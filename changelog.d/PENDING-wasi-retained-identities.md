@@ -1,5 +1,0 @@
-Capture component wrapper identities alongside retained wrappers during encoding. A fixed traced holder owns the growing pair list, so growth publishes its replacement header and later ownership matching can use saved identities after a host wrapper has transferred. Qualify JSON field-order differences, list growth, actual wrapper movement, generation checks and collection after all matching aliases are released.
-
-Snapshot synchronous and async arguments and import results according to WIT. Record fields and tagged payloads outside the selected contract do not run getters or retain unrelated owners; void results are ignored. Pending imports retain their result type in private traced state. Getter failures preserve their original identity through moving collection.
-
-Linux development and production panic-abort checks pass 52 component and 12 async-hook tests, plus the production closure ABI check. The production runtime library checks without new component warnings. Persistent C-driver receipt consumption and the public concurrent runtime remain in progress.

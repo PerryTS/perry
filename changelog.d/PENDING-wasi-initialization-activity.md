@@ -1,3 +1,0 @@
-Keep persistent C component drivers active while an accepted JavaScript import reply is pending. A core start function can enqueue an async import that runs on the first driver poll without any exported invocation; Wasmtime can otherwise report that unobserved subtask as quiescent. The bridge now includes its outstanding reply channels in the activity report and returns to idle after resolution.
-
-Qualify synchronous initialization at origin zero, async initialization under a fresh first-poll context, suspension and resolution without an export call, and initialization rejection with Store retirement and failed origin zero. Embeddings must schedule an initial poll after construction even when no export has been invoked. No C ABI or dependency change.

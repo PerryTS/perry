@@ -207,6 +207,7 @@ class CategoryRoutingTests(unittest.TestCase):
                 with self.subTest(planned=planned, outcome=outcome):
                     needs = {
                         "route": {"result": "success"},
+                        "tokio-ban": {"result": "success"},
                         "plan": {"result": "success", "outputs": {"plan": json.dumps({"jobs": {"wasi_execution": planned}})}}
                     }
                     if outcome is not None:

@@ -1,5 +1,0 @@
-Keep each component import's borrowed resource aliases alive until its own settlement. Persistent driver submissions pin valid async import loans before execution, including work submitted by a callback that returns immediately. Settlement rejects new forwarding and waits for accepted borrowers. Synchronous imports cannot remove overlapping async loans. Cancellation and retirement release ownership once.
-
-Preserve opaque native borrow capabilities in private TypeScript wrapper state under moving GC. Native C tests cover JavaScript-backed resources, actual WASI provider resources and future payloads containing owned resources. The TypeScript persistent driver integration remains unfinished.
-
-Vendor pinned wac-graph 0.12.0 with a nominal resource alias fix for valid freestanding and nested signatures; retain upstream provenance, licensing and unchanged fixture coverage. No Tokio dependency or dependency soak exception is introduced. The existing shipping-lock crypto-bigint advisory remains unresolved.

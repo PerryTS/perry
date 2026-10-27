@@ -1,3 +1,0 @@
-Save component invocation context in an ordinary traced record owned by the pending operation between polls. Native operation metadata keeps public serial IDs; observed async metadata stays behind a traced edge, and each poll derives its execution token from that edge. A new poll no longer needs an earlier callback frame or the public Promise to recover ALS and execution IDs.
-
-Exercise two separate poll scopes with actual collection and movement between them, independent public Promise collection, observed and unobserved metadata, and exception restoration. Public TypeScript component calls still use the legacy engine path while persistent driver routing is integrated.
