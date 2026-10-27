@@ -96,6 +96,7 @@ pub mod arena;
 pub mod array;
 pub mod async_context;
 pub mod async_hooks;
+pub mod async_local_storage;
 pub mod atomics;
 pub mod atomics_futex;
 pub mod bigint;

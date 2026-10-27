@@ -1,0 +1,393 @@
+//! AsyncLocalStorage constructors and methods for native and WASI images.
+//!
+//! Native implementation of Node.js AsyncLocalStorage from `async_hooks`.
+//! Provides run(), getStore(), enterWith(), exit(), and disable().
+
+use crate::array::{js_array_length, ArrayHeader};
+use crate::closure::JsThis;
+use crate::closure::{is_closure_ptr, js_closure_call_array, ClosureHeader};
+use crate::native_payload::{self, NativePayloadFamily, PayloadMiss, PayloadPrototype};
+
+const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+
+// Keep the active context in the single runtime provider. Preserve these
+// extern provider calls even when this module is linked through the native
+// stdlib into a separate app-only dylib image: a private Rust-path context
+// would diverge from the promise/timer scheduler context (#8037).
+extern "C" {
+    fn js_async_context_als_run_enter(handle: i64, store: f64);
+    fn js_async_context_als_exit_enter(handle: i64);
+    fn js_async_context_als_scope_leave();
+    fn js_async_context_als_get_store(handle: i64) -> f64;
+    fn js_async_context_als_enter_with(handle: i64, store: f64);
+    fn js_async_context_als_clear(handle: i64);
+}
+
+/// #3092 — `AsyncLocalStorage#run`/`#exit` must reject a non-callable callback
+/// with a `TypeError`, matching Node (which throws through its function-apply
+/// path). Returns the validated `ClosureHeader` pointer for a callable value,
+/// or diverges via `js_throw`. The POINTER_TAG check guards `is_closure_ptr`
+/// from the short-string/double bit patterns that can otherwise look
+/// pointer-ish enough to segfault.
+unsafe fn validate_callback(callback: f64) -> *const ClosureHeader {
+    let bits = callback.to_bits();
+    if (bits & !POINTER_MASK) == POINTER_TAG {
+        let ptr = (bits & POINTER_MASK) as usize;
+        if is_closure_ptr(ptr) {
+            return ptr as *const ClosureHeader;
+        }
+    }
+    let message = "callback is not a function";
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let msg = scope.root_string_ptr(msg);
+    let err = msg.with_mut_ptr(|msg| crate::error::js_typeerror_new(msg));
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+/// #3093 — invoke a validated callback with the forwarded rest arguments.
+/// `args_array` is a raw `*const ArrayHeader` (i64) holding the trailing
+/// `...args` packed by the codegen `NA_VARARGS` lowering; `0` / empty array
+/// means no forwarded args. Mirrors the data/len extraction used by
+/// `AsyncResource#runInAsyncScope` in perry-runtime.
+unsafe fn call_with_forwarded_args(cb: *const ClosureHeader, args_array: i64) -> f64 {
+    let closure_env = cb as i64;
+    if args_array == 0 {
+        return js_closure_call_array(
+            closure_env,
+            crate::closure::plain_call_receiver(),
+            std::ptr::null(),
+            0,
+        );
+    }
+    let arr = args_array as *const ArrayHeader;
+    let len = js_array_length(arr) as i64;
+    let data = if arr.is_null() || len == 0 {
+        std::ptr::null()
+    } else {
+        crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64
+    };
+    js_closure_call_array(
+        closure_env,
+        crate::closure::plain_call_receiver(),
+        data,
+        len,
+    )
+}
+
+/// AsyncLocalStorage handle. Store stacks live in perry-runtime's active
+/// async context so schedulers can snapshot and restore them across async
+/// boundaries.
+static ASYNC_LOCAL_STORAGE_FAMILY: NativePayloadFamily = NativePayloadFamily {
+    class_id: crate::native_class_ids::ASYNC_LOCAL_STORAGE_LEGACY,
+    name: "AsyncLocalStorage",
+    constructor_export: Some(("async_hooks", "AsyncLocalStorage")),
+    constructor_length: 0,
+    links_owner: false,
+    install_prototype: install_async_local_storage_prototype,
+};
+
+macro_rules! als_method {
+    ($proto:expr, $name:literal, $body:ident, $n:tt) => {
+        $proto.method(
+            $name,
+            crate::fn_info!(
+                $body, $n;
+                with_declared($n),
+                with_flags(crate::closure::FN_BUILTIN)
+            ),
+            $n,
+        )
+    };
+}
+
+fn install_async_local_storage_prototype(proto: &mut PayloadPrototype) {
+    proto.getter(
+        "name",
+        crate::fn_info!(als_name_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+    );
+    proto.method(
+        "run",
+        crate::fn_info!(
+            als_run_thunk, 3;
+            with_rest(2),
+            with_declared(2),
+            with_flags(crate::closure::FN_BUILTIN)
+        ),
+        2,
+    );
+    proto.method(
+        "withScope",
+        crate::fn_info!(
+            als_run_thunk, 3;
+            with_rest(2),
+            with_declared(2),
+            with_flags(crate::closure::FN_BUILTIN)
+        ),
+        2,
+    );
+    als_method!(proto, "getStore", als_get_store_thunk, 0);
+    als_method!(proto, "enterWith", als_enter_with_thunk, 1);
+    proto.method(
+        "exit",
+        crate::fn_info!(
+            als_exit_thunk, 2;
+            with_rest(1),
+            with_declared(1),
+            with_flags(crate::closure::FN_BUILTIN)
+        ),
+        1,
+    );
+    als_method!(proto, "disable", als_disable_thunk, 0);
+}
+
+fn canonical_prototype() -> *mut crate::object::ObjectHeader {
+    let value = crate::object::async_local_storage_prototype_value();
+    let proto = crate::value::js_nanbox_get_pointer(value) as *mut crate::object::ObjectHeader;
+    native_payload::adopt_prototype(&ASYNC_LOCAL_STORAGE_FAMILY, proto)
+}
+
+fn throw_invalid_receiver() -> ! {
+    let message = b"Value of \"this\" must be of type AsyncLocalStorage";
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let msg = scope.root_string_ptr(msg);
+    let err = msg.with_mut_ptr(|msg| crate::error::js_typeerror_new(msg));
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+pub(crate) fn resolve_async_local_storage_token(receiver: i64) -> Option<i64> {
+    let value = crate::value::js_nanbox_pointer(receiver);
+    unsafe {
+        native_payload::payload_mut_attached::<crate::async_context::AsyncLocalStoragePayload>(
+            value,
+            &ASYNC_LOCAL_STORAGE_FAMILY,
+        )
+        .ok()
+        .map(|payload| payload.token())
+    }
+}
+
+fn ensure_async_local_storage_token(receiver: i64) -> Option<i64> {
+    let value = crate::value::js_nanbox_pointer(receiver);
+    match unsafe {
+        native_payload::payload_mut_attached::<crate::async_context::AsyncLocalStoragePayload>(
+            value,
+            &ASYNC_LOCAL_STORAGE_FAMILY,
+        )
+    } {
+        Ok(payload) => Some(payload.token()),
+        Err(PayloadMiss::Closed) => {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let receiver = scope.root_nanbox_f64(value);
+            native_payload::attach_to_object(
+                receiver.get_nanbox_f64(),
+                &ASYNC_LOCAL_STORAGE_FAMILY,
+                crate::async_context::AsyncLocalStoragePayload::default(),
+                0,
+            );
+            resolve_async_local_storage_token(crate::value::js_nanbox_get_pointer(
+                receiver.get_nanbox_f64(),
+            ))
+        }
+        Err(PayloadMiss::Foreign) => None,
+    }
+}
+
+/// Stamp an ordinary source-compiled subclass instance with a native ALS
+/// backing. Its inherited methods receive the ordinary object as `this` and
+/// resolve through the hidden handle above.
+#[no_mangle]
+pub extern "C" fn js_async_local_storage_subclass_init(this_value: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(this_value);
+    let _ = canonical_prototype();
+    native_payload::attach_to_object(
+        receiver.get_nanbox_f64(),
+        &ASYNC_LOCAL_STORAGE_FAMILY,
+        crate::async_context::AsyncLocalStoragePayload::default(),
+        0,
+    );
+    receiver.get_nanbox_f64()
+}
+
+/// Create a new AsyncLocalStorage instance
+#[no_mangle]
+pub extern "C" fn js_async_local_storage_new() -> f64 {
+    native_payload::alloc_with_prototype(
+        &ASYNC_LOCAL_STORAGE_FAMILY,
+        crate::async_context::AsyncLocalStoragePayload::default(),
+        0,
+        &[],
+        canonical_prototype(),
+    )
+}
+
+/// AsyncLocalStorage.run(store, callback, ...args)
+/// Push store onto stack, call callback with the forwarded rest args, pop
+/// store, return result. `args_array` carries the `...args` packed by the
+/// codegen `NA_VARARGS` lowering (#3093).
+#[no_mangle]
+pub unsafe extern "C" fn js_async_local_storage_run(
+    receiver: i64,
+    store: f64,
+    callback: f64,
+    args_array: i64,
+) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(receiver));
+    let store = scope.root_nanbox_f64(store);
+    let callback = scope.root_nanbox_f64(callback);
+    let args_array = scope.root_raw_const_ptr(args_array as *const ArrayHeader);
+    // Validate before mutating the async context so an invalid callback throws
+    // without leaving a pushed store behind (#3092).
+    let _ = validate_callback(callback.get_nanbox_f64());
+    let receiver = crate::value::js_nanbox_get_pointer(receiver.get_nanbox_f64());
+    let token =
+        ensure_async_local_storage_token(receiver).unwrap_or_else(|| throw_invalid_receiver());
+
+    // A context guard mirrors the pop below: if the callback throws,
+    // `js_throw` applies the guard while unwinding so the catch site still
+    // observes the pre-`run` store (#788, Node restores via try/finally).
+    js_async_context_als_run_enter(token, store.get_nanbox_f64());
+    let cb = validate_callback(callback.get_nanbox_f64());
+    let result = call_with_forwarded_args(cb, args_array.get_raw_const_ptr::<ArrayHeader>() as i64);
+    js_async_context_als_scope_leave();
+
+    result
+}
+
+/// AsyncLocalStorage.getStore()
+/// Returns the current store (top of stack) or undefined
+#[no_mangle]
+pub extern "C" fn js_async_local_storage_get_store(receiver: i64) -> f64 {
+    let value = crate::value::js_nanbox_pointer(receiver);
+    match unsafe {
+        native_payload::payload_mut_attached::<crate::async_context::AsyncLocalStoragePayload>(
+            value,
+            &ASYNC_LOCAL_STORAGE_FAMILY,
+        )
+    } {
+        Ok(payload) => unsafe { js_async_context_als_get_store(payload.token()) },
+        Err(PayloadMiss::Closed) => f64::from_bits(crate::value::JSValue::undefined().bits()),
+        Err(PayloadMiss::Foreign) => throw_invalid_receiver(),
+    }
+}
+
+/// AsyncLocalStorage.enterWith(store)
+/// Push store onto stack (caller is responsible for cleanup)
+#[no_mangle]
+pub extern "C" fn js_async_local_storage_enter_with(receiver: i64, store: f64) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(receiver));
+    let store = scope.root_nanbox_f64(store);
+    let receiver = crate::value::js_nanbox_get_pointer(receiver.get_nanbox_f64());
+    if let Some(token) = ensure_async_local_storage_token(receiver) {
+        unsafe { js_async_context_als_enter_with(token, store.get_nanbox_f64()) };
+    }
+}
+
+/// AsyncLocalStorage.exit(callback, ...args)
+/// Save current stack, clear it, call callback with the forwarded rest args,
+/// restore stack. `args_array` carries the `...args` packed by the codegen
+/// `NA_VARARGS` lowering (#3093).
+#[no_mangle]
+pub unsafe extern "C" fn js_async_local_storage_exit(
+    receiver: i64,
+    callback: f64,
+    args_array: i64,
+) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(receiver));
+    let callback = scope.root_nanbox_f64(callback);
+    let args_array = scope.root_raw_const_ptr(args_array as *const ArrayHeader);
+    // Validate before clearing the context so an invalid callback throws
+    // without disturbing the saved store (#3092).
+    let _ = validate_callback(callback.get_nanbox_f64());
+    let receiver = crate::value::js_nanbox_get_pointer(receiver.get_nanbox_f64());
+    let token =
+        ensure_async_local_storage_token(receiver).unwrap_or_else(|| throw_invalid_receiver());
+    js_async_context_als_exit_enter(token);
+
+    let cb = validate_callback(callback.get_nanbox_f64());
+    let result = call_with_forwarded_args(cb, args_array.get_raw_const_ptr::<ArrayHeader>() as i64);
+
+    js_async_context_als_scope_leave();
+
+    result
+}
+
+/// AsyncLocalStorage.disable()
+/// Clear the store stack
+#[no_mangle]
+pub extern "C" fn js_async_local_storage_disable(receiver: i64) {
+    if let Some(token) = resolve_async_local_storage_token(receiver) {
+        unsafe { js_async_context_als_clear(token) };
+    }
+}
+
+extern "C" fn als_run_thunk(
+    _closure: *const ClosureHeader,
+    this: JsThis,
+    store: f64,
+    callback: f64,
+    rest: f64,
+) -> f64 {
+    unsafe {
+        js_async_local_storage_run(
+            crate::value::js_nanbox_get_pointer(this.as_f64()),
+            store,
+            callback,
+            crate::value::js_nanbox_get_pointer(rest),
+        )
+    }
+}
+
+extern "C" fn als_get_store_thunk(_closure: *const ClosureHeader, this: JsThis) -> f64 {
+    js_async_local_storage_get_store(crate::value::js_nanbox_get_pointer(this.as_f64()))
+}
+
+extern "C" fn als_name_thunk(_closure: *const ClosureHeader, this: JsThis) -> f64 {
+    if matches!(
+        unsafe {
+            native_payload::payload_mut_attached::<crate::async_context::AsyncLocalStoragePayload>(
+                this.as_f64(),
+                &ASYNC_LOCAL_STORAGE_FAMILY,
+            )
+        },
+        Err(PayloadMiss::Foreign)
+    ) {
+        throw_invalid_receiver();
+    }
+    crate::value::js_nanbox_string(crate::string::js_string_from_bytes(b"".as_ptr(), 0) as i64)
+}
+
+extern "C" fn als_enter_with_thunk(
+    _closure: *const ClosureHeader,
+    this: JsThis,
+    store: f64,
+) -> f64 {
+    js_async_local_storage_enter_with(crate::value::js_nanbox_get_pointer(this.as_f64()), store);
+    f64::from_bits(0x7FFC_0000_0000_0001)
+}
+
+extern "C" fn als_exit_thunk(
+    _closure: *const ClosureHeader,
+    this: JsThis,
+    callback: f64,
+    rest: f64,
+) -> f64 {
+    unsafe {
+        js_async_local_storage_exit(
+            crate::value::js_nanbox_get_pointer(this.as_f64()),
+            callback,
+            crate::value::js_nanbox_get_pointer(rest),
+        )
+    }
+}
+
+extern "C" fn als_disable_thunk(_closure: *const ClosureHeader, this: JsThis) -> f64 {
+    js_async_local_storage_disable(crate::value::js_nanbox_get_pointer(this.as_f64()));
+    f64::from_bits(0x7FFC_0000_0000_0001)
+}
