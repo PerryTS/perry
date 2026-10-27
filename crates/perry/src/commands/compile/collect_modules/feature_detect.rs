@@ -7,6 +7,8 @@
 //! actually reach. Over-matching only over-includes a subsystem (a size,
 //! not a correctness, cost); the rule throughout is zero false negatives.
 
+mod global_object;
+
 use super::crypto_ns::module_uses_global_crypto_namespace;
 use crate::commands::compile::CompilationContext;
 
@@ -442,6 +444,8 @@ pub(super) fn detect_optional_feature_usage(
     // false-negative class for every gate at once (the rule is zero false
     // negatives; including more HIR can only over-include a feature).
     let hir_debug = module_hir_debug(hir_module);
+    ctx.uses_json_format |= module_uses_json_format(hir_module);
+    ctx.uses_global_json |= global_object::may_escape(hir_module);
     if hir_debug.contains("Proxy")
         || hir_debug.contains("GlobalThisExpr")
         || hir_debug.contains("property: \"globalThis\"")
@@ -500,7 +504,7 @@ pub(super) fn detect_optional_feature_usage(
     ctx.uses_file_handle_capability |= computed.file_handles;
     ctx.uses_bun_file_capability |= computed.bun_files;
     if computed.json_members || (ctx.uses_bun_file_capability && ctx.uses_computed_member_keys) {
-        ctx.uses_global_json = true;
+        ctx.uses_json_engine = true;
     }
 
     // Web Streams constructors and FileHandle.readableWebStream call the
@@ -839,19 +843,21 @@ pub(super) fn detect_optional_feature_usage(
         if hir_debug.contains("\"Math\"") || debug_hir_uses_global_math_member(&hir_debug) {
             ctx.uses_global_math = true;
         }
-        if hir_debug.contains("\"JSON\"")
-            || hir_debug.contains("JsonParse")
+        if hir_debug.contains("JsonParse")
             || hir_debug.contains("JsonStringify")
             || hir_debug.contains("JsonRawJson")
             || hir_debug.contains("JsonIsRawJson")
             || hir_debug.contains("property: \"json\"")
             || hir_debug.contains("method: \"json\"")
+        {
+            ctx.uses_json_engine = true;
+        }
+        if hir_debug.contains("\"JSON\"")
             || ["parse", "stringify", "rawJSON", "isRawJSON"]
                 .iter()
                 .any(|name| {
                     hir_debug.contains(&format!("object: GlobalGet(0), property: \"{name}\""))
                 })
-            || module_uses_json_format(hir_module)
         {
             ctx.uses_global_json = true;
         }
@@ -1339,5 +1345,46 @@ class C {
             !imports_fs_promises_glob(&module),
             "an unrelated named glob import must not retain the regex engine"
         );
+    }
+    #[test]
+    fn json_format_keeps_namespace_selection_independent() {
+        let format = detect_for_source(
+            r#"
+            class Printer { static print(pattern: string, value: any) {
+                console.log(pattern, value);
+            } }
+            Printer.print(process.argv[2], {x: 1});
+        "#,
+        );
+        assert!(format.uses_json_format);
+        assert!(!format.uses_global_json);
+        let direct = detect_for_source("console.log(JSON.stringify({x:1}));");
+        assert!(direct.uses_json_engine);
+        assert!(!direct.uses_global_json);
+        let namespace = detect_for_source("const j = JSON; console.log(j.stringify({x: 1}));");
+        assert!(namespace.uses_global_json);
+        let literal = detect_for_source("console.log(\"literal %j\");");
+        assert!(!literal.uses_json_format && !literal.uses_global_json);
+    }
+    #[test]
+    fn escaped_globals_keep_json_namespace_available() {
+        for source in [
+            "const host = globalThis; const j = host[process.argv[2]]; console.log(j.stringify({x:1}));",
+            "function host() { return this; } const j = host()[process.argv[2]]; console.log(j.stringify({x:1}));",
+            "const host = function () { return this; }; console.log(host()[process.argv[2]]);",
+        ] {
+            assert!(detect_for_source(source).uses_global_json, "{source}");
+        }
+        assert!(
+            detect_for_source(
+                "const j = globalThis[process.argv[2]]; console.log(j.stringify({x:1}));"
+            )
+            .uses_global_json
+        );
+        assert!(
+            !detect_for_source("const max = Math.max; console.log(max(1,2));").uses_global_json
+        );
+        let strict_receiver = detect_for_source("class C { identity() { return this; } } console.log(new C().identity().constructor.name);");
+        assert!(!strict_receiver.uses_global_json);
     }
 }

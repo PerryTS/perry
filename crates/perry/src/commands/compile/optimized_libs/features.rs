@@ -268,13 +268,24 @@ pub(crate) fn auto_optimized_cross_features(
     {
         cross_features.push("perry-runtime/turnloop".to_string());
     }
+    // A formatter-only program can reach stringify, without creating a global
+    // namespace or constructing parser/tape values. The full JSON installer
+    // also fills formatting slots when the JSON API itself is reachable.
+    let json_namespace =
+        ctx.uses_global_json || (ctx.uses_json_format && !ctx.native_addons.is_empty());
+    if ctx.uses_json_engine && !json_namespace && !needs_dyn_eval {
+        cross_features.push("perry-runtime/json-engine".to_string());
+    }
+    if ctx.uses_json_format && !ctx.uses_json_engine && !json_namespace && !needs_dyn_eval {
+        cross_features.push("perry-runtime/json-format".to_string());
+    }
     // Per-namespace globalThis member tables — see perry-runtime's `global-*`.
     // A deferred dynamic-code site can reach any namespace by runtime string,
     // so force all four on there (mirrors the intl-namespace rule).
     let dynamic_code = needs_dyn_eval;
     for (used, feat) in [
         (ctx.uses_global_math, "global-math"),
-        (ctx.uses_global_json, "global-json"),
+        (json_namespace, "global-json"),
         (ctx.uses_global_reflect, "global-reflect"),
         (ctx.uses_global_atomics, "global-atomics"),
         (ctx.uses_global_url, "global-url"),

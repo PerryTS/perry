@@ -333,15 +333,10 @@ pub extern "C" fn js_runtime_install_global_math() {
         crate::object::global_this::web_hooks::install_math();
     });
 }
-
 #[no_mangle]
 pub extern "C" fn js_runtime_install_global_json() {
-    crate::json_hooks::register_roots();
-    perry_install_once!({
-        crate::object::global_this::web_hooks::install_json();
-        crate::builtins::install_json_format();
-        crate::json_hooks::install();
-    });
+    install_json_engine();
+    crate::object::global_this::web_hooks::install_json();
 }
 
 #[no_mangle]
@@ -388,7 +383,7 @@ pub extern "C" fn js_runtime_install_global_webcrypto() {
 
 #[no_mangle]
 pub extern "C" fn js_runtime_install_global_webfetch() {
-    js_runtime_install_global_json();
+    install_json_engine();
     perry_install_once!({
         crate::object::global_this::web_hooks::install_webfetch();
     });
@@ -460,4 +455,26 @@ pub extern "C" fn js_runtime_install_proxy() {
     crate::perry_install_once!({
         crate::proxy_hooks::install();
     });
+}
+/// Formatting can stringify without publishing a JSON namespace.
+#[no_mangle]
+pub extern "C" fn js_runtime_install_json_format() {
+    // The sole store is idempotent; no initialization work needs a Once.
+    crate::builtins::install_json_format();
+}
+
+/// JSON value operations required by native producers (IPC, fetch, module
+/// data), independently of exposing the global namespace member table.
+pub(crate) fn install_json_engine() {
+    crate::json_hooks::register_roots();
+    crate::perry_install_once!({
+        crate::builtins::install_json_format();
+        crate::json_hooks::install();
+    });
+}
+
+/// Direct JSON operations require the engine without a namespace object.
+#[no_mangle]
+pub extern "C" fn js_runtime_install_json_engine() {
+    install_json_engine();
 }

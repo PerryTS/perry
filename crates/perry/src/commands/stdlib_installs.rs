@@ -190,6 +190,8 @@ const RUNTIME_INSTALLS: &[(&str, &[&str])] = &[
     ("js_runtime_install_intl_locale", &["intl-locale"]),
     ("js_runtime_install_global_math", &["global-math"]),
     ("js_runtime_install_global_json", &["global-json"]),
+    ("js_runtime_install_json_format", &["json-format"]),
+    ("js_runtime_install_json_engine", &["json-engine"]),
     ("js_runtime_install_turnloop", &["turnloop"]),
     ("js_runtime_install_bigint", &["bigint"]),
     ("js_runtime_install_proxy", &["proxy"]),

@@ -320,7 +320,7 @@ pub(crate) fn process_ipc_property(name: &str) -> Option<f64> {
 /// The `proc-ipc` install.
 pub(crate) fn install() {
     IPC_PROPERTY.set(process_ipc_property_impl);
-    crate::feature_hooks::js_runtime_install_global_json();
+    crate::feature_hooks::install_json_engine();
 }
 
 fn process_ipc_property_impl(name: &str) -> Option<f64> {

@@ -1,4 +1,4 @@
-// HWS hook: js_runtime_install_global_json
+// HWS hook: js_runtime_install_json_engine
 // HWS prefixes: perry_runtime::json_tape::
 // The JSON install owns the tape parser and its generic lazy-array slots.
 // A >1KB array selects the existing auto tape route without an environment knob.
