@@ -527,10 +527,10 @@ borrow cannot partially consume the other owners or hand a failed frame to C.
 The generated C adapter starts native I/O only after `begin` succeeds. See the
 [resource loan receipt](validation/wasi-guest-resource-loans-20261027.json) for
 native ownership tests and actual guest regressions. These are runtime
-prerequisites: the experimental resource-profile guard remains. Generated
-resource transfers before callee start, cancellation racing owned results, and
-borrow expiration at `task.return` still need adapter qualification before
-async resource interfaces can be enabled.
+prerequisites: the experimental resource-profile guard remains. The private
+generated adapter qualification below covers basic transfers, return-time
+borrow expiration and resource-bearing canonical cancellation. Broader compound
+ownership still needs qualification before async resource interfaces can be enabled.
 
 A private generated resource profile now executes on Linux with ordinary and
 instrumented production archives, including verified moving GC. It covers
@@ -538,9 +538,20 @@ owner round trips, overlapping and list borrows, import-loan acknowledgement,
 guest-defined resources, and borrow expiration at return while post-return work
 keeps the frame alive. The caller reclaims that owner before the child resumes.
 The [resource adapter receipt](validation/wasi-async-guest-resources-20261027.json)
-records the exact cases and artifacts. Resource-bearing canonical cancellation,
-pre-start transfers and owned-result races still need full component
-qualification; the shipping resource and public async guards remain.
+records the exact cases and artifacts.
+
+A maintained-C provider and caller now compose around the actual Perry guest,
+with explicit shared nominal resource aliases. Across 32 calls, the caller
+cancels pre-start owned transfers and suspended borrowed calls, races completed
+owned results, and cancels while a provider returns an already-created owner.
+That last case requires the generated C adapter to discard an unclaimed result
+without lifting or publishing it to JavaScript. All 80 resources are destroyed
+exactly once, and every call keeps an independent sibling live through
+acknowledgement before reusing the same Store. Ordinary, instrumented knobs-off
+and forced-moving-GC execution pass; the latter copies 9,594 objects with
+evacuation verified. The [canonical resource cancellation receipt](validation/wasi-async-resource-cancellation-20261027.json)
+records the source-matched artifacts and narrower scope. Compound resource
+ownership remains open; the shipping resource and public async guards remain.
 
 The internal generic-reader checks additionally cover canonical layouts from
 `wit-parser::SizeAlign`, shared metadata for repeated aliases, a reusable

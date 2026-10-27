@@ -1,15 +1,16 @@
 # WASI 0.3.0 completion
 
 Objective: complete supported WASI 0.3.0 hosting and Perry-authored component
-output, including reusable typed plugin interfaces. The current baseline is
-main `315930289939d39cb0cf0c876c03e82da6000d3a`. Existing historical receipts
+output, including reusable typed plugin interfaces. The implementation branch
+is based on main `034939356199d1cb47f3ac303fafd1de8c6223d2`; the previous merged
+WASI milestone is `315930289939d39cb0cf0c876c03e82da6000d3a`. Existing historical receipts
 retain their original scope. An implemented helper or passing narrow test does
 not establish completion of a row below.
 
 | Requirement | Required evidence | Current state |
 | --- | --- | --- |
 | Canonical async imports and exports | Public generated components compose in both directions; overlapping calls, immediate/delayed completion, errors, post-return work and Store reuse | Experimental scalar/compound profile qualified; public CLI guarded |
-| Resource ownership across async calls | Imported/exported nominal resources, compound aliases, pre-start cancellation, returned-result races, borrow expiry at return/cancel, exactly-once drops and moving GC | Basic generated resource profile passes on Linux with ordinary/instrumented production runtimes and moving GC; canonical cancellation races and broader ownership cases remain open |
+| Resource ownership across async calls | Imported/exported nominal resources, compound aliases, pre-start cancellation, returned-result races, borrow expiry at return/cancel, exactly-once drops and moving GC | Basic resources and actual C/Perry/C canonical cancellation pass on Linux with ordinary/instrumented runtimes and moving GC, including pre-start owners, suspended borrows and unclaimed returned owners; broader compound ownership remains open |
 | Guest `future<T>` and `stream<T>` | Readable/writable ownership, arbitrary supported WIT payloads, void, bounded writes, backpressure, final partial chunks, closure, cancellation and cleanup across suspension | Native hosts have readers/producers; guest adapters guarded |
 | WASI 0.3.0 command output | A public command/runtime profile with `wasi:cli/run@0.3.0`, explicit system-interface versions and execution in a host providing the declared 0.3.0 imports; no implicit reliance on P2 compatibility | Current `--target wasi` and runtime builder select wasip2; a native 0.3.0 output profile is unfinished |
 | Complete supported 0.3.0 WASI interfaces | Commands, clocks, randomness, filesystem, TCP/UDP/DNS and HTTP execute through Turnloop with capability checks, I/O cancellation and shutdown | Linux provider/command/HTTP receipts exist; complete current-profile matrix still required |
