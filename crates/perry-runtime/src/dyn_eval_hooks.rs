@@ -8,9 +8,10 @@
 //! it in every binary. They call these forwarders, which reach it only through
 //! slots the `dyn-eval` install fills (see `crate::feature_hooks`).
 //!
-//! The install runs from `js_gc_init`, before any user code, so the
-//! interpreter never runs with a slot empty. An empty slot answers what a build
-//! without `dyn-eval` answers: no function, no scan, no move bookkeeping.
+//! The compiler-selected install runs before user code and registers the
+//! evaluator's roots for the current agent. Later agents register them through
+//! the installed root callback in `gc_init`. Empty slots provide the absence
+//! behavior: no function, no scan, no move bookkeeping.
 
 use crate::feature_hooks::Hook;
 
@@ -23,8 +24,8 @@ pub(crate) fn function_from_strings(args: &[String]) -> Option<f64> {
     FUNCTION_FROM_STRINGS.get().map(|f| f(args))
 }
 
-/// Root scanner for the interpreter's rooted value stack (#6559). Registered
-/// unconditionally in `gc_init`; scans only once the evaluator is installed.
+/// Forward scans of the interpreter's rooted value stack (#6559). The
+/// installer registers the evaluator's actual scanner only when selected.
 pub fn scan_dyn_eval_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     if let Some(scan) = SCAN_ROOTS.get() {
         scan(visitor);
