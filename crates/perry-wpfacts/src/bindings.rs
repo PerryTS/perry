@@ -102,7 +102,13 @@ pub(crate) fn sealed_owner(m: &Model, t: u32) -> Option<(u32, u8)> {
     }
     if let Some(n) = m.ta_birth_input.get(&tm) {
         let src = &m.nodes[*n as usize];
-        if src.prim != crate::model::prim::NUM || !src.pts.is_empty() {
+        if src.prim != crate::model::prim::NUM
+            || src
+                .pts
+                .to_sorted()
+                .into_iter()
+                .any(|v| v == TOP || !m.beside_values(v))
+        {
             return None;
         }
     } else if !m.ta_min_len.contains_key(&tm) {

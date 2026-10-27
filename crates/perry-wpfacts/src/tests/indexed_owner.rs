@@ -123,3 +123,17 @@ fn prototype_writes_withhold_the_global_metadata_effect_proof() {
         assert!(!f.indexed_metadata_pristine());
     }
 }
+
+#[test]
+fn numeric_constructor_arguments_keep_owner_identity_without_inventing_an_extent() {
+    for units in [false, true] {
+        let (h, f) = run("function make(n: number) { return new Float64Array(n); } const x = make(8); console.log(x.length);", units);
+        let o = owner(&h, &f, "x").expect("numeric argument contract proves fresh construction");
+        assert_eq!((o.kind, o.min_len, o.exact_len), (7, 0, None));
+        let (h, f) = run("function make(n: number) { return new Float64Array(n); } const x = make(new ArrayBuffer(64) as unknown as number); console.log(x.length);", units);
+        assert!(
+            owner(&h, &f, "x").is_none(),
+            "a source/view overload is never a numeric fresh-owner contract"
+        );
+    }
+}
