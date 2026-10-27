@@ -413,7 +413,7 @@ macro_rules! section_sentinel {
         #[cfg_attr(target_vendor = "apple", link_section = $mach)]
         #[cfg_attr(target_os = "windows", link_section = $win)]
         #[cfg_attr(
-            not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
+            not(any(target_vendor = "apple", target_os = "windows")),
             link_section = $elf
         )]
         static $($mutable)* $name: $ty = $init;
@@ -465,7 +465,7 @@ section_sentinel!(
 /// Runtime-only binaries use this empty weak definition. Its address is
 /// resolved by the linker, never registered, memoized or changed at startup.
 #[used(linker)]
-#[cfg_attr(not(target_family = "wasm"), linkage = "weak")]
+#[linkage = "weak"]
 #[export_name = "perry_shadow_name_descriptor"]
 static SHADOW_NAME_DESCRIPTOR: StaticAtom = StaticAtom {
     hash: 0,
@@ -523,7 +523,7 @@ fn layout_bounds() -> (usize, usize) {
             std::ptr::addr_of!(LAYOUT_END) as usize,
         )
     }
-    #[cfg(not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")))]
+    #[cfg(not(any(target_vendor = "apple", target_os = "windows")))]
     {
         unsafe extern "C" {
             static __start_perry_layouts: u8;
@@ -533,10 +533,6 @@ fn layout_bounds() -> (usize, usize) {
             std::ptr::addr_of!(__start_perry_layouts) as usize,
             std::ptr::addr_of!(__stop_perry_layouts) as usize,
         )
-    }
-    #[cfg(target_family = "wasm")]
-    {
-        (0, 0)
     }
 }
 
@@ -563,7 +559,7 @@ fn atom_bounds() -> (usize, usize) {
             std::ptr::addr_of!(ATOM_END) as usize,
         )
     }
-    #[cfg(not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")))]
+    #[cfg(not(any(target_vendor = "apple", target_os = "windows")))]
     {
         unsafe extern "C" {
             static __start_perry_atoms: u8;
@@ -573,10 +569,6 @@ fn atom_bounds() -> (usize, usize) {
             std::ptr::addr_of!(__start_perry_atoms) as usize,
             std::ptr::addr_of!(__stop_perry_atoms) as usize,
         )
-    }
-    #[cfg(target_family = "wasm")]
-    {
-        (0, 0)
     }
 }
 
@@ -677,6 +669,8 @@ pub(crate) fn seed_static_atoms() {
         }
     }
     crate::object::layout_probe::seed_colours();
+    #[cfg(all(feature = "wasm-image-selftest", target_family = "wasm"))]
+    wasm_program_image_checks::check_atoms();
 }
 
 #[path = "layout_desc/registration.rs"]
@@ -1782,14 +1776,17 @@ pub(crate) unsafe fn prepare_hole_define(receiver: u64, key: u64) {
     }
 }
 
-// Wasm uses the same records and registration logic; only image enumeration
-// differs because relocated data cannot live in Rust's Wasm custom sections.
+// Program records use linker section bounds on every target. On wasm the
+// runtime also keeps its own existing inventory: Rust custom sections cannot
+// carry relocations. No program constructor or address registry is needed.
 fn image_atoms() -> impl Iterator<Item = *mut StaticAtom> {
     #[cfg(target_family = "wasm")]
     {
-        inventory::iter::<crate::wasm_image::Atom>
-            .into_iter()
-            .map(|item| item.0.cast_mut())
+        records::<StaticAtom>(atom_bounds()).chain(
+            inventory::iter::<crate::wasm_image::Atom>
+                .into_iter()
+                .map(|item| item.0.cast_mut()),
+        )
     }
     #[cfg(not(target_family = "wasm"))]
     {
@@ -1799,9 +1796,11 @@ fn image_atoms() -> impl Iterator<Item = *mut StaticAtom> {
 fn image_layouts() -> impl Iterator<Item = *mut PerryLayoutDesc> {
     #[cfg(target_family = "wasm")]
     {
-        inventory::iter::<crate::wasm_image::Layout>
-            .into_iter()
-            .map(|item| item.0)
+        records::<PerryLayoutDesc>(layout_bounds()).chain(
+            inventory::iter::<crate::wasm_image::Layout>
+                .into_iter()
+                .map(|item| item.0),
+        )
     }
     #[cfg(not(target_family = "wasm"))]
     {
@@ -1816,7 +1815,15 @@ fn descriptor_index(desc: *const PerryLayoutDesc) -> Option<u32> {
     if at >= start && at < end && (at - start) % size == 0 {
         Some(((at - start) / size) as u32)
     } else {
-        literal_birth::literal_index(desc)
+        let literal = literal_birth::literal_index(desc);
+        #[cfg(target_family = "wasm")]
+        {
+            literal.or_else(|| literal_birth::runtime_index(desc))
+        }
+        #[cfg(not(target_family = "wasm"))]
+        {
+            literal
+        }
     }
 }
 const _: () = assert!(
@@ -1863,3 +1870,7 @@ mod windows_atom_bounds_tests {
         }
     }
 }
+
+#[cfg(all(feature = "wasm-image-selftest", target_family = "wasm"))]
+#[path = "layout_desc/wasm_program_image_checks.rs"]
+mod wasm_program_image_checks;

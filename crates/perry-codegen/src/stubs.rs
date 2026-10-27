@@ -504,6 +504,54 @@ mod tests {
     use super::*;
 
     #[test]
+    fn wasm_seed_is_relocated_image_data_without_a_constructor() {
+        let shape = crate::BirthShape {
+            keys: b"wrt2cSharedKey\0other\0".to_vec(),
+            key_count: 2,
+            live: 2,
+            proto: crate::BirthProto::Literal,
+            typed: None,
+            rep: 0,
+            constfn: vec![],
+            private: vec![],
+            brands: vec![],
+            attrs: vec![],
+        };
+        let ll = static_shape_seed_ll_impl(&[(0x1000_0042, shape)], true, Some("wasm32-wasip2"));
+        assert!(
+            ll.contains("@perry_atom_77727432635368617265644b6579 = weak_odr"),
+            "{ll}"
+        );
+        assert!(ll.contains("section \"perry_atoms\""), "{ll}");
+        assert!(ll.contains("section \"perry_strings\""), "{ll}");
+        assert!(ll.contains("section \"perry_realm\""), "{ll}");
+        assert!(
+            ll.contains("i32 ptrtoint (ptr getelementptr (i8, ptr @perry_image_literal_0_"),
+            "{ll}"
+        );
+        assert!(
+            ll.contains("i32 2147418112"),
+            "string tag is the constant upper half: {ll}"
+        );
+        assert!(
+            ll.contains("ptr @perry_static_seed_atoms_0, ptr getelementptr"),
+            "{ll}"
+        );
+        assert!(
+            ll.contains("comdat($perry_atom_77727432635368617265644b6579)"),
+            "{ll}"
+        );
+        assert!(
+            ll.contains(".no_dead_strip perry_atom_77727432635368617265644b6579"),
+            "{ll}"
+        );
+        assert!(!ll.contains("llvm.global_ctors"), "{ll}");
+        assert!(!ll.contains("seed_plain_by_names"), "{ll}");
+        compile_ll_to_object(&ll, Some("wasm32-wasip2"))
+            .expect("ILP32 image seed relocations compile");
+    }
+
+    #[test]
     fn the_seed_unit_seeds_every_literal_and_registers_itself() {
         let shape = crate::BirthShape {
             keys: b"u\0v\0".to_vec(),

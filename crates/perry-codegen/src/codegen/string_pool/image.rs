@@ -100,7 +100,11 @@ mod tests {
 
     #[test]
     fn split_units_preserve_cross_module_weak_image_identity() {
-        for target in ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"] {
+        for target in [
+            "x86_64-unknown-linux-gnu",
+            "x86_64-pc-windows-msvc",
+            "wasm32-wasip2",
+        ] {
             let mut m = LlModule::new(target);
             m.add_coalesced_global("image", "@image = weak_odr constant i64 1".into());
             m.add_internal_global("holder", crate::types::I64, "ptrtoint (ptr @image to i64)");
@@ -138,11 +142,12 @@ mod tests {
     }
 
     #[test]
-    fn literals_have_linker_owned_bounds_on_native_targets() {
+    fn literals_have_linker_owned_bounds_on_all_targets() {
         for (target, section) in [
             ("x86_64-unknown-linux-gnu", "perry_strings"),
             ("aarch64-apple-darwin", "__TEXT,__perry_strings"),
             ("x86_64-pc-windows-msvc", ".perrystr$m"),
+            ("wasm32-wasip2", "perry_strings"),
         ] {
             let mut pool = StringPool::with_prefix("bounds".into());
             let id = pool.intern("literal");
@@ -206,7 +211,11 @@ mod tests {
     }
     #[test]
     fn split_comdat_images_ignore_linkage_words_in_literal_bytes() {
-        for target in ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"] {
+        for target in [
+            "x86_64-unknown-linux-gnu",
+            "x86_64-pc-windows-msvc",
+            "wasm32-wasip2",
+        ] {
             let mut pool = StringPool::with_prefix("linkage_words".into());
             let id = pool.intern("literal = external thread_local , comdat(");
             let mut m = LlModule::new(target);
