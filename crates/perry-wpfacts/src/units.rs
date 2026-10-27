@@ -227,6 +227,13 @@ pub(crate) struct FnContract {
     /// holds it): a unit calling it publishes what it passes
     /// (`ProgramFacts::method_runs_out`), however it got the function.
     pub method: bool,
+    /// DECISIONS 212: the published class (its display) whose instances a
+    /// method runs on, when there is one: a unit holding the method as a
+    /// value (returned, read from a field, an array element or the
+    /// prototype) admits those as receivers and publishes them, as for a
+    /// method call on the class's stand-in (DECISIONS 107). `None` with
+    /// `method`: it admits no receiver (each one is a census report).
+    pub this_class: Option<String>,
     /// Per parameter: what the callee does to the argument itself
     /// (`model::MARK_*`), and to what the argument reaches (its fields,
     /// transitively). Two sets: reading `p.n` and converting it is no
@@ -377,6 +384,9 @@ impl FnContract {
     /// (`None`) absorbs them; the receiver is unused only if both say so.
     pub(crate) fn join(&mut self, o: &FnContract) {
         self.method |= o.method;
+        if self.this_class != o.this_class {
+            self.this_class = None;
+        }
         for (v, w) in [(&mut self.params, &o.params), (&mut self.reach, &o.reach)] {
             if v.len() < w.len() {
                 v.resize(w.len(), 0);

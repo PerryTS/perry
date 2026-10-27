@@ -1793,15 +1793,24 @@ impl<'a> Gen<'a> {
                         }
                         continue;
                     }
+                    // Its readers find an unknown value: what it holds leaves
+                    // beyond any contract (DECISIONS 203, 212), unless it
+                    // holds only functions they call through their
+                    // contracts (`note_field_fns`).
                     self.sunk_fields.insert((tm, a));
                     self.field_layouts.remove(&(tm, a));
                     self.field_values.remove(&(tm, a));
                     self.field_tas.remove(&(tm, a));
                     self.field_prims.remove(&(tm, a));
+                    let ru = self.m.reason(UNDESCRIBED);
                     for &t in &ts {
                         if let Some(&n) = self.m.fields.get(&(t, a)) {
                             if self.sunk_field_toks.insert((t, a)) {
-                                self.m.sink_node(n, r);
+                                let rf = match self.field_fns.contains_key(&(t, a)) {
+                                    true => r,
+                                    false => ru,
+                                };
+                                self.m.sink_node(n, rf);
                                 changed = true;
                             }
                         }

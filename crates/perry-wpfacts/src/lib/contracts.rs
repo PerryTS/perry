@@ -619,6 +619,7 @@ pub(super) fn fn_contract_of(
         .collect();
     units::FnContract {
         method: g.m.published_this.contains_key(&f),
+        this_class: this_class(g, f),
         this_use,
         this_reach,
         this_stores,
@@ -680,12 +681,25 @@ pub(super) fn unnamed_methods(m: &model::Model) -> impl Iterator<Item = model::F
         )
 }
 
+/// DECISIONS 212: the one published class whose instances method `f` runs
+/// on (its contract receivers, `Model::published_this`), by display.
+fn this_class(g: &gen::Gen, f: model::FnIdx) -> Option<String> {
+    let rs = g.m.published_this.get(&f)?;
+    let mut ds = rs
+        .iter()
+        .filter_map(|r| g.m.recv_class.get(r))
+        .map(|&tm| g.m.tmpls[tm as usize].display.clone());
+    let d = ds.next()?;
+    ds.all(|x| x == d).then_some(d)
+}
+
 pub(super) fn fn_named(g: &gen::Gen, f: model::FnIdx) -> units::FnContract {
     let fi = &g.m.funcs[f as usize];
     let n = fi.params.len();
     let (name, closed) = fn_contract_name(g, f);
     units::FnContract {
         method: g.m.published_this.contains_key(&f),
+        this_class: this_class(g, f),
         name,
         closed,
         params: vec![model::MARK_ESCAPE; n],

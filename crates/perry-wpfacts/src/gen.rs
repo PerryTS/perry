@@ -9,6 +9,7 @@ use perry_hir::{Class, Export, Function, Global, Import, ImportSpecifier, Module
 
 mod define_keys;
 mod export;
+pub(crate) use export::UNDESCRIBED;
 mod for_in;
 mod glue;
 mod primitives;

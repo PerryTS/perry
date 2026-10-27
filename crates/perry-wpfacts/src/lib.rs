@@ -680,6 +680,7 @@ pub(crate) fn compute_in<'a>(
                     // class's own keys into the receiver, nothing else.
                     None => Some(units::FnContract {
                         method: false,
+                        this_class: None,
                         name: format!("{name}.constructor"),
                         params: Vec::new(),
                         reach: Vec::new(),

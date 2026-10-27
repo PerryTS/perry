@@ -762,20 +762,49 @@ impl Model {
         if t == TOP {
             return;
         }
+        // Another unit's function the census broke, forwarded where no
+        // contract describes it: its owner already lets unknown code call it
+        // (any receiver, any arguments, DECISIONS 209), so its leaving tells
+        // nothing more, and no class it is a member of leaves with it
+        // (DECISIONS 212).
+        if let TokKind::Func(f, _) = self.toks[t as usize] {
+            let fi = &self.funcs[f as usize];
+            if fi.func_id == u32::MAX
+                && !self.broken_fns.is_empty()
+                && self.broken_fns.contains(&format!("fn:{}", fi.name))
+                && self.reasons[reason as usize] == crate::gen::UNDESCRIBED
+            {
+                return;
+            }
+        }
         if let Some(&old) = self.escaped.get(&t) {
-            // DECISIONS 210: a function that left through its contract only
-            // (`escape_props`) and now also through no contract (a value no
-            // contract describes, DECISIONS 203; unknown code): that code
-            // may construct it, which no unit publishes (`ctor_runs`).
             let contract = |m: &Self, r: u32| {
                 m.pub_reason == Some(r)
                     || m.field_fn_reason == Some(r)
                     || m.closed_pub_reason == Some(r)
             };
-            if self.props_escaped.contains_key(&t) && contract(self, old) && !contract(self, reason)
-            {
+            if contract(self, old) && !contract(self, reason) {
                 if let TokKind::Func(f, _) = self.toks[t as usize] {
-                    self.construct_unknown(t, f, reason);
+                    // DECISIONS 212: a contract function that left through
+                    // its contract only and now also through no contract (a
+                    // value no contract describes, DECISIONS 203; unknown
+                    // code) is called by that code with any receiver and
+                    // any arguments, which no unit publishes: its `this` and
+                    // parameters take ⊤ beside what the contract gave them.
+                    if self.contract_fns.contains(&f) && self.funcs[f as usize].func_id != u32::MAX
+                    {
+                        self.escaped.insert(t, reason);
+                        if !self.funcs[f as usize].lexical_this {
+                            self.escape_this(t, reason);
+                        }
+                        self.escape_fn_params(t, reason);
+                    }
+                    // DECISIONS 210: one that left with its properties
+                    // (`escape_props`): that code may construct it, which no
+                    // unit publishes (`ctor_runs`).
+                    if self.props_escaped.contains_key(&t) {
+                        self.construct_unknown(t, f, reason);
+                    }
                 }
             }
             return;
@@ -829,7 +858,10 @@ impl Model {
                     self.mark_use(t, crate::model::MARK_ESCAPE);
                     self.mark_escaped(t, reason);
                     self.rel(|| format!("escaped {t}"));
-                    self.escape_props(t, reason);
+                    // Its own properties are read by code no contract
+                    // describes (DECISIONS 212).
+                    let rp = self.beyond_contract(reason);
+                    self.escape_props(t, rp);
                     if !self.funcs[f as usize].lexical_this {
                         self.escape_this(t, reason);
                     }
@@ -909,6 +941,17 @@ impl Model {
         self.with_s(|m| m.escape_inner(t, reason));
         for s in self.wide_sites(t) {
             self.escape(s, reason);
+        }
+    }
+
+    /// DECISIONS 212: the reason what a value escaping with `reason`
+    /// reaches escapes with: a publication (`pub_reason`, a published
+    /// literal's field function) describes the value itself, not what
+    /// unknown code then reads from it (DECISIONS 203, `UNDESCRIBED`).
+    pub(crate) fn beyond_contract(&mut self, reason: u32) -> u32 {
+        match self.pub_reason == Some(reason) || self.field_fn_reason == Some(reason) {
+            true => self.reason(crate::gen::UNDESCRIBED),
+            false => reason,
         }
     }
 
@@ -1434,6 +1477,12 @@ impl Model {
     }
 
     pub(super) fn escape_inner(&mut self, t: Tok, reason: u32) {
+        // DECISIONS 212: a value that escapes beyond any contract under the
+        // publication reason (no stand-in forwarded, no contract function)
+        // is held by code no contract describes: what it reaches leaves
+        // beyond any contract too (DECISIONS 203), its contract functions
+        // included (`escape`).
+        let reason = self.beyond_contract(reason);
         self.mark_use(t, crate::model::MARK_ESCAPE);
         self.virt_revoke(t, None);
         if let Some(is) = self.contract_recv.get(&t).cloned() {
