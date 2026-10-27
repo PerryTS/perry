@@ -27,7 +27,7 @@ use crate::strings::StringPool;
 
 /// `%PerryLayoutDesc`: family, variant, kind, integrity, slot_count,
 /// template word, rep, proto, keys, key_count, index_mask, index, class, parent,
-/// methods, identity and pad (80 bytes LP64; 64 bytes ILP32).
+/// methods, identity, pad and image keys (88 bytes LP64; 72 bytes ILP32).
 pub const DESC_TY: &str =
     "{ i32, i16, i8, i8, i32, i32, i64, ptr, ptr, i32, i32, ptr, i32, i32, ptr, i32, i32, ptr }";
 mod methods;

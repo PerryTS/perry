@@ -227,8 +227,9 @@ pub(crate) fn emit_key_list_cell(
     )
 }
 
-/// A descriptor's string keys, attributes and storage permutation as image
-/// cells. Symbol bindings cannot be constants of a program descriptor.
+/// A descriptor's keys, attributes and storage permutation as image cells.
+/// Process-lifetime symbols are resolved before publication; per-evaluation
+/// symbol bindings deliberately keep their dynamic path.
 pub(crate) fn emit_layout_key_list(
     llmod: &mut LlModule,
     name: &str,
@@ -239,6 +240,10 @@ pub(crate) fn emit_layout_key_list(
     }
     let mut slots = Vec::new();
     for (atom, _, _, _) in keys {
+        if atom.starts_with("perry_atom_sym_") {
+            slots.push(Slot::Bits(crate::nanbox::TAG_UNDEFINED));
+            continue;
+        }
         let Some(hex) = atom.strip_prefix("perry_atom_") else {
             return "null".into();
         };
@@ -254,11 +259,15 @@ pub(crate) fn emit_layout_key_list(
         let attrs_name = format!("{name}_attrs");
         let mut previous = 0;
         let mut words = Vec::new();
-        for (_, hash, entry, slot) in keys {
+        for (atom, hash, entry, slot) in keys {
             previous = perry_abi::canonical_key_attribute_word(
                 previous,
                 *entry,
-                1u16 << (*hash >> 60),
+                if atom.starts_with("perry_atom_sym_") {
+                    0
+                } else {
+                    1u16 << (*hash >> 60)
+                },
                 mapped.then_some(*slot),
             );
             words.push(Slot::Bits(previous));
@@ -403,6 +412,45 @@ mod tests {
         emit_test_fixture_install(block, &fixture);
         block.ret_void();
         module.to_ir()
+    }
+
+    #[test]
+    fn process_symbols_have_image_slots_but_binding_symbols_do_not() {
+        for triple in [
+            "x86_64-unknown-linux-gnu",
+            "aarch64-apple-darwin",
+            "wasm32-wasip2",
+        ] {
+            let mut module = LlModule::new(triple);
+            let keys = [(
+                "perry_atom_sym_014040776b3a30".into(),
+                0xffff_ffff_ffff_ffff,
+                1,
+                0,
+            )];
+            assert_ne!(
+                emit_layout_key_list(&mut module, "symbol_keys", &keys),
+                "null"
+            );
+            let ir = module.to_ir();
+            assert!(
+                ir.contains(&format!("i64 {}", crate::nanbox::TAG_UNDEFINED as i64)),
+                "{triple}: {ir}"
+            );
+            let expected = perry_abi::canonical_key_attribute_word(0, 1, 0, None);
+            assert!(
+                ir.contains(&format!("i64 {}", expected as i64)),
+                "symbol attributes carry no string Bloom bit: {ir}"
+            );
+            let context = inkwell::context::Context::create();
+            crate::inprocess::parse_ir_text(&context, &ir, "symbol_keys")
+                .expect("symbol-list image IR parses");
+            let binding = [("perry_atom_local_module_7".into(), 0, 0, 0)];
+            assert_eq!(
+                emit_layout_key_list(&mut module, "bound_keys", &binding),
+                "null"
+            );
+        }
     }
 
     #[test]
