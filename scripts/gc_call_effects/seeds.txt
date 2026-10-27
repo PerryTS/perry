@@ -676,3 +676,10 @@ indirect exact perry_runtime::process::ipc_hooks::process_ipc_send_raw_json => e
 indirect exact perry_runtime::process::ipc_hooks::initialize_channel => regex ^perry_runtime::process::ipc::initialize_(unix|windows)_ipc$ -- IPC installer fills platform channel adoption; common bootstrap keeps its original mutex and environment cleanup
 
 indirect exact perry_runtime::process::ipc_bootstrap::process_ipc_ensure_initialized => regex ^perry_runtime::process::ipc::initialize_(unix|windows)_ipc$ -- objdump-verified INITIALIZE_CHANNEL load at +0x271 and call at +0x2a2 after inlining
+
+indirect exact perry_runtime::bun_hook_slots::js_bun_stdin => exact js_bun_stdin -- Bun CLI installer fills the concrete object or decorator
+indirect exact perry_runtime::bun_hook_slots::js_bun_stdout => exact js_bun_stdout -- Bun CLI installer fills the concrete object or decorator
+indirect exact perry_runtime::bun_hook_slots::js_bun_stderr => exact js_bun_stderr -- Bun CLI installer fills the concrete object or decorator
+indirect exact perry_runtime::bun_hook_slots::decorate_bun_plugin => exact perry_runtime::bun_compat::plugin::decorate_bun_plugin -- Bun CLI installer fills the concrete object or decorator
+
+indirect exact perry_runtime::bun_hook_slots::resolve_self_guard => exact perry_runtime::bun_compat::self_global::installed_tls::resolve -- Bun platform bootstrap installs existing TLS storage resolver before its original once guard

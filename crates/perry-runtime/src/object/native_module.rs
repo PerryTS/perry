@@ -941,9 +941,9 @@ unsafe fn native_module_property_by_name_impl(
                 let submodule = "bun.ant";
                 return js_create_native_module_namespace(submodule.as_ptr(), submodule.len());
             }
-            "stdin" => return crate::bun_compat::js_bun_stdin(),
-            "stdout" => return crate::bun_compat::js_bun_stdout(),
-            "stderr" => return crate::bun_compat::js_bun_stderr(),
+            "stdin" => return crate::bun_hook_slots::js_bun_stdin(),
+            "stdout" => return crate::bun_hook_slots::js_bun_stdout(),
+            "stderr" => return crate::bun_hook_slots::js_bun_stderr(),
             "YAML" => return crate::bun_compat::js_bun_yaml(),
             "TOML" => return crate::bun_compat::js_bun_toml(),
             "semver" => return crate::bun_compat::js_bun_semver(),

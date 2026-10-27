@@ -89,10 +89,7 @@ fn boxed_str(bytes: &[u8]) -> f64 {
     let ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
     f64::from_bits(JSValue::string_ptr(ptr).bits())
 }
-
-fn key_ptr(key: &[u8]) -> *mut StringHeader {
-    js_string_from_bytes(key.as_ptr(), key.len() as u32)
-}
+use crate::builtin_value_support::key_ptr;
 
 fn promise_value(value: f64) -> f64 {
     let promise = crate::promise::js_promise_new();

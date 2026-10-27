@@ -1389,3 +1389,6 @@ pub mod event_target_hook_slots;
 
 mod byte_cell_support;
 pub mod typedarray_hook_slots;
+
+mod builtin_value_support;
+mod bun_hook_slots;

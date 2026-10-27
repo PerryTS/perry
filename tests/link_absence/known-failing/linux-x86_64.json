@@ -96,16 +96,6 @@
       "rustc_demangle::demangle",
       "rustc_demangle::v0::basic_type"
     ],
-    "bun_cli_utils": [
-      "perry_runtime::bun_compat::bun_std_out_like",
-      "perry_runtime::bun_compat::bun_stdin_array_buffer",
-      "perry_runtime::bun_compat::bun_stdin_json",
-      "perry_runtime::bun_compat::bun_stdin_text",
-      "perry_runtime::bun_compat::cli_utils::syntax_error_value",
-      "perry_runtime::bun_compat::json_parse_promise",
-      "perry_runtime::bun_compat::key_ptr",
-      "perry_runtime::bun_compat::plugin::decorate_bun_plugin"
-    ],
     "diagnostics": [
       "perry_runtime::process::report::scan_report_cache_roots_mut"
     ],

@@ -272,6 +272,7 @@ pub extern "C" fn js_runtime_install_bun_cli_utils() {
     js_runtime_install_bigint();
     perry_install_once!({
         crate::bun_compat::install_cli_utils();
+        crate::bun_hook_slots::install();
     });
 }
 

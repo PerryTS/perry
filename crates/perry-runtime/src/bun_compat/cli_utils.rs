@@ -29,12 +29,7 @@ fn error_value(message: &str) -> f64 {
     let error = crate::error::js_error_new_with_message(message);
     f64::from_bits(JSValue::pointer(error as *const u8).bits())
 }
-
-fn syntax_error_value(message: &str) -> f64 {
-    let message = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let error = crate::error::js_syntaxerror_new(message);
-    f64::from_bits(JSValue::pointer(error as *const u8).bits())
-}
+use crate::builtin_value_support::syntax_error_value;
 
 fn throw_type_error(message: &str) -> ! {
     let message = js_string_from_bytes(message.as_ptr(), message.len() as u32);
