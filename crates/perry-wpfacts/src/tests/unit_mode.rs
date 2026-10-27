@@ -586,3 +586,6 @@ fn closed_chain(n: usize) -> [(&'static str, String); 2] {
     );
     [("a", a), ("b", b)]
 }
+
+#[path = "unit_mode/escaped_results.rs"]
+mod escaped_results;
