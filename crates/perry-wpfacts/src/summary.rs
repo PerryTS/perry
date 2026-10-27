@@ -328,7 +328,12 @@ pub fn map_cons(
         },
         Implicit { reason, proto } => Implicit { reason, proto },
         CreateProto { reason } => CreateProto { reason },
-        ChainUnion { key, dst } => ChainUnion { key, dst: n(dst) },
+        ChainUnion { key, dst, of } => ChainUnion {
+            key,
+            dst: n(dst),
+            of,
+        },
+        ProtoGiven { protos } => ProtoGiven { protos: n(protos) },
         ProtoClosure { dst } => ProtoClosure { dst: n(dst) },
         ProtoMethods { origin, key, call } => ProtoMethods {
             origin,

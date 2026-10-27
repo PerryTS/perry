@@ -1591,9 +1591,10 @@ impl Model {
                 format!("implicit {n} {reason} {}", proto.name())
             }
             Cons::CreateProto { reason } => format!("createproto {n} {reason}"),
-            Cons::ChainUnion { key, dst } => {
-                format!("chainunion {n} {} {dst}", self.key_name(*key))
+            Cons::ChainUnion { key, dst, of } => {
+                format!("chainunion {n} {} {dst} {of}", self.key_name(*key))
             }
+            Cons::ProtoGiven { protos } => format!("protogiven {n} {protos}"),
             Cons::ProtoClosure { dst } => format!("protoclosure {n} {dst}"),
             Cons::ProtoMethods { origin, key, call } => {
                 format!("protomethods {n} {origin} {} {call}", self.key_name(*key))
