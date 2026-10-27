@@ -498,12 +498,7 @@ pub fn to_number(raw: f64) -> f64 {
         |run| run(raw),
     )
 }
-static TYPED_ARRAY_ALLOC: Hook<fn(u8, u32) -> *mut TypedArrayHeader> = Hook::empty();
-pub fn typed_array_alloc(kind: u8, length: u32) -> *mut TypedArrayHeader {
-    TYPED_ARRAY_ALLOC
-        .get()
-        .map_or_else(|| std::ptr::null_mut(), |run| run(kind, length))
-}
+pub use crate::byte_cell_support::typed_array_alloc;
 static TYPED_ARRAY_FAST_INDEX_GET: Hook<fn(usize, u8, f64) -> Option<f64>> = Hook::empty();
 pub(crate) fn typed_array_fast_index_get(ptr: usize, kind: u8, index: f64) -> Option<f64> {
     TYPED_ARRAY_FAST_INDEX_GET
@@ -595,7 +590,6 @@ pub(crate) fn install() {
         STORE_COERCED.set(crate::typedarray::species::store_coerced);
         TO_BIGINT_FOR_STORE.set(crate::typedarray::bigint::to_bigint_for_store);
         TO_NUMBER.set(crate::typedarray::species::to_number);
-        TYPED_ARRAY_ALLOC.set(crate::typedarray::typed_array_alloc);
         TYPED_ARRAY_FAST_INDEX_GET.set(crate::typedarray::typed_array_fast_index_get);
         TYPED_ARRAY_FAST_INDEX_SET.set(crate::typedarray::typed_array_fast_index_set);
         TYPED_ARRAY_FROM_SOURCE_RAW_VALUES

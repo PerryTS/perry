@@ -220,14 +220,7 @@ unsafe fn native_memory_copy_accepts_buffer(addr: usize) -> bool {
     addr >= 0x1000 && crate::buffer::is_uint8array_buffer(addr)
 }
 
-/// All typed owners use the common byte-store entry and placement rule.
-pub fn typed_array_alloc(kind: u8, length: u32) -> *mut TypedArrayHeader {
-    crate::buffer::store::store_alloc(
-        type_for_kind(kind),
-        length,
-        crate::buffer::store::Init::Zero,
-    )
-}
+pub use crate::byte_cell_support::typed_array_alloc;
 
 /// Store a number into the typed array slot, performing the per-kind cast.
 pub(crate) unsafe fn store_at(ta: *mut TypedArrayHeader, idx: usize, value: f64) {

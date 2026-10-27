@@ -640,3 +640,12 @@ pub(crate) fn throw_bigint_number_mix() -> ! {
     }
     throw_type_error(b"Cannot mix BigInt and other types, use explicit conversions")
 }
+
+/// All typed owners use the common byte-store entry and placement rule.
+pub fn typed_array_alloc(kind: u8, length: u32) -> *mut TypedArrayHeader {
+    crate::buffer::store::store_alloc(
+        type_for_kind(kind),
+        length,
+        crate::buffer::store::Init::Zero,
+    )
+}
