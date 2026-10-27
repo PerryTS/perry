@@ -759,8 +759,15 @@ impl Model {
                         .iter()
                         .map(|&c| {
                             let f = self.node_fn[self.calls[c as usize].ret as usize];
-                            let p = if self.protocol_calls.contains(&c) { " protocol" } else { "" };
-                            let name = self.funcs.get(f as usize).map_or("(no function)", |f| f.name.as_str());
+                            let p = if self.protocol_calls.contains(&c) {
+                                " protocol"
+                            } else {
+                                ""
+                            };
+                            let name = self
+                                .funcs
+                                .get(f as usize)
+                                .map_or("(no function)", |f| f.name.as_str());
                             format!("{name}#{c}{p}")
                         })
                         .collect();

@@ -295,19 +295,20 @@ pub(super) fn a_broken_namespace_field_function_resolves_only_the_units_that_see
     // Rewritten for DECISIONS 196 (each reader an argument marker gains is
     // solve work): [699, 725, 908, 406, 334] -> [709, 731, 914, 410, 334];
     // for #13294 (decision 151: every unit replays the shared objects'
-    // writes) -> [709, 779, 956, 443, 392]; for the intrinsic member
-    // descriptions (a name no builtin prototype defines reads nothing from
-    // a builtin object, so fewer opaque values flow) -> [709, 779, 918, 443,
-    // 392]; for a store into ⊤ writing the intrinsics under its key and the
-    // builtin namespaces' prototype chain (their lookups reach
-    // `Object.prototype`) -> [773, 891, 1035, 511, 452]; ABM3: the unit
-    // boundary's store standing in for other units' code writes no builtin
-    // member (they publish their own stores into ⊤) -> [773, 891, 1000, 511,
-    // 452]; a stand-in class's prototype defines its contract's methods (a
-    // lookup of one stops there) and an undescribed builtin member is no
-    // written one -> the pin below.
+    // writes) -> [709, 779, 956, 443, 392]; for DECISIONS 209 (a broken
+    // function read through a value contract is its stand-in, not ⊤: the
+    // units of `a` holding `util.get`, #u1 145 -> 181 and #u3 37 -> 62,
+    // solve its contract and its escaped object; `b`, `c`, `m` and round 2
+    // unchanged) -> [709, 779, 956, 504, 428]; for DECISIONS 210 (a
+    // published function's properties leave with it but its `prototype`,
+    // whose template no longer escapes) -> [695, 772, 949, 497, 428]; for
+    // the intrinsic member descriptions and the static rule (a store into ⊤
+    // writes its key on every builtin prototype, the builtin namespaces'
+    // lookups reach `Object.prototype`; the unit boundary's stand-in store
+    // writes none, a stand-in class's prototype defines its contract's
+    // methods) -> the pin below.
     assert!(pf.round_work[1] < w("a.ts") + w("m.ts") + w("b.ts") + w("c.ts"));
-    assert_eq!(pf.round_work, [768, 886, 1000, 511, 452], "{:?}", pf.units);
+    assert_eq!(pf.round_work, [754, 879, 993, 563, 487], "{:?}", pf.units);
 }
 
 #[test]

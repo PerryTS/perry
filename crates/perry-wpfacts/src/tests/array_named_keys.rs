@@ -31,8 +31,16 @@ fn a_named_key_of_an_array_reads_none_of_its_elements() {
         for (const x of xs) console.log(x.a);
         "#,
     );
-    assert!(!recv(&pf, "q").iter().any(|r| r.ends_with(":A")), "{}", pf.dump_text());
-    assert!(recv(&pf, "a").iter().any(|r| r.ends_with(":A")), "{}", pf.dump_text());
+    assert!(
+        !recv(&pf, "q").iter().any(|r| r.ends_with(":A")),
+        "{}",
+        pf.dump_text()
+    );
+    assert!(
+        recv(&pf, "a").iter().any(|r| r.ends_with(":A")),
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// The iteration protocol of an array holding a builtin function value: the
@@ -70,7 +78,11 @@ fn a_computed_key_store_reaches_the_named_keys() {
     let q = recv(&pf, "q");
     assert!(q.iter().any(|r| r.ends_with(":C")), "{}", pf.dump_text());
     assert!(!q.iter().any(|r| r.ends_with(":A")), "{}", pf.dump_text());
-    assert!(recv(&pf, "c").iter().any(|r| r.ends_with(":C")), "{}", pf.dump_text());
+    assert!(
+        recv(&pf, "c").iter().any(|r| r.ends_with(":C")),
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// Soundness: a key that may be ToString of a Number is an element key.
@@ -84,7 +96,11 @@ fn a_numeric_key_reads_the_elements() {
         if (v) console.log(v.q);
         "#,
     );
-    assert!(recv(&pf, "q").iter().any(|r| r.ends_with(":A")), "{}", pf.dump_text());
+    assert!(
+        recv(&pf, "q").iter().any(|r| r.ends_with(":A")),
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// Soundness: an escaped array's named keys hold what unknown code wrote.
@@ -102,4 +118,3 @@ fn an_escaped_arrays_named_keys_read_top() {
     );
     assert!(top(&pf, "q"), "{}", pf.dump_text());
 }
-

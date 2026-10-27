@@ -695,7 +695,8 @@ impl<'a> Gen<'a> {
                 true => !self.receiver_unused(t),
                 false => self.m.is_escaped(t) && !self.open_fn(t),
             };
-            if escaped || self.m.hard.contains_key(&t) {
+            // DECISIONS 210: used as an object beyond the contract.
+            if escaped || self.m.hard.contains_key(&t) || self.m.fn_touched.contains(&t) {
                 out.push(format!("fn:{name}"));
             }
         }
@@ -712,8 +713,16 @@ impl<'a> Gen<'a> {
             });
             if self.m.aborted || written || self.m.is_escaped(*t) || self.m.hard.contains_key(t) {
                 if self.m.explain {
-                    let esc = self.m.escaped.get(t).map(|&r| self.m.reasons[r as usize].clone());
-                    let hard = self.m.hard.get(t).map(|&(_, r)| self.m.reasons[r as usize].clone());
+                    let esc = self
+                        .m
+                        .escaped
+                        .get(t)
+                        .map(|&r| self.m.reasons[r as usize].clone());
+                    let hard = self
+                        .m
+                        .hard
+                        .get(t)
+                        .map(|&(_, r)| self.m.reasons[r as usize].clone());
                     eprintln!(
                         "perry: wpfacts explain: unit reports {rep}: written {written} escaped {esc:?} hard {hard:?}"
                     );

@@ -289,6 +289,19 @@ impl Model {
                 },
             );
         }
+        // DECISIONS 210: a store into another unit's function (a stand-in)
+        // under `prototype` (or a key that may be it) replaces the chain its
+        // owner's layout has: the census reports it. Its other properties
+        // left in the owner (`escape_props`).
+        if let TokKind::Func(f, _) = self.toks[t as usize] {
+            let proto = match key {
+                Key::Named(a) => self.atoms[a as usize] == "prototype",
+                Key::Any => true,
+            };
+            if proto && self.foreign_ctor.contains_key(&f) {
+                self.fn_touched.insert(t);
+            }
+        }
         // A store into a builtin function value is decided once the
         // worklist is empty (`settle_bf_written`): `write_builtin_fns` notes it.
         // The boundary's store for other units' code is theirs to publish.

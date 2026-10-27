@@ -513,14 +513,15 @@ pub(super) fn an_escaped_value_beside_top_is_that_top() {
     // callers' ⊤ they stay and ride into every array: n² until a store into a
     // parameter only ⊤ is passed for escapes there (DECISIONS 192, open).
     // Rewritten for #13294 (decision 151: every unit replays the shared
-    // objects' writes): (939, 2563, 8115) -> (964, 2612, 8212); for the
-    // builtin namespaces' prototype chain -> (966, 2614, 8214); ABM3: every
-    // array holding `y` has its named-key node (`Model::named_any`) beside
-    // its elements, which a store under a computed key fills -> the pin
-    // below (the same n² growth).
+    // objects' writes): (939, 2563, 8115) -> (964, 2612, 8212); for
+    // DECISIONS 210 (the published `f`'s prototype stays its own: two
+    // entries fewer at every `n`) -> (962, 2610, 8210); for the builtin
+    // namespaces' prototype chain and every array's named-key node
+    // (`Model::named_any`, beside its elements, which a store under a
+    // computed key fills) -> the pin below (the same n² growth).
     assert_eq!(
         (e8, e16, e32),
-        (1070, 2950, 9398),
+        (1068, 2948, 9396),
         "entries {e8} {e16} {e32}"
     );
 }

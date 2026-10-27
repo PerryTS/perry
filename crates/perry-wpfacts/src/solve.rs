@@ -1556,7 +1556,10 @@ impl Model {
             ),
             Cons::Hard { kind, reason } => format!("hard {n} {} {reason}", kind.code()),
             Cons::DeleteKey { key, reason } => {
-                format!("deletekey {n} {} {reason}", esc_key(&self.atoms[*key as usize]))
+                format!(
+                    "deletekey {n} {} {reason}",
+                    esc_key(&self.atoms[*key as usize])
+                )
             }
             Cons::AddsKeys => format!("addskeys {n}"),
             Cons::DefineKey { key, data, reason } => {

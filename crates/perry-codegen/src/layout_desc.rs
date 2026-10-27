@@ -769,7 +769,8 @@ fn emit_desc(
         format!("{keys:?}|{family}|{slot_count}|{class:?}"),
         0,
         true,
-        class.0 != 0,
+        // Both nominal and admitted classless families carry their DPA word.
+        true,
         0,
     );
     llmod.add_raw_global(format!(
@@ -1072,9 +1073,28 @@ pub(crate) fn emit_module_layouts(
             variants.push((v.key_bits, vnamed, v.slot_count));
         }
         let methods = methods::emit(llmod, strings, &mut atoms, fam);
+        let literal = layouts.literal_families.contains(&fam.class_id);
+        let identity = if literal {
+            (0, 0)
+        } else {
+            (fam.class_id, fam.parent_class_id)
+        };
+        // First-birth literal descriptors are static image data outside the
+        // startup enumeration. DPA assigns their immutable row words; the
+        // runtime publishes the current agent's facts only at first birth.
+        let family_section = if literal {
+            section(
+                &llmod.target_triple,
+                "perry_literal_layouts",
+                "__DATA,__perry_litlay",
+                ".perrylit$m",
+            )
+        } else {
+            sect.clone()
+        };
         emit_desc(
             llmod,
-            &sect,
+            &family_section,
             (
                 &format!("perry_layout_keys_{module_prefix}_{n}"),
                 &format!("perry_layout_index_{module_prefix}_{n}"),
@@ -1083,7 +1103,7 @@ pub(crate) fn emit_module_layouts(
             family,
             &named,
             fam.slot_count,
-            (fam.class_id, fam.parent_class_id),
+            identity,
             &methods,
             declared_proto_tag(class),
         );
@@ -1093,7 +1113,7 @@ pub(crate) fn emit_module_layouts(
             let name = format!("perry_layout_class_{}_v{j}", fam.class_id);
             emit_desc(
                 llmod,
-                &sect,
+                &family_section,
                 (
                     &format!("perry_layout_keys_{module_prefix}_{n}"),
                     &format!("perry_layout_index_{module_prefix}_{n}"),
@@ -1102,7 +1122,7 @@ pub(crate) fn emit_module_layouts(
                 family,
                 vnamed,
                 *slot_count,
-                (fam.class_id, fam.parent_class_id),
+                identity,
                 &methods,
                 declared_proto_tag(class),
             );

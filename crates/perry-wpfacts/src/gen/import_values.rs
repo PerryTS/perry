@@ -656,6 +656,27 @@ impl<'a> Gen<'a> {
         self.m.add_tok(n, tok);
         self.stand_in_fns.insert((c.name.clone(), holder), (n, tok));
         self.stand_in_fc.insert(tok, c);
+        // DECISIONS 210: a `new` of it constructs its owner's `new <name>`
+        // layout: its stand-in instance is held here once the owner
+        // published it (read like a cell, `other_layout`; a broken one is
+        // ⊤). Until then the construction's result is unknown and the
+        // construction is published, so the owner constructs and publishes
+        // the layout (`lib.rs` records the read once this unit constructs).
+        let d = format!("new {}", c.name);
+        let held = match self.unit_in {
+            Some(u) if u.layout(&d).is_some() || u.broken(&d) => self.other_layout(&d).map(|cc| {
+                self.stand_in_class(mi, cc);
+                let tm = self.stand_ins[&d].1;
+                let nv = self
+                    .m
+                    .node_named("newval", || format!("newval({})", c.name));
+                let inst = self.m.tok(TokKind::Obj(tm, NO_CTX));
+                self.m.add_tok(nv, inst);
+                (nv, tm)
+            }),
+            _ => None,
+        };
+        self.m.foreign_ctor.insert(fx, held);
         // What unknown code receives goes nowhere here.
         self.m.nodes[args_all as usize].sink = true;
         self.m.sink_node(args_all, r);

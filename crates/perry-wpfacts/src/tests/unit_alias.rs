@@ -50,7 +50,7 @@ fn field<'t>(t: &'t TemplateFacts, key: &str) -> &'t crate::derive::FieldFacts {
 /// (per template display both have): a stable prefix, a fixed layout, per
 /// field a slot, definiteness, readonly, a kind (`w`'s must be within
 /// `u`'s), a stable typed array.
-fn stronger(u: &ProgramFacts, w: &ProgramFacts) -> Vec<String> {
+pub(super) fn stronger(u: &ProgramFacts, w: &ProgramFacts) -> Vec<String> {
     let mut out = Vec::new();
     for tu in &u.templates {
         let Some(tw) = w.templates.iter().find(|t| t.display == tu.display) else {
@@ -659,6 +659,7 @@ fn a_layout_met_again_in_its_own_description_is_named_once() {
         definite: Vec::new(),
         ctor_leaks: true,
         binding_prim: 0,
+        fn_inst: false,
     };
     let with = |mut c: crate::units::ClassContract, inner: crate::units::ClassContract| {
         let vc = crate::units::ValueContract {

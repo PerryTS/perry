@@ -891,7 +891,9 @@ impl<'a> Gen<'a> {
                     self.m.reason("E7 delete")
                 };
                 match target.as_ref() {
-                    Expr::PropertyGet { object, property, .. } => {
+                    Expr::PropertyGet {
+                        object, property, ..
+                    } => {
                         let o = self.expr(fx, object);
                         let key = self.m.atom(property);
                         self.m.cons(o, Cons::DeleteKey { key, reason: r });

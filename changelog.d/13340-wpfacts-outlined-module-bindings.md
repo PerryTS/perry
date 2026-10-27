@@ -1,0 +1,1 @@
+Whole-program analysis now preserves module bindings when large modules are split into initialization functions. Default imports and CommonJS require results can resolve their exported values instead of becoming unknown merely because the exporting module was outlined.

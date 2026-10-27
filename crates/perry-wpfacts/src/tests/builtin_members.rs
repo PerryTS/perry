@@ -188,7 +188,14 @@ fn a_store_into_top_writes_the_intrinsics_under_its_key() {
     ] {
         // A program object's lookup ends at `Object.prototype` too (ABM2
         // fixtures FE/FF: a miscompile on main, fixed by the static rule).
-        for other in ["Object", "\"text\"", "new Map()", "[1]", "new A()", "{ q: 1 }"] {
+        for other in [
+            "Object",
+            "\"text\"",
+            "new Map()",
+            "[1]",
+            "new A()",
+            "{ q: 1 }",
+        ] {
             for (w, want) in [(named, false), (computed, false), (elsewhere, true)] {
                 let src = body(hand, w, other);
                 let pf = facts(&src);
@@ -314,8 +321,14 @@ fn a_key_written_onto_a_namespace_is_a_member() {
     let top = "const t: any = unknown.value; t.inner = function () { return 1; };";
     for (src, want) in [
         (body("", ""), true),
-        (body("(Object as any).inner = function () { return 1; };", ""), false),
-        (body("", "(Object as any).inner = function () { return 1; };"), false),
+        (
+            body("(Object as any).inner = function () { return 1; };", ""),
+            false,
+        ),
+        (
+            body("", "(Object as any).inner = function () { return 1; };"),
+            false,
+        ),
         (body(fw, ""), false),
         (body(top, ""), false),
         (body(&format!("unknown.take(Map); {top}"), ""), false),

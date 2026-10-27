@@ -369,6 +369,8 @@ pub(crate) struct FnCtx<'a> {
     /// Object model step 5 (case 2c): the program's key colouring
     /// (`layout_families`, `expr/layout_read.rs`).
     pub program_layouts: std::sync::Arc<crate::layout_families::ProgramLayouts>,
+    /// Compile-time code selection, never a receiver lifetime proof.
+    pub receiver_families: std::sync::Arc<std::collections::BTreeMap<u32, u32>>,
     /// `this` slots whose value is the `this` of a HIR function: (slot,
     /// function id). A `this` read is answered only while the top of
     /// `this_stack` is one of these slots (an inlined constructor pushes its

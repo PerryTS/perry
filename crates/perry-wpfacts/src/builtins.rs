@@ -372,7 +372,9 @@ fn builtin_fn(m: &mut Model, why: &'static str) -> Tok {
 fn opaque_member(m: &mut Model, dst: NodeId) {
     let bf = builtin_fn(m, "opaque member (written key)");
     m.add_tok(dst, bf);
-    m.add_top(dst, |_| "member of a builtin prototype written through ⊤".into());
+    m.add_top(dst, |_| {
+        "member of a builtin prototype written through ⊤".into()
+    });
     m.add_prim(dst, prim::ALL);
 }
 
@@ -682,6 +684,29 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 let fc = m.tok(TokKind::Builtin(BuiltinNs::Function));
                 m.add_tok(dst, fc);
             }
+            // DECISIONS 210: another unit's constructor function: its
+            // prototype is its owner's layout's once the owner published it
+            // (a store there is this unit's census report); before that an
+            // unknown value, never a prototype of this unit's own.
+            Some("prototype") if m.foreign_ctor.contains_key(&f) => match m.foreign_ctor[&f] {
+                Some((_, tm)) => {
+                    let p = m.tok(TokKind::Proto(tm));
+                    let a = m.atom("prototype");
+                    let fl = m.field(t, a);
+                    m.add_tok(fl, p);
+                }
+                None => {
+                    // Beyond the contract: the owner's chain would take
+                    // what is stored through it unseen. Reported, so the
+                    // owner escapes the function (its chain is ⊤ there).
+                    m.fn_touched.insert(t);
+                    m.add_top(dst, |_| {
+                        "prototype of another unit's constructor function (layout not published)"
+                            .into()
+                    });
+                    m.add_prim(dst, prim::ALL);
+                }
+            },
             Some("prototype") => {
                 let tm = m.fn_inst_template(f);
                 let p = m.tok(TokKind::Proto(tm));
@@ -879,7 +904,11 @@ pub fn prim_method(m: &mut Model, prim: u16, key: Key, call: CallId) {
     // A key a store into ⊤ may have written onto the chain: the call runs
     // what was stored (a described method may be replaced too).
     if !intrinsic_miss(m, a, NativeMiss::PrimCall(prim, call)) {
-        unknown_method(m, call, &format!("argument of a written primitive method {name}"));
+        unknown_method(
+            m,
+            call,
+            &format!("argument of a written primitive method {name}"),
+        );
     }
     match members::prim_member(prim, &name) {
         // `Object.prototype`'s methods on a primitive (no own chain here).
@@ -1817,10 +1846,14 @@ pub fn native_proto_keys(name: &str) -> &'static [&'static str] {
 pub fn native_written(m: &Model, np: Tok, a: Atom) -> bool {
     // An element store's write (`NUM_KEY`) is one of every numeric key and
     // of `length` (`push` on an array-like moves it).
-    let num = m.atom_index.get(crate::model::NUM_KEY).copied().filter(|_| {
-        let n = &m.atoms[a as usize];
-        crate::solve::numeric_key(n) || n == "length"
-    });
+    let num = m
+        .atom_index
+        .get(crate::model::NUM_KEY)
+        .copied()
+        .filter(|_| {
+            let n = &m.atoms[a as usize];
+            crate::solve::numeric_key(n) || n == "length"
+        });
     let hit = |t: Tok| {
         m.native_writes.contains_key(&(t, None))
             || m.native_writes.contains_key(&(t, Some(a)))
@@ -1933,7 +1966,9 @@ fn replay_native_missing(m: &mut Model) {
                 NativeMiss::Load(dst) => {
                     let bf = builtin_fn(m, "written key replay");
                     m.add_tok(dst, bf);
-                    m.add_top(dst, |_| "member of a builtin prototype written through ⊤".into());
+                    m.add_top(dst, |_| {
+                        "member of a builtin prototype written through ⊤".into()
+                    });
                     m.add_prim(dst, prim::ALL);
                 }
                 NativeMiss::Global(dst, f) => {
@@ -1973,7 +2008,11 @@ fn replay_native_missing(m: &mut Model) {
                 }
                 NativeMiss::PrimCall(_, call) => {
                     let name = m.atoms[a as usize].clone();
-                    unknown_method(m, call, &format!("argument of a written primitive method {name}"));
+                    unknown_method(
+                        m,
+                        call,
+                        &format!("argument of a written primitive method {name}"),
+                    );
                 }
             }
         }
