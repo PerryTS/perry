@@ -1366,3 +1366,5 @@ pub mod async_hook_slots;
 
 mod fs_hook_slots;
 mod io_error;
+
+mod thread_hook_slots;

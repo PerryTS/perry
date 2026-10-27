@@ -410,3 +410,13 @@ indirect exact perry_runtime::fs_hook_slots::try_clone_registered_fd => exact pe
 indirect exact perry_runtime::fs_hook_slots::is_fs_stream_instance_value => exact perry_runtime::fs::is_fs_stream_instance_value -- the fs installer fills the state probe; empty means no filesystem-owned state
 indirect exact perry_runtime::fs_hook_slots::resolve_watch_queue => exact perry_runtime::fs::dir_glob_watch::watch_backend::watch_queue_tls::resolve -- fs installer fills the unchanged TLS storage resolver
 indirect exact perry_runtime::fs_hook_slots::resolve_watch_shared => exact perry_runtime::fs::dir_glob_watch::watch_backend::watch_shared_tls::resolve -- fs installer fills the unchanged TLS storage resolver
+
+indirect exact perry_runtime::thread_hook_slots::js_thread_process_pending => exact js_thread_process_pending -- thread installer fills the concrete completion/clone target
+indirect exact perry_runtime::thread_hook_slots::js_thread_has_pending => exact js_thread_has_pending -- thread installer fills the concrete completion/clone target
+indirect exact perry_runtime::thread_hook_slots::purge_agent_thread_results => exact perry_runtime::thread::pending_results::purge_agent_thread_results -- thread installer fills the concrete completion/clone target
+indirect exact perry_runtime::thread_hook_slots::clone_with_transfers => exact perry_runtime::builtins::globals::clone_with_transfers -- thread installer fills the concrete completion/clone target
+indirect exact perry_runtime::thread_hook_slots::diagnostics_channel_process_pending => exact perry_runtime::node_submodules::diagnostics::diagnostics_channel_process_pending -- thread installer fills the concrete completion/clone target
+indirect exact perry_runtime::thread_hook_slots::diagnostics_channel_has_pending_publishes => exact perry_runtime::node_submodules::diagnostics::diagnostics_channel_has_pending_publishes -- thread installer fills the concrete completion/clone target
+indirect exact perry_runtime::thread_hook_slots::enqueue_cross_thread_publish => exact perry_runtime::node_submodules::diagnostics::enqueue_cross_thread_publish -- the thread installer selects serialization for cross-thread diagnostic delivery
+indirect exact js_microtasks_pending => exact js_thread_has_pending -- inlined HAS_PENDING slot, actual C ABI target
+indirect exact js_microtasks_pending => exact perry_runtime::node_submodules::diagnostics::diagnostics_channel_has_pending_publishes -- inlined DIAG_PENDING slot, actual Rust target

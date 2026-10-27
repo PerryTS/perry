@@ -24,10 +24,10 @@ pub(super) fn can_skip_callback_phases() -> bool {
     // after this check is handled by the next pump, just as one arriving after
     // the ordinary drain. Conservatively use the full path for active workers.
     !(super::super::native_async::completion_work_pending()
-        || crate::thread::js_thread_has_pending() != 0
+        || crate::thread_hook_slots::js_thread_has_pending() != 0
         || crate::bun_ffi::callback::threadsafe_callback_work_pending()
         || crate::async_hook_slots::gc_destroy_work_pending()
-        || crate::node_submodules::diagnostics_channel_has_pending_publishes()
+        || crate::thread_hook_slots::diagnostics_channel_has_pending_publishes()
         || crate::node_submodules::diagnostics::uncaught_work_pending()
         || crate::os::process_stdin_needs_pump()
         || crate::timer::timer_phase_work_pending())

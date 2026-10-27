@@ -485,7 +485,7 @@ fn collect_transfer_list(options: f64) -> std::collections::HashSet<usize> {
 /// structuredClone and worker messages use one Node-compatible codec.
 #[no_mangle]
 pub extern "C" fn js_structured_clone(value: f64) -> f64 {
-    clone_with_transfers(value, &[])
+    crate::thread_hook_slots::clone_with_transfers(value, &[])
 }
 
 #[no_mangle]
@@ -496,7 +496,7 @@ pub extern "C" fn js_structured_clone_with_options(value: f64, options: f64) -> 
         .into_iter()
         .collect::<Vec<_>>();
     let outcome = crate::exception::catch_js_throw(|| {
-        clone_with_transfers(value.get_nanbox_f64(), &transfer)
+        crate::thread_hook_slots::clone_with_transfers(value.get_nanbox_f64(), &transfer)
     });
     drop(transfer);
     drop(scope);
@@ -506,7 +506,7 @@ pub extern "C" fn js_structured_clone_with_options(value: f64, options: f64) -> 
     }
 }
 
-fn clone_with_transfers(value: f64, transfer: &[usize]) -> f64 {
+pub(crate) fn clone_with_transfers(value: f64, transfer: &[usize]) -> f64 {
     let message = match unsafe { crate::thread::serialize_message(value.to_bits(), transfer, None) }
     {
         Ok(message) => message,

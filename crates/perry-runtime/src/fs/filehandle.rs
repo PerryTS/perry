@@ -1585,10 +1585,11 @@ pub(crate) extern "C" fn filehandle_read_lines_impl(
 /// keeps the fs surface out of binaries that never create a FileHandle. The
 /// probe unifies the two identity checks the thread serializer used to call
 /// directly.
-static FS_THREAD_CODEC_IMPL: crate::thread::FsThreadCodec = crate::thread::FsThreadCodec {
-    is_filehandle: fs_codec_is_filehandle,
-    build_detached: build_detached_filehandle_object,
-};
+static FS_THREAD_CODEC_IMPL: crate::thread_hook_slots::FsThreadCodec =
+    crate::thread_hook_slots::FsThreadCodec {
+        is_filehandle: fs_codec_is_filehandle,
+        build_detached: build_detached_filehandle_object,
+    };
 
 fn fs_codec_is_filehandle(value: f64) -> bool {
     crate::fs::is_fs_filehandle_value(value) || crate::fs::filehandle_object_fd(value).is_some()
@@ -1600,7 +1601,7 @@ fn build_filehandle_object(fd: i32) -> f64 {
     // Arm BEFORE the object exists: every FileHandle (attached or detached)
     // is minted here, so the thread codec is live from the first moment a
     // probe could ever match.
-    crate::thread::arm_fs_thread_codec(&FS_THREAD_CODEC_IMPL);
+    crate::thread_hook_slots::arm_fs_thread_codec(&FS_THREAD_CODEC_IMPL);
     let obj = crate::object::js_object_alloc(CLASS_ID_FS_FILEHANDLE, 23);
     let handle = f64::from_bits(crate::value::JSValue::pointer(obj as *const u8).bits());
     let set = |name: &str, v: f64| {

@@ -898,10 +898,10 @@ pub(crate) fn unwind_async_box_execution_refs(depth: usize) {
 /// microtask drain runs.
 #[no_mangle]
 pub extern "C" fn js_microtasks_pending() -> i32 {
-    if crate::node_submodules::diagnostics_channel_has_pending_publishes() {
+    if crate::thread_hook_slots::diagnostics_channel_has_pending_publishes() {
         return 1;
     }
-    if crate::thread::js_thread_has_pending() != 0 {
+    if crate::thread_hook_slots::js_thread_has_pending() != 0 {
         return 1;
     }
     if crate::builtins::queued_microtasks_pending() {

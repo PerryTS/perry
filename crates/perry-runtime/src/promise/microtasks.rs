@@ -305,10 +305,10 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
 
     // Process diagnostics_channel publishes queued by perry/thread workers.
     if !matches!(mode, MicrotaskDrainMode::BeforeExit) {
-        ran += crate::node_submodules::diagnostics_channel_process_pending();
+        ran += crate::thread_hook_slots::diagnostics_channel_process_pending();
 
         // Process pending thread results (from perry/thread spawn)
-        ran += crate::thread::js_thread_process_pending();
+        ran += crate::thread_hook_slots::js_thread_process_pending();
     }
 
     // Then process the task queue.

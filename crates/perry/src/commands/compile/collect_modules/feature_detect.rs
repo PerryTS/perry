@@ -444,6 +444,20 @@ pub(super) fn detect_optional_feature_usage(
     // false-negative class for every gate at once (the rule is zero false
     // negatives; including more HIR can only over-include a feature).
     let hir_debug = module_hir_debug(hir_module);
+    ctx.uses_turnloop |= hir_debug.contains(r#""perry/thread""#);
+    ctx.uses_thread_codec |= global_object::may_escape(hir_module)
+        || [
+            r#""performance""#,
+            "AtomicsWaitAsync",
+            "StructuredClone",
+            "structuredClone",
+            "perry/thread",
+            "MessageChannel",
+            "MessagePort",
+            "BroadcastChannel",
+        ]
+        .iter()
+        .any(|name| hir_debug.contains(name));
     ctx.uses_json_format |= module_uses_json_format(hir_module);
     if global_object::may_escape(hir_module) {
         ctx.uses_global_json = true;

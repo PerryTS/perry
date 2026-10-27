@@ -210,3 +210,5 @@ pub(crate) use globals::{
     test_clear_queued_jobs, test_queued_microtask_snapshot, test_seed_queued_job_owner,
     test_seed_queued_microtask, test_seed_queued_microtask_previous_context,
 };
+
+pub(crate) use globals::clone_with_transfers;
