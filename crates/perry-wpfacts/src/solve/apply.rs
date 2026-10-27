@@ -636,6 +636,13 @@ impl Model {
                 for &t in toks {
                     if let Some(s) = self.shared_of(t) {
                         let k = self.atoms[key as usize].clone();
+                        if self.explain && !self.shared_replay && s != Shared::Top {
+                            eprintln!(
+                                "perry: wpfacts explain: accessor {} on shared {} key {k:?}",
+                                self.tok_name(f),
+                                self.tok_name(t)
+                            );
+                        }
                         self.note_shared(SharedWrite::Accessor(s, k));
                     }
                     self.note_fnproto_write(t, Some(Key::Named(key)), "accessor");
