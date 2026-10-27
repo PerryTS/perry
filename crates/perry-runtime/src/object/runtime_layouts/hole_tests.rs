@@ -652,6 +652,11 @@ fn classless_optional_family_keeps_shape_and_routes_unknown_keys_to_overflow() {
     });
     ordinary.with_const_ptr(|obj: *const ObjectHeader| unsafe {
         assert!(crate::object::layout_desc::family_desc_of(obj).is_none());
+        assert_eq!(
+            crate::object::layout_desc::family_own_key(obj, b"holes_a"),
+            None,
+            "an ordinary classless descriptor is not a family proof"
+        );
         assert!(!crate::object::layout_desc::is_family_layout_word(
             (*obj).parent_class_id
         ));
@@ -674,6 +679,11 @@ fn classless_optional_family_keeps_shape_and_routes_unknown_keys_to_overflow() {
         assert_eq!(
             crate::object::layout_desc::family_own_key(obj, b"holes_a"),
             Some(Some((0, 0)))
+        );
+        assert_eq!(
+            crate::object::layout_desc::family_own_key(obj, b"not_in_family"),
+            Some(None),
+            "a family proof can answer absence without an ordinary probe"
         );
         js_object_set_field_by_name(obj, H_A.string, 17.0);
         js_object_set_field_by_name(obj, H_B.string, 23.0);

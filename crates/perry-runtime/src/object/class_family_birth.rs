@@ -260,6 +260,11 @@ mod evaluation_layout_tests {
             );
             assert!(is_family_object(obj));
             assert_eq!(
+                crate::object::layout_desc::family_own_key(obj, b"not_in_family"),
+                Some(None),
+                "the evaluation receiver consumes its checked family proof"
+            );
+            assert_eq!(
                 shapes::evaluation_copy_birth_edges(copy, (*desc).layout_id),
                 Some((proto_bits, class_bits))
             );
