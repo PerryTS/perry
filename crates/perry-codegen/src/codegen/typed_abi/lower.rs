@@ -53,7 +53,14 @@ fn lower_typed_f64_expr_with_env(
                 BinaryOp::Sub => blk.fsub(&l, &r),
                 BinaryOp::Mul => blk.fmul(&l, &r),
                 BinaryOp::Div => blk.fdiv(&l, &r),
-                BinaryOp::Mod => blk.frem(&l, &r),
+                // The typed entry proves Number operands, not integer or range
+                // facts. Reuse the exact checked-integer helper instead of
+                // bypassing it with a libm call for every typed remainder.
+                BinaryOp::Mod => blk.call(
+                    crate::types::DOUBLE,
+                    "js_number_mod",
+                    &[(crate::types::DOUBLE, &l), (crate::types::DOUBLE, &r)],
+                ),
                 _ => {
                     anyhow::bail!("typed-f64 clone cannot lower non-arithmetic expression")
                 }
@@ -430,7 +437,14 @@ fn lower_typed_f64_receiver_expr_with_env(
                 BinaryOp::Sub => blk.fsub(&l, &r),
                 BinaryOp::Mul => blk.fmul(&l, &r),
                 BinaryOp::Div => blk.fdiv(&l, &r),
-                BinaryOp::Mod => blk.frem(&l, &r),
+                // The typed entry proves Number operands, not integer or range
+                // facts. Reuse the exact checked-integer helper instead of
+                // bypassing it with a libm call for every typed remainder.
+                BinaryOp::Mod => blk.call(
+                    crate::types::DOUBLE,
+                    "js_number_mod",
+                    &[(crate::types::DOUBLE, &l), (crate::types::DOUBLE, &r)],
+                ),
                 _ => {
                     anyhow::bail!("typed-f64 receiver clone cannot lower non-arithmetic expression")
                 }

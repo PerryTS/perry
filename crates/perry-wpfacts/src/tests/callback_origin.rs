@@ -55,16 +55,15 @@ fn call_and_apply_key_on_their_site() {
         console.log(ra.a, rb.b, pa.a, pb.b);
         "#,
     );
-    // CWL (layout as the unit of propagation): the target call `call` and
-    // `apply` make binds the target's one instance (no `this` term), so all
-    // four results hold both classes; each still reaches its site. Was:
-    // each site's result held its own class only.
+    // A pure copy through `.call` returns the actual argument at that
+    // site. `.apply` supplies a spread: it retains the conservative
+    // transfer through the shared instance.
     let d = pf.dump_text();
-    for k in ["a", "b"] {
-        let v: Vec<_> = pf.sites.iter().filter(|s| s.key == k).collect();
+    for (k, expected) in [("a", "A"), ("b", "B")] {
+        let mut v: Vec<_> = pf.sites.iter().filter(|s| s.key == k).collect();
+        v.sort_by_key(|s| s.byte_offset);
         assert_eq!(v.len(), 2, "{d}");
-        for s in v {
-            assert_eq!(classes(s), ["A", "B"], "{d}");
-        }
+        assert_eq!(classes(v[0]), [expected], "{d}");
+        assert_eq!(classes(v[1]), ["A", "B"], "{d}");
     }
 }
