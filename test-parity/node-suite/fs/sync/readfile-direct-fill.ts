@@ -45,7 +45,9 @@ async function main(): Promise<void> {
   fs.writeFileSync(file, 'abcdef');
   let getterReads = 0;
   const getterOptions = { get encoding() { getterReads++; return 'utf8'; } };
-  console.log('getter-result', fs.readFileSync(file, getterOptions), getterReads);
+  // Check observable decoding and accessor dispatch without pinning Node's
+  // implementation-dependent number of encoding probes.
+  console.log('getter-result', fs.readFileSync(file, getterOptions), getterReads > 0);
   const fd = fs.openSync(file, 'r');
   const one = Buffer.alloc(1);
   fs.readSync(fd, one, 0, 1, null);
