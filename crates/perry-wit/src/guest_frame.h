@@ -87,6 +87,9 @@ int32_t perry_component_frame_import_reject(void *, uint32_t);
 uint32_t perry_component_frame_resource_lift(void *, uint32_t, uint32_t, uint32_t, int32_t);
 uint32_t perry_component_frame_resource_lower(void *, uint32_t, uint32_t, int32_t, int32_t);
 void perry_component_frame_resource_commit(void *);
+/* Retire incoming borrows before task.return/cancel. The frame and its values
+   remain alive for post-return work. Also releases borrows on a failed frame. */
+int32_t perry_component_frame_resource_scope_end(void *);
 void perry_component_frame_resource_destroy(void *, uint32_t, uint32_t);
 
 /* Only native C allocations live here. Every JS value is a rooted frame slot. */
