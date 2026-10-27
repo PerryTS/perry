@@ -202,9 +202,6 @@
     ],
     "string_normalize": [
       "perry_runtime::string::normalize_hooked::ccc"
-    ],
-    "wasm_host": [
-      "perry_runtime::webassembly::define_host_property"
     ]
   }
 }

@@ -52,6 +52,7 @@ NEGATIVES = {
     "without_node_test": ["mod_node_test"],
     "without_temporal": ["temporal"],
     "without_dgram": ["mod_dgram"],
+    "without_wasm": ["wasm_host"],
     "without_messaging": ["messaging"],
     "without_async_hooks": ["async_hooks"],
     "without_bigint_querystring": ["bigint"],

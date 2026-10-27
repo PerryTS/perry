@@ -1401,3 +1401,5 @@ mod temporal_layout;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod dgram_registry_owner;
+
+mod wasm_hook_slots;

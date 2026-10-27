@@ -240,6 +240,7 @@ pub extern "C" fn js_runtime_install_node_api_host() {
 /// keeps its graceful-failure behavior.
 #[no_mangle]
 pub extern "C" fn js_runtime_install_wasm_host() {
+    crate::wasm_hook_slots::install();
     js_runtime_install_bigint();
     perry_install_once!({
         crate::webassembly::install();
