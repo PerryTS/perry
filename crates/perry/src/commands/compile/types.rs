@@ -692,6 +692,7 @@ pub struct CompilationContext {
     pub(crate) uses_date: bool,
     pub(crate) uses_perf_hooks: bool,
     pub(crate) uses_os: bool,
+    pub(crate) uses_messaging: bool,
     /// `new URL("<script>", import.meta.url)` targets not yet accepted.
     pub(crate) worker_url_candidates: Vec<super::collect_modules::worker_url::WorkerUrlCandidate>,
     /// Accepted URL-literal targets, linked once collection ends.
@@ -1365,6 +1366,7 @@ impl CompilationContext {
             uses_date: false,
             uses_perf_hooks: false,
             uses_os: false,
+            uses_messaging: false,
             worker_url_candidates: Vec::new(),
             worker_url_accepted: Vec::new(),
             worker_url_entries: Vec::new(),

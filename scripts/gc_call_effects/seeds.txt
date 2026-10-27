@@ -550,3 +550,15 @@ indirect exact perry_runtime::fs_hook_slots::utf8_stream_write_value => exact pe
 indirect exact perry_runtime::os_hook_slots::resolve_process_exit_guard => exact perry_runtime::os::os_process_emitter::process_exit_tls::resolve -- process installer owns the exit guard storage resolver
 indirect exact js_runtime_install_os => exact perry_runtime::os_hook_slots::register_roots -- inlined process root-registration callback
 indirect exact js_runtime_install_node_api_host => exact perry_runtime::os_hook_slots::register_roots -- the inlined OS REGISTER_ROOTS slot invokes its selected root-registration callback
+
+indirect exact perry_runtime::messaging_hook_slots::js_broadcast_channel_constructor_call_error => exact perry_runtime::messaging::js_broadcast_channel_constructor_call_error -- messaging installer fills the concrete constructor/prototype operation
+indirect exact perry_runtime::messaging_hook_slots::js_broadcast_channel_new => exact js_broadcast_channel_new -- messaging installer fills the concrete constructor/prototype operation
+indirect exact perry_runtime::messaging_hook_slots::js_message_channel_constructor_call_error => regex ^perry_runtime::messaging::js_message_(channel|port)_constructor_call_error$ -- messaging installer fills the concrete constructor/prototype operation
+indirect exact perry_runtime::messaging_hook_slots::js_message_channel_new => exact js_message_channel_new -- messaging installer fills the concrete constructor/prototype operation
+indirect exact perry_runtime::messaging_hook_slots::js_message_port_constructor_call_error => regex ^perry_runtime::messaging::js_message_(channel|port)_constructor_call_error$ -- messaging installer fills the concrete constructor/prototype operation
+indirect exact perry_runtime::messaging_hook_slots::js_message_port_constructor_error => exact js_message_port_constructor_error -- messaging installer fills the concrete constructor/prototype operation
+indirect exact perry_runtime::messaging_hook_slots::populate_messaging_prototype => exact perry_runtime::messaging::populate_messaging_prototype -- messaging installer fills the concrete constructor/prototype operation
+
+# LLVM may fold the identical two-argument MessageChannel/MessagePort call-error bodies; the callback rule follows either emitted alias.
+
+indirect exact perry_runtime::messaging_hook_slots::resolve_root_guard => exact perry_runtime::messaging::root_guard_tls::resolve -- messaging installer owns the existing root guard storage resolver

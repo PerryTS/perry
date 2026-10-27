@@ -444,6 +444,19 @@ pub(super) fn detect_optional_feature_usage(
     // false-negative class for every gate at once (the rule is zero false
     // negatives; including more HIR can only over-include a feature).
     let hir_debug = module_hir_debug(hir_module);
+    ctx.uses_messaging |= global_object::may_escape(hir_module)
+        || hir_debug.contains(r#""worker_threads""#)
+        || hir_module.imports.iter().any(|import| {
+            !import.type_only
+                && import
+                    .source
+                    .strip_prefix("node:")
+                    .unwrap_or(&import.source)
+                    == "worker_threads"
+        })
+        || ["MessageChannel", "MessagePort", "BroadcastChannel"]
+            .iter()
+            .any(|name| hir_debug.contains(name));
     ctx.uses_os |= global_object::may_escape(hir_module)
         || hir_debug
             .as_bytes()

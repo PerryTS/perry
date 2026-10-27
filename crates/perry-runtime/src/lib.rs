@@ -1380,3 +1380,5 @@ mod perf_hook_slots;
 mod event_emitter_error;
 mod os_hook_slots;
 mod process_startup;
+
+mod messaging_hook_slots;

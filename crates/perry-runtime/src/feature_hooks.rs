@@ -144,6 +144,7 @@ pub extern "C" fn js_runtime_install_compiled() {
     js_runtime_install_date();
     js_runtime_install_perf_hooks();
     js_runtime_install_os();
+    js_runtime_install_messaging();
     #[cfg(feature = "dyn-eval")]
     js_runtime_install_dyn_eval();
     #[cfg(feature = "bun-cli-utils")]
@@ -510,4 +511,9 @@ pub extern "C" fn js_runtime_install_perf_hooks() {
 #[no_mangle]
 pub extern "C" fn js_runtime_install_os() {
     crate::os_hook_slots::install();
+}
+
+#[no_mangle]
+pub extern "C" fn js_runtime_install_messaging() {
+    crate::messaging_hook_slots::install();
 }

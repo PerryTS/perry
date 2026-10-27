@@ -200,6 +200,7 @@ const RUNTIME_INSTALLS: &[(&str, &[&str])] = &[
     ("js_runtime_install_date", &["date"]),
     ("js_runtime_install_perf_hooks", &["perf-hooks"]),
     ("js_runtime_install_os", &["os"]),
+    ("js_runtime_install_messaging", &["messaging"]),
     ("js_runtime_install_global_reflect", &["global-reflect"]),
     ("js_runtime_install_global_atomics", &["global-atomics"]),
     ("js_runtime_install_global_url", &["global-url"]),

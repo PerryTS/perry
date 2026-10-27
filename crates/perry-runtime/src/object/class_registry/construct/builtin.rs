@@ -396,10 +396,10 @@ pub(super) unsafe fn construct(
             return Some(crate::value::js_nanbox_pointer(controller as i64));
         }
         BuiltinConstructorIdentity::MessageChannel => {
-            return Some(crate::messaging::js_message_channel_new());
+            return Some(crate::messaging_hook_slots::js_message_channel_new());
         }
         BuiltinConstructorIdentity::MessagePort => {
-            return Some(crate::messaging::js_message_port_constructor_error());
+            return Some(crate::messaging_hook_slots::js_message_port_constructor_error());
         }
         BuiltinConstructorIdentity::Storage => {
             return Some(crate::web_storage::storage_constructor_illegal(
@@ -412,7 +412,7 @@ pub(super) unsafe fn construct(
                 .first()
                 .copied()
                 .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
-            return Some(crate::messaging::js_broadcast_channel_new(name));
+            return Some(crate::messaging_hook_slots::js_broadcast_channel_new(name));
         }
         BuiltinConstructorIdentity::URL => {
             if let Some(value) = crate::object::global_this::web_hooks::construct(
