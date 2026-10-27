@@ -43,6 +43,7 @@ NEGATIVES = {
     "without_date": ["date"],
     "without_perf_hooks": ["perf_hooks"],
     "without_os": ["os"],
+    "without_wasi": ["wasi"],
     "without_messaging": ["messaging"],
     "without_async_hooks": ["async_hooks"],
     "without_bigint_querystring": ["bigint"],

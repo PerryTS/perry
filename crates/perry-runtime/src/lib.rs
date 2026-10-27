@@ -1382,3 +1382,5 @@ mod os_hook_slots;
 mod process_startup;
 
 mod messaging_hook_slots;
+
+mod wasi_hook_slots;

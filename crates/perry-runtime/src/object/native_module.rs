@@ -687,7 +687,7 @@ pub extern "C" fn js_create_native_module_namespace(
     };
     let module_name = normalize_native_module_alias(module_name);
     if module_name == "wasi" {
-        crate::wasi::emit_wasi_static_warning();
+        crate::wasi_hook_slots::emit_wasi_static_warning();
     }
     if should_cache_native_module_namespace(module_name) {
         if let Some(bits) =

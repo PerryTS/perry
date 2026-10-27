@@ -1440,8 +1440,8 @@ fn js_object_keys_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
         // check drops it. Plain object literals keep class_id 0, so
         // `{"#fff": 1}` stays visible.
         let hide_private = (*obj).class_id != 0;
-        let hide_wasi_state = crate::wasi::is_wasi_import_object(obj)
-            || crate::wasi::is_wasi_instance(f64::from_bits(
+        let hide_wasi_state = crate::wasi_hook_slots::is_wasi_import_object(obj)
+            || crate::wasi_hook_slots::is_wasi_instance(f64::from_bits(
                 crate::value::js_nanbox_pointer(obj as i64).to_bits(),
             ));
         if !has_descriptors && !own_keys_may_hide(obj) && !hide_wasi_state {

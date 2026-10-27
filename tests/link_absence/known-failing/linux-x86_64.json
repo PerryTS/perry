@@ -334,35 +334,6 @@
       "perry_runtime::typedarray::typed_array_alloc",
       "perry_runtime::typedarray::typed_array_length_or_throw"
     ],
-    "wasi": [
-      "<perry_runtime::wasi::host::Context>::open",
-      "js_wasi_new",
-      "perry_runtime::wasi::bound_memory",
-      "perry_runtime::wasi::ensure_import_started",
-      "perry_runtime::wasi::ensure_wasi_not_started",
-      "perry_runtime::wasi::ensure_wasi_prototype",
-      "perry_runtime::wasi::host::call",
-      "perry_runtime::wasi::host::drop_context",
-      "perry_runtime::wasi::host::exit_marker",
-      "perry_runtime::wasi::host::host_error",
-      "perry_runtime::wasi::host::strings",
-      "perry_runtime::wasi::import_binding_name",
-      "perry_runtime::wasi::instance_export",
-      "perry_runtime::wasi::invalid_arg_type",
-      "perry_runtime::wasi::invalid_options",
-      "perry_runtime::wasi::invalid_type",
-      "perry_runtime::wasi::invalid_undefined_property",
-      "perry_runtime::wasi::invalid_wasm_memory",
-      "perry_runtime::wasi::is_wasi_import_object",
-      "perry_runtime::wasi::is_wasi_instance",
-      "perry_runtime::wasi::mark_wasi_started",
-      "perry_runtime::wasi::object_field",
-      "perry_runtime::wasi::set_object_field",
-      "perry_runtime::wasi::type_error_with_code",
-      "perry_runtime::wasi::wasi_import_or_throw",
-      "perry_runtime::wasi::wasi_receiver_or_throw_with_code",
-      "perry_runtime::wasi::wasi_started"
-    ],
     "wasm_host": [
       "perry_runtime::webassembly::define_host_property"
     ]

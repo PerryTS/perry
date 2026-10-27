@@ -660,6 +660,7 @@ pub extern "C" fn js_nm_install_vm() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_wasi() {
+    crate::wasi_hook_slots::install();
     nm_register_attach(
         NmBucket::Wasi,
         super::native_module::callable_exports::nm_attach_wasi,

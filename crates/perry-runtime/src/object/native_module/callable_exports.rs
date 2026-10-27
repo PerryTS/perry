@@ -1360,7 +1360,7 @@ pub(crate) unsafe fn nm_attach_wasi(
     _closure_addr: usize,
 ) -> f64 {
     if property_name == "WASI" {
-        crate::wasi::attach_wasi_constructor_prototype(value);
+        crate::wasi_hook_slots::attach_wasi_constructor_prototype(value);
     }
     value
 }

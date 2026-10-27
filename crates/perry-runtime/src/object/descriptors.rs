@@ -1551,8 +1551,8 @@ fn js_object_get_own_property_names_shape(obj_value: f64) -> f64 {
         // Drop only compiler/runtime storage keys. A user String key beginning
         // with `#` is still an ordinary reflectable property.
         let hide_private = super::field_get_set::own_keys_may_hide(obj);
-        let hide_wasi_state = crate::wasi::is_wasi_import_object(obj)
-            || crate::wasi::is_wasi_instance(f64::from_bits(
+        let hide_wasi_state = crate::wasi_hook_slots::is_wasi_import_object(obj)
+            || crate::wasi_hook_slots::is_wasi_instance(f64::from_bits(
                 crate::value::js_nanbox_pointer(obj as i64).to_bits(),
             ));
 

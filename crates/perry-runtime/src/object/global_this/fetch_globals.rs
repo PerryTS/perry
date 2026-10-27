@@ -753,7 +753,7 @@ pub unsafe extern "C-unwind" fn js_fetch_or_value_super(
         } else {
             undef
         };
-        crate::wasi::js_wasi_init_subclass(this_box, arg0);
+        crate::wasi_hook_slots::js_wasi_init_subclass(this_box, arg0);
         return undef;
     }
     // #10453: `class X extends AsyncResource` threw "Class constructor

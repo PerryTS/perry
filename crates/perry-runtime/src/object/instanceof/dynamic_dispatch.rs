@@ -548,7 +548,7 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
                 });
             }
         }
-        if module == "wasi" && method == "WASI" && crate::wasi::is_wasi_instance(value) {
+        if module == "wasi" && method == "WASI" && crate::wasi_hook_slots::is_wasi_instance(value) {
             return f64::from_bits(crate::value::TAG_TRUE);
         }
         if module == "repl" {

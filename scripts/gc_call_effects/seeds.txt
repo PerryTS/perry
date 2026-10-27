@@ -562,3 +562,15 @@ indirect exact perry_runtime::messaging_hook_slots::populate_messaging_prototype
 # LLVM may fold the identical two-argument MessageChannel/MessagePort call-error bodies; the callback rule follows either emitted alias.
 
 indirect exact perry_runtime::messaging_hook_slots::resolve_root_guard => exact perry_runtime::messaging::root_guard_tls::resolve -- messaging installer owns the existing root guard storage resolver
+
+indirect exact perry_runtime::wasi_hook_slots::attach_wasi_constructor_prototype => exact perry_runtime::wasi::attach_wasi_constructor_prototype -- WASI installer fills the concrete operation; no WASI values exist otherwise
+indirect exact perry_runtime::wasi_hook_slots::call_import => exact perry_runtime::wasi::host::call_import -- WASI installer fills the concrete operation; no WASI values exist otherwise
+indirect exact perry_runtime::wasi_hook_slots::emit_wasi_static_warning => exact perry_runtime::wasi::emit_wasi_static_warning -- WASI installer fills the concrete operation; no WASI values exist otherwise
+indirect exact perry_runtime::wasi_hook_slots::ensure_wasi_prototype_for_subclass => exact perry_runtime::wasi::ensure_wasi_prototype_for_subclass -- WASI installer fills the concrete operation; no WASI values exist otherwise
+indirect exact perry_runtime::wasi_hook_slots::is_exit_marker => exact perry_runtime::wasi::host::is_exit_marker -- WASI installer fills the concrete operation; no WASI values exist otherwise
+indirect exact perry_runtime::wasi_hook_slots::is_wasi_import_object => exact perry_runtime::wasi::is_wasi_import_object -- WASI installer fills the concrete operation; no WASI values exist otherwise
+indirect exact perry_runtime::wasi_hook_slots::is_wasi_instance => exact perry_runtime::wasi::is_wasi_instance -- WASI installer fills the concrete operation; no WASI values exist otherwise
+indirect exact perry_runtime::wasi_hook_slots::js_wasi_constructor_call => exact js_wasi_constructor_call -- WASI installer fills the concrete operation; no WASI values exist otherwise
+indirect exact perry_runtime::wasi_hook_slots::js_wasi_init_subclass => exact perry_runtime::wasi::js_wasi_init_subclass -- WASI installer fills the concrete operation; no WASI values exist otherwise
+indirect exact perry_runtime::wasi_hook_slots::js_wasi_new => exact js_wasi_new -- WASI installer fills the concrete operation; no WASI values exist otherwise
+indirect exact perry_runtime::wasi_hook_slots::pending_exit_code => exact perry_runtime::wasi::pending_exit_code -- WASI installer fills the concrete operation; no WASI values exist otherwise
