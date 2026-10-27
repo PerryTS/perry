@@ -1,5 +1,7 @@
 //! Experimental generated async functions. The public CLI remains fail-closed.
 mod imports;
+#[cfg(test)]
+mod tests;
 use super::*;
 
 pub(super) fn check_profile(world: &crate::World) -> Result<()> {

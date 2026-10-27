@@ -67,6 +67,15 @@ fn generate_guest(
     } else {
         None
     };
+    generate_resolved(resolve, id, world, anchor)
+}
+
+fn generate_resolved(
+    mut resolve: Resolve,
+    id: WorldId,
+    world: crate::World,
+    anchor: Option<String>,
+) -> Result<BTreeMap<String, Vec<u8>>> {
     let mut files = Files::default();
     wit_bindgen_c::Opts {
         no_sig_flattening: true,

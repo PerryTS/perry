@@ -40,9 +40,30 @@ impl Generator<'_> {
             let unit = emitter.slot("perry_component_frame_array(f, 0)");
             emitter.slot(&format!("perry_component_frame_array_get(f, {unit}, 0)"))
         };
+        if function.result.is_some_and(|ty| emitter.owns_resources(ty)) {
+            // A failed compound lift may already have adopted some handles.
+            // Retire the Store even for inline completion; recovering this
+            // import would need per-handle ownership rollback.
+            emitter
+                .source
+                .push_str("perry_require(!perry_component_frame_failed(f));\n");
+        }
         writeln!(emitter.source, "(void)perry_component_frame_import_resolve(f, {result});\n}}\nstatic void {stem}_destroy(perry_child *child) {{\n{stem}_state *data = ({stem}_state *)child;")?;
+        emitter.source.push_str("if (!child->params_consumed) {\n");
+        for (n, param) in function.params.iter().enumerate() {
+            let input = if aggregate {
+                format!("data->args.{}", wit_bindgen_c::to_c_ident(&param.name))
+            } else {
+                format!("data->arg{n}")
+            };
+            emitter.discard_owned(param.ty, &input);
+        }
+        emitter.source.push_str("}\n");
         if let Some(ty) = function.result {
             emitter.source.push_str("if (child->result_ready) {\n");
+            emitter.source.push_str("if (!child->result_claimed) {\n");
+            emitter.discard_owned(ty, "data->result");
+            emitter.source.push_str("}\n");
             emitter.free(ty, "&data->result");
             emitter.source.push_str("}\n");
         }

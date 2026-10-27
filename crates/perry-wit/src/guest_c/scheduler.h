@@ -4,7 +4,10 @@ typedef struct perry_child {
     void *frame;
     struct perry_child *next;
     $W_subtask_t handle;
-    bool complete, result_ready;
+    /* result_claimed means lifting has begun. A partial lift failure follows
+       the runtime error/Store-retirement path; C must not drop those owners
+       again after some have already been adopted by JS. */
+    bool complete, params_consumed, result_ready, result_claimed;
     void (*finish)(void *);
     void (*destroy)(struct perry_child *);
 } perry_child;
@@ -126,12 +129,14 @@ static void perry_child_start(perry_task *t, perry_child *child, $W_subtask_stat
     $W_subtask_state_t state = $U_SUBTASK_STATE(status);
     child->handle = $U_SUBTASK_HANDLE(status);
     perry_require(state == $U_SUBTASK_STARTING || state == $U_SUBTASK_STARTED || state == $U_SUBTASK_RETURNED);
+    child->params_consumed = state != $U_SUBTASK_STARTING;
     if (state == $U_SUBTASK_RETURNED) {
         if (child->handle) $W_subtask_drop(child->handle);
         child->handle = 0;
         child->complete = child->result_ready = true;
         /* Already inside the original task. Reentering its Rust frame here
            would alias an outstanding borrow. The import frame is distinct. */
+        child->result_claimed = true;
         child->finish(child);
     } else {
         perry_require(child->handle != 0);
@@ -141,6 +146,7 @@ static void perry_child_start(perry_task *t, perry_child *child, $W_subtask_stat
 }
 static void perry_child_complete(void *pointer) {
     perry_child *child = pointer;
+    child->result_claimed = true;
     child->finish(child);
     /* A later conversion/settlement failure cannot unwind through C or leave
        an unresolved Promise alive. Inline completion uses the normal caller's
@@ -153,8 +159,12 @@ static void perry_task_event(perry_task *t, $W_event_t *event) {
         perry_child *child = t->children;
         while (child && child->handle != event->waitable) child = child->next;
         perry_require(child && !child->complete);
-        if (event->code == $U_SUBTASK_STARTED) return;
+        if (event->code == $U_SUBTASK_STARTED) {
+            child->params_consumed = true;
+            return;
+        }
         perry_require(event->code == $U_SUBTASK_RETURNED);
+        child->params_consumed = true;
         $W_waitable_join(child->handle, 0);
         $W_subtask_drop(child->handle);
         child->handle = 0;
@@ -179,6 +189,11 @@ static $W_callback_code_t perry_task_cancel(perry_task *t) {
         $W_waitable_join(child->handle, 0);
         $W_subtask_state_t state = $U_SUBTASK_STATE($W_subtask_cancel(child->handle));
         perry_require(state == $U_SUBTASK_RETURNED || state == $U_SUBTASK_STARTED_CANCELLED || state == $U_SUBTASK_RETURNED_CANCELLED);
+        /* STARTED_CANCELLED acknowledges cancellation before parameter
+           consumption. Other terminal states transferred the arguments,
+           even if their STARTED notification has not been observed yet. */
+        perry_require(!child->params_consumed || state != $U_SUBTASK_STARTED_CANCELLED);
+        child->params_consumed = state != $U_SUBTASK_STARTED_CANCELLED;
         /* Cancellation may lose to a successful return. Only that status
            initializes the typed result and requires result deallocation. */
         child->result_ready = state == $U_SUBTASK_RETURNED;
