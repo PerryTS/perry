@@ -39,6 +39,9 @@ fn dispatch_table_read_is_no_dynamic_code() {
     // An array's `constructor` is `Array`.
     assert!(!dynamic("const a: any = [1]; const C = a.constructor; C(d);"));
     assert!(!dynamic("const a: any = [1]; a.constructor(d);"));
+    // Under a computed key: `Array.prototype`'s members, no Function.
+    assert!(!dynamic("const a: any = [1]; const g = a[k]; g(d);"));
+    assert!(!dynamic("const a: any = [1]; a[k](d);"));
 }
 
 #[test]

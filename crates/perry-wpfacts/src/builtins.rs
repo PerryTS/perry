@@ -627,23 +627,28 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
 /// there (`Model::seed_proto`) it is one of them, and its `constructor` is
 /// that one's: only a function's chain reaches `Function.prototype`, whose
 /// `constructor` is the Function constructor (DECISIONS 213). A key that
-/// may name any member reads `Object.prototype`'s methods beside it; an
-/// array's or builtin object's prototype has its own, approximated as
-/// `tok_load` does.
+/// may name any member reads the prototype's methods beside it: an array's
+/// (opaque builtin functions), then `Object.prototype`'s. A site builtin
+/// object's (a typed array's ...) under such a key stays `tok_load`'s.
 pub fn chain_load(m: &mut Model, of: Tok, q: Tok, key: Key, dst: NodeId) {
     if !matches!(m.toks[q as usize], TokKind::ObjectProto) || !m.is_constructor_key(key) {
         return tok_load(m, q, key, dst);
     }
-    let named = key != Key::Any;
-    let ctor = match m.seed_proto(of) {
+    let seed = m.seed_proto(of);
+    let ctor = match seed {
         Some(SeedProto::Object) => TokKind::Builtin(BuiltinNs::Object),
-        Some(SeedProto::Array) if named => TokKind::Builtin(BuiltinNs::Array),
-        Some(SeedProto::Builtin) if named => TokKind::BuiltinFn,
+        Some(SeedProto::Array) => TokKind::Builtin(BuiltinNs::Array),
+        Some(SeedProto::Builtin) if key != Key::Any => TokKind::BuiltinFn,
         _ => return tok_load(m, q, key, dst),
     };
     let c = m.tok(ctor);
     m.add_tok(dst, c);
-    if !named {
+    if key == Key::Any {
+        // An array's own prototype methods, then `Object.prototype`'s.
+        if seed == Some(SeedProto::Array) {
+            let bf = m.tok(TokKind::BuiltinFn);
+            m.add_tok(dst, bf);
+        }
         let f = m.tok(TokKind::Builtin(BuiltinNs::ObjectProtoMethod));
         m.add_tok(dst, f);
         m.add_prim(dst, prim::UNDEF);
