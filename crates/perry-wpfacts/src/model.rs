@@ -86,6 +86,11 @@ pub enum BuiltinNs {
     /// constant specifier ([`Model::call_lit`]): a compiled module's path
     /// gives that module's exports; anything else is the unknown loader.
     Require,
+    /// A method of `Object.prototype` read as a value under a key that may
+    /// name any of them (`o[k]` on an object whose chain ends there): one of
+    /// `hasOwnProperty`, `valueOf`, `__defineGetter__` ... A call runs each
+    /// one's effect on its receiver (`proto_method`); none is a constructor.
+    ObjectProtoMethod,
     Other,
 }
 
@@ -119,6 +124,18 @@ pub enum TokKind {
     /// The prototype of a native parent class (`extends EventEmitter`),
     /// whose methods have summaries in `builtins.rs`.
     NativeProto(String),
+}
+
+/// The builtin prototype `ObjectProto` stands for on a chain whose
+/// object's kind seeds it (`Model::seed_proto`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SeedProto {
+    Object,
+    Function,
+    Array,
+    /// A site builtin object's (Map, Promise, Error ...): its
+    /// `constructor` is that builtin's, an opaque builtin function.
+    Builtin,
 }
 
 /// An object every unit shares (decision 151): the runtime's own objects
@@ -670,9 +687,14 @@ pub enum Cons {
     Implicit { reason: u32, proto: Protocol },
     /// The node holds `Object.create` prototype arguments (E10).
     CreateProto { reason: u32 },
-    /// The node is `ProtoNode(t)`: dst ⊇ the values of `key` on each
-    /// prototype (and further up), shared by every receiver of `t`.
-    ChainUnion { key: Key, dst: NodeId },
+    /// The node is `ProtoNode(of)`: dst ⊇ the values of `key` on each
+    /// prototype (and further up), shared by every receiver of `of`.
+    ChainUnion { key: Key, dst: NodeId, of: Tok },
+    /// The node holds a value given as the prototype of an object (its
+    /// `ProtoNode` is `protos`): a builtin prototype there may be any of
+    /// them (`ObjectProto` collapses them), whose members the chain cannot
+    /// name: the chain also holds an unknown prototype.
+    ProtoGiven { protos: NodeId },
     /// The node is `ProtoNode(t)`: dst ⊇ every prototype, transitively.
     ProtoClosure { dst: NodeId },
     /// The node is the prototype closure of receiver `origin`: builtin
@@ -855,6 +877,7 @@ impl Cons {
             Cons::Implicit { .. } => "implicit",
             Cons::CreateProto { .. } => "createproto",
             Cons::ChainUnion { .. } => "chainunion",
+            Cons::ProtoGiven { .. } => "protogiven",
             Cons::ProtoClosure { .. } => "protoclosure",
             Cons::ProtoMethods { .. } => "protomethods",
             Cons::AnyAccessors { .. } => "anyaccessors",
@@ -1043,6 +1066,8 @@ pub struct Model {
     // dedup of bindings / chain walks
     pub bind_done: crate::pts::FxHashSet<(CallId, Tok, Tok)>,
     pub chain_done: crate::pts::FxHashSet<(NodeId, Tok, Key, ChainAct)>,
+    /// (value node, `ProtoNode`) pairs a `ProtoGiven` watches.
+    pub given_proto: crate::pts::FxHashSet<(NodeId, NodeId)>,
     pub implicit_done: crate::pts::FxHashSet<(Tok, Protocol)>,
     pub construct_done: crate::pts::FxHashSet<(CallId, Tok)>,
     pub idx_done: crate::pts::FxHashSet<(NodeId, Tok, NodeId, u8)>,

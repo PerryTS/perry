@@ -583,6 +583,38 @@ impl Model {
         n
     }
 
+    /// Which builtin prototype `ObjectProto` stands for on the chain of
+    /// `t` when `t`'s kind puts it there (`proto_node` seeds it): a
+    /// function's is `Function.prototype` (with the async/generator
+    /// function prototypes above it), an array's `Array.prototype`, a site
+    /// builtin object's its own builtin's, anything else's
+    /// `Object.prototype`. `None`: the chain's prototypes are values
+    /// (`new f()`, `extends <value>`, `Object.create(p)`, whose seed is no
+    /// prototype it has) or a class's.
+    pub fn seed_proto(&self, t: Tok) -> Option<SeedProto> {
+        match &self.toks[t as usize] {
+            TokKind::Obj(tm, _) => match &self.tmpls[*tm as usize].kind {
+                TmplKind::Class { .. } | TmplKind::FnInst { .. } | TmplKind::ObjCreate { .. } => None,
+                _ if self.virt_protos.contains_key(&t) => None,
+                TmplKind::Arr { .. } => Some(SeedProto::Array),
+                TmplKind::BObj { .. } => Some(SeedProto::Builtin),
+                TmplKind::Lit { .. } => Some(SeedProto::Object),
+            },
+            TokKind::Proto(tm) => {
+                let tm = &self.tmpls[*tm as usize];
+                (tm.parent.is_none() && tm.native_parent.is_none() && tm.parent_value.is_none())
+                    .then_some(SeedProto::Object)
+            }
+            TokKind::NativeProto(_) => Some(SeedProto::Object),
+            TokKind::Func(_, _) | TokKind::Bound(_) | TokKind::BuiltinFn => Some(SeedProto::Function),
+            TokKind::ClassObj(tm) => {
+                let tm = &self.tmpls[*tm as usize];
+                (tm.parent.is_none() && tm.parent_value.is_none()).then_some(SeedProto::Function)
+            }
+            _ => None,
+        }
+    }
+
     /// The node holding the prototype objects of `t`.
     pub fn proto_node(&mut self, t: Tok) -> NodeId {
         if let Some(&n) = self.proto_node.get(&t) {
@@ -1536,9 +1568,10 @@ impl Model {
                 format!("implicit {n} {reason} {}", proto.name())
             }
             Cons::CreateProto { reason } => format!("createproto {n} {reason}"),
-            Cons::ChainUnion { key, dst } => {
-                format!("chainunion {n} {} {dst}", self.key_name(*key))
+            Cons::ChainUnion { key, dst, of } => {
+                format!("chainunion {n} {} {dst} {of}", self.key_name(*key))
             }
+            Cons::ProtoGiven { protos } => format!("protogiven {n} {protos}"),
             Cons::ProtoClosure { dst } => format!("protoclosure {n} {dst}"),
             Cons::ProtoMethods { origin, key, call } => {
                 format!("protomethods {n} {origin} {} {call}", self.key_name(*key))

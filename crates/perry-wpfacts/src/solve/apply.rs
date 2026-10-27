@@ -424,7 +424,7 @@ impl Model {
                     }
                 }
             }
-            Cons::ChainUnion { key, dst } => {
+            Cons::ChainUnion { key, dst, of } => {
                 for &q in toks {
                     if q == TOP {
                         self.add_tok(dst, TOP);
@@ -443,7 +443,7 @@ impl Model {
                         Key::Any => self.all_fields(q),
                     };
                     self.edge(f, dst);
-                    self.with_b(|m| builtins::tok_load(m, q, key, dst));
+                    self.with_b(|m| builtins::chain_load(m, of, q, key, dst));
                     if self.stops_at(q, key) {
                         self.stopped_shared.entry(q).or_default().push((key, dst));
                     } else {
@@ -667,12 +667,26 @@ impl Model {
                     }
                     let pn = self.proto_node(t);
                     self.edge(src, pn);
+                    if self.given_proto.insert((src, pn)) {
+                        self.cons(src, Cons::ProtoGiven { protos: pn });
+                    }
                     if let TokKind::ClassObj(tm) = self.toks[t as usize] {
                         let instance = self.tok(TokKind::Obj(tm, NO_CTX));
                         let reason =
                             self.reason("E6 live superclass may change constructor birth fields");
                         self.mark_hard(instance, Hard::E6SetPrototypeOf, reason);
                     }
+                }
+            }
+            // `ObjectProto` given as a prototype may be any builtin
+            // prototype, `Function.prototype` included: `seed_proto` no
+            // longer says what the chain's `ObjectProto` is.
+            Cons::ProtoGiven { protos } => {
+                if toks
+                    .iter()
+                    .any(|&t| matches!(self.toks[t as usize], TokKind::ObjectProto))
+                {
+                    self.add_tok(protos, TOP);
                 }
             }
             Cons::ProtoOf { dst } => {
