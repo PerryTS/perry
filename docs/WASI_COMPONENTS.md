@@ -445,17 +445,20 @@ bytes, collection inside result getters, immediate and void returns, and idle
 after every round. It also checks verified moving GC and the native host's
 existing policy of retiring the Store and siblings on rejection or dropping a
 started call. That receipt covers Store retirement rather than cooperative
-canonical cancellation; the later cancellation checks are described below. Its profile rejects
+canonical cancellation; the later cancellation checks are described below. That earlier profile rejected
 resources and future/stream guest values. Module initialization is
 synchronous; its unowned jobs can be adopted by the first task. See the
 [generated async export receipt](validation/wasi-generated-async-exports-20261026.json).
 
-Native runtime tests verify ALS restoration across task callbacks. This WASI
-guest does not instantiate `AsyncLocalStorage`: its constructor currently lives
-in the native stdlib, and the supported WASI link includes only the runtime
-archive. Attempting that import produced an unresolved
-`js_async_local_storage_new` symbol. The experimental export checks do not
-qualify that guest API, resource cancellation, other host
+Native runtime tests verify ALS restoration across task callbacks. The original
+WASI guest did not instantiate `AsyncLocalStorage`: its stdlib-only constructor
+was absent from the supported runtime-only WASI link, producing an unresolved
+`js_async_local_storage_new` symbol. The constructor and methods now live in the
+runtime, with stdlib compatibility re-exports and the existing extern context
+provider calls retained. Updated import/export guests assert public ALS isolation
+across overlapping calls, native completions, nested scopes and collecting
+getters; their fresh source-matched execution qualification is in progress.
+The earlier export receipt does not qualify that guest API, resource cancellation, other host
 platforms or distribution packages. Public `--guest-c` async output remains
 guarded while those adapters are completed.
 
@@ -509,9 +512,9 @@ the cancelled task exits. Repeated rounds reuse the same Store. The
 records native runtime checks, actual moving GC, ordinary import/export
 regressions and a negative probe that removes cancelled-job ownership. This
 adds guest-to-guest canonical cancellation; dropping a public native
-`DriverCall` still retires its Store. Resource and future/stream guest values,
-WASI ALS constructor packaging and public async CLI generation remain separate
-unfinished work.
+`DriverCall` still retires its Store. The resource extension is described below.
+Guest future/stream values, final WASI ALS execution qualification and public
+async CLI generation remain separate unfinished work.
 
 Guest frames now retain committed canonical borrow leases independently of
 Promise settlement and task cancellation. Each frame roots the wrapper and
@@ -527,10 +530,9 @@ borrow cannot partially consume the other owners or hand a failed frame to C.
 The generated C adapter starts native I/O only after `begin` succeeds. See the
 [resource loan receipt](validation/wasi-guest-resource-loans-20261027.json) for
 native ownership tests and actual guest regressions. These are runtime
-prerequisites: the experimental resource-profile guard remains. The private
-generated adapter qualification below covers basic transfers, return-time
-borrow expiration and resource-bearing canonical cancellation. Broader compound
-ownership still needs qualification before async resource interfaces can be enabled.
+prerequisites. The generated adapter qualification below covers basic and
+compound transfers, return-time borrow expiration and resource-bearing
+canonical cancellation.
 
 A private generated resource profile now executes on Linux with ordinary and
 instrumented production archives, including verified moving GC. It covers
@@ -550,8 +552,22 @@ exactly once, and every call keeps an independent sibling live through
 acknowledgement before reusing the same Store. Ordinary, instrumented knobs-off
 and forced-moving-GC execution pass; the latter copies 9,594 objects with
 evacuation verified. The [canonical resource cancellation receipt](validation/wasi-async-resource-cancellation-20261027.json)
-records the source-matched artifacts and narrower scope. Compound resource
-ownership remains open; the shipping resource and public async guards remain.
+records the source-matched artifacts and narrower scope.
+
+The compound extension sends five owners nested in records, a list and a tagged
+option. It rejects a repeated owner after staging distinct owners, then forces
+GC and proves every input still usable before a valid transfer. Responses cover
+an optional owner list inside a tuple/variant, an owned result error, Unicode
+text and a payload-free variant. Ordinary, instrumented knobs-off and verified
+moving-GC execution pass: 24 duplicate-owner rejections, 188 exactly-once resource
+drops and 32 live siblings per run. Six of eight unclaimed-response cancellations
+carry 14 owners; the other two carry text or a payload-free variant. Moving GC
+copies 14,943 objects. See the [compound resource receipt](validation/wasi-async-compound-resources-20261027.json)
+for exact sources, retained failures and artifact identities. The experimental
+generator now accepts resource interfaces, and fixture generation uses that
+entry point directly. Guest future/stream values and public async CLI generation
+remain guarded; current-source qualification of the entry-point and ALS changes
+is in progress.
 
 The internal generic-reader checks additionally cover canonical layouts from
 `wit-parser::SizeAlign`, shared metadata for repeated aliases, a reusable
