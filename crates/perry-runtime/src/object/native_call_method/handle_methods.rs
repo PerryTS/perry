@@ -856,7 +856,7 @@ pub(super) unsafe fn dispatch_handle(
                 ));
             }
             if let Some(result) =
-                crate::node_test::dispatch_object_method((*obj).class_id, method_name)
+                crate::node_test_hook_slots::dispatch_object_method((*obj).class_id, method_name)
             {
                 return Some(result);
             }

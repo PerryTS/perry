@@ -696,7 +696,7 @@ pub(crate) unsafe fn get_native_module_constant(
             }
             _ => None,
         },
-        "test" => crate::node_test::property(property),
+        "test" => crate::node_test_hook_slots::property(property),
         "wasi" => match property {
             "default" if !is_cjs_default_object => cjs_default_export_value("wasi"),
             _ => None,

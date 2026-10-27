@@ -683,3 +683,6 @@ indirect exact perry_runtime::bun_hook_slots::js_bun_stderr => exact js_bun_stde
 indirect exact perry_runtime::bun_hook_slots::decorate_bun_plugin => exact perry_runtime::bun_compat::plugin::decorate_bun_plugin -- Bun CLI installer fills the concrete object or decorator
 
 indirect exact perry_runtime::bun_hook_slots::resolve_self_guard => exact perry_runtime::bun_compat::self_global::installed_tls::resolve -- Bun platform bootstrap installs existing TLS storage resolver before its original once guard
+
+indirect exact perry_runtime::node_test_hook_slots::property => exact perry_runtime::node_test::property -- test installer fills namespace lookup
+indirect exact perry_runtime::node_test_hook_slots::dispatch_object_method => exact perry_runtime::node_test::dispatch_object_method -- test installer fills object dispatch

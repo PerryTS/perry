@@ -1392,3 +1392,5 @@ pub mod typedarray_hook_slots;
 
 mod builtin_value_support;
 mod bun_hook_slots;
+
+mod node_test_hook_slots;

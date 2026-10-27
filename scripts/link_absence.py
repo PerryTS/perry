@@ -49,6 +49,7 @@ NEGATIVES = {
     "without_typedarray": ["typedarray"],
     "without_proc_ipc": ["proc_ipc"],
     "without_bun_cli": ["bun_cli_utils"],
+    "without_node_test": ["mod_node_test"],
     "without_messaging": ["messaging"],
     "without_async_hooks": ["async_hooks"],
     "without_bigint_querystring": ["bigint"],

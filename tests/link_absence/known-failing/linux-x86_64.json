@@ -196,11 +196,6 @@
       "perry_runtime::intl::segmenter::SEGMENT_RECORD_KEYS::resolve",
       "perry_runtime::intl::segmenter::scan_segment_record_keys_roots_mut"
     ],
-    "mod_node_test": [
-      "perry_runtime::node_test::dispatch_object_method",
-      "perry_runtime::node_test::noop3",
-      "perry_runtime::node_test::property"
-    ],
     "node_api_host": [
       "perry_runtime::node_api_host::metadata::PENDING_FINALIZERS::resolve",
       "perry_runtime::node_api_host::metadata::enqueue_finalizer"

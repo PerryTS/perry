@@ -427,6 +427,7 @@ pub extern "C" fn js_runtime_install_mod_http2_constants() {
 pub extern "C" fn js_runtime_install_mod_node_test() {
     perry_install_once!({
         crate::node_submodules::install_node_test();
+        crate::node_test_hook_slots::install();
     });
 }
 

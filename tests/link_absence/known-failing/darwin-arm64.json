@@ -203,11 +203,6 @@
       "<perry_runtime::dgram::DGRAM_REGISTRY::{closure#0} as core::ops::function::FnOnce<()>>::call_once",
       "perry_runtime::dgram::release_dgram_bindings_in_freed_ranges"
     ],
-    "mod_node_test": [
-      "perry_runtime::node_test::dispatch_object_method",
-      "perry_runtime::node_test::noop3",
-      "perry_runtime::node_test::property"
-    ],
     "node_api_host": [
       "<perry_runtime::node_api_host::async_work::COMPLETIONS::{closure#0} as core::ops::function::FnOnce<()>>::call_once",
       "perry_runtime::node_api_host::NODE_API_ENV::resolve",
