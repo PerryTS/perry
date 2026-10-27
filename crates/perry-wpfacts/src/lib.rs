@@ -277,6 +277,7 @@ pub(crate) fn compute_in<'a>(
     g.m.rel(|| format!("interp {}", interp.replace(' ', "\\s")));
     if cfg.profile {
         g.m.profile = Some(Default::default());
+        g.m.prof = Some(Default::default());
     }
     // The bounds are in force from the first constraint: generation already
     // solves online (`Model::cons` and `Model::edge` apply each rule to what
@@ -337,7 +338,9 @@ pub(crate) fn compute_in<'a>(
         let thrown = g.m.thrown;
         g.m.sink_node(thrown, r);
     }
+    g.m.prof_mark(crate::model::NO_NODE, "generation");
     g.m.summarize_and_replay();
+    g.m.prof_mark(crate::model::NO_NODE, "summaries");
     if cfg.profile || cfg.explain {
         eprintln!("perry: wpfacts {}", g.m.sum.stats);
     }
@@ -357,7 +360,9 @@ pub(crate) fn compute_in<'a>(
     let checks_ms = t1.elapsed().as_secs_f64() * 1000.0 - first_solve_ms;
     g.m.settle_keyed_uses();
     g.settle_parent_layouts();
+    g.m.prof_mark(crate::model::NO_NODE, "after solve");
     if cfg.profile {
+        g.m.prof_report();
         eprintln!(
             "perry: wpfacts post-solve: first solve {first_solve_ms:.0} ms, {checks} contract checks with their solves {checks_ms:.0} ms, settle {:.0} ms",
             t1.elapsed().as_secs_f64() * 1000.0 - first_solve_ms - checks_ms
