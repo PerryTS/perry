@@ -177,7 +177,7 @@ fn event_emitter_async_resource_backing(receiver: f64) -> Option<i64> {
     // resolving, not by backing-registry membership. `resource` stays the
     // public object: the `asyncResource` getter hands it to JS, and every
     // `js_async_resource_*` entry point resolves it.
-    crate::async_hooks::resolve_async_resource_handle(resource).map(|_| resource)
+    crate::async_hook_slots::resolve_async_resource_handle(resource).map(|_| resource)
 }
 
 fn require_event_emitter_async_resource_receiver(
@@ -199,13 +199,13 @@ extern "C" fn ns_ee_async_resource_emit_rest(
     rest: f64,
 ) -> f64 {
     let resource = require_event_emitter_async_resource_receiver(closure, this);
-    let runtime_async_id = crate::async_hooks::js_async_resource_runtime_async_id(resource);
+    let runtime_async_id = crate::async_hook_slots::js_async_resource_runtime_async_id(resource);
     if runtime_async_id != 0 {
-        crate::async_hooks::js_async_hooks_provider_enter(runtime_async_id);
+        crate::async_hook_slots::js_async_hooks_provider_enter(runtime_async_id);
     }
     let result = ns_emit_rest(closure, this, event, rest);
     if runtime_async_id != 0 {
-        crate::async_hooks::js_async_hooks_provider_leave(runtime_async_id);
+        crate::async_hook_slots::js_async_hooks_provider_leave(runtime_async_id);
     }
     result
 }
@@ -219,7 +219,7 @@ extern "C" fn ns_ee_async_resource_destroy(
     this: crate::closure::JsThis,
 ) -> f64 {
     let resource = require_event_emitter_async_resource_receiver(closure, this);
-    crate::async_hooks::js_async_resource_emit_destroy(resource);
+    crate::async_hook_slots::js_async_resource_emit_destroy(resource);
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
@@ -244,8 +244,8 @@ extern "C" fn ns_ee_async_resource_getter(
     let operation = crate::closure::js_closure_get_capture_ptr(closure, 1) as u32;
     let resource = require_event_emitter_async_resource_receiver(closure, this);
     match operation {
-        0 => crate::async_hooks::js_async_resource_async_id(resource),
-        1 => crate::async_hooks::js_async_resource_trigger_async_id(resource),
+        0 => crate::async_hook_slots::js_async_resource_async_id(resource),
+        1 => crate::async_hook_slots::js_async_resource_trigger_async_id(resource),
         2 => f64::from_bits(crate::value::js_nanbox_pointer(resource).to_bits()),
         _ => f64::from_bits(crate::value::TAG_UNDEFINED),
     }

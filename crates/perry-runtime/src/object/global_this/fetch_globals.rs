@@ -791,7 +791,7 @@ pub unsafe extern "C-unwind" fn js_fetch_or_value_super(
         } else {
             undef
         };
-        crate::async_hooks::js_async_resource_subclass_init(this_box, type_value, options);
+        crate::async_hook_slots::js_async_resource_subclass_init(this_box, type_value, options);
         return undef;
     }
     // #10625: `class X extends AsyncLocalStorage` reached indirectly (local

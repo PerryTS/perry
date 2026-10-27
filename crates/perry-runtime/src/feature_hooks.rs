@@ -138,6 +138,7 @@ pub(crate) fn run_feature_installer() {
 /// (its Cargo features).
 #[no_mangle]
 pub extern "C" fn js_runtime_install_compiled() {
+    js_runtime_install_async_hooks();
     #[cfg(feature = "dyn-eval")]
     js_runtime_install_dyn_eval();
     #[cfg(feature = "bun-cli-utils")]
@@ -477,4 +478,9 @@ pub(crate) fn install_json_engine() {
 #[no_mangle]
 pub extern "C" fn js_runtime_install_json_engine() {
     install_json_engine();
+}
+
+#[no_mangle]
+pub extern "C" fn js_runtime_install_async_hooks() {
+    crate::async_hook_slots::install();
 }

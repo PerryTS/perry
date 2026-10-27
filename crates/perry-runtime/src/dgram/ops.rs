@@ -200,7 +200,7 @@ pub(crate) fn bind_impl(socket: f64, args: &[f64]) -> f64 {
         Ok(()) => {
             emit_event(socket, "listening", &[]);
             if let Some(callback) = callback_from_args(args) {
-                crate::async_hooks::run_resource_scope(socket_async_ids(socket), || {
+                crate::async_hook_slots::run_resource_scope(socket_async_ids(socket), || {
                     call_function(callback, socket, &[]);
                 });
             }
@@ -254,7 +254,7 @@ pub(crate) fn close_impl(socket: f64, args: &[f64]) -> f64 {
         // completion callback (event listeners have their own dispatch path).
         call_function(callback, socket, &[]);
     }
-    crate::async_hooks::destroy(async_ids.async_id);
+    crate::async_hook_slots::destroy(async_ids.async_id);
     socket
 }
 

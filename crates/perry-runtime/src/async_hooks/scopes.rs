@@ -26,9 +26,10 @@ pub fn run_provider_completion(type_name: &'static str, completion: impl FnOnce(
         destroy(ids.async_id);
         TAG_UNDEFINED_F64
     });
-    let destroy_error = destroy_outcome
-        .err()
-        .map(|error| scope.root_nanbox_f64(error));
+    let destroy_error = match destroy_outcome {
+        Ok(_) => None,
+        Err(error) => Some(scope.root_nanbox_f64(error)),
+    };
     if threw {
         crate::exception::js_throw(result.get_nanbox_f64());
     }

@@ -730,10 +730,10 @@ pub(crate) fn enqueue_queue_microtask(callback: i64) {
     let resource_value = resource_handle
         .with_mut_ptr::<u8, _>(|resource| crate::value::js_nanbox_pointer(resource as i64));
     let (ids, callback) = callback_handle.across_const::<crate::closure::ClosureHeader, _>(|| {
-        crate::async_hooks::init_scheduled_resource("Microtask", resource_value, None)
+        crate::async_hook_slots::init_scheduled_resource("Microtask", resource_value, None)
     });
     // The queue entry owns the job's state; keep it reachable until queued.
-    if let Some(state) = crate::async_hooks::resource_state::get(ids.async_id) {
+    if let Some(state) = crate::async_hook_slots::resource_state::get(ids.async_id) {
         scope.root_raw_mut_ptr(state);
     }
     crate::async_context::refresh_snapshot_from_roots(&mut context, &context_roots);

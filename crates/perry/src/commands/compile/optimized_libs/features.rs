@@ -251,6 +251,17 @@ pub(crate) fn auto_optimized_cross_features(
     {
         cross_features.push("perry-runtime/bigint".to_string());
     }
+    // Install observation before user scheduling, even for a later require.
+    if ctx
+        .native_module_imports
+        .iter()
+        .any(|m| matches!(m.as_str(), "async_hooks" | "events"))
+        || ctx.uses_get_builtin_module
+        || needs_dyn_eval
+        || !ctx.native_addons.is_empty()
+    {
+        cross_features.push("perry-runtime/async-hooks".to_string());
+    }
     if ctx.uses_proxy
         || ctx.uses_get_builtin_module
         || needs_dyn_eval

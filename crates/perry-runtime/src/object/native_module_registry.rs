@@ -235,6 +235,7 @@ pub extern "C" fn js_globalthis_seed_async_local_storage() {
 
 #[no_mangle]
 pub extern "C" fn js_nm_install_async_hooks() {
+    crate::async_hook_slots::install();
     nm_register_attach(
         NmBucket::AsyncHooks,
         super::native_module::callable_exports::nm_attach_async_hooks,
@@ -357,6 +358,7 @@ pub extern "C" fn js_nm_install_domain() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_events() {
+    js_nm_install_async_hooks();
     crate::stream_hooks::install();
     super::native_module::install_nm_ee_ops();
     nm_register_ctor(NmBucket::Events, nm_ctor_events);

@@ -1361,3 +1361,5 @@ mod source_read_log;
 pub mod proxy_hooks;
 
 pub mod url_hooks;
+
+pub mod async_hook_slots;

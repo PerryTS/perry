@@ -694,7 +694,7 @@ impl Drop for Arena {
                     crate::gc::GC_TYPE_SET_STORE => crate::set::finalize_owned_store(user, false),
                     crate::gc::GC_TYPE_MAP_STORE => crate::map::finalize_owned_store(user, false),
                     crate::gc::GC_TYPE_ASYNC_RESOURCE_STATE => {
-                        crate::async_hooks::resource_state::finalize(user.cast(), false)
+                        crate::async_hook_slots::resource_state::finalize(user.cast(), false)
                     }
                     crate::gc::GC_TYPE_ASYNC_SNAPSHOT => {
                         crate::async_context::finalize_snapshot_holder(user.cast())

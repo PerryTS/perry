@@ -26,7 +26,7 @@ pub(super) fn can_skip_callback_phases() -> bool {
     !(super::super::native_async::completion_work_pending()
         || crate::thread::js_thread_has_pending() != 0
         || crate::bun_ffi::callback::threadsafe_callback_work_pending()
-        || crate::async_hooks::gc_destroy_work_pending()
+        || crate::async_hook_slots::gc_destroy_work_pending()
         || crate::node_submodules::diagnostics_channel_has_pending_publishes()
         || crate::node_submodules::diagnostics::uncaught_work_pending()
         || crate::os::process_stdin_needs_pump()
@@ -151,15 +151,15 @@ mod tests {
     fn gc_destroy_jobs_are_not_skipped() {
         isolated(|| {
             let resource = crate::object::js_object_alloc(0, 0);
-            let ids = crate::async_hooks::init_resource(
+            let ids = crate::async_hook_slots::init_resource(
                 "destroy-job",
                 crate::value::js_nanbox_pointer(resource as i64),
                 true,
             );
-            crate::async_hooks::enqueue_gc_destroy(ids.async_id);
+            crate::async_hook_slots::enqueue_gc_destroy(ids.async_id);
             assert!(!can_skip_callback_phases());
             assert!(js_promise_run_microtasks_event_loop() > 0);
-            assert!(!crate::async_hooks::gc_destroy_work_pending());
+            assert!(!crate::async_hook_slots::gc_destroy_work_pending());
         });
     }
 

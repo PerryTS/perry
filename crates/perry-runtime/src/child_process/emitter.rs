@@ -47,7 +47,7 @@ pub(crate) fn cp_emit(target: f64, event: &str, args: &[f64]) -> bool {
     let async_ids = cp_handle_of(target.get_nanbox_f64())
         .and_then(|handle| reactor::cp_async_scope_for_target(handle, target.get_nanbox_f64()));
     if let Some(ids) = async_ids {
-        crate::async_hooks::enter_resource_scope(ids);
+        crate::async_hook_slots::enter_resource_scope(ids);
     }
 
     let key = cp_listener_key(event);
@@ -91,7 +91,7 @@ pub(crate) fn cp_emit(target: f64, event: &str, args: &[f64]) -> bool {
     }
 
     if let Some(ids) = async_ids {
-        crate::async_hooks::leave_resource_scope(ids.async_id);
+        crate::async_hook_slots::leave_resource_scope(ids.async_id);
     }
     fired
 }

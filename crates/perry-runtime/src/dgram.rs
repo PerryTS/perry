@@ -596,7 +596,7 @@ pub(crate) fn socket_object(socket_type: &str) -> f64 {
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let socket = scope.root_nanbox_f64(socket);
-    let ids = crate::async_hooks::init_resource("UDPWRAP", socket.get_nanbox_f64(), true);
+    let ids = crate::async_hook_slots::init_resource("UDPWRAP", socket.get_nanbox_f64(), true);
     set_hidden_value(socket.get_nanbox_f64(), KEY_ASYNC_ID, ids.async_id as f64);
     set_hidden_value(
         socket.get_nanbox_f64(),
@@ -606,8 +606,8 @@ pub(crate) fn socket_object(socket_type: &str) -> f64 {
     socket.get_nanbox_f64()
 }
 
-pub(crate) fn socket_async_ids(socket: f64) -> crate::async_hooks::AsyncResourceIds {
-    crate::async_hooks::AsyncResourceIds {
+pub(crate) fn socket_async_ids(socket: f64) -> crate::async_hook_slots::AsyncResourceIds {
+    crate::async_hook_slots::AsyncResourceIds {
         async_id: get_hidden_value(socket, KEY_ASYNC_ID).unwrap_or(0.0) as u64,
         trigger_async_id: get_hidden_value(socket, KEY_TRIGGER_ASYNC_ID).unwrap_or(0.0) as u64,
     }

@@ -164,13 +164,17 @@ pub(crate) unsafe fn nm_dispatch_async_hooks(
                 .with_mut_ptr::<crate::StringHeader, _>(|msg| crate::error::js_typeerror_new(msg));
             crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
         }
-        ("async_hooks", "createHook") => crate::async_hooks::js_async_hooks_create_hook(arg(0)),
-        ("async_hooks", "executionAsyncId") => {
-            crate::async_hooks::js_async_hooks_execution_async_id()
+        ("async_hooks", "createHook") => {
+            crate::async_hook_slots::js_async_hooks_create_hook(arg(0))
         }
-        ("async_hooks", "triggerAsyncId") => crate::async_hooks::js_async_hooks_trigger_async_id(),
+        ("async_hooks", "executionAsyncId") => {
+            crate::async_hook_slots::js_async_hooks_execution_async_id()
+        }
+        ("async_hooks", "triggerAsyncId") => {
+            crate::async_hook_slots::js_async_hooks_trigger_async_id()
+        }
         ("async_hooks", "executionAsyncResource") => {
-            crate::async_hooks::js_async_hooks_execution_async_resource()
+            crate::async_hook_slots::js_async_hooks_execution_async_resource()
         }
         _ => f64::from_bits(JSValue::undefined().bits()),
     }

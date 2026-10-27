@@ -1120,7 +1120,7 @@ pub fn gc_init() {
     // Object/string-valued `err.<prop> = v` user props live as raw bits in
     reg_scanner!(exception_mutable_root_scanner);
     reg_scanner!(async_context_mutable_root_scanner);
-    reg_scanner!(async_hooks_mutable_root_scanner);
+    crate::async_hook_slots::register_installed_roots();
     reg_scanner!(shape_cache_mutable_root_scanner);
     reg_scanner!(crate::regex::scan_last_exec_groups_root_mut);
     // #7211: the eight interned `typeof` result strings, and JSON.rawJSON's

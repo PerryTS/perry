@@ -485,7 +485,7 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
         {
             let raw = value_addr(value);
             let matched = if method == "AsyncResource" {
-                crate::async_hooks::resolve_async_resource_handle(raw as i64).is_some()
+                crate::async_hook_slots::resolve_async_resource_handle(raw as i64).is_some()
                     || (crate::value::addr_class::is_plausible_heap_addr(raw)
                         && ordinary_has_instance_prototype_walk(value, type_ref))
             } else {

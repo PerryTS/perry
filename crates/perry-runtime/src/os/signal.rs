@@ -888,7 +888,7 @@ pub(crate) fn set_process_signal_listener_count(name: &str, count: usize) {
                 release_signal_resources_in_freed_ranges,
             );
             let async_id = unsafe {
-                crate::async_hooks::js_async_hooks_provider_init(b"SIGNALWRAP".as_ptr(), 10)
+                crate::async_hook_slots::js_async_hooks_provider_init(b"SIGNALWRAP".as_ptr(), 10)
             };
             SIGNAL_ASYNC_IDS
                 .lock()
@@ -899,7 +899,7 @@ pub(crate) fn set_process_signal_listener_count(name: &str, count: usize) {
     } else {
         let async_id = SIGNAL_ASYNC_IDS.lock().unwrap().remove(name);
         if let Some(async_id) = async_id {
-            crate::async_hooks::destroy(async_id);
+            crate::async_hook_slots::destroy(async_id);
         }
     }
 }
@@ -1470,9 +1470,10 @@ mod resource_teardown_tests {
     }
     fn check(omit: bool) {
         let _guard = crate::gc::global_side_table_test_lock();
-        let token =
-            unsafe { crate::async_hooks::js_async_hooks_provider_init(b"SIGNALWRAP".as_ptr(), 10) };
-        assert!(crate::async_hooks::resource_state::get(token).is_some());
+        let token = unsafe {
+            crate::async_hook_slots::js_async_hooks_provider_init(b"SIGNALWRAP".as_ptr(), 10)
+        };
+        assert!(crate::async_hook_slots::resource_state::get(token).is_some());
         const NAME: &str = "objtables-native-signal-range";
         super::SIGNAL_ASYNC_IDS
             .lock()
@@ -1487,6 +1488,6 @@ mod resource_teardown_tests {
             !super::SIGNAL_ASYNC_IDS.lock().unwrap().contains_key(NAME),
             "retired signal state must not remain in native routing"
         );
-        crate::async_hooks::destroy(token);
+        crate::async_hook_slots::destroy(token);
     }
 }

@@ -494,7 +494,9 @@ pub(crate) unsafe fn get_native_module_constant(
         "dns/promises" => dns_error_alias(property).map(&str_val),
         "async_hooks" => match property {
             "default" if !is_cjs_default_object => cjs_default_export_value("async_hooks"),
-            "asyncWrapProviders" => Some(crate::async_hooks::js_async_hooks_async_wrap_providers()),
+            "asyncWrapProviders" => {
+                Some(crate::async_hook_slots::js_async_hooks_async_wrap_providers())
+            }
             _ => None,
         },
         "querystring" => match property {

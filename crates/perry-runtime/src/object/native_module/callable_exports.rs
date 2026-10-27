@@ -1537,7 +1537,7 @@ pub(crate) unsafe fn nm_attach_async_hooks(
             ),
         );
         let bind = scope.root_nanbox_f64(async_hooks_static_method_value(
-            crate::fn_info!(crate::async_hooks::js_async_local_storage_static_bind_method, 2; with_rest(1)),
+            crate::fn_info!(crate::async_hook_slots::js_async_local_storage_static_bind_method, 2; with_rest(1)),
             "bind",
             1,
         ));
@@ -1552,7 +1552,7 @@ pub(crate) unsafe fn nm_attach_async_hooks(
             super::PropertyAttrs::new(true, false, true),
         );
         let snapshot = scope.root_nanbox_f64(async_hooks_static_method_value(
-            crate::fn_info!(crate::async_hooks::js_async_local_storage_static_snapshot_method, 1; with_rest(0)),
+            crate::fn_info!(crate::async_hook_slots::js_async_local_storage_static_snapshot_method, 1; with_rest(0)),
             "snapshot",
             0,
         ));
@@ -1575,7 +1575,7 @@ pub(crate) unsafe fn nm_attach_async_hooks(
             ),
         );
         let bind = scope.root_nanbox_f64(async_hooks_static_method_value(
-            crate::fn_info!(crate::async_hooks::js_async_resource_static_bind_method, 4; with_rest(3)),
+            crate::fn_info!(crate::async_hook_slots::js_async_resource_static_bind_method, 4; with_rest(3)),
             "bind",
             3,
         ));

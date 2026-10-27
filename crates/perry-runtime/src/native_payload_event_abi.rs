@@ -75,7 +75,7 @@ unsafe fn emit_span_rooted(
     if std::env::var("PERRY_TEST_NET_SABOTAGE").as_deref() == Ok("event_catch") {
         return emit();
     }
-    match crate::async_hooks::owned_provider_scope_rooted(scope, resource, emit) {
+    match crate::async_hook_slots::owned_provider_scope_rooted(scope, resource, emit) {
         Ok(value) => value,
         Err(error) => event_exception(error),
     }
@@ -140,7 +140,7 @@ pub extern "C" fn js_perry_event_emit_in_resource(
             crate::value::js_nanbox_get_pointer(arguments.get_nanbox_f64()),
         );
     }
-    match crate::async_hooks::owned_provider_scope(resource.get_nanbox_f64(), || {
+    match crate::async_hook_slots::owned_provider_scope(resource.get_nanbox_f64(), || {
         crate::node_stream::js_node_stream_method_emit_args(
             crate::value::js_nanbox_get_pointer(owner.get_nanbox_f64()),
             event.get_nanbox_f64(),
@@ -191,7 +191,7 @@ pub unsafe extern "C" fn js_perry_event_call_in_resource(
     };
     if args.len() <= 4 {
         let args = crate::node_stream::RootedArgs::new(&scope, args);
-        return match crate::async_hooks::owned_provider_scope_rooted(&scope, &resource, || {
+        return match crate::async_hook_slots::owned_provider_scope_rooted(&scope, &resource, || {
             args.with_live(|args| {
                 crate::closure::native_call_value_this(
                     callback.get_nanbox_f64(),
@@ -207,7 +207,7 @@ pub unsafe extern "C" fn js_perry_event_call_in_resource(
     }
     let args = scope.root_nanbox_f64_slice(args);
     let mut values = Vec::with_capacity(args.len());
-    match crate::async_hooks::owned_provider_scope(resource.get_nanbox_f64(), || {
+    match crate::async_hook_slots::owned_provider_scope(resource.get_nanbox_f64(), || {
         // A before hook may move arguments. Read the rooted slots after it;
         // keep the owning Vec outside the JS exception boundary.
         values.extend(args.iter().map(|arg| arg.get_nanbox_f64()));

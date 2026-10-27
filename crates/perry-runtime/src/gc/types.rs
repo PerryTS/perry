@@ -1386,11 +1386,11 @@ pub(crate) unsafe fn gc_type_finalize_unmarked_payload(obj_type: u8, user_ptr: *
             );
         }
         GcFinalizeHookKind::AsyncResourceState => {
-            crate::async_hooks::resource_state::finalize(user_ptr.cast(), true);
+            crate::async_hook_slots::resource_state::finalize(user_ptr.cast(), true);
         }
         GcFinalizeHookKind::PromiseCleanup => {
             let promise = user_ptr as *mut crate::promise::Promise;
-            crate::async_hooks::enqueue_gc_destroy((*promise).async_id);
+            crate::async_hook_slots::enqueue_gc_destroy((*promise).async_id);
             crate::promise::clear_promise_context_for_gc(promise);
         }
 

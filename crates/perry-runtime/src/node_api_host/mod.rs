@@ -525,7 +525,10 @@ pub fn scan_node_api_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) 
         // including contexts created without a JavaScript resource value.
         for context in &mut env.async_contexts {
             if !context.destroyed {
-                crate::async_hooks::resource_state::scan_token(&mut context.ids.async_id, visitor);
+                crate::async_hook_slots::resource_state::scan_token(
+                    &mut context.ids.async_id,
+                    visitor,
+                );
             }
         }
         for tsfn in &env.tsfns {

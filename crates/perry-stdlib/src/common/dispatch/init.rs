@@ -150,7 +150,7 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
                 } else {
                     TAG_UNDEFINED_F64
                 };
-                perry_runtime::async_hooks::js_async_resource_new(type_value, options)
+                perry_runtime::async_hook_slots::js_async_resource_new(type_value, options)
             }
             // `new sd.StringDecoder(enc)` where `StringDecoder` was read off the
             // `string_decoder` namespace as a value: the same handle the static

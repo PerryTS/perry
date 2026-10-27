@@ -971,7 +971,7 @@ pub(super) fn resolve_with_bits(bits: u64) -> *mut Promise {
 pub(super) fn resolve_with_bits_provider(bits: u64, provider_type: &'static str) -> *mut Promise {
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let value = scope.root_nanbox_f64(f64::from_bits(bits));
-    let result = perry_runtime::async_hooks::run_provider_completion(provider_type, || {
+    let result = perry_runtime::async_hook_slots::run_provider_completion(provider_type, || {
         let promise = js_promise_resolved(value.get_nanbox_f64());
         f64::from_bits(JSValue::pointer(promise as *const u8).bits())
     });

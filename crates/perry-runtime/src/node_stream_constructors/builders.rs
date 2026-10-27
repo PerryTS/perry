@@ -236,13 +236,13 @@ pub extern "C" fn js_event_emitter_async_resource_subclass_init(this: f64, optio
         options_handle.get_nanbox_f64()
     };
     let resource =
-        crate::async_hooks::js_async_resource_new(name_handle.get_nanbox_f64(), async_options);
+        crate::async_hook_slots::js_async_resource_new(name_handle.get_nanbox_f64(), async_options);
     // #10926: `resource` is the public AsyncResource OBJECT now -- ordinary and
     // movable, where it used to be a never-freed `Box` -- and this frame is its
     // only holder until it is stored below, while the hidden key allocates.
     // Root it, and re-read `this` and the resource after that allocation.
     let resource_handle = scope.root_nanbox_f64(resource);
-    crate::async_hooks::js_async_resource_set_event_emitter(
+    crate::async_hook_slots::js_async_resource_set_event_emitter(
         raw_ptr_from_value(resource_handle.get_nanbox_f64()) as i64,
         raw_ptr_from_value(this_handle.get_nanbox_f64()) as i64,
     );

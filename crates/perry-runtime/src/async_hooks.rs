@@ -7,7 +7,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
 use std::ptr;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{LazyLock, Mutex};
+use std::sync::Mutex;
 
 use crate::array::{js_array_length, ArrayHeader};
 use crate::closure::{
@@ -29,7 +29,7 @@ use arg_values::{
     async_id_to_js_number, is_callable_value, js_string_value_to_string, require_string_arg,
     throw_apply_not_function, trigger_id_from_options, validate_bind_callback,
 };
-mod provider_ffi;
+pub(crate) mod provider_ffi;
 pub use provider_ffi::{
     defer_destroy_after_check_turns, js_async_hooks_provider_defer_destroy,
     js_async_hooks_provider_destroy, js_async_hooks_provider_enter, js_async_hooks_provider_init,
@@ -39,7 +39,7 @@ pub use provider_ffi::{
     js_async_hooks_provider_run_catching_with_this,
 };
 pub(crate) use provider_ffi::{owned_provider_scope, owned_provider_scope_rooted};
-mod scopes;
+pub(crate) mod scopes;
 pub use scopes::{
     enter_resource_scope, leave_resource_scope, run_provider_completion, run_resource_scope,
     run_resource_scope_catching, try_enter_resource_scope, try_leave_resource_scope,
@@ -81,11 +81,7 @@ per_test_global! {
     static TEST_FORCE_RESOLVE_GC: AtomicUsize = AtomicUsize::new(0);
 }
 
-#[derive(Clone, Copy)]
-pub struct AsyncResourceIds {
-    pub async_id: u64,
-    pub trigger_async_id: u64,
-}
+pub use crate::async_hook_slots::AsyncResourceIds;
 
 pub(crate) mod resource_state;
 
@@ -157,7 +153,7 @@ struct HookRecord {
 // already covers them; `per_test_global!` only changes which instance a test
 // thread resolves to, not the scanner's reach.
 per_test_global! {
-    static HOOKS: LazyLock<Mutex<Vec<HookRecord>>> = LazyLock::new(|| Mutex::new(Vec::new()));
+    static HOOKS: Mutex<Vec<HookRecord>> = Mutex::new(Vec::new());
     static GC_DESTROY_QUEUE: Mutex<VecDeque<(u64, bool)>> = Mutex::new(VecDeque::new());
     static ASYNC_WRAP_PROVIDERS: AtomicU64 = AtomicU64::new(0);
 }
@@ -1505,7 +1501,6 @@ pub extern "C" fn js_async_resource_async_id(handle: i64) -> f64 {
 /// `asyncId` is a serial number and names no state: passing it back into
 /// [`js_async_hooks_provider_enter`] or a provider trigger loses the
 /// resource's captured context. Valid while `handle` is reachable.
-#[no_mangle]
 pub extern "C" fn js_async_resource_runtime_async_id(handle: i64) -> u64 {
     resolve_async_resource_handle(handle)
         .and_then(|handle| {
@@ -1893,3 +1888,12 @@ pub use test_support::reset_for_tests;
 pub(crate) use test_support::{
     test_async_hooks_scanner_snapshot, test_seed_async_hooks_scanner_roots, test_set_hooks_active,
 };
+
+pub(crate) mod slots_bridge;
+
+pub(crate) fn register_roots() {
+    crate::gc::gc_register_mutable_root_scanner_named_once(
+        "async_hooks_mutable_root_scanner",
+        crate::gc::async_hooks_mutable_root_scanner,
+    );
+}

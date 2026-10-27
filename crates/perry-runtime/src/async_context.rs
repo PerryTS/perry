@@ -424,7 +424,9 @@ pub fn apply_context_guard(action: ContextGuardAction) {
         ContextGuardAction::PopStore(lease) => pop_store(lease.token()),
         ContextGuardAction::RestoreStores(lease, stores) => restore_store(lease.token(), stores),
         ContextGuardAction::RestoreSnapshot(snapshot) => restore_context(snapshot),
-        ContextGuardAction::RestoreExecutionIds => crate::async_hooks::unwind_execution_scope(),
+        ContextGuardAction::RestoreExecutionIds => {
+            crate::async_hook_slots::unwind_execution_scope()
+        }
         #[cfg(test)]
         ContextGuardAction::TestNoop => {}
     }

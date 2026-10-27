@@ -1133,7 +1133,7 @@ pub(crate) extern "C" fn filehandle_writer_impl(
 }
 
 fn filehandle_close_promise() -> f64 {
-    crate::async_hooks::run_provider_completion("FILEHANDLECLOSEREQ", || {
+    crate::async_hook_slots::run_provider_completion("FILEHANDLECLOSEREQ", || {
         let promise =
             crate::promise::js_promise_resolved(f64::from_bits(crate::value::TAG_UNDEFINED));
         f64::from_bits(crate::value::JSValue::pointer(promise as *const u8).bits())

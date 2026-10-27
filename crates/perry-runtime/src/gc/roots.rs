@@ -405,6 +405,23 @@ pub fn gc_register_mutable_root_scanner_named(source: &'static str, scanner: Mut
     gc_register_named_mutable_root_scanner(source, scanner);
 }
 
+/// Register an installer's per-thread scanner once, including late installs.
+pub(crate) fn gc_register_mutable_root_scanner_named_once(
+    name: &'static str,
+    scanner: MutableRootScanner,
+) {
+    let exists = MUTABLE_ROOT_SCANNERS.with(|scanners| {
+        scanners
+            .borrow()
+            .iter()
+            .rev()
+            .any(|entry| entry.name == name && std::ptr::fn_addr_eq(entry.scanner, scanner))
+    });
+    if !exists {
+        gc_register_named_mutable_root_scanner(name, scanner);
+    }
+}
+
 pub(super) fn gc_register_mutable_root_scanner_with_source(
     scanner: MutableRootScanner,
     source: MutableRootScannerSource,

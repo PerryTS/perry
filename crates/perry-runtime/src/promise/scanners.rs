@@ -42,13 +42,13 @@ pub fn scan_promise_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
                     resource,
                     ..
                 } => {
-                    crate::async_hooks::resource_state::scan_token(async_id, visitor);
+                    crate::async_hook_slots::resource_state::scan_token(async_id, visitor);
                     visitor.visit_nanbox_f64_slot(resource);
                     visitor.visit_raw_const_ptr_slot(callback);
                     scan_snapshot_roots_mut(context, visitor);
                 }
                 Task::AsyncStep(cb, value, next, _, context, _, id, _) => {
-                    crate::async_hooks::resource_state::scan_token(id, visitor);
+                    crate::async_hook_slots::resource_state::scan_token(id, visitor);
                     visitor.visit_raw_const_ptr_slot(cb);
                     visitor.visit_raw_mut_ptr_slot(next);
                     visitor.visit_nanbox_f64_slot(value);
@@ -234,11 +234,11 @@ fn scan_task_step(
         Task::Microtask {
             async_id, resource, ..
         } => {
-            crate::async_hooks::resource_state::scan_token(async_id, visitor);
+            crate::async_hook_slots::resource_state::scan_token(async_id, visitor);
             visitor.visit_nanbox_f64_slot(resource);
         }
         Task::AsyncStep(_, _, _, _, _, _, async_id, _) => {
-            crate::async_hooks::resource_state::scan_token(async_id, visitor);
+            crate::async_hook_slots::resource_state::scan_token(async_id, visitor);
         }
         _ => {}
     }

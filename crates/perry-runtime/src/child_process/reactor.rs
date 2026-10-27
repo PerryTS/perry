@@ -141,8 +141,8 @@ struct LiveChild {
     owner: crate::agent::AgentId,
     /// NaN-boxed ChildProcess object — a GC root (see `cp_reactor_scan_roots_mut`).
     cp_bits: u64,
-    process_ids: crate::async_hooks::AsyncResourceIds,
-    pipe_ids: [crate::async_hooks::AsyncResourceIds; 3],
+    process_ids: crate::async_hook_slots::AsyncResourceIds,
+    pipe_ids: [crate::async_hook_slots::AsyncResourceIds; 3],
     pipe_bits: [u64; 3],
     pid: i32,
     stdin: Option<CpStdin>,
@@ -256,20 +256,20 @@ fn cp_init_async_resources(
     stdout_obj: f64,
     stderr_obj: f64,
 ) -> (
-    crate::async_hooks::AsyncResourceIds,
-    [crate::async_hooks::AsyncResourceIds; 3],
+    crate::async_hook_slots::AsyncResourceIds,
+    [crate::async_hook_slots::AsyncResourceIds; 3],
 ) {
-    let process_ids = crate::async_hooks::init_resource("PROCESSWRAP", cp, true);
+    let process_ids = crate::async_hook_slots::init_resource("PROCESSWRAP", cp, true);
     let stdin_ids = stdin_obj
-        .map(|object| crate::async_hooks::init_resource("PIPEWRAP", object, true))
-        .unwrap_or(crate::async_hooks::AsyncResourceIds {
+        .map(|object| crate::async_hook_slots::init_resource("PIPEWRAP", object, true))
+        .unwrap_or(crate::async_hook_slots::AsyncResourceIds {
             async_id: 0,
             trigger_async_id: 0,
         });
     let pipe_ids = [
         stdin_ids,
-        crate::async_hooks::init_resource("PIPEWRAP", stdout_obj, true),
-        crate::async_hooks::init_resource("PIPEWRAP", stderr_obj, true),
+        crate::async_hook_slots::init_resource("PIPEWRAP", stdout_obj, true),
+        crate::async_hook_slots::init_resource("PIPEWRAP", stderr_obj, true),
     ];
     (process_ids, pipe_ids)
 }
@@ -1439,9 +1439,9 @@ fn cp_reactor_pump_inner() {
 
         cp_cleanup_abort_listener(item.abort_signal_bits, item.abort_listener_bits);
         if let Some(exec) = item.exec {
-            crate::async_hooks::enter_resource_scope(item.process_ids);
+            crate::async_hook_slots::enter_resource_scope(item.process_ids);
             cp_exec_fire_close(exec, item.code, item.signal, item.pid);
-            crate::async_hooks::leave_resource_scope(item.process_ids.async_id);
+            crate::async_hook_slots::leave_resource_scope(item.process_ids.async_id);
         }
         if let Some(cp_bits) = cp_lookup_cp_bits(item.handle) {
             let cp = f64::from_bits(cp_bits);
@@ -1459,9 +1459,9 @@ fn cp_reactor_pump_inner() {
             .as_mut()
             .and_then(|map| map.remove(&item.handle))
             .is_some();
-        crate::async_hooks::destroy(item.process_ids.async_id);
+        crate::async_hook_slots::destroy(item.process_ids.async_id);
         for pipe in item.pipe_ids {
-            crate::async_hooks::destroy(pipe.async_id);
+            crate::async_hook_slots::destroy(pipe.async_id);
         }
         if removed {
             CP_LIVE_COUNT.fetch_sub(1, Ordering::SeqCst);
@@ -1482,8 +1482,8 @@ struct CpCloseItem {
     abort_signal_bits: u64,
     abort_listener_bits: u64,
     exec: Option<Box<CpExecPending>>,
-    process_ids: crate::async_hooks::AsyncResourceIds,
-    pipe_ids: [crate::async_hooks::AsyncResourceIds; 3],
+    process_ids: crate::async_hook_slots::AsyncResourceIds,
+    pipe_ids: [crate::async_hook_slots::AsyncResourceIds; 3],
     refed: bool,
     close: bool,
 }
@@ -1558,7 +1558,7 @@ pub(crate) fn release_cp_children_in_freed_ranges(freed: &crate::arena::thread_e
 #[doc(hidden)]
 pub fn cp_register_idle_live_child_for_test(cp: f64) -> u64 {
     let handle = CP_NEXT_LIVE_ID.fetch_add(1, Ordering::SeqCst);
-    let no_ids = crate::async_hooks::AsyncResourceIds {
+    let no_ids = crate::async_hook_slots::AsyncResourceIds {
         async_id: 0,
         trigger_async_id: 0,
     };
@@ -1630,7 +1630,7 @@ fn cp_lookup_cp_bits(handle: u64) -> Option<u64> {
 pub(super) fn cp_async_scope_for_target(
     handle: u64,
     target: f64,
-) -> Option<crate::async_hooks::AsyncResourceIds> {
+) -> Option<crate::async_hook_slots::AsyncResourceIds> {
     let target_bits = target.to_bits();
     let guard = cp_live_lock();
     let child = guard.as_ref()?.get(&handle)?;

@@ -208,7 +208,7 @@ fn run_callback_entry(entry: Entry) {
     let scope = crate::gc::RuntimeHandleScope::new();
     // The popped entry no longer owns the timer's state (an interval's re-armed
     // copy may): this scope does for the whole dispatch.
-    if let Some(state) = crate::async_hooks::resource_state::get(async_id) {
+    if let Some(state) = crate::async_hook_slots::resource_state::get(async_id) {
         scope.root_raw_mut_ptr(state);
     }
     let js_handle = scope.root_nanbox_f64(js_handle);
@@ -217,7 +217,11 @@ fn run_callback_entry(entry: Entry) {
     let previous = crate::async_context::enter_context(&context);
     let mut previous = previous;
     let previous_roots = crate::async_context::root_snapshot(&scope, &previous);
-    crate::async_hooks::before_scheduled(async_id, trigger_async_id, js_handle.get_nanbox_f64());
+    crate::async_hook_slots::before_scheduled(
+        async_id,
+        trigger_async_id,
+        js_handle.get_nanbox_f64(),
+    );
 
     enter_timer_callback_dispatch();
     call_timer_callback_entry(&scope, id, callback, &args, &js_handle);
@@ -227,11 +231,11 @@ fn run_callback_entry(entry: Entry) {
     crate::promise::microtasks::js_promise_run_microtasks_checkpoint();
     leave_timer_callback_dispatch();
 
-    crate::async_hooks::after(async_id);
+    crate::async_hook_slots::after(async_id);
     // An interval keeps its resource alive across ticks; a one-shot timer's is
     // destroyed once it has run.
     if class != Class::Interval {
-        crate::async_hooks::destroy_scheduled(async_id);
+        crate::async_hook_slots::destroy_scheduled(async_id);
     }
     crate::async_context::refresh_snapshot_from_roots(&mut previous, &previous_roots);
     crate::async_context::restore_context(previous);

@@ -349,7 +349,7 @@ fn native_instanceof(
         };
     }
     if class_id == CLASS_ID_ASYNC_RESOURCE {
-        return if crate::async_hooks::resolve_async_resource_handle(value_addr(value) as i64)
+        return if crate::async_hook_slots::resolve_async_resource_handle(value_addr(value) as i64)
             .is_some()
         {
             true_val

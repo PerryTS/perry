@@ -165,8 +165,11 @@ pub(crate) extern "C" fn thunk_fs_promises_open(
                 let handle = scope.root_nanbox_f64(handle);
                 let promise =
                     scope.root_nanbox_f64(crate::fs::promise_value_fs(handle.get_nanbox_f64()));
-                let ids =
-                    crate::async_hooks::init_resource("FILEHANDLE", handle.get_nanbox_f64(), true);
+                let ids = crate::async_hook_slots::init_resource(
+                    "FILEHANDLE",
+                    handle.get_nanbox_f64(),
+                    true,
+                );
                 // FILEHANDLE is owned by the public handle and remains live
                 // after open; Node does not emit before/after/destroy for it.
                 let _ = ids;
@@ -477,8 +480,11 @@ pub(crate) extern "C" fn thunk_fs_promises_opendir(
         Ok(directory) => {
             let scope = crate::gc::RuntimeHandleScope::new();
             let directory = scope.root_nanbox_f64(directory);
-            let _ =
-                crate::async_hooks::init_resource("DIRHANDLE", directory.get_nanbox_f64(), true);
+            let _ = crate::async_hook_slots::init_resource(
+                "DIRHANDLE",
+                directory.get_nanbox_f64(),
+                true,
+            );
             crate::fs::promise_value_fs(directory.get_nanbox_f64())
         }
         Err(err) => crate::fs::promise_rejected_fs(err),
