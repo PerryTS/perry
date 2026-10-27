@@ -1546,6 +1546,12 @@ impl Model {
         // Unknown code reads every field and can write any key.
         let all = self.all_fields(t);
         self.cons(all, Cons::TopSink { reason });
+        // A module namespace object is not writable: [[Set]] and
+        // [[DefineOwnProperty]] fail, [[Delete]] of an export fails (ES
+        // 10.4.6); its keys hold what its module's bindings hold.
+        if matches!(self.toks[t as usize], TokKind::ModNs(_)) {
+            return;
+        }
         let any = self.any_key_node(t);
         self.add_top(any, |m| {
             format!(

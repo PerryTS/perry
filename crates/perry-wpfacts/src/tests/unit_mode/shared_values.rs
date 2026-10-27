@@ -521,7 +521,12 @@ pub(super) fn a_primitive_method_box_in_another_units_storage_keeps_its_elements
     // program.
     let a = "export class P { x: number; constructor(x: number) { this.x = x; } get(): number { return this.x; } } export class Vector { storage: any[]; n: number; constructor() { this.storage = new Array(2); this.n = 0; } append(e: any) { if (this.n >= this.storage.length) { const s = this.storage.slice(); this.storage = new Array(this.n * 2); for (let i = 0; i < this.n; i++) this.storage[i] = s[i]; } this.storage[this.n] = e; this.n = this.n + 1; } at(i: number): any { return this.storage[i]; } }";
     let m = "import { P, Vector } from './a'; class J { input: string; v: Vector; constructor(s: string) { this.input = s; this.v = new Vector(); } run() { for (let i = 0; i < 4; i++) { this.v.append(new P(i)); this.v.append(this.input.substring(i, i + 1)); } return this.v.at(0).get(); } } function main() { const j = new J(process.argv.length > 9 ? 'abcdef' : 'xyzuvw'); console.log(j.run()); } main(); main();";
-    assert_parity(&[("a", a), ("m", m)]);
+    // Gap: `m` reads `this.v.at(0)` as ⊤ (the element `at` returns is
+    // `m`'s own value in `a`'s storage), so no unit publishes `P` as the
+    // receiver of `get`: per unit `this.x` there is E0 over `P` (the
+    // guarded body), the whole program T0. It was "proven" before only by
+    // a proof over no receiver (`tests/proof_receivers.rs`).
+    assert_parity_but(&[("a", a), ("m", m)], &["a.ts@91.x"]);
 }
 
 #[test]
