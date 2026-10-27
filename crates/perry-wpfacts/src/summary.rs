@@ -1738,7 +1738,11 @@ impl Model {
             if contract {
                 // Design §11.2: the result is checked after the solve.
                 self.contract_rets.push((f, r));
-            } else {
+            }
+            // Beyond its publication (an export or a published literal's
+            // field, DECISIONS 210), unknown code calls it and keeps what
+            // it returns.
+            if !contract || (self.pub_reason != Some(reason) && self.field_fn_reason != Some(reason)) {
                 self.sink_node(r, reason);
             }
         }

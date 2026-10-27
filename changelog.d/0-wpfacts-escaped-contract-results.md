@@ -1,0 +1,1 @@
+Published functions that later reach unknown code also let that code retain their results. Per-unit facts now escape those results, including when publication came through a literal field, instead of relying solely on caller-unit contracts.

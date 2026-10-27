@@ -1068,6 +1068,12 @@ impl Model {
             }
             self.add_top(fi.args_all, why);
             self.contract_rets.push((f, fi.ret));
+            // Beyond its publication (an export or a published literal's
+            // field, DECISIONS 210), unknown code calls it and keeps what
+            // it returns.
+            if self.pub_reason != Some(reason) && self.field_fn_reason != Some(reason) {
+                self.sink_node(fi.ret, reason);
+            }
             return;
         }
         self.add_top(fi.args_all, why);

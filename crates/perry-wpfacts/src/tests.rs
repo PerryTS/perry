@@ -18,6 +18,7 @@ mod closed_world;
 mod closure_context;
 mod dynamic_code;
 mod escaped_method_this;
+mod escaped_contract_result;
 mod export_star;
 mod for_in_keys;
 mod function_values;
