@@ -1,6 +1,7 @@
 //! A site proof names the receivers it is over: a site whose only receiver
 //! tokens are closed markers with nothing beside them has no receiver, per
-//! unit as in the whole program.
+//! unit as in the whole program. And an escaped module namespace is read,
+//! never written, by unknown code: what its keys hold stays its module's.
 
 use super::*;
 
@@ -97,4 +98,28 @@ fn a_called_method_still_proves_its_read() {
     let s = u.sites.iter().find(|s| s.key == "k").expect("the read");
     assert!(matches!(s.verdict, Verdict::T0Mono), "{s:?}\n{}", u.dump_text());
     assert_eq!(s.receivers, vec!["a.ts:C".to_string()]);
+}
+
+const NS_A: &str = "export function f(o: any) { return o.k; } export function g() { return (n: number) => n * 2; }";
+
+#[test]
+fn unknown_code_cannot_write_an_escaped_module_namespace() {
+    // `A` reaches unknown code (a call of an unknown function value), which
+    // reads its exports but cannot store into it (ES 10.4.6): `A.g()` is
+    // still the closure `g` returns, and the call of it is proven.
+    let m = "import * as A from './a'; declare const sink: any; sink(A); const h = A.g(); console.log(A.f({ k: 1 }), h(3));";
+    let mods = [("a", NS_A), ("m", m)];
+    let (u, w) = (run(&mods, true), run(&mods, false));
+    for pf in [&w, &u] {
+        let c = pf
+            .sites
+            .iter()
+            .find(|s| s.module == 1 && s.key == "()" && s.targets.iter().any(|t| t.starts_with("a.ts:closure")))
+            .unwrap_or_else(|| panic!("the call of h is not proven\n{}", pf.dump_text()));
+        assert!(matches!(c.verdict, Verdict::T0Mono), "{c:?}");
+    }
+    assert_eq!(stronger(&u, &w), Vec::<String>::new(), "{}\n---\n{}", u.dump_text(), w.dump_text());
+    // Its exports still escape: unknown code may call `f` with anything.
+    let k = w.sites.iter().find(|s| s.module == 0 && s.key == "k").expect("the read in f");
+    assert!(matches!(k.verdict, Verdict::No(_)), "{k:?}\n{}", w.dump_text());
 }
