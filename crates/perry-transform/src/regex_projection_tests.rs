@@ -86,6 +86,7 @@ fn rejects_escapes_metadata_aliases_writes_and_multiple_captures() {
             index: Box::new(Expr::LocalGet(4)),
         }),
         Stmt::Expr(Expr::ArrayPop(2)),
+        Stmt::Expr(Expr::Delete(Box::new(get(7)))),
     ] {
         assert!(!projected(&optimized(vec![Stmt::Expr(get(7)), extra])));
     }

@@ -657,7 +657,21 @@ pub(crate) fn execute_rooted(
         return Ok(None);
     };
     let (array, groups) = match output {
-        ExecOutput::Object => {
+        ExecOutput::Capture(index)
+            if captures.as_ref().is_some_and(|slots| index < slots.len()) =>
+        {
+            let fresh = bind_heap_subject(*input)?;
+            let found = Match { full, captures };
+            let array = caught(|| {
+                super::perex_results::materialize_capture(
+                    &fresh, &found, position, index, budget, poll,
+                )
+            })??;
+            (array, std::ptr::null_mut())
+        }
+        // An absent numbered property can invoke an inherited getter with
+        // the result as its receiver, exposing every capture and metadata.
+        ExecOutput::Object | ExecOutput::Capture(_) => {
             let found = Match { full, captures };
             let scope = RuntimeHandleScope::new();
             let fresh;
@@ -691,16 +705,6 @@ pub(crate) fn execute_rooted(
                     poll,
                 )
             })??
-        }
-        ExecOutput::Capture(index) => {
-            let fresh = bind_heap_subject(*input)?;
-            let found = Match { full, captures };
-            let array = caught(|| {
-                super::perex_results::materialize_capture(
-                    &fresh, &found, position, index, budget, poll,
-                )
-            })??;
-            (array, std::ptr::null_mut())
         }
         ExecOutput::Test => (std::ptr::null_mut(), std::ptr::null_mut()),
     };

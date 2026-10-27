@@ -88,3 +88,19 @@ try { one(/(x)/, symbolPrimitive); } catch (e) { console.log(e instanceof TypeEr
 const bound: any = /(a)/;
 bound.exec = /(b)/.exec.bind(/(b)/);
 one(bound, "b");
+function inheritedOutOfRange(): void {
+  Object.defineProperty(Array.prototype, "3", { configurable: true, get() { return this[0] + ":" + this.index + ":" + this.input; } });
+  const re = /(x)/;
+  const m = re.exec("x");
+  if (m !== null) console.log(m[3]);
+  delete (Array.prototype as any)[3];
+}
+inheritedOutOfRange();
+function deletedCapture(): void {
+  Object.defineProperty(Array.prototype, "1", { configurable: true, get() { return this[0] + ":" + this.index + ":" + this.input; } });
+  const re = /(x)/;
+  const m = re.exec("x");
+  if (m !== null) { delete (m as any)[1]; console.log(m[1]); }
+  delete (Array.prototype as any)[1];
+}
+deletedCapture();

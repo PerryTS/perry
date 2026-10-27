@@ -90,7 +90,7 @@ fn reads(
             return;
         }
         // Captured references must fail the module-wide census comparison.
-        Expr::Closure { .. } => return,
+        Expr::Closure { .. } | Expr::Delete(_) => return,
         _ => {}
     }
     walk_expr_children(expr, &mut |child| {
