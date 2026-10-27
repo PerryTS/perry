@@ -803,18 +803,16 @@ fn object_proto_method_call(m: &mut Model, call: CallId) {
     }
 }
 
-/// `Object.prototype`'s methods (`proto_method_inner`).
-const OBJECT_PROTO_METHODS: [&str; 10] = [
+/// `Object.prototype`'s methods, one per distinct summary in
+/// `proto_method_inner`: `propertyIsEnumerable` / `isPrototypeOf` run as
+/// `hasOwnProperty` does, `toLocaleString` as `toString`, the setter forms
+/// as the getter forms.
+const OBJECT_PROTO_METHODS: [&str; 5] = [
     "hasOwnProperty",
-    "propertyIsEnumerable",
-    "isPrototypeOf",
     "toString",
-    "toLocaleString",
     "valueOf",
     "__defineGetter__",
-    "__defineSetter__",
     "__lookupGetter__",
-    "__lookupSetter__",
 ];
 
 fn proto_method_inner(m: &mut Model, p: Tok, origin: Tok, key: Key, call: CallId) {
