@@ -5069,6 +5069,7 @@ node_api_symbol_for	i32s	ptr,ptr,usize,ptr
 node_api_throw_syntax_error	i32s	ptr,ptr,ptr
 perry_alloc_class_family	ptr	ptr,i32u,i32u
 perry_alloc_layout	ptr	ptr
+perry_alloc_literal_layout	ptr	ptr
 perry_alloc_runtime_record	ptr	ptr
 perry_app_group_init	void	ptr,i32s
 perry_app_group_suite_name	ptr	ptr
