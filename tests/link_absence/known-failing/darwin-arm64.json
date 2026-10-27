@@ -195,10 +195,6 @@
       "perry_runtime::gc::verify_diag::panic_stale_forwarded_reference_detailed",
       "perry_runtime::gc::verify_diag::type_name"
     ],
-    "intl_segmenter": [
-      "perry_runtime::intl::segmenter::SEGMENT_RECORD_KEYS::resolve",
-      "perry_runtime::intl::segmenter::scan_segment_record_keys_roots_mut"
-    ],
     "node_api_host": [
       "<perry_runtime::node_api_host::async_work::COMPLETIONS::{closure#0} as core::ops::function::FnOnce<()>>::call_once",
       "perry_runtime::node_api_host::NODE_API_ENV::resolve",

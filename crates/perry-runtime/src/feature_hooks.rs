@@ -329,6 +329,7 @@ pub extern "C" fn js_runtime_install_string_normalize() {
 pub extern "C" fn js_runtime_install_intl_segmenter() {
     perry_install_once!({
         crate::intl::install_intl_segmenter_feature();
+        crate::segmenter_hook_roots::install();
     });
 }
 

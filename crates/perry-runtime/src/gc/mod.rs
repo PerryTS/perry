@@ -1233,7 +1233,7 @@ pub fn gc_init() {
     // the thread-local slot is the only place the new address can be recorded.
     // Same shape as the line above: the shared keys arrays behind
     // `Intl.Segmenter`'s segment records are referenced only by this cache.
-    reg_scanner!(crate::intl::segmenter::scan_segment_record_keys_roots_mut);
+    crate::segmenter_hook_roots::register_installed_roots();
     reg_scanner!(small_int_cache_mutable_root_scanner);
     reg_scanner!(concat_memo_mutable_root_scanner);
     // A pinned object is a root: its holder is an external reference the

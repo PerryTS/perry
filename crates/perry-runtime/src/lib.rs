@@ -1403,3 +1403,5 @@ mod temporal_layout;
 mod dgram_registry_owner;
 
 mod wasm_hook_slots;
+
+mod segmenter_hook_roots;
