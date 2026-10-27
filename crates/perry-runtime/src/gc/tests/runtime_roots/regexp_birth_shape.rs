@@ -278,10 +278,19 @@ fn keyless_birth_memo_word_is_carried_across_full_traces() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _scan = ConservativeScanDisabledGuard::new();
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    let word =
-        unsafe { crate::object::shapes::object_shape_stamp(crate::object::object_alloc_plain(0)) };
+    let plain_birth = || unsafe {
+        crate::object::shapes::object_shape_stamp(crate::object::object_alloc_plain(0))
+    };
+    let word = plain_birth();
     for round in 0..3 {
         let control = unrooted_semantic_shape();
+        // The control's unmarked birth took the one memo; a plain keyless
+        // birth hands it back, so the trace runs with the memo naming `word`.
+        assert_eq!(
+            plain_birth(),
+            word,
+            "round {round}: the memo names the plain birth"
+        );
         collect_synchronous_full_trace();
         assert!(
             crate::object::shapes::shape_is_retired(LayoutWord(control)),

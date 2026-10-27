@@ -665,6 +665,9 @@ pub(crate) fn seed_static_atoms() {
         image_atoms().next().is_some(),
         "Wasm image constructors did not run"
     );
+    crate::string::reserve_static_atoms(
+        super::runtime_layouts::PERRY_ASCII_CHARS.0.len() + image_atoms().count(),
+    );
     super::runtime_layouts::seed_ascii_char_atoms();
     unsafe {
         for atom in image_atoms() {
@@ -681,6 +684,13 @@ mod registration;
 use registration::binding_symbol_keys;
 use registration::declared_kind;
 use registration::layout_key_word;
+pub(crate) use registration::layout_word_for_birth;
+
+/// Runtime layouts this agent installed (test builds).
+#[cfg(test)]
+pub(crate) fn registration_installs() -> u32 {
+    registration::RUNTIME_LAYOUT_INSTALLS.with(|n| n.get())
+}
 pub(crate) use registration::register_function_layout;
 pub(crate) use registration::register_namespace_layout;
 pub(crate) use registration::register_one;
@@ -699,7 +709,7 @@ pub unsafe extern "C" fn perry_alloc_layout(desc: *const PerryLayoutDesc) -> *mu
     #[cfg(test)]
     crate::test_support::bootstrap_test_thread();
     let d = &*desc;
-    let Some(id) = registered_layout_id(load_layout_id(desc)) else {
+    let Some(id) = layout_word_for_birth(desc) else {
         eprintln!(
             "Perry internal error: perry_alloc_layout of an unregistered layout (family {:#x})",
             d.family
@@ -845,7 +855,7 @@ pub(crate) unsafe fn alloc_derived_layout_object(
     proto: &crate::gc::RuntimeHandle<'_>,
     recorded: LayoutWord,
 ) -> Option<*mut ObjectHeader> {
-    let id = registered_layout_id(load_layout_id(d))?;
+    let id = layout_word_for_birth(d)?;
     let size = std::mem::size_of::<ObjectHeader>() + d.slot_count as usize * 8;
     let obj =
         crate::arena::arena_alloc_gc(size, 8, crate::gc::GC_TYPE_OBJECT).cast::<ObjectHeader>();
@@ -924,7 +934,7 @@ pub(crate) unsafe fn alloc_layout_prototype(
     room: u32,
 ) -> *mut ObjectHeader {
     let d = &*desc;
-    let Some(id) = registered_layout_id(load_layout_id(d)) else {
+    let Some(id) = layout_word_for_birth(d) else {
         eprintln!(
             "Perry internal error: a prototype born on an unregistered layout (family {:#x})",
             d.family
@@ -1067,7 +1077,7 @@ pub(crate) unsafe fn prototype_image(
     serial: u64,
     bound: &[u64],
 ) -> Option<f64> {
-    let id = registered_layout_id(load_layout_id(d))?;
+    let id = layout_word_for_birth(d)?;
     if bound.len() != binding_symbol_keys(d)
         || !bound
             .iter()
@@ -1231,7 +1241,7 @@ unsafe fn family_birth(d: &PerryLayoutDesc, proto: f64) -> Option<*mut ObjectHea
     if d.proto.addr() < LAYOUT_PROTO_TAG_END {
         return None;
     }
-    let id = registered_layout_id(load_layout_id(d))?;
+    let id = layout_word_for_birth(d)?;
     let serial = proto_family_serial_registered(d.proto);
     let bits = proto.to_bits();
     if serial == 0 || bits & !crate::value::POINTER_MASK != crate::value::POINTER_TAG {
