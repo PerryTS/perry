@@ -9,7 +9,7 @@ use std::{
 
 const LIVE: u8 = 0;
 const EXITED: u8 = 1;
-const CANCELLED: u8 = 2;
+const DOMAIN_CANCELLED: u8 = 2;
 
 struct State {
     status: AtomicU8,
@@ -61,7 +61,7 @@ impl JobDomain {
     }
 
     pub(crate) fn cancel(&self) {
-        self.token.0.status.store(CANCELLED, Ordering::Release);
+        self.token.0.status.store(DOMAIN_CANCELLED, Ordering::Release);
         self.token.0.ready.store(false, Ordering::Release);
     }
 
@@ -121,7 +121,7 @@ pub(crate) fn eligible(domain: &Option<JobDomainToken>) -> bool {
 pub(crate) fn cancelled(domain: &Option<JobDomainToken>) -> bool {
     domain
         .as_ref()
-        .is_some_and(|owner| owner.0.status.load(Ordering::Acquire) == CANCELLED)
+        .is_some_and(|owner| owner.0.status.load(Ordering::Acquire) == DOMAIN_CANCELLED)
 }
 
 /// Cancelled reactions must retain their owner identity, including when a
