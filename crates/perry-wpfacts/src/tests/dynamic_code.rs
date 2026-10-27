@@ -97,8 +97,10 @@ fn object_prototype_method_value_runs_on_its_receiver() {
 /// family's members (`members`) and the written-key rule beside them: a
 /// store into ⊤ under `constructor`, or under any key for a computed read,
 /// may have replaced the member, before or after the read in the solve.
-/// (A literal's and a class instance's `constructor` is their class's own,
-/// on its prototype: the chain stops there.)
+/// A literal has no own `constructor` (its shape class's prototype does not
+/// declare one; was: the lookup stopped there and read nothing, a wrong
+/// proof); a class instance's is its class's own, which no store into ⊤
+/// replaces.
 #[test]
 fn a_store_into_top_reaches_the_seeded_chains() {
     let f = "function (o: any) { o.y = 'x'; }";
@@ -114,11 +116,16 @@ fn a_store_into_top_reaches_the_seeded_chains() {
         }
         v
     };
-    for read in ["o.constructor(d);", "const C = o.constructor; C(d);"] {
-        assert_eq!(d_escape(&format!("{TOP}const o: any = [1]; {read}")), None);
-        for (body, want) in cases("[1]", read) {
-            assert_eq!(d_escape(&body).is_some(), want, "{body}");
+    for recv in ["[1]", "{ a: 1 }", "{}", "{ f() { return 1; } }"] {
+        for read in ["o.constructor(d);", "const C = o.constructor; C(d);"] {
+            assert_eq!(d_escape(&format!("{TOP}const o: any = {recv}; {read}")), None);
+            for (body, want) in cases(recv, read) {
+                assert_eq!(d_escape(&body).is_some(), want, "{body}");
+            }
         }
+    }
+    for (body, _) in cases("new (class P {})()", "o.constructor(d);") {
+        assert_eq!(d_escape(&body), None, "{body}");
     }
     for recv in ["{ a: 1 }", "new (class P {})()"] {
         assert_eq!(d_escape(&format!("{TOP}const o: any = {recv}; o[k](d);")), None);

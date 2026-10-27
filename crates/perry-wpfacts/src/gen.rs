@@ -1061,8 +1061,12 @@ impl<'a> Gen<'a> {
                 let a = self.m.atom(&meth.name);
                 push_unique(&mut v, a);
             }
-            let a = self.m.atom("constructor");
-            push_unique(&mut v, a);
+            // A literal has no own `constructor`: it reads
+            // `Object.prototype`'s, which a store into ⊤ may replace.
+            if !c.is_literal_shape() {
+                let a = self.m.atom("constructor");
+                push_unique(&mut v, a);
+            }
             v
         };
         if !c.is_literal_shape() {
