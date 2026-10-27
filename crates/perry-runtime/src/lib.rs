@@ -1398,3 +1398,6 @@ mod node_test_hook_slots;
 #[path = "temporal/hooked.rs"]
 pub mod temporal_hook_slots;
 mod temporal_layout;
+
+#[cfg(not(target_arch = "wasm32"))]
+mod dgram_registry_owner;

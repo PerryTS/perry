@@ -688,3 +688,5 @@ indirect exact perry_runtime::node_test_hook_slots::property => exact perry_runt
 indirect exact perry_runtime::node_test_hook_slots::dispatch_object_method => exact perry_runtime::node_test::dispatch_object_method -- test installer fills object dispatch
 
 indirect exact perry_runtime::temporal_hook_slots::from_epoch_milliseconds => exact perry_runtime::temporal::instant::from_epoch_milliseconds_static -- Temporal installer fills Date conversion
+
+indirect regex ^perry_runtime::dgram_registry_owner::DGRAM_REGISTRY.* => exact perry_runtime::dgram::register_thread_exit_hook -- UDP installer fills existing registry initializer callback

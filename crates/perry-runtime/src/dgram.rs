@@ -10,7 +10,7 @@
 //! touching the network.
 
 use std::collections::HashMap;
-use std::sync::{LazyLock, Mutex};
+use std::sync::Mutex;
 
 use crate::array::ArrayHeader;
 use crate::closure::{
@@ -292,18 +292,12 @@ pub(crate) struct DgramRegistry {
     pub(crate) bound: HashMap<SocketKey, f64>,
 }
 
-pub(crate) static DGRAM_REGISTRY: LazyLock<Mutex<DgramRegistry>> = LazyLock::new(|| {
-    // #11541: register the thread-exit hook when the registry is first
-    // touched (before any binding can exist) instead of naming it in
-    // `arena::thread_exit`'s dispatcher.
+pub(crate) use crate::dgram_registry_owner::DGRAM_REGISTRY;
+pub(crate) fn register_thread_exit_hook() {
     crate::arena::thread_exit::register_thread_exit_range_hook(
         release_dgram_bindings_in_freed_ranges,
     );
-    Mutex::new(DgramRegistry {
-        next_port: 49152,
-        bound: HashMap::new(),
-    })
-});
+}
 
 /// #11471: forget every deterministic-mode binding whose socket object lives
 /// in a thread's arena that is being freed.
