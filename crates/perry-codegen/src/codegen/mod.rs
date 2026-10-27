@@ -30,6 +30,7 @@
 //! errors with an actionable "Phase X not yet supported" message.
 
 pub mod reach_report;
+pub(crate) mod realm_image;
 pub mod source_need;
 
 use std::cell::Cell;
