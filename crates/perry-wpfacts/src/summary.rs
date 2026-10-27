@@ -1476,7 +1476,39 @@ impl Model {
         }
         let cret = self.calls[c].ret;
         if !self.rel_into(call, inst + 1, &terms) {
-            self.edge(r, cret);
+            // A summary consisting only of an unwritten parameter copied
+            // to its return passes this call's value back. Its shared
+            // instance still observes every argument, but the caller must
+            // not receive other calls' values (e.g. an identity helper
+            // returning two distinct function arguments).
+            let s = &self.sum.of[&f];
+            let copy = match s.edges.as_slice() {
+                [(from, to)]
+                    if *to == s.ret
+                        && is_slot(*from)
+                        && is_slot(*to)
+                        && s.seeds.is_empty()
+                        && s.cons.is_empty()
+                        && s.calls.is_empty()
+                        && s.births.is_empty()
+                        && s.closures.is_empty()
+                        && self.calls[c].spread.is_empty() =>
+                {
+                    s.params
+                        .iter()
+                        .position(|p| p == from)
+                        .filter(|&i| s.rel[i] && caps[i].is_none())
+                }
+                _ => None,
+            };
+            if let Some(i) = copy {
+                match self.calls[c].args.get(i).copied() {
+                    Some(a) => self.edge(a, cret),
+                    None => self.add_prim(cret, prim::UNDEF),
+                }
+            } else {
+                self.edge(r, cret);
+            }
         }
     }
 

@@ -109,12 +109,12 @@ fn callback_result_per_call() {
         const a = apply(id, new A()); const b = apply(id, new B());
         console.log(a.x, b.y);"
     ));
-    // CWL (layout as the unit of propagation): `apply` keeps one instance
-    // per program site, but `cb(v)` inside it is a dynamic callee bound per
-    // function token: one `id` instance for both, so both results hold A
-    // and B. Was: each call `apply`'s instances make got its own `id`.
-    exact(&pf, "x", 2);
-    exact(&pf, "y", 2);
+    // `id` is a pure parameter-to-return copy: each callback returns
+    // this call's argument, although its observation instance is shared.
+    exact(&pf, "x", 1);
+    exact(&pf, "y", 1);
+    sees(&pf, "x", "A");
+    sees(&pf, "y", "B");
 }
 
 /// A callee that itself calls: the calls instances make share one instance

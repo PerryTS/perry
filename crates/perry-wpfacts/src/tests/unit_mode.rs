@@ -589,3 +589,6 @@ fn closed_chain(n: usize) -> [(&'static str, String); 2] {
 
 #[path = "unit_mode/escaped_results.rs"]
 mod escaped_results;
+
+#[path = "unit_mode/return_transfers.rs"]
+mod return_transfers;
