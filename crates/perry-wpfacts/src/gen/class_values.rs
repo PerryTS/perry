@@ -781,6 +781,11 @@ impl<'a> Gen<'a> {
                 .add_top(any, |_| "static member of another unit's class".into());
             self.m.add_prim(any, prim::ALL);
         }
+        // Its prototype defines the contract's methods at class creation, as
+        // the defining unit's does: a lookup of one ends there
+        // (`Model::stops_at`) and never reaches a builtin prototype.
+        let pm: Vec<Atom> = c.methods.iter().map(|(k, _)| self.m.atom(k)).collect();
+        self.m.tmpls[tm as usize].proto_members = pm;
         let mut method_fns: Vec<(NodeId, &'a crate::units::FnContract)> = Vec::new();
         for (key, fname) in &c.methods {
             if let Some((_, fc)) = c.method_fns.iter().find(|(k, _)| k == key) {

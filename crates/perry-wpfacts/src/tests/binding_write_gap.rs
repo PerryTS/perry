@@ -57,7 +57,11 @@ fn fninst<'a>(pf: &'a ProgramFacts, name: &str) -> &'a crate::TemplateFacts {
     let t = it
         .next()
         .unwrap_or_else(|| panic!("new ..:{name} in\n{}", pf.dump_text()));
-    assert!(it.next().is_none(), "one template of {name}:\n{}", pf.dump_text());
+    assert!(
+        it.next().is_none(),
+        "one template of {name}:\n{}",
+        pf.dump_text()
+    );
     t
 }
 
@@ -173,8 +177,7 @@ fn a_value_written_into_a_module_binding_from_a_function_unit_is_constructed_by_
 }
 
 #[test]
-fn the_commonjs_record_of_an_unflattened_factory_is_constructed_by_another_unit_with_its_facts(
-) {
+fn the_commonjs_record_of_an_unflattened_factory_is_constructed_by_another_unit_with_its_facts() {
     // The wrapper's shape in a program that is not closed: the record binding
     // is written by the factory, which the run-once view does not flatten
     // (held beyond its record).
@@ -307,7 +310,9 @@ fn a_broken_constructor_function_is_constructed_by_unknown_code() {
     let (u, w) = (run(&h, true), run(&h, false));
     let (tu, tw) = (fninst(&u, "Reply"), fninst(&w, "Reply"));
     assert!(
-        u.broken.iter().any(|d| d.starts_with("fn:") && d.contains(":Reply")),
+        u.broken
+            .iter()
+            .any(|d| d.starts_with("fn:") && d.contains(":Reply")),
         "unknown code holding it breaks the function:\n{}",
         u.dump_text()
     );
@@ -383,7 +388,9 @@ fn a_store_into_another_units_constructor_function_prototype_breaks_it() {
     let h = hirs(&[("a", a), ("main", main)]);
     let (u, w) = (run(&h, true), run(&h, false));
     assert!(
-        u.broken.iter().any(|d| d.starts_with("fn:") && d.contains(":Reply")),
+        u.broken
+            .iter()
+            .any(|d| d.starts_with("fn:") && d.contains(":Reply")),
         "replacing the prototype breaks the function:\n{}",
         u.dump_text()
     );

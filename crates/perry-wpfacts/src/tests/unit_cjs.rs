@@ -479,7 +479,10 @@ fn a_published_method_runs_on_every_receiver_its_units_publish() {
 const T9: [(&str, &str); 3] = [
     ("/t9/m.js", include_str!("fixtures/cjs_tsw/m.js")),
     ("/t9/t.js", include_str!("fixtures/cjs_tsw/t.js")),
-    ("/t9/perry_cjs.js", include_str!("fixtures/cjs_tsw/perry_cjs.js")),
+    (
+        "/t9/perry_cjs.js",
+        include_str!("fixtures/cjs_tsw/perry_cjs.js"),
+    ),
 ];
 
 #[test]
@@ -496,7 +499,9 @@ fn a_broken_function_is_still_the_callee_of_a_call_by_its_name() {
     let (w, u) = both(&T9);
     for f in ["isId", "filter"] {
         assert!(
-            u.broken.iter().any(|d| d.starts_with("fn:") && d.contains(&format!(":{f}#"))),
+            u.broken
+                .iter()
+                .any(|d| d.starts_with("fn:") && d.contains(&format!(":{f}#"))),
             "the census must break {f} (else this test proves nothing): {:?}",
             u.broken
         );
@@ -517,10 +522,17 @@ fn a_broken_function_is_still_the_callee_of_a_call_by_its_name() {
     let (cw, cu) = (calls(&w), calls(&u));
     assert_eq!(cw.len(), 4, "{cw:?}");
     let lost: Vec<&String> = cw.difference(&cu).collect();
-    assert!(lost.is_empty(), "lost per unit {lost:?}\nbroken {:?}", u.broken);
+    assert!(
+        lost.is_empty(),
+        "lost per unit {lost:?}\nbroken {:?}",
+        u.broken
+    );
     let (pw, pu) = (proven_sites(&w), proven_sites(&u));
     let stronger: Vec<&String> = pu.difference(&pw).collect();
-    assert!(stronger.is_empty(), "per unit claims more than whole-program: {stronger:?}");
+    assert!(
+        stronger.is_empty(),
+        "per unit claims more than whole-program: {stronger:?}"
+    );
 }
 
 /// DECISIONS 209: yargs-parser's shape as the compiler wraps it. `index.js`
@@ -531,7 +543,10 @@ fn a_broken_function_is_still_the_callee_of_a_call_by_its_name() {
 const T10: [(&str, &str); 3] = [
     ("/t10/m.js", include_str!("fixtures/cjs_tsw2/m.js")),
     ("/t10/index.js", include_str!("fixtures/cjs_tsw2/index.js")),
-    ("/t10/perry_cjs.js", include_str!("fixtures/cjs_tsw2/perry_cjs.js")),
+    (
+        "/t10/perry_cjs.js",
+        include_str!("fixtures/cjs_tsw2/perry_cjs.js"),
+    ),
 ];
 
 #[test]
@@ -546,12 +561,17 @@ fn a_property_of_a_broken_function_holds_anything() {
     // `parse` result).
     let (w, u) = both(&T10);
     assert!(
-        u.broken.iter().any(|d| d.starts_with("fn:") && d.contains(":Parser#")),
+        u.broken
+            .iter()
+            .any(|d| d.starts_with("fn:") && d.contains(":Parser#")),
         "the census must break Parser (else this test proves nothing): {:?}",
         u.broken
     );
     let s = super::unit_alias::stronger(&u, &w);
-    assert!(s.is_empty(), "per-unit claims more than whole-program: {s:?}");
+    assert!(
+        s.is_empty(),
+        "per-unit claims more than whole-program: {s:?}"
+    );
     let lit = u
         .templates
         .iter()

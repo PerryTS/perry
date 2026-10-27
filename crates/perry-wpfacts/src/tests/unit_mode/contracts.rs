@@ -301,9 +301,14 @@ pub(super) fn a_broken_namespace_field_function_resolves_only_the_units_that_see
     // solve its contract and its escaped object; `b`, `c`, `m` and round 2
     // unchanged) -> [709, 779, 956, 504, 428]; for DECISIONS 210 (a
     // published function's properties leave with it but its `prototype`,
-    // whose template no longer escapes) -> the pin below.
+    // whose template no longer escapes) -> [695, 772, 949, 497, 428]; for
+    // the intrinsic member descriptions and the static rule (a store into ⊤
+    // writes its key on every builtin prototype, the builtin namespaces'
+    // lookups reach `Object.prototype`; the unit boundary's stand-in store
+    // writes none, a stand-in class's prototype defines its contract's
+    // methods) -> the pin below.
     assert!(pf.round_work[1] < w("a.ts") + w("m.ts") + w("b.ts") + w("c.ts"));
-    assert_eq!(pf.round_work, [695, 772, 949, 497, 428], "{:?}", pf.units);
+    assert_eq!(pf.round_work, [754, 879, 993, 563, 487], "{:?}", pf.units);
 }
 
 #[test]
@@ -383,9 +388,13 @@ pub(super) fn a_unit_over_the_bound_is_not_solved_again() {
         .filter(|(q, s)| crate::decl_units::module_of(q) == "o.ts" && !s.aborted)
         .map(|(_, s)| s.work)
         .sum();
-    assert_eq!(
-        pf.round_work[1],
-        module_work(&pf, "a.ts") + module_work(&pf, "m.ts") + small_o,
+    // Since the builtin namespaces have a prototype chain (`Map`'s lookups
+    // reach `Object.prototype`) a third round solves `a` and `m` again; no
+    // later round solves the unit of `o` over the bound. (The units report
+    // their last solve, so each later round is at most their sum.)
+    let small = module_work(&pf, "a.ts") + module_work(&pf, "m.ts") + small_o;
+    assert!(
+        pf.round_work[1..].iter().all(|&w| w <= small),
         "{:?} {:?}",
         pf.round_work,
         pf.units

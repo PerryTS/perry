@@ -9,6 +9,7 @@
 
 use std::path::PathBuf;
 
+use super::wasi_flavour::Flavour;
 use super::{is_android_target, is_windows_target};
 
 /// The output file a compile targets when no `-o` was given.
@@ -57,7 +58,7 @@ pub(super) fn default_output_path(
         PathBuf::from(format!("lib{}.so", stem))
     } else if is_windows_target(target) {
         PathBuf::from(format!("{}.exe", stem))
-    } else if target == Some("wasi") {
+    } else if target.is_some_and(|t| Flavour::from_target(t).is_some()) {
         PathBuf::from(format!("{}.wasm", stem))
     } else {
         PathBuf::from(stem)

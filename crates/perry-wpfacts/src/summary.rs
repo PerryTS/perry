@@ -299,6 +299,7 @@ pub fn map_cons(
             reason,
         },
         Hard { kind, reason } => Hard { kind, reason },
+        DeleteKey { key, reason } => DeleteKey { key, reason },
         AddsKeys => AddsKeys,
         DefineKey { key, data, reason } => DefineKey { key, data, reason },
         DefineAll {
@@ -503,6 +504,7 @@ fn gen_kind(c: &Cons) -> bool {
             | OverrideThis { .. }
             | TopIfAny { .. }
             | Hard { .. }
+            | DeleteKey { .. }
             | DefineKey { .. }
             | DefineAll { .. }
             | AddsKeys
