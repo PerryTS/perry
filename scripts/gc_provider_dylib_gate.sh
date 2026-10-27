@@ -135,7 +135,10 @@ if [[ "$host_os" == Darwin ]]; then
   install_name_tool -id '@rpath/libperry_runtime.dylib' "$runtime_library"
   install_name_tool -id '@rpath/libperry_stdlib.dylib' "$stdlib_library"
 else
-  nm -D "$stdlib_library" | grep -q ' T js_gc_init' || {
+  # Read nm to completion: grep -q otherwise closes the large symbol stream
+  # early, and pipefail mistakes nm's SIGPIPE for a missing export.
+  stdlib_symbols=$(nm -D "$stdlib_library")
+  grep -q ' T js_gc_init$' <<<"$stdlib_symbols" || {
     echo "stdlib provider hid js_gc_init — not preemptible" >&2
     exit 1
   }
