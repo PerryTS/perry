@@ -532,6 +532,16 @@ resource transfers before callee start, cancellation racing owned results, and
 borrow expiration at `task.return` still need adapter qualification before
 async resource interfaces can be enabled.
 
+A private generated resource profile now executes on Linux with ordinary and
+instrumented production archives, including verified moving GC. It covers
+owner round trips, overlapping and list borrows, import-loan acknowledgement,
+guest-defined resources, and borrow expiration at return while post-return work
+keeps the frame alive. The caller reclaims that owner before the child resumes.
+The [resource adapter receipt](validation/wasi-async-guest-resources-20261027.json)
+records the exact cases and artifacts. Resource-bearing canonical cancellation,
+pre-start transfers and owned-result races still need full component
+qualification; the shipping resource and public async guards remain.
+
 The internal generic-reader checks additionally cover canonical layouts from
 `wit-parser::SizeAlign`, shared metadata for repeated aliases, a reusable
 quota-limited Wasm allocator, and task-local frames. They exercise concurrent
