@@ -35,11 +35,14 @@ fn compose(args: &[String]) -> Result<()> {
     }
     let provider = graph.instantiate(packages[0]);
     let foreign = graph.alias_instance_export(provider, FOREIGN)?;
+    let item = graph.alias_instance_export(foreign, "item")?;
     let guest = graph.instantiate(packages[1]);
     graph.set_instantiation_argument(guest, FOREIGN, foreign)?;
+    graph.set_instantiation_argument(guest, "item", item)?;
     let caller = graph.instantiate(packages[2]);
     // Both consumers receive the same instance, including its nominal type.
     graph.set_instantiation_argument(caller, FOREIGN, foreign)?;
+    graph.set_instantiation_argument(caller, "item", item)?;
     for name in INTERNAL {
         let function = graph.alias_instance_export(guest, *name)?;
         graph.set_instantiation_argument(caller, *name, function)?;
