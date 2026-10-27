@@ -688,7 +688,8 @@ pub(super) fn cp_install_abort_signal(handle: u64, signal: Option<f64>, opts_val
     let Some(signal) = signal else {
         return;
     };
-    let Some(signal_ptr) = crate::event_target::abort::abort_signal_ptr_from_value(signal) else {
+    let Some(signal_ptr) = crate::event_target_hook_slots::abort_signal_ptr_from_value(signal)
+    else {
         return;
     };
 
@@ -705,10 +706,14 @@ pub(super) fn cp_install_abort_signal(handle: u64, signal: Option<f64>, opts_val
         }
     }
 
-    if crate::url::js_abort_signal_is_aborted(signal_ptr) != 0 {
+    if crate::event_target_hook_slots::js_abort_signal_is_aborted(signal_ptr) != 0 {
         cp_push_event(CpEvent::Abort { handle });
     } else {
-        crate::url::js_abort_signal_add_listener(signal_ptr, cp_box_string("abort"), listener_val);
+        crate::event_target_hook_slots::js_abort_signal_add_listener(
+            signal_ptr,
+            cp_box_string("abort"),
+            listener_val,
+        );
     }
 }
 
@@ -757,10 +762,11 @@ fn cp_cleanup_abort_listener(signal_bits: u64, listener_bits: u64) {
         return;
     }
     let signal = f64::from_bits(signal_bits);
-    let Some(signal_ptr) = crate::event_target::abort::abort_signal_ptr_from_value(signal) else {
+    let Some(signal_ptr) = crate::event_target_hook_slots::abort_signal_ptr_from_value(signal)
+    else {
         return;
     };
-    crate::url::js_abort_signal_remove_listener(
+    crate::event_target_hook_slots::js_abort_signal_remove_listener(
         signal_ptr,
         cp_box_string("abort"),
         f64::from_bits(listener_bits),

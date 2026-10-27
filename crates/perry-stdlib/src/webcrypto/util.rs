@@ -984,7 +984,7 @@ pub(super) unsafe fn reject_with_dom_exception(name: &str, message: &str) -> *mu
     let message_str = perry_runtime::js_string_from_bytes(message.as_ptr(), message.len() as u32);
     let name_val = f64::from_bits(JSValue::string_ptr(name_str).bits());
     let message_val = f64::from_bits(JSValue::string_ptr(message_str).bits());
-    let err = perry_runtime::event_target::js_dom_exception_new(message_val, name_val);
+    let err = perry_runtime::event_target_hook_slots::js_dom_exception_new(message_val, name_val);
     if err.is_null() {
         return perry_runtime::js_promise_rejected(f64::from_bits(0x7FFC_0000_0000_0001));
     }

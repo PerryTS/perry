@@ -1063,13 +1063,13 @@ pub unsafe extern "C-unwind" fn js_fetch_or_value_super(
     // properties; replacing it would lose derived fields and prototype identity.
     match kind {
         Some("EventTarget") => {
-            return crate::event_target::js_event_target_subclass_init(this_box, 0)
+            return crate::event_target_hook_slots::js_event_target_subclass_init(this_box, 0)
         }
         Some("AbortController") => {
-            return crate::event_target::js_event_target_subclass_init(this_box, 1)
+            return crate::event_target_hook_slots::js_event_target_subclass_init(this_box, 1)
         }
         Some("AbortSignal") => {
-            return crate::event_target::js_event_target_subclass_init(this_box, 2)
+            return crate::event_target_hook_slots::js_event_target_subclass_init(this_box, 2)
         }
         Some("Event") | Some("CustomEvent") => {
             let arg0 = if args_len > 0 { *args_ptr } else { undef };
@@ -1078,7 +1078,7 @@ pub unsafe extern "C-unwind" fn js_fetch_or_value_super(
             } else {
                 undef
             };
-            return crate::event_target::js_event_subclass_init(
+            return crate::event_target_hook_slots::js_event_subclass_init(
                 this_box,
                 arg0,
                 arg1,
@@ -1093,7 +1093,9 @@ pub unsafe extern "C-unwind" fn js_fetch_or_value_super(
             } else {
                 undef
             };
-            return crate::event_target::js_dom_exception_subclass_init(this_box, arg0, arg1);
+            return crate::event_target_hook_slots::js_dom_exception_subclass_init(
+                this_box, arg0, arg1,
+            );
         }
         _ => {}
     }

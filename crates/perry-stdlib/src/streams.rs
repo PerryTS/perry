@@ -2645,7 +2645,7 @@ unsafe fn pipe_through_options_error(options: f64) -> Option<&'static str> {
 
 fn pipe_through_signal_error(signal: f64) -> Option<&'static str> {
     (signal.to_bits() != TAG_UNDEFINED
-        && perry_runtime::url::js_abort_signal_resolve_ptr(signal).is_null())
+        && perry_runtime::event_target_hook_slots::js_abort_signal_resolve_ptr(signal).is_null())
     .then_some("The options.signal property must be an AbortSignal")
 }
 

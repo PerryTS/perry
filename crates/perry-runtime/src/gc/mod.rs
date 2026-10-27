@@ -1247,6 +1247,7 @@ pub fn gc_init() {
     // `*const ClosureHeader` in a TLS map. The scanner existed but was never
     // called, so the table stayed invisible to the collector.
     crate::os_hook_slots::register_installed_roots();
+    crate::event_target_hook_slots::register_installed_roots();
     reg_scanner!(crate::weakref::scan_pending_finalization_jobs_roots_mut);
     // #6182: keep the weak-holder registry's stored holder ADDRESSES current
     // across evacuation. Metadata-only (non-rooting) — it rewrites forwarded

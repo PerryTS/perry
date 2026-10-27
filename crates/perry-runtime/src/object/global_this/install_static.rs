@@ -48,7 +48,7 @@ extern "C" fn abort_signal_abort_thunk(
     _this: crate::closure::JsThis,
     reason: f64,
 ) -> f64 {
-    let signal = crate::event_target::abort::js_abort_signal_abort(reason);
+    let signal = crate::event_target_hook_slots::js_abort_signal_abort(reason);
     crate::value::js_nanbox_pointer(signal as i64)
 }
 
@@ -57,7 +57,7 @@ extern "C" fn abort_signal_timeout_thunk(
     _this: crate::closure::JsThis,
     ms: f64,
 ) -> f64 {
-    let signal = crate::event_target::abort::js_abort_signal_timeout(ms);
+    let signal = crate::event_target_hook_slots::js_abort_signal_timeout(ms);
     crate::value::js_nanbox_pointer(signal as i64)
 }
 
@@ -75,7 +75,7 @@ extern "C" fn abort_signal_any_thunk(
     if array.is_null() {
         crate::validators::throw_invalid_arg_type("signals", "Array", signals);
     }
-    let signal = crate::event_target::abort::js_abort_signal_any(array);
+    let signal = crate::event_target_hook_slots::js_abort_signal_any(array);
     crate::value::js_nanbox_pointer(signal as i64)
 }
 

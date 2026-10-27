@@ -43,11 +43,11 @@ pub(crate) fn handles(name: BuiltinConstructorIdentity) -> bool {
 pub(crate) fn construct(name: BuiltinConstructorIdentity, args: &[f64]) -> f64 {
     match name {
         BuiltinConstructorIdentity::EventTarget => {
-            let target = crate::event_target::js_event_target_new();
+            let target = crate::event_target_hook_slots::js_event_target_new();
             return crate::value::js_nanbox_pointer(target as i64);
         }
         BuiltinConstructorIdentity::AbortController => {
-            let controller = crate::event_target::abort::js_abort_controller_new();
+            let controller = crate::event_target_hook_slots::js_abort_controller_new();
             return crate::value::js_nanbox_pointer(controller as i64);
         }
         BuiltinConstructorIdentity::TextEncoder => {

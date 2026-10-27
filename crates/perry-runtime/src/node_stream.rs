@@ -446,13 +446,17 @@ extern "C" fn ns_finished_signal_abort(
     let callback = js_closure_get_capture_f64(closure, 1);
     let signal = js_closure_get_capture_f64(closure, 3);
     if let Some(signal_obj) = object_ptr_from_value(signal) {
-        crate::url::js_abort_signal_remove_listener(
+        crate::event_target_hook_slots::js_abort_signal_remove_listener(
             signal_obj,
             literal_string_value(b"abort"),
             box_pointer(closure as *const u8),
         );
     }
-    call_listener_args(stream, callback, &[crate::url::js_abort_error_value()]);
+    call_listener_args(
+        stream,
+        callback,
+        &[crate::event_target_hook_slots::js_abort_error_value()],
+    );
     f64::from_bits(TAG_UNDEFINED)
 }
 

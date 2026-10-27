@@ -199,7 +199,11 @@ pub(crate) fn register_abort_listener(signal: f64, promise: *mut crate::promise:
     let event_str = js_string_from_bytes(event.as_ptr(), event.len() as u32);
     let event_value = f64::from_bits(JSValue::string_ptr(event_str).bits());
     let listener_value = value_from_ptr(closure as *const u8);
-    crate::url::js_abort_signal_add_listener(signal_obj, event_value, listener_value);
+    crate::event_target_hook_slots::js_abort_signal_add_listener(
+        signal_obj,
+        event_value,
+        listener_value,
+    );
 }
 
 fn pending_abortable_promise(signal: f64) -> f64 {

@@ -769,9 +769,13 @@ impl Writer<'_> {
         // outside the heap; a copy would be an empty `{}` (#6185).
         let obj = addr as *const crate::object::ObjectHeader;
         let class_id = (*obj).class_id;
-        if let Some(name) = crate::event_target::native_class_name(class_id).or_else(|| {
-            crate::event_target::state::transfer_family(addr as *mut crate::object::ObjectHeader)
-        }) {
+        if let Some(name) =
+            crate::event_target_hook_slots::native_class_name(class_id).or_else(|| {
+                crate::event_target_hook_slots::state_transfer_family(
+                    addr as *mut crate::object::ObjectHeader,
+                )
+            })
+        {
             return SerializedValue::Unsupported(name);
         }
         if crate::native_class_ids::is_native_backed_class_id(class_id) {
@@ -1377,7 +1381,7 @@ impl Writer<'_> {
     #[optimize(size)]
     unsafe fn error(&mut self, bits: u64, addr: usize) -> SerializedValue {
         let err = addr as *const crate::error::ErrorHeader;
-        if crate::event_target::is_dom_exception_error(err) {
+        if crate::event_target_hook_slots::is_dom_exception_error(err) {
             return SerializedValue::Unsupported("DOMException");
         }
         // The stack text is formatted on first read, which allocates.

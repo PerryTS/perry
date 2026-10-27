@@ -193,7 +193,11 @@ pub(super) unsafe fn construct(
                 .get(1)
                 .copied()
                 .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
-            let event = crate::event_target::js_event_new(event_type, options, args.len() as u32);
+            let event = crate::event_target_hook_slots::js_event_new(
+                event_type,
+                options,
+                args.len() as u32,
+            );
             return Some(crate::value::js_nanbox_pointer(event as i64));
         }
         BuiltinConstructorIdentity::CustomEvent => {
@@ -205,8 +209,11 @@ pub(super) unsafe fn construct(
                 .get(1)
                 .copied()
                 .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
-            let event =
-                crate::event_target::js_custom_event_new(event_type, options, args.len() as u32);
+            let event = crate::event_target_hook_slots::js_custom_event_new(
+                event_type,
+                options,
+                args.len() as u32,
+            );
             return Some(crate::value::js_nanbox_pointer(event as i64));
         }
         BuiltinConstructorIdentity::DOMException => {
@@ -218,7 +225,7 @@ pub(super) unsafe fn construct(
                 .get(1)
                 .copied()
                 .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
-            let exception = crate::event_target::js_dom_exception_new(message, name);
+            let exception = crate::event_target_hook_slots::js_dom_exception_new(message, name);
             return Some(crate::value::js_nanbox_pointer(exception as i64));
         }
         // #2889: `new (rebound Error subclass)(msg)` through a global
@@ -392,7 +399,7 @@ pub(super) unsafe fn construct(
         // constructs through the variable. Without this arm the dynamic
         // `new` fell through and threw "AbortController is not a function".
         BuiltinConstructorIdentity::AbortController => {
-            let controller = crate::url::js_abort_controller_new();
+            let controller = crate::event_target_hook_slots::js_abort_controller_new();
             return Some(crate::value::js_nanbox_pointer(controller as i64));
         }
         BuiltinConstructorIdentity::MessageChannel => {

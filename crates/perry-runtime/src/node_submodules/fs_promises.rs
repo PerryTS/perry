@@ -11,7 +11,7 @@ use crate::closure::{
     get_valid_func_ptr, js_closure_alloc, js_closure_get_capture_f64, js_closure_set_capture_f64,
     js_native_call_value, ClosureHeader,
 };
-use crate::event_target::abort::abort_signal_ptr_from_value;
+use crate::event_target_hook_slots::abort_signal_ptr_from_value;
 use crate::object::{
     js_object_alloc, js_object_get_field_by_name_f64, js_object_set_field_by_name, ObjectHeader,
 };
@@ -696,7 +696,11 @@ fn cleanup_question_abort_listener(interface: f64) {
     let listener = object_field(interface, RL_IF_ABORT_LISTENER).unwrap_or_else(undefined);
     if !is_undefined_value(signal) && !is_undefined_value(listener) {
         if let Some(signal_ptr) = abort_signal_ptr_from_value(signal) {
-            crate::url::js_abort_signal_remove_listener(signal_ptr, boxed_str(b"abort"), listener);
+            crate::event_target_hook_slots::js_abort_signal_remove_listener(
+                signal_ptr,
+                boxed_str(b"abort"),
+                listener,
+            );
         }
     }
     set_value_field(interface, RL_IF_ABORT_SIGNAL, undefined());
@@ -728,7 +732,10 @@ fn abort_pending_question(interface: f64) {
     };
     cleanup_question_abort_listener(interface);
     call_write_value(output, "\r\n");
-    crate::promise::js_promise_reject(promise, crate::url::js_abort_error_value());
+    crate::promise::js_promise_reject(
+        promise,
+        crate::event_target_hook_slots::js_abort_error_value(),
+    );
 }
 
 extern "C" fn readline_promises_abort_question(
@@ -826,7 +833,7 @@ extern "C" fn readline_promises_question(
 
     if let Some(signal) = object_field(options, b"signal") {
         if let Some(signal_ptr) = abort_signal_ptr_from_value(signal) {
-            if crate::url::js_abort_signal_is_aborted(signal_ptr) != 0 {
+            if crate::event_target_hook_slots::js_abort_signal_is_aborted(signal_ptr) != 0 {
                 abort_pending_question(interface);
                 return promise_value;
             }
@@ -837,7 +844,7 @@ extern "C" fn readline_promises_question(
             let listener_value = f64::from_bits(JSValue::pointer(listener as *const u8).bits());
             set_value_field(interface, RL_IF_ABORT_SIGNAL, signal);
             set_value_field(interface, RL_IF_ABORT_LISTENER, listener_value);
-            crate::url::js_abort_signal_add_listener(
+            crate::event_target_hook_slots::js_abort_signal_add_listener(
                 signal_ptr,
                 boxed_str(b"abort"),
                 listener_value,

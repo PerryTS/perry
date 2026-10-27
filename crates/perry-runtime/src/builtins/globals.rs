@@ -394,8 +394,10 @@ fn throw_data_clone_error(message: &str) -> ! {
         b"DataCloneError".as_ptr(),
         14,
     ) as i64));
-    let err =
-        crate::event_target::js_dom_exception_new(message.get_nanbox_f64(), name.get_nanbox_f64());
+    let err = crate::event_target_hook_slots::js_dom_exception_new(
+        message.get_nanbox_f64(),
+        name.get_nanbox_f64(),
+    );
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 

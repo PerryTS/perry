@@ -308,6 +308,26 @@ pub(crate) fn auto_optimized_cross_features(
     {
         cross_features.push("perry-runtime/messaging".to_string());
     }
+    if ctx.uses_event_target
+        || ctx.uses_get_builtin_module
+        || ctx.uses_thread_codec
+        || ctx.uses_perf_hooks
+        || ctx.uses_messaging
+        || ctx.uses_fetch
+        || ctx.uses_global_webfetch
+        || ctx.uses_global_webcrypto
+        || ctx.uses_global_websocket
+        || needs_dyn_eval
+        || !ctx.native_addons.is_empty()
+        || ctx.native_module_imports.iter().any(|m| {
+            matches!(
+                m.as_str(),
+                "perf_hooks" | "crypto" | "worker_threads" | "undici" | "bun" | "perry/thread"
+            )
+        })
+    {
+        cross_features.push("perry-runtime/event-target".to_string());
+    }
     // Clone-producing APIs and worker completions share the thread codec.
     if ctx.uses_thread_codec
         || ctx.uses_worker_threads

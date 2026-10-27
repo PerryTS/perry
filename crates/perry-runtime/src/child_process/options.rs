@@ -98,7 +98,7 @@ pub(crate) fn cp_read_abort_signal(opts_val: f64) -> Option<f64> {
     if JSValue::from_bits(signal.to_bits()).is_undefined() {
         return None;
     }
-    if crate::event_target::abort::abort_signal_ptr_from_value(signal).is_some() {
+    if crate::event_target_hook_slots::abort_signal_ptr_from_value(signal).is_some() {
         return Some(signal);
     }
     let message = format!(
@@ -109,8 +109,8 @@ pub(crate) fn cp_read_abort_signal(opts_val: f64) -> Option<f64> {
 }
 
 pub(crate) fn cp_abort_signal_is_aborted(signal: f64) -> bool {
-    crate::event_target::abort::abort_signal_ptr_from_value(signal)
-        .is_some_and(|ptr| crate::url::js_abort_signal_is_aborted(ptr) != 0)
+    crate::event_target_hook_slots::abort_signal_ptr_from_value(signal)
+        .is_some_and(|ptr| crate::event_target_hook_slots::js_abort_signal_is_aborted(ptr) != 0)
 }
 
 pub(crate) fn cp_spawnargs_argv0(default: &str, opts_val: f64) -> String {

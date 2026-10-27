@@ -386,7 +386,10 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
                     crate::value::js_nanbox_pointer(proto_obj as i64),
                 );
             }
-            crate::event_target::prototype::install_constructor_constants(name, closure_ptr.cast());
+            crate::event_target_hook_slots::prototype_install_constructor_constants(
+                name,
+                closure_ptr.cast(),
+            );
             if let Some(serial) = declaration.prototype_serial {
                 // SAFETY: `proto_obj` is the live, just-populated prototype.
                 unsafe {

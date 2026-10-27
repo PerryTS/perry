@@ -953,7 +953,7 @@ fn throw_invalid_state_error(detail: &str) -> ! {
 fn throw_dom_exception(name: &str, detail: &str) -> ! {
     let message = string_value(detail);
     let name = string_value(name);
-    let err = perry_runtime::event_target::js_dom_exception_new(message, name);
+    let err = perry_runtime::event_target_hook_slots::js_dom_exception_new(message, name);
     perry_runtime::exception::js_throw(f64::from_bits(JSValue::pointer(err as *const u8).bits()))
 }
 

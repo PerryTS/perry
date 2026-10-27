@@ -1353,7 +1353,10 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
         "AbortController" | "AbortSignal" | "EventTarget" | "Event" | "CustomEvent"
         | "DOMException" => {
             let _gc = crate::gc::GcSuppressScope::new();
-            crate::event_target::install_web_event_proto_methods(builtin_name, proto_obj);
+            crate::event_target_hook_slots::install_web_event_proto_methods(
+                builtin_name,
+                proto_obj,
+            );
             unsafe {
                 install_web_builtin_to_string_tag(proto_obj, builtin_name);
             }

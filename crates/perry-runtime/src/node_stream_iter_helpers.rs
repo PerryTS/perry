@@ -408,7 +408,7 @@ fn register_to_array_abort(stream: f64, opts: f64, result: f64) {
     let Some(sig_obj) = object_ptr_from_value(sig.get_nanbox_f64()) else {
         return;
     };
-    crate::url::js_abort_signal_add_listener(
+    crate::event_target_hook_slots::js_abort_signal_add_listener(
         sig_obj,
         literal_string_value(b"abort"),
         abort_cl.get_nanbox_f64(),
@@ -867,7 +867,7 @@ fn register_consume_abort(stream: f64, opts: f64, state: *const ClosureHeader) {
     let Some(sig_obj) = object_ptr_from_value(sig.get_nanbox_f64()) else {
         return;
     };
-    crate::url::js_abort_signal_add_listener(
+    crate::event_target_hook_slots::js_abort_signal_add_listener(
         sig_obj,
         literal_string_value(b"abort"),
         abort_cl.get_nanbox_f64(),

@@ -202,7 +202,7 @@ fn option_signal_value(options_value: f64) -> Result<Option<f64>, f64> {
         if is_nullish(signal) {
             return Ok(None);
         }
-        if crate::event_target::abort::abort_signal_ptr_from_value(signal).is_some() {
+        if crate::event_target_hook_slots::abort_signal_ptr_from_value(signal).is_some() {
             Ok(Some(signal))
         } else {
             Err(signal_type_error(signal))
@@ -211,30 +211,35 @@ fn option_signal_value(options_value: f64) -> Result<Option<f64>, f64> {
 }
 
 fn signal_is_aborted(signal: f64) -> bool {
-    crate::event_target::abort::abort_signal_ptr_from_value(signal)
-        .is_some_and(|ptr| crate::url::js_abort_signal_is_aborted(ptr) != 0)
+    crate::event_target_hook_slots::abort_signal_ptr_from_value(signal)
+        .is_some_and(|ptr| crate::event_target_hook_slots::js_abort_signal_is_aborted(ptr) != 0)
 }
 
 fn signal_abort_reason(signal: f64) -> f64 {
-    let Some(ptr) = crate::event_target::abort::abort_signal_ptr_from_value(signal) else {
-        return crate::url::js_abort_error_value();
+    let Some(ptr) = crate::event_target_hook_slots::abort_signal_ptr_from_value(signal) else {
+        return crate::event_target_hook_slots::js_abort_error_value();
     };
     let reason = crate::object::js_object_get_field_f64(ptr, 1);
     if crate::value::JSValue::from_bits(reason.to_bits()).is_undefined() {
-        crate::url::js_abort_error_value()
+        crate::event_target_hook_slots::js_abort_error_value()
     } else {
         reason
     }
 }
 
 fn add_abort_listener(signal: f64, id: usize, func: *const crate::closure::JsFunctionInfo) -> f64 {
-    let Some(signal_ptr) = crate::event_target::abort::abort_signal_ptr_from_value(signal) else {
+    let Some(signal_ptr) = crate::event_target_hook_slots::abort_signal_ptr_from_value(signal)
+    else {
         return undefined_value();
     };
     let closure = js_closure_alloc(func, 1);
     js_closure_set_capture_f64(closure, 0, id as f64);
     let listener = boxed_ptr(closure as *const u8);
-    crate::url::js_abort_signal_add_listener(signal_ptr, string_value(b"abort"), listener);
+    crate::event_target_hook_slots::js_abort_signal_add_listener(
+        signal_ptr,
+        string_value(b"abort"),
+        listener,
+    );
     listener
 }
 
@@ -242,8 +247,12 @@ fn remove_abort_listener(signal: f64, listener: f64) {
     if is_nullish(signal) || is_nullish(listener) {
         return;
     }
-    if let Some(signal_ptr) = crate::event_target::abort::abort_signal_ptr_from_value(signal) {
-        crate::url::js_abort_signal_remove_listener(signal_ptr, string_value(b"abort"), listener);
+    if let Some(signal_ptr) = crate::event_target_hook_slots::abort_signal_ptr_from_value(signal) {
+        crate::event_target_hook_slots::js_abort_signal_remove_listener(
+            signal_ptr,
+            string_value(b"abort"),
+            listener,
+        );
     }
 }
 

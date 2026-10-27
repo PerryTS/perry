@@ -817,7 +817,7 @@ fn native_instanceof(
             let err_ptr = obj_ptr as *const crate::error::ErrorHeader;
             let kind = (*err_ptr).error_kind;
             if class_id == crate::event_target::CLASS_ID_DOM_EXCEPTION {
-                return if crate::event_target::is_dom_exception_error(err_ptr) {
+                return if crate::event_target_hook_slots::is_dom_exception_error(err_ptr) {
                     true_val
                 } else {
                     false_val

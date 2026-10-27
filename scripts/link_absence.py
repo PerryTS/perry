@@ -44,6 +44,7 @@ NEGATIVES = {
     "without_perf_hooks": ["perf_hooks"],
     "without_os": ["os"],
     "without_wasi": ["wasi"],
+    "without_event_target": ["event_target"],
     "without_messaging": ["messaging"],
     "without_async_hooks": ["async_hooks"],
     "without_bigint_querystring": ["bigint"],

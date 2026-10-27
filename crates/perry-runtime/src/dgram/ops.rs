@@ -46,11 +46,12 @@ fn attach_abort_signal(socket: f64, signal: f64) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let socket = scope.root_nanbox_f64(socket);
     let signal = scope.root_nanbox_f64(signal);
-    let signal_ptr = crate::url::js_abort_signal_resolve_ptr(signal.get_nanbox_f64());
+    let signal_ptr =
+        crate::event_target_hook_slots::js_abort_signal_resolve_ptr(signal.get_nanbox_f64());
     if signal_ptr.is_null() {
         throw_invalid_arg_type("options.signal", "AbortSignal", signal.get_nanbox_f64());
     }
-    if crate::url::js_abort_signal_is_aborted(signal_ptr) != 0 {
+    if crate::event_target_hook_slots::js_abort_signal_is_aborted(signal_ptr) != 0 {
         schedule_abort_close(socket.get_nanbox_f64());
         return;
     }
@@ -62,8 +63,9 @@ fn attach_abort_signal(socket: f64, signal: f64) {
     js_closure_set_capture_f64(listener, 0, socket.get_nanbox_f64());
     let listener = scope.root_nanbox_f64(boxed_pointer(listener as *const u8));
     let abort_event = scope.root_nanbox_f64(str_value("abort"));
-    let signal_ptr = crate::url::js_abort_signal_resolve_ptr(signal.get_nanbox_f64());
-    crate::url::js_abort_signal_add_listener(
+    let signal_ptr =
+        crate::event_target_hook_slots::js_abort_signal_resolve_ptr(signal.get_nanbox_f64());
+    crate::event_target_hook_slots::js_abort_signal_add_listener(
         signal_ptr,
         abort_event.get_nanbox_f64(),
         listener.get_nanbox_f64(),
@@ -92,8 +94,9 @@ fn detach_abort_signal(socket: f64) {
     };
     let listener = scope.root_nanbox_f64(listener);
     let abort_event = scope.root_nanbox_f64(str_value("abort"));
-    let signal_ptr = crate::url::js_abort_signal_resolve_ptr(signal.get_nanbox_f64());
-    crate::url::js_abort_signal_remove_listener(
+    let signal_ptr =
+        crate::event_target_hook_slots::js_abort_signal_resolve_ptr(signal.get_nanbox_f64());
+    crate::event_target_hook_slots::js_abort_signal_remove_listener(
         signal_ptr,
         abort_event.get_nanbox_f64(),
         listener.get_nanbox_f64(),

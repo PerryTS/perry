@@ -223,7 +223,11 @@ pub(super) fn add_finished_signal_abort_listener(stream: f64, signal: f64, callb
     let Some(signal_obj) = object_ptr_from_value(signal.get_nanbox_f64()) else {
         return;
     };
-    crate::url::js_abort_signal_add_listener(signal_obj, abort, listener.get_nanbox_f64());
+    crate::event_target_hook_slots::js_abort_signal_add_listener(
+        signal_obj,
+        abort,
+        listener.get_nanbox_f64(),
+    );
 }
 
 pub(super) fn add_finished_cleanup_completion_listener(stream: f64, callback: f64) {

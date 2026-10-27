@@ -425,7 +425,7 @@ fn throw_type_error_with_code(msg: &str, code: &'static str) -> ! {
 fn throw_dom_exception(msg: &str, name: &str) -> ! {
     let message = f64::from_bits(str_value(msg).bits());
     let name = f64::from_bits(str_value(name).bits());
-    let err = crate::event_target::js_dom_exception_new(message, name);
+    let err = crate::event_target_hook_slots::js_dom_exception_new(message, name);
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 

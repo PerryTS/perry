@@ -444,6 +444,36 @@ pub(super) fn detect_optional_feature_usage(
     // false-negative class for every gate at once (the rule is zero false
     // negatives; including more HIR can only over-include a feature).
     let hir_debug = module_hir_debug(hir_module);
+    ctx.uses_event_target |= global_object::may_escape(hir_module)
+        || [
+            "Event",
+            "CustomEvent",
+            "EventTarget",
+            "DOMException",
+            "AbortSignal",
+            "AbortController",
+            "MessageEvent",
+            "CloseEvent",
+            "ProgressEvent",
+            "ErrorEvent",
+            "WebSocket",
+            "EventSource",
+            "Request",
+            "Worker",
+            "navigator",
+        ]
+        .iter()
+        .any(|name| hir_debug.contains(&format!("\"{name}\"")))
+        || hir_module.imports.iter().any(|import| {
+            !import.type_only
+                && matches!(
+                    import
+                        .source
+                        .strip_prefix("node:")
+                        .unwrap_or(&import.source),
+                    "perf_hooks" | "crypto" | "worker_threads" | "undici" | "bun" | "perry/thread"
+                )
+        });
     ctx.uses_messaging |= global_object::may_escape(hir_module)
         || hir_debug.contains(r#""worker_threads""#)
         || hir_module.imports.iter().any(|import| {
