@@ -57,7 +57,7 @@ pub struct Address {
 }
 
 impl Address {
-    fn allows(&self, address: SocketAddr) -> bool {
+    pub(crate) fn allows(&self, address: SocketAddr) -> bool {
         self.address == address.ip() && self.port.is_none_or(|port| port == address.port())
     }
 }
