@@ -48,7 +48,8 @@ fn async_compound_resource_guest_fixture() {
 
 fn resource_fixture(name: &str, selected: Option<&str>) {
     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../test-wasi/components").join(name);
+        .join("../../test-wasi/components")
+        .join(name);
     let source = std::fs::read_to_string(fixture.join("world.wit")).unwrap();
     let files = custody_world_files(&source, selected);
     let output = tempfile::tempdir().unwrap().keep();
