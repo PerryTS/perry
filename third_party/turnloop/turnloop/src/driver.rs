@@ -885,7 +885,7 @@ impl<B: Backend> Driver<B> {
     /// Unix and Windows native backends support this operation. Others report
     /// Unsupported. Ownership is consumed even on setup failure. Once accepted,
     /// completion, timeout and close/cancellation follow [`Self::tcp_connect`].
-    pub fn tcp_connect_bound(
+    pub fn tcp_connect_bound_with_options(
         &mut self,
         transport: B::Detached,
         addr: SocketAddr,
@@ -2439,7 +2439,7 @@ mod clock_contract {
             let h = match kind {
                 0 => driver.pipe_connect_until(&PipeName("synthetic".into()), at, Token(1)),
                 1 => driver.tcp_connect(peer, &opts, Token(1)),
-                _ => driver.tcp_connect_bound((), peer, &opts, Token(1)),
+                _ => driver.tcp_connect_bound_with_options((), peer, &opts, Token(1)),
             }
             .expect("connect");
             let op = driver
