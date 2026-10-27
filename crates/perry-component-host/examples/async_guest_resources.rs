@@ -230,8 +230,24 @@ fn main() -> Result<()> {
     tick(&mut driver)?;
     release(&gates, 200);
     ensure!(result(&mut driver, &mut many)? == json!([10, 10]));
+    let mut background = client.call("", "loan-background", &[json!(500), borrowed(&owner)])?;
+    ensure!(result(&mut driver, &mut background)? == json!(10));
+    ensure!(driver.is_active() && gates.lock().unwrap().contains_key(&500));
+    let mut expired = client.call("", "expired", &[])?;
+    ensure!(result(&mut driver, &mut expired)? == json!(true));
+    // Canonical return ends the loan even though a child keeps its task/frame
+    // alive. Reclaim the owner before that child's JS continuation runs.
     let mut drop_owner = client.drop_resource(&owner)?;
     result(&mut driver, &mut drop_owner)?;
+    release(&gates, 500);
+    for _ in 0..256 {
+        tick(&mut driver)?;
+        if !driver.is_active() {
+            break;
+        }
+    }
+    let mut expired = client.call("", "tail-expired", &[])?;
+    ensure!(result(&mut driver, &mut expired)? == json!(true));
     let mut loan = client.call("", "import-loan", &[json!(201), fresh(11)])?;
     tick(&mut driver)?;
     release(&gates, 201);
