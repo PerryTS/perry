@@ -15,6 +15,8 @@ pub(super) fn optimize_and_emit(
     native_roots: bool,
     mut stats: Option<&mut UnitCodegenStats>,
 ) -> Result<Vec<Vec<u8>>> {
+    #[cfg(feature = "target-wasi")]
+    crate::wasi_toolchain::check_linked(effective_target)?;
     global_init(mllvm);
     announce();
 

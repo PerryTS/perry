@@ -1,7 +1,7 @@
 //! Object freeze / seal / extensibility helpers, extracted from
 //! `object_ops.rs` to keep that file under the 2k-line limit. These map the
 //! `Object.freeze` / `Object.seal` / `Object.preventExtensions` family (and
-//! their `is*` predicates) onto the per-object GC-header reserved-flag bits.
+//! their `is*` predicates) onto shape-owned integrity and the existing header mirrors.
 
 use super::*;
 
@@ -47,10 +47,9 @@ unsafe fn restrict_function_keys(owner: usize, freeze: bool) {
 }
 
 /// Drop `writable`/`configurable` on every own **symbol-keyed** property of
-/// `obj`. The string-keyed table is handled by `mark_all_keys`; symbol props
-/// live in a separate side table, so `Object.freeze`/`Object.seal` must walk
-/// it too (else a frozen object's symbol props stay writable and strict writes
-/// to them wrongly succeed).
+/// `obj` through the existing symbol ownership funnel. Ordinary owned tables
+/// already restrict their string and symbol entries in one integrity operation;
+/// other receiver families retain this normalized symbol walk.
 unsafe fn mark_all_symbol_keys(
     obj: *mut ObjectHeader,
     drop_writable: bool,

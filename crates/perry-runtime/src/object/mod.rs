@@ -406,9 +406,9 @@ pub(crate) use descriptor_state::{
     reflect_getter_closure_bits, set_accessor_descriptor, set_builtin_accessor_descriptor,
     set_builtin_property_attrs, set_property_attrs, AccessorDescriptor, PropertyAttrs,
 };
-#[cfg(test)]
+#[cfg(any(test, target_os = "wasi"))]
 pub(crate) use field_get_set::private_lexical_brand_depth;
-#[cfg(test)]
+#[cfg(any(test, target_os = "wasi"))]
 pub(crate) use field_get_set::private_member_access_hints_depth;
 pub(crate) use field_get_set::FieldLookupCaches;
 pub(crate) use field_get_set::{
@@ -419,6 +419,10 @@ pub(crate) use field_get_set::{
     scan_private_lexical_brand_roots_mut,
 };
 #[cfg(test)]
+pub(crate) use this_binding::derived_super_scope_push_at;
+#[cfg(any(test, target_os = "wasi"))]
+pub(crate) use this_binding::static_private_owner_depth;
+#[cfg(test)]
 pub(crate) use this_binding::static_private_owner_push_at;
 pub(crate) use this_binding::{
     derived_super_binding_check_marks, derived_super_binding_len, derived_super_binding_truncate,
@@ -428,8 +432,6 @@ pub(crate) use this_binding::{
     static_private_owner_unwind_to, static_this_arm, static_this_arm_if_unarmed,
     static_this_disarm, SuperNewTargetScope,
 };
-#[cfg(test)]
-pub(crate) use this_binding::{derived_super_scope_push_at, static_private_owner_depth};
 pub use this_binding::{
     js_new_target_enter, js_new_target_get, js_new_target_leave, js_new_target_set,
     js_static_this_arm_classref, js_static_this_arm_value, js_static_this_resolve,
@@ -740,8 +742,10 @@ pub(crate) use keys_lookup::*;
 
 pub(crate) mod array_tail_transition;
 mod call_method_depth;
+#[cfg(any(test, target_os = "wasi"))]
+pub(crate) use call_method_depth::call_method_depth;
 #[cfg(test)]
-pub(crate) use call_method_depth::{call_method_depth, test_enter_catch_method};
+pub(crate) use call_method_depth::test_enter_catch_method;
 mod meta_accessors;
 use call_method_depth::CallMethodDepthGuard;
 pub(crate) use call_method_depth::{call_method_depth_check_marks, call_method_depth_unwind_to};
@@ -1912,3 +1916,19 @@ mod address_free_slots_tests;
 pub(crate) mod property_ops;
 
 pub(crate) mod url_layout;
+
+#[cfg(any(test, target_os = "wasi"))]
+pub(crate) use call_method_depth::call_method_depth_restore_depth;
+
+#[cfg(any(test, target_os = "wasi"))]
+pub(crate) use this_binding::{
+    derived_super_binding_restore_depth, static_private_owner_restore_depth,
+};
+
+#[cfg(any(test, target_os = "wasi"))]
+pub(crate) use field_get_set::{
+    private_lexical_brand_restore_depth, private_member_access_hints_restore_depth,
+};
+
+#[cfg(any(test, target_os = "wasi"))]
+pub(crate) use native_call_method::{namespace_override_depth, namespace_override_restore_depth};

@@ -656,12 +656,53 @@ impl<'a> Gen<'a> {
         self.m.add_tok(n, tok);
         self.stand_in_fns.insert((c.name.clone(), holder), (n, tok));
         self.stand_in_fc.insert(tok, c);
+        // DECISIONS 210: a `new` of it constructs its owner's `new <name>`
+        // layout: its stand-in instance is held here once the owner
+        // published it (read like a cell, `other_layout`; a broken one is
+        // ⊤). Until then the construction's result is unknown and the
+        // construction is published, so the owner constructs and publishes
+        // the layout (`lib.rs` records the read once this unit constructs).
+        let d = format!("new {}", c.name);
+        let held = match self.unit_in {
+            Some(u) if u.layout(&d).is_some() || u.broken(&d) => self.other_layout(&d).map(|cc| {
+                self.stand_in_class(mi, cc);
+                let tm = self.stand_ins[&d].1;
+                let nv = self
+                    .m
+                    .node_named("newval", || format!("newval({})", c.name));
+                let inst = self.m.tok(TokKind::Obj(tm, NO_CTX));
+                self.m.add_tok(nv, inst);
+                (nv, tm)
+            }),
+            _ => None,
+        };
+        self.m.foreign_ctor.insert(fx, held);
         // What unknown code receives goes nowhere here.
         self.m.nodes[args_all as usize].sink = true;
         self.m.sink_node(args_all, r);
         if let Some(n) = rest {
             self.m.sink_node(n, r);
         }
+        // DECISIONS 212: a published method held as a value (a result, a
+        // field, an array element, the prototype's key) runs on the
+        // receivers this unit passes, as when it calls it on its class's
+        // stand-in: the method's unit assumes no other (`escape_this`, a
+        // contract-only receiver). Its class's instances are admitted and
+        // published (DECISIONS 107); any other receiver is this unit's
+        // census report (DECISIONS 85). With no one class named, none is
+        // admitted.
+        let holder = match holder {
+            None if c.method && !c.lexical_this => Some(
+                match c.this_class.as_deref().and_then(|d| self.other_layout(d)) {
+                    Some(cc) => {
+                        self.stand_in_class(mi, cc);
+                        (self.stand_ins[&cc.display].1, false)
+                    }
+                    None => (TmplId::MAX, false),
+                },
+            ),
+            h => h,
+        };
         match holder {
             _ if c.lexical_this => {}
             Some((tm, statics)) => {
@@ -677,8 +718,11 @@ impl<'a> Gen<'a> {
                             self.stored_value(mi, this, c, &params, u32::MAX, false, None, Some(k))
                         })
                         .collect();
+                    // No class to admit (`TmplId::MAX`): a receiver is a
+                    // use beyond the contract (`admit_this`).
+                    let none = if tm == TmplId::MAX { MARK_ESCAPE } else { 0 };
                     self.m.this_contracts.push(crate::model::ThisContract {
-                        uses: c.this_use,
+                        uses: c.this_use | none,
                         reach: c.this_reach,
                         stores: c.this_stores.clone(),
                         values,

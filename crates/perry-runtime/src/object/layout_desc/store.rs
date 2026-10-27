@@ -219,10 +219,7 @@ pub(crate) unsafe fn family_own_key_hashed(
     {
         return None;
     }
-    let d = &*desc_at(layout_index_of_word(word)?);
-    if d.class_id == 0 {
-        return None;
-    }
+    let d = &*family_for_word(word)?;
     desc_own_key(d, bytes, hash)
 }
 
@@ -542,7 +539,7 @@ pub(super) unsafe fn family_store_admits(obj: *const ObjectHeader) -> bool {
         return false;
     };
     if let Some(index) = record.family_desc_index_plus_one().checked_sub(1) {
-        if (*desc_at(index)).class_id != 0 {
+        if literal_birth::family_at(index).is_some() {
             return true;
         }
     }

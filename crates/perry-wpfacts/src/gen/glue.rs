@@ -269,6 +269,26 @@ impl<'a> Gen<'a> {
                 self.prim_node(prim::BOOL)
             }
             "iteratorStepOutput" => self.iter_out_node(fx),
+            // The rest element of an array destructuring (`[a, ...rest] =
+            // it`): what codegen lowers it to, `js_array_push_f64(rest,
+            // value)`, the array itself as the result.
+            "iteratorRestAppend" => {
+                let (Some(rest), Some(value)) = (arg(0), arg(1)) else {
+                    return self.m.top_val("iteratorRestAppend without arguments");
+                };
+                self.store(
+                    fx,
+                    rest,
+                    Key::Any,
+                    value,
+                    "rest element append".into(),
+                    None,
+                    false,
+                );
+                let out = self.tmp("rest-append");
+                self.m.edge(rest, out);
+                out
+            }
             "iteratorCloseOnThrow" | "iteratorCloseIfNotDone" | "arrayRecordClose" => {
                 if let Some(it) = arg(0) {
                     // `iterator.return()` runs.

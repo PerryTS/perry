@@ -569,6 +569,10 @@ pub fn run_with_parse_cache(
     use_color: bool,
     verbose: u8,
 ) -> Result<CompileResult> {
+    #[cfg(feature = "target-wasi")]
+    if args.target.as_deref() == Some("wasi") {
+        perry_codegen::wasi_toolchain::check()?;
+    }
     if perry_codegen::fallback_diag::enabled() {
         perry_codegen::fallback_diag::reset();
     }

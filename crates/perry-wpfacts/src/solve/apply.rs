@@ -303,8 +303,30 @@ impl Model {
                     self.edge(from, dst);
                 }
             }
+            Cons::DeleteKey { key, reason } => {
+                for &t in toks {
+                    if t == TOP {
+                        // Deleting `key` of an unknown object changes that
+                        // key of whatever it is, a builtin prototype
+                        // included, and no other key.
+                        let k = Some(Key::Named(key));
+                        self.note_fnproto_write(TOP, k, Hard::E7Delete.code());
+                        builtins::note_native_write(self, TOP, k, "E7 delete");
+                    } else {
+                        self.mark_hard(t, Hard::E7Delete, reason);
+                    }
+                }
+            }
             Cons::Hard { kind, reason } => {
                 for &t in toks {
+                    if self.explain && t == TOP {
+                        eprintln!(
+                            "perry: wpfacts explain: {} on ⊤: {} (receiver: {})",
+                            kind.code(),
+                            self.reasons[reason as usize],
+                            self.top_origin(n)
+                        );
+                    }
                     self.mark_hard(t, kind, reason);
                 }
             }
@@ -346,6 +368,14 @@ impl Model {
                             if !ks.contains(&key) {
                                 ks.push(key);
                             }
+                        }
+                        // Defining `key` on an unknown object writes that key
+                        // of whatever it is, a builtin prototype included,
+                        // and no other key.
+                        _ if t == TOP => {
+                            let k = Some(Key::Named(key));
+                            self.note_fnproto_write(TOP, k, Hard::E5DefineProperty.code());
+                            builtins::note_native_write(self, TOP, k, "E5 Object.defineProperty");
                         }
                         _ => self.mark_hard(t, Hard::E5DefineProperty, reason),
                     }
@@ -514,8 +544,17 @@ impl Model {
                 let owner_class = self.constructor_origin(class);
                 let owner = self.tok(TokKind::ClassObj(owner_class));
                 if self.super_relink.contains(&owner) || self.is_escaped(owner) {
-                    let reason = self.reason("E6 constructor follows live superclass");
-                    self.mark_hard(origin, Hard::E6SetPrototypeOf, reason);
+                    // The instance under construction follows the live
+                    // superclass. An unknown one (⊤: another unit's
+                    // subclass instance) is a fresh object or whatever the
+                    // superclass returned, whose prototype construction
+                    // never changes: no write of a builtin prototype.
+                    if origin == TOP {
+                        self.super_relink.insert(TOP);
+                    } else {
+                        let reason = self.reason("E6 constructor follows live superclass");
+                        self.mark_hard(origin, Hard::E6SetPrototypeOf, reason);
+                    }
                 }
                 for &parent in toks {
                     match self.toks[parent as usize] {
@@ -546,7 +585,7 @@ impl Model {
                     }
                     let f = match key {
                         Key::Named(a) => self.field(t, a),
-                        Key::Any => self.field_any(t),
+                        Key::Any => self.any_key_node(t),
                     };
                     self.edge(src, f);
                 }
@@ -620,7 +659,7 @@ impl Model {
                             self.reason("accessor under a computed key")
                         };
                         self.escape(f, r);
-                        let fa = self.field_any(t);
+                        let fa = self.any_key_node(t);
                         self.add_top(fa, |_| "accessor under a computed key".into());
                         self.add_prim(fa, prim::ALL);
                         let ks = self.accessor_keys.entry(t).or_default();
@@ -853,7 +892,7 @@ impl Model {
                     // Each receiver binds every call looked up through
                     // this node: solve work per call.
                     self.work += calls.len() as u64;
-                    self.this_to(t, origin);
+                    self.this_to(t, origin, &calls);
                     self.this_calls(t, origin, &calls);
                 }
             }
@@ -933,6 +972,18 @@ impl Model {
                         TokKind::ClassObj(tm) => {
                             let inst = self.tok(TokKind::Obj(tm, NO_CTX));
                             self.mark_hard(inst, Hard::E11ReflectConstruct, reason);
+                        }
+                        // DECISIONS 210: another unit's constructor function:
+                        // the hard mark lands on its owner's layout (a census
+                        // report); unpublished, the function escapes.
+                        TokKind::Func(f, _) if self.foreign_ctor.contains_key(&f) => {
+                            match self.foreign_ctor[&f] {
+                                Some((_, tm)) => {
+                                    let inst = self.tok(TokKind::Obj(tm, NO_CTX));
+                                    self.mark_hard(inst, Hard::E11ReflectConstruct, reason);
+                                }
+                                None => self.escape(t, reason),
+                            }
                         }
                         TokKind::Func(f, _) => {
                             let tm = self.fn_inst_template(f);

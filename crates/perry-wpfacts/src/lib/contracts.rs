@@ -263,6 +263,7 @@ pub(super) fn nested_layouts(
                     definite: atoms_of(g, &g.m.tmpls[itm as usize].definite),
                     ctor_leaks: true,
                     binding_prim: 0,
+                    fn_inst: false,
                 });
                 let nl = nested_layouts(g, templates, itm, layouts_out, open_tm);
                 let fv = field_value_contracts(g, templates, itm, layouts_out, open_tm);
@@ -618,6 +619,7 @@ pub(super) fn fn_contract_of(
         .collect();
     units::FnContract {
         method: g.m.published_this.contains_key(&f),
+        this_class: this_class(g, f),
         this_use,
         this_reach,
         this_stores,
@@ -679,12 +681,25 @@ pub(super) fn unnamed_methods(m: &model::Model) -> impl Iterator<Item = model::F
         )
 }
 
+/// DECISIONS 212: the one published class whose instances method `f` runs
+/// on (its contract receivers, `Model::published_this`), by display.
+fn this_class(g: &gen::Gen, f: model::FnIdx) -> Option<String> {
+    let rs = g.m.published_this.get(&f)?;
+    let mut ds = rs
+        .iter()
+        .filter_map(|r| g.m.recv_class.get(r))
+        .map(|&tm| g.m.tmpls[tm as usize].display.clone());
+    let d = ds.next()?;
+    ds.all(|x| x == d).then_some(d)
+}
+
 pub(super) fn fn_named(g: &gen::Gen, f: model::FnIdx) -> units::FnContract {
     let fi = &g.m.funcs[f as usize];
     let n = fi.params.len();
     let (name, closed) = fn_contract_name(g, f);
     units::FnContract {
         method: g.m.published_this.contains_key(&f),
+        this_class: this_class(g, f),
         name,
         closed,
         params: vec![model::MARK_ESCAPE; n],
@@ -1020,6 +1035,7 @@ pub(super) fn describe_nodes(
                             definite: atoms_of(g, &g.m.tmpls[tm as usize].definite),
                             ctor_leaks: true,
                             binding_prim: 0,
+                            fn_inst: false,
                         });
                         let nl = nested_layouts(g, templates, tm, layouts_out, open_tm);
                         let fv = field_value_contracts(g, templates, tm, layouts_out, open_tm);
@@ -1350,6 +1366,7 @@ pub(super) fn describe_toks(
                     definite: atoms_of(g, &g.m.tmpls[tm as usize].definite),
                     ctor_leaks: true,
                     binding_prim: 0,
+                    fn_inst: false,
                 })
             });
         let Some(mut cc) = cc else {
@@ -1418,6 +1435,108 @@ pub(super) fn describe_toks(
     }
     vc.shared.sort();
     vc
+}
+
+/// DECISIONS 210: the layout of constructor function `f`'s instances (its
+/// `new <f>` template `tm`) as the units constructing it hold it: its
+/// facts, the methods on its prototype (contract functions among them with
+/// their contracts) and the function's own contract as the constructor. A
+/// prototype that is not the function's own (`f.prototype = ...`) or holds
+/// anything but one function of this unit under a key leaves the keys
+/// open: a reader finds unknown values there.
+pub(super) fn fn_inst_contract(
+    g: &gen::Gen,
+    templates: &[TemplateFacts],
+    f: model::FnIdx,
+    tm: model::TmplId,
+    layouts_out: &mut Vec<units::ClassContract>,
+    open_tm: &pts::FxHashSet<model::TmplId>,
+) -> Option<units::ClassContract> {
+    let facts = templates.iter().find(|t| t.id == tm)?.clone();
+    let m = &g.m;
+    let fi = &m.funcs[f as usize];
+    let proto = m.tok_index.get(&model::TokKind::Proto(tm)).copied();
+    let pa = m.atoms.iter().position(|x| x == "prototype");
+    let ca = m.atoms.iter().position(|x| x == "constructor");
+    let pf = pa.and_then(|a| m.fields.get(&(fi.token, a as model::Atom)).copied());
+    let mut open = pf.is_some_and(|n| {
+        let node = &m.nodes[n as usize];
+        node.prim != 0 || node.pts.to_sorted().iter().any(|&p| Some(p) != proto)
+    });
+    let mut methods: Vec<(String, String)> = Vec::new();
+    let mut method_fns: Vec<(String, units::FnContract)> = Vec::new();
+    if let Some(proto) = proto {
+        let mut own: Vec<(model::Atom, model::NodeId)> = m
+            .field_keys
+            .get(&proto)
+            .into_iter()
+            .flatten()
+            .filter(|&&k| Some(k as usize) != ca)
+            .map(|&k| (k, m.fields[&(proto, k)]))
+            .collect();
+        own.sort_unstable();
+        for (k, n) in own {
+            let node = &m.nodes[n as usize];
+            let ts = node.pts.to_sorted();
+            let fx = ts.first().map(|&t| m.tok_fn(t));
+            match fx {
+                Some(fx)
+                    if ts.len() == 1
+                        && node.prim == 0
+                        && fx != model::NO_FN
+                        && m.funcs[fx as usize].func_id != u32::MAX =>
+                {
+                    let key = m.atoms[k as usize].clone();
+                    methods.push((key.clone(), m.funcs[fx as usize].name.clone()));
+                    if m.contract_fns.contains(&fx) {
+                        method_fns
+                            .push((key, fn_contract_of(g, templates, fx, layouts_out, open_tm)));
+                    }
+                }
+                // A key read through the chain but never written (a lookup
+                // of an own field misses here): no member.
+                _ if ts.is_empty() && node.prim == 0 => {}
+                _ => open = true,
+            }
+        }
+        // Any key: open when something wrote one (a read under an unknown
+        // key leaves the node empty).
+        if let Some(&n) = m.field_any.get(&proto) {
+            let node = &m.nodes[n as usize];
+            if node.prim != 0 || !node.pts.is_empty() {
+                open = true;
+            }
+        }
+    }
+    let tpl = &m.tmpls[tm as usize];
+    Some(units::ClassContract {
+        display: tpl.display.clone(),
+        name: fi.name.clone(),
+        class_id: 0,
+        literal_shape: false,
+        facts,
+        methods,
+        native_parent: None,
+        parent: None,
+        field_fns: Vec::new(),
+        field_layouts: nested_layouts(g, templates, tm, layouts_out, open_tm),
+        field_values: field_value_contracts(g, templates, tm, layouts_out, open_tm),
+        field_tas: field_ta_contracts(g, tm),
+        open_keys: open_tm.contains(&tm) || open,
+        statics: Vec::new(),
+        statics_open: false,
+        static_fns: Vec::new(),
+        static_values: Vec::new(),
+        closed: None,
+        forwards: false,
+        method_fns,
+        ctor_fn: Some(fn_contract_of(g, templates, f, layouts_out, open_tm)),
+        birth_keys: atoms_of(g, &tpl.birth_keys),
+        definite: atoms_of(g, &tpl.definite),
+        ctor_leaks: true,
+        binding_prim: 0,
+        fn_inst: true,
+    })
 }
 
 /// DECISIONS 152: `t` is what an argument marker reaches (its reach, or
@@ -1649,6 +1768,7 @@ pub(super) fn arg_contract_of(
                             definite: atoms_of(g, &g.m.tmpls[tm as usize].definite),
                             ctor_leaks: true,
                             binding_prim: 0,
+                            fn_inst: false,
                         }),
                         _ => None,
                     }

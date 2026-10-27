@@ -299,6 +299,7 @@ pub fn map_cons(
             reason,
         },
         Hard { kind, reason } => Hard { kind, reason },
+        DeleteKey { key, reason } => DeleteKey { key, reason },
         AddsKeys => AddsKeys,
         DefineKey { key, data, reason } => DefineKey { key, data, reason },
         DefineAll {
@@ -503,6 +504,7 @@ fn gen_kind(c: &Cons) -> bool {
             | OverrideThis { .. }
             | TopIfAny { .. }
             | Hard { .. }
+            | DeleteKey { .. }
             | DefineKey { .. }
             | DefineAll { .. }
             | AddsKeys
@@ -1026,6 +1028,18 @@ impl Model {
             .is_some_and(|&w| self.nodes[n as usize].pts.contains_tok(w))
     }
 
+    /// The nodes `this` of function value `ft` reaches its body through:
+    /// the shared node, and its instance's when the body is summarized.
+    pub(crate) fn this_nodes(&mut self, ft: Tok) -> Vec<NodeId> {
+        let f = self.tok_fn(ft);
+        let mut dsts = vec![self.funcs[f as usize].this];
+        if self.has_this_term(f) {
+            let inst = self.instance((2, 0, ft));
+            dsts.push(self.sum.insts[inst as usize].this);
+        }
+        dsts
+    }
+
     pub(crate) fn escape_this(&mut self, ft: Tok, reason: u32) {
         if !self.sum.ready {
             self.sum.deferred.push(Deferred::EscapeThis(ft, reason));
@@ -1033,11 +1047,7 @@ impl Model {
         }
         let f = self.tok_fn(ft);
         let why = |m: &Self| format!("this of escaped function: {}", m.reasons[reason as usize]);
-        let mut dsts = vec![self.funcs[f as usize].this];
-        if self.has_this_term(f) {
-            let inst = self.instance((2, 0, ft));
-            dsts.push(self.sum.insts[inst as usize].this);
-        }
+        let dsts = self.this_nodes(ft);
         let insts = self.published_this.get(&f).cloned().unwrap_or_default();
         // DECISIONS 116: a method of sealed classes only, published through
         // its contract, runs on the instances this unit gave out (and the
@@ -1157,10 +1167,11 @@ impl Model {
     /// exactly `t`'s: a literal not escaped and not HARD, with no key added
     /// after birth or stored under a computed key, no computed member, no
     /// `__proto__`, whose chain gets no enumerable key from the program
-    /// (nothing writes `Object.prototype`); a body defining a property under
-    /// its key also needs each key to be one generation named
-    /// (`for_in_define_keys`). `late`: the keys stored into each template
-    /// (`settle_for_in`; the check before it only knows the cheap facts).
+    /// (nothing writes `Object.prototype`, `object_proto_written`); a body
+    /// defining a property under its key also needs each key to be one
+    /// generation named (`for_in_define_keys`). `late`: the keys stored into
+    /// each template (`settle_for_in`; the check before it only knows the
+    /// cheap facts).
     fn for_in_keys(
         &self,
         f: FnIdx,
@@ -1185,10 +1196,7 @@ impl Model {
             || self.hard.contains_key(&t)
             || self.adds_keys.get(&tm).is_some_and(|&n| n > 0)
             || self.any_writers.contains_key(&tm)
-            || self
-                .native_writes
-                .keys()
-                .any(|&(w, _)| w == TOP || matches!(self.toks[w as usize], TokKind::ObjectProto))
+            || self.object_proto_written()
         {
             return None;
         }
@@ -1222,6 +1230,21 @@ impl Model {
             return None;
         }
         Some(keys)
+    }
+
+    /// May `Object.prototype`, the chain of every literal, hold a key the
+    /// program wrote (`native_writes` on it: a store, an accessor, E5/E6/E7,
+    /// a reach into unmodeled code, another unit's write)? A for-in over a
+    /// literal visits such a key when it is enumerable. A write into ⊤ is
+    /// no such write: ⊤ holds no builtin prototype (`escape`: a runtime
+    /// object reaches unknown code as itself, and what may write it is
+    /// noted on it), and a literal whose keys are exactly its own is not
+    /// escaped, so not in ⊤ either. The write into ⊤ stays a fact about
+    /// ⊤'s members, which lookups through ⊤ already read as anything.
+    fn object_proto_written(&self) -> bool {
+        self.native_writes
+            .keys()
+            .any(|&(w, _)| matches!(self.toks[w as usize], TokKind::ObjectProto))
     }
 
     /// Once the worklist is empty: a literal a for-in body ran per key over

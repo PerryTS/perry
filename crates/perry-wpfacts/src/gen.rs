@@ -9,6 +9,7 @@ use perry_hir::{Class, Export, Function, Global, Import, ImportSpecifier, Module
 
 mod define_keys;
 mod export;
+pub(crate) use export::UNDESCRIBED;
 mod for_in;
 mod glue;
 mod primitives;
@@ -653,6 +654,35 @@ impl<'a> Gen<'a> {
             })
             .map(|(d, _)| d.clone())
             .collect();
+        // Explain: why this unit reports each contract it consumed.
+        if self.m.explain && !self.m.aborted {
+            let mut why: Vec<String> = Vec::new();
+            for (d, (_, tm, toks)) in &self.stand_ins {
+                if !out.contains(d) {
+                    continue;
+                }
+                let mut rs: Vec<String> = Vec::new();
+                if self.m.foreign_written.contains(tm) {
+                    rs.push("written".into());
+                }
+                if self.m.adds_keys.get(tm).is_some_and(|&k| k > 0) {
+                    rs.push("adds keys".into());
+                }
+                for &t in toks {
+                    if let Some(&r) = self.m.escaped.get(&t) {
+                        rs.push(format!("escaped: {}", self.m.reasons[r as usize]));
+                    }
+                    if let Some(&(_, r)) = self.m.hard.get(&t) {
+                        rs.push(format!("hard: {}", self.m.reasons[r as usize]));
+                    }
+                }
+                why.push(format!("{d}: {}", rs.join("; ")));
+            }
+            why.sort();
+            for w in why {
+                eprintln!("perry: wpfacts explain: unit reports {w}");
+            }
+        }
         for ((name, _), &(_, t)) in &self.stand_in_fns {
             // An aborted unit is unknown code holding everything it names
             // (ALI cause 4). It reports what no contract grants unknown code:
@@ -666,7 +696,8 @@ impl<'a> Gen<'a> {
                 true => !self.receiver_unused(t),
                 false => self.m.is_escaped(t) && !self.open_fn(t),
             };
-            if escaped || self.m.hard.contains_key(&t) {
+            // DECISIONS 210: used as an object beyond the contract.
+            if escaped || self.m.hard.contains_key(&t) || self.m.fn_touched.contains(&t) {
                 out.push(format!("fn:{name}"));
             }
         }
@@ -682,6 +713,21 @@ impl<'a> Gen<'a> {
                 })
             });
             if self.m.aborted || written || self.m.is_escaped(*t) || self.m.hard.contains_key(t) {
+                if self.m.explain {
+                    let esc = self
+                        .m
+                        .escaped
+                        .get(t)
+                        .map(|&r| self.m.reasons[r as usize].clone());
+                    let hard = self
+                        .m
+                        .hard
+                        .get(t)
+                        .map(|&(_, r)| self.m.reasons[r as usize].clone());
+                    eprintln!(
+                        "perry: wpfacts explain: unit reports {rep}: written {written} escaped {esc:?} hard {hard:?}"
+                    );
+                }
                 out.push(rep.clone());
             }
         }

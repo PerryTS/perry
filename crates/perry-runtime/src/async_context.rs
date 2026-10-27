@@ -407,7 +407,7 @@ pub fn push_context_guard_at(mark: usize, action: ContextGuardAction) {
     });
 }
 
-#[cfg(test)]
+#[cfg(any(test, target_os = "wasi"))]
 pub(crate) fn context_guard_depth() -> usize {
     CONTEXT_GUARDS.with(|guards| guards.borrow().len())
 }
@@ -732,5 +732,21 @@ mod tests {
             js_async_context_als_get_store(handle).to_bits(),
             crate::value::TAG_UNDEFINED
         );
+    }
+}
+
+/// Apply every displaced context above the lexical prefix, newest first.
+#[cfg(any(test, target_os = "wasi"))]
+pub(crate) fn restore_context_guard_depth(depth: usize) {
+    debug_assert!(depth <= context_guard_depth());
+    loop {
+        let action = CONTEXT_GUARDS.with(|guards| {
+            let mut guards = guards.borrow_mut();
+            (guards.len() > depth).then(|| guards.pop()).flatten()
+        });
+        match action {
+            Some(action) => apply_context_guard(action),
+            None => break,
+        }
     }
 }

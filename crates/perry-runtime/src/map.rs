@@ -57,13 +57,20 @@ pub(crate) fn map_foreach_unwind_to(sp: usize) {
     });
 }
 
+#[cfg(any(test, target_os = "wasi"))]
+pub(crate) fn map_foreach_restore_depth(depth: usize) {
+    MAP_FOREACH_STACK.with(|stack| {
+        stack.borrow_mut().restore_depth(depth);
+    });
+}
+
 pub(crate) fn map_foreach_check_marks(sp: usize) {
     MAP_FOREACH_STACK.with(|stack| {
         crate::exception::marks::check_marks(stack.borrow().marks(), sp, "map_foreach")
     });
 }
 
-#[cfg(test)]
+#[cfg(any(test, target_os = "wasi"))]
 pub(crate) fn map_foreach_depth() -> usize {
     MAP_FOREACH_STACK.with(|stack| stack.borrow().len())
 }

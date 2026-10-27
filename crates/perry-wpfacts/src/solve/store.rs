@@ -274,6 +274,12 @@ impl Model {
     }
 
     pub(crate) fn store_into(&mut self, t: Tok, key: Key, src: NodeId, site: SiteId) {
+        // An element store (`push`, `unshift`, `splice`: the element key) is
+        // an index store: on an Array it writes its elements only, which no
+        // named non-index key reads (`is_elem_array`); on anything else it
+        // is a store under a computed key.
+        let elem = self.is_elem_key(key);
+        let key = if elem { Key::Any } else { key };
         {
             self.virt_revoke(
                 t,
@@ -282,6 +288,19 @@ impl Model {
                     Key::Any => None,
                 },
             );
+        }
+        // DECISIONS 210: a store into another unit's function (a stand-in)
+        // under `prototype` (or a key that may be it) replaces the chain its
+        // owner's layout has: the census reports it. Its other properties
+        // left in the owner (`escape_props`).
+        if let TokKind::Func(f, _) = self.toks[t as usize] {
+            let proto = match key {
+                Key::Named(a) => self.atoms[a as usize] == "prototype",
+                Key::Any => true,
+            };
+            if proto && self.foreign_ctor.contains_key(&f) {
+                self.fn_touched.insert(t);
+            }
         }
         // A store into a builtin function value is decided once the
         // worklist is empty (`settle_bf_written`): `write_builtin_fns` notes it.
@@ -293,6 +312,7 @@ impl Model {
         {
             let k = match key {
                 Key::Named(a) => Some(self.atoms[a as usize].clone()),
+                Key::Any if elem => Some(NUM_KEY.to_string()),
                 Key::Any => None,
             };
             self.note_shared(SharedWrite::Store(s, k));
@@ -309,8 +329,34 @@ impl Model {
                 return;
             }
         }
-        self.note_fnproto_write(t, Some(key), "store");
-        builtins::note_native_write(self, t, Some(key), "store");
+        // An element store writes an index of a builtin prototype at most.
+        let wkey = match elem {
+            true => Key::Named(self.atom(NUM_KEY)),
+            false => key,
+        };
+        self.note_fnproto_write(t, Some(wkey), "store");
+        // Explain: the first store into ⊤ under a key names its site and why
+        // the receiver is ⊤.
+        let what = match (self.explain && t == TOP, self.store_at) {
+            (true, Some(n)) => {
+                let (desc, func) = self
+                    .stores
+                    .get(site as usize)
+                    .map_or(("(no site)", u32::MAX), |s| (s.desc.as_str(), s.func));
+                let f = self
+                    .funcs
+                    .get(func as usize)
+                    .map_or("(no function)", |f| f.name.as_str());
+                format!("store `{desc}` in {f} (receiver: {})", self.top_origin(n))
+            }
+            _ => "store".to_string(),
+        };
+        // Not the boundary's store for other units' code: what they store
+        // into ⊤ they publish (`SharedWrite::Store(Top, _)`; a unit past the
+        // bound publishes every key), and every unit replays it under its key.
+        if !theirs {
+            builtins::note_native_write(self, t, Some(wkey), &what);
+        }
         if matches!(key, Key::Any)
             || matches!(key, Key::Named(a) if self.atoms[a as usize] == "__proto__")
         {
@@ -591,7 +637,10 @@ impl Model {
                 }
             }
             Key::Any => {
-                let f = self.field_any(t);
+                let f = match elem && self.is_elem_array(t) {
+                    true => self.field_any(t),
+                    false => self.any_key_node(t),
+                };
                 self.edge(src, f);
                 if let Some(tm) = tm {
                     let birth = self.stores[site as usize].birth;

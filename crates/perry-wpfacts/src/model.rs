@@ -17,6 +17,11 @@ pub type SiteId = u32;
 
 /// The atom of the element key (`Model::elem_key`).
 pub const ELEM: &str = "#elem";
+/// The key an element store (`push`, `set.add`) writes on a value that may
+/// be a builtin prototype: an index, or no property at all (a collection's
+/// entries). A write under it is a write of every key that may be ToString
+/// of a Number (`builtins::native_written`, `solve::numeric_key`).
+pub const NUM_KEY: &str = "#num";
 /// The atom of the iteration key (`Model::iter_key`).
 pub const ITER_ELEM: &str = "#iter";
 
@@ -390,6 +395,8 @@ pub enum NativeMiss {
     /// A program-owned global (`builtins::global_user_key`) read into the
     /// first node; the second is the global's field.
     Global(NodeId, NodeId),
+    /// A method call on a primitive receiver of these kinds.
+    PrimCall(u16, CallId),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -632,6 +639,9 @@ pub enum Cons {
     },
     /// Every object token reaches a HARD operation.
     Hard { kind: Hard, reason: u32 },
+    /// `delete o.key`: E7 HARD on every object token; on ⊤ (which may be a
+    /// builtin prototype) a write of `key` only.
+    DeleteKey { key: Atom, reason: u32 },
     /// `Object.defineProperty(o, key, desc)` with a constant key (FVA 4.3a).
     /// An accessor descriptor (`data` false) on a literal layout that does
     /// not hold `key` as data: the key becomes an accessor key (the getter
@@ -848,6 +858,7 @@ impl Cons {
             Cons::OverrideThis { .. } => "overridethis",
             Cons::TopIfAny { .. } => "topifany",
             Cons::Hard { .. } => "hard",
+            Cons::DeleteKey { .. } => "deletekey",
             Cons::AddsKeys => "addskeys",
             Cons::DefineKey { .. } => "definekey",
             Cons::DefineAll { .. } => "defineall",
@@ -1015,6 +1026,9 @@ pub struct Model {
     pub bound: Vec<(NodeId, NodeId, Vec<NodeId>)>,
     pub fields: FxHashMap<(Tok, Atom), NodeId>,
     pub field_any: FxHashMap<Tok, NodeId>,
+    /// An array's values under a key no store named (`Model::named_any`):
+    /// what its named non-index keys read. Its elements are not among them.
+    pub named_any: FxHashMap<Tok, NodeId>,
     pub all_fields: FxHashMap<Tok, NodeId>,
     pub proto_node: FxHashMap<Tok, NodeId>,
     pub field_keys: FxHashMap<Tok, Vec<Atom>>,
@@ -1269,6 +1283,8 @@ pub struct Model {
     /// dynamic code may hand it out (`Function('return this')()`). Until
     /// then a store into ⊤ cannot write a global.
     pub global_in_top: bool,
+    /// Explain: builtin function values minted, by the arm that minted them.
+    pub bf_mints: FxHashMap<&'static str, u32>,
     /// Per unit (design §17.16 (b)): the global object's program-owned
     /// fields are cells (`global:<key>`), made at the unit boundary. A field
     /// first named later holds ⊤ and sets `global_late`: the unit then
@@ -1485,6 +1501,41 @@ pub struct Model {
     /// DECISIONS 165: the functions a call bound (`bind_args`), in any
     /// context.
     pub called: crate::pts::FxHashSet<FnIdx>,
+    /// DECISIONS 210: the stand-ins of other units' contract functions, each
+    /// with the node holding the stand-in instance of its owner's `new <f>`
+    /// layout and that layout's template, `None` until the owner publishes
+    /// it. A `new` of one constructs that layout (`construct`), never a
+    /// template of this unit; the construction is published (`constructed`,
+    /// `ProgramFacts::ctor_runs_out`).
+    pub foreign_ctor: FxHashMap<FnIdx, Option<(NodeId, TmplId)>>,
+    pub constructed: crate::pts::FxHashSet<FnIdx>,
+    /// DECISIONS 210: this unit's constructions of its own contract
+    /// functions for the units that construct them (`Gen::published_ctors`):
+    /// function and result node. The instance's layout is published to them
+    /// (`Gen::contract_check`, `fn_inst_published`).
+    pub own_ctor_runs: Vec<(FnIdx, NodeId)>,
+    pub fn_inst_published: crate::pts::FxHashSet<TmplId>,
+    /// DECISIONS 210: stand-ins of other units' functions this unit used as
+    /// objects beyond their contract (a store into one, its `prototype`
+    /// read while its owner published no layout): census reports.
+    pub fn_touched: crate::pts::FxHashSet<Tok>,
+    /// DECISIONS 210: this unit's contract functions published to other
+    /// units (`Model::escape_props`): every own property but `prototype`
+    /// left with the function (unknown code reads and writes them); the
+    /// reason it left.
+    pub props_escaped: FxHashMap<Tok, u32>,
+    /// Solving one unit (`FactsConfig::unit`): what escapes reaches other
+    /// units' code, which the whole program sees.
+    pub per_unit: bool,
+    /// DECISIONS 210: this unit's functions unknown code constructs
+    /// (`Model::construct_unknown`), once each.
+    pub unknown_new: crate::pts::FxHashSet<FnIdx>,
+    /// DECISIONS 210: the `new` calls of other units' functions: no call
+    /// of the function (`called`; their arguments go by `ctor_runs_out`).
+    pub ctor_calls: crate::pts::FxHashSet<CallId>,
+    /// The reason a published literal's field function escapes
+    /// (`Gen::note_field_fns`): a contract publication, as `pub_reason`.
+    pub field_fn_reason: Option<u32>,
     /// DECISIONS 165: the stand-in methods of other units' classes with no
     /// function contract (`Gen::stub_fn`): named as the method.
     pub stub_methods: crate::pts::FxHashSet<FnIdx>,

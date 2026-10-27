@@ -206,10 +206,11 @@ pub(crate) fn temp_root_len() -> usize {
 
 /// Drop every slot at or above `depth` (WASI handlers restore compiled
 /// slots by depth; see `crate::exception`).
-#[cfg(target_os = "wasi")]
+#[cfg(any(test, target_os = "wasi"))]
 pub(crate) fn temp_roots_truncate_to(depth: usize) {
     TEMP_ROOTS.with(|cell| unsafe {
         let s = &mut *cell.get();
+        debug_assert!(depth <= s.len(), "invalid wasm EH temp-root prefix");
         if depth <= s.len() {
             s.truncate(depth);
         }

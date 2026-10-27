@@ -87,7 +87,10 @@ export async function fixture(secure = false) {
       }
       timer = setTimeout(send,200);
     });
-    server.listen(0,'127.0.0.1',()=>fs.writeFileSync(process.argv[1],String(server.address().port)));
+    server.listen(0,'127.0.0.1',()=>{
+      fs.writeFileSync(process.argv[1]+'.tmp',String(server.address().port));
+      fs.renameSync(process.argv[1]+'.tmp',process.argv[1]);
+    });
   `;
   const child = spawn('node', ['-e', code, ready], { stdio: 'ignore' });
   for (let i = 0; i < 200 && !existsSync(ready); i++) await delay(10);
