@@ -885,7 +885,7 @@ pub fn chain_load(m: &mut Model, of: Tok, q: Tok, key: Key, dst: NodeId) {
     match key {
         Key::Named(a) => family_load(m, fam, a, dst),
         Key::Any if is_site_builtin(m, of) => tok_load(m, q, key, dst),
-        Key::Any => family_any(m, of, fam, dst),
+        Key::Any => family_any(m, fam, dst),
     }
 }
 
@@ -929,11 +929,12 @@ fn is_site_builtin(m: &Model, t: Tok) -> bool {
 }
 
 /// `dst` ⊇ what a key that may name any member reads on family `fam`'s
-/// intrinsic chain, the chain of `of`: its `constructor`, its own
-/// prototype's members (opaque builtin functions, data kinds),
-/// `Object.prototype`'s methods (`BuiltinNs::ObjectProtoMethod`),
-/// `__proto__` (`of`'s prototypes), and what a store into ⊤ wrote.
-fn family_any(m: &mut Model, of: Tok, fam: Family, dst: NodeId) {
+/// intrinsic chain: its `constructor`, its own prototype's members (opaque
+/// builtin functions, data kinds), `Object.prototype`'s methods
+/// (`BuiltinNs::ObjectProtoMethod`), and what a store into ⊤ wrote. Not
+/// `__proto__`: the prototype would be `ObjectProto`, which stands for
+/// every builtin prototype, as a value (an open gap, as before).
+fn family_any(m: &mut Model, fam: Family, dst: NodeId) {
     family_ctor(m, fam, dst);
     let (fns, prims) = members::any_member(fam);
     if fns {
@@ -943,8 +944,6 @@ fn family_any(m: &mut Model, of: Tok, fam: Family, dst: NodeId) {
     m.add_prim(dst, prims | prim::UNDEF);
     let f = m.tok(TokKind::Builtin(BuiltinNs::ObjectProtoMethod));
     m.add_tok(dst, f);
-    let pn = m.proto_node(of);
-    m.edge(pn, dst);
     any_written(m, dst);
 }
 
