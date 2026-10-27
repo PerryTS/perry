@@ -6,6 +6,7 @@ const cell = resources["test:async-guest-resources/local@1.0.0"].cell;
 let lastOwner: any;
 let lastBorrow: any;
 let lastLocalBorrow: any;
+let tailExpired = false;
 function check(ok: boolean, message: string): void {
   if (!ok) throw new Error(message);
 }
@@ -34,6 +35,16 @@ register({
       }
       lastBorrow = values[0]; return output;
     },
+    async "loan-background"(id, value) {
+      lastBorrow = value;
+      imports[""].wait(id).then(() => {
+        collect();
+        try { foreign["[method]item.read"](value); tailExpired = false; }
+        catch (_) { tailExpired = true; }
+      });
+      collect(); return foreign["[method]item.read"](value);
+    },
+    "tail-expired"() { return tailExpired; },
     async "import-loan"(id, value) {
       const waiting = foreign["borrow-wait"](id, value.borrow());
       let refused = false;

@@ -20,6 +20,8 @@ world plugin {
     export exchange: async func(id: u32, value: own<item>) -> own<item>;
     export loan: async func(id: u32, value: borrow<item>) -> u32;
     export loans: async func(id: u32, values: list<borrow<item>>) -> list<u32>;
+    export loan-background: async func(id: u32, value: borrow<item>) -> u32;
+    export tail-expired: func() -> bool;
     export import-loan: async func(id: u32, value: own<item>) -> u32;
     export expired: func() -> bool;
     export transferred: func() -> bool;
