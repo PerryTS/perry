@@ -45,6 +45,7 @@ pub use scopes::{
     run_resource_scope_catching, try_enter_resource_scope, try_leave_resource_scope,
     try_run_resource_scope,
 };
+pub(crate) use scopes::{try_run_captured_promise_scope, try_run_promise_scope};
 
 const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
@@ -158,7 +159,7 @@ struct HookRecord {
 // thread resolves to, not the scanner's reach.
 per_test_global! {
     static HOOKS: LazyLock<Mutex<Vec<HookRecord>>> = LazyLock::new(|| Mutex::new(Vec::new()));
-    static GC_DESTROY_QUEUE: Mutex<VecDeque<(u64, bool)>> = Mutex::new(VecDeque::new());
+    static GC_DESTROY_QUEUE: Mutex<VecDeque<(u64, bool, Option<crate::async_context::JobDomainToken>)>> = Mutex::new(VecDeque::new());
     static ASYNC_WRAP_PROVIDERS: AtomicU64 = AtomicU64::new(0);
 }
 
@@ -1274,7 +1275,7 @@ pub fn promise_resolve(async_id: u64) {
 }
 
 fn destroy_with_kind(async_id: u64, is_promise: bool) {
-    let Some((serial, _)) = resource_state::destroy_notification(async_id) else {
+    let Some((serial, _, _)) = resource_state::destroy_notification(async_id) else {
         return;
     };
     emit_destroy_notification(serial, is_promise);
@@ -1305,11 +1306,18 @@ pub fn destroy_promise(async_id: u64) {
     destroy_with_kind(async_id, true);
 }
 
-fn queue_destroy_notification(serial: u64, promise: bool) {
+fn queue_destroy_notification(
+    serial: u64,
+    promise: bool,
+    mut domain: Option<crate::async_context::JobDomainToken>,
+) {
+    if !crate::async_context::job_domain::prepare_enqueue(&mut domain) {
+        return;
+    }
     GC_DESTROY_QUEUE
         .lock()
         .unwrap()
-        .push_back((serial, promise));
+        .push_back((serial, promise, domain));
 }
 fn emit_destroy_notification(serial: u64, promise: bool) {
     with_hook_callbacks(HookPhase::Destroy, promise, |callback| {
@@ -1322,13 +1330,24 @@ fn emit_destroy_notification(serial: u64, promise: bool) {
 }
 
 pub fn enqueue_gc_destroy(async_id: u64) {
-    if let Some((serial, promise)) = resource_state::destroy_notification(async_id) {
-        queue_destroy_notification(serial, promise);
+    if let Some((serial, promise, domain)) = resource_state::destroy_notification(async_id) {
+        queue_destroy_notification(serial, promise, domain);
     }
 }
 
 pub(crate) fn gc_destroy_work_pending() -> bool {
-    !GC_DESTROY_QUEUE.lock().unwrap().is_empty()
+    GC_DESTROY_QUEUE
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|(_, _, domain)| crate::async_context::job_domain::eligible(domain))
+}
+
+pub(crate) fn discard_cancelled_destroy_notifications() {
+    GC_DESTROY_QUEUE
+        .lock()
+        .unwrap()
+        .retain(|(_, _, domain)| !crate::async_context::job_domain::cancelled(domain));
 }
 
 pub fn drain_gc_destroy_queue() -> i32 {
@@ -1346,11 +1365,13 @@ pub fn drain_gc_destroy_queue() -> i32 {
     GC_DESTROY_QUEUE
         .lock()
         .unwrap()
-        .retain(|&(serial, promise)| {
-            if active_serials.contains(&serial) {
+        .retain(|(serial, promise, domain)| {
+            if active_serials.contains(serial)
+                || !crate::async_context::job_domain::eligible(domain)
+            {
                 true
             } else {
-                notifications.push((serial, promise));
+                notifications.push((*serial, *promise));
                 false
             }
         });

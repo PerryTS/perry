@@ -1,5 +1,6 @@
 //! The WIT contract shared by component binding generation and validation.
 //! TypeScript declarations never substitute `any` for an unsupported WIT type.
+pub mod canonical;
 mod guest_c;
 mod resolve;
 mod typescript;
@@ -8,6 +9,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 pub use guest_c::canonical_guest;
+#[doc(hidden)]
+pub use guest_c::experimental_async_guest;
 pub use resolve::{parse, parse_file};
 pub use typescript::{typescript, typescript_guest};
 
@@ -41,6 +44,13 @@ pub struct Function {
     pub params: Vec<Field>,
     pub result: Option<Type>,
     pub kind: FunctionKind,
+    /// Canonical async calling convention; absent in legacy synchronous manifests.
+    #[serde(default, rename = "async", skip_serializing_if = "is_false")]
+    pub async_: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -94,6 +104,8 @@ pub enum Type {
         err: Option<Box<Type>>,
     },
     List(Box<Type>),
+    Future(Option<Box<Type>>),
+    Stream(Option<Box<Type>>),
     Resource,
     Own(String),
     Borrow(String),

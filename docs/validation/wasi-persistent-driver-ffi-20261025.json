@@ -1,0 +1,546 @@
+{
+  "scope": "ABI9 persistent C driver transport; existing TypeScript runtime remains on legacy entry points",
+  "baseRevision": "759da9e17583855ec5675599eac2ea5317ffdc4c",
+  "qualifiedSnapshot": "v258",
+  "finalDocumentationSnapshot": "v259",
+  "sourceFilesVerifiedExceptValidationLock": 38665,
+  "turnloopSourceFilesVerified": 1529,
+  "postQualificationDocumentationOnly": [
+    "changelog.d/PENDING-wasi-persistent-driver-ffi.md",
+    "docs/WASI_COMPONENTS.md"
+  ],
+  "shippingCargoLockSha256": "e2fea4dcc6c051c2b340d44015a7ee1cf3a388d572eb554bed8035cc17203599",
+  "shippingLockUnchanged": true,
+  "manifestsUnchanged": true,
+  "wasmtime": "48.0.7",
+  "componentHostAbi": 9,
+  "componentGuestAbi": 2,
+  "tests": {
+    "engineDevelopment": 149,
+    "engineProductionPanicAbort": 149,
+    "witDevelopment": 22,
+    "witProductionPanicAbort": 22,
+    "legacyRuntimeComponent": 45,
+    "legacyRuntimeAsyncHooks": 11,
+    "allTargetsClippy": true,
+    "strictTypescript": true,
+    "typescript": "5.9.3",
+    "productionExecution": "unprivileged uid/gid 65534, one test thread",
+    "tokioGate": "0 root edges/packages/source lines and standalone fixtures clean",
+    "normalDependencyTreeTokioFree": true,
+    "nodeVersionConsistency": true,
+    "changedFilesWithin2000LineCap": true,
+    "repositoryFileSizeGate": "fails on unchanged parent paths; no changed/new file exceeds 2000 lines"
+  },
+  "developmentPhases": [
+    {
+      "phase": "invalidate",
+      "exitCode": 0
+    },
+    {
+      "phase": "wit-tests",
+      "exitCode": 0
+    },
+    {
+      "phase": "engine-tests",
+      "exitCode": 0
+    },
+    {
+      "phase": "clippy",
+      "exitCode": 0
+    },
+    {
+      "phase": "wit-cli",
+      "exitCode": 0
+    },
+    {
+      "phase": "bindings",
+      "exitCode": 0
+    },
+    {
+      "phase": "typecheck",
+      "exitCode": 0
+    }
+  ],
+  "productionPhases": [
+    {
+      "phase": "invalidate-engine-wit",
+      "exitCode": 0
+    },
+    {
+      "phase": "build",
+      "exitCode": 0
+    },
+    {
+      "phase": "perry_wit",
+      "exitCode": 0
+    },
+    {
+      "phase": "perry_component_host",
+      "exitCode": 0
+    },
+    {
+      "phase": "tree",
+      "exitCode": 0
+    }
+  ],
+  "legacyRuntimePhases": [
+    {
+      "phase": "invalidate",
+      "exitCode": 0
+    },
+    {
+      "phase": "runtime-component-tests",
+      "exitCode": 0
+    },
+    {
+      "phase": "runtime-async-hooks-tests",
+      "exitCode": 0
+    }
+  ],
+  "negativeControls": {
+    "origin": [
+      {
+        "phase": "invalidate",
+        "exitCode": 0
+      },
+      {
+        "phase": "negative",
+        "exitCode": 101
+      }
+    ],
+    "cleanup": [
+      {
+        "phase": "invalidate",
+        "exitCode": 0
+      },
+      {
+        "phase": "negative",
+        "exitCode": 101
+      }
+    ]
+  },
+  "productionArtifacts": {
+    "perry_component_host": {
+      "path": "/root/codex-components-p2-20261021/turnloop-provider-target/prod/build/perry-component-host/96c241177e06800f/out/perry_component_host-96c241177e06800f",
+      "sha256": "34952478305b400663604c35db956d6f1f1dc02445884c0b21a49f08fa73dd55",
+      "fresh": false,
+      "frozenPath": "/root/codex-components-p2-20261021/perry-driver-ffi-v258-artifacts/perry_component_host-tests"
+    },
+    "perry_wit": {
+      "path": "/root/codex-components-p2-20261021/turnloop-provider-target/prod/build/perry-wit/527fd89bba1749a8/out/perry_wit-527fd89bba1749a8",
+      "sha256": "4b3388229ee182e937219598bcc5209a11b2abbad05699e3cbef20ded99278d2",
+      "fresh": false,
+      "frozenPath": "/root/codex-components-p2-20261021/perry-driver-ffi-v258-artifacts/perry_wit-tests"
+    }
+  },
+  "boundarySubjects": [
+    "ffi_driver_overlaps_calls_refreshes_origins_and_allows_queue_only_reentry",
+    "ffi_driver_keeps_post_return_context_and_reports_background_import_failure",
+    "ffi_driver_cancellation_distinguishes_queued_from_started_calls",
+    "ffi_driver_transports_compound_factories_and_partial_stream_writes",
+    "ffi_driver_routes_retirement_to_cleanup_frame_without_replacing_primary_error",
+    "ffi_driver_preflight_quota_null_output_and_mode_guards_preserve_queued_work",
+    "ffi_driver_explicit_disposal_reports_released_error_and_native_drop_calls_no_embedding"
+  ],
+  "behavior": {
+    "submission": "Queue-only owned JSON snapshot; decimal-string invocation ID; no Store borrow or guest/embedding code. Callback submission can execute in the same outer poll. Recursive poll/dispose is rejected before borrowing Store.",
+    "operations": [
+      "call",
+      "read",
+      "close",
+      "create",
+      "write",
+      "cancel-write",
+      "close-writer",
+      "abort-writer"
+    ],
+    "callbacks": "Explicit u64 invocation origin plus current-poll context token. Force embedding-stack Dispatcher for persistent instances including synchronous WIT worlds; initialize using async linker when dispatcher is present.",
+    "poll": "Native completed events, conservative retained IDs, active/retired state and driver error. Drain replies before pruning invocation contexts; retention is not task completion. Null output or missing contexts rejects before execution.",
+    "errors": "Ordered deduplicated failedOrigins includes async rejection channel origin; original operation error survives throwing retirement cleanup. Cleanup uses current cleanup context, component-wide origin zero.",
+    "ownership": "Real C transport test exchanges compound wide-integer/Unicode/bytes future payload and a partial string stream. Native tokens retain existing actual type checks and transactional ownership.",
+    "cancellation": "Discarding a queued observer skips its request; dropping a started observer requests Store retirement. Accepted soft controls remain executable.",
+    "lifetime": "Explicit dispose reports RELEASED_ERROR for a failing embedding destructor; native host_drop invokes no embedding callbacks. Fresh context tokens are reset after each call.",
+    "legacy": "Retain legacy constructors and entry points within matching ABI9 table; reject execution/resource/HTTP operations against persistent handles. No TypeScript runtime switch in this slice."
+  },
+  "limitations": [
+    "TypeScript per-origin traced frames, ALS/first-JS-error routing, owned future/stream wrappers and producer interfaces remain unfinished.",
+    "Deferred resource collection and HTTP have not migrated to persistent driver commands; legacy runtime/HTTP behavior retained.",
+    "Current Linux engine/runtime regression checks do not qualify current combined compiler/static archives, moving GC, guest async adapters, other platforms or final packages.",
+    "Turnloop provider sources remain immutable validation patches; no releases performed.",
+    "Shipping-lock crypto-bigint RUSTSEC-2026-0387 remains open; manifest and shipping lock unchanged; no audit waiver or publish-age override.",
+    "Full goal remains active; no readiness, release or merge authorization inferred."
+  ],
+  "developmentFailuresRetained": [
+    "v253 assertion used incorrect tagged JSON representation for WIT types",
+    "v254 assertion also needed to resolve preserved WIT aliases",
+    "v256 all 148 engine tests passed; Clippy rejected a test helper loop that returned its first iteration; replaced with first()"
+  ],
+  "sourceManifestSha256": "0a1ccde429400d16c1875823d6ffe38e83a5c5fb39afbb8d9377d6561a6f9b6c",
+  "finalManifestSha256": "e8ae8c930246c39563aa08546b011b16159344f6cca8d0dea1eb5884b921cece",
+  "turnloopSourceManifestSha256": "71ee0f2692d2e9f02ec3710c3c9c380dba2f9ece84ab55242542e25b09d5ea46",
+  "validationLockSha256": "9b33197bcb5a09b4ae9f5c1a9a7f0dd2678be1f8dcba8fefb9d81f3942d8410b",
+  "patchConfigSha256": "fc4a5afe7272cfc9eaa5e96448188bf2c42ec8d62ec0728182932f515201bcaa",
+  "members": {
+    "development/v253/engine-tests.log": {
+      "sha256": "37fe242e93fc8f3932f9ce09a57cf2fe19482a12cc5a37d4e4b07349d960add1",
+      "bytes": 20669
+    },
+    "development/v253/invalidate.log": {
+      "sha256": "0fe6b48e32eec6fb91545e46f7f80a29895f0ab9ee6587d9985ca21364b7fb0e",
+      "bytes": 83
+    },
+    "development/v253/phases.json": {
+      "sha256": "ea362c52a83f636518aca24a4599ace3fdecdd3202c485f0cb616c1de01720f0",
+      "bytes": 168
+    },
+    "development/v253/wit-tests.log": {
+      "sha256": "f4f7e79cec2990283953842d781ab1c4fb51f83705673804ace1c40ef0ab2704",
+      "bytes": 6603
+    },
+    "development/v254/engine-tests.log": {
+      "sha256": "3edd83da46f8937af9321389d8ef9abc61d6aac6f8abcc5163dada5be4b0483f",
+      "bytes": 20554
+    },
+    "development/v254/invalidate.log": {
+      "sha256": "6803085f644d938a4966df10c7f6d74abffe66314db4decc8354010873f3d335",
+      "bytes": 83
+    },
+    "development/v254/phases.json": {
+      "sha256": "ea362c52a83f636518aca24a4599ace3fdecdd3202c485f0cb616c1de01720f0",
+      "bytes": 168
+    },
+    "development/v254/wit-tests.log": {
+      "sha256": "027f12f813f60788a448a6287cb36e623480445ee99a6d8189b7c0597cf59045",
+      "bytes": 6603
+    },
+    "development/v256/clippy.log": {
+      "sha256": "b68f892414487f716ce8adc1d116cee2cdb1e3129f18c3eb5ef97f8eb99ba35d",
+      "bytes": 5556
+    },
+    "development/v256/engine-tests.log": {
+      "sha256": "9d93610bbdbdeabe74249343beef84f35158533b5afa37387e08f3422a4a2101",
+      "bytes": 20179
+    },
+    "development/v256/invalidate.log": {
+      "sha256": "6803085f644d938a4966df10c7f6d74abffe66314db4decc8354010873f3d335",
+      "bytes": 83
+    },
+    "development/v256/phases.json": {
+      "sha256": "87160046ea289aec1b04145a8999514784e53c58595589a5e1ae1c0cc755c459",
+      "bytes": 218
+    },
+    "development/v256/wit-tests.log": {
+      "sha256": "1eb76f1c9fe2b5ba67f2ca696a7de6909b8605d38472f0b36b25ca0655aeed69",
+      "bytes": 6603
+    },
+    "development/v258/bindings.log": {
+      "sha256": "df4fce3a2617a400261c11f8e8d0cf1cf1818af4955f7efc79e8675541c3e847",
+      "bytes": 45
+    },
+    "development/v258/clippy.log": {
+      "sha256": "dc854ea25ec1fc08012382f21fda2de537aa6d4b53b877e6214a3d1f22d0a16f",
+      "bytes": 4644
+    },
+    "development/v258/engine-tests.log": {
+      "sha256": "db622a6045944bfddec60d8146702d86c518333292331e38359fbb6470c57eb1",
+      "bytes": 20298
+    },
+    "development/v258/invalidate.log": {
+      "sha256": "ddeeccfa3e2b396ceddc029ecc36b23bbb19941fb3f56d51495c253dca97984f",
+      "bytes": 83
+    },
+    "development/v258/phases.json": {
+      "sha256": "f9944cd53ef88c1f3ec1a1d1a6e5955f7f04399f8d2957fd0e655a3f318ab06e",
+      "bytes": 372
+    },
+    "development/v258/typecheck/generated/bindings.ts": {
+      "sha256": "48619a5a79cb7cb7732ca61102947dc11a8cc875ce96cfe39f20bd2220cb513b",
+      "bytes": 4112
+    },
+    "development/v258/typecheck/generated/guest.ts": {
+      "sha256": "af6183533059cb638a34cc452efad842c1a1552ef7e14a80ea8a4102fae9d951",
+      "bytes": 3266
+    },
+    "development/v258/typecheck/generated/world.json": {
+      "sha256": "f017262e5153ce478af7e9774ede1a8a305b60d96fa6d51b21e894f8e6b136f0",
+      "bytes": 2977
+    },
+    "development/v258/typecheck/tsconfig.json": {
+      "sha256": "58eff588a3c5b5d81690300ad2a8f16ecd681e4228f9a8401e082fecfcacc481",
+      "bytes": 530
+    },
+    "development/v258/typecheck/typecheck.ts": {
+      "sha256": "7db75513776920a75cfd664346a561439bde3ba892932409da5e2786f0f17344",
+      "bytes": 1570
+    },
+    "development/v258/typecheck/world.wit": {
+      "sha256": "bb9a38bcf36ea263746c7fa5e274a7708b6784b26589ed9f698eaa136cfb2727",
+      "bytes": 365
+    },
+    "development/v258/typecheck.log": {
+      "sha256": "df4fce3a2617a400261c11f8e8d0cf1cf1818af4955f7efc79e8675541c3e847",
+      "bytes": 45
+    },
+    "development/v258/wit-cli.log": {
+      "sha256": "3e9f8521402297e6da7fd1a90859281d748f5430c74c456ffbbdc86b2d98948e",
+      "bytes": 4507
+    },
+    "development/v258/wit-tests.log": {
+      "sha256": "023660c33bfc4860de70b1a1e82752412a3f7054f713b7170a4e353c2deffbba",
+      "bytes": 6603
+    },
+    "production/build.log": {
+      "sha256": "6b696a4b82260a191e9aed9775975f84f9930c85ae379f933470df417a78459a",
+      "bytes": 265468
+    },
+    "production/invalidate-engine-wit.log": {
+      "sha256": "1dc4d724b8d284bcb3ea6660b86c2e44316a9afc20053eb9a93744bb4812a4e6",
+      "bytes": 82
+    },
+    "production/perry_component_host-binary.json": {
+      "sha256": "8ca222aa0c27f482a0b78a2455814ac0f19143f6d2b933c8eaea785c0e9573cd",
+      "bytes": 265
+    },
+    "production/perry_component_host-tests.log": {
+      "sha256": "0a0a2d2bfce22e45fc0ae65a26e5b152cc6aeedf37957a777fedee4d05dc5cac",
+      "bytes": 15506
+    },
+    "production/perry_wit-binary.json": {
+      "sha256": "fe773164f059096e0f27ca97d06512b3a02d103755f8e1f3a457426bdfaeae56",
+      "bytes": 243
+    },
+    "production/perry_wit-tests.log": {
+      "sha256": "3ff5a9600103dda6546a13dea6edd747c4b20a9149cd97872df00d0326d30515",
+      "bytes": 1971
+    },
+    "production/phases.json": {
+      "sha256": "d00c2e369b040c60ad77d6038ccd37f870b32e99c2e3f040ff4e966ea0dab61f",
+      "bytes": 282
+    },
+    "production/tree.log": {
+      "sha256": "8d3b01ea7a1b51a8939f1e1c8ec95a04407170497b548e1239ec3e119f135bb9",
+      "bytes": 12498
+    },
+    "legacy-runtime/invalidate.log": {
+      "sha256": "37842aff315a9002433365486f0a6624f8b68cfbb6b7cbb85c41d9759e0d7720",
+      "bytes": 83
+    },
+    "legacy-runtime/phases.json": {
+      "sha256": "d103dbd9343c6df640105cf2023aa88bed3e1e3cfcb02a053cc5bc9770f1cccc",
+      "bytes": 193
+    },
+    "legacy-runtime/runtime-async-hooks-tests.log": {
+      "sha256": "3c58b8ff099890ea64ecb6e08b0a10c3c5e48c954766f5aa0542691e58d31233",
+      "bytes": 50140
+    },
+    "legacy-runtime/runtime-component-tests.log": {
+      "sha256": "4c430f350dbcf6861c51652e345e63f757deb5226a598100e650f296747baca1",
+      "bytes": 54206
+    },
+    "negative/origin/invalidate.log": {
+      "sha256": "4b3fed6986905432a5945c9453da7fdd4e272899e0a1241a59694bb4ffa5b2b0",
+      "bytes": 83
+    },
+    "negative/origin/negative.log": {
+      "sha256": "f7f18dc22272bd819ae1e2c0c0a6de103e976d232291773bedcb049f58ec8ea9",
+      "bytes": 5583
+    },
+    "negative/origin/phases.json": {
+      "sha256": "39b53cc41711b2ac0debb9380111c85bbf5f337aa1152114edc63bfd9b2737b1",
+      "bytes": 111
+    },
+    "negative/origin/callbacks.rs": {
+      "sha256": "1af9f71734e642ba69df7245e859cc842dad4b541e53f0a0ee6e00514971cf3f",
+      "bytes": 1687
+    },
+    "negative/cleanup/invalidate.log": {
+      "sha256": "093a2e08383d12afa3c67745966f9bba26257f685d895859fe6011a6c1d0834f",
+      "bytes": 82
+    },
+    "negative/cleanup/negative.log": {
+      "sha256": "39b427a5c2f6d2e0aa0aedec32d46be70ddc0d6b890a5b15957a6b85d0588792",
+      "bytes": 5632
+    },
+    "negative/cleanup/phases.json": {
+      "sha256": "39b53cc41711b2ac0debb9380111c85bbf5f337aa1152114edc63bfd9b2737b1",
+      "bytes": 111
+    },
+    "negative/cleanup/driver.rs": {
+      "sha256": "2028756f636d06c1b08aa7be0cd8d53df0ed96311afe7fd96d7b2941a07b07e2",
+      "bytes": 10439
+    },
+    "security/Cargo.lock": {
+      "sha256": "e2fea4dcc6c051c2b340d44015a7ee1cf3a388d572eb554bed8035cc17203599",
+      "bytes": 258501
+    },
+    "security/audit-baseline.log": {
+      "sha256": "00c765eeb96938fa9018defdeacc685422123d5247132ad85aaa8a5ae80f6a21",
+      "bytes": 2948
+    },
+    "security/audit.log": {
+      "sha256": "df3e75773d2dddca85303a7b626ffd549cac2038c17f691547c24d9236a9f64c",
+      "bytes": 3040
+    },
+    "security/component-tree.log": {
+      "sha256": "8b45cad6b7ad35c6f1b4bb9c67146371b764e8da71e27c18caaa2ceca30973bf",
+      "bytes": 11858
+    },
+    "security/crypto-new-tree.log": {
+      "sha256": "c69ed9071b22a5a865a82a13a45154567524852a83690c0f2674dcc5a811293d",
+      "bytes": 505
+    },
+    "security/crypto-old-tree.log": {
+      "sha256": "b3b5fd925ae709377e2a2a650dd47c21fcff639f445f2e5e4987af13b9663caf",
+      "bytes": 908
+    },
+    "security/deny.log": {
+      "sha256": "e6ff654c545198a09478fb3b1d29421064d9c172707e3c2cce67784871d2ebe6",
+      "bytes": 1095522
+    },
+    "security/lock.log": {
+      "sha256": "749f9ca3db5fe38d9c2d9aa6eeed688688d1ef921d6ddb5f164a57932f98154a",
+      "bytes": 467
+    },
+    "snapshots/perry-http-runtime-v258-manifest.json": {
+      "sha256": "0a1ccde429400d16c1875823d6ffe38e83a5c5fb39afbb8d9377d6561a6f9b6c",
+      "bytes": 5674628
+    },
+    "snapshots/perry-http-runtime-v258-overlay.tar.gz": {
+      "sha256": "f4705e68d88dddb4649bfef3e21b090d0596e25c6705b3e17b41a4d5e4d81b0f",
+      "bytes": 906768
+    },
+    "snapshots/perry-http-runtime-v259-manifest.json": {
+      "sha256": "e8ae8c930246c39563aa08546b011b16159344f6cca8d0dea1eb5884b921cece",
+      "bytes": 5674753
+    },
+    "snapshots/perry-http-runtime-v259-overlay.tar.gz": {
+      "sha256": "87f409c0a8b3be0e95694551c1cf27547b5651f9279b4be8bde02a6048b8bf66",
+      "bytes": 907880
+    },
+    "source/crates/perry-component-host/src/ffi/async_calls/tests.rs": {
+      "sha256": "5ec73c378090a514cec8d265d6691abad0ccacf0dd0712931ba1bedf3dda5bb2",
+      "bytes": 7664
+    },
+    "source/crates/perry-component-host/src/ffi/async_calls.rs": {
+      "sha256": "da56c0b343eed1f69448e172a9d7a8b58236301002205bc16917c242d141d2b5",
+      "bytes": 11427
+    },
+    "source/crates/perry-component-host/src/ffi/callbacks.rs": {
+      "sha256": "28fb385bad472717a89c87106c7e0f9ee12e7f5d2f5b9d11b38788cab4898626",
+      "bytes": 1741
+    },
+    "source/crates/perry-component-host/src/ffi/driver/tests.rs": {
+      "sha256": "b1fabfb10f0730b32e622a7c52f1b9d64bc964228e7a903edc062f085b1e6067",
+      "bytes": 21832
+    },
+    "source/crates/perry-component-host/src/ffi/driver.rs": {
+      "sha256": "7cb18719a39f6259cc6e785ebe52376d08e4aa21ba14498d3f09139d7530357b",
+      "bytes": 10386
+    },
+    "source/crates/perry-component-host/src/ffi/http/options.rs": {
+      "sha256": "bcef64f5a330dadcf8e667fd764620aa48c42a73233658fad0a4c620eeeb9c38",
+      "bytes": 2742
+    },
+    "source/crates/perry-component-host/src/ffi/http/tests/p3.rs": {
+      "sha256": "555cc2ef312302eab08421a96d51fba5393fdded9b01ba2b33abcb7e5114a74b",
+      "bytes": 9045
+    },
+    "source/crates/perry-component-host/src/ffi/http/tests.rs": {
+      "sha256": "8e1c2fde6625b07db0e7e044d930d1df02c5b0fd9de16a952775e969a26b02f3",
+      "bytes": 12974
+    },
+    "source/crates/perry-component-host/src/ffi/http.rs": {
+      "sha256": "8b737ed83a715fe44b8c6d20d8d08005b408e1816f489e41783af80abe7c608a",
+      "bytes": 14512
+    },
+    "source/crates/perry-abi/src/component_host.rs": {
+      "sha256": "94db3d914e177cd036324608630fbfd83fea0ac1c24307dd2501a163a73ba771",
+      "bytes": 8552
+    },
+    "source/crates/perry-component-host/src/ffi.rs": {
+      "sha256": "fb85d57276e6c1ffd1cba22021edaf8f07f0e4f1567426d5b130c40c7343b25e",
+      "bytes": 20526
+    },
+    "source/crates/perry-component-host/src/driver.rs": {
+      "sha256": "fafd71546f414080dfb667624112fce33f6bc2c832af1c615e38c0eea74d8deb",
+      "bytes": 13724
+    },
+    "source/crates/perry-component-host/src/lib.rs": {
+      "sha256": "a3837e90beed1d38b8d0fa695cd418fa16a06e39afce2a1f9456140ebe67b7cf",
+      "bytes": 18783
+    },
+    "source/crates/perry-component-host/src/host_resource_tests.rs": {
+      "sha256": "103c5cb222b6c91f5a6747862c9980c72a0f4391b466f3722b4c3a6a3bf96414",
+      "bytes": 13932
+    },
+    "source/crates/perry-component-host/Cargo.toml": {
+      "sha256": "b57b9f1dbf0244a20c17eecb8f4483d7a78339923c3dad7c047da5e7738c5819",
+      "bytes": 795
+    },
+    "source/Cargo.toml": {
+      "sha256": "1cc7f5b244a66d940dcab64b6e7f40ac3693ba0f26b4e0fb1cb1ccce5a4f256e",
+      "bytes": 30952
+    },
+    "source/Cargo.lock": {
+      "sha256": "9b33197bcb5a09b4ae9f5c1a9a7f0dd2678be1f8dcba8fefb9d81f3942d8410b",
+      "bytes": 258641
+    },
+    "source/.cargo/config.toml": {
+      "sha256": "f78759b1721b9116d5024ea3c52e7f8a57b0fa6dbfea95af53e9c5c2accbcbc0",
+      "bytes": 4738
+    },
+    "source/rust-toolchain.toml": {
+      "sha256": "02d08527a444fc4330aecf139695ef487fed9059cc1473f65e67e64a782cc348",
+      "bytes": 876
+    },
+    "tools/perry-driver-ffi-prod.py": {
+      "sha256": "ae8035152d4dda646548b4b3dad374898d08c9dd5ed737f6f6d48f35b81cd0d0",
+      "bytes": 8359
+    },
+    "tools/perry-driver-ffi-negative.py": {
+      "sha256": "4852b0d85c8c6c695853f795bbb454fe60c8d3b10b489e411ff60fbe715fc8e0",
+      "bytes": 2682
+    },
+    "tools/perry-driver-ffi-verify.py": {
+      "sha256": "799a963e394b4af77bfcbeb0cb1647fedce72f02367057d6ec49e2ddc33ca67f",
+      "bytes": 11240
+    },
+    "tools/perry-driver-ffi-runtime-check.py": {
+      "sha256": "676ebd01945bcc6d37b38b61f0af3258192d276ae78784adf5fbd2e2e763cb6b",
+      "bytes": 2247
+    },
+    "tools/perry-generic-async-check.py": {
+      "sha256": "4fdc625ea6e87a282d7bc8248fac7b49f2eb31826980cb63579c5fd257c1fe0e",
+      "bytes": 2962
+    },
+    "tools/perry-p3-http-bridge-prepare.py": {
+      "sha256": "5a26b049c35d9469c5ac7b2b4e7a289a8cda20097f493e80753dd0e04c01ab75",
+      "bytes": 1997
+    },
+    "tools/turnloop-http-case-v3-manifest.json": {
+      "sha256": "71ee0f2692d2e9f02ec3710c3c9c380dba2f9ece84ab55242542e25b09d5ea46",
+      "bytes": 207761
+    },
+    "tools/turnloop-http-case-v3-patch.toml": {
+      "sha256": "fc4a5afe7272cfc9eaa5e96448188bf2c42ec8d62ec0728182932f515201bcaa",
+      "bytes": 340
+    },
+    "checks/tokio.log": {
+      "sha256": "fe4f2bd9190b963378e83eeb8c9f38d5f4b08ff5522c06bbf3b6e3ece97bbf61",
+      "bytes": 138
+    },
+    "checks/node-version.log": {
+      "sha256": "c5de53a384a6ebd59c492797b73ac9386059d4a59c9e773ac0b343da51785dc3",
+      "bytes": 2481
+    },
+    "checks/file-size.log": {
+      "sha256": "55d717db298ca6fa4e868f701947b560def2009b99707e3d27097da3f8d6845b",
+      "bytes": 1388
+    },
+    "checks/changed-files.json": {
+      "sha256": "567660ecde021b223b4baf4730af4dcef0a0f5cc499fa15e2aa8216421ba0997",
+      "bytes": 593
+    }
+  }
+}

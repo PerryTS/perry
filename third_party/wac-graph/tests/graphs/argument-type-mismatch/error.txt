@@ -1,0 +1,5 @@
+failed to add argument edge from source node 0 to target node 1 referenced in argument 0 for test case `argument-type-mismatch`
+
+Caused by:
+    0: mismatched instantiation argument `a`
+    1: expected instance, found function

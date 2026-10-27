@@ -11,6 +11,8 @@ pub(super) struct Context {
     pub host: *mut c_void,
     pub world: Value,
     pub alive: bool,
+    pub async_active: bool,
+    pub persistent: Option<super::persistent::State>,
     // Native identity metadata only; never contains managed JS values.
     pub pending_resource_drops: Vec<Value>,
     pub pending_collections: Vec<Value>,
@@ -34,6 +36,8 @@ pub(super) fn publish(world: Value, imports: f64) -> f64 {
         host: std::ptr::null_mut(),
         world,
         alive: true,
+        async_active: false,
+        persistent: None,
         pending_resource_drops: Vec::new(),
         pending_collections: Vec::new(),
     }));
@@ -124,10 +128,18 @@ pub(super) fn finish_disposal(owner: f64, status: i32) {
         let owner = scope.root_nanbox_f64(owner);
         let error = scope.root_nanbox_f64(undefined());
         let cleanup = crate::exception::catch_js_throw(|| {
+            if super::persistent::enabled(owner.get_nanbox_f64()) {
+                super::persistent::imports::clear(owner.get_nanbox_f64());
+            } else {
+                super::asynchronous::imports::clear(owner.get_nanbox_f64());
+            }
             super::host_resource::payload::dispose_owner(owner.get_nanbox_f64())
         });
         if let Err(thrown) = cleanup {
             error.set_nanbox_f64(thrown);
+        }
+        unsafe {
+            (*get(owner.get_nanbox_f64())).alive = false;
         }
         set_imports(owner.get_nanbox_f64(), undefined());
         unsafe {

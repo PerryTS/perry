@@ -1,0 +1,15 @@
+package foo:bar;
+
+interface baz {
+    resource x;
+}
+
+interface qux {
+    use baz.{x};
+    f: func() -> x;
+}
+
+world w {
+    import qux;
+    export qux;
+}

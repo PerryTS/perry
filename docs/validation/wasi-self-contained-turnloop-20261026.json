@@ -1,0 +1,275 @@
+{
+  "date": "2026-10-26",
+  "scope": "Self-contained root-workspace and standalone-fixture provider builds using qualified Turnloop source repairs",
+  "baseCommit": "988568936e006509223e093799df895f1afc47d7",
+  "platform": "Linux x86_64",
+  "snapshots": {
+    "provider": "v386",
+    "standaloneFixture": "v387"
+  },
+  "externalCargoOverride": false,
+  "shippingLockUnchangedDuringQualification": true,
+  "source": {
+    "manifest": "third_party/turnloop/source-manifest.json",
+    "selectedRustFiles": 80,
+    "byteIdenticalToPreviouslyQualifiedSources": true,
+    "registryPackages": [
+      {
+        "crate": "turnloop",
+        "version": "0.1.0-alpha.9",
+        "registryArchiveSha256": "1c31584700d452b02385d31829045ac5a5369080617761cc2f368baf50f98782",
+        "registryArchiveBytes": 281041
+      },
+      {
+        "crate": "turnloop-http",
+        "version": "0.1.0-alpha.9",
+        "registryArchiveSha256": "7dc14bd5b84fd4b7f99251eb35764949eeba7c34e2b799c1a7cd6354a58b3381",
+        "registryArchiveBytes": 584303
+      }
+    ],
+    "unchangedRegistryPackage": {
+      "crate": "turnloop-io",
+      "version": "0.1.0-alpha.9",
+      "registryArchiveSha256": "381c4502cdcb2a813ae95948a5e06d7091d35298d7d1d73eb6e1f41e941d9056",
+      "registryArchiveBytes": 26513
+    }
+  },
+  "unitTests": {
+    "development": {
+      "perryWasi": 277,
+      "componentHost": 189,
+      "componentIo": 26,
+      "wit": 22
+    },
+    "productionPanicAbort": {
+      "perryWasi": 277,
+      "componentHost": 189,
+      "componentIo": 25,
+      "wit": 22
+    },
+    "uid": 65534,
+    "gid": 65534
+  },
+  "phases": [
+    {
+      "phase": "tree",
+      "exitCode": 0
+    },
+    {
+      "phase": "dev-build",
+      "exitCode": 0
+    },
+    {
+      "phase": "dev-perry_wit",
+      "exitCode": 0
+    },
+    {
+      "phase": "dev-perry_component_io",
+      "exitCode": 0
+    },
+    {
+      "phase": "dev-perry_component_host",
+      "exitCode": 0
+    },
+    {
+      "phase": "dev-perry_wasi",
+      "exitCode": 0
+    },
+    {
+      "phase": "prod-build",
+      "exitCode": 0
+    },
+    {
+      "phase": "prod-perry_wit",
+      "exitCode": 0
+    },
+    {
+      "phase": "prod-perry_component_io",
+      "exitCode": 0
+    },
+    {
+      "phase": "prod-perry_component_host",
+      "exitCode": 0
+    },
+    {
+      "phase": "prod-perry_wasi",
+      "exitCode": 0
+    },
+    {
+      "phase": "doctests",
+      "exitCode": 0
+    },
+    {
+      "phase": "clippy",
+      "exitCode": 0
+    }
+  ],
+  "testArtifacts": [
+    {
+      "profile": "dev",
+      "crate": "perry_wit",
+      "path": "/root/codex-components-p2-20261021/perry-vendored-provider-v386-artifacts/dev-perry_wit",
+      "sha256": "23e87838532e80f73cf017ec4475f04e94c66ebc556b9d190bd984f38af938ab",
+      "summary": "test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s",
+      "uid": 65534,
+      "gid": 65534
+    },
+    {
+      "profile": "dev",
+      "crate": "perry_component_io",
+      "path": "/root/codex-components-p2-20261021/perry-vendored-provider-v386-artifacts/dev-perry_component_io",
+      "sha256": "01d68f2fb8712ba99fe8940fd4aa81a4885c848968e3a4f777584f33bb6dadc3",
+      "summary": "test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s",
+      "uid": 65534,
+      "gid": 65534
+    },
+    {
+      "profile": "dev",
+      "crate": "perry_component_host",
+      "path": "/root/codex-components-p2-20261021/perry-vendored-provider-v386-artifacts/dev-perry_component_host",
+      "sha256": "d30a2df7b1ac6b6427542ca475b23d7a89724d13534aa22007290d417988ce1c",
+      "summary": "test result: ok. 189 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 32.70s",
+      "uid": 65534,
+      "gid": 65534
+    },
+    {
+      "profile": "dev",
+      "crate": "perry_wasi",
+      "path": "/root/codex-components-p2-20261021/perry-vendored-provider-v386-artifacts/dev-perry_wasi",
+      "sha256": "18d2f3009a456ceb7d35a3191551b196a832f57324af594dc502537677c45284",
+      "summary": "test result: ok. 277 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.56s",
+      "uid": 65534,
+      "gid": 65534
+    },
+    {
+      "profile": "prod",
+      "crate": "perry_wit",
+      "path": "/root/codex-components-p2-20261021/perry-vendored-provider-v386-artifacts/prod-perry_wit",
+      "sha256": "c8d23d89146669da1ae04ad723d576f79aeb6d0184ea3a92edd11a8774dac271",
+      "summary": "test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s",
+      "uid": 65534,
+      "gid": 65534
+    },
+    {
+      "profile": "prod",
+      "crate": "perry_component_io",
+      "path": "/root/codex-components-p2-20261021/perry-vendored-provider-v386-artifacts/prod-perry_component_io",
+      "sha256": "8cb68349a26f529125bfe5805e7848777599a1b116491a799f02156db9b915ca",
+      "summary": "test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s",
+      "uid": 65534,
+      "gid": 65534
+    },
+    {
+      "profile": "prod",
+      "crate": "perry_component_host",
+      "path": "/root/codex-components-p2-20261021/perry-vendored-provider-v386-artifacts/prod-perry_component_host",
+      "sha256": "727c83353749b153844d89681c2ddc29ada480e3a632e8c6a65bc97408829945",
+      "summary": "test result: ok. 189 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.11s",
+      "uid": 65534,
+      "gid": 65534
+    },
+    {
+      "profile": "prod",
+      "crate": "perry_wasi",
+      "path": "/root/codex-components-p2-20261021/perry-vendored-provider-v386-artifacts/prod-perry_wasi",
+      "sha256": "ac32785b6e111a7ccefce0611f3efe18383cafca48b9e994dfeef1e44f48115e",
+      "summary": "test result: ok. 277 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.99s",
+      "uid": 65534,
+      "gid": 65534
+    }
+  ],
+  "standaloneFixture": {
+    "build": "cargo build --locked --release with fixture-local patches and no external configuration",
+    "typedCalls": 51,
+    "composedCalls": 51,
+    "guestSnapshot": "v186",
+    "freshGuestCompilation": false,
+    "uid": 65534,
+    "gid": 65534,
+    "artifacts": {
+      "host": {
+        "path": "/root/codex-components-p2-20261021/perry-vendored-fixture-v387-artifacts/host",
+        "sha256": "7d819c6bc9941fe4b92a70a1f6de7df8f798d577adb21d4876b7897b3edc316c"
+      },
+      "typed": {
+        "path": "/root/codex-components-p2-20261021/perry-async-runtime-v186/wasm/guest/transform/transform.component.wasm",
+        "sha256": "69c690a9dcb5c4baff61dbd8b37164de6c94435cc5ac90ffe1bf60b4402ab682",
+        "guestSnapshot": "v186"
+      },
+      "composed": {
+        "path": "/root/codex-components-p2-20261021/perry-async-runtime-v186/wasm/guest/transform/composed.component.wasm",
+        "sha256": "2b279ab869b442e476fd1cb4de76f4c355e138f67c9f0a797fd8122e5cbe1476",
+        "guestSnapshot": "v186"
+      }
+    },
+    "script": "scripts/component_guest_acceptance.py::prepare_rust_host_manifest"
+  },
+  "evidenceArchives": [
+    {
+      "file": "perry-vendored-provider-v386-evidence.tar.gz",
+      "sha256": "f0c6e1a55f4cf19be2cfd0fb6db429a093f0d033590582dda54543a78b524ecd",
+      "bytes": 2717382,
+      "verifiedMembers": 138,
+      "allMembersVerifiedLocally": true
+    },
+    {
+      "file": "perry-vendored-fixture-v387-evidence.tar.gz",
+      "sha256": "ec947b752cf41d4cdaf216b5697bcf175c8e4ecf40c88c3e3d48dd6b7dc43958",
+      "bytes": 1746609,
+      "verifiedMembers": 20,
+      "allMembersVerifiedLocally": true
+    }
+  ],
+  "lint": [
+    {
+      "gate": "address",
+      "exitCode": 1,
+      "sha256": "9ed7255453b910401c7c49ae78b97d438169d390b3321eb349e4bce1f9be05ea",
+      "byteIdenticalToQualifiedParent": true
+    },
+    {
+      "gate": "holders",
+      "exitCode": 1,
+      "sha256": "d545b30e51168a7cbe0e17576898ad9ba3ee397b583ad7de0ffeff1fd6a62b48",
+      "byteIdenticalToQualifiedParent": true
+    },
+    {
+      "gate": "size",
+      "exitCode": 1,
+      "sha256": "55d717db298ca6fa4e868f701947b560def2009b99707e3d27097da3f8d6845b",
+      "byteIdenticalToQualifiedParent": true
+    },
+    {
+      "gate": "tokio",
+      "exitCode": 0,
+      "sha256": "fe4f2bd9190b963378e83eeb8c9f38d5f4b08ff5522c06bbf3b6e3ece97bbf61"
+    },
+    {
+      "gate": "node-pin",
+      "exitCode": 0,
+      "sha256": "c5de53a384a6ebd59c492797b73ac9386059d4a59c9e773ac0b343da51785dc3"
+    },
+    {
+      "gate": "diff",
+      "exitCode": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "vendorFileSizeExemption": {
+    "path": "third_party/turnloop/turnloop/src/driver.rs",
+    "reason": "Preserve the exact qualified upstream module layout for source comparison; 2612 lines."
+  },
+  "postQualificationChanges": [
+    "Documentation, this receipt and changelog fragment.",
+    "Remove unused package-local Cargo.lock files; workspace and fixture lockfiles are unchanged.",
+    "Trim one trailing space in the HPACK corpus copyright line; no license text or executable source changes."
+  ],
+  "limitations": [
+    "Async Perry-authored guest adapters, scheduling, canonical suspension, cancellation and future/stream guest values remain unfinished.",
+    "This qualifies source selection, provider/component unit tests and a rebuilt standalone Rust host against frozen synchronous Perry guests; it is not a new complete compiler/runtime/package or WASI guest execution sweep.",
+    "Other host platforms and final release packages require qualification.",
+    "Rust applications embedding these source crates from a separate workspace must declare the same patches in their own root manifest; emitted component consumers need no Cargo patches.",
+    "Existing address-class, root-holder and file-size failures retain byte-identical output; the only added file-size exemption is the documented vendored driver.",
+    "Existing security debt remains open."
+  ]
+}

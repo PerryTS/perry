@@ -129,7 +129,7 @@ pub extern "C" fn js_promise_run_before_exit_checkpoint() -> i32 {
         // A rejection listener can queue more jobs after the ordinary job
         // drain. Finish those here too; microtasks alone must not re-emit
         // beforeExit as if a new timer/I/O turn had occurred.
-        if TASK_QUEUE.with(|queue| queue.borrow().is_empty())
+        if !super::job_queue::eligible_task_pending()
             && !crate::builtins::queued_microtasks_pending()
         {
             return ran;
@@ -163,6 +163,28 @@ pub extern "C" fn js_promise_run_microtasks_await_loop() -> i32 {
 /// Complete one native callback before the next callback is delivered.
 pub fn js_promise_run_microtasks_checkpoint() -> i32 {
     run_microtasks(MicrotaskDrainMode::MicrotasksOnly)
+}
+
+/// Guest errors must leave the runner reusable before the C frame catches them.
+/// The ordinary pump has throw-capable cleanup phases outside its job trap.
+/// Save only native counters here; the existing landing pad restores JS scopes.
+#[inline(never)]
+pub(crate) fn guest_task_checkpoint() -> i32 {
+    debug_assert!(crate::async_context::job_domain::current().is_some());
+    let depths = MICROTASK_RUN_DEPTH.with(std::cell::Cell::get);
+    let bases = ASYNC_BOX_EXECUTION_REF_BASES.with(|bases| bases.borrow().len());
+    let refs = async_box_execution_ref_depth();
+    match crate::exception::catch_js_throw(|| run_microtasks(MicrotaskDrainMode::MicrotasksOnly)) {
+        Ok(count) => count,
+        Err(error) => {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let error = scope.root_nanbox_f64(error);
+            unwind_async_box_execution_refs(refs);
+            ASYNC_BOX_EXECUTION_REF_BASES.with(|stack| stack.borrow_mut().truncate(bases));
+            MICROTASK_RUN_DEPTH.with(|depth| depth.set(depths));
+            crate::exception::js_throw(error.get_nanbox_f64());
+        }
+    }
 }
 
 /// Drain pending promise/queueMicrotask jobs WITHOUT giving the nextTick
@@ -245,6 +267,7 @@ fn rooted_closure(h: &crate::gc::RuntimeHandle<'_>) -> ClosurePtr {
 }
 
 fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
+    let guest_task = crate::async_context::job_domain::current().is_some();
     mt_profile_register();
     bump(&MT_DRAIN_COUNT);
     if matches!(
@@ -282,7 +305,7 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
     });
     let mut ran = 0;
 
-    if !matches!(mode, MicrotaskDrainMode::BeforeExit) {
+    if !guest_task && !matches!(mode, MicrotaskDrainMode::BeforeExit) {
         ran += crate::bun_ffi::callback::drain_threadsafe_callbacks();
     }
 
@@ -296,15 +319,17 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
     ran += crate::weakref::drain_pending_finalization_jobs();
 
     // Native async tokens settle only through the main-thread handoff path.
-    if !matches!(mode, MicrotaskDrainMode::BeforeExit) {
+    if !guest_task && !matches!(mode, MicrotaskDrainMode::BeforeExit) {
         ran += super::native_async::js_native_async_process_pending();
     }
 
     // Process any scheduled resolutions (simulates async completions)
-    ran += super::combinators::process_scheduled_resolves();
+    if !guest_task {
+        ran += super::combinators::process_scheduled_resolves();
+    }
 
     // Process diagnostics_channel publishes queued by perry/thread workers.
-    if !matches!(mode, MicrotaskDrainMode::BeforeExit) {
+    if !guest_task && !matches!(mode, MicrotaskDrainMode::BeforeExit) {
         ran += crate::node_submodules::diagnostics_channel_process_pending();
 
         // Process pending thread results (from perry/thread spawn)
@@ -492,7 +517,7 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
             } else {
                 None
             };
-            let task = TASK_QUEUE.with(|q| q.borrow_mut().pop_front());
+            let task = super::job_queue::pop_task();
             if let Some(t) = t0 {
                 MT_TIME_NS_QUEUE.fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
             }
@@ -506,7 +531,7 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
                     let task_scope = crate::gc::RuntimeHandleScope::new();
                     let task_promise_handle = task_scope.root_nanbox_f64(boxed_promise(promise));
                     let task_value_handle = task_scope.root_nanbox_f64(value);
-                    enter_microtask_context(&task_context);
+                    enter_microtask_context(task_context);
                     let promise = rooted_promise(&task_promise_handle);
                     let value = task_value_handle.get_nanbox_f64();
                     unsafe {
@@ -691,7 +716,7 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
                     let state_arr_h = task_scope
                         .root_nanbox_f64(crate::value::js_nanbox_pointer(state.state_arr as i64));
                     let value_h = task_scope.root_nanbox_f64(value);
-                    enter_microtask_context(&task_context);
+                    enter_microtask_context(task_context);
                     state.result_promise = rooted_promise(&result_h);
                     state.results_arr =
                         crate::value::js_nanbox_get_pointer(results_h.get_nanbox_f64())
@@ -712,7 +737,7 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
                     let callback_handle = trap_scope.root_nanbox_f64(boxed_closure(callback));
                     let value_handle = trap_scope.root_nanbox_f64(value);
                     let next_handle = trap_scope.root_nanbox_f64(boxed_promise(next));
-                    enter_microtask_context(&task_context);
+                    enter_microtask_context(task_context);
                     let callback = rooted_closure(&callback_handle);
                     let value = value_handle.get_nanbox_f64();
                     let next = rooted_promise(&next_handle);
@@ -845,7 +870,7 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
                     }
                     let resource_handle = scope.root_nanbox_f64(resource);
                     let callback_handle = scope.root_nanbox_f64(boxed_closure(callback));
-                    enter_microtask_context(&context);
+                    enter_microtask_context(context);
                     let callback = rooted_closure(&callback_handle);
                     let prev_promise = CURRENT_MICROTASK_PROMISE.with(|c| c.get());
                     let prev_callback = CURRENT_MICROTASK_CALLBACK.with(|c| c.get());
@@ -908,7 +933,7 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
                     let step_handle = trap_scope.root_nanbox_f64(boxed_closure(step_closure));
                     let value_handle = trap_scope.root_nanbox_f64(value);
                     let next_handle = trap_scope.root_nanbox_f64(boxed_promise(next));
-                    enter_microtask_context(&task_context);
+                    enter_microtask_context(task_context);
                     let step_closure = rooted_closure(&step_handle);
                     let value = value_handle.get_nanbox_f64();
                     let next = rooted_promise(&next_handle);
@@ -1155,18 +1180,19 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
     // before the poll phase. Every OTHER caller is a busy-wait pump with no
     // phases of its own (`for await` over a stream, `fs.cp`, `perry_poll`), and
     // for those "run whatever is due" is still the right approximation.
-    let fire_timers = match mode {
-        MicrotaskDrainMode::AllowTimers => !reentrant,
-        // #5437 (CodeRabbit): the codegen `await` loop calls this drain and then
-        // `js_await_loop_tick_timers` (the guard-suspending timer path) on the
-        // very same iteration — the two are always emitted as a pair and this is
-        // the mode's only caller. Firing timers here too advanced them twice per
-        // await tick (a timer/immediate that schedules another could run in the
-        // same iteration before settlement is observed). Drain microtasks only;
-        // `js_await_loop_tick_timers` is the single timer owner for this path.
-        MicrotaskDrainMode::AwaitLoop => false,
-        _ => false,
-    };
+    let fire_timers = crate::async_context::job_domain::current().is_none()
+        && match mode {
+            MicrotaskDrainMode::AllowTimers => !reentrant,
+            // #5437 (CodeRabbit): the codegen `await` loop calls this drain and then
+            // `js_await_loop_tick_timers` (the guard-suspending timer path) on the
+            // very same iteration — the two are always emitted as a pair and this is
+            // the mode's only caller. Firing timers here too advanced them twice per
+            // await tick (a timer/immediate that schedules another could run in the
+            // same iteration before settlement is observed). Drain microtasks only;
+            // `js_await_loop_tick_timers` is the single timer owner for this path.
+            MicrotaskDrainMode::AwaitLoop => false,
+            _ => false,
+        };
     if fire_timers {
         *ran += crate::timer::js_event_loop_timers_phase();
         *ran += crate::builtins::drain_queued_microtasks_count();

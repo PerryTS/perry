@@ -138,19 +138,30 @@ fn resources_keep_identity_ownership_and_method_signatures() {
 }
 
 #[test]
-fn rejects_async_types_instead_of_generating_any() {
+fn async_values_keep_their_payload_and_are_not_promise_aliases() {
     for signature in [
-        "func() -> future<string>",
+        "async func() -> future<string>",
         "func() -> stream<u8>",
-        "async func() -> string",
+        "func() -> future",
+        "func() -> stream",
     ] {
         let source =
             format!("package test:async-types; world plugin {{ export call: {signature}; }}");
-        let error = parse(&source, None).unwrap_err();
-        let message = format!("{error:#}");
-        assert!(
-            message.contains("P3") || message.contains("P2 binding profile"),
-            "{message}"
+        let world = parse(&source, None).unwrap();
+        let ts = typescript(&world);
+        assert!(!ts.contains("any"));
+        if signature.starts_with("async") {
+            assert!(ts.contains("Promise<"));
+        }
+        if signature.contains("future") {
+            assert!(ts.contains("= ComponentFuture<"));
+        }
+        if signature.contains("stream<u8>") {
+            assert!(ts.contains("= ComponentStream<number, Uint8Array>"));
+        }
+        assert_eq!(
+            serde_json::from_str::<World>(&serde_json::to_string(&world).unwrap()).unwrap(),
+            world
         );
     }
 }
@@ -401,4 +412,134 @@ fn resource_aliases_preserve_nominal_identity_and_compile() {
         String::from_utf8_lossy(&output.stderr),
         String::from_utf8_lossy(&files["perry_adapter.c"])
     );
+}
+
+#[test]
+fn incoming_http_host_binding_uses_the_selected_interface_version() {
+    let world = parse(
+        "package wasi:http@0.2.12; interface incoming-handler { handle: func(); } world proxy { export incoming-handler; }",
+        None,
+    ).unwrap();
+    let host = typescript(&world);
+    assert!(host.contains("handleHttp(server: ComponentHttpServer): Promise<void>"));
+    assert!(host.contains(
+        "handleComponentHttpRequest(server, handle, \"wasi:http/incoming-handler@0.2.12\")"
+    ));
+    assert!(!typescript_guest(&world).contains("handleComponentHttpRequest"));
+    assert!(!typescript(&parse(TRANSFORM, None).unwrap()).contains("handleHttp"));
+}
+
+#[test]
+fn async_calling_conventions_survive_manifest_round_trips_and_legacy_defaults() {
+    let world = parse("package test:async-calls; interface jobs { resource job { run: async func() -> u32; make: static async func() -> own<job>; } execute: async func(value: u32) -> u32; } world plugin { export jobs; }", None).unwrap();
+    assert!(world.exports[0].functions.iter().all(|f| f.async_));
+    let json = serde_json::to_string(&world).unwrap();
+    assert!(json.contains("\"async\":true"));
+    assert_eq!(serde_json::from_str::<World>(&json).unwrap(), world);
+    let legacy = parse(TRANSFORM, None).unwrap();
+    let json = serde_json::to_string(&legacy).unwrap();
+    assert!(!json.contains("\"async\":"));
+    assert!(serde_json::from_str::<World>(&json)
+        .unwrap()
+        .exports
+        .iter()
+        .flat_map(|i| &i.functions)
+        .all(|f| !f.async_));
+}
+
+#[test]
+fn p3_http_host_binding_keeps_exact_handler_version_and_async_exports() {
+    for version in ["0.3.0", "0.3.1"] {
+        let world=parse(&format!("package wasi:http@{version}; interface handler {{ handle: async func(); }} world proxy {{ export handler; }}"), None).unwrap();
+        let host = typescript(&world);
+        assert_eq!(
+            host.contains("handleHttp(server: ComponentHttpServer): Promise<void>"),
+            version == "0.3.0"
+        );
+        assert!(!typescript_guest(&world).contains("handleComponentHttpRequest"));
+        if version == "0.3.0" {
+            assert!(host.contains(
+                "handleComponentHttpRequest(server, handle, \"wasi:http/handler@0.3.0\")"
+            ));
+        }
+    }
+}
+
+#[test]
+fn character_streams_are_rejected_before_emitting_unloadable_bindings() {
+    for payload in ["char", "letter"] {
+        let source = format!("package test:chars; interface data {{ type letter = char; get: func() -> stream<{payload}>; }} world plugin {{ export data; }}");
+        let error = parse(&source, None).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("stream<char> is unsupported"),
+            "{error:#}"
+        );
+    }
+    assert!(parse(
+        "package test:chars; world plugin { export get: func() -> future<char>; }",
+        None
+    )
+    .is_ok());
+}
+
+#[cfg(unix)]
+#[test]
+fn experimental_async_exports_compile_without_changing_the_public_contract() {
+    for source in [
+        "package test:async-export; world plugin { export run: async func(id: u32) -> u32; export wake: func(id: u32); export perry-scheduler-signal-0: func(); }",
+        "package test:async-export; interface api { record data { text: string, bytes: list<u8> } run: async func(input: data) -> result<data, string>; sync: func() -> data; empty: async func(); } world plugin { import log: func(text: string); export api; }",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("world.wit");
+        std::fs::write(&input, source).unwrap();
+        assert!(canonical_guest(&input, None).unwrap_err().to_string().contains("async guest functions"));
+        let world = parse(source, None).unwrap();
+        let files = experimental_async_guest(&input, None).unwrap();
+        let adapter = String::from_utf8(files["perry_adapter.c"].clone()).unwrap();
+        let contract = serde_json::to_vec(&world).unwrap().iter().map(u8::to_string).collect::<Vec<_>>().join(",");
+        assert!(adapter.contains(&format!("perry_contract[] = {{{contract}}}")));
+        assert!(adapter.contains("perry_component_frame_task_checkpoint"));
+        assert!(!adapter.contains("perry_component_frame_call(f,"));
+        assert!(!adapter.contains("CALLBACK_CODE_YIELD"));
+        for (name, bytes) in files { std::fs::write(dir.path().join(name), bytes).unwrap(); }
+        let output = std::process::Command::new("clang").args(["-std=c11", "-Wall", "-Werror", "-Wno-unused-function", "-fsyntax-only"]).arg(dir.path().join("perry_adapter.c")).output().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    }
+}
+
+#[test]
+fn experimental_async_exports_reject_unqualified_resources_and_async_values() {
+    for (source, expected) in [
+        ("package test:profile; interface api { resource item; run: async func() -> own<item>; } world plugin { export api; }", "resources"),
+        ("package test:profile; world plugin { export run: async func() -> future<u32>; }", "future/stream"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("world.wit");
+        std::fs::write(&input, source).unwrap();
+        assert!(experimental_async_guest(&input, None).unwrap_err().to_string().contains(expected));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn experimental_async_imports_compile_with_the_backends_indirect_and_flat_signatures() {
+    for source in [
+        "package test:imports; world plugin { import empty: async func(); import scalar: async func(a: u32, b: u64, c: bool) -> u32; import text: async func(input: string) -> string; export run: async func() -> u32; }",
+        "package test:imports; interface api { record payload { text: string, bytes: list<u8>, labels: option<list<string>> } single: async func(input: payload) -> payload; many: async func(a: payload, b: payload, c: payload, d: payload, e: payload) -> result<payload, string>; } world plugin { import api; export run: async func(); }",
+        "package test:imports; world plugin { import unused: async func(); export sync: func() -> u32; }",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("world.wit");
+        std::fs::write(&input, source).unwrap();
+        assert!(canonical_guest(&input, None).is_err());
+        let files = experimental_async_guest(&input, None).unwrap();
+        let adapter = String::from_utf8(files["perry_adapter.c"].clone()).unwrap();
+        assert!(adapter.contains("Async import requires an async export task"));
+        assert!(adapter.contains("perry_component_frame_import_begin(f)"));
+        assert!(adapter.contains("perry_component_frame_import_resolve(f,"));
+        assert!(!adapter.contains("CALLBACK_CODE_YIELD"));
+        for (name, bytes) in files { std::fs::write(dir.path().join(name), bytes).unwrap(); }
+        let output = std::process::Command::new("clang").args(["-std=c11", "-Wall", "-Werror", "-Wno-unused-function", "-fsyntax-only"]).arg(dir.path().join("perry_adapter.c")).output().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    }
 }
