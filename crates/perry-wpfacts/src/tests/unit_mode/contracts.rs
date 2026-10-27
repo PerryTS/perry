@@ -299,9 +299,11 @@ pub(super) fn a_broken_namespace_field_function_resolves_only_the_units_that_see
     // function read through a value contract is its stand-in, not ⊤: the
     // units of `a` holding `util.get`, #u1 145 -> 181 and #u3 37 -> 62,
     // solve its contract and its escaped object; `b`, `c`, `m` and round 2
-    // unchanged) -> the pin below.
+    // unchanged) -> [709, 779, 956, 504, 428]; for DECISIONS 210 (a
+    // published function's properties leave with it but its `prototype`,
+    // whose template no longer escapes) -> the pin below.
     assert!(pf.round_work[1] < w("a.ts") + w("m.ts") + w("b.ts") + w("c.ts"));
-    assert_eq!(pf.round_work, [709, 779, 956, 504, 428], "{:?}", pf.units);
+    assert_eq!(pf.round_work, [695, 772, 949, 497, 428], "{:?}", pf.units);
 }
 
 #[test]

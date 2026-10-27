@@ -659,6 +659,7 @@ fn a_layout_met_again_in_its_own_description_is_named_once() {
         definite: Vec::new(),
         ctor_leaks: true,
         binding_prim: 0,
+        fn_inst: false,
     };
     let with = |mut c: crate::units::ClassContract, inner: crate::units::ClassContract| {
         let vc = crate::units::ValueContract {

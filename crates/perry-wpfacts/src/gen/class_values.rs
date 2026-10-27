@@ -79,8 +79,8 @@ impl<'a> Gen<'a> {
                         && !self.stand_ins.values().any(|s| s.1 as usize == i)
                         && !self.m.foreign.contains_key(&(i as TmplId))
                 });
-                let tm = match own {
-                    Some(i) => i as TmplId,
+                let tm = match own.map(|i| i as TmplId).or_else(|| self.own_layout(cc)) {
+                    Some(tm) => tm,
                     None => {
                         self.stand_in_class(0, cc);
                         self.stand_ins[&cc.display].1
@@ -162,6 +162,77 @@ impl<'a> Gen<'a> {
         }
     }
 
+    /// DECISIONS 210: a contract function of this unit that some unit
+    /// constructs (`Published::ctor_runs`: the join of what their `new`s
+    /// pass) is constructed here with their union, as the whole program
+    /// constructs it where each `new` is: its instances are this unit's
+    /// `new <f>` layout, published to them (`contract_check`,
+    /// `contracts::fn_inst_contract`). A constructing unit that passes what
+    /// no contract describes constructs it with unknown arguments. A
+    /// function the census broke is held by unknown code, which may
+    /// construct it with anything: constructed with unknown arguments, its
+    /// instance escapes, so a layout of it never claims what no unit wrote
+    /// (one whose `this` stores the construction-phase analysis found,
+    /// `fn_birth`: the only one with a layout to claim).
+    pub(crate) fn published_ctors(&mut self) {
+        let Some(unit_in) = self.unit_in else {
+            return;
+        };
+        if unit_in.eval_scopes() {
+            return;
+        }
+        let rb = self
+            .m
+            .reason("constructed by unknown code: the census broke the function");
+        for f in 0..self.m.funcs.len() as FnIdx {
+            let fi = &self.m.funcs[f as usize];
+            if fi.module != 0
+                || fi.func_id == u32::MAX
+                || fi.ctor_of.is_some()
+                || fi.lexical_this
+                || fi.gen_step
+            {
+                continue;
+            }
+            let token = fi.token;
+            let n = fi.params.len();
+            let name = crate::contracts::fn_contract_name(self, f).0;
+            let broken = unit_in.broken(&format!("fn:{name}"));
+            let runs = unit_in.ctor_runs.get(&name);
+            if !broken && runs.is_none() {
+                continue;
+            }
+            if broken && !self.m.fn_birth.contains_key(&f) {
+                continue;
+            }
+            let known = runs.filter(|ac| !ac.top && !broken);
+            let mut args = Vec::with_capacity(n);
+            for i in 0..n {
+                let node = match known.and_then(|ac| ac.params.get(i)) {
+                    Some(vc) if !vc.unknown => {
+                        self.stand_in_value(0, &format!("{name}:new{i}"), vc)
+                    }
+                    // A call passing fewer arguments passes undefined.
+                    None if known.is_some() => {
+                        let node = self.m.node_named("arg", || format!("new{i}({name})"));
+                        self.m.add_prim(node, prim::UNDEF);
+                        node
+                    }
+                    _ => self.m.top_val("argument of another unit's construction"),
+                };
+                args.push(node);
+            }
+            let (call, ret) = self.new_call(crate::model::ThisArg::Undef, args, Vec::new());
+            self.m.contract_new.insert(call);
+            let fnode = self.tok_node(token);
+            self.m.cons(fnode, Cons::New { call });
+            match broken {
+                true => self.m.sink_node(ret, rb),
+                false => self.m.own_ctor_runs.push((f, ret)),
+            }
+        }
+    }
+
     /// This unit's own class named by display: a class has one defining
     /// unit (a literal shape may have several, DECISIONS 112).
     pub(super) fn own_class(&self, display: &str) -> Option<TmplId> {
@@ -169,6 +240,26 @@ impl<'a> Gen<'a> {
             .get(display)
             .copied()
             .filter(|tm| !self.m.foreign.contains_key(tm))
+    }
+
+    /// DECISIONS 210: this unit's own template of a layout described back
+    /// to it: its class's, or, for a constructor function's instances
+    /// (`fn_inst`), the `new <f>` template of its own function `f`, whose
+    /// facts this solve makes (a reader's `new` runs here,
+    /// `published_ctors`): never a stand-in of its own layout.
+    pub(super) fn own_layout(&mut self, cc: &crate::units::ClassContract) -> Option<TmplId> {
+        if let Some(tm) = self.own_class(&cc.display) {
+            return Some(tm);
+        }
+        if !cc.fn_inst {
+            return None;
+        }
+        let f = (0..self.m.funcs.len() as FnIdx).find(|&f| {
+            let fi = &self.m.funcs[f as usize];
+            fi.module == 0 && fi.func_id != u32::MAX && fi.name == cc.name
+        })?;
+        let tm = self.m.fn_inst_template(f);
+        (!self.m.foreign.contains_key(&tm)).then_some(tm)
     }
 
     pub(super) fn value_contract_for(
@@ -203,7 +294,7 @@ impl<'a> Gen<'a> {
             // caller passes this unit's instances to its closed
             // constructor, DECISIONS 133): its own template, whose facts
             // this solve makes, as for the class value (DECISIONS 120).
-            let tm = match self.own_class(&cc.display) {
+            let tm = match self.own_layout(cc) {
                 Some(tm) => tm,
                 None => {
                     self.stand_in_class(mi, cc);
@@ -566,11 +657,17 @@ impl<'a> Gen<'a> {
         let birth_keys = c.birth_keys.iter().map(|k| self.m.atom(k)).collect();
         let definite = c.definite.iter().map(|k| self.m.atom(k)).collect();
         self.m.tmpls.push(Template {
-            kind: TmplKind::Class {
-                module: mi,
-                name: c.name.clone(),
-                class_id: c.class_id,
-                literal_shape: c.literal_shape,
+            // DECISIONS 210: a constructor function's instances keep their
+            // kind: no class id guards them, and their chain is the
+            // function's `prototype` (`Model::proto_node`).
+            kind: match c.fn_inst {
+                true => TmplKind::FnInst { func: ctor },
+                false => TmplKind::Class {
+                    module: mi,
+                    name: c.name.clone(),
+                    class_id: c.class_id,
+                    literal_shape: c.literal_shape,
+                },
             },
             display: c.display.clone(),
             birth_keys,
@@ -612,7 +709,15 @@ impl<'a> Gen<'a> {
         // A literal layout has no class object: its `constructor` is
         // Object's, found up the chain (decision 17: what an argument
         // reaches is not the stand-in's class).
-        if !c.literal_shape {
+        if c.fn_inst {
+            // DECISIONS 210: the chain of a constructor function's instances
+            // is `f.prototype`: the stub's until `ctor_fn` (the function's
+            // own contract) takes its place below.
+            let pa = self.m.atom("prototype");
+            let ct = self.m.funcs[ctor as usize].token;
+            let pf = self.m.field(ct, pa);
+            self.m.add_tok(pf, proto);
+        } else if !c.literal_shape {
             let pa = self.m.atom("prototype");
             let pf = self.m.field(cobj, pa);
             self.m.add_tok(pf, proto);
@@ -851,6 +956,17 @@ impl<'a> Gen<'a> {
             self.m.funcs[f as usize].ctor_of = Some(tm);
             self.m.funcs[ctor as usize].ctor_of = None;
             self.m.tmpls[tm as usize].ctor = Some(f);
+            if c.fn_inst {
+                // DECISIONS 210: the function is the constructor: its
+                // `prototype` is the chain, the chain's `constructor` is it.
+                self.m.tmpls[tm as usize].kind = TmplKind::FnInst { func: f };
+                let pa = self.m.atom("prototype");
+                let pf = self.m.field(t, pa);
+                self.m.add_tok(pf, proto);
+                let ca = self.m.atom("constructor");
+                let cf = self.m.field(proto, ca);
+                self.m.add_tok(cf, t);
+            }
             // DECISIONS 198: what a `new` (or a subclass's `super`) passes
             // the constructor still reaches the stub's parameters: a closed
             // class's constructions publish them (`closed_ctors`) and hand

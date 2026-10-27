@@ -614,3 +614,62 @@ fn a_constructor_function_escaped_through_the_cache_is_escaped_in_every_unit() {
     }
     assert_cjs_per_unit(&w, &u, proven_sites(&u).len());
 }
+
+/// DECISIONS 210: `rep` of CJL as the compiler wraps it, the factory held
+/// beyond its record (`void __perry_cjs_factory`), so the run-once view
+/// does not flatten it: `Reply` is a local of the factory, written into
+/// the record's `exports`, which is published described by no contract
+/// (DECISIONS 203). `m.js` constructs it (and a subclass-like `_Reply`
+/// whose prototype is `Object.create(Reply.prototype)`).
+const TM: [(&str, &str); 3] = [
+    ("/mbw/m.js", include_str!("fixtures/cjs_mbw/m.js")),
+    ("/mbw/r.js", include_str!("fixtures/cjs_mbw/r.js")),
+    (
+        "/mbw/perry_cjs.js",
+        include_str!("fixtures/cjs_mbw/perry_cjs.js"),
+    ),
+];
+
+#[test]
+fn an_escaped_constructor_function_of_an_unflattened_factory_is_constructed_by_unknown_code() {
+    // Per unit the owner's `new Reply` layout is never stronger than the
+    // whole program's: another unit's code holds `Reply` (it escaped with
+    // the record) and constructs it, so the owner constructs it with
+    // unknown arguments and the instance escapes. Before DECISIONS 210 no
+    // unit constructed it: `raw` held nothing (kind none, readonly) while
+    // the whole program saw `new r(2)`.
+    let (w, u) = both(&TM);
+    let tmpl = |pf: &ProgramFacts| -> crate::TemplateFacts {
+        pf.templates
+            .iter()
+            .find(|t| t.display.starts_with("new r.js:Reply"))
+            .cloned()
+            .unwrap_or_else(|| panic!("new r.js:Reply in\n{}", pf.dump_text()))
+    };
+    let (tu, tw) = (tmpl(&u), tmpl(&w));
+    let raw = |t: &crate::TemplateFacts| {
+        t.fields
+            .iter()
+            .find(|f| f.key == "raw")
+            .cloned()
+            .unwrap_or_else(|| panic!("raw of {}", t.display))
+    };
+    let (ru, rw) = (raw(&tu), raw(&tw));
+    assert!(
+        ru.kind.top || (rw.kind.prims & !ru.kind.prims == 0 && !rw.kind.top),
+        "per unit raw {:?} narrower than whole program {:?}\nper unit:\n{}",
+        ru.kind,
+        rw.kind,
+        u.dump_text()
+    );
+    assert!(
+        !(ru.readonly && !rw.readonly),
+        "per unit claims raw readonly, the whole program does not\n{}",
+        u.dump_text()
+    );
+    assert!(
+        !(tu.prefix_stable && !tw.prefix_stable),
+        "per unit claims prefix_stable, the whole program does not\n{}",
+        u.dump_text()
+    );
+}

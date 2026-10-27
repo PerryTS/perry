@@ -510,10 +510,12 @@ pub(super) fn an_escaped_value_beside_top_is_that_top() {
     // callers' ⊤ they stay and ride into every array: n² until a store into a
     // parameter only ⊤ is passed for escapes there (DECISIONS 192, open).
     // Rewritten for #13294 (decision 151: every unit replays the shared
-    // objects' writes): (939, 2563, 8115) -> the pin below.
+    // objects' writes): (939, 2563, 8115) -> (964, 2612, 8212); for
+    // DECISIONS 210 (the published `f`'s prototype stays its own: two
+    // entries fewer at every `n`) -> the pin below.
     assert_eq!(
         (e8, e16, e32),
-        (964, 2612, 8212),
+        (962, 2610, 8210),
         "entries {e8} {e16} {e32}"
     );
 }

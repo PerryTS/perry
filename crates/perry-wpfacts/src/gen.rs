@@ -660,7 +660,8 @@ impl<'a> Gen<'a> {
                 true => !self.receiver_unused(t),
                 false => self.m.is_escaped(t) && !self.open_fn(t),
             };
-            if escaped || self.m.hard.contains_key(&t) {
+            // DECISIONS 210: used as an object beyond the contract.
+            if escaped || self.m.hard.contains_key(&t) || self.m.fn_touched.contains(&t) {
                 out.push(format!("fn:{name}"));
             }
         }
