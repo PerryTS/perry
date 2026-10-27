@@ -199,6 +199,9 @@ impl SharedReads {
                     }
             }
             SharedWrite::Unmodeled(s) => self.objects.contains_key(s) || !self.keys.is_empty(),
+            // Every chain reaches Object.prototype.
+            SharedWrite::Hard(Shared::ObjectProto, _) => true,
+            SharedWrite::Hard(s, _) => self.objects.contains_key(s),
         }
     }
 }
@@ -220,6 +223,10 @@ pub enum SharedWrite {
     /// unit that includes the other units' code. It is ⊤ there, so every
     /// unit's store into ⊤ may be a store into it (`units::shared_closure`).
     Handed(Shared),
+    /// A HARD mark (`Model::mark_hard`: `defineProperty`, `delete`,
+    /// `setPrototypeOf` ...) on the object: on `Object.prototype` every
+    /// chain through it is HARD, as the whole program derives it.
+    Hard(Shared, Hard),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

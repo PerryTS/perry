@@ -75,11 +75,7 @@ fn a_computed_key_is_never_proto() {
 
 #[test]
 fn a_class_instances_prototype_as_a_value_is_its_class_prototype() {
-    for get in [
-        "c.__proto__",
-        "Object.getPrototypeOf(c)",
-        "C.prototype",
-    ] {
+    for get in ["c.__proto__", "Object.getPrototypeOf(c)", "C.prototype"] {
         assert!(sees_e_on_instances(get), "{get}");
     }
 }
@@ -271,5 +267,34 @@ fn a_parameters_prototype_is_its_class_prototype_in_every_unit() {
                 pf.dump_text()
             );
         }
+    }
+}
+
+#[test]
+fn a_hard_object_prototype_is_hard_in_every_unit() {
+    // `Object.defineProperties` on Object.prototype in one unit makes every
+    // chain through it HARD (E5), in the other units too, as the whole
+    // program derives it (`SharedWrite::Hard`; main: per unit stronger).
+    // The prototype may come as a value (DECISIONS 217).
+    for proto in ["Object.prototype", "Object.getPrototypeOf(o)"] {
+        let a = format!(
+            "const o: any = {{ a: 1 }};
+            export function install(k: string) {{
+                const d: any = {{ get [k]() {{ return 1; }} }};
+                Object.defineProperties({proto}, Object.getOwnPropertyDescriptors(d));
+            }}"
+        );
+        let m = "import { install } from './a';
+            class C { x = 1; }
+            const c = new C();
+            install(String(Math.random()));
+            console.log(c.x);";
+        let (u, _) = super::unit_alias::assert_not_stronger(&[("a", a.as_str()), ("m", m)]);
+        let c = u
+            .templates
+            .iter()
+            .find(|t| t.display == "m.ts:C")
+            .expect("C");
+        assert!(!c.prefix_stable, "{proto}\n{}", u.dump_text());
     }
 }

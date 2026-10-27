@@ -1672,6 +1672,10 @@ impl Model {
         if kind == Hard::E6SetPrototypeOf && matches!(self.toks[t as usize], TokKind::ObjectProto) {
             return;
         }
+        // DECISIONS 217: another unit's lookups see a HARD shared object.
+        if let Some(s) = self.shared_of(t) {
+            self.note_shared(SharedWrite::Hard(s, kind));
+        }
         if self.hard.contains_key(&t) {
             return;
         }
