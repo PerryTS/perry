@@ -323,7 +323,3 @@ mod contract_tests;
 #[cfg(test)]
 #[path = "wasi_network_legacy_tests.rs"]
 mod legacy_network_execution_tests;
-
-#[cfg(test)]
-#[path = "wasi_contract_tests.rs"]
-mod contract_tests;
