@@ -80,7 +80,7 @@ semver.workspace = true
 rayon = "1.10"
 # `--report-size`: read the final linked binary's own symbol table (ELF/Mach-O/PE
 # via `object`, demangled via `rustc-demangle`) to attribute size by crate.
-object = { version = "0.37", default-features = false, features = ["read", "std"] }
+object = { version = "0.39", default-features = false, features = ["read", "std"] }
 rustc-demangle = "0.1"
 # Every pattern the CLI compiles runs on Perex, in the `regex` dialect it was
 # written in; `perry_perex::tooling` translates and refuses what it cannot.

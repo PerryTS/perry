@@ -40,7 +40,7 @@ analyzer = [
 anyhow.workspace = true
 sha2 = "0.11"
 clap = { workspace = true, optional = true }
-object = { version = "0.37", default-features = false, features = ["read", "std"], optional = true }
+object = { version = "0.39", default-features = false, features = ["read", "std"], optional = true }
 rustc-demangle = { version = "0.1", optional = true }
 perry-perex = { workspace = true, optional = true }
 regex = { workspace = true, optional = true }
