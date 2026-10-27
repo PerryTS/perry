@@ -11,6 +11,11 @@ pub(crate) fn add_internal_process_listener(
         .get()
         .map_or_else(|| (), |run| run(event, callback))
 }
+static PROCESS_EXIT_EVENT_EMITTED: Hook<fn() -> bool> = Hook::empty();
+pub(crate) fn process_exit_event_emitted() -> bool {
+    // Teardown observes the selected install; it must not bootstrap Rust fixtures.
+    PROCESS_EXIT_EVENT_EMITTED.peek().map_or(false, |run| run())
+}
 static EMIT_PROCESS_EVENT: Hook<fn(&str, &[f64]) -> bool> = Hook::empty();
 pub(crate) fn emit_process_event(event: &str, args: &[f64]) -> bool {
     EMIT_PROCESS_EVENT
@@ -262,6 +267,7 @@ fn register_roots() {
 pub(crate) fn install() {
     crate::perry_install_once!({
         crate::os::os_process_emitter::install_exit_tls_resolver();
+        PROCESS_EXIT_EVENT_EMITTED.set(crate::os::os_process_emitter::process_exit_event_emitted);
         crate::os::os_process_emitter::install_process_signal_sync();
         ADD_INTERNAL_PROCESS_LISTENER
             .set(crate::os::os_process_emitter::add_internal_process_listener);
