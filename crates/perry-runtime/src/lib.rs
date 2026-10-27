@@ -1411,3 +1411,6 @@ mod native_finalizer_hook;
 mod string_combining_class;
 
 mod diagnostic_report_roots;
+
+mod dyn_eval_hook_roots;
+mod interp_proto_guard;

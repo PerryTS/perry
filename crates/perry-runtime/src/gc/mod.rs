@@ -1291,7 +1291,7 @@ pub fn gc_init() {
     // from inside interpreted code.
     // Registered unconditionally; it scans once the `dyn-eval` install has
     // connected the interpreter (see `crate::dyn_eval_hooks`).
-    reg_scanner!(crate::dyn_eval_hooks::scan_dyn_eval_roots_mut);
+    crate::dyn_eval_hook_roots::register_installed_roots();
     reg_scanner!(crate::tls::scan_tls_roots_mut);
     reg_scanner!(crate::process::scan_process_finalization_roots_mut);
     reg_scanner!(crate::process::scan_process_module_loader_roots_mut);

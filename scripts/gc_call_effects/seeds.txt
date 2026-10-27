@@ -708,3 +708,9 @@ indirect exact perry_runtime::native_finalizer_hook::new_completion_queue => exa
 indirect exact perry_runtime::diagnostic_report_roots::register_installed_roots => exact perry_runtime::diagnostic_report_roots::register_roots -- diagnostics installer registers existing report-controller scanner per thread
 
 indirect exact perry_runtime::diagnostic_report_roots::report_value => exact perry_runtime::process::report::process_report_value -- diagnostics installer fills generic process report lookup
+
+indirect exact perry_runtime::dyn_eval_hook_roots::register_installed_roots => exact perry_runtime::dyn_eval_hooks::install::register_roots -- evaluator installer registers its existing root scanner per thread
+
+indirect exact perry_runtime::dyn_eval_hook_roots::resolve_active_functions_storage => exact perry_runtime::dyn_eval::function_owner::active_functions_storage::resolve -- evaluator installer fills existing function pin TLS resolver
+
+indirect exact perry_runtime::dyn_eval_hook_roots::resolve_pin_top_storage => exact perry_runtime::dyn_eval::function_owner::pin_top_storage::resolve -- evaluator installer fills existing function pin TLS resolver

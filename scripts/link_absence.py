@@ -57,6 +57,7 @@ NEGATIVES = {
     "without_node_api_host": ["node_api_host"],
     "without_normalize": ["string_normalize"],
     "without_diagnostics": ["diagnostics"],
+    "without_dyn_eval": ["dyn_eval"],
     "without_messaging": ["messaging"],
     "without_async_hooks": ["async_hooks"],
     "without_bigint_querystring": ["bigint"],

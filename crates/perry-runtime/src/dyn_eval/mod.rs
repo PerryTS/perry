@@ -893,3 +893,7 @@ pub extern "C" fn js_eval_in_scope(
         this_value.get_nanbox_f64(),
     )
 }
+
+pub(crate) fn install_function_owner_storage() {
+    function_owner::install_storage_resolvers();
+}

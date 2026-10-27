@@ -96,10 +96,6 @@
       "rustc_demangle::demangle",
       "rustc_demangle::v0::basic_type"
     ],
-    "dyn_eval": [
-      "perry_runtime::dyn_eval_hooks::note_proto_write",
-      "perry_runtime::dyn_eval_hooks::scan_dyn_eval_roots_mut"
-    ],
     "gc_diagnostics": [
       "<perry_runtime::gc::diag_sites::ChargeProbe>::begin",
       "<perry_runtime::gc::diag_sites::ChargeProbe>::end",
