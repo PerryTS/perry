@@ -136,3 +136,18 @@ fn a_store_into_top_reaches_the_seeded_chains() {
 }
 
 const TOP: &str = "declare const unknown: any; const t: any = unknown.reach(0);";
+
+/// Open (BFI census, 6,450 sites in the all-knobs-off arm): a key whose
+/// values are all numbers names no `Object.prototype` method (no intrinsic
+/// prototype has a numeric member), so `table[n](...)` cannot run
+/// `__defineGetter__` and sink its accessor argument. The model has no key
+/// values: every index that is no string literal is `Key::Any` (`key_of`).
+/// Closing it needs the key's values on the load / call (ToPropertyKey of
+/// its primitives), not its type.
+#[test]
+#[ignore = "open: computed keys carry no values (numeric key reads Object.prototype methods)"]
+fn a_numeric_key_names_no_object_prototype_method() {
+    let table = "const table: any = { 0(a: any, b: any) { return 1; }, 1(a: any, b: any) { return 2; } };";
+    let n = "const n = Math.random() > 0.5 ? 0 : 1;";
+    assert_eq!(d_escape(&format!("{table} {n} table[n]('y', () => d);")), None);
+}
