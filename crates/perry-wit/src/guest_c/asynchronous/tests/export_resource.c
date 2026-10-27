@@ -53,6 +53,13 @@ plugin_waitable_status_t plugin_stream_void_cancel_read(plugin_stream_void_t h) 
 void plugin_stream_void_drop_readable(plugin_stream_void_t h) { (void)h; assert(0); }
 void plugin_stream_void_drop_writable(plugin_stream_void_writer_t h) { (void)h; assert(0); }
 void plugin_waitable_set_drop(plugin_waitable_set_t s) { (void)s; assert(0); }
+plugin_waitable_set_t plugin_waitable_set_new(void) { assert(0); return 0; }
+plugin_stream_void_t plugin_stream_void_new(plugin_stream_void_writer_t *writer) {
+    (void)writer; assert(0); return 0;
+}
+plugin_waitable_status_t plugin_stream_void_read(plugin_stream_void_t reader, size_t count) {
+    (void)reader; (void)count; assert(0); return 0;
+}
 void plugin_context_set_0(void *p) { assert(p == NULL); }
 
 int main(void) {
