@@ -103,6 +103,7 @@ mod proxy_registry;
 mod residual_prototype_relocation;
 mod restore_coverage;
 mod retention_9628_9629;
+mod retired_handle_carrier;
 mod root_words;
 mod rooted_container_values;
 mod rooted_define_property;
