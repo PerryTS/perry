@@ -1020,6 +1020,7 @@ impl<'a> Gen<'a> {
             proto_members,
             parent_value: None,
             parent_links: Vec::new(),
+            null_proto: c.declared_keys_null_proto(),
         });
         self.mods[mi as usize].classes.insert(c.name.clone(), tm);
         for a in &c.aliases {
@@ -1473,6 +1474,7 @@ impl<'a> Gen<'a> {
             proto_members: vec![],
             parent_value: None,
             parent_links: Vec::new(),
+            null_proto: false,
         });
         tm
     }
@@ -1508,6 +1510,7 @@ impl<'a> Gen<'a> {
             proto_members: vec![],
             parent_value: None,
             parent_links: Vec::new(),
+            null_proto: false,
         });
         tm
     }

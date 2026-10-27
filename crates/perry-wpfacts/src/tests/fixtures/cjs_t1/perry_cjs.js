@@ -16,6 +16,20 @@ export function takePending() {
     return record;
 }
 let base;
+// A static edge whose target was evaluated and then deleted from the cache
+// re-runs it, as Node does, with the requiring module as its parent (the
+// handoff its record reads). One loader for the program: the path is
+// absolute. One body, so the edges of every module share it (the facts solve
+// it once). The edge links the new record: it reads the cache by its literal
+// path, a declared slot. A read here by the parameter is a computed key that
+// reaches `Object.prototype` (its `constructor`), and the link would store
+// the parent on it.
+let reloader;
+export function reload(path, parent) {
+    
+        throw requireError('error', 'ERR_PERRY_CJS_CLOSED', 'a closed program has no CommonJS loader');
+    
+}
 // A literal builtin `require` is a static native binding (#13296); only a
 // computed specifier reaches this loader, and only a program that is not
 // closed has one. A closed program links no `createRequire`.

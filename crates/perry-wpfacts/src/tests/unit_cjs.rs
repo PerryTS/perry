@@ -186,9 +186,14 @@ fn escaped(pf: &ProgramFacts) -> BTreeSet<String> {
 
 #[test]
 fn a_commonjs_unit_proves_what_the_whole_program_proves() {
+    // CJL2: static edges. Against the dispatching `require` of main's wrap
+    // the wrapper's own sites change (the dispatch call and its cache read
+    // go, each edge's `children`/`parent`/`exports` come), and the user's
+    // `this.go()` (b.js) and `b.run()` (m.js) are proven whole-program. Per
+    // unit the four lost sites are the dispatch's (no user site).
     let (w, u) = both(&T1);
-    assert_eq!(proven_sites(&w).len(), 27);
-    assert_cjs_per_unit(&w, &u, 9);
+    assert_eq!(proven_sites(&w).len(), 25);
+    assert_cjs_per_unit(&w, &u, 7);
 }
 
 /// DECISIONS 115: a class whose binding may hold `undefined` beside the
@@ -209,7 +214,7 @@ fn a_class_bound_through_its_self_cell_is_a_contract() {
     };
     assert!(pw.len() >= 8, "whole-program proves {:?}", pw);
     let _ = (lost, classes);
-    assert_cjs_per_unit(&w, &u, 3);
+    assert_cjs_per_unit(&w, &u, 8);
     // `T.k = S` holds the class and the cell's `undefined` both ways: the
     // reader's import carries the binding's primitives.
     let k_kind = |pf: &ProgramFacts| {
@@ -261,21 +266,21 @@ fn only_a_unit_consuming_the_registry_union_reads_it() {
         .filter_map(|k| k.split_once('#').map(|x| x.0))
         .collect();
     modules.dedup();
-    // On main's support module the wrappers' computed-specifier arms and the
-    // support module's own `requireComputed` and `refresh` consume it too:
-    // still only the consuming units read it (DECISIONS 171).
+    // The program is not closed (`sa_CD.js` requires by a computed
+    // specifier). Static edges (CJL) read the cache by their literal paths,
+    // so a module's only consumer is the unit holding its wrapper's
+    // `require` (its computed arm), plus the support module's loader units:
+    // 7 of some 200 units.
     assert_eq!(
         readers,
         [
-            "/t6/benchmark.js#u11",
-            "/t6/cd.js#u17",
-            "/t6/cd.js#u42",
+            "/t6/benchmark.js#u13",
+            "/t6/cd.js#u48",
             "/t6/perry_cjs.js#u4",
-            "/t6/perry_cjs.js#u10",
-            "/t6/perry_cjs.js#u14",
-            "/t6/sa_CD.js#u9",
-            "/t6/sa_CD.js#u20",
-            "/t6/som.js#u19"
+            "/t6/perry_cjs.js#u6",
+            "/t6/perry_cjs.js#u12",
+            "/t6/sa_CD.js#u23",
+            "/t6/som.js#u21"
         ],
         "{units} units, modules {modules:?}"
     );
@@ -342,7 +347,9 @@ fn richards_per_unit_proves_what_the_whole_program_proves() {
         "whole-program proves {}",
         proven_sites(&w).len()
     );
-    assert_cjs_per_unit(&w, &u, 5);
+    // CJL2: whole-program 22 -> 129 with static edges (the records no
+    // longer meet in the dispatch); per unit the dispatch's 4 sites go.
+    assert_cjs_per_unit(&w, &u, 3);
 }
 
 #[test]
@@ -353,8 +360,8 @@ fn capture_parameters_bound_directly_or_composed_hold_the_class_environment() {
     // unit hands back; reading `P` through it would make `new P(n)` a `new`
     // of an unknown constructor and sink `P`.
     let (w, u) = both(&T5);
-    assert_eq!(proven_sites(&w).len(), 32);
-    assert_cjs_per_unit(&w, &u, 5);
+    assert_eq!(proven_sites(&w).len(), 31);
+    assert_cjs_per_unit(&w, &u, 13);
 }
 
 #[test]

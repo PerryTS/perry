@@ -1805,6 +1805,12 @@ impl<'a> Gen<'a> {
         if let Some(n) = self.import_value(mi, name) {
             return n;
         }
+        if self.m.explain {
+            eprintln!(
+                "perry: wpfacts explain: unresolved scope name {name} in {}",
+                self.modules[mi as usize].0
+            );
+        }
         self.m.top_val(&format!("unresolved scope name {name}"))
     }
 }

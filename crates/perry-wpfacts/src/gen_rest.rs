@@ -830,6 +830,7 @@ impl<'a> Gen<'a> {
                     proto_members: vec![],
                     parent_value: None,
                     parent_links: Vec::new(),
+                    null_proto: false,
                 });
                 let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
                 let pn = self.m.proto_node(t);

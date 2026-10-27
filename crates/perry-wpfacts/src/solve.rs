@@ -607,6 +607,8 @@ impl Model {
                 (None, None) => match self.tmpls[tm as usize].parent_value {
                     // `S.prototype.__proto__` is the parent's `prototype`.
                     Some((_, pp)) => self.edge(pp, n),
+                    // A null-prototype record: the chain ends here.
+                    None if self.tmpls[tm as usize].null_proto => {}
                     None => self.add_tok(n, objproto),
                 },
             },

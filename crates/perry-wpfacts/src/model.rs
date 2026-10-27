@@ -282,6 +282,11 @@ pub struct Template {
     /// Classes whose constructor chain `super()` ran on this class's
     /// instances during the solve (the parent value's class tokens).
     pub parent_links: Vec<TmplId>,
+    /// A declared-keys record born with a null prototype
+    /// (`Class::declared_keys_null_proto`: `require.cache`): its prototype
+    /// stand-in has no members and no prototype, so a lookup through it ends
+    /// there and never reaches `Object.prototype`.
+    pub null_proto: bool,
 }
 
 #[derive(Clone, Debug)]

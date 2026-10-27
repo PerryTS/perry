@@ -1074,6 +1074,40 @@ fn cjs_cache_slot_holds_its_own_record() {
     assert_eq!(site.verdict, Verdict::T0Mono, "{}", pf.dump_text());
 }
 
+/// `require.cache` (`__perry_declared_keys`) has a null prototype: a read by
+/// a computed key holds the records and `undefined`, never what
+/// `Object.prototype` holds (its `constructor`: `Object`, `Function`). A
+/// store on what such a read returns (the loader's `child.parent = module`)
+/// is then a store on a record, not on a builtin (E20), and a call of it is
+/// no `Function(...)` call (E14). With `Object.prototype` as the prototype
+/// (`__perry_declared_keys_object`) the same read reaches the builtins.
+fn null_proto_read(births: &str) -> Option<String> {
+    let pf = facts(&format!(
+        r#"
+        class Parent {{ x = 1; }}
+        class Child {{ y = 2; }}
+        const cache = {births}("/npr-a.js", "/npr-b.js");
+        cache["/npr-a.js"] = new Child();
+        function read(path) {{ return cache[path]; }}
+        const parent = new Parent();
+        const got = read(String(Math.random()));
+        if (got !== undefined) got.parent = parent;
+        console.log(parent.x);
+    "#
+    ));
+    tmpl(&pf, "Parent").escape.clone()
+}
+
+#[test]
+fn a_computed_read_of_a_null_prototype_record_stops_at_the_record() {
+    assert_eq!(null_proto_read("__perry_declared_keys"), None);
+    let escape = null_proto_read("__perry_declared_keys_object");
+    assert!(
+        escape.as_deref().is_some_and(|e| e.contains("E20")),
+        "{escape:?}"
+    );
+}
+
 #[test]
 fn cjs_main_is_one_record_and_does_not_alias_every_export() {
     let pf = facts(

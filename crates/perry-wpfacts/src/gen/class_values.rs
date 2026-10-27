@@ -332,6 +332,7 @@ impl<'a> Gen<'a> {
             proto_members: vec![],
             parent_value: None,
             parent_links: Vec::new(),
+            null_proto: false,
             declared: vec![],
         });
         let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
@@ -558,6 +559,7 @@ impl<'a> Gen<'a> {
             proto_members: Vec::new(),
             parent_value: None,
             parent_links: Vec::new(),
+            null_proto: false,
         });
         self.m.funcs[ctor as usize].ctor_of = Some(tm);
         self.m.foreign.insert(tm, c.facts.clone());
