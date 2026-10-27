@@ -19,5 +19,12 @@ perry-ffi.workspace = true
 # only need core text + line drawing, which lives in the base crate.
 printpdf = { version = "0.10", default-features = false }
 
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+# printpdf selects this browser-only bridge transitively. 0.4.79 adds a
+# target-gated Tokio dependency, which Cargo resolves into every lockfile even
+# when building natively or for WASI. Keep the last Tokio-free release; the
+# repository-wide ban must pass before this pin can move.
+wasm-bindgen-futures = { version = "=0.4.78", default-features = false }
+
 [dev-dependencies]
 perry-ffi = { workspace = true, features = ["runtime-link"] }
