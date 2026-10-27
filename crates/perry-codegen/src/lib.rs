@@ -197,8 +197,8 @@ pub fn method_supports_arguments_length_direct_abi(method: &perry_hir::Function)
 pub mod expr_shadow_layout {
     pub use crate::expr::shadow_inline::{
         SHADOW_ENTRY_META_OFFSET, SHADOW_ENTRY_SHIFT, SHADOW_ENTRY_SIZE, SHADOW_SLOT_ACTIVE_BIT,
-        SHADOW_STACK_HEADER_SLOTS, SHADOW_STATE_FRAME_TOP_OFFSET, SHADOW_STATE_LEN_OFFSET,
-        SHADOW_STATE_PTR_OFFSET,
+        SHADOW_STACK_HEADER_SLOTS, SHADOW_STATE_CAP_OFFSET, SHADOW_STATE_FRAME_TOP_OFFSET,
+        SHADOW_STATE_LEN_OFFSET, SHADOW_STATE_PTR_OFFSET,
     };
 }
 

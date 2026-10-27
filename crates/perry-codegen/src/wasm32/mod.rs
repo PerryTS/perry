@@ -6,11 +6,13 @@
 
 mod abi_adapt;
 mod closure_abi;
+mod shadow_frame;
 
 /// The wasm32 lowering applied to one finished module's IR text.
 pub(crate) fn lower_module(ir: &str) -> String {
     let (ir, closure_bodies) = closure_abi::retype_closure_bodies(ir);
     let ir = closure_abi::retype_indirect_body_calls(&ir);
+    let ir = shadow_frame::inline_frame_ops(&ir);
     rename_entry_point(&command_boundary(&abi_adapt::adapt_runtime_abi(
         &ir,
         &closure_bodies,
