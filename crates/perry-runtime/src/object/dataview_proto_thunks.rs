@@ -212,15 +212,21 @@ pub(crate) fn install_dataview_proto_methods(proto_obj: *mut ObjectHeader) {
                 crate::value::js_nanbox_pointer(c as i64).to_bits()
             }
         };
-        let bl = mk(crate::fn_info!(dataview_byte_length_getter_thunk, 0; with_declared(0)));
+        let bl = mk(
+            crate::fn_info!(#[realm("dataview_proto_thunks.realm.json#body:dataview_byte_length_getter_thunk")] dataview_byte_length_getter_thunk, 0; with_declared(0)),
+        );
         if bl != 0 {
             super::object_ops::install_builtin_getter(proto_obj, "byteLength", bl);
         }
-        let bo = mk(crate::fn_info!(dataview_byte_offset_getter_thunk, 0; with_declared(0)));
+        let bo = mk(
+            crate::fn_info!(#[realm("dataview_proto_thunks.realm.json#body:dataview_byte_offset_getter_thunk")] dataview_byte_offset_getter_thunk, 0; with_declared(0)),
+        );
         if bo != 0 {
             super::object_ops::install_builtin_getter(proto_obj, "byteOffset", bo);
         }
-        let bf = mk(crate::fn_info!(dataview_buffer_getter_thunk, 0; with_declared(0)));
+        let bf = mk(
+            crate::fn_info!(#[realm("dataview_proto_thunks.realm.json#body:dataview_buffer_getter_thunk")] dataview_buffer_getter_thunk, 0; with_declared(0)),
+        );
         if bf != 0 {
             super::object_ops::install_builtin_getter(proto_obj, "buffer", bf);
         }
@@ -231,43 +237,43 @@ pub(crate) fn install_dataview_proto_methods(proto_obj: *mut ObjectHeader) {
     let gets: &[(&str, *const crate::closure::JsFunctionInfo)] = &[
         (
             "getInt8",
-            crate::fn_info!(dv_get_int8, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm("dataview_proto_thunks.realm.json#body:dv_get_int8")] dv_get_int8, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
         ),
         (
             "getUint8",
-            crate::fn_info!(dv_get_uint8, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm("dataview_proto_thunks.realm.json#body:dv_get_uint8")] dv_get_uint8, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
         ),
         (
             "getInt16",
-            crate::fn_info!(dv_get_int16, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm("dataview_proto_thunks.realm.json#body:dv_get_int16")] dv_get_int16, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
         ),
         (
             "getUint16",
-            crate::fn_info!(dv_get_uint16, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm("dataview_proto_thunks.realm.json#body:dv_get_uint16")] dv_get_uint16, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
         ),
         (
             "getInt32",
-            crate::fn_info!(dv_get_int32, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm("dataview_proto_thunks.realm.json#body:dv_get_int32")] dv_get_int32, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
         ),
         (
             "getUint32",
-            crate::fn_info!(dv_get_uint32, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm("dataview_proto_thunks.realm.json#body:dv_get_uint32")] dv_get_uint32, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
         ),
         (
             "getFloat32",
-            crate::fn_info!(dv_get_float32, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm("dataview_proto_thunks.realm.json#body:dv_get_float32")] dv_get_float32, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
         ),
         (
             "getFloat64",
-            crate::fn_info!(dv_get_float64, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm("dataview_proto_thunks.realm.json#body:dv_get_float64")] dv_get_float64, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
         ),
         (
             "getBigInt64",
-            crate::fn_info!(dv_get_bigint64, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm("dataview_proto_thunks.realm.json#body:dv_get_bigint64")] dv_get_bigint64, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
         ),
         (
             "getBigUint64",
-            crate::fn_info!(dv_get_biguint64, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm("dataview_proto_thunks.realm.json#body:dv_get_biguint64")] dv_get_biguint64, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
         ),
     ];
     for (name, ptr) in gets.iter().copied() {
@@ -279,43 +285,43 @@ pub(crate) fn install_dataview_proto_methods(proto_obj: *mut ObjectHeader) {
     let sets: &[(&str, *const crate::closure::JsFunctionInfo)] = &[
         (
             "setInt8",
-            crate::fn_info!(dv_set_int8, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm("dataview_proto_thunks.realm.json#body:dv_set_int8")] dv_set_int8, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
         ),
         (
             "setUint8",
-            crate::fn_info!(dv_set_uint8, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm("dataview_proto_thunks.realm.json#body:dv_set_uint8")] dv_set_uint8, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
         ),
         (
             "setInt16",
-            crate::fn_info!(dv_set_int16, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm("dataview_proto_thunks.realm.json#body:dv_set_int16")] dv_set_int16, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
         ),
         (
             "setUint16",
-            crate::fn_info!(dv_set_uint16, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm("dataview_proto_thunks.realm.json#body:dv_set_uint16")] dv_set_uint16, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
         ),
         (
             "setInt32",
-            crate::fn_info!(dv_set_int32, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm("dataview_proto_thunks.realm.json#body:dv_set_int32")] dv_set_int32, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
         ),
         (
             "setUint32",
-            crate::fn_info!(dv_set_uint32, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm("dataview_proto_thunks.realm.json#body:dv_set_uint32")] dv_set_uint32, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
         ),
         (
             "setFloat32",
-            crate::fn_info!(dv_set_float32, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm("dataview_proto_thunks.realm.json#body:dv_set_float32")] dv_set_float32, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
         ),
         (
             "setFloat64",
-            crate::fn_info!(dv_set_float64, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm("dataview_proto_thunks.realm.json#body:dv_set_float64")] dv_set_float64, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
         ),
         (
             "setBigInt64",
-            crate::fn_info!(dv_set_bigint64, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm("dataview_proto_thunks.realm.json#body:dv_set_bigint64")] dv_set_bigint64, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
         ),
         (
             "setBigUint64",
-            crate::fn_info!(dv_set_biguint64, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm("dataview_proto_thunks.realm.json#body:dv_set_biguint64")] dv_set_biguint64, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
         ),
     ];
     for (name, ptr) in sets.iter().copied() {

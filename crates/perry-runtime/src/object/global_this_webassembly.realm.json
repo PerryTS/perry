@@ -1,0 +1,669 @@
+{
+  "version": 1,
+  "groups": {
+    "objects": [
+      {
+        "name": "WebAssembly",
+        "kind": "namespace",
+        "properties": [
+          {
+            "key": "CompileError",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "WebAssembly.CompileError"
+            }
+          },
+          {
+            "key": "Exception",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "WebAssembly.Exception"
+            }
+          },
+          {
+            "key": "Global",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "WebAssembly.Global"
+            }
+          },
+          {
+            "key": "Instance",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "WebAssembly.Instance"
+            }
+          },
+          {
+            "key": "JSTag",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "reference",
+              "value": "WebAssembly.JSTag"
+            }
+          },
+          {
+            "key": "LinkError",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "WebAssembly.LinkError"
+            }
+          },
+          {
+            "key": "Memory",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "WebAssembly.Memory"
+            }
+          },
+          {
+            "key": "Module",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "WebAssembly.Module"
+            }
+          },
+          {
+            "key": "RuntimeError",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "WebAssembly.RuntimeError"
+            }
+          },
+          {
+            "key": "Table",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "WebAssembly.Table"
+            }
+          },
+          {
+            "key": "Tag",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "WebAssembly.Tag"
+            }
+          },
+          {
+            "key": "compile",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "WebAssembly.compile"
+            }
+          },
+          {
+            "key": "compileStreaming",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "WebAssembly.compileStreaming"
+            }
+          },
+          {
+            "key": "instantiate",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "WebAssembly.instantiate"
+            }
+          },
+          {
+            "key": "instantiateStreaming",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "WebAssembly.instantiateStreaming"
+            }
+          },
+          {
+            "key": "promising",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "WebAssembly.promising"
+            }
+          },
+          {
+            "key": "validate",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "WebAssembly.validate"
+            }
+          }
+        ],
+        "own_key_order": [
+          "Module",
+          "Instance",
+          "Memory",
+          "Table",
+          "Global",
+          "CompileError",
+          "LinkError",
+          "RuntimeError",
+          "Exception",
+          "Tag",
+          "JSTag",
+          "compile",
+          "validate",
+          "instantiate",
+          "compileStreaming",
+          "instantiateStreaming",
+          "promising"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2048,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "Object.prototype",
+          "WebAssembly.CompileError",
+          "WebAssembly.Exception",
+          "WebAssembly.Global",
+          "WebAssembly.Instance",
+          "WebAssembly.JSTag",
+          "WebAssembly.LinkError",
+          "WebAssembly.Memory",
+          "WebAssembly.Module",
+          "WebAssembly.RuntimeError",
+          "WebAssembly.Table",
+          "WebAssembly.Tag",
+          "WebAssembly.compile",
+          "WebAssembly.compileStreaming",
+          "WebAssembly.instantiate",
+          "WebAssembly.instantiateStreaming",
+          "WebAssembly.promising",
+          "WebAssembly.validate"
+        ]
+      },
+      {
+        "name": "WebAssembly.CompileError.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "WebAssembly.CompileError"
+            }
+          },
+          {
+            "key": "message",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "string",
+              "value": "CompileError"
+            }
+          }
+        ],
+        "own_key_order": [
+          "constructor",
+          "name",
+          "message"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2048,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "Object.prototype",
+          "WebAssembly.CompileError"
+        ]
+      },
+      {
+        "name": "WebAssembly.Exception.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "WebAssembly.Exception"
+            }
+          }
+        ],
+        "own_key_order": [
+          "constructor"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2048,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "Object.prototype",
+          "WebAssembly.Exception"
+        ]
+      },
+      {
+        "name": "WebAssembly.Global.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "WebAssembly.Global"
+            }
+          },
+          {
+            "key": "value",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "undefined"
+            }
+          },
+          {
+            "key": "valueOf",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "WebAssembly.Global.prototype.valueOf"
+            }
+          }
+        ],
+        "own_key_order": [
+          "constructor",
+          "value",
+          "valueOf"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2048,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "Object.prototype",
+          "WebAssembly.Global",
+          "WebAssembly.Global.prototype.valueOf"
+        ]
+      },
+      {
+        "name": "WebAssembly.Instance.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "WebAssembly.Instance"
+            }
+          },
+          {
+            "key": "exports",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "undefined"
+            }
+          }
+        ],
+        "own_key_order": [
+          "constructor",
+          "exports"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2048,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "Object.prototype",
+          "WebAssembly.Instance"
+        ]
+      },
+      {
+        "name": "WebAssembly.JSTag",
+        "kind": "namespace",
+        "properties": [],
+        "own_key_order": [],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 2,
+          "reserved": 0,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "Object.prototype"
+        ]
+      },
+      {
+        "name": "WebAssembly.LinkError.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "WebAssembly.LinkError"
+            }
+          },
+          {
+            "key": "message",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "string",
+              "value": "LinkError"
+            }
+          }
+        ],
+        "own_key_order": [
+          "constructor",
+          "name",
+          "message"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2048,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "Object.prototype",
+          "WebAssembly.LinkError"
+        ]
+      },
+      {
+        "name": "WebAssembly.Memory.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "buffer",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "undefined"
+            }
+          },
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "WebAssembly.Memory"
+            }
+          },
+          {
+            "key": "grow",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "WebAssembly.Memory.prototype.grow"
+            }
+          }
+        ],
+        "own_key_order": [
+          "constructor",
+          "buffer",
+          "grow"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2048,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "Object.prototype",
+          "WebAssembly.Memory",
+          "WebAssembly.Memory.prototype.grow"
+        ]
+      },
+      {
+        "name": "WebAssembly.Module.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "WebAssembly.Module"
+            }
+          }
+        ],
+        "own_key_order": [
+          "constructor"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2048,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "Object.prototype",
+          "WebAssembly.Module"
+        ]
+      },
+      {
+        "name": "WebAssembly.RuntimeError.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "WebAssembly.RuntimeError"
+            }
+          },
+          {
+            "key": "message",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "string",
+              "value": "RuntimeError"
+            }
+          }
+        ],
+        "own_key_order": [
+          "constructor",
+          "name",
+          "message"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2048,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "Object.prototype",
+          "WebAssembly.RuntimeError"
+        ]
+      },
+      {
+        "name": "WebAssembly.Table.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "WebAssembly.Table"
+            }
+          },
+          {
+            "key": "get",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "WebAssembly.Table.prototype.get"
+            }
+          },
+          {
+            "key": "grow",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "WebAssembly.Table.prototype.grow"
+            }
+          },
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "undefined"
+            }
+          },
+          {
+            "key": "set",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "WebAssembly.Table.prototype.set"
+            }
+          }
+        ],
+        "own_key_order": [
+          "constructor",
+          "get",
+          "grow",
+          "length",
+          "set"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2048,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "Object.prototype",
+          "WebAssembly.Table",
+          "WebAssembly.Table.prototype.get",
+          "WebAssembly.Table.prototype.grow",
+          "WebAssembly.Table.prototype.set"
+        ]
+      },
+      {
+        "name": "WebAssembly.Tag.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "WebAssembly.Tag"
+            }
+          }
+        ],
+        "own_key_order": [
+          "constructor"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2048,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "Object.prototype",
+          "WebAssembly.Tag"
+        ]
+      }
+    ]
+  }
+}

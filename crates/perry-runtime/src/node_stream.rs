@@ -1938,3 +1938,6 @@ pub(crate) fn test_append_chunk_bytes(value: f64, out: &mut Vec<u8>) {
 pub(crate) fn test_buffer_value_from_bytes(bytes: &[u8]) -> f64 {
     buffer_value_from_bytes(bytes)
 }
+
+// Realm facts owned here; source-only until image emission.
+crate::realm_decl!("node_stream.realm.json#objects");

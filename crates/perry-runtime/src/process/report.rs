@@ -121,7 +121,7 @@ fn process_report_controller_object() -> f64 {
     obj.set(4, JSValue::from_bits((module_string_value("")).to_bits()));
     obj.set( 5, JSValue::from_bits((module_function1(
             "getReport",
-            crate::fn_info!(process_report_function_get_report, 1; with_declared(1), with_length(1)),
+            crate::fn_info!(#[realm("report.realm.json#body:process_report_function_get_report")] process_report_function_get_report, 1; with_declared(1), with_length(1)),
             1,
         )).to_bits()));
     obj.set(6, JSValue::from_bits((bool_value(false)).to_bits()));
@@ -133,7 +133,7 @@ fn process_report_controller_object() -> f64 {
     );
     obj.set( 10, JSValue::from_bits((module_function2(
             "writeReport",
-            crate::fn_info!(process_report_function_write_report, 2; with_declared(2), with_length(2)),
+            crate::fn_info!(#[realm("report.realm.json#body:process_report_function_write_report")] process_report_function_write_report, 2; with_declared(2), with_length(2)),
             2,
         )).to_bits()));
     module_object_value(obj.finish())

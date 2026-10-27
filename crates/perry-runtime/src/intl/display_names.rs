@@ -386,3 +386,6 @@ pub(super) extern "C" fn constructor_thunk(
         super::rest_arg(rest, 1),
     )
 }
+
+// Realm facts owned here; source-only until image emission.
+crate::realm_decl!("display_names.realm.json#objects");

@@ -168,3 +168,6 @@ pub(super) extern "C" fn supported_values_of_thunk(
         )),
     }
 }
+
+// Realm facts owned here; source-only until image emission.
+crate::realm_decl!("locales.realm.json#objects");

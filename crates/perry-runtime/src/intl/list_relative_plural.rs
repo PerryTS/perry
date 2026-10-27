@@ -821,7 +821,7 @@ pub(super) fn configure_plural_rules(
         install_function(
             obj,
             "selectRange",
-            crate::fn_info!(plural_rules_select_range_thunk, 2; with_declared(2)),
+            crate::fn_info!(#[realm("list_relative_plural.realm.json#body:plural_rules_select_range_thunk")] plural_rules_select_range_thunk, 2; with_declared(2)),
             2,
         )
     });
@@ -1135,3 +1135,6 @@ pub(crate) extern "C" fn plural_rules_bound_resolved_options_thunk(
     let obj = captured_intl_object(closure, "resolvedOptions", KIND_PLURAL_RULES);
     plural_rules_resolved_options_object(obj)
 }
+
+// Realm facts owned here; source-only until image emission.
+crate::realm_decl!("list_relative_plural.realm.json#objects");

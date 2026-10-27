@@ -92,7 +92,7 @@ fn attach_prototype(constructor_value: f64, methods: &[(&str, u32)]) -> f64 {
         super::super::PropertyAttrs::new(true, false, true),
     );
 
-    let thunk = crate::fn_info!(async_hooks_prototype_method_thunk, 1; with_rest(0));
+    let thunk = crate::fn_info!(#[realm("async_hooks_exports.realm.json#body:async_hooks_prototype_method_thunk")] async_hooks_prototype_method_thunk, 1; with_rest(0));
     for &(name, length) in methods {
         let method = crate::closure::js_closure_alloc(thunk, 2);
         if method.is_null() {

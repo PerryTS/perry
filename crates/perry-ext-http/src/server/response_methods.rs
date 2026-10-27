@@ -269,3 +269,9 @@ mod tests {
             .unwrap();
     }
 }
+
+// Realm facts owned here; source-only until image emission.
+macro_rules! realm_decl {
+    ($facts:literal) => {};
+}
+realm_decl!("response_methods.realm.json#objects");

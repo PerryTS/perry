@@ -540,3 +540,6 @@ pub(crate) fn segmenter_resolved_options_object(obj: *const ObjectHeader) -> f64
     );
     js_nanbox_pointer(out as i64)
 }
+
+// Realm facts owned here; source-only until image emission.
+crate::realm_decl!("segmenter.realm.json#objects");

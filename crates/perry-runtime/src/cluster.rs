@@ -1663,3 +1663,6 @@ fn value_to_string(value: f64) -> Option<String> {
             .map(|s| s.to_string())
     }
 }
+
+// Realm facts owned here; source-only until image emission.
+crate::realm_decl!("cluster.realm.json#objects");

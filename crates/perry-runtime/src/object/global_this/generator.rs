@@ -931,15 +931,15 @@ fn build_generator_tower(
     );
     let (next_info, return_info, throw_info) = if is_async {
         (
-            crate::fn_info!(async_generator_proto_next_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
-            crate::fn_info!(async_generator_proto_return_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
-            crate::fn_info!(async_generator_proto_throw_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm("generator.realm.json#body:async_generator_proto_next_thunk")] async_generator_proto_next_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm("generator.realm.json#body:async_generator_proto_return_thunk")] async_generator_proto_return_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm("generator.realm.json#body:async_generator_proto_throw_thunk")] async_generator_proto_throw_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         )
     } else {
         (
-            crate::fn_info!(generator_proto_next_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
-            crate::fn_info!(generator_proto_return_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
-            crate::fn_info!(generator_proto_throw_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm("generator.realm.json#body:generator_proto_next_thunk")] generator_proto_next_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm("generator.realm.json#body:generator_proto_return_thunk")] generator_proto_return_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm("generator.realm.json#body:generator_proto_throw_thunk")] generator_proto_throw_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         )
     };
     for (name, info, key) in [
@@ -985,13 +985,13 @@ fn build_generator_tower(
         (
             "asyncIterator",
             "[Symbol.asyncIterator]",
-            crate::fn_info!(async_generator_proto_async_iterator_thunk, 1; with_declared(0)),
+            crate::fn_info!(#[realm("generator.realm.json#body:async_generator_proto_async_iterator_thunk")] async_generator_proto_async_iterator_thunk, 1; with_declared(0)),
         )
     } else {
         (
             "iterator",
             "[Symbol.iterator]",
-            crate::fn_info!(generator_proto_iterator_thunk, 1; with_declared(0)),
+            crate::fn_info!(#[realm("generator.realm.json#body:generator_proto_iterator_thunk")] generator_proto_iterator_thunk, 1; with_declared(0)),
         )
     };
     if is_async {

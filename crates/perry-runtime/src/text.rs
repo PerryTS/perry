@@ -1109,3 +1109,6 @@ mod tests {
         assert_eq!(got, expected, "decode(DataView) must see the backing bytes");
     }
 }
+
+// Realm facts owned here; source-only until image emission.
+crate::realm_decl!("text.realm.json#objects");

@@ -1646,3 +1646,6 @@ mod grouping_tests {
         assert!(!grouping_enabled("false", 9, sizes));
     }
 }
+
+// Realm facts owned here; source-only until image emission.
+crate::realm_decl!("number_format.realm.json#objects");

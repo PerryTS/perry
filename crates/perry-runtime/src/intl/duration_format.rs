@@ -309,19 +309,19 @@ pub(super) fn configure(obj: *mut ObjectHeader, options: f64) {
     super::install_function_from_handle(
         &obj_handle,
         "format",
-        crate::fn_info!(format_thunk, 1; with_declared(1)),
+        crate::fn_info!(#[realm("duration_format.realm.json#body:format_thunk")] format_thunk, 1; with_declared(1)),
         1,
     );
     super::install_function_from_handle(
         &obj_handle,
         "formatToParts",
-        crate::fn_info!(to_parts_thunk, 1; with_declared(1)),
+        crate::fn_info!(#[realm("duration_format.realm.json#body:to_parts_thunk")] to_parts_thunk, 1; with_declared(1)),
         1,
     );
     super::install_function_from_handle(
         &obj_handle,
         "resolvedOptions",
-        crate::fn_info!(resolved_options_thunk, 0; with_declared(0)),
+        crate::fn_info!(#[realm("duration_format.realm.json#body:resolved_options_thunk")] resolved_options_thunk, 0; with_declared(0)),
         0,
     );
 }
@@ -912,3 +912,6 @@ pub(super) extern "C" fn constructor_thunk(
         super::rest_arg(rest, 1),
     )
 }
+
+// Realm facts owned here; source-only until image emission.
+crate::realm_decl!("duration_format.realm.json#objects");

@@ -94,3 +94,6 @@ pub(crate) extern "C" fn plural_rules_constructor_thunk(
         rest_arg(rest, 1),
     )
 }
+
+// Realm facts owned here; source-only until image emission.
+crate::realm_decl!("constructor_thunks.realm.json#objects");

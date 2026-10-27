@@ -571,7 +571,7 @@ fn install_domain_prototype(proto: &mut PayloadPrototype) {
     method!("exit", domain_exit_thunk, 0);
     method!("add", domain_add_thunk, 1);
     method!("remove", domain_remove_thunk, 1);
-    proto.method("run", perry_runtime::fn_info!(
+    proto.method("run", perry_runtime::fn_info!(#[realm("domain.realm.json#body:domain_run_thunk")] 
         domain_run_thunk, 2; with_rest(1), with_declared(1), with_flags(perry_runtime::closure::FN_BUILTIN)
     ), 1);
     method!("intercept", domain_intercept_thunk, 1);
@@ -650,3 +650,9 @@ pub unsafe extern "C" fn js_domain_native_dispatch(
         _ => undefined(),
     }
 }
+
+// Realm facts owned here; source-only until image emission.
+macro_rules! realm_decl {
+    ($facts:literal) => {};
+}
+realm_decl!("domain.realm.json#objects");

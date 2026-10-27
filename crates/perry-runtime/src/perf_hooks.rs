@@ -1898,3 +1898,6 @@ mod sso_tests_1781 {
         }
     }
 }
+
+// Realm facts owned here; source-only until image emission.
+crate::realm_decl!("perf_hooks.realm.json#objects");

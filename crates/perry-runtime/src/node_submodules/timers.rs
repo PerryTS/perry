@@ -436,3 +436,6 @@ pub(crate) extern "C" fn timers_promises_scheduler(
     let err = crate::error::js_typeerror_new(msg);
     crate::exception::js_throw(boxed_ptr(err as *const u8))
 }
+
+// Realm facts owned here; source-only until image emission.
+crate::realm_decl!("timers.realm.json#objects");

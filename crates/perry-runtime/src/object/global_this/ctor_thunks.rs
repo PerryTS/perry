@@ -464,11 +464,11 @@ pub(crate) extern "C" fn cryptokey_usages_getter_thunk(
 pub(crate) fn webcrypto_method_value(property_name: &str) -> Option<f64> {
     let (info, arity) = match property_name {
         "getRandomValues" => (
-            crate::fn_info!(webcrypto_get_random_values_thunk, 1; with_declared(1)),
+            crate::fn_info!(#[realm("ctor_thunks.realm.json#body:webcrypto_get_random_values_thunk")] webcrypto_get_random_values_thunk, 1; with_declared(1)),
             1,
         ),
         "randomUUID" => (
-            crate::fn_info!(webcrypto_random_uuid_thunk, 0; with_declared(0)),
+            crate::fn_info!(#[realm("ctor_thunks.realm.json#body:webcrypto_random_uuid_thunk")] webcrypto_random_uuid_thunk, 0; with_declared(0)),
             0,
         ),
         _ => return None,
@@ -654,3 +654,6 @@ mod tests {
         );
     }
 }
+
+// Realm facts owned here; source-only until image emission.
+crate::realm_decl!("ctor_thunks.realm.json#objects");

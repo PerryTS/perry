@@ -821,3 +821,6 @@ pub extern "C" fn js_atomics_wait_async(
     });
     wait_async_result(true, crate::value::js_nanbox_pointer(promise as i64))
 }
+
+// Realm facts owned here; source-only until image emission.
+crate::realm_decl!("atomics.realm.json#objects");

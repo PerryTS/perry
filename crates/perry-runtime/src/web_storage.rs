@@ -233,27 +233,27 @@ pub(crate) fn install_storage_globals(
     install_method(
         storage_proto,
         "clear",
-        crate::fn_info!(storage_clear, 0; with_declared(0)),
+        crate::fn_info!(#[realm("web_storage.realm.json#body:storage_clear")] storage_clear, 0; with_declared(0)),
     );
     install_method(
         storage_proto,
         "getItem",
-        crate::fn_info!(storage_get_item, 1; with_declared(1)),
+        crate::fn_info!(#[realm("web_storage.realm.json#body:storage_get_item")] storage_get_item, 1; with_declared(1)),
     );
     install_method(
         storage_proto,
         "key",
-        crate::fn_info!(storage_key, 1; with_declared(1)),
+        crate::fn_info!(#[realm("web_storage.realm.json#body:storage_key")] storage_key, 1; with_declared(1)),
     );
     install_method(
         storage_proto,
         "removeItem",
-        crate::fn_info!(storage_remove_item, 1; with_declared(1)),
+        crate::fn_info!(#[realm("web_storage.realm.json#body:storage_remove_item")] storage_remove_item, 1; with_declared(1)),
     );
     install_method(
         storage_proto,
         "setItem",
-        crate::fn_info!(storage_set_item, 2; with_declared(2)),
+        crate::fn_info!(#[realm("web_storage.realm.json#body:storage_set_item")] storage_set_item, 2; with_declared(2)),
     );
     install_storage_length_accessor(storage_proto);
 
@@ -312,7 +312,7 @@ fn install_method(
 
 fn install_storage_length_accessor(proto: *mut ObjectHeader) {
     let getter = crate::closure::js_closure_alloc(
-        crate::fn_info!(storage_length_getter, 0; with_declared(0)),
+        crate::fn_info!(#[realm("web_storage.realm.json#body:storage_length_getter")] storage_length_getter, 0; with_declared(0)),
         0,
     );
     if getter.is_null() {
@@ -382,12 +382,16 @@ fn set_global_storage_property(global: *mut ObjectHeader, name: &str, value: *mu
     );
 
     let getter_fn = match name {
-        "localStorage" => crate::fn_info!(storage_local_global_getter, 0; with_declared(0)),
-        _ => crate::fn_info!(storage_session_global_getter, 0; with_declared(0)),
+        "localStorage" => {
+            crate::fn_info!(#[realm("web_storage.realm.json#body:storage_local_global_getter")] storage_local_global_getter, 0; with_declared(0))
+        }
+        _ => {
+            crate::fn_info!(#[realm("web_storage.realm.json#body:storage_session_global_getter")] storage_session_global_getter, 0; with_declared(0))
+        }
     };
     let getter = crate::closure::js_closure_alloc(getter_fn, 0);
     let setter = crate::closure::js_closure_alloc(
-        crate::fn_info!(storage_global_setter, 1; with_declared(1)),
+        crate::fn_info!(#[realm("web_storage.realm.json#body:storage_global_setter")] storage_global_setter, 1; with_declared(1)),
         0,
     );
     if !getter.is_null() && !setter.is_null() {
@@ -530,3 +534,6 @@ fn throw_quota_exceeded() -> f64 {
     let err = crate::error::js_error_new_with_name_message(b"QuotaExceededError", msg);
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
+
+// Realm facts owned here; source-only until image emission.
+crate::realm_decl!("web_storage.realm.json#objects");

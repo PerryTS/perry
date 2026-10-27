@@ -794,3 +794,6 @@ mod tests {
         assert_eq!(crate::builtins::js_number_coerce(result), 5.0);
     }
 }
+
+// Realm facts owned here; source-only until image emission.
+crate::realm_decl!("builtin_thunks.realm.json#objects");

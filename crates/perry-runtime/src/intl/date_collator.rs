@@ -1865,3 +1865,6 @@ mod collator_compare_tests {
         );
     }
 }
+
+// Realm facts owned here; source-only until image emission.
+crate::realm_decl!("date_collator.realm.json#objects");

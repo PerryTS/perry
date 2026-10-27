@@ -708,3 +708,6 @@ mod redirect_mode_tests {
         assert_eq!(js_fetch_take_pending_redirect(), -1);
     }
 }
+
+// Realm facts owned here; source-only until image emission.
+crate::realm_decl!("global_fetch.realm.json#objects");

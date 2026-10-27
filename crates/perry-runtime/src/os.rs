@@ -1521,3 +1521,6 @@ mod tests {
         assert!(!eol.is_null());
     }
 }
+
+// Realm facts owned here; source-only until image emission.
+crate::realm_decl!("os.realm.json#objects");

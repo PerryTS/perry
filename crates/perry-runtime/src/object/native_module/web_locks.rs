@@ -240,13 +240,13 @@ fn worker_threads_locks_proto_value() -> f64 {
     let proto = crate::object::js_object_alloc(0, 0);
     let request = web_locks_make_function(
         "request",
-        crate::fn_info!(worker_threads_locks_request, 3; with_declared(3)),
+        crate::fn_info!(#[realm("web_locks.realm.json#body:worker_threads_locks_request")] worker_threads_locks_request, 3; with_declared(3)),
         2,
     );
     web_locks_set_field(proto, "request", request);
     let query = web_locks_make_function(
         "query",
-        crate::fn_info!(worker_threads_locks_query, 0; with_declared(0)),
+        crate::fn_info!(#[realm("web_locks.realm.json#body:worker_threads_locks_query")] worker_threads_locks_query, 0; with_declared(0)),
         0,
     );
     web_locks_set_field(proto, "query", query);

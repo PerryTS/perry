@@ -188,3 +188,6 @@ extern "C" fn deferred_bind_trampoline(
         )
     }
 }
+
+// Realm facts owned here; source-only until image emission.
+crate::realm_decl!("resource_methods.realm.json#objects");

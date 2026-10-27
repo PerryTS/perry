@@ -249,3 +249,6 @@ mod tests {
         });
     }
 }
+
+// Realm facts owned here; source-only until image emission.
+crate::realm_decl!("object_intrinsic.realm.json#objects");

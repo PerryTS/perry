@@ -424,6 +424,8 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
         "crates/perry-runtime/src/object/shapes.rs",
         "crates/perry-runtime/src/object/shapes_slot_list.rs",
         "crates/perry-runtime/src/object/shapes_store.rs",
+        "crates/perry-runtime/src/object/shapes_store/slab.rs",
+        "crates/perry-runtime/src/object/shapes_store/flat.rs",
         "crates/perry-runtime/src/object/mod.rs",
         "crates/perry-runtime/src/object/live_slots.rs",
         "crates/perry-codegen/src/lower_call/new_alloc.rs",
@@ -467,7 +469,13 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
         + clean["crates/perry-runtime/src/object/shapes_store.rs"]
         + "\n"
         + clean["crates/perry-runtime/src/object/shapes_store/slab.rs"]
+        + "\n"
+        + clean["crates/perry-runtime/src/object/shapes_store/flat.rs"]
     )
+    flat = clean["crates/perry-runtime/src/object/shapes_store/flat.rs"]
+    require_code(flat, r"struct\s+Region\s*\{\s*base\s*:\s*\*mut\s+ShapeRecord", "one immovable descriptor Region")
+    if re.search(r"\brealloc\s*\(", blank_rust_comments_and_literals(flat)):
+        raise CensusError("descriptor Region must never realloc")
     object_mod = clean["crates/perry-runtime/src/object/mod.rs"]
     live_slots = clean["crates/perry-runtime/src/object/live_slots.rs"]
     codegen_alloc = clean["crates/perry-codegen/src/lower_call/new_alloc.rs"]
@@ -520,13 +528,13 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
         # into a rehashing bucket) moves them under the collector's feet.
         (r"slab\s*:\s*(?:std::cell::)?UnsafeCell\s*<\s*ShapeSlab\s*>", "by-id descriptor slab with stable record addresses"),
         (r"struct\s+Slot\s*<\s*T\s*>\s*\(\s*std::ptr::NonNull\s*<\s*T\s*>\s*\)", "a slab slot is one pointer to its own allocation"),
-        (r"type\s+ChunkCells\s*=\s*\[\s*UnsafeCell\s*<\s*ShapeRecord\s*>\s*;\s*CHUNK_LEN\s*\]", "slab chunks individually allocated, never reallocated"),
+        (r"type\s+ChunkCells\s*=\s*\[\s*UnsafeCell\s*<\s*\*mut\s+ShapeRecord\s*>\s*;\s*CHUNK_LEN\s*\]", "slab chunks hold pointers to stable Region records"),
         (r"type\s+PageSlots\s*=\s*\[\s*Slot\s*<\s*ChunkCells\s*>\s*;\s*PAGE_LEN\s*\]", "slab pages hold chunk pointers, not records"),
         (r"type\s+Page\s*=\s*Slot\s*<\s*PageSlots\s*>", "slab directory entries are page pointers"),
         (r"pages\s*:\s*Vec\s*<\s*Page\s*>", "slab directory is a vector of page pointers"),
         # `keys` must stay the FIRST field of the `#[repr(C)]` record: the
         # record address IS the rewritable keys slot (`keys_slot`).
-        (r"#\[repr\(C\)\]\s*(?:#\[[^\]]*\]\s*)*pub\(crate\)\s+struct\s+ShapeRecord\s*\{\s*(?://[^\n]*\n\s*)*pub\(super\)\s+keys\s*:\s*u64", "slab record is repr(C) with the keys word first"),
+        (r"#\[repr\(C(?:,\s*align\(8\))?\)\]\s*(?:#\[[^\]]*\]\s*)*pub\(crate\)\s+struct\s+ShapeRecord\s*\{\s*(?://[^\n]*\n\s*)*pub\(super\)\s+keys\s*:\s*u64", "slab record is repr(C) with the keys word first"),
         (r"logical_key_count\s*:\s*u32", "exact logical-key fact"),
         (r"live_inline_slot_count\s*:\s*u32", "exact live-slot fact"),
         (r"semantic_generation\s*:\s*u64", "semantic transition fact"),
@@ -556,7 +564,7 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     if re.search(r"\bfetch_add\s*\(", allocator):
         raise CensusError("ShapeId allocator wraps instead of parking")
     require_code(shapes, r"\bfn\s+shape_id_exhausted_abort\b", "exhaustion fail-stop")
-    public_ensure = function_body(shapes, "shape_id_for_keys_ensure")
+    public_ensure = function_body(shapes, "layout_for_keys_ensure")
     require_code(
         public_ensure,
         r"publish_shape_result\s*\(",
@@ -655,13 +663,13 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
         )
     assert_before(
         ensure,
-        "slab_mut().insert",
+        "slab_mut().publish_dynamic",
         ensure_append,
         "by-id descriptor before reverse accelerator",
     )
     assert_before(
         ensure,
-        "slab_mut().insert",
+        "slab_mut().publish_dynamic",
         "facts_append_fresh",
         "by-id descriptor before facts accelerator",
     )
@@ -1166,8 +1174,8 @@ def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object])
     store_path = "crates/perry-runtime/src/object/shapes_store.rs"
     flat_slab = dict(sources)
     flat_slab[store_path] = flat_slab[store_path].replace(
-        "type ChunkCells = [UnsafeCell<ShapeRecord>; CHUNK_LEN];",
-        "type ChunkCells = Vec<UnsafeCell<ShapeRecord>>;",
+        "type ChunkCells = [UnsafeCell<*mut ShapeRecord>; CHUNK_LEN];",
+        "type ChunkCells = Vec<UnsafeCell<*mut ShapeRecord>>;",
         1,
     )
     expect_rejected(
@@ -1227,7 +1235,7 @@ def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object])
         mint_body = function_body(
             inverted_mint[shapes_path], "shape_descriptor_mint_fresh"
         )
-        inverted_body = swap_once(mint_body, "slab_mut().insert", accelerator)
+        inverted_body = swap_once(mint_body, "slab_mut().publish_dynamic", accelerator)
         inverted_mint[shapes_path] = inverted_mint[shapes_path].replace(
             mint_body, inverted_body, 1
         )

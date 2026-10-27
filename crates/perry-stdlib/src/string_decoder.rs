@@ -275,7 +275,7 @@ pub unsafe fn string_decoder_prototype_value() -> f64 {
         proto,
         "write",
         function_value(
-            perry_runtime::fn_info!(string_decoder_proto_write, 1; with_declared(1)),
+            perry_runtime::fn_info!(#[realm("string_decoder.realm.json#body:string_decoder_proto_write")] string_decoder_proto_write, 1; with_declared(1)),
             "write",
         ),
         true,
@@ -285,7 +285,7 @@ pub unsafe fn string_decoder_prototype_value() -> f64 {
         proto,
         "end",
         function_value(
-            perry_runtime::fn_info!(string_decoder_proto_end, 1; with_declared(1)),
+            perry_runtime::fn_info!(#[realm("string_decoder.realm.json#body:string_decoder_proto_end")] string_decoder_proto_end, 1; with_declared(1)),
             "end",
         ),
         true,
@@ -295,7 +295,7 @@ pub unsafe fn string_decoder_prototype_value() -> f64 {
         proto,
         "text",
         function_value(
-            perry_runtime::fn_info!(string_decoder_proto_text, 2; with_declared(2)),
+            perry_runtime::fn_info!(#[realm("string_decoder.realm.json#body:string_decoder_proto_text")] string_decoder_proto_text, 2; with_declared(2)),
             "text",
         ),
         true,
@@ -305,7 +305,7 @@ pub unsafe fn string_decoder_prototype_value() -> f64 {
         proto,
         "lastChar",
         function_value(
-            perry_runtime::fn_info!(string_decoder_last_char_getter, 0; with_declared(0)),
+            perry_runtime::fn_info!(#[realm("string_decoder.realm.json#body:string_decoder_last_char_getter")] string_decoder_last_char_getter, 0; with_declared(0)),
             "get lastChar",
         ),
         true,
@@ -314,7 +314,7 @@ pub unsafe fn string_decoder_prototype_value() -> f64 {
         proto,
         "lastNeed",
         function_value(
-            perry_runtime::fn_info!(string_decoder_last_need_getter, 0; with_declared(0)),
+            perry_runtime::fn_info!(#[realm("string_decoder.realm.json#body:string_decoder_last_need_getter")] string_decoder_last_need_getter, 0; with_declared(0)),
             "get lastNeed",
         ),
         true,
@@ -323,7 +323,7 @@ pub unsafe fn string_decoder_prototype_value() -> f64 {
         proto,
         "lastTotal",
         function_value(
-            perry_runtime::fn_info!(string_decoder_last_total_getter, 0; with_declared(0)),
+            perry_runtime::fn_info!(#[realm("string_decoder.realm.json#body:string_decoder_last_total_getter")] string_decoder_last_total_getter, 0; with_declared(0)),
             "get lastTotal",
         ),
         true,

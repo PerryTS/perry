@@ -45,12 +45,12 @@ pub(crate) fn install_lazy_state_getters(proto: *mut crate::object::ObjectHeader
     let _no_move = crate::gc::GcSuppressScope::new();
     for (name, which) in [("_readableState", 0.0), ("_writableState", 1.0)] {
         let getter = crate::closure::js_closure_alloc(
-            crate::fn_info!(lazy_state_get, 0; with_declared(0)),
+            crate::fn_info!(#[realm("native_hooks.realm.json#body:lazy_state_get")] lazy_state_get, 0; with_declared(0)),
             1,
         );
         crate::closure::js_closure_set_capture_f64(getter, 0, which);
         let setter = crate::closure::js_closure_alloc(
-            crate::fn_info!(lazy_state_set, 1; with_declared(1)),
+            crate::fn_info!(#[realm("native_hooks.realm.json#body:lazy_state_set")] lazy_state_set, 1; with_declared(1)),
             1,
         );
         crate::closure::js_closure_set_capture_f64(setter, 0, which);

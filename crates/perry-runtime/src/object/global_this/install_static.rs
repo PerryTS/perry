@@ -751,17 +751,17 @@ pub(crate) fn install_builtin_constructor_statics(
             // and reflection see.
             s.method(
                 "abort",
-                crate::fn_info!(abort_signal_abort_thunk, 1; with_declared(0)),
+                crate::fn_info!(#[realm("install_static.realm.json#body:abort_signal_abort_thunk")] abort_signal_abort_thunk, 1; with_declared(0)),
                 0,
             );
             s.method(
                 "timeout",
-                crate::fn_info!(abort_signal_timeout_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm("install_static.realm.json#body:abort_signal_timeout_thunk")] abort_signal_timeout_thunk, 1; with_declared(1)),
                 1,
             );
             s.method(
                 "any",
-                crate::fn_info!(abort_signal_any_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm("install_static.realm.json#body:abort_signal_any_thunk")] abort_signal_any_thunk, 1; with_declared(1)),
                 1,
             );
         }
@@ -808,12 +808,12 @@ pub(crate) fn install_builtin_constructor_statics(
         "Uint8Array" => {
             s.method(
                 "fromBase64",
-                crate::fn_info!(uint8array_from_base64_thunk, 2; with_declared(2)),
+                crate::fn_info!(#[realm("install_static.realm.json#body:uint8array_from_base64_thunk")] uint8array_from_base64_thunk, 2; with_declared(2)),
                 1,
             );
             s.method(
                 "fromHex",
-                crate::fn_info!(uint8array_from_hex_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm("install_static.realm.json#body:uint8array_from_hex_thunk")] uint8array_from_hex_thunk, 1; with_declared(1)),
                 1,
             );
         }
@@ -1156,7 +1156,7 @@ pub(crate) fn install_builtin_species_accessor(ctor: *mut crate::closure::Closur
         return;
     }
     let getter = crate::closure::js_closure_alloc(
-        crate::fn_info!(builtin_species_getter_thunk, 0; with_declared(0)),
+        crate::fn_info!(#[realm("install_static.realm.json#body:builtin_species_getter_thunk")] builtin_species_getter_thunk, 0; with_declared(0)),
         0,
     );
     if getter.is_null() {
@@ -1186,12 +1186,12 @@ pub(super) fn web_url_statics(name: &str, s: &mut ConstructorStatics) {
         "URL" => {
             s.method(
                 "canParse",
-                crate::fn_info!(url_can_parse_thunk, 2; with_declared(1)),
+                crate::fn_info!(#[realm("install_static.realm.json#body:url_can_parse_thunk")] url_can_parse_thunk, 2; with_declared(1)),
                 1,
             );
             s.method(
                 "parse",
-                crate::fn_info!(url_parse_thunk, 2; with_declared(1)),
+                crate::fn_info!(#[realm("install_static.realm.json#body:url_parse_thunk")] url_parse_thunk, 2; with_declared(1)),
                 1,
             );
         }
@@ -1205,7 +1205,7 @@ pub(super) fn web_webcrypto_statics(name: &str, s: &mut ConstructorStatics) {
         "SubtleCrypto" => {
             s.method_with_attrs(
                 "supports",
-                crate::fn_info!(subtle_crypto_supports_thunk, 1; with_rest(0)),
+                crate::fn_info!(#[realm("install_static.realm.json#body:subtle_crypto_supports_thunk")] subtle_crypto_supports_thunk, 1; with_rest(0)),
                 2,
                 super::super::PropertyAttrs::new(true, true, true),
             );
@@ -1213,3 +1213,6 @@ pub(super) fn web_webcrypto_statics(name: &str, s: &mut ConstructorStatics) {
         _ => {}
     }
 }
+
+// Realm facts owned here; source-only until image emission.
+crate::realm_decl!("install_static.realm.json#objects");

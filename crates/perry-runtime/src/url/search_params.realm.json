@@ -1,0 +1,683 @@
+{
+  "version": 1,
+  "groups": {
+    "objects": [
+      {
+        "name": "URLSearchParams.prototype.append",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "append"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "crate::url::search_params::usp_proto_append",
+        "function_info": {
+          "params": 2,
+          "rest_fixed": 0,
+          "flags": 3584,
+          "length": 0,
+          "declared": 2,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::url::search_params::usp_proto_append",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_c1bb25f1b1b951a27809",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "URLSearchParams.prototype.delete",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "delete"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::url::search_params::usp_proto_delete",
+        "function_info": {
+          "params": 2,
+          "rest_fixed": 0,
+          "flags": 3584,
+          "length": 0,
+          "declared": 2,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::url::search_params::usp_proto_delete",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_501e3f50ef21b6befcbe",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "URLSearchParams.prototype.entries",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "entries"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::url::search_params::usp_proto_entries",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 3584,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::url::search_params::usp_proto_entries",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_7d07541132b0643fc107",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "URLSearchParams.prototype.forEach",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "forEach"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::url::search_params::usp_proto_for_each",
+        "function_info": {
+          "params": 2,
+          "rest_fixed": 0,
+          "flags": 3584,
+          "length": 0,
+          "declared": 2,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::url::search_params::usp_proto_for_each",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_fd7005ea09ffbc57c372",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "URLSearchParams.prototype.get",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "get"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::url::search_params::usp_proto_get",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 3584,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::url::search_params::usp_proto_get",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_ca9deb1436f46ba0960a",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "URLSearchParams.prototype.getAll",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "getAll"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::url::search_params::usp_proto_get_all",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 3584,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::url::search_params::usp_proto_get_all",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_41ac096d514b293f9181",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "URLSearchParams.prototype.has",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "has"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::url::search_params::usp_proto_has",
+        "function_info": {
+          "params": 2,
+          "rest_fixed": 0,
+          "flags": 3584,
+          "length": 0,
+          "declared": 2,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::url::search_params::usp_proto_has",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_f29414ad0cf6a64d3f47",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "URLSearchParams.prototype.keys",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "keys"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::url::search_params::usp_proto_keys",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 3584,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::url::search_params::usp_proto_keys",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_ebe74addb6f50a22cb22",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "URLSearchParams.prototype.set",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "set"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "crate::url::search_params::usp_proto_set",
+        "function_info": {
+          "params": 2,
+          "rest_fixed": 0,
+          "flags": 3584,
+          "length": 0,
+          "declared": 2,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::url::search_params::usp_proto_set",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_6d8f1b754ed672e33c27",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "URLSearchParams.prototype.size.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "get size"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::url::search_params::usp_proto_size_getter",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::url::search_params::usp_proto_size_getter",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_6620cb4ee3285ac98d3e",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "URLSearchParams.prototype.sort",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "sort"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::url::search_params::usp_proto_sort",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 3584,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::url::search_params::usp_proto_sort",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_d49a71cf3a2260294850",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "URLSearchParams.prototype.toString",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "toString"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::url::search_params::usp_proto_to_string",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 3584,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::url::search_params::usp_proto_to_string",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_c3166137f1a3baa7edd8",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "URLSearchParams.prototype.values",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "values"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::url::search_params::usp_proto_values",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 3584,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::url::search_params::usp_proto_values",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_c5fa1705c85181f3fd27",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ]
+  }
+}

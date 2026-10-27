@@ -174,12 +174,12 @@ fn source_map_prototype() -> f64 {
             (
                 1,
                 "findEntry",
-                crate::fn_info!(source_map_find_entry_thunk, 1; with_rest(0)),
+                crate::fn_info!(#[realm("source_map.realm.json#body:source_map_find_entry_thunk")] source_map_find_entry_thunk, 1; with_rest(0)),
             ),
             (
                 2,
                 "findOrigin",
-                crate::fn_info!(source_map_find_origin_thunk, 1; with_rest(0)),
+                crate::fn_info!(#[realm("source_map.realm.json#body:source_map_find_origin_thunk")] source_map_find_origin_thunk, 1; with_rest(0)),
             ),
         ] {
             let value = source_map_method(name, info);
@@ -194,12 +194,12 @@ fn source_map_prototype() -> f64 {
             (
                 4,
                 "payload",
-                crate::fn_info!(source_map_payload_getter, 0; with_declared(0)),
+                crate::fn_info!(#[realm("source_map.realm.json#body:source_map_payload_getter")] source_map_payload_getter, 0; with_declared(0)),
             ),
             (
                 3,
                 "lineLengths",
-                crate::fn_info!(source_map_line_lengths_getter, 0; with_declared(0)),
+                crate::fn_info!(#[realm("source_map.realm.json#body:source_map_line_lengths_getter")] source_map_line_lengths_getter, 0; with_declared(0)),
             ),
         ] {
             let getter = source_map_getter(name, info);

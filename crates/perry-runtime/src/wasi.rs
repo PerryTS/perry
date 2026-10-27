@@ -451,7 +451,7 @@ fn ensure_wasi_prototype() {
     crate::object::class_prototype_object_root_store(CLASS_ID_WASI, proto);
     let method_scope = crate::gc::RuntimeHandleScope::new();
     let method = method_scope.root_nanbox_f64(closure_value(
-        crate::fn_info!(js_wasi_get_import_object, 0; with_declared(0)),
+        crate::fn_info!(#[realm("wasi.realm.json#body:js_wasi_get_import_object")] js_wasi_get_import_object, 0; with_declared(0)),
         "getImportObject",
         0,
     ));
@@ -461,7 +461,7 @@ fn ensure_wasi_prototype() {
         JSValue::from_bits(method.get_nanbox_f64().to_bits()),
     );
     method.set_nanbox_f64(closure_value(
-        crate::fn_info!(js_wasi_start, 1; with_declared(1)),
+        crate::fn_info!(#[realm("wasi.realm.json#body:js_wasi_start")] js_wasi_start, 1; with_declared(1)),
         "start",
         1,
     ));
@@ -471,7 +471,7 @@ fn ensure_wasi_prototype() {
         JSValue::from_bits(method.get_nanbox_f64().to_bits()),
     );
     method.set_nanbox_f64(closure_value(
-        crate::fn_info!(js_wasi_initialize, 1; with_declared(1)),
+        crate::fn_info!(#[realm("wasi.realm.json#body:js_wasi_initialize")] js_wasi_initialize, 1; with_declared(1)),
         "initialize",
         1,
     ));
@@ -481,7 +481,7 @@ fn ensure_wasi_prototype() {
         JSValue::from_bits(method.get_nanbox_f64().to_bits()),
     );
     method.set_nanbox_f64(closure_rest_value(
-        crate::fn_info!(js_wasi_finalize_bindings, 2; with_rest(1)),
+        crate::fn_info!(#[realm("wasi.realm.json#body:js_wasi_finalize_bindings")] js_wasi_finalize_bindings, 2; with_rest(1)),
         "finalizeBindings",
         1,
     ));

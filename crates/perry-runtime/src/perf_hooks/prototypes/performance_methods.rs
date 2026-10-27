@@ -131,3 +131,6 @@ pub(super) extern "C" fn mark_resource_timing(
         delivery_type,
     )
 }
+
+// Realm facts owned here; source-only until image emission.
+crate::realm_decl!("performance_methods.realm.json#objects");

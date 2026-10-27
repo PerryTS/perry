@@ -1528,3 +1528,6 @@ pub(crate) use cjs_default::{
 
 #[cfg(test)]
 mod buffer_pool_size_tests;
+
+// Realm facts owned here; source-only until image emission.
+crate::realm_decl!("native_module.realm.json#objects");

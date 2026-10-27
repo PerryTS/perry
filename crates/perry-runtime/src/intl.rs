@@ -1992,3 +1992,6 @@ fn install_intl_namespace_members(ns_obj: *mut ObjectHeader) {
         &[],
     );
 }
+
+// Realm facts owned here; source-only until image emission.
+crate::realm_decl!("intl.realm.json#objects");

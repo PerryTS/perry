@@ -1653,3 +1653,6 @@ mod tests {
         ));
     }
 }
+
+// Realm facts owned here; source-only until image emission.
+crate::realm_decl!("global_this_webassembly.realm.json#objects");

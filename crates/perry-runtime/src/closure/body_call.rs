@@ -401,3 +401,9 @@ pub(crate) extern "C" fn native_noop0(
 ) -> f64 {
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
+
+/// Source-owned realm facts; this marker emits no runtime code or data.
+#[macro_export]
+macro_rules! realm_decl {
+    ($facts:literal) => {};
+}

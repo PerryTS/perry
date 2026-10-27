@@ -1143,3 +1143,6 @@ thunk!(
 #[cfg(test)]
 #[path = "fs_promises_gc_tests.rs"]
 mod gc_tests;
+
+// Realm facts owned here; source-only until image emission.
+crate::realm_decl!("fs_promises.realm.json#objects");

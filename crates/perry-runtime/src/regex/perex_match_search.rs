@@ -363,3 +363,6 @@ pub(crate) extern "C" fn search_thunk(
 ) -> f64 {
     api::finish(regexp(Operation::Search, this.as_f64(), arg))
 }
+
+// Realm facts owned here; source-only until image emission.
+crate::realm_decl!("perex_match_search.realm.json#objects");

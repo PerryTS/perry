@@ -1266,3 +1266,5 @@ static KEEP_JS_EVENT_TARGET_SUBCLASS_INIT: extern "C" fn(f64, u32) -> f64 =
     js_event_target_subclass_init;
 
 pub(crate) mod abort;
+
+crate::realm_decl!("event_target.realm.json#*");

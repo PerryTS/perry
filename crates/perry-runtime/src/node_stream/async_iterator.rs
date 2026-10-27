@@ -1184,7 +1184,7 @@ pub(crate) fn mark_foreign_readable_ended(stream: f64) {
 pub(crate) fn install_readable_async_iterator_symbol(stream: f64) {
     install_async_iterator_symbol(
         stream,
-        crate::fn_info!(ns_async_iterator, 0; with_declared(0)),
+        crate::fn_info!(#[realm("async_iterator.realm.json#body:ns_async_iterator")] ns_async_iterator, 0; with_declared(0)),
     );
 }
 
@@ -1333,3 +1333,6 @@ mod fifo_pending_tests {
         assert_eq!(unsafe { (*promise).reason }, 7.0);
     }
 }
+
+// Realm facts owned here; source-only until image emission.
+crate::realm_decl!("async_iterator.realm.json#objects");

@@ -716,3 +716,6 @@ pub(crate) extern "C" fn thunk_streamP_finished(
         pending_finished_promise(stream, signal, need_readable, need_writable)
     }
 }
+
+// Realm facts owned here; source-only until image emission.
+crate::realm_decl!("stream_promises.realm.json#objects");

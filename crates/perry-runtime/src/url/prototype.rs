@@ -75,63 +75,83 @@ pub(crate) fn install_url_prototype_accessors(proto: *mut ObjectHeader) {
     let entries: &[(&str, Info, Option<Info>)] = &[
         (
             "href",
-            crate::fn_info!(get_href, 0; with_declared(0)),
-            Some(crate::fn_info!(set_href, 1; with_declared(1))),
+            crate::fn_info!(#[realm("prototype.realm.json#body:get_href")] get_href, 0; with_declared(0)),
+            Some(
+                crate::fn_info!(#[realm("prototype.realm.json#body:set_href")] set_href, 1; with_declared(1)),
+            ),
         ),
         (
             "origin",
-            crate::fn_info!(get_origin, 0; with_declared(0)),
+            crate::fn_info!(#[realm("prototype.realm.json#body:get_origin")] get_origin, 0; with_declared(0)),
             None,
         ),
         (
             "protocol",
-            crate::fn_info!(get_protocol, 0; with_declared(0)),
-            Some(crate::fn_info!(set_protocol, 1; with_declared(1))),
+            crate::fn_info!(#[realm("prototype.realm.json#body:get_protocol")] get_protocol, 0; with_declared(0)),
+            Some(
+                crate::fn_info!(#[realm("prototype.realm.json#body:set_protocol")] set_protocol, 1; with_declared(1)),
+            ),
         ),
         (
             "username",
-            crate::fn_info!(get_username, 0; with_declared(0)),
-            Some(crate::fn_info!(set_username, 1; with_declared(1))),
+            crate::fn_info!(#[realm("prototype.realm.json#body:get_username")] get_username, 0; with_declared(0)),
+            Some(
+                crate::fn_info!(#[realm("prototype.realm.json#body:set_username")] set_username, 1; with_declared(1)),
+            ),
         ),
         (
             "password",
-            crate::fn_info!(get_password, 0; with_declared(0)),
-            Some(crate::fn_info!(set_password, 1; with_declared(1))),
+            crate::fn_info!(#[realm("prototype.realm.json#body:get_password")] get_password, 0; with_declared(0)),
+            Some(
+                crate::fn_info!(#[realm("prototype.realm.json#body:set_password")] set_password, 1; with_declared(1)),
+            ),
         ),
         (
             "host",
-            crate::fn_info!(get_host, 0; with_declared(0)),
-            Some(crate::fn_info!(set_host, 1; with_declared(1))),
+            crate::fn_info!(#[realm("prototype.realm.json#body:get_host")] get_host, 0; with_declared(0)),
+            Some(
+                crate::fn_info!(#[realm("prototype.realm.json#body:set_host")] set_host, 1; with_declared(1)),
+            ),
         ),
         (
             "hostname",
-            crate::fn_info!(get_hostname, 0; with_declared(0)),
-            Some(crate::fn_info!(set_hostname, 1; with_declared(1))),
+            crate::fn_info!(#[realm("prototype.realm.json#body:get_hostname")] get_hostname, 0; with_declared(0)),
+            Some(
+                crate::fn_info!(#[realm("prototype.realm.json#body:set_hostname")] set_hostname, 1; with_declared(1)),
+            ),
         ),
         (
             "port",
-            crate::fn_info!(get_port, 0; with_declared(0)),
-            Some(crate::fn_info!(set_port, 1; with_declared(1))),
+            crate::fn_info!(#[realm("prototype.realm.json#body:get_port")] get_port, 0; with_declared(0)),
+            Some(
+                crate::fn_info!(#[realm("prototype.realm.json#body:set_port")] set_port, 1; with_declared(1)),
+            ),
         ),
         (
             "pathname",
-            crate::fn_info!(get_pathname, 0; with_declared(0)),
-            Some(crate::fn_info!(set_pathname, 1; with_declared(1))),
+            crate::fn_info!(#[realm("prototype.realm.json#body:get_pathname")] get_pathname, 0; with_declared(0)),
+            Some(
+                crate::fn_info!(#[realm("prototype.realm.json#body:set_pathname")] set_pathname, 1; with_declared(1)),
+            ),
         ),
         (
             "search",
-            crate::fn_info!(get_search, 0; with_declared(0)),
-            Some(crate::fn_info!(set_search, 1; with_declared(1))),
+            crate::fn_info!(#[realm("prototype.realm.json#body:get_search")] get_search, 0; with_declared(0)),
+            Some(
+                crate::fn_info!(#[realm("prototype.realm.json#body:set_search")] set_search, 1; with_declared(1)),
+            ),
         ),
         (
             "searchParams",
-            crate::fn_info!(get_search_params, 0; with_declared(0)),
+            crate::fn_info!(#[realm("prototype.realm.json#body:get_search_params")] get_search_params, 0; with_declared(0)),
             None,
         ),
         (
             "hash",
-            crate::fn_info!(get_hash, 0; with_declared(0)),
-            Some(crate::fn_info!(set_hash, 1; with_declared(1))),
+            crate::fn_info!(#[realm("prototype.realm.json#body:get_hash")] get_hash, 0; with_declared(0)),
+            Some(
+                crate::fn_info!(#[realm("prototype.realm.json#body:set_hash")] set_hash, 1; with_declared(1)),
+            ),
         ),
     ];
     let scope = crate::gc::RuntimeHandleScope::new();

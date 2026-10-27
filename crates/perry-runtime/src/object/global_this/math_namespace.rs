@@ -201,3 +201,6 @@ const MEMBERS: &[Member] = &[
 pub(crate) fn create_math_namespace() -> *mut ObjectHeader {
     builtin_namespace::create(MEMBERS)
 }
+
+// Realm facts owned here; source-only until image emission.
+crate::realm_decl!("math_namespace.realm.json#objects");

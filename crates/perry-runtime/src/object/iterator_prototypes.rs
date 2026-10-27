@@ -360,22 +360,22 @@ fn build_iterator_prototypes() {
     set_to_string_tag(shared, "Iterator");
 
     let array_proto = build_family_proto(
-        crate::fn_info!(array_iterator_next_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::codegen_abi::FN_PERMANENT_IMAGE)),
+        crate::fn_info!(#[realm("iterator_prototypes.realm.json#body:array_iterator_next_thunk")] array_iterator_next_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::codegen_abi::FN_PERMANENT_IMAGE)),
         "Array Iterator",
         shared,
     );
     let map_proto = build_family_proto(
-        crate::fn_info!(map_iterator_next_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::codegen_abi::FN_PERMANENT_IMAGE)),
+        crate::fn_info!(#[realm("iterator_prototypes.realm.json#body:map_iterator_next_thunk")] map_iterator_next_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::codegen_abi::FN_PERMANENT_IMAGE)),
         "Map Iterator",
         shared,
     );
     let set_proto = build_family_proto(
-        crate::fn_info!(set_iterator_next_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::codegen_abi::FN_PERMANENT_IMAGE)),
+        crate::fn_info!(#[realm("iterator_prototypes.realm.json#body:set_iterator_next_thunk")] set_iterator_next_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::codegen_abi::FN_PERMANENT_IMAGE)),
         "Set Iterator",
         shared,
     );
     let string_proto = build_family_proto(
-        crate::fn_info!(string_iterator_next_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::codegen_abi::FN_PERMANENT_IMAGE)),
+        crate::fn_info!(#[realm("iterator_prototypes.realm.json#body:string_iterator_next_thunk")] string_iterator_next_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::codegen_abi::FN_PERMANENT_IMAGE)),
         "String Iterator",
         shared,
     );
@@ -403,7 +403,7 @@ fn build_iterator_prototypes() {
 /// `name`/`length` own props match the spec (`"[Symbol.iterator]"`, length 0).
 fn install_symbol_iterator(shared: *mut ObjectHeader) {
     let closure = crate::closure::js_closure_alloc(
-        crate::fn_info!(iterator_proto_symbol_iterator_thunk, 1; with_declared(0)),
+        crate::fn_info!(#[realm("iterator_prototypes.realm.json#body:iterator_proto_symbol_iterator_thunk")] iterator_proto_symbol_iterator_thunk, 1; with_declared(0)),
         0,
     );
     if closure.is_null() {

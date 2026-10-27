@@ -1400,3 +1400,6 @@ mod dynamic_super_new_target_tests {
         }
     }
 }
+
+// Realm facts owned here; source-only until image emission.
+crate::realm_decl!("fetch_globals.realm.json#objects");

@@ -239,17 +239,17 @@ pub(crate) fn process_finalization_value() -> f64 {
     crate::object::runtime_layouts::runtime_record!(obj, RECORD_Q440_0);
     obj.set( 0, JSValue::from_bits((module_function2(
             "register",
-            crate::fn_info!(process_finalization_register_function, 2; with_declared(2), with_length(2)),
+            crate::fn_info!(#[realm("finalization.realm.json#body:process_finalization_register_function")] process_finalization_register_function, 2; with_declared(2), with_length(2)),
             2,
         )).to_bits()));
     obj.set( 1, JSValue::from_bits((module_function2(
             "registerBeforeExit",
-            crate::fn_info!(process_finalization_register_before_exit_function, 2; with_declared(2), with_length(2)),
+            crate::fn_info!(#[realm("finalization.realm.json#body:process_finalization_register_before_exit_function")] process_finalization_register_before_exit_function, 2; with_declared(2), with_length(2)),
             2,
         )).to_bits()));
     obj.set( 2, JSValue::from_bits((module_function1(
             "unregister",
-            crate::fn_info!(process_finalization_unregister_function, 1; with_declared(1), with_length(1)),
+            crate::fn_info!(#[realm("finalization.realm.json#body:process_finalization_unregister_function")] process_finalization_unregister_function, 1; with_declared(1), with_length(1)),
             1,
         )).to_bits()));
     let value = module_object_value(obj.finish());

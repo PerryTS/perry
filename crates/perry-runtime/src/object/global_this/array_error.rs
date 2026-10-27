@@ -1213,3 +1213,6 @@ mod native_args_tests;
 
 #[cfg(test)]
 mod variadic_args_tests;
+
+// Realm facts owned here; source-only until image emission.
+crate::realm_decl!("array_error.realm.json#objects");

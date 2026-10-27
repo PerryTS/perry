@@ -698,7 +698,7 @@ fn ensure_tty_prototypes() {
         1,
         JSValue::from_bits(
             closure_value(
-                crate::fn_info!(js_tty_read_stream_set_raw_mode, 1; with_declared(1)),
+                crate::fn_info!(#[realm("tty.realm.json#body:js_tty_read_stream_set_raw_mode")] js_tty_read_stream_set_raw_mode, 1; with_declared(1)),
                 "setRawMode",
                 1,
             )
@@ -720,7 +720,7 @@ fn ensure_tty_prototypes() {
         2,
         JSValue::from_bits(
             closure_value(
-                crate::fn_info!(js_tty_write_stream_get_color_depth, 1; with_declared(1)),
+                crate::fn_info!(#[realm("tty.realm.json#body:js_tty_write_stream_get_color_depth")] js_tty_write_stream_get_color_depth, 1; with_declared(1)),
                 "getColorDepth",
                 1,
             )
@@ -732,7 +732,7 @@ fn ensure_tty_prototypes() {
         3,
         JSValue::from_bits(
             closure_value(
-                crate::fn_info!(js_tty_write_stream_has_colors, 2; with_declared(2)),
+                crate::fn_info!(#[realm("tty.realm.json#body:js_tty_write_stream_has_colors")] js_tty_write_stream_has_colors, 2; with_declared(2)),
                 "hasColors",
                 2,
             )
@@ -744,7 +744,7 @@ fn ensure_tty_prototypes() {
         4,
         JSValue::from_bits(
             closure_value(
-                crate::fn_info!(js_tty_write_stream_refresh_size, 0; with_declared(0)),
+                crate::fn_info!(#[realm("tty.realm.json#body:js_tty_write_stream_refresh_size")] js_tty_write_stream_refresh_size, 0; with_declared(0)),
                 "_refreshSize",
                 0,
             )
@@ -756,7 +756,7 @@ fn ensure_tty_prototypes() {
         5,
         JSValue::from_bits(
             closure_value(
-                crate::fn_info!(js_tty_write_stream_cursor_to, 3; with_declared(3)),
+                crate::fn_info!(#[realm("tty.realm.json#body:js_tty_write_stream_cursor_to")] js_tty_write_stream_cursor_to, 3; with_declared(3)),
                 "cursorTo",
                 3,
             )
@@ -768,7 +768,7 @@ fn ensure_tty_prototypes() {
         6,
         JSValue::from_bits(
             closure_value(
-                crate::fn_info!(js_tty_write_stream_move_cursor, 3; with_declared(3)),
+                crate::fn_info!(#[realm("tty.realm.json#body:js_tty_write_stream_move_cursor")] js_tty_write_stream_move_cursor, 3; with_declared(3)),
                 "moveCursor",
                 3,
             )
@@ -780,7 +780,7 @@ fn ensure_tty_prototypes() {
         7,
         JSValue::from_bits(
             closure_value(
-                crate::fn_info!(js_tty_write_stream_clear_line, 2; with_declared(2)),
+                crate::fn_info!(#[realm("tty.realm.json#body:js_tty_write_stream_clear_line")] js_tty_write_stream_clear_line, 2; with_declared(2)),
                 "clearLine",
                 2,
             )
@@ -792,7 +792,7 @@ fn ensure_tty_prototypes() {
         8,
         JSValue::from_bits(
             closure_value(
-                crate::fn_info!(js_tty_write_stream_clear_screen_down, 1; with_declared(1)),
+                crate::fn_info!(#[realm("tty.realm.json#body:js_tty_write_stream_clear_screen_down")] js_tty_write_stream_clear_screen_down, 1; with_declared(1)),
                 "clearScreenDown",
                 1,
             )
@@ -804,7 +804,7 @@ fn ensure_tty_prototypes() {
         9,
         JSValue::from_bits(
             closure_value(
-                crate::fn_info!(js_tty_write_stream_get_window_size, 0; with_declared(0)),
+                crate::fn_info!(#[realm("tty.realm.json#body:js_tty_write_stream_get_window_size")] js_tty_write_stream_get_window_size, 0; with_declared(0)),
                 "getWindowSize",
                 0,
             )
