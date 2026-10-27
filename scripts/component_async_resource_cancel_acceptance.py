@@ -84,8 +84,11 @@ def main():
             assert copied > 0 and "evacuation_ok" in log, "resource cancellation moving GC did not execute"
             states = re.search(r"RESOURCE_CANCEL_STATES=([^\r\n]+)", log)
             assert states and sum(json.loads(states.group(1)).values()) == 8
+            unclaimed = re.search(r"RESOURCE_UNCLAIMED_CANCEL_STATES=([^\r\n]+)", log)
+            assert unclaimed and json.loads(unclaimed.group(1)) == {"4": 8}, "unclaimed-result cancellation did not execute"
             (out / "moving.json").write_text(json.dumps(dict(copiedObjects=copied, evacuationVerified=True,
-                                                             returnedResultRaceStates=json.loads(states.group(1))), indent=2) + "\n")
+                                                             returnedResultRaceStates=json.loads(states.group(1)),
+                                                             unclaimedResultCancelStates=json.loads(unclaimed.group(1))), indent=2) + "\n")
     paths = [generator, host, *peers, *components, *fixture.iterdir()]
     identities = {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in paths if path.is_file()}
     (out / "artifact-identities.json").write_text(json.dumps(identities, indent=2) + "\n")

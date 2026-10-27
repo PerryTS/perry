@@ -361,16 +361,30 @@ fn main() -> Result<()> {
         }
     }
     let events = events.lock().unwrap();
-    ensure!(events.acknowledged.len() == 32 && events.dropped.len() == 72);
+    ensure!(events.acknowledged.len() == 32);
+    // Two owners per call, plus one result owner in each mode-2/mode-3 call.
+    ensure!(
+        events.dropped.len() == 80,
+        "unexpected drop census: {}",
+        events.dropped.len()
+    );
     let mut race_states = BTreeMap::<u32, usize>::new();
+    let mut unclaimed_states = BTreeMap::<u32, usize>::new();
     for (mode, state) in events.acknowledged.values() {
         if *mode == 2 {
             *race_states.entry(*state).or_default() += 1;
+        }
+        if *mode == 3 {
+            *unclaimed_states.entry(*state).or_default() += 1;
         }
     }
     println!(
         "RESOURCE_CANCEL_STATES={}",
         serde_json::to_string(&race_states)?
+    );
+    println!(
+        "RESOURCE_UNCLAIMED_CANCEL_STATES={}",
+        serde_json::to_string(&unclaimed_states)?
     );
     println!("PASS: resource canonical cancellation, 8 pre-start owners, 8 suspended borrows, 8 ready owned results, 8 unclaimed owned results, 32 live siblings and reusable Store");
     Ok(())
