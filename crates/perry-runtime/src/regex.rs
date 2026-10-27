@@ -178,12 +178,45 @@ pub extern "C" fn js_string_match_all_js(_receiver: f64, _pattern: f64) -> f64 {
 pub extern "C" fn js_string_search_js(_receiver: f64, _pattern: f64) -> f64 {
     -1.0
 }
+// The result-use transform also admits ordinary objects named `exec`.
+// With the engine absent no branded receiver can exist: preserve their exact
+// fetched-method call without retaining the regex engine for these programs.
+#[cfg(not(feature = "regex-engine"))]
+#[no_mangle]
+pub extern "C" fn js_regexp_exec_projected(
+    receiver: f64,
+    method: f64,
+    argument: f64,
+    _capture: f64,
+) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(receiver);
+    let method = scope.root_nanbox_f64(method);
+    let argument = scope.root_nanbox_f64(argument);
+    let args = [argument.get_nanbox_f64()];
+    if crate::proxy::js_proxy_is_proxy(method.get_nanbox_f64()) == 1 {
+        crate::proxy::call_proxy_value_with_this(
+            method.get_nanbox_f64(),
+            receiver.get_nanbox_f64(),
+            &args,
+        )
+    } else {
+        unsafe {
+            crate::closure::call_value(
+                method.get_nanbox_f64(),
+                crate::closure::JsThis::from_f64(receiver.get_nanbox_f64()),
+                &args,
+            )
+        }
+    }
+}
+
 #[cfg(feature = "regex-engine")]
 mod exec;
 #[cfg(feature = "regex-engine")]
 mod match_string;
 #[cfg(feature = "regex-engine")]
-pub use exec::js_regexp_exec;
+pub use exec::{js_regexp_exec, js_regexp_exec_projected};
 #[cfg(all(test, feature = "regex-engine"))]
 pub use match_string::{js_string_match, js_string_search_regex};
 #[cfg(feature = "regex-engine")]

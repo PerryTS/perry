@@ -3513,6 +3513,7 @@ js_regexp_construct_call	ptr	f64,f64
 js_regexp_empty_source	ptr	
 js_regexp_escape	f64	f64
 js_regexp_exec	ptr	ptr,ptr
+js_regexp_exec_projected	f64	f64,f64,f64,f64
 js_regexp_exec_get_groups	i64	
 js_regexp_exec_get_index	f64	
 js_regexp_get_flags	ptr	ptr

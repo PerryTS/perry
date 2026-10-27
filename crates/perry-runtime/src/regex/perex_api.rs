@@ -526,6 +526,8 @@ pub(crate) enum ExecOutput {
     Test,
     /// The exec result array and its groups object.
     Object,
+    /// Only a numbered capture of a nonescaping exec result is observable.
+    Capture(usize),
 }
 
 /// [`execute_with_resources`] with an explicit output.
@@ -689,6 +691,16 @@ pub(crate) fn execute_rooted(
                     poll,
                 )
             })??
+        }
+        ExecOutput::Capture(index) => {
+            let fresh = bind_heap_subject(*input)?;
+            let found = Match { full, captures };
+            let array = caught(|| {
+                super::perex_results::materialize_capture(
+                    &fresh, &found, position, index, budget, poll,
+                )
+            })??;
+            (array, std::ptr::null_mut())
         }
         ExecOutput::Test => (std::ptr::null_mut(), std::ptr::null_mut()),
     };

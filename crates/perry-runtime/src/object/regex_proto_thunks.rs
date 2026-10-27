@@ -249,7 +249,8 @@ pub(super) extern "C" fn regex_proto_exec_thunk(
     let re = regex_instance_or_throw(this, "exec");
     let scope = crate::gc::RuntimeHandleScope::new();
     let re = scope.root_raw_const_ptr(re);
-    let s = crate::value::js_jsvalue_to_string_coerce(arg);
+    let argument = scope.root_nanbox_f64(arg);
+    let s = crate::regex::perex_api::finish(crate::regex::perex_dispatch::to_string(&argument));
     // Re-read after the coercion; `js_regexp_exec` roots both arguments.
     let arr =
         re.with_mut_ptr::<crate::regex::RegExpHeader, _>(|re| crate::regex::js_regexp_exec(re, s));
