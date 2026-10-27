@@ -65,6 +65,7 @@ struct Events {
     submitted: BTreeSet<u32>,
     entered: BTreeSet<u32>,
     ready: BTreeSet<u32>,
+    prepared: BTreeSet<u32>,
     dropped: BTreeMap<u32, usize>,
     acknowledged: BTreeMap<u32, (u32, u32)>,
 }
@@ -98,7 +99,7 @@ fn main() -> Result<()> {
     let events: Shared = Arc::default();
     let mut imports = Imports::new();
     let root = imports.entry(String::new()).or_default();
-    for name in ["submitted", "entered", "ready", "dropped"] {
+    for name in ["submitted", "entered", "ready", "prepared", "dropped"] {
         let observed = events.clone();
         let callback: Import = Arc::new(move |args| {
             let id = args[0].as_u64().context("observer ID")? as u32;
@@ -106,6 +107,7 @@ fn main() -> Result<()> {
             match name {
                 "submitted" => ensure!(events.submitted.insert(id)),
                 "entered" => ensure!(events.entered.insert(id)),
+                "prepared" => ensure!(events.prepared.insert(id)),
                 "dropped" => {
                     let count = events.dropped.entry(id).or_default();
                     *count += 1;
@@ -176,6 +178,17 @@ fn main() -> Result<()> {
                     "returned owner was leaked or published without cleanup"
                 );
             }
+            3 => {
+                ensure!(state == 4, "Perry published a result after cancellation");
+                ensure!(events.prepared.contains(&(base + 10)));
+                ensure!(events.entered.contains(&(base + 10)));
+                ensure!(!events.ready.contains(&(base + 10)));
+                ensure!(events.gates[&(base + 10)].is_canceled());
+                ensure!(
+                    events.dropped.get(&(base + 1 + 1000000)) == Some(&1),
+                    "unclaimed canonical result owner was not discarded"
+                );
+            }
             _ => anyhow::bail!("unknown scenario"),
         }
         ensure!(events.acknowledged.insert(base, (mode, state)).is_none());
@@ -237,7 +250,7 @@ fn main() -> Result<()> {
         Arc::new(|_| Ok(Vec::new())),
     )?;
     let (mut driver, client) = host.into_driver()?;
-    for mode in 0..3 {
+    for mode in 0..4 {
         for round in 0..8 {
             let base = 1000 + mode * 100000 + round * 100;
             let mut call = client.call("", "exercise", &[json!(mode), json!(base)])?;
@@ -253,9 +266,14 @@ fn main() -> Result<()> {
                     && match mode {
                         0 => events.submitted.contains(&(base + 10)),
                         1 => events.gates.contains_key(&(base + 10)),
-                        _ => {
+                        2 => {
                             events.submitted.contains(&(base + 10))
                                 && events.entered.contains(&(base + 10))
+                                && events.gates.contains_key(&(base + 10))
+                        }
+                        _ => {
+                            events.submitted.contains(&(base + 10))
+                                && events.prepared.contains(&(base + 10))
                                 && events.gates.contains_key(&(base + 10))
                         }
                     };
@@ -300,7 +318,7 @@ fn main() -> Result<()> {
                 block_on(poll_once(&mut call)).is_none(),
                 "sibling stopped being pending"
             );
-            if mode == 1 {
+            if mode == 1 || mode == 3 {
                 ensure!(
                     events
                         .lock()
@@ -310,7 +328,7 @@ fn main() -> Result<()> {
                         .unwrap()
                         .send(())
                         .is_err(),
-                    "late completion revived a cancelled borrow"
+                    "late completion revived cancelled native work"
                 );
             }
             events
@@ -343,7 +361,7 @@ fn main() -> Result<()> {
         }
     }
     let events = events.lock().unwrap();
-    ensure!(events.acknowledged.len() == 24 && events.dropped.len() == 56);
+    ensure!(events.acknowledged.len() == 32 && events.dropped.len() == 72);
     let mut race_states = BTreeMap::<u32, usize>::new();
     for (mode, state) in events.acknowledged.values() {
         if *mode == 2 {
@@ -354,6 +372,6 @@ fn main() -> Result<()> {
         "RESOURCE_CANCEL_STATES={}",
         serde_json::to_string(&race_states)?
     );
-    println!("PASS: resource canonical cancellation, 8 pre-start owners, 8 suspended borrows, 8 ready owned results, 24 live siblings and reusable Store");
+    println!("PASS: resource canonical cancellation, 8 pre-start owners, 8 suspended borrows, 8 ready owned results, 8 unclaimed owned results, 32 live siblings and reusable Store");
     Ok(())
 }

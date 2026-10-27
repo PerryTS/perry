@@ -5,11 +5,13 @@ interface foreign {
     borrow-wait: async func(id: u32, value: borrow<item>) -> u32;
     block: func();
     unblock: func();
+    complete-on-cancel: func();
 }
 world provider {
     import gate: async func(id: u32);
     import entered: func(id: u32);
     import ready: func(id: u32);
+    import prepared: func(id: u32);
     import dropped: func(id: u32);
     export foreign;
 }
@@ -26,6 +28,7 @@ world supervisor {
     import gate: async func(id: u32);
     import entered: func(id: u32);
     import ready: func(id: u32);
+    import prepared: func(id: u32);
     import dropped: func(id: u32);
     import proceed: async func(mode: u32, base: u32) -> u32;
     import acknowledged: func(mode: u32, base: u32, state: u32);
