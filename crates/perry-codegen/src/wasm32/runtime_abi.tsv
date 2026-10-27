@@ -3589,6 +3589,7 @@ js_register_native_property_bag_dispatch	void	ptr
 js_register_net_socket_handle_probe	void	ptr
 js_register_node_stream_web_adapter_callbacks	void	ptr,ptr,ptr,ptr,ptr,ptr,ptr,ptr,ptr,ptr,ptr
 js_register_path_init	void	ptr,i64,i64
+js_register_path_inits_lazily	void	ptr
 js_register_path_module	void	f64,f64
 js_register_path_module_partial	void	f64,f64,f64
 js_register_prototype_method	void	i32u,ptr,usize,f64
