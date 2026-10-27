@@ -3961,6 +3961,81 @@ jobs:
 
 
   # ---------------------------------------------------------------------------
+  # node-suite: the per-module node-compatibility corpus
+  # (test-parity/node-suite/**), scored against
+  # test-parity/node_suite_baseline.json by
+  # scripts/node_suite_regression_check.py.
+  #
+  # It already runs on its own daily schedule in compiler-runtime.yml, but a
+  # workflow cannot `needs:` a job from another workflow, and `full-suite-gate`
+  # is the gate release-packages.yml's await-tests keys on. A 4442-case corpus
+  # that no release waits for is a corpus nobody reads: node:dns once went
+  # 83% -> 0% behind a green build (the checker's own docstring records it), and
+  # that is the failure mode this job exists to close. The scheduled run stays
+  # as the on-demand/dispatch lens; this is the blocking half.
+  #
+  # The baseline is a FLOOR per module (pass >= floor.pass and
+  # total >= floor.total), not a 100% demand: it blocks a regression at today's
+  # measured level without asking the corpus for a number it does not reach.
+  # Raising a floor after a fix is a separate, deliberate edit to that file.
+  # ---------------------------------------------------------------------------
+  node-suite-guard:
+    name: node-suite-guard
+    needs: [plan, check]
+    if: fromJSON(needs.plan.outputs.plan).jobs.node_suite_guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Install Rust toolchain
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+      - uses: ./.github/actions/setup-llvm22
+      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
+        with:
+          shared-key: "${{ runner.os }}-perry"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Setup Node.js
+        uses: ./.github/actions/perry/actions/setup-node # v7
+        with:
+          # The oracle is the pinned dist, exactly as in the scheduled guard: a
+          # different Node is a different correctness input, not a detail.
+          node-version-file: .node-version
+      - name: Build Perry release binary
+        run: |
+          cargo build-perry --release
+          scripts/gc_call_effects/sidecars.sh target/release
+      - name: Node-suite regression guard (floor baseline)
+        run: |
+          set -euo pipefail
+          echo '### Node-suite regression guard' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          python3 scripts/node_suite_regression_check.py target/release/perry . \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+
+  # ---------------------------------------------------------------------------
   # Compile smoke test (all top-level test files must compile)
   # ---------------------------------------------------------------------------
   compile-smoke:
@@ -5299,6 +5374,7 @@ jobs:
       - gc-call-effects
       - parity
       - parity-aggregate
+      - node-suite-guard
       - compile-smoke
       - harmonyos-smoke
       - drizzle-mysql-smoke
