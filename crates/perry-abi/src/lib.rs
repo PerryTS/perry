@@ -1096,3 +1096,25 @@ mod call_entry_layout_tests {
         );
     }
 }
+
+/// Frame-owned wasm EH checkpoint. Fixed-width depths keep this POD layout
+/// identical in the host compiler and the wasm32 runtime. No managed values.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct WasmEhCheckpoint {
+    pub handles: u64,
+    pub shadow_frame_top: u64,
+    pub shadow_len: u64,
+    pub async_context: u64,
+    pub temp_roots: u64,
+    pub call_method: u64,
+    pub pump: u64,
+    pub set_foreach: u64,
+    pub map_foreach: u64,
+    pub prototype_resolution: u64,
+    pub static_private_owner: u64,
+    pub private_lexical_brand: u64,
+    pub derived_super_binding: u64,
+    pub private_member_access_hints: u64,
+    pub namespace_override: u64,
+}

@@ -803,7 +803,12 @@ fn closed(
     module: &Module,
     unit_of: Option<&dyn Fn(Item) -> usize>,
     named: &dyn Fn(&str) -> bool,
-) -> (Closed, FxHashMap<String, u32>, FxHashSet<String>, FxHashSet<String>) {
+) -> (
+    Closed,
+    FxHashMap<String, u32>,
+    FxHashSet<String>,
+    FxHashSet<String>,
+) {
     #[derive(Default)]
     struct Use {
         refs: u32,

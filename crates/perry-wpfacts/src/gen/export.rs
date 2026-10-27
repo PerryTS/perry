@@ -374,7 +374,9 @@ impl<'a> Gen<'a> {
             let own = support.and_then(|sp| {
                 self.exports
                     .iter()
-                    .find(|(&(mi, a), _)| path_of(self, mi) == sp && self.m.atoms[a as usize] == name)
+                    .find(|(&(mi, a), _)| {
+                        path_of(self, mi) == sp && self.m.atoms[a as usize] == name
+                    })
                     .map(|(_, &b)| b)
             });
             let value = match (cells, own, support) {
@@ -934,6 +936,38 @@ impl<'a> Gen<'a> {
                 changed = true;
             }
         }
+        // DECISIONS 210: the instances constructed here for the units that
+        // construct this unit's functions (`published_ctors`): their layout
+        // is published to them as a class given out is (`give_class`): the
+        // prototype's functions are contracts run on them, the fields leave
+        // (`fn_inst_contract` describes them). One the census broke (a
+        // reader used it beyond the layout) escapes beyond any contract.
+        let runs = self.m.own_ctor_runs.clone();
+        for (f, ret) in runs {
+            let Some(&tm) = self.m.fn_inst.get(&f) else {
+                continue;
+            };
+            let d = self.m.tmpls[tm as usize].display.clone();
+            let broken = self.unit_in.is_some_and(|u| u.broken(&d));
+            for t in self.m.nodes[ret as usize].pts.to_sorted() {
+                if self.m.tmpl_of(t) != Some(tm) {
+                    continue;
+                }
+                if broken {
+                    let rb = self.m.reason(UNDESCRIBED);
+                    changed |= self.m.escape_changed(t, rb);
+                    continue;
+                }
+                if self.m.fn_inst_published.insert(tm) {
+                    self.m.publish_fn_inst(f, tm, t, r);
+                    changed = true;
+                }
+                if !self.ret_ok.contains(&t) {
+                    changed |= self.note_field_fns(t);
+                }
+                changed |= self.fields_leave(t, r);
+            }
+        }
         changed |= self.nested_fields(r);
         // A literal of this unit passed to another unit's closed function
         // (decision 13) is described by the argument contract as a value
@@ -1198,6 +1232,7 @@ impl<'a> Gen<'a> {
         let r = self
             .m
             .reason("a field function of a literal given to another unit");
+        self.m.field_fn_reason = Some(r);
         let mut fields: Vec<(Atom, NodeId)> = self
             .m
             .field_keys
@@ -1421,6 +1456,12 @@ impl<'a> Gen<'a> {
             }
         }
         let n = self.m.field_any(t);
+        // Other units' stores under a computed key are published into the
+        // element cell: the named keys read them as well.
+        if self.m.is_elem_array(t) {
+            let na = self.m.named_any(t);
+            self.m.edge(n, na);
+        }
         // DECISIONS 184: a container's elements are primitives besides
         // what was stored (`builtins::tok_load`): its cell says so, as a
         // reader's own container of the same kind reads them.
@@ -1763,15 +1804,24 @@ impl<'a> Gen<'a> {
                         }
                         continue;
                     }
+                    // Its readers find an unknown value: what it holds leaves
+                    // beyond any contract (DECISIONS 203, 212), unless it
+                    // holds only functions they call through their
+                    // contracts (`note_field_fns`).
                     self.sunk_fields.insert((tm, a));
                     self.field_layouts.remove(&(tm, a));
                     self.field_values.remove(&(tm, a));
                     self.field_tas.remove(&(tm, a));
                     self.field_prims.remove(&(tm, a));
+                    let ru = self.m.reason(UNDESCRIBED);
                     for &t in &ts {
                         if let Some(&n) = self.m.fields.get(&(t, a)) {
                             if self.sunk_field_toks.insert((t, a)) {
-                                self.m.sink_node(n, r);
+                                let rf = match self.field_fns.contains_key(&(t, a)) {
+                                    true => r,
+                                    false => ru,
+                                };
+                                self.m.sink_node(n, rf);
                                 changed = true;
                             }
                         }

@@ -2,6 +2,8 @@
 # minimal — add targets here only when a plain `cargo <verb>` isn't enough.
 RUSTUP_TOOLCHAIN := $(shell sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)
 CARGO_BIN := $(if $(CARGO_HOME),$(CARGO_HOME),$(HOME)/.cargo)/bin
+# Development uses full unwind tables; Blaze refuses compact sync tables.
+PERRY_DEV_RUSTFLAGS ?= -C force-unwind-tables=yes
 LLVM_SYS_221_PREFIX ?= $(shell brew --prefix llvm@22 2>/dev/null)
 
 # Apply clippy's machine-applicable autofixes across the workspace via
@@ -27,8 +29,7 @@ fix-deps:
 	@set -e; v=$$(node -e "console.log(require('./external-tools.json').tools['cargo-fixit'].version)"); \
 	rustup run $(RUSTUP_TOOLCHAIN) cargo install cargo-fixit@$$v --locked
 
-# Install the pinned Mr Boxington Cargo cache used by build-dev/build-prod.
-# The pin also provides the Cargo shim required for optional Blaze routing.
+# Install the pinned production Cargo cache. Development provisions its prebuilts.
 .PHONY: mbx-deps
 mbx-deps:
 	@set -e; v=$$(node -e "console.log(require('./external-tools.json').tools.mbx.version)"); \
@@ -41,12 +42,12 @@ mbx-deps:
 # unchanged dependencies. Explicit Cargo incremental mode disables that sharing.
 .PHONY: build-dev build-fast build-prod
 build-dev:
-	PATH="$(CARGO_BIN):$$PATH" LLVM_SYS_221_PREFIX="$(LLVM_SYS_221_PREFIX)" mbx build --profile dev -p perry
+	LLVM_SYS_221_PREFIX="$(LLVM_SYS_221_PREFIX)" RUSTFLAGS="$(PERRY_DEV_RUSTFLAGS)" sh scripts/setup-blaze.sh cargo build -p perry
 
 build-fast: build-dev
 
 build-prod:
-	PATH="$(CARGO_BIN):$$PATH" LLVM_SYS_221_PREFIX="$(LLVM_SYS_221_PREFIX)" mbx build --profile prod -p perry
+	PATH="$(CARGO_BIN):$$PATH" LLVM_SYS_221_PREFIX="$(LLVM_SYS_221_PREFIX)" env -u RUSTC rustup run $(RUSTUP_TOOLCHAIN) mbx build --profile prod -p perry
 
 # Dedicated Linux agent hosts must provision compressed, quota-bounded ZFS
 # before building. Both paths are explicit to avoid using the root filesystem.

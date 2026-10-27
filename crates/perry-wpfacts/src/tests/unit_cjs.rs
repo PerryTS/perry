@@ -12,7 +12,10 @@ const T1: [(&str, &str); 4] = [
     ("/t1/m.js", include_str!("fixtures/cjs_t1/m.js")),
     ("/t1/a.js", include_str!("fixtures/cjs_t1/a.js")),
     ("/t1/b.js", include_str!("fixtures/cjs_t1/b.js")),
-    ("/t1/perry_cjs.js", include_str!("fixtures/cjs_t1/perry_cjs.js")),
+    (
+        "/t1/perry_cjs.js",
+        include_str!("fixtures/cjs_t1/perry_cjs.js"),
+    ),
 ];
 
 /// DECISIONS 115: `r.js` keeps its classes inside the factory (they name
@@ -23,7 +26,10 @@ const T1: [(&str, &str); 4] = [
 const T2: [(&str, &str); 3] = [
     ("/t2/m.js", include_str!("fixtures/cjs_t2/m.js")),
     ("/t2/r.js", include_str!("fixtures/cjs_t2/r.js")),
-    ("/t2/perry_cjs.js", include_str!("fixtures/cjs_t2/perry_cjs.js")),
+    (
+        "/t2/perry_cjs.js",
+        include_str!("fixtures/cjs_t2/perry_cjs.js"),
+    ),
 ];
 
 /// AWFY Richards as the compiler wraps it: `sa_Richards.js` requires
@@ -42,7 +48,10 @@ const T3: [(&str, &str); 4] = [
         "/t3/benchmark.js",
         include_str!("fixtures/cjs_t3/benchmark.js"),
     ),
-    ("/t3/perry_cjs.js", include_str!("fixtures/cjs_t3/perry_cjs.js")),
+    (
+        "/t3/perry_cjs.js",
+        include_str!("fixtures/cjs_t3/perry_cjs.js"),
+    ),
 ];
 
 /// DECISIONS 127: hidden capture parameters bound at a direct call and in a
@@ -57,7 +66,10 @@ const T5: [(&str, &str); 4] = [
     ("/t5/m.js", include_str!("fixtures/cjs_t5/m.js")),
     ("/t5/r.js", include_str!("fixtures/cjs_t5/r.js")),
     ("/t5/b.js", include_str!("fixtures/cjs_t5/b.js")),
-    ("/t5/perry_cjs.js", include_str!("fixtures/cjs_t5/perry_cjs.js")),
+    (
+        "/t5/perry_cjs.js",
+        include_str!("fixtures/cjs_t5/perry_cjs.js"),
+    ),
 ];
 
 /// AWFY CD as the compiler wraps it: `sa_CD.js` requires `cd.js` (the
@@ -71,7 +83,10 @@ const T6: [(&str, &str); 5] = [
         include_str!("fixtures/cjs_t6/benchmark.js"),
     ),
     ("/t6/som.js", include_str!("fixtures/cjs_t6/som.js")),
-    ("/t6/perry_cjs.js", include_str!("fixtures/cjs_t6/perry_cjs.js")),
+    (
+        "/t6/perry_cjs.js",
+        include_str!("fixtures/cjs_t6/perry_cjs.js"),
+    ),
 ];
 
 fn hirs(mods: &[(&str, &str)]) -> Vec<(String, perry_hir::Module)> {
@@ -116,7 +131,10 @@ fn both(mods: &[(&str, &str)]) -> (ProgramFacts, ProgramFacts) {
 fn assert_cjs_per_unit(w: &ProgramFacts, u: &ProgramFacts, n: usize) {
     let (pw, pu) = (proven_sites(w), proven_sites(u));
     let stronger: Vec<&String> = pu.difference(&pw).collect();
-    assert!(stronger.is_empty(), "per unit claims more than whole-program: {stronger:?}");
+    assert!(
+        stronger.is_empty(),
+        "per unit claims more than whole-program: {stronger:?}"
+    );
     assert_eq!(
         pu.len(),
         n,
@@ -196,8 +214,16 @@ fn a_class_bound_through_its_self_cell_is_a_contract() {
     };
     // Per unit `T.k` reads ⊤ until a class instance's fields cross units
     // (DECISIONS 186); the whole program holds the class and `undefined`.
-    assert_eq!(k_kind(&w), Some((false, crate::model::prim::UNDEF)), "T.k whole-program");
-    assert_eq!(k_kind(&u), Some((true, crate::model::prim::ALL)), "T.k per unit");
+    assert_eq!(
+        k_kind(&w),
+        Some((false, crate::model::prim::UNDEF)),
+        "T.k whole-program"
+    );
+    assert_eq!(
+        k_kind(&u),
+        Some((true, crate::model::prim::ALL)),
+        "T.k per unit"
+    );
 }
 
 /// DECISIONS 171: every unit names the CommonJS registry union `cjs:*`,
@@ -302,7 +328,11 @@ fn a_registry_union_consumed_during_the_solve_is_seeded() {
 #[test]
 fn richards_per_unit_proves_what_the_whole_program_proves() {
     let (w, u) = both(&T3);
-    assert!(proven_sites(&w).len() >= 120, "whole-program proves {}", proven_sites(&w).len());
+    assert!(
+        proven_sites(&w).len() >= 120,
+        "whole-program proves {}",
+        proven_sites(&w).len()
+    );
     assert_cjs_per_unit(&w, &u, 5);
 }
 
@@ -436,5 +466,173 @@ fn a_published_method_runs_on_every_receiver_its_units_publish() {
     assert!(
         !(ur.iter().any(|r| r.ends_with(":Main")) && !ur.iter().any(|r| r.ends_with(":X"))),
         "per unit {uv:?} {ur:?}"
+    );
+}
+
+/// DECISIONS 209: typescript.js's shape as the compiler wraps it. `t.js`
+/// keeps its functions in a run-once arrow (`((module) => {…})(module)`)
+/// and hands each out through `__export`'s getters and `__toCommonJS`;
+/// `user` calls `isId`, `other` and `filter` by name, `filter` gets `isId`
+/// as a callback; `m.js` runs `require("./t").user(..)`.
+const T9: [(&str, &str); 3] = [
+    ("/t9/m.js", include_str!("fixtures/cjs_tsw/m.js")),
+    ("/t9/t.js", include_str!("fixtures/cjs_tsw/t.js")),
+    (
+        "/t9/perry_cjs.js",
+        include_str!("fixtures/cjs_tsw/perry_cjs.js"),
+    ),
+];
+
+#[test]
+fn a_broken_function_is_still_the_callee_of_a_call_by_its_name() {
+    // The getters hand `isId`, `filter` and `user` to unknown code, so the
+    // census breaks their contracts and their owners run them on ⊤
+    // arguments. A call by name still calls that function: whole-program
+    // proves the callees of `user`'s calls (other units of `t.js`). Before,
+    // a broken function read through a value contract was ⊤ ("broken
+    // function of another unit"): no target, and typescript.js's top-level
+    // helpers (`isIdentifier`, `visitNode`, `some`, ...) lost 22,115 call
+    // sites per unit. The arguments still escape and the result is unknown
+    // (the escaped function's contract, `fn_named`).
+    let (w, u) = both(&T9);
+    for f in ["isId", "filter"] {
+        assert!(
+            u.broken
+                .iter()
+                .any(|d| d.starts_with("fn:") && d.contains(&format!(":{f}#"))),
+            "the census must break {f} (else this test proves nothing): {:?}",
+            u.broken
+        );
+    }
+    let calls = |pf: &ProgramFacts| -> BTreeSet<String> {
+        pf.sites
+            .iter()
+            .filter(|s| {
+                !matches!(s.verdict, Verdict::No(_))
+                    && pf.module_paths[s.module as usize] == "/t9/t.js"
+                    && ["isId", "other", "filter"]
+                        .iter()
+                        .any(|f| s.targets.iter().any(|t| t.contains(&format!(":{f}#"))))
+            })
+            .map(|s| format!("{}.{}", s.byte_offset, s.key))
+            .collect()
+    };
+    let (cw, cu) = (calls(&w), calls(&u));
+    assert_eq!(cw.len(), 4, "{cw:?}");
+    let lost: Vec<&String> = cw.difference(&cu).collect();
+    assert!(
+        lost.is_empty(),
+        "lost per unit {lost:?}\nbroken {:?}",
+        u.broken
+    );
+    let (pw, pu) = (proven_sites(&w), proven_sites(&u));
+    let stronger: Vec<&String> = pu.difference(&pw).collect();
+    assert!(
+        stronger.is_empty(),
+        "per unit claims more than whole-program: {stronger:?}"
+    );
+}
+
+/// DECISIONS 209: yargs-parser's shape as the compiler wraps it. `index.js`
+/// exports a function object `Parser` with a property function
+/// `Parser.detailed` that returns a literal holding two more; `m.js` reads
+/// `P.detailed`, calls it and hands the result to unknown code
+/// (`globalThis.zz(d)`).
+const T10: [(&str, &str); 3] = [
+    ("/t10/m.js", include_str!("fixtures/cjs_tsw2/m.js")),
+    ("/t10/index.js", include_str!("fixtures/cjs_tsw2/index.js")),
+    (
+        "/t10/perry_cjs.js",
+        include_str!("fixtures/cjs_tsw2/perry_cjs.js"),
+    ),
+];
+
+#[test]
+fn a_property_of_a_broken_function_holds_anything() {
+    // The census breaks `Parser`: `m.js` reads a property of it, which no
+    // function contract describes. Its calls still go through its owner's
+    // contract, but as an object it escaped: `P.detailed` holds anything,
+    // so the literal `detailed` returns reaches unknown code per unit as
+    // it does whole-program. Before, the stand-in's fields held nothing:
+    // `d` was empty, the literal never escaped and kept facts the whole
+    // program refutes (d_yargs: 49 stronger facts on yargs-parser's
+    // `parse` result).
+    let (w, u) = both(&T10);
+    assert!(
+        u.broken
+            .iter()
+            .any(|d| d.starts_with("fn:") && d.contains(":Parser#")),
+        "the census must break Parser (else this test proves nothing): {:?}",
+        u.broken
+    );
+    let s = super::unit_alias::stronger(&u, &w);
+    assert!(
+        s.is_empty(),
+        "per-unit claims more than whole-program: {s:?}"
+    );
+    let lit = u
+        .templates
+        .iter()
+        .find(|t| t.display.starts_with("/t10/index.js:") && t.birth_keys.iter().any(|k| k == "aliases"))
+        .expect("the parse result literal");
+    assert!(lit.escape.is_some(), "{lit:?}");
+}
+
+/// DECISIONS 210: `rep` of CJL as the compiler wraps it, the factory held
+/// beyond its record (`void __perry_cjs_factory`), so the run-once view
+/// does not flatten it: `Reply` is a local of the factory, written into
+/// the record's `exports`, which is published described by no contract
+/// (DECISIONS 203). `m.js` constructs it (and a subclass-like `_Reply`
+/// whose prototype is `Object.create(Reply.prototype)`).
+const TM: [(&str, &str); 3] = [
+    ("/mbw/m.js", include_str!("fixtures/cjs_mbw/m.js")),
+    ("/mbw/r.js", include_str!("fixtures/cjs_mbw/r.js")),
+    (
+        "/mbw/perry_cjs.js",
+        include_str!("fixtures/cjs_mbw/perry_cjs.js"),
+    ),
+];
+
+#[test]
+fn an_escaped_constructor_function_of_an_unflattened_factory_is_constructed_by_unknown_code() {
+    // Per unit the owner's `new Reply` layout is never stronger than the
+    // whole program's: another unit's code holds `Reply` (it escaped with
+    // the record) and constructs it, so the owner constructs it with
+    // unknown arguments and the instance escapes. Before DECISIONS 210 no
+    // unit constructed it: `raw` held nothing (kind none, readonly) while
+    // the whole program saw `new r(2)`.
+    let (w, u) = both(&TM);
+    let tmpl = |pf: &ProgramFacts| -> crate::TemplateFacts {
+        pf.templates
+            .iter()
+            .find(|t| t.display.starts_with("new /mbw/r.js:Reply"))
+            .cloned()
+            .unwrap_or_else(|| panic!("new /mbw/r.js:Reply in\n{}", pf.dump_text()))
+    };
+    let (tu, tw) = (tmpl(&u), tmpl(&w));
+    let raw = |t: &crate::TemplateFacts| {
+        t.fields
+            .iter()
+            .find(|f| f.key == "raw")
+            .cloned()
+            .unwrap_or_else(|| panic!("raw of {}", t.display))
+    };
+    let (ru, rw) = (raw(&tu), raw(&tw));
+    assert!(
+        ru.kind.top || (rw.kind.prims & !ru.kind.prims == 0 && !rw.kind.top),
+        "per unit raw {:?} narrower than whole program {:?}\nper unit:\n{}",
+        ru.kind,
+        rw.kind,
+        u.dump_text()
+    );
+    assert!(
+        !(ru.readonly && !rw.readonly),
+        "per unit claims raw readonly, the whole program does not\n{}",
+        u.dump_text()
+    );
+    assert!(
+        !(tu.prefix_stable && !tw.prefix_stable),
+        "per unit claims prefix_stable, the whole program does not\n{}",
+        u.dump_text()
     );
 }

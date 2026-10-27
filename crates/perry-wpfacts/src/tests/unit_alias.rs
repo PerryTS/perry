@@ -50,7 +50,7 @@ fn field<'t>(t: &'t TemplateFacts, key: &str) -> &'t crate::derive::FieldFacts {
 /// (per template display both have): a stable prefix, a fixed layout, per
 /// field a slot, definiteness, readonly, a kind (`w`'s must be within
 /// `u`'s), a stable typed array.
-fn stronger(u: &ProgramFacts, w: &ProgramFacts) -> Vec<String> {
+pub(super) fn stronger(u: &ProgramFacts, w: &ProgramFacts) -> Vec<String> {
     let mut out = Vec::new();
     for tu in &u.templates {
         let Some(tw) = w.templates.iter().find(|t| t.display == tu.display) else {
@@ -586,7 +586,11 @@ fn a_store_costs_its_readers_not_the_call_path() {
     let w = |n: usize| {
         let (a, m) = (method_chain(n), chain_reader(n));
         let u = run(&[("a", &a), ("m", &m)], true, &FactsConfig::default());
-        assert!(reader_field_holds_str(&u, &format!("k{}", n - 1)), "{}", u.dump_text());
+        assert!(
+            reader_field_holds_str(&u, &format!("k{}", n - 1)),
+            "{}",
+            u.dump_text()
+        );
         u.units
             .iter()
             .filter(|(p, _)| crate::decl_units::module_of(p) == "a.ts")
@@ -609,7 +613,11 @@ fn a_closed_class_another_unit_extends_publishes_what_its_constructions_pass() {
     let a = "class Base { scale: number; constructor(k: number) { this.scale = k; } } class Derived extends Base { }\nfunction kernel(n: number): number { const cs: Base[] = [new Base(3), new Derived(5)]; return cs[n & 1].scale; }\nconsole.log(kernel(10));\n";
     let (u, _) = assert_not_stronger(&[("a", a)]);
     let f = field(template(&u, "a.ts:Base"), "scale");
-    assert!(f.kind.prims & crate::model::prim::NUM != 0 || f.kind.top, "{f:?}\n{}", u.dump_text());
+    assert!(
+        f.kind.prims & crate::model::prim::NUM != 0 || f.kind.top,
+        "{f:?}\n{}",
+        u.dump_text()
+    );
 }
 
 #[test]
@@ -619,7 +627,11 @@ fn a_layout_met_again_in_its_own_description_is_named_once() {
     // builds it). After the cut the inner L keeps its facts but describes
     // no field values, so the description stops growing.
     // A layout contract as `value_contract_of_toks` builds one, facts from a solve.
-    let pf = run(&[("a", "const o = { a: 1 }; console.log(o.a);")], true, &FactsConfig::default());
+    let pf = run(
+        &[("a", "const o = { a: 1 }; console.log(o.a);")],
+        true,
+        &FactsConfig::default(),
+    );
     let facts = pf.templates.first().cloned().expect("a template");
     let mk = |d: &str| crate::units::ClassContract {
         display: d.to_string(),
@@ -647,6 +659,7 @@ fn a_layout_met_again_in_its_own_description_is_named_once() {
         definite: Vec::new(),
         ctor_leaks: true,
         binding_prim: 0,
+        fn_inst: false,
     };
     let with = |mut c: crate::units::ClassContract, inner: crate::units::ClassContract| {
         let vc = crate::units::ValueContract {
@@ -656,7 +669,10 @@ fn a_layout_met_again_in_its_own_description_is_named_once() {
         c.field_values.push(("next".to_string(), vc));
         c
     };
-    let deep = with(mk("L"), with(mk("M"), with(mk("L"), with(mk("M"), mk("L")))));
+    let deep = with(
+        mk("L"),
+        with(mk("M"), with(mk("L"), with(mk("M"), mk("L")))),
+    );
     let mut cut = deep.clone();
     crate::cut_described_again(&mut cut, &mut Vec::new());
     let m = &cut.field_values[0].1.layouts[0];
@@ -686,7 +702,9 @@ fn a_function_passed_to_a_method_of_a_parameters_field_escapes() {
     let t = u
         .templates
         .iter()
-        .find(|t| t.display.starts_with("main.ts:__AnonShape") && t.birth_keys.iter().any(|k| k == "key"))
+        .find(|t| {
+            t.display.starts_with("main.ts:__AnonShape") && t.birth_keys.iter().any(|k| k == "key")
+        })
         .expect("the literal");
     assert!(t.escape.is_some(), "{t:?}");
 }

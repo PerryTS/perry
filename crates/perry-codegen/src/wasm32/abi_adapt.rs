@@ -612,20 +612,17 @@ mod tests {
     }
 
     #[test]
-    fn wasi_exception_handler_keeps_its_stack_mark() {
-        // The WASI runtime restores managed stacks to this mark when an
-        // exception crosses a runtime frame. A stale zero-argument table
-        // entry silently discarded it, even though the generated call was
-        // correct. Exercise the real table through the lowering pass.
-        let ir = "declare ptr @js_try_push(ptr)\n\
-                  define ptr @handler(ptr %mark) {\n\
-                  entry:\n\
-                    %handler = call ptr @js_try_push(ptr %mark)\n\
-                    ret ptr %handler\n\
-                  }\n";
+    fn wasm_exception_class_filter_keeps_pointer_and_boolean_abi() {
+        let ir = "declare i1 @js_wasm_eh_is_perry(ptr)\ndefine i1 @filter(ptr %object) {\nentry:\n  %ours = call i1 @js_wasm_eh_is_perry(ptr %object)\n  ret i1 %ours\n}\n";
         let out = adapt_runtime_abi(ir, &HashMap::new());
-        assert!(out.contains("declare ptr @js_try_push(ptr)"), "{out}");
-        assert!(out.contains("call ptr @js_try_push(ptr %mark)"), "{out}");
-        assert!(!out.contains("@__perry_wabi.js_try_push"), "{out}");
+        assert!(
+            out.contains("declare i1 @js_wasm_eh_is_perry(ptr)"),
+            "{out}"
+        );
+        assert!(
+            out.contains("call i1 @js_wasm_eh_is_perry(ptr %object)"),
+            "{out}"
+        );
+        assert!(!out.contains("@__perry_wabi.js_wasm_eh_is_perry"), "{out}");
     }
 }

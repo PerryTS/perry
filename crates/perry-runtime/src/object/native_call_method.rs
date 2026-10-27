@@ -50,7 +50,7 @@ use bare_receiver::{
 use disposal::{
     js_using_check_disposable, try_disposable_stack_method_dispatch, try_symbol_dispose_dispatch,
 };
-#[cfg(test)]
+#[cfg(any(test, target_os = "wasi"))]
 pub(crate) use namespace_override::namespace_override_depth;
 #[cfg(test)]
 pub(crate) use namespace_override::test_push_catch_namespace_override;
@@ -2853,3 +2853,6 @@ mod receiver_repr_guard_tests {
 }
 
 pub(crate) mod compiled_target;
+
+#[cfg(any(test, target_os = "wasi"))]
+pub(crate) use namespace_override::namespace_override_restore_depth;

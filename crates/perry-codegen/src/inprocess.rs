@@ -117,10 +117,7 @@ fn global_init(mllvm: &[String]) {
         // These options affect only the WebAssembly backend. Initialize
         // them even if a native unit happens to be compiled first.
         #[cfg(feature = "target-wasi")]
-        mllvm.extend([
-            "-wasm-enable-sjlj".into(),
-            "-wasm-use-legacy-eh=false".into(),
-        ]);
+        mllvm.extend(["-wasm-enable-eh".into(), "-wasm-use-legacy-eh=false".into()]);
         // Only the backends Perry can actually emit for. `initialize_all()`
         // references every LLVM target's init symbol, which makes the static
         // link pull in all ~20 backends — measured at **+86.9 MB** on the
@@ -295,6 +292,9 @@ fn interpret_plan_args(
             // `-g` is a measured no-op on Perry IR (no DI metadata; see the
             // TEMP_NONCE_COUNTER doc block in linker.rs), matching clang.
             "-c" | "-fno-math-errno" | "-g" => {}
+            // optimize_and_emit enables +exception-handling and the wasm EH
+            // exception model for wasm targets, matching this clang flag.
+            "-mexception-handling" => {}
             "-S" => emit_asm = true,
             "-o" | "-target" => {
                 it.next();

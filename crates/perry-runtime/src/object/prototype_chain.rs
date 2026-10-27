@@ -200,6 +200,13 @@ pub(crate) fn resolution_stack_unwind_to(sp: usize) {
     });
 }
 
+#[cfg(any(test, target_os = "wasi"))]
+pub(crate) fn resolution_stack_restore_depth(depth: usize) {
+    PROTOTYPE_RESOLUTION_STACK.with(|stack| {
+        stack.borrow_mut().restore_depth(depth);
+    });
+}
+
 pub(crate) fn resolution_stack_check_marks(sp: usize) {
     PROTOTYPE_RESOLUTION_STACK.with(|stack| {
         crate::exception::marks::check_marks(stack.borrow().marks(), sp, "prototype_resolution")
@@ -430,8 +437,8 @@ fn object_set_static_prototype_impl_with(
                 owner_handle.across_mut::<u8, _>(crate::array::array_prototype_addr);
             obj_ptr = owner as usize;
             unsafe {
-                let header = crate::gc::header_from_trusted_user_ptr(obj_ptr as *const u8)
-                    as *mut crate::gc::GcHeader;
+                let header =
+                    crate::gc::header_from_trusted_user_ptr(obj_ptr as *const u8).cast_mut();
                 (*header)._reserved |= crate::gc::GC_ARRAY_CUSTOM_PROTO;
             }
             // #11915: this array no longer reads `%Array.prototype%`; the
@@ -881,7 +888,7 @@ pub(crate) unsafe fn default_object_prototype_for_owner(obj_ptr: usize) -> Optio
         return None;
     }
     let obj = obj_ptr as *const crate::ObjectHeader;
-    if !super::is_valid_obj_ptr(obj as *const u8) {
+    if !crate::value::addr_class::is_plausible_heap_addr(obj_ptr) {
         return None;
     }
     let gc = super::gc_header_for(obj);
@@ -954,7 +961,7 @@ pub(crate) fn resolve_inherited_field_from_prototype(
     let top16 = proto_bits >> 48;
     let proto_ptr = if top16 == 0x7FFD {
         (proto_bits & 0x0000_FFFF_FFFF_FFFF) as usize
-    } else if top16 == 0 && proto_bits > 0x10000 {
+    } else if top16 == 0 && crate::value::addr_class::is_above_handle_band(proto_bits as usize) {
         proto_bits as usize
     } else {
         return None;
@@ -963,7 +970,7 @@ pub(crate) fn resolve_inherited_field_from_prototype(
         return None;
     }
     let mut proto = proto_ptr as *const crate::ObjectHeader;
-    if !super::is_valid_obj_ptr(proto as *const u8) {
+    if !crate::value::addr_class::is_plausible_heap_addr(proto_ptr) {
         return None;
     }
     if guard.segment_depth >= SKIP_PROVEN_ABSENT_FROM_DEPTH && !key.is_null() {
@@ -982,7 +989,9 @@ pub(crate) fn resolve_inherited_field_from_prototype(
             }
             super::field_get_set::has_property::shape_presence::ChainHolder::Absent => return None,
         }
-        if proto as usize == obj_ptr || !super::is_valid_obj_ptr(proto as *const u8) {
+        if proto as usize == obj_ptr
+            || !crate::value::addr_class::is_plausible_heap_addr(proto as usize)
+        {
             return None;
         }
     }

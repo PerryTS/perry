@@ -894,7 +894,7 @@ fn a_class_extending_a_native_never_settles() {
 }
 
 /// A native registry id in the id band, as `new Headers()` hands one out.
-const RAW_NATIVE_ID: usize = 0x40000;
+const RAW_NATIVE_ID: usize = crate::value::addr_class::FETCH_HANDLE_BAND_START;
 
 unsafe extern "C" fn raw_id_property(handle: i64, key: *const u8, len: usize) -> f64 {
     if handle as usize == RAW_NATIVE_ID && std::slice::from_raw_parts(key, len) == b"length" {

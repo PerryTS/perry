@@ -322,7 +322,7 @@
       "reason": "The map contains only structural module-initializer kinds and omits every binding with a module-wide write."
     },
     {
-      "path": "crates/perry-codegen/src/lower_call/console_promise.rs",
+      "path": "crates/perry-codegen/src/lower_call/console_promise/util_types.rs",
       "function": "util_types_arg_is_async_function_static",
       "access": "stable_local_type_proof",
       "count": 1,
@@ -744,6 +744,14 @@
       "count": 2,
       "classification": "metadata-only",
       "reason": "The generic HIR environment exposes source-level metadata only; codegen supplies its separate runtime-proof facts adapter."
+    },
+    {
+      "path": "crates/perry-hir/src/lexical_frames.rs",
+      "function": "local",
+      "access": "raw:self.locals",
+      "count": 1,
+      "classification": "metadata-only",
+      "reason": "LocalId renaming map of a copied frame (commit 678511e58): maps old ids to fresh ids; holds no type fact."
     },
     {
       "path": "crates/perry-hir/src/lower/context.rs",

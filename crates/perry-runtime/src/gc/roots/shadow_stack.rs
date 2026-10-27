@@ -648,8 +648,8 @@ pub(crate) fn shadow_stack_has_active_frame() -> bool {
 /// slots carry frame marks (`crate::exception::marks`).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(crate) struct FrameRootSavepoint {
-    frame_top: usize,
-    len: usize,
+    pub(crate) frame_top: usize,
+    pub(crate) len: usize,
 }
 
 /// Capture the current shadow-stack depth.

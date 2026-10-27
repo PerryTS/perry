@@ -133,7 +133,8 @@ impl<'a> Gen<'a> {
 
     /// Store `v` into every element/entry of what `recv` holds.
     fn elem_store(&mut self, fx: &Fx, recv: NodeId, v: NodeId, what: &str) {
-        self.store(fx, recv, Key::Any, v, what.to_string(), None, false);
+        let ek = self.m.elem_key();
+        self.store(fx, recv, ek, v, what.to_string(), None, false);
     }
 
     /// Call `cb` with `args` (this = undefined); returns the result node.
@@ -748,10 +749,7 @@ impl<'a> Gen<'a> {
                         proto: Protocol::ToPrimitive,
                     },
                 );
-                let key = match k.as_ref() {
-                    Expr::String(s) => Some(s.clone()),
-                    _ => None,
-                };
+                let key = self.const_key(mi, k);
                 let accessor = self.accessor_descriptor(mi, d);
                 match self.for_in_key_of(mi, k).filter(|_| key.is_none()) {
                     Some(kp) => {
@@ -787,9 +785,36 @@ impl<'a> Gen<'a> {
                     "E5 Object.defineProperties".to_string()
                 };
                 let r = self.m.reason(&why);
+                // A map of exactly known keys defines each by its descriptor
+                // (`Cons::DefineAll`); any other map's own values are these
+                // descriptors, defined under a computed key.
                 let descs = self.tmp("own-descriptors");
-                self.m.cons(pn, Cons::OwnValues { dst: descs });
-                self.define_property(fx, on, None, descs, r, false);
+                let va = self.m.atom("value");
+                let value = self.load(descs, Key::Named(va));
+                let site = self.store_site(fx.module, fx.f, "defineProperty".into(), None, false);
+                let star = self.m.atom(crate::STAR_KEY);
+                for (name, setter) in [("get", false), ("set", true)] {
+                    let a = self.m.atom(name);
+                    let f = self.load(descs, Key::Named(a));
+                    self.m.cons(
+                        f,
+                        Cons::Accessor {
+                            holder: on,
+                            key: star,
+                            setter,
+                        },
+                    );
+                }
+                self.m.cons(
+                    pn,
+                    Cons::DefineAll {
+                        o: on,
+                        descs,
+                        value,
+                        site,
+                        reason: r,
+                    },
+                );
                 on
             }
             Expr::ObjectGetOwnPropertyDescriptor(o, k)

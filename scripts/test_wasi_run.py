@@ -9,7 +9,17 @@ from unittest.mock import patch
 import wasi_run
 
 
-class RunnerTests(unittest.TestCase):
+def core_module(*imports):
+    """A core wasm module whose import section lists (module, name) pairs."""
+    def name(text):
+        return bytes([len(text)]) + text.encode()
+    body = bytes([len(imports)]) + b"".join(name(m) + name(n) + b"\0\0" for m, n in imports)
+    types = b"\x01\x60\x00\x00"
+    return (b"\0asm\x01\0\0\0" + b"\x01" + bytes([len(types)]) + types
+            + b"\x02" + bytes([len(body)]) + body)
+
+
+class CaseFixture(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="wasi runner space ")
         self.addCleanup(self.temporary.cleanup)
@@ -27,6 +37,8 @@ class RunnerTests(unittest.TestCase):
         (self.output / "fixture.wasm").write_bytes(b"\0asm")
         return subprocess.CompletedProcess(args[0], 0, b"", b"")
 
+
+class RunnerTests(CaseFixture):
     def test_compiler_failure_never_runs_wasmtime(self):
         with patch("wasi_run.subprocess.run", return_value=subprocess.CompletedProcess([], 1, b"", b"link failed")) as run:
             result = self.run_case()
@@ -101,6 +113,62 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(command[:4], ["wasmtime", "run", "--dir", "."])
         self.assertEqual(command[4], str(self.output / "fixture.wasm"))
         self.assertEqual(command[5:], ["argument with spaces", "--flag"])
+
+
+class FlavourTests(CaseFixture):
+    def run_p1(self):
+        return wasi_run.run_case(self.root / "perry.exe", "wasmtime", self.source, self.output, 1,
+                                 flavour="p1")
+
+    def execute_with(self, module, status=3):
+        def execute(command, **kwargs):
+            if command[0] == "wasmtime":
+                return subprocess.CompletedProcess(command, status, b"ok\n", b"")
+            (self.output / "fixture.wasm").write_bytes(module)
+            return subprocess.CompletedProcess(command, 0, b"", b"")
+        return execute
+
+    def test_p2_command_is_unchanged(self):
+        with patch("wasi_run.subprocess.run", side_effect=self.execute_with(b"\0asm")) as run:
+            self.assertTrue(self.run_case()["passed"])
+        compile_command, run_command = (call.args[0] for call in run.call_args_list)
+        self.assertEqual(compile_command[1:], [
+            "compile", str(self.source), "--target", "wasi", "-o", str(self.output / "fixture.wasm")])
+        self.assertEqual(run_command, ["wasmtime", "run", str(self.output / "fixture.wasm")])
+
+    def test_p1_compiles_for_wasip1_and_enables_exceptions(self):
+        module = core_module(("wasi_snapshot_preview1", "fd_write"))
+        with patch("wasi_run.subprocess.run", side_effect=self.execute_with(module)) as run:
+            result = self.run_p1()
+        self.assertTrue(result["passed"])
+        compile_command, run_command = (call.args[0] for call in run.call_args_list)
+        self.assertEqual(compile_command[3:5], ["--target", "wasip1"])
+        self.assertEqual(run_command[:4], ["wasmtime", "run", "-W", "exceptions=y"])
+
+    def test_p1_preopens_follow_the_exception_flag(self):
+        self.source.with_suffix(".json").write_text('{"wasmtime_args": ["--dir", "."]}')
+        module = core_module(("wasi_snapshot_preview1", "fd_write"))
+        with patch("wasi_run.subprocess.run", side_effect=self.execute_with(module)) as run:
+            self.assertTrue(self.run_p1()["passed"])
+        self.assertEqual(run.call_args_list[1].args[0][:6],
+                         ["wasmtime", "run", "-W", "exceptions=y", "--dir", "."])
+
+    def test_p1_module_with_another_import_fails_before_running(self):
+        module = core_module(("wasi_snapshot_preview1", "fd_write"), ("env", "leftover"))
+        with patch("wasi_run.subprocess.run", side_effect=self.execute_with(module)) as run:
+            result = self.run_p1()
+        self.assertFalse(result["passed"])
+        self.assertEqual(result["stage"], "imports")
+        self.assertEqual(run.call_count, 1)
+
+    def test_p1_component_output_is_rejected(self):
+        component = b"\0asm\x0d\0\x01\0"
+        with patch("wasi_run.subprocess.run", side_effect=self.execute_with(component)) as run:
+            result = self.run_p1()
+        self.assertFalse(result["passed"])
+        self.assertEqual(result["stage"], "imports")
+        self.assertIn("not a core wasm binary", result["detail"])
+        self.assertEqual(run.call_count, 1)
 
 
 if __name__ == "__main__":

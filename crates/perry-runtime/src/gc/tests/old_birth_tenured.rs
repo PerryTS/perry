@@ -8,10 +8,17 @@ use super::super::*;
 use super::support::*;
 
 unsafe fn assert_born_tenured(user: usize, path: &str) {
-    assert!(crate::arena::pointer_in_old_gen(user), "{path}: premise, born old");
+    assert!(
+        crate::arena::pointer_in_old_gen(user),
+        "{path}: premise, born old"
+    );
     let flags = (*header_from_user_ptr(user as *const u8)).gc_flags;
     assert_ne!(flags & GC_FLAG_ARENA, 0, "{path}: arena header");
-    assert_ne!(flags & GC_FLAG_TENURED, 0, "{path}: born old but not TENURED");
+    assert_ne!(
+        flags & GC_FLAG_TENURED,
+        0,
+        "{path}: born old but not TENURED"
+    );
     assert!(
         super::super::barrier_store::parent_flags_may_need_remembering(flags),
         "{path}: the barrier's parent gate would skip this old object"

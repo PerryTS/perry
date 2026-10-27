@@ -64,6 +64,7 @@ mod switch_stmt;
 mod try_stmt;
 mod unused_expr;
 mod versioned_indexed_loop;
+mod wasm_eh;
 
 pub(crate) use if_stmt::lower_if;
 pub(crate) use let_stmt::lower_let;
