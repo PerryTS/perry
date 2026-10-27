@@ -43,3 +43,6 @@ winx = { version = "0.36.0" }
 [dev-dependencies]
 tempfile = "3.27.0"
 wasmtime = { version = "=48.0.7", default-features = false, features = ["cranelift", "wat"] }
+
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_SystemServices"] }
