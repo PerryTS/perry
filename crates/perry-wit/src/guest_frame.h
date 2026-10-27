@@ -18,6 +18,9 @@ typedef struct {
 } perry_guest_ops;
 int32_t js_component_set_guest_ops(const perry_guest_ops *);
 void *perry_component_frame_new(void);
+/* Binds the module's layout image before allocating the returned owned frame.
+   Initializer errors are retained in that frame; a null initializer returns NULL. */
+void *perry_component_frame_bootstrap(const void *, void *);
 void perry_component_frame_drop(void *);
 int32_t perry_component_frame_failed(void *);
 void perry_component_frame_fail(void *, const uint8_t *, size_t);

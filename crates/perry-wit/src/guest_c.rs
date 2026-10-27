@@ -174,7 +174,7 @@ impl Generator<'_> {
 
     fn generate(&mut self) -> Result<()> {
         self.source
-            .push_str("static void perry_initialize(void *f);\n");
+            .push_str("static void *perry_initialize(void);\n");
         if let Some(anchor) = &self.anchor {
             self.source.push_str(&asynchronous::scheduler(
                 &self.resolve.worlds[self.id].name.to_snake_case(),
@@ -255,18 +255,27 @@ impl Generator<'_> {
                 .join(",")
         )?;
         self.source.push_str("static const perry_guest_ops perry_ops = {2, sizeof(perry_guest_ops), perry_contract, sizeof(perry_contract), perry_import, perry_resource};\n");
-        self.source.push_str(r#"
+        self.source.push_str(
+            r#"
 extern void perry_module_init(void);
 static unsigned perry_initialized;
-static void perry_initialize(void *f) {
-    if (perry_initialized == 2) return;
-    if (perry_initialized != 0) { perry_bad(f, "Component initialization failed or reentered"); return; }
+static void perry_module_start(void *data) { (void)data; perry_module_init(); }
+static void *perry_initialize(void) {
+    if (perry_initialized == 2) return perry_component_frame_new();
+    if (perry_initialized != 0) {
+        void *f = perry_component_frame_new();
+        perry_bad(f, "Component initialization failed or reentered");
+        return f;
+    }
     perry_initialized = 1;
-    if (!js_component_set_guest_ops(&perry_ops)) perry_bad(f, "Component adapter ABI mismatch");
-    perry_component_frame_initialize(f, (const void *)perry_module_init);
+    if (!js_component_set_guest_ops(&perry_ops)) __builtin_trap();
+    void *f = perry_component_frame_bootstrap((const void *)perry_module_start, NULL);
+    if (f == NULL) __builtin_trap();
     perry_initialized = perry_component_frame_failed(f) ? 3 : 2;
+    return f;
 }
-"#);
+"#,
+        );
         Ok(())
     }
 
@@ -424,7 +433,7 @@ static void perry_initialize(void *f) {
             if params.is_empty() {
                 params.push("void".into());
             }
-            writeln!(emitter.source, "{ret} {cname}({}) {{\nvoid *f = perry_component_frame_new();\nperry_allocations arena = {{0}};\nperry_initialize(f);", params.join(", "))?;
+            writeln!(emitter.source, "{ret} {cname}({}) {{\nvoid *f = perry_initialize();\nperry_allocations arena = {{0}};", params.join(", "))?;
             let args = emitter.slot(&format!(
                 "perry_component_frame_array(f, {})",
                 function.params.len()
