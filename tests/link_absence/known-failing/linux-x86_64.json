@@ -191,9 +191,6 @@
       "perry_runtime::gc::verify_diag::object_space",
       "perry_runtime::gc::verify_diag::panic_stale_forwarded_reference_detailed",
       "perry_runtime::gc::verify_diag::type_name"
-    ],
-    "string_normalize": [
-      "perry_runtime::string::normalize_hooked::ccc"
     ]
   }
 }
