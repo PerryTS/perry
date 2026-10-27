@@ -277,3 +277,46 @@ fn duplicate_definitions_take_the_weaker_row_in_any_order() {
         }
     }
 }
+
+#[test]
+fn installed_callback_delegation_derives_the_actual_callback_effect() {
+    let tmp = tempfile::tempdir().unwrap();
+    for (tag, normal, _, _) in FORMATS {
+        let lib = archive(tmp.path(), &format!("callback-{tag}.a"), normal);
+        let graph = build_graph(&[lib]).unwrap();
+        for (target, expected) in [
+            (
+                "leaf_helper",
+                Entry {
+                    class: Class::Leaf,
+                    throws: false,
+                },
+            ),
+            (
+                "alloc_helper",
+                Entry {
+                    class: Class::AllocOnly,
+                    throws: false,
+                },
+            ),
+            (
+                "throw_helper",
+                Entry {
+                    class: Class::ThrowOnly,
+                    throws: true,
+                },
+            ),
+            (
+                "reenter_helper",
+                Entry {
+                    class: Class::Reenters,
+                    throws: true,
+                },
+            ),
+        ] {
+            let text = format!("{RULES}\nindirect exact indirect_helper => exact {target} -- fixture of a closed installer slot with this exact callback\n");
+            let result = classify(&graph, &load_rules(&text).unwrap(), None).unwrap();
+            assert_eq!(result.table["indirect_helper"], expected, "{tag}: {target}");
+        }
+    }
+}
