@@ -93,6 +93,34 @@ pub struct IndexedOwner {
     pub allocations: Vec<String>,
 }
 
+/// Only real stores revoke the metadata contract. Native reads may seed
+/// primitive values on field observation nodes; that is not a program write.
+pub(crate) fn owner_metadata_written(m: &Model, tm: u32) -> bool {
+    let numeric_key = |site: &u32| {
+        m.stores[*site as usize].key_value.is_some_and(|n| {
+            let n = &m.nodes[n as usize];
+            n.prim == crate::model::prim::NUM
+                && n.pts
+                    .to_sorted()
+                    .into_iter()
+                    .all(|v| v != TOP && m.beside_values(v))
+        })
+    };
+    if m.any_writers
+        .get(&tm)
+        .is_some_and(|w| w.ctor.iter().chain(&w.post).any(|s| !numeric_key(s)))
+    {
+        return true;
+    }
+    m.writers.keys().any(|(owner, key)| {
+        let key = &m.atoms[*key as usize];
+        *owner == tm
+            && key != crate::model::NUM_KEY
+            && key != crate::model::ELEM
+            && !crate::solve::numeric_key(key)
+    })
+}
+
 pub(crate) fn sealed_owner(m: &Model, t: u32) -> Option<(u32, u8)> {
     let TokKind::Obj(tm, _) = m.toks[t as usize] else {
         return None;
@@ -114,20 +142,7 @@ pub(crate) fn sealed_owner(m: &Model, t: u32) -> Option<(u32, u8)> {
     } else if !m.ta_min_len.contains_key(&tm) {
         return None;
     }
-    // A named property could shadow metadata or change the prototype. Numeric
-    // element writes are the storage's contents, not a competing metadata key.
-    if m.field_keys.get(&t).is_some_and(|ks| {
-        ks.iter().any(|a| {
-            let key = &m.atoms[*a as usize];
-            key != crate::model::NUM_KEY
-                && key != crate::model::ELEM
-                && !crate::solve::numeric_key(key)
-                && m.fields.get(&(t, *a)).is_some_and(|n| {
-                    let v = &m.nodes[*n as usize];
-                    v.prim != 0 || !v.pts.is_empty()
-                })
-        })
-    }) {
+    if owner_metadata_written(m, tm) {
         return None;
     }
     Some((tm, *m.ta_elem.get(&tm)?))

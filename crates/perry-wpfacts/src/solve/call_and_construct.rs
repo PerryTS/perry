@@ -394,6 +394,7 @@ impl Model {
             ctor_fn: None,
             rooted: false,
             deep: false,
+            key_value: None,
         });
         id
     }
@@ -845,10 +846,7 @@ impl Model {
         // is its write; the others re-escaped it, each publishing ⊤ for
         // what it reaches (opencode: every unit ⊤ for the ~210 arrays the
         // program throws, 27M cell writes in round 3).
-        if self.thrown_reason == Some(reason)
-            && self.thrown_in.contains(&t)
-            && self.stand_in(t)
-        {
+        if self.thrown_reason == Some(reason) && self.thrown_in.contains(&t) && self.stand_in(t) {
             return;
         }
         if self.closed_pub_reason == Some(reason) {

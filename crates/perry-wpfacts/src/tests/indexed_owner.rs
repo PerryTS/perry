@@ -128,7 +128,12 @@ fn prototype_writes_withhold_the_global_metadata_effect_proof() {
 fn numeric_constructor_arguments_keep_owner_identity_without_inventing_an_extent() {
     for units in [false, true] {
         let (h, f) = run("function make(n: number) { return new Float64Array(n); } const x = make(8); console.log(x.length);", units);
-        let o = owner(&h, &f, "x").expect("numeric argument contract proves fresh construction");
+        let o = owner(&h, &f, "x").unwrap_or_else(|| {
+            panic!(
+                "numeric argument contract, units={units}: {}",
+                f.dump_text()
+            )
+        });
         assert_eq!((o.kind, o.min_len, o.exact_len), (7, 0, None));
         let (h, f) = run("function make(n: number) { return new Float64Array(n); } const x = make(new ArrayBuffer(64) as unknown as number); console.log(x.length);", units);
         assert!(
@@ -151,4 +156,31 @@ fn a_unit_over_its_work_budget_cannot_certify_program_wide_metadata_effects() {
     );
     assert!(facts.units.iter().any(|(_, s)| s.aborted));
     assert!(!facts.indexed_metadata_pristine());
+}
+
+#[test]
+fn numeric_element_writes_do_not_masquerade_as_metadata_writes() {
+    for units in [false, true] {
+        let (h, f) = run("const x = new Float64Array(8); for (let i = 0; i < 8; i++) x[i] = i; console.log(x.length, x[0]);", units);
+        assert!(
+            owner(&h, &f, "x").is_some(),
+            "numeric indexed writes preserve metadata, units={units}"
+        );
+        let (h, f) = run("const x = new Float64Array(8); const key = 'spare'; (x as any)[key] = 1; console.log(x.length);", units);
+        assert!(
+            owner(&h, &f, "x").is_none(),
+            "unproven named writes keep the metadata guard, units={units}"
+        );
+    }
+}
+
+#[test]
+fn typed_byte_read_annotations_do_not_turn_view_arguments_into_numeric_lengths() {
+    for units in [false, true] {
+        let (h, f) = run("const fake = {0: new ArrayBuffer(64)} as unknown as Uint8Array; const x = new Float64Array(fake[0] as unknown as number); console.log(x.length);", units);
+        assert!(
+            owner(&h, &f, "x").is_none(),
+            "actual receiver values, not the indexed annotation, establish constructor semantics"
+        );
+    }
 }

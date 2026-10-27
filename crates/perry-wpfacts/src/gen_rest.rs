@@ -484,16 +484,10 @@ impl<'a> Gen<'a> {
             | Expr::BufferIsEncoding(..)
             | Expr::BufferByteLength { .. }
             | Expr::BufferToString { .. }
-            | Expr::BufferLength(..)
             | Expr::BufferCopy { .. }
             | Expr::BufferWrite { .. }
             | Expr::BufferFill { .. }
             | Expr::BufferEquals { .. }
-            | Expr::BufferIndexGet { .. }
-            | Expr::BufferIndexSet { .. }
-            | Expr::Uint8ArrayLength(..)
-            | Expr::Uint8ArrayGet { .. }
-            | Expr::Uint8ArraySet { .. }
             | Expr::PodLayoutSizeOf { .. }
             | Expr::PodLayoutAlignOf { .. }
             | Expr::PodLayoutOffsetOf { .. }
@@ -1933,7 +1927,13 @@ impl<'a> Gen<'a> {
             | Expr::PropertyGet { .. }
             | Expr::PropertySet { .. }
             | Expr::PropertyUpdate { .. }
+            | Expr::BufferLength(..)
+            | Expr::Uint8ArrayLength(..)
+            | Expr::BufferIndexGet { .. }
+            | Expr::Uint8ArrayGet { .. }
             | Expr::IndexGet { .. }
+            | Expr::BufferIndexSet { .. }
+            | Expr::Uint8ArraySet { .. }
             | Expr::IndexSet { .. }
             | Expr::IndexUpdate { .. }
             | Expr::Object(..)

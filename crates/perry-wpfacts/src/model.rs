@@ -1008,6 +1008,9 @@ pub struct StoreSite {
     /// DECISIONS 149d: rooted, and the object is a load (not `this`): it
     /// holds a reach marker of the receiver.
     pub deep: bool,
+    /// The evaluated key of an indexed source store. Its solved scalar kind
+    /// distinguishes element effects from arbitrary named-property writes.
+    pub key_value: Option<NodeId>,
 }
 
 #[derive(Default, Clone, Debug)]
