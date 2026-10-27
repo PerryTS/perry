@@ -3,7 +3,6 @@
 //! The existing native events installer fills these slots. With no possible
 //! stream instances the probes return their ordinary non-stream result.
 use crate::feature_hooks::Hook;
-use crate::object::{layout_desc::PerryLayoutDesc, ObjectHeader};
 
 static JS_EVENT_EMITTER_SUBCLASS_INIT: Hook<extern "C" fn(f64, f64) -> f64> = Hook::empty();
 pub(crate) fn js_event_emitter_subclass_init(this: f64, options: f64) -> f64 {
@@ -20,23 +19,8 @@ pub(crate) fn js_event_emitter_async_resource_subclass_init(this: f64, options: 
         .map_or_else(|| this, |f| f(this, options))
 }
 
-static INSTANCE_LAYOUT_SLOT: Hook<
-    unsafe fn(*const ObjectHeader, &[u8], Option<u64>) -> Option<Option<u32>>,
-> = Hook::empty();
-pub(crate) unsafe fn instance_layout_slot(
-    obj: *const ObjectHeader,
-    bytes: &[u8],
-    hash: Option<u64>,
-) -> Option<Option<u32>> {
-    INSTANCE_LAYOUT_SLOT
-        .get()
-        .map_or_else(|| None, |f| f(obj, bytes, hash))
-}
-
-static DERIVED_LAYOUT: Hook<unsafe fn(u64) -> Option<*const PerryLayoutDesc>> = Hook::empty();
-pub(crate) unsafe fn derived_layout(proto: u64) -> Option<*const PerryLayoutDesc> {
-    DERIVED_LAYOUT.get().map_or_else(|| None, |f| f(proto))
-}
+// Shape and key-slot proofs belong to the object model's layout image.
+pub(crate) use crate::object::native_instance_layout::{derived_layout, instance_layout_slot};
 
 static IS_CLASSIC_STREAM_INSTANCE_VALUE: Hook<fn(f64) -> bool> = Hook::empty();
 pub(crate) fn is_classic_stream_instance_value(value: f64) -> bool {
@@ -104,8 +88,6 @@ pub(crate) fn install() {
     JS_EVENT_EMITTER_SUBCLASS_INIT.set(crate::node_stream::js_event_emitter_subclass_init);
     JS_EVENT_EMITTER_ASYNC_RESOURCE_SUBCLASS_INIT
         .set(crate::node_stream::js_event_emitter_async_resource_subclass_init);
-    INSTANCE_LAYOUT_SLOT.set(crate::node_stream::instance_birth::instance_layout_slot);
-    DERIVED_LAYOUT.set(crate::node_stream::instance_birth::derived_layout);
     IS_CLASSIC_STREAM_INSTANCE_VALUE.set(crate::node_stream::is_classic_stream_instance_value);
     IS_CLASSIC_STREAM_INSTANCE_OF.set(crate::node_stream::is_classic_stream_instance_of);
     READABLE_HANDLE_ASYNC_ITERATOR

@@ -270,6 +270,7 @@ pub(crate) mod shape_carriers;
 mod class_family_birth;
 mod function_family_birth;
 pub mod layout_desc;
+pub(crate) mod native_instance_layout;
 pub(crate) use shapes::layout_probe;
 #[cfg(test)]
 mod layout_desc_tests;
