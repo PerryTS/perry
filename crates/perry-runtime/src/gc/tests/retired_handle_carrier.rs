@@ -38,7 +38,10 @@ fn a_full_after_a_full_survives_retired_owned_handles() {
     GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.set(old_in_use));
     GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(true));
     let mut result = JsGcStepResult::default();
-    assert_eq!(js_gc_step_work_units(1, &mut result), JS_GC_STEP_STATUS_ACTIVE);
+    assert_eq!(
+        js_gc_step_work_units(1, &mut result),
+        JS_GC_STEP_STATUS_ACTIVE
+    );
     complete_budgeted_gc_cycle();
     for i in 0..24 {
         let bits = crate::object::js_object_get_field_by_name(

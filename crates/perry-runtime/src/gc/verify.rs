@@ -1377,7 +1377,10 @@ pub(super) fn verify_array_pointer_slots_enumerated_report(phase: &str) {
 /// yields is a shared runtime root with its own scanner.
 #[cold]
 #[inline(never)]
-unsafe fn verify_image_cell_child_marks(stats: &mut MarkInvariantVerifyStats, header: *mut GcHeader) {
+unsafe fn verify_image_cell_child_marks(
+    stats: &mut MarkInvariantVerifyStats,
+    header: *mut GcHeader,
+) {
     stats.checked_marked_objects = stats.checked_marked_objects.saturating_add(1);
     visit_gc_rewrite_slots(header, |slot| {
         if !slot.is_parent_owned() {

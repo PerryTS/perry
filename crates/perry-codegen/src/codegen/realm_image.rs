@@ -152,7 +152,11 @@ pub(crate) fn emit_object_cell(
     let size = GC_HEADER_SIZE + header + 8 * slots.len() as u64;
     let ilp32 = crate::target_layout::target_is_ilp32(&triple);
     // ILP32 keeps the slot region 8-aligned with a pad word before `meta`.
-    let (pad_ty, pad_init) = if ilp32 { ("i32, ", "i32 0, ") } else { ("", "") };
+    let (pad_ty, pad_init) = if ilp32 {
+        ("i32, ", "i32 0, ")
+    } else {
+        ("", "")
+    };
     let mut fixups = Vec::new();
     let mut types = Vec::new();
     let mut inits = Vec::new();
@@ -240,7 +244,11 @@ pub(crate) fn emit_test_fixture(llmod: &mut LlModule) -> TestFixture {
 pub(crate) fn emit_test_fixture_install(blk: &mut LlBlock, fixture: &TestFixture) {
     emit_tag_fixups(blk, &fixture.fixups);
     let header = GC_HEADER_SIZE.to_string();
-    let user = blk.gep(I8, &format!("@{}", fixture.object), &[(I64, header.as_str())]);
+    let user = blk.gep(
+        I8,
+        &format!("@{}", fixture.object),
+        &[(I64, header.as_str())],
+    );
     let address = blk.ptrtoint(&user, I64);
     let tagged = blk.or(I64, &address, crate::nanbox::POINTER_TAG_I64);
     let value = blk.bitcast_i64_to_double(&tagged);
@@ -254,7 +262,9 @@ mod tests {
     fn fixture_ir(triple: &str) -> String {
         let mut module = LlModule::new(triple);
         let fixture = emit_test_fixture(&mut module);
-        let block = module.define_function("main", VOID, vec![]).create_block("entry");
+        let block = module
+            .define_function("main", VOID, vec![])
+            .create_block("entry");
         emit_test_fixture_install(block, &fixture);
         block.ret_void();
         module.to_ir()
@@ -270,13 +280,20 @@ mod tests {
         ] {
             let ir = fixture_ir(triple);
             assert_eq!(
-                ir.matches(&format!("section \"{section}\", align 8")).count(),
+                ir.matches(&format!("section \"{section}\", align 8"))
+                    .count(),
                 2,
                 "{triple}: both cells in {section}\n{ir}"
             );
-            assert!(ir.contains("@perry_realm_fixture_fn = internal global"), "{triple}");
+            assert!(
+                ir.contains("@perry_realm_fixture_fn = internal global"),
+                "{triple}"
+            );
             assert!(ir.contains("ptr @perry_realm_fixture_info"), "{triple}");
-            assert!(ir.contains("call void @js_realm_test_fixture_publish(double"), "{triple}");
+            assert!(
+                ir.contains("call void @js_realm_test_fixture_publish(double"),
+                "{triple}"
+            );
         }
     }
 
@@ -289,7 +306,9 @@ mod tests {
         // Apple: an untagged rebase, tagged in main.
         let mac = fixture_ir("aarch64-apple-darwin");
         assert!(!mac.contains("add (i64 ptrtoint"));
-        assert!(mac.contains("i64 ptrtoint (ptr getelementptr (i8, ptr @perry_realm_fixture_fn, i64 8) to i64)"));
+        assert!(mac.contains(
+            "i64 ptrtoint (ptr getelementptr (i8, ptr @perry_realm_fixture_fn, i64 8) to i64)"
+        ));
         assert_eq!(mac.matches("load i64").count(), 1, "{mac}");
         // wasm32: address half relocated, tag half constant.
         let wasm = fixture_ir("wasm32-wasip2");
