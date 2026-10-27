@@ -465,7 +465,11 @@ pub(super) unsafe fn dispatch_string(
                     let search = arg_at(0).unwrap_or(undefined);
                     let replacement = arg_at(1).unwrap_or(undefined);
                     return Some(if method_name == "replaceAll" {
-                        crate::regex::hooked::js_string_replace_all_js(receiver, search, replacement)
+                        crate::regex::hooked::js_string_replace_all_js(
+                            receiver,
+                            search,
+                            replacement,
+                        )
                     } else {
                         crate::regex::hooked::js_string_replace_js(receiver, search, replacement)
                     });
