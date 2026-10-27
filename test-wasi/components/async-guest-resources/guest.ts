@@ -61,7 +61,7 @@ register({
     transferred() {
       collect();
       try { lastOwner.borrow(); return false; } catch (_) { return true; }
-    }
+    },
   "test:async-guest-resources/local@1.0.0": {
     async make(id) {
       await imports.wait(id);
