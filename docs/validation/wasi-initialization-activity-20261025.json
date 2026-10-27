@@ -1,0 +1,315 @@
+{
+  "scope": "Persistent C-driver activity for async imports enqueued by core start functions; TypeScript persistent routing remains unfinished",
+  "baseRevision": "b817f42d4c4a169727cb301ea493a6a9819ddc02",
+  "snapshot": "v314",
+  "documentationSnapshot": "v315",
+  "sourceFilesVerified": 38824,
+  "shippingLockSha256": "c0c77b202d422016fdb7fc1e3312f5fc500d35fbb8923c17a851f6917b2626ab",
+  "validationLockSha256": "b312b6670c24f567e7f1e69991cb5cfb6d5b0d1774acd40568fba04a68ea73fb",
+  "abi": 9,
+  "tests": {
+    "developmentEngine": 177,
+    "productionEngine": 177,
+    "developmentWit": 22,
+    "productionWit": 22,
+    "productionPanicAbort": true,
+    "uid": 65534,
+    "gid": 65534,
+    "clippyAllTargetsWarningsDenied": true,
+    "generatedBindingsStrictTypeScript": true
+  },
+  "subjects": [
+    "ffi_driver_core_start_defers_async_import_failure_to_the_first_poll",
+    "ffi_driver_async_core_start_resolves_without_any_export_invocation"
+  ],
+  "assertions": [
+    "Synchronous core-start imports use constructor context at origin zero.",
+    "Async core-start imports are accepted at instantiation but execute under a fresh first-poll context.",
+    "No export invocation is needed to suspend and resolve the import.",
+    "Pending embedding reply channels keep active true even if Wasmtime reports its unobserved subtask quiescent.",
+    "Successful resolution returns the driver to idle without replaying a constructor frame or callback.",
+    "Initialization callback failure retires the Store and reports failed origin zero."
+  ],
+  "negativeControl": {
+    "snapshot": "v313",
+    "enginePassed": 176,
+    "engineFailed": 1,
+    "exitCode": 101,
+    "diagnostic": "pending initialization must keep its embedding active",
+    "productionDeltaOnly": [
+      "Replies::is_pending",
+      "Include pending replies in the C poll activity report"
+    ],
+    "testSourceUnchanged": true
+  },
+  "discovery": "The v311 probe assumed async core-start imports were invalid; the engine accepted the component. The corrected fixture v312 demonstrated deferred callback failure. The v313 suspension fixture reproduced premature idle reporting; v314 adds only the two production additions.",
+  "productionBinaries": {
+    "perry_component_host": {
+      "path": "/root/codex-components-p2-20261021/turnloop-provider-target/prod/build/perry-component-host/8b554e73797787e0/out/perry_component_host-8b554e73797787e0",
+      "sha256": "f47f548609fca6b28dea2ab6722b229227c9de7188eb6a834af1e7e17dddf2af",
+      "fresh": false,
+      "protectedPath": "/root/codex-components-p2-20261021/perry-initialization-v314-artifacts/perry_component_host-tests"
+    },
+    "perry_wit": {
+      "path": "/root/codex-components-p2-20261021/turnloop-provider-target/prod/build/perry-wit/527fd89bba1749a8/out/perry_wit-527fd89bba1749a8",
+      "sha256": "4b3388229ee182e937219598bcc5209a11b2abbad05699e3cbef20ded99278d2",
+      "fresh": false,
+      "protectedPath": "/root/codex-components-p2-20261021/perry-initialization-v314-artifacts/perry_wit-tests"
+    }
+  },
+  "unchanged": [
+    "Runtime, ABI and vendored encoder sources, dependency manifests and shipping lock.",
+    "Rust Driver::is_active continues to report Wasmtime interest; the C bridge additionally owns pending embedding reply channels.",
+    "Existing crypto-bigint advisory and baseline lint debt remain open."
+  ],
+  "remaining": [
+    "Schedule an initial TypeScript persistent poll after construction and retain origin-zero initialization context independently of retained invocation IDs.",
+    "Per-origin TypeScript constructor/submit/poll, receipt consumption, future/stream wrappers and persistent HTTP.",
+    "Other platforms and combined compiler/runtime/package production qualification."
+  ],
+  "sourceSha256": {
+    "crates/perry-component-host/src/ffi/async_calls.rs": "204f2d7ace2b4227d639e57f1a0d350d59adba07015aeda20c7b4dd38f514d66",
+    "crates/perry-component-host/src/ffi/driver.rs": "fc82e675e62243fb7b873d8e20ae3e4dab0c5cff61fe5ab88f1062949f7def22",
+    "crates/perry-component-host/src/ffi/driver/tests.rs": "8ccba516c81ac3e8d857c36940d546109b97800604204098c8e4c9c48a8a42ab",
+    "crates/perry-component-host/src/ffi/driver/tests/initialization_tests.rs": "585d2979c263eb82f8dad23de189744201f3c0a04cb65e4648bc60fe03792d0b"
+  },
+  "archiveName": "perry-initialization-v314-evidence.tar.gz",
+  "evidenceFiles": {
+    "development/v311/wit-tests.log": {
+      "sha256": "c4cdb7bf14022243ea74d85f9dfe4c5c77a4f29ec8eba7a71ae342f6d1ae351f",
+      "bytes": 6603
+    },
+    "development/v311/engine-tests.log": {
+      "sha256": "f3c4b2d0f0c6bdc1e8a1c6b9df33b79b46556ca14dab9f9033b34b158b63b140",
+      "bytes": 24419
+    },
+    "development/v311/phases.json": {
+      "sha256": "ea362c52a83f636518aca24a4599ace3fdecdd3202c485f0cb616c1de01720f0",
+      "bytes": 168
+    },
+    "development/v311/invalidate.log": {
+      "sha256": "e2c4bbd3d17da3b6f35571409a0a9091147cc6f3fc7dcd6a1a0304dfa60d799e",
+      "bytes": 83
+    },
+    "development/v312/wit-cli.log": {
+      "sha256": "d2fe1a6c390bd5f86f1b1904f0df93a84416fe24023290f768b7ce665634ec61",
+      "bytes": 4507
+    },
+    "development/v312/typecheck.log": {
+      "sha256": "24d9d0a8abf430c960b39c5a173f06418669cd3d65c92451ba352c9c845f33cd",
+      "bytes": 45
+    },
+    "development/v312/wit-tests.log": {
+      "sha256": "45a43e6f150c2279969101ca467d60100d215b2b5a7e6bd534f5899ca9eea9a9",
+      "bytes": 6603
+    },
+    "development/v312/engine-tests.log": {
+      "sha256": "02f4865d4524d81bde19503c73bdd796202b901570411b93b14064b8b792c2e6",
+      "bytes": 23802
+    },
+    "development/v312/phases.json": {
+      "sha256": "f9944cd53ef88c1f3ec1a1d1a6e5955f7f04399f8d2957fd0e655a3f318ab06e",
+      "bytes": 372
+    },
+    "development/v312/clippy.log": {
+      "sha256": "f40ed831647c509ad05ee3e10861c9f82d149941e9b71e9786ed92de38ca40e3",
+      "bytes": 4762
+    },
+    "development/v312/bindings.log": {
+      "sha256": "24d9d0a8abf430c960b39c5a173f06418669cd3d65c92451ba352c9c845f33cd",
+      "bytes": 45
+    },
+    "development/v312/invalidate.log": {
+      "sha256": "bda397e841abe94c8d609d44c77acbc3002b2d8b70af2a82cd30a8c8223e9d1e",
+      "bytes": 83
+    },
+    "development/v312/typecheck/world.wit": {
+      "sha256": "bb9a38bcf36ea263746c7fa5e274a7708b6784b26589ed9f698eaa136cfb2727",
+      "bytes": 365
+    },
+    "development/v312/typecheck/tsconfig.json": {
+      "sha256": "e18c35041f1b3e799a484c8fdf85ad436beacc3db1620d957efd9387fdc9718c",
+      "bytes": 530
+    },
+    "development/v312/typecheck/typecheck.ts": {
+      "sha256": "7db75513776920a75cfd664346a561439bde3ba892932409da5e2786f0f17344",
+      "bytes": 1570
+    },
+    "development/v312/typecheck/generated/world.json": {
+      "sha256": "f017262e5153ce478af7e9774ede1a8a305b60d96fa6d51b21e894f8e6b136f0",
+      "bytes": 2977
+    },
+    "development/v312/typecheck/generated/bindings.ts": {
+      "sha256": "48619a5a79cb7cb7732ca61102947dc11a8cc875ce96cfe39f20bd2220cb513b",
+      "bytes": 4112
+    },
+    "development/v312/typecheck/generated/guest.ts": {
+      "sha256": "af6183533059cb638a34cc452efad842c1a1552ef7e14a80ea8a4102fae9d951",
+      "bytes": 3266
+    },
+    "development/v313/wit-tests.log": {
+      "sha256": "89934aa2c386d4a6765b8c83b34285b1037df883014a0530d09f2d2a829d9077",
+      "bytes": 6603
+    },
+    "development/v313/engine-tests.log": {
+      "sha256": "0731d0d561502227cd12043c2d16c9396edafc286caead4847bec71c493e8fc4",
+      "bytes": 24778
+    },
+    "development/v313/phases.json": {
+      "sha256": "ea362c52a83f636518aca24a4599ace3fdecdd3202c485f0cb616c1de01720f0",
+      "bytes": 168
+    },
+    "development/v313/invalidate.log": {
+      "sha256": "8adf6d3dc279604d82a2dc18ec3dac5363aae50b2a7d2d1848d5b4a0570ca651",
+      "bytes": 84
+    },
+    "development/v314/wit-cli.log": {
+      "sha256": "73a6c86b9ed4d7afafbd002904db2ba9032adc78bcaeaeb693f2ef9b2e704015",
+      "bytes": 4507
+    },
+    "development/v314/typecheck.log": {
+      "sha256": "df4fce3a2617a400261c11f8e8d0cf1cf1818af4955f7efc79e8675541c3e847",
+      "bytes": 45
+    },
+    "development/v314/wit-tests.log": {
+      "sha256": "1343b37946fb3f47f5652d6f9ea0ab00d46f2892d48deeb9ef8e15bd3feec102",
+      "bytes": 6603
+    },
+    "development/v314/engine-tests.log": {
+      "sha256": "785d3d7baf2b1e1aeadc0002c04999d08b2ee899444b5d85a2770fa4c27bd2a8",
+      "bytes": 23927
+    },
+    "development/v314/phases.json": {
+      "sha256": "f9944cd53ef88c1f3ec1a1d1a6e5955f7f04399f8d2957fd0e655a3f318ab06e",
+      "bytes": 372
+    },
+    "development/v314/clippy.log": {
+      "sha256": "5920965994fb37533f1528ea326d0a7a4d22095e4330e05396a97aad5cbca392",
+      "bytes": 4762
+    },
+    "development/v314/bindings.log": {
+      "sha256": "df4fce3a2617a400261c11f8e8d0cf1cf1818af4955f7efc79e8675541c3e847",
+      "bytes": 45
+    },
+    "development/v314/invalidate.log": {
+      "sha256": "c3cb9da2e59b363d9e42c76b8efa218b8ac3066381a9499c1ef9441735305991",
+      "bytes": 83
+    },
+    "development/v314/typecheck/world.wit": {
+      "sha256": "bb9a38bcf36ea263746c7fa5e274a7708b6784b26589ed9f698eaa136cfb2727",
+      "bytes": 365
+    },
+    "development/v314/typecheck/tsconfig.json": {
+      "sha256": "182d3981b96049163f6a5652cea9d3cb72a8b736d4f0044204dabdb33c54ce36",
+      "bytes": 530
+    },
+    "development/v314/typecheck/typecheck.ts": {
+      "sha256": "7db75513776920a75cfd664346a561439bde3ba892932409da5e2786f0f17344",
+      "bytes": 1570
+    },
+    "development/v314/typecheck/generated/world.json": {
+      "sha256": "f017262e5153ce478af7e9774ede1a8a305b60d96fa6d51b21e894f8e6b136f0",
+      "bytes": 2977
+    },
+    "development/v314/typecheck/generated/bindings.ts": {
+      "sha256": "48619a5a79cb7cb7732ca61102947dc11a8cc875ce96cfe39f20bd2220cb513b",
+      "bytes": 4112
+    },
+    "development/v314/typecheck/generated/guest.ts": {
+      "sha256": "af6183533059cb638a34cc452efad842c1a1552ef7e14a80ea8a4102fae9d951",
+      "bytes": 3266
+    },
+    "production/build.log": {
+      "sha256": "c712cd01efff6aabb7ef56d499b18bb770ab3ca48e8a6e87716c4bdfdb073107",
+      "bytes": 265522
+    },
+    "production/perry_component_host-binary.json": {
+      "sha256": "efc66136f8222df6afaf1ca0dfa5e036a5188c4fe1a44c3b2cb8646e60dabcf6",
+      "bytes": 265
+    },
+    "production/perry_component_host-tests.log": {
+      "sha256": "f50f946d10f6d39b2a1b7fa054d26789b53c2dd2f0eb1c74c22394a43a00351f",
+      "bytes": 19017
+    },
+    "production/perry_wit-tests.log": {
+      "sha256": "3ff5a9600103dda6546a13dea6edd747c4b20a9149cd97872df00d0326d30515",
+      "bytes": 1971
+    },
+    "production/tree.log": {
+      "sha256": "3747ea1ed022d4cbab9cd04027d56593acb18e589a7452b634b00fd4867f3dd3",
+      "bytes": 12585
+    },
+    "production/invalidate-engine-wit.log": {
+      "sha256": "e665977fb828eb0fe0e5a302c4eef78a6543deeb13ed8fbf5965da89f1646eed",
+      "bytes": 82
+    },
+    "production/perry_wit-binary.json": {
+      "sha256": "fe773164f059096e0f27ca97d06512b3a02d103755f8e1f3a457426bdfaeae56",
+      "bytes": 243
+    },
+    "production/phases.json": {
+      "sha256": "d00c2e369b040c60ad77d6038ccd37f870b32e99c2e3f040ff4e966ea0dab61f",
+      "bytes": 282
+    },
+    "snapshots/perry-http-runtime-v313-manifest.json": {
+      "sha256": "a55b819f7e0939087d9885983ffbe9f6ca83b0792518166c4529b3473cc5f252",
+      "bytes": 5696396
+    },
+    "snapshots/perry-http-runtime-v313-overlay.tar.gz": {
+      "sha256": "ef38cb795f24dc57d7b73a70a8f28e50bb82a61fa6c3928a3f8d1707179bebce",
+      "bytes": 1044224
+    },
+    "snapshots/perry-http-runtime-v314-manifest.json": {
+      "sha256": "86262f82dcfb5d921534b50ae75488b5f68651f1479bd75de2bd1d51d5a7a91a",
+      "bytes": 5696396
+    },
+    "snapshots/perry-http-runtime-v314-overlay.tar.gz": {
+      "sha256": "7665116b1b3549feb293ac9d677bcf0357b5f77b1ad83de8a0c8e54a72bfefad",
+      "bytes": 1044359
+    },
+    "snapshots/perry-http-runtime-v315-manifest.json": {
+      "sha256": "f140894b86a8fc3906bb17d913fdf29d3aabe2f4d276a25c091c5c1ca43e9f32",
+      "bytes": 5696523
+    },
+    "snapshots/perry-http-runtime-v315-overlay.tar.gz": {
+      "sha256": "ed5cd5142ea761a0881a80b0d7c9b6c8910f23de94aabe4d1a86d7f58eb6849f",
+      "bytes": 1044879
+    },
+    "source/crates/perry-component-host/src/ffi/async_calls.rs": {
+      "sha256": "204f2d7ace2b4227d639e57f1a0d350d59adba07015aeda20c7b4dd38f514d66",
+      "bytes": 11528
+    },
+    "source/crates/perry-component-host/src/ffi/driver.rs": {
+      "sha256": "fc82e675e62243fb7b873d8e20ae3e4dab0c5cff61fe5ab88f1062949f7def22",
+      "bytes": 11172
+    },
+    "source/crates/perry-component-host/src/ffi/driver/tests.rs": {
+      "sha256": "8ccba516c81ac3e8d857c36940d546109b97800604204098c8e4c9c48a8a42ab",
+      "bytes": 24882
+    },
+    "source/crates/perry-component-host/src/ffi/driver/tests/initialization_tests.rs": {
+      "sha256": "585d2979c263eb82f8dad23de189744201f3c0a04cb65e4648bc60fe03792d0b",
+      "bytes": 6715
+    },
+    "negative/async_calls.rs": {
+      "sha256": "da56c0b343eed1f69448e172a9d7a8b58236301002205bc16917c242d141d2b5",
+      "bytes": 11427
+    },
+    "negative/driver.rs": {
+      "sha256": "9766ee1793ca167251079730bdc00b4f95592180fee221bcc9496f421c6a6017",
+      "bytes": 10790
+    },
+    "harness/perry-generic-async-check.py": {
+      "sha256": "ad584dd0549df0ef7c88ed1792648b6996908d29fac1fb891741520f635138d3",
+      "bytes": 2979
+    },
+    "harness/perry-initialization-prod.py": {
+      "sha256": "03335b1bc0409dd2cd3b33685ee2e0ffe5899a6177ba1d4ce04cba2fc09c4cb3",
+      "bytes": 9251
+    },
+    "harness/perry-initialization-verify.py": {
+      "sha256": "152ee57ecb358c537a037e6219fde6b31a9164a283c1b68af4cfefc2b0ac52c2",
+      "bytes": 7708
+    }
+  }
+}

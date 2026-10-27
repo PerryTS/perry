@@ -1,0 +1,271 @@
+// Adapted from Wasmtime 48.0.5; Apache-2.0 WITH LLVM-exception.
+use super::bindings::http::types::{self, ErrorCode, Method, Scheme};
+use crate::http::Error;
+impl From<ErrorCode> for Error {
+    fn from(e: ErrorCode) -> Self {
+        match e {
+            ErrorCode::DnsTimeout => Self::DnsTimeout,
+            ErrorCode::DnsError(payload) => Self::DnsError {
+                rcode: payload.rcode,
+                info_code: payload.info_code,
+            },
+            ErrorCode::DestinationNotFound => Self::DestinationNotFound,
+            ErrorCode::DestinationUnavailable => Self::DestinationUnavailable,
+            ErrorCode::DestinationIpProhibited => Self::DestinationIpProhibited,
+            ErrorCode::DestinationIpUnroutable => Self::DestinationIpUnroutable,
+            ErrorCode::ConnectionRefused => Self::ConnectionRefused,
+            ErrorCode::ConnectionTerminated => Self::ConnectionTerminated,
+            ErrorCode::ConnectionTimeout => Self::ConnectionTimeout,
+            ErrorCode::ConnectionReadTimeout => Self::ConnectionReadTimeout,
+            ErrorCode::ConnectionWriteTimeout => Self::ConnectionWriteTimeout,
+            ErrorCode::ConnectionLimitReached => Self::ConnectionLimitReached,
+            ErrorCode::TlsProtocolError => Self::TlsProtocolError,
+            ErrorCode::TlsCertificateError => Self::TlsCertificateError,
+            ErrorCode::TlsAlertReceived(payload) => Self::TlsAlertReceived {
+                alert_id: payload.alert_id,
+                alert_message: payload.alert_message,
+            },
+            ErrorCode::HttpRequestDenied => Self::HttpRequestDenied,
+            ErrorCode::HttpRequestLengthRequired => Self::HttpRequestLengthRequired,
+            ErrorCode::HttpRequestBodySize(payload) => Self::HttpRequestBodySize(payload),
+            ErrorCode::HttpRequestMethodInvalid => Self::HttpRequestMethodInvalid,
+            ErrorCode::HttpRequestUriInvalid => Self::HttpRequestUriInvalid,
+            ErrorCode::HttpRequestUriTooLong => Self::HttpRequestUriTooLong,
+            ErrorCode::HttpRequestHeaderSectionSize(payload) => {
+                Self::HttpRequestHeaderSectionSize(payload)
+            }
+            ErrorCode::HttpRequestHeaderSize(payload) => {
+                let (field_name, field_size) = match payload {
+                    Some(p) => (p.field_name, p.field_size),
+                    None => (None, None),
+                };
+                Self::HttpRequestHeaderSize {
+                    field_name,
+                    field_size,
+                }
+            }
+            ErrorCode::HttpRequestTrailerSectionSize(payload) => {
+                Self::HttpRequestTrailerSectionSize(payload)
+            }
+            ErrorCode::HttpRequestTrailerSize(payload) => Self::HttpRequestTrailerSize {
+                field_name: payload.field_name,
+                field_size: payload.field_size,
+            },
+            ErrorCode::HttpResponseIncomplete => Self::HttpResponseIncomplete,
+            ErrorCode::HttpResponseHeaderSectionSize(payload) => {
+                Self::HttpResponseHeaderSectionSize(payload)
+            }
+            ErrorCode::HttpResponseHeaderSize(payload) => Self::HttpResponseHeaderSize {
+                field_name: payload.field_name,
+                field_size: payload.field_size,
+            },
+            ErrorCode::HttpResponseBodySize(payload) => Self::HttpResponseBodySize(payload),
+            ErrorCode::HttpResponseTrailerSectionSize(payload) => {
+                Self::HttpResponseTrailerSectionSize(payload)
+            }
+            ErrorCode::HttpResponseTrailerSize(payload) => Self::HttpResponseTrailerSize {
+                field_name: payload.field_name,
+                field_size: payload.field_size,
+            },
+            ErrorCode::HttpResponseTransferCoding(payload) => {
+                Self::HttpResponseTransferCoding(payload)
+            }
+            ErrorCode::HttpResponseContentCoding(payload) => {
+                Self::HttpResponseContentCoding(payload)
+            }
+            ErrorCode::HttpResponseTimeout => Self::HttpResponseTimeout,
+            ErrorCode::HttpUpgradeFailed => Self::HttpUpgradeFailed,
+            ErrorCode::HttpProtocolError => Self::HttpProtocolError,
+            ErrorCode::LoopDetected => Self::LoopDetected,
+            ErrorCode::ConfigurationError => Self::ConfigurationError,
+            ErrorCode::InternalError(payload) => Self::InternalError(payload),
+        }
+    }
+}
+
+impl From<Error> for ErrorCode {
+    fn from(e: Error) -> Self {
+        match e {
+            Error::DnsTimeout => ErrorCode::DnsTimeout,
+            Error::DnsError { rcode, info_code } => {
+                ErrorCode::DnsError(types::DnsErrorPayload { rcode, info_code })
+            }
+            Error::DestinationNotFound => ErrorCode::DestinationNotFound,
+            Error::DestinationUnavailable => ErrorCode::DestinationUnavailable,
+            Error::DestinationIpProhibited => ErrorCode::DestinationIpProhibited,
+            Error::DestinationIpUnroutable => ErrorCode::DestinationIpUnroutable,
+            Error::ConnectionRefused => ErrorCode::ConnectionRefused,
+            Error::ConnectionTerminated => ErrorCode::ConnectionTerminated,
+            Error::ConnectionTimeout => ErrorCode::ConnectionTimeout,
+            Error::ConnectionReadTimeout => ErrorCode::ConnectionReadTimeout,
+            Error::ConnectionWriteTimeout => ErrorCode::ConnectionWriteTimeout,
+            Error::ConnectionLimitReached => ErrorCode::ConnectionLimitReached,
+            Error::TlsProtocolError => ErrorCode::TlsProtocolError,
+            Error::TlsCertificateError => ErrorCode::TlsCertificateError,
+            Error::TlsAlertReceived {
+                alert_id,
+                alert_message,
+            } => ErrorCode::TlsAlertReceived(types::TlsAlertReceivedPayload {
+                alert_id,
+                alert_message,
+            }),
+            Error::HttpRequestDenied => ErrorCode::HttpRequestDenied,
+            Error::HttpRequestLengthRequired => ErrorCode::HttpRequestLengthRequired,
+            Error::HttpRequestBodySize(payload) => ErrorCode::HttpRequestBodySize(payload),
+            Error::HttpRequestMethodInvalid => ErrorCode::HttpRequestMethodInvalid,
+            Error::HttpRequestUriInvalid => ErrorCode::HttpRequestUriInvalid,
+            Error::HttpRequestUriTooLong => ErrorCode::HttpRequestUriTooLong,
+            Error::HttpRequestHeaderSectionSize(payload) => {
+                ErrorCode::HttpRequestHeaderSectionSize(payload)
+            }
+            Error::HttpRequestHeaderSize {
+                field_name,
+                field_size,
+            } => ErrorCode::HttpRequestHeaderSize(Some(types::FieldSizePayload {
+                field_name,
+                field_size,
+            })),
+            Error::HttpRequestTrailerSectionSize(payload) => {
+                ErrorCode::HttpRequestTrailerSectionSize(payload)
+            }
+            Error::HttpRequestTrailerSize {
+                field_name,
+                field_size,
+            } => ErrorCode::HttpRequestTrailerSize(types::FieldSizePayload {
+                field_name,
+                field_size,
+            }),
+            Error::HttpResponseIncomplete => ErrorCode::HttpResponseIncomplete,
+            Error::HttpResponseHeaderSectionSize(payload) => {
+                ErrorCode::HttpResponseHeaderSectionSize(payload)
+            }
+            Error::HttpResponseHeaderSize {
+                field_name,
+                field_size,
+            } => ErrorCode::HttpResponseHeaderSize(types::FieldSizePayload {
+                field_name,
+                field_size,
+            }),
+            Error::HttpResponseBodySize(payload) => ErrorCode::HttpResponseBodySize(payload),
+            Error::HttpResponseTrailerSectionSize(payload) => {
+                ErrorCode::HttpResponseTrailerSectionSize(payload)
+            }
+            Error::HttpResponseTrailerSize {
+                field_name,
+                field_size,
+            } => ErrorCode::HttpResponseTrailerSize(types::FieldSizePayload {
+                field_name,
+                field_size,
+            }),
+            Error::HttpResponseTransferCoding(payload) => {
+                ErrorCode::HttpResponseTransferCoding(payload)
+            }
+            Error::HttpResponseContentCoding(payload) => {
+                ErrorCode::HttpResponseContentCoding(payload)
+            }
+            Error::HttpResponseTimeout => ErrorCode::HttpResponseTimeout,
+            Error::HttpUpgradeFailed => ErrorCode::HttpUpgradeFailed,
+            Error::HttpProtocolError => ErrorCode::HttpProtocolError,
+            Error::LoopDetected => ErrorCode::LoopDetected,
+            Error::ConfigurationError => ErrorCode::ConfigurationError,
+            Error::InternalError(payload) => ErrorCode::InternalError(payload),
+        }
+    }
+}
+
+impl From<http::Method> for Method {
+    fn from(method: http::Method) -> Self {
+        Self::from(&method)
+    }
+}
+
+impl From<&http::Method> for Method {
+    fn from(method: &http::Method) -> Self {
+        if method == http::Method::GET {
+            Self::Get
+        } else if method == http::Method::HEAD {
+            Self::Head
+        } else if method == http::Method::POST {
+            Self::Post
+        } else if method == http::Method::PUT {
+            Self::Put
+        } else if method == http::Method::DELETE {
+            Self::Delete
+        } else if method == http::Method::CONNECT {
+            Self::Connect
+        } else if method == http::Method::OPTIONS {
+            Self::Options
+        } else if method == http::Method::TRACE {
+            Self::Trace
+        } else if method == http::Method::PATCH {
+            Self::Patch
+        } else {
+            Self::Other(method.as_str().into())
+        }
+    }
+}
+
+impl TryFrom<Method> for http::Method {
+    type Error = http::method::InvalidMethod;
+
+    fn try_from(method: Method) -> Result<Self, Self::Error> {
+        Self::try_from(&method)
+    }
+}
+
+impl TryFrom<&Method> for http::Method {
+    type Error = http::method::InvalidMethod;
+
+    fn try_from(method: &Method) -> Result<Self, Self::Error> {
+        match method {
+            Method::Get => Ok(Self::GET),
+            Method::Head => Ok(Self::HEAD),
+            Method::Post => Ok(Self::POST),
+            Method::Put => Ok(Self::PUT),
+            Method::Delete => Ok(Self::DELETE),
+            Method::Connect => Ok(Self::CONNECT),
+            Method::Options => Ok(Self::OPTIONS),
+            Method::Trace => Ok(Self::TRACE),
+            Method::Patch => Ok(Self::PATCH),
+            Method::Other(s) => s.parse(),
+        }
+    }
+}
+
+impl From<http::uri::Scheme> for Scheme {
+    fn from(scheme: http::uri::Scheme) -> Self {
+        Self::from(&scheme)
+    }
+}
+
+impl From<&http::uri::Scheme> for Scheme {
+    fn from(scheme: &http::uri::Scheme) -> Self {
+        if *scheme == http::uri::Scheme::HTTP {
+            Self::Http
+        } else if *scheme == http::uri::Scheme::HTTPS {
+            Self::Https
+        } else {
+            Self::Other(scheme.as_str().into())
+        }
+    }
+}
+
+impl TryFrom<Scheme> for http::uri::Scheme {
+    type Error = http::uri::InvalidUri;
+
+    fn try_from(scheme: Scheme) -> Result<Self, Self::Error> {
+        Self::try_from(&scheme)
+    }
+}
+
+impl TryFrom<&Scheme> for http::uri::Scheme {
+    type Error = http::uri::InvalidUri;
+
+    fn try_from(scheme: &Scheme) -> Result<Self, Self::Error> {
+        match scheme {
+            Scheme::Http => Ok(Self::HTTP),
+            Scheme::Https => Ok(Self::HTTPS),
+            Scheme::Other(s) => s.parse(),
+        }
+    }
+}

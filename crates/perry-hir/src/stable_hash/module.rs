@@ -173,6 +173,7 @@ impl SH for ModuleInitKind {
         match self {
             ModuleInitKind::Eager => tag(h, 0),
             ModuleInitKind::Deferred => tag(h, 1),
+            ModuleInitKind::OnDemand => tag(h, 2),
         }
     }
 }

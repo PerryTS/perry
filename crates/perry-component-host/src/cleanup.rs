@@ -4,7 +4,7 @@ use crate::{Host, ResourceRef};
 use anyhow::Result;
 use serde::Deserialize;
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub(crate) enum CollectedResource {
     Guest { token: String },

@@ -4,14 +4,32 @@ use crate::exception::catch_js_throw;
 use crate::{gc::RuntimeHandleScope, value::JSValue};
 use serde_json::{json, Value};
 
+pub(super) mod retention;
+pub(super) mod typed;
+
 pub(super) fn encode(value: f64) -> Value {
-    encode_at(value, 0, None).unwrap_or_else(|error| crate::exception::js_throw(error))
+    encode_at(value, 0, None, None).unwrap_or_else(|error| crate::exception::js_throw(error))
 }
 
+#[cfg(test)]
 pub(super) fn encode_for(value: f64, owner: f64) -> Value {
     let scope = RuntimeHandleScope::new();
     let owner = scope.root_nanbox_f64(owner);
-    encode_at(value, 0, Some(&owner)).unwrap_or_else(|error| crate::exception::js_throw(error))
+    encode_at(value, 0, Some(&owner), None)
+        .unwrap_or_else(|error| crate::exception::js_throw(error))
+}
+
+/// Async submission snapshots bytes immediately but must also retain resource
+/// wrappers until native lowering commits ownership. Retain them during this
+/// traversal, including resources produced by getters or later removed from
+/// the caller's mutable argument objects.
+#[cfg(test)]
+pub(super) fn encode_for_retained(value: f64, owner: f64, retained: f64) -> Value {
+    let scope = RuntimeHandleScope::new();
+    let owner = scope.root_nanbox_f64(owner);
+    let retained = scope.root_nanbox_f64(retained);
+    encode_at(value, 0, Some(&owner), Some(&retained))
+        .unwrap_or_else(|error| crate::exception::js_throw(error))
 }
 
 fn encoding_error(message: &str) -> f64 {
@@ -24,6 +42,7 @@ fn encode_at(
     value: f64,
     depth: usize,
     owner: Option<&crate::gc::RuntimeHandle<'_>>,
+    retained: Option<&crate::gc::RuntimeHandle<'_>>,
 ) -> Result<Value, f64> {
     if depth >= 128 {
         return Err(encoding_error(
@@ -75,7 +94,7 @@ fn encode_at(
         let mut values = Vec::with_capacity(len as usize);
         for i in 0..len {
             let child = catch_js_throw(|| crate::array::js_array_get_f64(pointer(), i))?;
-            values.push(encode_at(child, depth + 1, owner)?);
+            values.push(encode_at(child, depth + 1, owner, retained)?);
         }
         return Ok(Value::Array(values));
     }
@@ -91,15 +110,26 @@ fn encode_at(
         .map_err(|_| encoding_error("Detached component byte list"));
     }
     if object_pointer(root.get_nanbox_f64()).is_some() {
+        if let Some(value) = catch_js_throw(|| {
+            super::async_value::encode(
+                root.get_nanbox_f64(),
+                owner.map_or_else(super::undefined, |owner| owner.get_nanbox_f64()),
+            )
+        })? {
+            retain_resource(retained, &root, &value)?;
+            return Ok(value);
+        }
         if let Some(resource) = catch_js_throw(|| {
             super::host_resource::encode(
                 root.get_nanbox_f64(),
                 owner.map_or_else(super::undefined, |owner| owner.get_nanbox_f64()),
             )
         })? {
+            retain_resource(retained, &root, &resource)?;
             return Ok(resource);
         }
         if let Some(resource) = catch_js_throw(|| super::resource::encode(root.get_nanbox_f64()))? {
+            retain_resource(retained, &root, &resource)?;
             return Ok(resource);
         }
         let keys = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(catch_js_throw(|| {
@@ -119,13 +149,28 @@ fn encode_at(
                 ));
             }
             let value = catch_js_throw(|| field(root.get_nanbox_f64(), key.as_bytes()))?;
-            object.insert(key, encode_at(value, depth + 1, owner)?);
+            object.insert(key, encode_at(value, depth + 1, owner, retained)?);
         }
         return Ok(Value::Object(object));
     }
     Err(encoding_error(
         "Value cannot cross a WIT component boundary",
     ))
+}
+
+fn retain_resource(
+    retained: Option<&crate::gc::RuntimeHandle<'_>>,
+    resource: &crate::gc::RuntimeHandle<'_>,
+    identity: &Value,
+) -> Result<(), f64> {
+    if let Some(retained) = retained {
+        retention::retain(
+            retained.get_nanbox_f64(),
+            resource.get_nanbox_f64(),
+            identity,
+        )?;
+    }
+    Ok(())
 }
 
 fn resolved<'a>(world: &'a Value, mut ty: &'a Value) -> &'a Value {
@@ -225,6 +270,18 @@ fn decode_at(
             )
         }
         Value::Object(object) => {
+            if object.contains_key("$future") || object.contains_key("$stream") {
+                let stream = object.contains_key("$stream");
+                if ty["kind"] != if stream { "stream" } else { "future" } {
+                    fail("Async value does not match its WIT type");
+                }
+                return super::async_value::decode(
+                    owner.get_nanbox_f64(),
+                    value,
+                    &ty["value"],
+                    stream,
+                );
+            }
             if object.contains_key("$hostResource") {
                 return super::host_resource::decode(
                     owner.get_nanbox_f64(),
@@ -247,11 +304,11 @@ fn decode_at(
                     _ => fail("Invalid component float"),
                 };
             }
-            if let Some(token) = object.get("$resource").and_then(Value::as_str) {
-                return super::resource::wrap(
+            if object.contains_key("$resource") {
+                return super::resource::decode(
                     owner.get_nanbox_f64(),
-                    token,
-                    object.get("owned") == Some(&Value::Bool(true)),
+                    value,
+                    lifetime.get_nanbox_f64(),
                 );
             }
             let output = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(

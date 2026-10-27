@@ -386,6 +386,7 @@ fn resolve_file_candidate(path: &std::path::Path) -> Option<std::path::PathBuf> 
             component => normalized.push(component.as_os_str()),
         }
     }
+    path_registry::register_pending_path_inits();
     MODULE_PATH_REGISTRY
         .with(|registry| registry.contains_registered(&normalized.to_string_lossy()))
         .then_some(normalized)
@@ -1112,6 +1113,7 @@ fn canonical_or_literal_suffix(path: &std::path::Path) -> std::path::PathBuf {
 /// machine, without touching the filesystem. Any other spelling is
 /// canonicalized first, so it still meets the module's one key.
 fn module_lookup_key(path: &str) -> String {
+    path_registry::register_pending_path_inits();
     if MODULE_PATH_REGISTRY.with(|registry| registry.contains_registered(path)) {
         return path.to_string();
     }
@@ -1143,6 +1145,19 @@ pub unsafe extern "C" fn js_register_path_init(path_ptr: *const u8, path_len: i6
     if !MODULE_PATH_REGISTRY.with(|r| r.register_init(key.clone(), init_addr as usize)) {
         eprintln!("perry: rejected duplicate path-module initializer for canonical path {key}");
     }
+}
+
+/// Codegen FFI: `registrar` (a generated function of `js_register_path_init`
+/// calls) registers its modules' initializers the first time this heap looks
+/// up an initializer it does not have, or hands its table to a worker. The
+/// entry of a program that is not closed passes its on-demand CommonJS
+/// modules here instead of registering each at startup.
+///
+/// # Safety
+/// `registrar` is a generated `extern "C" fn()` of this program image.
+#[no_mangle]
+pub unsafe extern "C" fn js_register_path_inits_lazily(registrar: unsafe extern "C" fn()) {
+    path_registry::defer_path_inits(registrar);
 }
 
 /// Codegen FFI: publish a CommonJS module's record before
@@ -1307,6 +1322,7 @@ fn run_path_initializer(addr: usize) -> Result<(), u64> {
 }
 
 fn require_path_key(key: &str) -> Result<Option<u64>, PathModuleRequireError> {
+    path_registry::register_pending_path_inits();
     MODULE_PATH_REGISTRY.with(|r| r.require_with(key, &run_path_initializer))
 }
 

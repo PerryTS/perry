@@ -339,8 +339,9 @@ rustls-pemfile = { workspace = true, optional = true }
 rusqlite = { version = "0.39", features = ["bundled", "column_decltype", "limits", "session"], optional = true }
 
 # Crypto
-# CPU-dispatched fixed SHA-384/512 contexts, without an EVP allocation.
-openssl-sys = { version = "0.9", optional = true, features = ["vendored"] }
+# SHA-384/512 contexts come from OpenSSL's CPU-dispatched fixed contexts
+# (`openssl-sys`, declared in the non-wasi target table below) or, on WASI,
+# where OpenSSL cannot build, from `sha2` (`crypto/wide_digest.rs`).
 sha2 = { version = "0.11", optional = true }
 sha1 = { version = "0.11", optional = true }
 # SHAKE128/256 moved out of `sha3`'s root into this crate as of sha3 0.12.
@@ -411,6 +412,9 @@ scraper = { version = "0.27", optional = true }
 # IDs
 # Pulled only by crypto or bundled-nodemailer.
 perry-uuid = { workspace = true, optional = true }
+
+[target.'cfg(not(target_os = "wasi"))'.dependencies]
+openssl-sys = { version = "0.9", optional = true, features = ["vendored"] }
 
 # libc — termios for readline's raw-mode toggle (#347 Phase 2). The
 # Unix path uses tcsetattr/cfmakeraw; Windows uses SetConsoleMode via

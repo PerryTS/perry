@@ -88,25 +88,6 @@ fn debug_hir_uses_string_normalization(hir_debug: &str) -> bool {
         || hir_debug.contains("property: \"Collator\"")
 }
 
-fn debug_hir_uses_global_math_member(hir_debug: &str) -> bool {
-    // Value-form reads such as `const cos = Math.cos` lose the `Math`
-    // receiver during lowering and reach final HIR as a property read from
-    // the shared GlobalGet(0) builtin sentinel. Match every member reified by
-    // `install_math_namespace`. A same-named property on another object is a
-    // benign false positive (a slightly larger runtime), while a false
-    // negative leaves the extracted function undefined.
-    const MEMBERS: &[&str] = &[
-        "abs", "acos", "acosh", "asin", "asinh", "atan", "atan2", "atanh", "cbrt", "ceil", "clz32",
-        "cos", "cosh", "exp", "expm1", "f16round", "floor", "fround", "hypot", "imul", "log",
-        "log1p", "log2", "log10", "max", "min", "pow", "random", "round", "sign", "sin", "sinh",
-        "sqrt", "tan", "tanh", "trunc",
-    ];
-
-    MEMBERS
-        .iter()
-        .any(|member| hir_debug.contains(&format!(r#"property: "{member}""#)))
-}
-
 /// `perry-runtime/url-engine` gate. Despite the name it is not only the host
 /// parser: `String(url)`, JSON and the setter paths recognize a URL object only
 /// under it, so it is needed wherever a URL object can exist.
@@ -175,9 +156,163 @@ fn module_hir_debug(hir_module: &perry_hir::Module) -> String {
     )
 }
 
+/// Whether `found` holds for one of the expression roots of `module`'s
+/// lowered code: statements of the init, functions and class bodies,
+/// parameter defaults, decorators, field initializers and computed keys.
+/// `found` descends into an expression itself (closure bodies included,
+/// through [`stmts_any_expr`]).
+fn module_any_expr(
+    module: &perry_hir::Module,
+    found: &mut dyn FnMut(&perry_hir::Expr) -> bool,
+) -> bool {
+    use perry_hir::Function;
+
+    fn decorators(
+        ds: &[perry_hir::Decorator],
+        found: &mut dyn FnMut(&perry_hir::Expr) -> bool,
+    ) -> bool {
+        ds.iter().any(|d| d.args.iter().any(&mut *found))
+    }
+
+    fn function(f: &Function, found: &mut dyn FnMut(&perry_hir::Expr) -> bool) -> bool {
+        f.params.iter().any(|param| {
+            param.default.as_ref().is_some_and(&mut *found) || decorators(&param.decorators, found)
+        }) || stmts_any_expr(&f.body, found)
+            || decorators(&f.decorators, found)
+    }
+
+    stmts_any_expr(&module.init, found)
+        || module.functions.iter().any(|f| function(f, found))
+        || module.classes.iter().any(|class| {
+            class.extends_expr.as_deref().is_some_and(&mut *found)
+                || class
+                    .constructor
+                    .iter()
+                    .chain(&class.methods)
+                    .chain(&class.static_methods)
+                    .chain(class.getters.iter().map(|(_, f)| f))
+                    .chain(class.setters.iter().map(|(_, f)| f))
+                    .any(|f| function(f, found))
+                || class
+                    .fields
+                    .iter()
+                    .chain(&class.static_fields)
+                    .any(|field| {
+                        field.init.as_ref().is_some_and(&mut *found)
+                            || field.key_expr.as_ref().is_some_and(&mut *found)
+                            || decorators(&field.decorators, found)
+                    })
+                || class
+                    .computed_members
+                    .iter()
+                    .any(|member| found(&member.key_expr) || function(&member.function, found))
+                || decorators(&class.decorators, found)
+        })
+}
+
+fn stmts_any_expr(
+    stmts: &[perry_hir::Stmt],
+    found: &mut dyn FnMut(&perry_hir::Expr) -> bool,
+) -> bool {
+    stmts
+        .iter()
+        .any(|stmt| perry_hir::walker::stmt_any_expr(stmt, &mut |e| found(e)))
+}
+
+/// `global-math`: does the program evaluate the `Math` namespace object?
+///
+/// Direct calls (`Math.max(a, b)`) lower to intrinsics and never read it. A
+/// value read keeps the namespace receiver (`PropertyGet { PropertyGet {
+/// GlobalGet(0), "Math" }, "cos" }`), as do `Math` itself, `globalThis.Math`
+/// and `globalThis["Math"]`: every one names `Math` as a property. A member
+/// read off the bare `GlobalGet(0)` receiver is counted too, except as a
+/// call's callee: that shape is the collapsed intrinsic surface
+/// (`console.log(…)`, a declined `Math.f()`), dispatched by name and never
+/// through the namespace object. A `"Math"` string that is no property key
+/// is not a use.
+fn module_uses_global_math(module: &perry_hir::Module) -> bool {
+    use perry_hir::walker::walk_expr_children;
+    use perry_hir::Expr;
+
+    fn is_math_member(name: &str) -> bool {
+        matches!(
+            name,
+            "abs"
+                | "acos"
+                | "acosh"
+                | "asin"
+                | "asinh"
+                | "atan"
+                | "atan2"
+                | "atanh"
+                | "cbrt"
+                | "ceil"
+                | "clz32"
+                | "cos"
+                | "cosh"
+                | "exp"
+                | "expm1"
+                | "f16round"
+                | "floor"
+                | "fround"
+                | "hypot"
+                | "imul"
+                | "log"
+                | "log1p"
+                | "log2"
+                | "log10"
+                | "max"
+                | "min"
+                | "pow"
+                | "random"
+                | "round"
+                | "sign"
+                | "sin"
+                | "sinh"
+                | "sqrt"
+                | "tan"
+                | "tanh"
+                | "trunc"
+        )
+    }
+
+    fn uses(expr: &Expr) -> bool {
+        match expr {
+            Expr::PropertyGet { property, .. } if property == "Math" => return true,
+            Expr::PropertyGet {
+                object, property, ..
+            } if matches!(object.as_ref(), Expr::GlobalGet(0)) && is_math_member(property) => {
+                return true
+            }
+            Expr::IndexGet { index, .. } if matches!(index.as_ref(), Expr::String(s) if s == "Math") => {
+                return true
+            }
+            Expr::Closure { body, .. } if stmts_any_expr(body, &mut uses) => return true,
+            _ => {}
+        }
+        let collapsed_callee = match expr {
+            Expr::Call { callee, .. } | Expr::CallSpread { callee, .. } => {
+                matches!(callee.as_ref(), Expr::PropertyGet { object, .. }
+                    if matches!(object.as_ref(), Expr::GlobalGet(0)))
+                .then_some(callee.as_ref() as *const Expr)
+            }
+            _ => None,
+        };
+        let mut found = false;
+        walk_expr_children(expr, &mut |child| {
+            if !found && collapsed_callee != Some(child as *const Expr) {
+                found = uses(child);
+            }
+        });
+        found
+    }
+
+    module_any_expr(module, &mut uses)
+}
+
 fn module_uses_webassembly_namespace(module: &perry_hir::Module) -> bool {
-    use perry_hir::walker::{stmt_any_expr, walk_expr_children};
-    use perry_hir::{Expr, Function, Stmt};
+    use perry_hir::walker::walk_expr_children;
+    use perry_hir::Expr;
 
     fn is_global_object_value(expr: &Expr) -> bool {
         matches!(expr, Expr::GlobalThisExpr)
@@ -212,7 +347,7 @@ fn module_uses_webassembly_namespace(module: &perry_hir::Module) -> bool {
         }
         // Expression descent visits closure defaults, but not closure bodies.
         if let Expr::Closure { body, .. } = expr {
-            if stmts_use_namespace(body) {
+            if stmts_any_expr(body, &mut expr_uses_namespace) {
                 return true;
             }
         }
@@ -223,56 +358,7 @@ fn module_uses_webassembly_namespace(module: &perry_hir::Module) -> bool {
         found
     }
 
-    fn stmts_use_namespace(stmts: &[Stmt]) -> bool {
-        stmts
-            .iter()
-            .any(|stmt| stmt_any_expr(stmt, &mut expr_uses_namespace))
-    }
-
-    fn decorators_use_namespace(decorators: &[perry_hir::Decorator]) -> bool {
-        decorators
-            .iter()
-            .any(|decorator| decorator.args.iter().any(expr_uses_namespace))
-    }
-
-    fn function_uses_namespace(function: &Function) -> bool {
-        function.params.iter().any(|param| {
-            param.default.as_ref().is_some_and(expr_uses_namespace)
-                || decorators_use_namespace(&param.decorators)
-        }) || stmts_use_namespace(&function.body)
-            || decorators_use_namespace(&function.decorators)
-    }
-
-    stmts_use_namespace(&module.init)
-        || module.functions.iter().any(function_uses_namespace)
-        || module.classes.iter().any(|class| {
-            class
-                .extends_expr
-                .as_deref()
-                .is_some_and(expr_uses_namespace)
-                || class
-                    .constructor
-                    .iter()
-                    .chain(&class.methods)
-                    .chain(&class.static_methods)
-                    .chain(class.getters.iter().map(|(_, function)| function))
-                    .chain(class.setters.iter().map(|(_, function)| function))
-                    .any(function_uses_namespace)
-                || class
-                    .fields
-                    .iter()
-                    .chain(&class.static_fields)
-                    .any(|field| {
-                        field.init.as_ref().is_some_and(expr_uses_namespace)
-                            || field.key_expr.as_ref().is_some_and(expr_uses_namespace)
-                            || decorators_use_namespace(&field.decorators)
-                    })
-                || class.computed_members.iter().any(|member| {
-                    expr_uses_namespace(&member.key_expr)
-                        || function_uses_namespace(&member.function)
-                })
-                || decorators_use_namespace(&class.decorators)
-        })
+    module_any_expr(module, &mut expr_uses_namespace)
 }
 
 fn module_uses_json_format(module: &perry_hir::Module) -> bool {
@@ -1040,7 +1126,7 @@ pub(super) fn detect_optional_feature_usage(
         // bodies, so an extracted method in a constructor, method, accessor,
         // or field initializer cannot be pruned.) Bare matching stays
         // over-approximate on purpose (a false positive only costs size).
-        if hir_debug.contains("\"Math\"") || debug_hir_uses_global_math_member(&hir_debug) {
+        if module_uses_global_math(hir_module) {
             ctx.uses_global_math = true;
         }
         if hir_debug.contains("JsonParse")
@@ -1286,7 +1372,7 @@ pub(super) fn detect_optional_feature_usage(
 #[cfg(test)]
 mod tests {
     use super::{
-        debug_hir_uses_get_builtin_module, debug_hir_uses_global_math_member, debug_hir_uses_regex,
+        debug_hir_uses_get_builtin_module, debug_hir_uses_regex,
         debug_hir_uses_string_normalization, debug_hir_uses_web_compression_stream,
         debug_hir_uses_zlib_brotli, debug_hir_uses_zlib_zstd, imports_fs_promises_glob,
     };
@@ -1386,20 +1472,24 @@ mod tests {
     }
 
     #[test]
-    fn global_math_gate_detects_extracted_members_but_not_direct_intrinsics() {
-        assert!(debug_hir_uses_global_math_member(
-            r#"PropertyGet { object: GlobalGet(0), property: "cos", optional: false }"#
-        ));
-        assert!(debug_hir_uses_global_math_member(
-            r#"PropertyGet { object: GlobalGet(0), property: "imul", optional: false }"#
-        ));
-        assert!(debug_hir_uses_global_math_member(
-            r#"PropertyGet { object: GlobalGet(0), property: "f16round", optional: false }"#
-        ));
-        assert!(!debug_hir_uses_global_math_member("MathCos(Number(0.0))"));
-        assert!(!debug_hir_uses_global_math_member(
-            r#"PropertyGet { object: GlobalGet(0), property: "stringify", optional: false }"#
-        ));
+    fn global_math_gate_needs_the_namespace_not_its_name() {
+        for source in [
+            "const cos = Math.cos; console.log(cos(0));",
+            "const m = Math; console.log(m.max(1, 2));",
+            "const { imul } = Math; console.log(imul(2, 3));",
+            "console.log(Object.keys(Math).length);",
+            "console.log((globalThis as any)[\"Math\"].PI);",
+            "class C { f() { return Math.f16round; } } console.log(new C().f());",
+        ] {
+            assert!(detect_for_source(source).uses_global_math, "{source}");
+        }
+        for source in [
+            "console.log(\"Math\");",
+            "const name: string = process.argv[2] ?? \"world\"; console.log(`Hello, ${name}!`);",
+            "console.log(Math.max(1, 2), Math.cos(0), Math.PI);",
+        ] {
+            assert!(!detect_for_source(source).uses_global_math, "{source}");
+        }
     }
 
     fn detect_for_source(source: &str) -> crate::commands::compile::CompilationContext {

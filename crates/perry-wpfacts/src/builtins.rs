@@ -195,6 +195,7 @@ fn site_tmpl(m: &mut Model, call: CallId, what: &'static str) -> Tok {
         proto_members: vec![],
         parent_value: None,
         parent_links: Vec::new(),
+        null_proto: false,
     });
     let t = m.tok(TokKind::Obj(tm, NO_CTX));
     m.site_tmpls.insert(key, t);
@@ -483,13 +484,7 @@ fn ns_load(m: &mut Model, t: Tok, ns: BuiltinNs, a: Atom, dst: NodeId) {
         // `@@species` is the constructor itself; `constructor` is the
         // chain's (`Function` for a constructor, `Object` for a namespace).
         Some(Mem::Ctor) if name == "@@__perry_wk_species" => m.add_tok(dst, t),
-        Some(Mem::Ctor) => {
-            let fam = match ns {
-                BuiltinNs::Math | BuiltinNs::Json | BuiltinNs::Reflect => Family::Object,
-                _ => Family::Function,
-            };
-            family_ctor(m, fam, dst);
-        }
+        Some(Mem::Ctor) => family_ctor(m, members::ns_chain(ns), dst),
         Some(Mem::Proto) => {
             let op = m.tok(TokKind::ObjectProto);
             m.add_tok(dst, op);
@@ -664,11 +659,17 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 m.add_prim(dst, prim::ALL);
             }
         }
+        // A method has no `prototype`.
+        TokKind::Builtin(BuiltinNs::ObjectProtoMethod) if name.as_deref() == Some("prototype") => {
+            m.add_prim(dst, prim::UNDEF)
+        }
         TokKind::Builtin(ns) => match name.as_deref() {
             Some("prototype") => {
                 let op = m.tok(TokKind::ObjectProto);
                 m.add_tok(dst, op);
             }
+            // Its `constructor` is its chain's (`Function` for a
+            // constructor, E14; `Object` for a namespace object).
             Some(n) if members::ns_member(ns, n).is_some() => {
                 let Key::Named(a) = key else { unreachable!() };
                 ns_load(m, t, ns, a, dst);
@@ -677,6 +678,10 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 let bf = builtin_fn(m, "builtin namespace static");
                 m.add_tok(dst, bf);
                 m.add_prim(dst, prim::ALL);
+                // A computed key may name the chain's `constructor`.
+                if name.is_none() {
+                    family_ctor(m, members::ns_chain(ns), dst);
+                }
             }
         },
         TokKind::Func(f, _) => match name.as_deref() {
@@ -816,20 +821,15 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
         },
         TokKind::ObjectProto if name.as_deref() == Some("constructor") || name.is_none() => {
             // Object.prototype stands for every builtin prototype here:
-            // its `constructor` may be Object or Function (E14).
+            // its `constructor` may be Object or Function (E14). On a chain
+            // its object's kind says which one it is (`chain_load`).
             for ns in [BuiltinNs::Object, BuiltinNs::Function] {
                 let b = m.tok(TokKind::Builtin(ns));
                 m.add_tok(dst, b);
             }
             m.add_prim(dst, prim::UNDEF);
-            // A computed read may find any key a store into ⊤ wrote.
             if name.is_none() {
-                let star = m.atom(crate::STAR_KEY);
-                if m.native_writes.keys().any(|(w, _)| *w == TOP)
-                    || !intrinsic_miss(m, star, NativeMiss::Load(dst))
-                {
-                    opaque_member(m, dst);
-                }
+                any_written(m, dst);
             }
         }
         // A program object's lookup that reaches `Object.prototype`: a key
@@ -854,12 +854,106 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
             let bf = builtin_fn(m, "native proto / builtin fn computed key");
             m.add_tok(dst, bf);
             m.add_prim(dst, prim::ALL);
-            if matches!(name.as_deref(), Some("constructor") | None) {
+            // A function's `constructor` is the Function constructor (E14);
+            // a native prototype's is its native class (the builtin
+            // function above).
+            if matches!(name.as_deref(), Some("constructor") | None)
+                && !matches!(m.toks[t as usize], TokKind::NativeProto(_))
+            {
                 let fc = m.tok(TokKind::Builtin(BuiltinNs::Function));
                 m.add_tok(dst, fc);
             }
         }
         TokKind::Top => {}
+    }
+}
+
+/// `tok_load` of prototype `q` on the chain of `of` (`Cons::ChainUnion`).
+/// `ObjectProto` collapses the builtin prototypes; where `of`'s kind put it
+/// there it is one of them (`seed_family`), and the members it reads under
+/// `constructor` or a computed key are that family's chain's (`members`,
+/// as on a builtin object itself): only a function's chain reaches
+/// `Function.prototype`, whose `constructor` is the Function constructor
+/// (DECISIONS 213). A site builtin object's chain (a typed array's ...)
+/// under a computed key stays `tok_load`'s.
+pub fn chain_load(m: &mut Model, of: Tok, q: Tok, key: Key, dst: NodeId) {
+    if !matches!(m.toks[q as usize], TokKind::ObjectProto) || !m.is_constructor_key(key) {
+        return tok_load(m, q, key, dst);
+    }
+    let Some(fam) = seed_family(m, of) else {
+        return tok_load(m, q, key, dst);
+    };
+    match key {
+        Key::Named(a) => family_load(m, fam, a, dst),
+        Key::Any if is_site_builtin(m, of) => tok_load(m, q, key, dst),
+        Key::Any => family_any(m, fam, dst),
+    }
+}
+
+/// The intrinsic family whose chain `ObjectProto` stands for on the chain
+/// of `t`, when `t`'s kind puts it there (`proto_node` seeds it): a
+/// function's is `Function.prototype` (with the async/generator function
+/// prototypes above it), an array's `Array.prototype`, a site builtin
+/// object's its own builtin's, a namespace's its chain's, anything else's
+/// `Object.prototype`. `None`: the chain's prototypes are values (`new
+/// f()`, `extends <value>`, `Object.create(p)`, whose seed is no prototype
+/// it has) or a class's. A builtin prototype given as a value later adds ⊤
+/// to the chain (`Cons::ProtoGiven`).
+fn seed_family(m: &Model, t: Tok) -> Option<Family> {
+    match &m.toks[t as usize] {
+        TokKind::Obj(tm, _) => match &m.tmpls[*tm as usize].kind {
+            TmplKind::Class { .. } | TmplKind::FnInst { .. } | TmplKind::ObjCreate { .. } => None,
+            _ if m.virt_protos.contains_key(&t) => None,
+            TmplKind::Arr { .. } => Some(Family::Array),
+            TmplKind::BObj { what, .. } => Some(members::bobj_family(what)),
+            TmplKind::Lit { .. } => Some(Family::Object),
+        },
+        TokKind::Proto(tm) => {
+            let tm = &m.tmpls[*tm as usize];
+            (tm.parent.is_none() && tm.native_parent.is_none() && tm.parent_value.is_none())
+                .then_some(Family::Object)
+        }
+        TokKind::NativeProto(_) => Some(Family::Object),
+        TokKind::Func(_, _) | TokKind::Bound(_) | TokKind::BuiltinFn => Some(Family::Function),
+        TokKind::ClassObj(tm) => {
+            let tm = &m.tmpls[*tm as usize];
+            (tm.parent.is_none() && tm.parent_value.is_none()).then_some(Family::Function)
+        }
+        TokKind::Builtin(ns) => Some(members::ns_chain(*ns)),
+        _ => None,
+    }
+}
+
+fn is_site_builtin(m: &Model, t: Tok) -> bool {
+    matches!(m.toks[t as usize], TokKind::Obj(tm, _)
+        if matches!(m.tmpls[tm as usize].kind, TmplKind::BObj { .. }))
+}
+
+/// `dst` ⊇ what a key that may name any member reads on family `fam`'s
+/// intrinsic chain: its `constructor`, its own prototype's members (opaque
+/// builtin functions, data kinds), `Object.prototype`'s methods
+/// (`BuiltinNs::ObjectProtoMethod`), and what a store into ⊤ wrote. Not
+/// `__proto__`: the prototype would be `ObjectProto`, which stands for
+/// every builtin prototype, as a value (an open gap, as before).
+fn family_any(m: &mut Model, fam: Family, dst: NodeId) {
+    family_ctor(m, fam, dst);
+    let (fns, prims) = members::any_member(fam);
+    if fns {
+        let bf = builtin_fn(m, "computed key on a described chain");
+        m.add_tok(dst, bf);
+    }
+    m.add_prim(dst, prims | prim::UNDEF);
+    let f = m.tok(TokKind::Builtin(BuiltinNs::ObjectProtoMethod));
+    m.add_tok(dst, f);
+    any_written(m, dst);
+}
+
+/// A computed read of a builtin prototype may find any key a store into ⊤
+/// wrote, now or later in the solve (`native_written` of `STAR_KEY`).
+fn any_written(m: &mut Model, dst: NodeId) {
+    let star = m.atom(crate::STAR_KEY);
+    if !intrinsic_miss(m, star, NativeMiss::Load(dst)) {
+        opaque_member(m, dst);
     }
 }
 
@@ -991,6 +1085,15 @@ fn own_method_inner(m: &mut Model, t: Tok, key: Key, call: CallId) {
         Key::Named(a) => Some(m.atoms[a as usize].clone()),
         Key::Any => None,
     };
+    // A builtin function's `constructor` is the Function constructor (E14);
+    // a computed key may name it.
+    if let TokKind::Builtin(ns) = m.toks[t as usize] {
+        if members::ns_chain(ns) == Family::Function
+            && matches!(name.as_deref(), Some("constructor") | None)
+        {
+            return call_builtin_ns(m, BuiltinNs::Function, call);
+        }
+    }
     // A well-known-symbol method is a named member of the intrinsic chain
     // where the chain is described (a function value, an array, a described
     // builtin object: absent unless the description names it, as the
@@ -1056,6 +1159,45 @@ pub fn proto_method(m: &mut Model, p: Tok, origin: Tok, key: Key, call: CallId) 
     m.cur_this = prev;
 }
 
+/// A call of `BuiltinNs::ObjectProtoMethod`: any method of
+/// `Object.prototype`. On a receiver it is each method's call on it
+/// (`proto_method`). Without one, `hasOwnProperty` / `propertyIsEnumerable`
+/// convert their key before they throw, `isPrototypeOf` of a primitive is
+/// `false`, `toString` is `"[object Undefined]"`; the others throw
+/// (ToObject of `undefined`).
+fn object_proto_method_call(m: &mut Model, call: CallId) {
+    match (m.cur_this, m.calls[call as usize].this.clone()) {
+        (Some(o), _) => {
+            let op = m.tok(TokKind::ObjectProto);
+            for name in OBJECT_PROTO_METHODS {
+                let a = m.atom(name);
+                proto_method(m, op, o, Key::Named(a), call);
+            }
+        }
+        (None, ThisArg::Undef) => {
+            if let Some(k) = arg(m, call, 0) {
+                let reason = m.reason("ToPropertyKey");
+                m.cons(k, Cons::Implicit { reason, proto: Protocol::ToPrimitive });
+            }
+            ret_prim(m, call, prim::STR | prim::BOOL);
+        }
+        // A receiver node no token stands for: its values are unknown here.
+        (None, _) => unknown_method(m, call, "call of an Object.prototype method"),
+    }
+}
+
+/// `Object.prototype`'s methods, one per distinct summary in
+/// `proto_method_inner`: `propertyIsEnumerable` / `isPrototypeOf` run as
+/// `hasOwnProperty` does, `toLocaleString` as `toString`, the setter forms
+/// as the getter forms.
+const OBJECT_PROTO_METHODS: [&str; 5] = [
+    "hasOwnProperty",
+    "toString",
+    "valueOf",
+    "__defineGetter__",
+    "__lookupGetter__",
+];
+
 fn proto_method_inner(m: &mut Model, p: Tok, origin: Tok, key: Key, call: CallId) {
     let name = match key {
         Key::Named(a) => m.atoms[a as usize].clone(),
@@ -1074,13 +1216,29 @@ fn proto_method_inner(m: &mut Model, p: Tok, origin: Tok, key: Key, call: CallId
                 ret_prim(m, call, prim::STR);
             }
             "valueOf" => ret_tok(m, call, origin),
+            // No function to install: TypeError before anything else.
+            "__defineGetter__" | "__defineSetter__"
+                if m.calls[call as usize].args.len() < 2
+                    && m.calls[call as usize].spread.is_empty() => {}
             "__defineGetter__" | "__defineSetter__" => {
                 let r = m.reason("E5 __defineGetter__/__defineSetter__");
                 m.mark_hard(origin, Hard::E5DefineProperty, r);
                 m.escape(origin, r);
-                unknown_method(m, call, "E5 __defineGetter__ argument");
+                // ToPropertyKey of the key; the function becomes an accessor
+                // of the escaped receiver, which unknown code runs.
+                let c = m.calls[call as usize].clone();
+                if let Some(&k) = c.args.first() {
+                    let reason = m.reason("ToPropertyKey");
+                    m.cons(k, Cons::Implicit { reason, proto: Protocol::ToPrimitive });
+                }
+                let r = m.reason("E5 __defineGetter__ argument");
+                for &a in c.args.iter().skip(1).take(1).chain(&c.spread) {
+                    m.sink_node(a, r);
+                }
+                ret_prim(m, call, prim::UNDEF);
             }
             "__lookupGetter__" | "__lookupSetter__" => {
+                implicit_args(m, call, "ToPropertyKey", Protocol::ToPrimitive);
                 m.implicit(origin, 0, Protocol::Any);
                 ret_tok(m, call, TOP);
             }
@@ -1572,6 +1730,7 @@ pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             set_dyn_eval(m, "E14 Function(...) call");
             unknown_method(m, call, "E14 dynamic code");
         }
+        BuiltinNs::ObjectProtoMethod => object_proto_method_call(m, call),
         BuiltinNs::Error => {
             implicit_args(m, call, "Error message", Protocol::Any);
             let e = error_tok(m, call);
@@ -1681,6 +1840,8 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             set_dyn_eval(m, "E14 new Function(...)");
             unknown_method(m, call, "E14 dynamic code");
         }
+        // Not a constructor (TypeError).
+        BuiltinNs::ObjectProtoMethod => {}
         BuiltinNs::Array => call_builtin_ns(m, ns, call),
         BuiltinNs::Object => {
             let o = site_tmpl(m, call, "Object()");
@@ -1854,10 +2015,13 @@ pub fn native_written(m: &Model, np: Tok, a: Atom) -> bool {
             let n = &m.atoms[a as usize];
             crate::solve::numeric_key(n) || n == "length"
         });
+    // A computed read (`STAR_KEY`) may name the key of any write.
+    let any = m.atoms[a as usize] == crate::STAR_KEY;
     let hit = |t: Tok| {
         m.native_writes.contains_key(&(t, None))
             || m.native_writes.contains_key(&(t, Some(a)))
             || num.is_some_and(|n| m.native_writes.contains_key(&(t, Some(n))))
+            || (any && m.native_writes.keys().any(|&(w, _)| w == t))
     };
     let global = match &m.toks[np as usize] {
         TokKind::NativeProto(n) => ns_by_name(n).is_some(),
@@ -1918,6 +2082,9 @@ pub fn note_native_write(m: &mut Model, t: Tok, key: Option<Key>, what: &str) {
         Some(Key::Named(a)) if a != star => Some(a),
         _ => None,
     };
+    if k.is_none() && !m.shared_replay && t != TOP {
+        m.global_written_own |= matches!(m.toks[t as usize], TokKind::Builtin(BuiltinNs::GlobalThis));
+    }
     if m.explain && !m.shared_replay && t == TOP && k.is_none() {
         eprintln!("perry: wpfacts explain: computed write on ⊤: {what}");
     }
@@ -1942,6 +2109,7 @@ pub fn note_native_write(m: &mut Model, t: Tok, key: Option<Key>, what: &str) {
 
 /// The global object may now be ⊤: stores into ⊤ may have written globals.
 pub fn note_global_in_top(m: &mut Model) {
+    m.global_written_own |= !m.shared_replay;
     if !m.global_in_top {
         m.global_in_top = true;
         replay_native_missing(m);
@@ -2057,6 +2225,7 @@ fn anon_tmpl(m: &mut Model, what: &'static str) -> Tok {
         proto_members: vec![],
         parent_value: None,
         parent_links: Vec::new(),
+        null_proto: false,
     });
     m.tok(TokKind::Obj(tm, NO_CTX))
 }
@@ -2098,6 +2267,7 @@ pub fn global_field(m: &mut Model, g: Tok, a: Atom) -> NodeId {
     m.global_fields.push((a, n));
     if m.global_cells {
         m.global_late = true;
+        m.global_written_own |= !m.shared_replay;
         m.add_top(n, |_| "global named after the unit boundary".into());
         m.add_prim(n, prim::ALL);
         let r = m.reason("stored into a global named after the unit boundary");

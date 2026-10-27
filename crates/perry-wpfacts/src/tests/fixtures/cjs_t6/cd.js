@@ -1,7 +1,88 @@
-import { cache as __perry_cjs_cache, main as __perry_cjs_main, extensions as __perry_cjs_extensions, setPending as __perry_cjs_set_pending, takePending as __perry_cjs_take_pending, builtin as __perry_cjs_builtin, link as __perry_cjs_link, requireComputed as __perry_cjs_require_computed, requireError as __perry_cjs_require_error } from 'perry:cjs';
-import { createRequire as __perry_cjs_create_require, isBuiltin as __perry_cjs_is_builtin } from 'node:module';
+import { cache as __perry_cjs_cache, main as __perry_cjs_main, extensions as __perry_cjs_extensions, setPending as __perry_cjs_set_pending, takePending as __perry_cjs_take_pending, link as __perry_cjs_link, requireComputed as __perry_cjs_require_computed, requireError as __perry_cjs_require_error, reload as __perry_cjs_reload } from 'perry:cjs';
+import { createRequire as __perry_cjs_create_require } from 'node:module';
 import _req_0 from './benchmark';
+import { __perry_cjs_record as __perry_cjs_rec_0 } from './benchmark';
 import som from './som';
+import { __perry_cjs_record as __perry_cjs_rec_1 } from './som';
+export var __perry_cjs_record;
+let __perry_cjs_lk_0 = false;
+function __perry_require_static_0() {
+    
+        // Not closed: the cache entry is the link (a deletion or replacement
+        // is visible) and a deleted entry re-runs the module. The flag says
+        // this edge linked the record it found (what Node's updateChildren
+        // scan finds): after the first call, one byte test. A reload through
+        // this edge links the new record; a reload through another requirer
+        // leaves this flag set, so this module's `children` keeps the record
+        // it linked where Node's scan would add the new one: the one
+        // inexactness, in a program that is not closed and reloads. (A record
+        // held in a module binding written here would be exact, and costs
+        // every per-unit solve of the program.)
+        const cached = __perry_cjs_cache["/t6/benchmark.js"];
+        if (cached !== undefined) {
+            if (__perry_cjs_lk_0 === false) { __perry_cjs_lk_0 = true; if (cached.parent === undefined) cached.parent = __perry_cjs_record; __perry_cjs_record.children.push(cached); }
+            return cached.exports;
+        }
+        // Evaluated before (its record binding is set) and its entry is gone:
+        // Node re-runs it with this module as its parent (the support
+        // module's one loader) and this edge links the new record. A `var`,
+        // so the read before evaluation is `undefined`, with no lookup in the
+        // path registry.
+        if (__perry_cjs_rec_0 !== undefined) {
+            const required = __perry_cjs_reload("/t6/benchmark.js", __perry_cjs_record);
+            const fresh = __perry_cjs_cache["/t6/benchmark.js"];
+            if (fresh !== undefined) { __perry_cjs_lk_0 = true; __perry_cjs_link(__perry_cjs_record, fresh); }
+            return required;
+        }
+        const record = __perry_cjs_init(__perry_cjs_rec_0);
+        if (__perry_cjs_lk_0 === false) {
+            __perry_cjs_lk_0 = true;
+            if (record.parent === undefined) record.parent = __perry_cjs_record;
+            __perry_cjs_record.children.push(record);
+        }
+        return record.exports;
+    
+}
+let __perry_cjs_lk_1 = false;
+function __perry_require_static_1() {
+    
+        // Not closed: the cache entry is the link (a deletion or replacement
+        // is visible) and a deleted entry re-runs the module. The flag says
+        // this edge linked the record it found (what Node's updateChildren
+        // scan finds): after the first call, one byte test. A reload through
+        // this edge links the new record; a reload through another requirer
+        // leaves this flag set, so this module's `children` keeps the record
+        // it linked where Node's scan would add the new one: the one
+        // inexactness, in a program that is not closed and reloads. (A record
+        // held in a module binding written here would be exact, and costs
+        // every per-unit solve of the program.)
+        const cached = __perry_cjs_cache["/t6/som.js"];
+        if (cached !== undefined) {
+            if (__perry_cjs_lk_1 === false) { __perry_cjs_lk_1 = true; if (cached.parent === undefined) cached.parent = __perry_cjs_record; __perry_cjs_record.children.push(cached); }
+            return cached.exports;
+        }
+        // Evaluated before (its record binding is set) and its entry is gone:
+        // Node re-runs it with this module as its parent (the support
+        // module's one loader) and this edge links the new record. A `var`,
+        // so the read before evaluation is `undefined`, with no lookup in the
+        // path registry.
+        if (__perry_cjs_rec_1 !== undefined) {
+            const required = __perry_cjs_reload("/t6/som.js", __perry_cjs_record);
+            const fresh = __perry_cjs_cache["/t6/som.js"];
+            if (fresh !== undefined) { __perry_cjs_lk_1 = true; __perry_cjs_link(__perry_cjs_record, fresh); }
+            return required;
+        }
+        const record = __perry_cjs_init(__perry_cjs_rec_1);
+        if (__perry_cjs_lk_1 === false) {
+            __perry_cjs_lk_1 = true;
+            if (record.parent === undefined) record.parent = __perry_cjs_record;
+            __perry_cjs_record.children.push(record);
+        }
+        return record.exports;
+    
+}
+__perry_cjs_init(__perry_cjs_rec_1);
+
 
 function treeMinimum(x) {
   let current = x;
@@ -487,18 +568,28 @@ function __perry_cjs_factory() {
         filename: "/t6/cd.js",
         loaded: false,
         children: [],
-        parent: __perry_cjs_take_pending(),
+        parent: undefined,
         paths: ["/t6" + '/node_modules'],
         require: undefined
     };
-    // Node populates `module.parent` before the body evaluates, so link it
-    // here rather than at the tail's registry publication.
-    __perry_link_path_module_parent(__cjs_module);
-    // Publish the record before user code, just as at final publication.
-    // #10178: esbuild replaces module.exports before requiring its peer.
-    // Holding the initial empty object loses that replacement at re-entry;
-    // the runtime's existing record unwrap reads the current exports instead.
-    __perry_register_path_module_partial("/t6/cd.js", __cjs_module, __perry_cjs_factory);
+    // The module's record binding: what a static edge of a requiring module
+    // reads, from before the body, so a cycle sees the partial record.
+    __perry_cjs_record = __cjs_module;
+    
+        __cjs_module.parent = __perry_cjs_take_pending();
+    
+    
+        // Node populates `module.parent` before the body evaluates, so link
+        // it here rather than at the tail's registry publication.
+        __perry_link_path_module_parent(__cjs_module);
+        // Publish the record before user code, just as at final publication.
+        // #10178: esbuild replaces module.exports before requiring its peer.
+        // Holding the initial empty object loses that replacement at
+        // re-entry; the runtime's record unwrap reads the current exports.
+        // Only a program that can require by path or reload (not closed)
+        // has a path registry; the factory is held by nobody otherwise.
+        __perry_register_path_module_partial("/t6/cd.js", __cjs_module, __perry_cjs_factory);
+    
     var module = __cjs_module;
     var exports = __cjs_module.exports;
     // The program's `require.cache` (the support module's object, whose keys
@@ -506,23 +597,30 @@ function __perry_cjs_factory() {
     const __perry_cjs_c = __perry_cjs_cache;
     __perry_cjs_c["/t6/cd.js"] = __cjs_module;
 
-    // This module's own loader for the cold paths (a reload after
-    // `delete require.cache[...]`, a computed specifier outside the graph),
-    // created on first use: `createRequire` costs ~117k instructions.
+    // This module's own loader for the cold paths of `require` (a computed
+    // specifier outside the graph, relative to this module), created on
+    // first use: `createRequire` costs ~117k instructions. Only a program
+    // that is not closed can compute a specifier or reload.
     let __perry_cjs_reload_require;
     function __perry_cjs_reloader() {
-        if (__perry_cjs_reload_require === undefined) __perry_cjs_reload_require = __perry_cjs_create_require("/t6/cd.js");
-        return __perry_cjs_reload_require;
+        
+            if (__perry_cjs_reload_require === undefined) __perry_cjs_reload_require = __perry_cjs_create_require("/t6/cd.js");
+            return __perry_cjs_reload_require;
+        
     }
     function require(specifier) {
         if (typeof specifier !== 'string') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_TYPE', 'The "id" argument must be of type string.');
         if (specifier === '') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_VALUE', 'The argument "id" must be a non-empty string.');
-        if (specifier === './benchmark') { const __perry_cached = __perry_cjs_c["/t6/benchmark.js"]; if (__perry_cached !== undefined) { __perry_cjs_link(module, __perry_cached); return __perry_cached.exports; } if (!__perry_has_path_module("/t6/benchmark.js")) return _req_0; return __perry_cjs_reloader()("/t6/benchmark.js"); }
-        if (specifier === './som') { const __perry_cached = __perry_cjs_c["/t6/som.js"]; if (__perry_cached !== undefined) { __perry_cjs_link(module, __perry_cached); return __perry_cached.exports; } if (!__perry_has_path_module("/t6/som.js")) return som; return __perry_cjs_reloader()("/t6/som.js"); }
+        if (specifier === "./benchmark") return __perry_require_static_0();
+        if (specifier === "./som") return __perry_require_static_1();
         // A specifier no case above resolved: builtins, native addons, a
         // compiled module reached by a computed path, a `.json` file, a
         // package outside the graph (`perry:cjs`'s `requireComputed`).
-        return __perry_cjs_require_computed(specifier, "/t6", __perry_cjs_reloader);
+        // A closed program has no computed require and no reload (design
+        // CJS_LINK §2.5): no loader surface is linked for it.
+        
+            return __perry_cjs_require_computed(specifier, "/t6", __perry_cjs_reloader);
+        
     }
     // No `defineProperty(require, 'name', ...)`: a `function require(...)`
     // declaration already carries exactly
@@ -535,9 +633,13 @@ function __perry_cjs_factory() {
         if (typeof specifier !== 'string') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_TYPE', 'The "request" argument must be of type string.');
         if (specifier === "./benchmark") return "/t6/benchmark.js";
         if (specifier === "./som") return "/t6/som.js";
-        if (__perry_cjs_is_builtin(specifier)) return specifier;
-        var __perry_nm_resolved = __perry_require_resolve_node_modules("/t6", specifier);
-        if (__perry_nm_resolved !== undefined) return __perry_nm_resolved;
+        // `require.resolve` is reachable only through `require` as a value,
+        // which a closed program does not have.
+        
+            if (__perry_is_builtin(specifier)) return specifier;
+            var __perry_nm_resolved = __perry_require_resolve_node_modules("/t6", specifier);
+            if (__perry_nm_resolved !== undefined) return __perry_nm_resolved;
+        
         throw __perry_cjs_require_error('error', 'MODULE_NOT_FOUND', 'Cannot find module ' + specifier);
     };
     __perry_cjs_resolve.paths = function paths(specifier) {
@@ -579,8 +681,8 @@ function __perry_cjs_factory() {
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 // SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-const { Benchmark } = require('./benchmark');
-                             
+const { Benchmark } = __perry_require_static_0();
+__perry_require_static_1();
 
                 
                      
@@ -1409,7 +1511,7 @@ class CD extends Benchmark {
 exports.newInstance = () => new CD();
 
 
-    __cjs_module.loaded = true; __perry_register_path_module("/t6/cd.js", __cjs_module);
+    __cjs_module.loaded = true;  __perry_register_path_module("/t6/cd.js", __cjs_module); 
     return __cjs_module.exports;
 }
 return __perry_cjs_factory();
@@ -1427,5 +1529,4 @@ export { Collision };
 export { Aircraft };
 
 export const newInstance = _cjs.newInstance;
-
 

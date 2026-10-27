@@ -675,19 +675,26 @@ pub(crate) struct ObjectHotTables {
     /// (`Box`) — oversized inline storage overflowed the arm64_32 ILP32
     /// TLS layout when this lived in a `thread_local!`, and keeping it
     /// boxed inside the heap-allocated `RuntimeState` preserves that.
-    pub(crate) transition_cache: std::cell::UnsafeCell<Box<[TransitionEntry]>>,
+    pub(crate) transition_cache:
+        crate::zeroed_cache::ZeroPages<TransitionEntry, TRANSITION_CACHE_SIZE>,
     /// Bidirectional index over learned sequential numeric property appends.
     /// Array-subclass `push`/`pop` uses it to restore an exact historical
     /// ShapeId without cloning or compacting the ordered-keys array.
-    pub(crate) array_tail_forward:
-        std::cell::UnsafeCell<Box<[array_tail_transition::ArrayTailTransitionEntry]>>,
-    pub(crate) array_tail_reverse:
-        std::cell::UnsafeCell<Box<[array_tail_transition::ArrayTailTransitionEntry]>>,
+    pub(crate) array_tail_forward: crate::zeroed_cache::ZeroPages<
+        array_tail_transition::ArrayTailTransitionEntry,
+        { array_tail_transition::ARRAY_TAIL_TRANSITION_CACHE_SIZE },
+    >,
+    pub(crate) array_tail_reverse: crate::zeroed_cache::ZeroPages<
+        array_tail_transition::ArrayTailTransitionEntry,
+        { array_tail_transition::ARRAY_TAIL_TRANSITION_CACHE_SIZE },
+    >,
     /// Exact-ShapeId -> authoritative forward/reverse table indices. This is
     /// an accelerator only: collisions and stale indices revalidate the full
     /// entry and fall back to the complete open-addressed tables.
-    pub(crate) array_tail_direct:
-        std::cell::UnsafeCell<Box<[array_tail_transition::ArrayTailDirectIndex]>>,
+    pub(crate) array_tail_direct: crate::zeroed_cache::ZeroPages<
+        array_tail_transition::ArrayTailDirectIndex,
+        { array_tail_transition::ARRAY_TAIL_TRANSITION_CACHE_SIZE },
+    >,
     /// Set before the first entry is published into either tail table; while
     /// false every slot of both is `EMPTY`, so the GC scan and the prune have
     /// nothing to visit (see `array_tail_transition::tables_may_hold_entries`).
@@ -707,19 +714,12 @@ impl ObjectHotTables {
             ),
             shape_cache_overflow: RefCell::new(crate::fast_hash::new_ptr_hash_map()),
             class_keys_by_id: RefCell::new(crate::fast_hash::new_ptr_hash_map()),
-            // #11507: zero-allocated, so untouched pages are never mapped.
-            transition_cache: std::cell::UnsafeCell::new(crate::zeroed_cache::new_zeroed_cache(
-                TRANSITION_CACHE_SIZE,
-            )),
-            array_tail_forward: std::cell::UnsafeCell::new(crate::zeroed_cache::new_zeroed_cache(
-                array_tail_transition::ARRAY_TAIL_TRANSITION_CACHE_SIZE,
-            )),
-            array_tail_reverse: std::cell::UnsafeCell::new(crate::zeroed_cache::new_zeroed_cache(
-                array_tail_transition::ARRAY_TAIL_TRANSITION_CACHE_SIZE,
-            )),
-            array_tail_direct: std::cell::UnsafeCell::new(crate::zeroed_cache::new_zeroed_cache(
-                array_tail_transition::ARRAY_TAIL_TRANSITION_CACHE_SIZE,
-            )),
+            // Zero pages mapped by the first use: a thread that never takes
+            // a dynamic transition maps none of them.
+            transition_cache: crate::zeroed_cache::ZeroPages::new(),
+            array_tail_forward: crate::zeroed_cache::ZeroPages::new(),
+            array_tail_reverse: crate::zeroed_cache::ZeroPages::new(),
+            array_tail_direct: crate::zeroed_cache::ZeroPages::new(),
             array_tail_occupied: Cell::new(false),
         }
     }
@@ -1011,10 +1011,20 @@ fn transition_entry_is_minor_relevant(entry: &TransitionEntry) -> bool {
 fn with_transition_cache<R>(
     f: impl FnOnce(*mut [TransitionEntry; TRANSITION_CACHE_SIZE]) -> R,
 ) -> R {
-    unsafe {
-        let boxed = &mut *crate::state::state().object_hot.transition_cache.get();
-        f(boxed.as_mut_ptr() as *mut [TransitionEntry; TRANSITION_CACHE_SIZE])
-    }
+    f(crate::state::state().object_hot.transition_cache.get())
+}
+
+/// [`with_transition_cache`] for a scan or prune: `None` when this thread
+/// never used the cache (nothing to visit, and nothing to map).
+#[inline]
+fn with_used_transition_cache<R>(
+    f: impl FnOnce(*mut [TransitionEntry; TRANSITION_CACHE_SIZE]) -> R,
+) -> Option<R> {
+    crate::state::state()
+        .object_hot
+        .transition_cache
+        .mapped()
+        .map(f)
 }
 
 /// FNV-1a content hash for a property-name string.

@@ -53,7 +53,7 @@ pub(crate) fn recompute_after_full_trace() {
     super::alloc_basic::note_keyless_birth_carrier();
     crate::stream_hooks::note_birth_carriers();
 
-    with_transition_cache(|table| unsafe {
+    with_used_transition_cache(|table| unsafe {
         for entry in (*table).iter() {
             if entry.next_keys != 0 && entry_owns_target(entry) {
                 // The same set as `transition_cache_insert` / `spread::learn`:

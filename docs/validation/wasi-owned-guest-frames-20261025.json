@@ -1,0 +1,1694 @@
+{
+  "date": "2026-10-25",
+  "platform": "Linux x86_64",
+  "baseCommit": "a3f261745c4b61695049a5e36b8b0848af91445a",
+  "scope": "Owned canonical guest frame lifetimes and Tokio-free Rust guest acceptance",
+  "abi": {
+    "componentHost": 8,
+    "canonicalGuest": 2
+  },
+  "runtimeSnapshot": "v183",
+  "integrationSnapshot": "v186",
+  "finalSourceSnapshot": "v187",
+  "productionInputsEqualAcrossSnapshots": true,
+  "unitTests": {
+    "runtime-tests": 45,
+    "native-class-tests": 1,
+    "async-hooks-tests": 11,
+    "wit-tests": 16
+  },
+  "newRegressionTests": [
+    "guest_frames_can_finish_out_of_order_without_truncating_other_roots",
+    "guest_frames_survive_the_native_scope_that_created_them",
+    "guest_frame_growth_publishes_live_heads_and_keeps_all_slots_traced",
+    "dropping_a_guest_frame_preserves_later_temporary_handle_scopes",
+    "guest_frame_drop_after_cell_teardown_never_resolves_its_stale_link"
+  ],
+  "runtimeTestArtifact": {
+    "path": "/root/codex-components-p2-20261021/perry-guest-owned-frame-v183-artifacts/runtime-component-tests",
+    "sha256": "510110bc910353103603a1d931aa7872ae6ac4a1cb61af2559316fa0ae6929d1"
+  },
+  "negativeControl": {
+    "snapshot": "v179",
+    "failedTests": [
+      "guest_frames_can_finish_out_of_order_without_truncating_other_roots",
+      "guest_frames_survive_the_native_scope_that_created_them"
+    ]
+  },
+  "qualification": {
+    "runtime": [
+      {
+        "phase": "lock-http-patch",
+        "exitCode": 0
+      },
+      {
+        "phase": "invalidate-wit",
+        "exitCode": 0
+      },
+      {
+        "phase": "check",
+        "exitCode": 0
+      },
+      {
+        "phase": "runtime-tests",
+        "exitCode": 0
+      },
+      {
+        "phase": "native-class-tests",
+        "exitCode": 0
+      },
+      {
+        "phase": "async-hooks-tests",
+        "exitCode": 0
+      },
+      {
+        "phase": "wit-tests",
+        "exitCode": 0
+      }
+    ],
+    "native": [
+      {
+        "phase": "invalidate-local",
+        "exitCode": 0
+      },
+      {
+        "phase": "build",
+        "exitCode": 0
+      },
+      {
+        "phase": "wat-encoder",
+        "exitCode": 0
+      },
+      {
+        "phase": "coherent-build",
+        "exitCode": 0
+      },
+      {
+        "phase": "sidecars",
+        "exitCode": 0
+      },
+      {
+        "phase": "async-acceptance",
+        "exitCode": 0
+      },
+      {
+        "phase": "p3-command-acceptance",
+        "exitCode": 0
+      },
+      {
+        "phase": "p3-http-acceptance",
+        "exitCode": 0
+      }
+    ],
+    "moving": [
+      {
+        "phase": "instrumented-build",
+        "exitCode": 0
+      },
+      {
+        "phase": "sidecars",
+        "exitCode": 0
+      },
+      {
+        "phase": "async-acceptance",
+        "exitCode": 0
+      },
+      {
+        "phase": "p3-command-acceptance",
+        "exitCode": 0
+      },
+      {
+        "phase": "p3-http-acceptance",
+        "exitCode": 0
+      }
+    ],
+    "wasm": [
+      {
+        "phase": "wasi-runtime",
+        "exitCode": 0
+      },
+      {
+        "phase": "guest-acceptance",
+        "exitCode": 0
+      },
+      {
+        "phase": "http-guest-bindings",
+        "exitCode": 0
+      },
+      {
+        "phase": "http-guest-compile",
+        "exitCode": 0
+      },
+      {
+        "phase": "http-guest-link",
+        "exitCode": 0
+      },
+      {
+        "phase": "http-guest-acceptance",
+        "exitCode": 0
+      }
+    ],
+    "turnloopGuest": [
+      {
+        "phase": "guest-acceptance",
+        "exitCode": 0
+      },
+      {
+        "phase": "fixture-provider-tree",
+        "exitCode": 0
+      }
+    ]
+  },
+  "acceptance": {
+    "native/async": [
+      {
+        "phase": "bindings",
+        "exitCode": 0
+      },
+      {
+        "phase": "component",
+        "exitCode": 0
+      },
+      {
+        "phase": "compile-ordinary",
+        "exitCode": 0
+      },
+      {
+        "phase": "ordinary",
+        "exitCode": 0
+      }
+    ],
+    "native/p3-commands": [
+      {
+        "phase": "encode-ok",
+        "exitCode": 0
+      },
+      {
+        "phase": "encode-err",
+        "exitCode": 0
+      },
+      {
+        "phase": "encode-exit",
+        "exitCode": 0
+      },
+      {
+        "phase": "encode-init-exit",
+        "exitCode": 0
+      },
+      {
+        "phase": "encode-bad-init",
+        "exitCode": 0
+      },
+      {
+        "phase": "encode-wrong-version",
+        "exitCode": 0
+      },
+      {
+        "phase": "encode-clock",
+        "exitCode": 0
+      },
+      {
+        "phase": "encode-closed-stdio",
+        "exitCode": 0
+      },
+      {
+        "phase": "encode-late-trap",
+        "exitCode": 0
+      },
+      {
+        "phase": "compile-ordinary",
+        "exitCode": 0
+      },
+      {
+        "phase": "ordinary",
+        "exitCode": 0
+      },
+      {
+        "phase": "stdio-ordinary",
+        "exitCode": 0
+      }
+    ],
+    "native/p3-http": [
+      {
+        "phase": "bindings",
+        "exitCode": 0
+      },
+      {
+        "phase": "encode-echo",
+        "exitCode": 0
+      },
+      {
+        "phase": "encode-denied",
+        "exitCode": 0
+      },
+      {
+        "phase": "encode-trap",
+        "exitCode": 0
+      },
+      {
+        "phase": "encode-late-trap",
+        "exitCode": 0
+      },
+      {
+        "phase": "compile-ordinary",
+        "exitCode": 0
+      },
+      {
+        "phase": "plain-ordinary",
+        "exitCode": 0,
+        "failure": null,
+        "responses": [
+          {
+            "case": "empty",
+            "status": 200,
+            "bodyBytes": 0,
+            "trailers": [
+              "x-native: preserved"
+            ]
+          },
+          {
+            "case": "large",
+            "status": 200,
+            "bodyBytes": 3145865,
+            "trailers": [
+              "x-native: preserved"
+            ]
+          },
+          {
+            "case": "reused",
+            "status": 200,
+            "bodyBytes": 4,
+            "trailers": [
+              "x-native: preserved"
+            ]
+          },
+          {
+            "case": "denied",
+            "status": 500,
+            "bodyBytes": 0,
+            "trailers": []
+          },
+          {
+            "case": "denied-reused",
+            "status": 500,
+            "bodyBytes": 0,
+            "trailers": []
+          },
+          {
+            "case": "trap",
+            "status": 500,
+            "bodyBytes": 0,
+            "trailers": []
+          },
+          {
+            "case": "late-trap",
+            "status": 200,
+            "disconnected": true
+          },
+          {
+            "case": "reject",
+            "status": null,
+            "disconnected": true
+          },
+          {
+            "case": "dispose",
+            "status": null,
+            "disconnected": true
+          },
+          {
+            "case": "close",
+            "status": null,
+            "disconnected": true
+          }
+        ],
+        "copiedObjects": 0
+      },
+      {
+        "phase": "tls-ordinary",
+        "exitCode": 0,
+        "failure": null,
+        "responses": [
+          {
+            "case": "empty",
+            "status": 200,
+            "bodyBytes": 0,
+            "trailers": [
+              "x-native: preserved"
+            ]
+          },
+          {
+            "case": "large",
+            "status": 200,
+            "bodyBytes": 3145865,
+            "trailers": [
+              "x-native: preserved"
+            ]
+          },
+          {
+            "case": "reused",
+            "status": 200,
+            "bodyBytes": 4,
+            "trailers": [
+              "x-native: preserved"
+            ]
+          },
+          {
+            "case": "denied",
+            "status": 500,
+            "bodyBytes": 0,
+            "trailers": []
+          },
+          {
+            "case": "denied-reused",
+            "status": 500,
+            "bodyBytes": 0,
+            "trailers": []
+          },
+          {
+            "case": "trap",
+            "status": 500,
+            "bodyBytes": 0,
+            "trailers": []
+          },
+          {
+            "case": "late-trap",
+            "status": 200,
+            "disconnected": true
+          },
+          {
+            "case": "reject",
+            "status": null,
+            "disconnected": true
+          },
+          {
+            "case": "dispose",
+            "status": null,
+            "disconnected": true
+          },
+          {
+            "case": "close",
+            "status": null,
+            "disconnected": true
+          }
+        ],
+        "copiedObjects": 0
+      }
+    ],
+    "moving/async": [
+      {
+        "phase": "bindings",
+        "exitCode": 0
+      },
+      {
+        "phase": "component",
+        "exitCode": 0
+      },
+      {
+        "phase": "compile-ordinary",
+        "exitCode": 0
+      },
+      {
+        "phase": "ordinary",
+        "exitCode": 0
+      },
+      {
+        "phase": "compile-moving",
+        "exitCode": 0
+      },
+      {
+        "phase": "moving",
+        "exitCode": 0
+      }
+    ],
+    "moving/p3-commands": [
+      {
+        "phase": "encode-ok",
+        "exitCode": 0
+      },
+      {
+        "phase": "encode-err",
+        "exitCode": 0
+      },
+      {
+        "phase": "encode-exit",
+        "exitCode": 0
+      },
+      {
+        "phase": "encode-init-exit",
+        "exitCode": 0
+      },
+      {
+        "phase": "encode-bad-init",
+        "exitCode": 0
+      },
+      {
+        "phase": "encode-wrong-version",
+        "exitCode": 0
+      },
+      {
+        "phase": "encode-clock",
+        "exitCode": 0
+      },
+      {
+        "phase": "encode-closed-stdio",
+        "exitCode": 0
+      },
+      {
+        "phase": "encode-late-trap",
+        "exitCode": 0
+      },
+      {
+        "phase": "compile-ordinary",
+        "exitCode": 0
+      },
+      {
+        "phase": "ordinary",
+        "exitCode": 0
+      },
+      {
+        "phase": "stdio-ordinary",
+        "exitCode": 0
+      },
+      {
+        "phase": "compile-moving",
+        "exitCode": 0
+      },
+      {
+        "phase": "moving",
+        "exitCode": 0
+      },
+      {
+        "phase": "stdio-moving",
+        "exitCode": 0
+      }
+    ],
+    "moving/p3-http": [
+      {
+        "phase": "bindings",
+        "exitCode": 0
+      },
+      {
+        "phase": "encode-echo",
+        "exitCode": 0
+      },
+      {
+        "phase": "encode-denied",
+        "exitCode": 0
+      },
+      {
+        "phase": "encode-trap",
+        "exitCode": 0
+      },
+      {
+        "phase": "encode-late-trap",
+        "exitCode": 0
+      },
+      {
+        "phase": "compile-ordinary",
+        "exitCode": 0
+      },
+      {
+        "phase": "plain-ordinary",
+        "exitCode": 0,
+        "failure": null,
+        "responses": [
+          {
+            "case": "empty",
+            "status": 200,
+            "bodyBytes": 0,
+            "trailers": [
+              "x-native: preserved"
+            ]
+          },
+          {
+            "case": "large",
+            "status": 200,
+            "bodyBytes": 3145865,
+            "trailers": [
+              "x-native: preserved"
+            ]
+          },
+          {
+            "case": "reused",
+            "status": 200,
+            "bodyBytes": 4,
+            "trailers": [
+              "x-native: preserved"
+            ]
+          },
+          {
+            "case": "denied",
+            "status": 500,
+            "bodyBytes": 0,
+            "trailers": []
+          },
+          {
+            "case": "denied-reused",
+            "status": 500,
+            "bodyBytes": 0,
+            "trailers": []
+          },
+          {
+            "case": "trap",
+            "status": 500,
+            "bodyBytes": 0,
+            "trailers": []
+          },
+          {
+            "case": "late-trap",
+            "status": 200,
+            "disconnected": true
+          },
+          {
+            "case": "reject",
+            "status": null,
+            "disconnected": true
+          },
+          {
+            "case": "dispose",
+            "status": null,
+            "disconnected": true
+          },
+          {
+            "case": "close",
+            "status": null,
+            "disconnected": true
+          }
+        ],
+        "copiedObjects": 0
+      },
+      {
+        "phase": "tls-ordinary",
+        "exitCode": 0,
+        "failure": null,
+        "responses": [
+          {
+            "case": "empty",
+            "status": 200,
+            "bodyBytes": 0,
+            "trailers": [
+              "x-native: preserved"
+            ]
+          },
+          {
+            "case": "large",
+            "status": 200,
+            "bodyBytes": 3145865,
+            "trailers": [
+              "x-native: preserved"
+            ]
+          },
+          {
+            "case": "reused",
+            "status": 200,
+            "bodyBytes": 4,
+            "trailers": [
+              "x-native: preserved"
+            ]
+          },
+          {
+            "case": "denied",
+            "status": 500,
+            "bodyBytes": 0,
+            "trailers": []
+          },
+          {
+            "case": "denied-reused",
+            "status": 500,
+            "bodyBytes": 0,
+            "trailers": []
+          },
+          {
+            "case": "trap",
+            "status": 500,
+            "bodyBytes": 0,
+            "trailers": []
+          },
+          {
+            "case": "late-trap",
+            "status": 200,
+            "disconnected": true
+          },
+          {
+            "case": "reject",
+            "status": null,
+            "disconnected": true
+          },
+          {
+            "case": "dispose",
+            "status": null,
+            "disconnected": true
+          },
+          {
+            "case": "close",
+            "status": null,
+            "disconnected": true
+          }
+        ],
+        "copiedObjects": 0
+      },
+      {
+        "phase": "compile-moving",
+        "exitCode": 0
+      },
+      {
+        "phase": "plain-moving",
+        "exitCode": 0,
+        "failure": null,
+        "responses": [
+          {
+            "case": "empty",
+            "status": 200,
+            "bodyBytes": 0,
+            "trailers": [
+              "x-native: preserved"
+            ]
+          },
+          {
+            "case": "large",
+            "status": 200,
+            "bodyBytes": 3145865,
+            "trailers": [
+              "x-native: preserved"
+            ]
+          },
+          {
+            "case": "reused",
+            "status": 200,
+            "bodyBytes": 4,
+            "trailers": [
+              "x-native: preserved"
+            ]
+          },
+          {
+            "case": "denied",
+            "status": 500,
+            "bodyBytes": 0,
+            "trailers": []
+          },
+          {
+            "case": "denied-reused",
+            "status": 500,
+            "bodyBytes": 0,
+            "trailers": []
+          },
+          {
+            "case": "trap",
+            "status": 500,
+            "bodyBytes": 0,
+            "trailers": []
+          },
+          {
+            "case": "late-trap",
+            "status": 200,
+            "disconnected": true
+          },
+          {
+            "case": "reject",
+            "status": null,
+            "disconnected": true
+          },
+          {
+            "case": "dispose",
+            "status": null,
+            "disconnected": true
+          },
+          {
+            "case": "close",
+            "status": null,
+            "disconnected": true
+          }
+        ],
+        "copiedObjects": 1736
+      },
+      {
+        "phase": "tls-moving",
+        "exitCode": 0,
+        "failure": null,
+        "responses": [
+          {
+            "case": "empty",
+            "status": 200,
+            "bodyBytes": 0,
+            "trailers": [
+              "x-native: preserved"
+            ]
+          },
+          {
+            "case": "large",
+            "status": 200,
+            "bodyBytes": 3145865,
+            "trailers": [
+              "x-native: preserved"
+            ]
+          },
+          {
+            "case": "reused",
+            "status": 200,
+            "bodyBytes": 4,
+            "trailers": [
+              "x-native: preserved"
+            ]
+          },
+          {
+            "case": "denied",
+            "status": 500,
+            "bodyBytes": 0,
+            "trailers": []
+          },
+          {
+            "case": "denied-reused",
+            "status": 500,
+            "bodyBytes": 0,
+            "trailers": []
+          },
+          {
+            "case": "trap",
+            "status": 500,
+            "bodyBytes": 0,
+            "trailers": []
+          },
+          {
+            "case": "late-trap",
+            "status": 200,
+            "disconnected": true
+          },
+          {
+            "case": "reject",
+            "status": null,
+            "disconnected": true
+          },
+          {
+            "case": "dispose",
+            "status": null,
+            "disconnected": true
+          },
+          {
+            "case": "close",
+            "status": null,
+            "disconnected": true
+          }
+        ],
+        "copiedObjects": 1736
+      }
+    ],
+    "wasm/http": [
+      {
+        "name": "bindings",
+        "exitCode": 0,
+        "seconds": 0.007
+      },
+      {
+        "name": "typecheck",
+        "exitCode": 0,
+        "seconds": 0.965
+      },
+      {
+        "name": "compile-host",
+        "exitCode": 0,
+        "seconds": 7.721
+      },
+      {
+        "name": "plain-native0-guest0",
+        "exitCode": 0,
+        "seconds": 142.002,
+        "incoming": [
+          {
+            "case": "success",
+            "status": 202,
+            "bytes": 7,
+            "sha256": "13ce3403bf0ec804d44556f2fce6a75e4117680fb8791e7bc631bb7ef0d13550"
+          },
+          {
+            "case": "large",
+            "status": 202,
+            "bytes": 3145865,
+            "sha256": "83944a0a52a4660997df172a66d308c35765d4c99061df3b2a2b0e721c8a6ebc"
+          },
+          {
+            "case": "explicit-error",
+            "status": 500,
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "case": "reused",
+            "status": 202,
+            "bytes": 7,
+            "sha256": "13ce3403bf0ec804d44556f2fce6a75e4117680fb8791e7bc631bb7ef0d13550"
+          },
+          {
+            "case": "retire-1",
+            "status": 500,
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "case": "retire-2",
+            "status": 500,
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "case": "retire-4",
+            "status": 500,
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ],
+        "outgoing": [
+          {
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "bytes": 7,
+            "sha256": "13ce3403bf0ec804d44556f2fce6a75e4117680fb8791e7bc631bb7ef0d13550"
+          },
+          {
+            "bytes": 3145865,
+            "sha256": "83944a0a52a4660997df172a66d308c35765d4c99061df3b2a2b0e721c8a6ebc"
+          },
+          {
+            "bytes": 17,
+            "sha256": "b6ff0191041cc77b1ef514adaed53fdd247fd43221a629d3d7c91d14e21038a3"
+          }
+        ],
+        "backendErrors": [],
+        "guestCollections": 2375,
+        "guestCopiedObjects": 0,
+        "outsideGuestCollectionCopiedObjects": 0,
+        "failure": null
+      },
+      {
+        "name": "tls-native0-guest0",
+        "exitCode": 0,
+        "seconds": 138.172,
+        "incoming": [
+          {
+            "case": "success",
+            "status": 202,
+            "bytes": 7,
+            "sha256": "13ce3403bf0ec804d44556f2fce6a75e4117680fb8791e7bc631bb7ef0d13550"
+          },
+          {
+            "case": "large",
+            "status": 202,
+            "bytes": 3145865,
+            "sha256": "83944a0a52a4660997df172a66d308c35765d4c99061df3b2a2b0e721c8a6ebc"
+          },
+          {
+            "case": "explicit-error",
+            "status": 500,
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "case": "reused",
+            "status": 202,
+            "bytes": 7,
+            "sha256": "13ce3403bf0ec804d44556f2fce6a75e4117680fb8791e7bc631bb7ef0d13550"
+          },
+          {
+            "case": "retire-1",
+            "status": 500,
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "case": "retire-2",
+            "status": 500,
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "case": "retire-4",
+            "status": 500,
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ],
+        "outgoing": [
+          {
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "bytes": 7,
+            "sha256": "13ce3403bf0ec804d44556f2fce6a75e4117680fb8791e7bc631bb7ef0d13550"
+          },
+          {
+            "bytes": 3145865,
+            "sha256": "83944a0a52a4660997df172a66d308c35765d4c99061df3b2a2b0e721c8a6ebc"
+          },
+          {
+            "bytes": 17,
+            "sha256": "b6ff0191041cc77b1ef514adaed53fdd247fd43221a629d3d7c91d14e21038a3"
+          }
+        ],
+        "backendErrors": [],
+        "guestCollections": 2354,
+        "guestCopiedObjects": 0,
+        "outsideGuestCollectionCopiedObjects": 0,
+        "failure": null
+      },
+      {
+        "name": "plain-native0-guest1",
+        "exitCode": 0,
+        "seconds": 192.371,
+        "incoming": [
+          {
+            "case": "success",
+            "status": 202,
+            "bytes": 7,
+            "sha256": "13ce3403bf0ec804d44556f2fce6a75e4117680fb8791e7bc631bb7ef0d13550"
+          },
+          {
+            "case": "large",
+            "status": 202,
+            "bytes": 3145865,
+            "sha256": "83944a0a52a4660997df172a66d308c35765d4c99061df3b2a2b0e721c8a6ebc"
+          },
+          {
+            "case": "explicit-error",
+            "status": 500,
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "case": "reused",
+            "status": 202,
+            "bytes": 7,
+            "sha256": "13ce3403bf0ec804d44556f2fce6a75e4117680fb8791e7bc631bb7ef0d13550"
+          },
+          {
+            "case": "retire-1",
+            "status": 500,
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "case": "retire-2",
+            "status": 500,
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "case": "retire-4",
+            "status": 500,
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ],
+        "outgoing": [
+          {
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "bytes": 7,
+            "sha256": "13ce3403bf0ec804d44556f2fce6a75e4117680fb8791e7bc631bb7ef0d13550"
+          },
+          {
+            "bytes": 3145865,
+            "sha256": "83944a0a52a4660997df172a66d308c35765d4c99061df3b2a2b0e721c8a6ebc"
+          },
+          {
+            "bytes": 17,
+            "sha256": "b6ff0191041cc77b1ef514adaed53fdd247fd43221a629d3d7c91d14e21038a3"
+          }
+        ],
+        "backendErrors": [],
+        "guestCollections": 2375,
+        "guestCopiedObjects": 54012,
+        "outsideGuestCollectionCopiedObjects": 0,
+        "failure": null
+      },
+      {
+        "name": "tls-native0-guest1",
+        "exitCode": 0,
+        "seconds": 176.852,
+        "incoming": [
+          {
+            "case": "success",
+            "status": 202,
+            "bytes": 7,
+            "sha256": "13ce3403bf0ec804d44556f2fce6a75e4117680fb8791e7bc631bb7ef0d13550"
+          },
+          {
+            "case": "large",
+            "status": 202,
+            "bytes": 3145865,
+            "sha256": "83944a0a52a4660997df172a66d308c35765d4c99061df3b2a2b0e721c8a6ebc"
+          },
+          {
+            "case": "explicit-error",
+            "status": 500,
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "case": "reused",
+            "status": 202,
+            "bytes": 7,
+            "sha256": "13ce3403bf0ec804d44556f2fce6a75e4117680fb8791e7bc631bb7ef0d13550"
+          },
+          {
+            "case": "retire-1",
+            "status": 500,
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "case": "retire-2",
+            "status": 500,
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "case": "retire-4",
+            "status": 500,
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ],
+        "outgoing": [
+          {
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "bytes": 7,
+            "sha256": "13ce3403bf0ec804d44556f2fce6a75e4117680fb8791e7bc631bb7ef0d13550"
+          },
+          {
+            "bytes": 3145865,
+            "sha256": "83944a0a52a4660997df172a66d308c35765d4c99061df3b2a2b0e721c8a6ebc"
+          },
+          {
+            "bytes": 17,
+            "sha256": "b6ff0191041cc77b1ef514adaed53fdd247fd43221a629d3d7c91d14e21038a3"
+          }
+        ],
+        "backendErrors": [],
+        "guestCollections": 2354,
+        "guestCopiedObjects": 53529,
+        "outsideGuestCollectionCopiedObjects": 0,
+        "failure": null
+      },
+      {
+        "name": "compile-host-moving",
+        "exitCode": 0,
+        "seconds": 7.571
+      },
+      {
+        "name": "plain-native1-guest0",
+        "exitCode": 0,
+        "seconds": 136.24,
+        "incoming": [
+          {
+            "case": "success",
+            "status": 202,
+            "bytes": 7,
+            "sha256": "13ce3403bf0ec804d44556f2fce6a75e4117680fb8791e7bc631bb7ef0d13550"
+          },
+          {
+            "case": "large",
+            "status": 202,
+            "bytes": 3145865,
+            "sha256": "83944a0a52a4660997df172a66d308c35765d4c99061df3b2a2b0e721c8a6ebc"
+          },
+          {
+            "case": "explicit-error",
+            "status": 500,
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "case": "reused",
+            "status": 202,
+            "bytes": 7,
+            "sha256": "13ce3403bf0ec804d44556f2fce6a75e4117680fb8791e7bc631bb7ef0d13550"
+          },
+          {
+            "case": "retire-1",
+            "status": 500,
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "case": "retire-2",
+            "status": 500,
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "case": "retire-4",
+            "status": 500,
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ],
+        "outgoing": [
+          {
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "bytes": 7,
+            "sha256": "13ce3403bf0ec804d44556f2fce6a75e4117680fb8791e7bc631bb7ef0d13550"
+          },
+          {
+            "bytes": 3145865,
+            "sha256": "83944a0a52a4660997df172a66d308c35765d4c99061df3b2a2b0e721c8a6ebc"
+          },
+          {
+            "bytes": 17,
+            "sha256": "b6ff0191041cc77b1ef514adaed53fdd247fd43221a629d3d7c91d14e21038a3"
+          }
+        ],
+        "backendErrors": [],
+        "guestCollections": 2375,
+        "guestCopiedObjects": 0,
+        "outsideGuestCollectionCopiedObjects": 1509,
+        "failure": null
+      },
+      {
+        "name": "tls-native1-guest0",
+        "exitCode": 0,
+        "seconds": 136.727,
+        "incoming": [
+          {
+            "case": "success",
+            "status": 202,
+            "bytes": 7,
+            "sha256": "13ce3403bf0ec804d44556f2fce6a75e4117680fb8791e7bc631bb7ef0d13550"
+          },
+          {
+            "case": "large",
+            "status": 202,
+            "bytes": 3145865,
+            "sha256": "83944a0a52a4660997df172a66d308c35765d4c99061df3b2a2b0e721c8a6ebc"
+          },
+          {
+            "case": "explicit-error",
+            "status": 500,
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "case": "reused",
+            "status": 202,
+            "bytes": 7,
+            "sha256": "13ce3403bf0ec804d44556f2fce6a75e4117680fb8791e7bc631bb7ef0d13550"
+          },
+          {
+            "case": "retire-1",
+            "status": 500,
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "case": "retire-2",
+            "status": 500,
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "case": "retire-4",
+            "status": 500,
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ],
+        "outgoing": [
+          {
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "bytes": 7,
+            "sha256": "13ce3403bf0ec804d44556f2fce6a75e4117680fb8791e7bc631bb7ef0d13550"
+          },
+          {
+            "bytes": 3145865,
+            "sha256": "83944a0a52a4660997df172a66d308c35765d4c99061df3b2a2b0e721c8a6ebc"
+          },
+          {
+            "bytes": 17,
+            "sha256": "b6ff0191041cc77b1ef514adaed53fdd247fd43221a629d3d7c91d14e21038a3"
+          }
+        ],
+        "backendErrors": [],
+        "guestCollections": 2354,
+        "guestCopiedObjects": 0,
+        "outsideGuestCollectionCopiedObjects": 1509,
+        "failure": null
+      },
+      {
+        "name": "plain-native1-guest1",
+        "exitCode": 0,
+        "seconds": 177.449,
+        "incoming": [
+          {
+            "case": "success",
+            "status": 202,
+            "bytes": 7,
+            "sha256": "13ce3403bf0ec804d44556f2fce6a75e4117680fb8791e7bc631bb7ef0d13550"
+          },
+          {
+            "case": "large",
+            "status": 202,
+            "bytes": 3145865,
+            "sha256": "83944a0a52a4660997df172a66d308c35765d4c99061df3b2a2b0e721c8a6ebc"
+          },
+          {
+            "case": "explicit-error",
+            "status": 500,
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "case": "reused",
+            "status": 202,
+            "bytes": 7,
+            "sha256": "13ce3403bf0ec804d44556f2fce6a75e4117680fb8791e7bc631bb7ef0d13550"
+          },
+          {
+            "case": "retire-1",
+            "status": 500,
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "case": "retire-2",
+            "status": 500,
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "case": "retire-4",
+            "status": 500,
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ],
+        "outgoing": [
+          {
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "bytes": 7,
+            "sha256": "13ce3403bf0ec804d44556f2fce6a75e4117680fb8791e7bc631bb7ef0d13550"
+          },
+          {
+            "bytes": 3145865,
+            "sha256": "83944a0a52a4660997df172a66d308c35765d4c99061df3b2a2b0e721c8a6ebc"
+          },
+          {
+            "bytes": 17,
+            "sha256": "b6ff0191041cc77b1ef514adaed53fdd247fd43221a629d3d7c91d14e21038a3"
+          }
+        ],
+        "backendErrors": [],
+        "guestCollections": 2375,
+        "guestCopiedObjects": 54012,
+        "outsideGuestCollectionCopiedObjects": 1509,
+        "failure": null
+      },
+      {
+        "name": "tls-native1-guest1",
+        "exitCode": 0,
+        "seconds": 177.027,
+        "incoming": [
+          {
+            "case": "success",
+            "status": 202,
+            "bytes": 7,
+            "sha256": "13ce3403bf0ec804d44556f2fce6a75e4117680fb8791e7bc631bb7ef0d13550"
+          },
+          {
+            "case": "large",
+            "status": 202,
+            "bytes": 3145865,
+            "sha256": "83944a0a52a4660997df172a66d308c35765d4c99061df3b2a2b0e721c8a6ebc"
+          },
+          {
+            "case": "explicit-error",
+            "status": 500,
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "case": "reused",
+            "status": 202,
+            "bytes": 7,
+            "sha256": "13ce3403bf0ec804d44556f2fce6a75e4117680fb8791e7bc631bb7ef0d13550"
+          },
+          {
+            "case": "retire-1",
+            "status": 500,
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "case": "retire-2",
+            "status": 500,
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "case": "retire-4",
+            "status": 500,
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ],
+        "outgoing": [
+          {
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "bytes": 7,
+            "sha256": "13ce3403bf0ec804d44556f2fce6a75e4117680fb8791e7bc631bb7ef0d13550"
+          },
+          {
+            "bytes": 3145865,
+            "sha256": "83944a0a52a4660997df172a66d308c35765d4c99061df3b2a2b0e721c8a6ebc"
+          },
+          {
+            "bytes": 17,
+            "sha256": "b6ff0191041cc77b1ef514adaed53fdd247fd43221a629d3d7c91d14e21038a3"
+          }
+        ],
+        "backendErrors": [],
+        "guestCollections": 2354,
+        "guestCopiedObjects": 53529,
+        "outsideGuestCollectionCopiedObjects": 1509,
+        "failure": null
+      }
+    ],
+    "turnloop-wasm-guest": [
+      {
+        "name": "guest-bindings",
+        "exitCode": 0,
+        "seconds": 0.003,
+        "log": "/root/codex-components-p2-20261021/perry-async-runtime-v186/wasm/guest/guest-bindings.log"
+      },
+      {
+        "name": "compile-guest",
+        "exitCode": 0,
+        "seconds": 0.214,
+        "log": "/root/codex-components-p2-20261021/perry-async-runtime-v186/wasm/guest/compile-guest.log"
+      },
+      {
+        "name": "link-guest-component",
+        "exitCode": 0,
+        "seconds": 0.264,
+        "log": "/root/codex-components-p2-20261021/perry-async-runtime-v186/wasm/guest/link-guest-component.log"
+      },
+      {
+        "name": "rust-host-provider-lock",
+        "exitCode": 0,
+        "seconds": 1.265,
+        "log": "/root/codex-components-p2-20261021/perry-async-runtime-v186/wasm/guest/rust-host-provider-lock.log"
+      },
+      {
+        "name": "build-rust-host",
+        "exitCode": 0,
+        "seconds": 10.827,
+        "log": "/root/codex-components-p2-20261021/perry-async-runtime-v186/wasm/guest/build-rust-host.log"
+      },
+      {
+        "name": "run-rust-host",
+        "exitCode": 0,
+        "seconds": 7.571,
+        "log": "/root/codex-components-p2-20261021/perry-async-runtime-v186/wasm/guest/run-rust-host.log"
+      },
+      {
+        "name": "build-rust-logger",
+        "exitCode": 0,
+        "seconds": 6.673,
+        "log": "/root/codex-components-p2-20261021/perry-async-runtime-v186/wasm/guest/build-rust-logger.log"
+      },
+      {
+        "name": "componentize-logger",
+        "exitCode": 0,
+        "seconds": 0.003,
+        "log": "/root/codex-components-p2-20261021/perry-async-runtime-v186/wasm/guest/componentize-logger.log"
+      },
+      {
+        "name": "compose",
+        "exitCode": 0,
+        "seconds": 0.064,
+        "log": "/root/codex-components-p2-20261021/perry-async-runtime-v186/wasm/guest/compose.log"
+      },
+      {
+        "name": "run-composed",
+        "exitCode": 0,
+        "seconds": 7.621,
+        "log": "/root/codex-components-p2-20261021/perry-async-runtime-v186/wasm/guest/run-composed.log"
+      },
+      {
+        "name": "values-guest-bindings",
+        "exitCode": 0,
+        "seconds": 0.003,
+        "log": "/root/codex-components-p2-20261021/perry-async-runtime-v186/wasm/guest/values-guest-bindings.log"
+      },
+      {
+        "name": "values-compile-guest",
+        "exitCode": 0,
+        "seconds": 0.064,
+        "log": "/root/codex-components-p2-20261021/perry-async-runtime-v186/wasm/guest/values-compile-guest.log"
+      },
+      {
+        "name": "values-link-guest-component",
+        "exitCode": 0,
+        "seconds": 0.414,
+        "log": "/root/codex-components-p2-20261021/perry-async-runtime-v186/wasm/guest/values-link-guest-component.log"
+      },
+      {
+        "name": "run-values",
+        "exitCode": 0,
+        "seconds": 7.522,
+        "log": "/root/codex-components-p2-20261021/perry-async-runtime-v186/wasm/guest/run-values.log"
+      },
+      {
+        "name": "resources-guest-bindings",
+        "exitCode": 0,
+        "seconds": 0.003,
+        "log": "/root/codex-components-p2-20261021/perry-async-runtime-v186/wasm/guest/resources-guest-bindings.log"
+      },
+      {
+        "name": "resources-compile-guest",
+        "exitCode": 0,
+        "seconds": 0.164,
+        "log": "/root/codex-components-p2-20261021/perry-async-runtime-v186/wasm/guest/resources-compile-guest.log"
+      },
+      {
+        "name": "resources-link-guest-component",
+        "exitCode": 0,
+        "seconds": 0.264,
+        "log": "/root/codex-components-p2-20261021/perry-async-runtime-v186/wasm/guest/resources-link-guest-component.log"
+      },
+      {
+        "name": "run-resources",
+        "exitCode": 0,
+        "seconds": 7.622,
+        "log": "/root/codex-components-p2-20261021/perry-async-runtime-v186/wasm/guest/run-resources.log"
+      },
+      {
+        "name": "run-resources-moving",
+        "exitCode": 0,
+        "seconds": 12.079,
+        "log": "/root/codex-components-p2-20261021/perry-async-runtime-v186/wasm/guest/run-resources-moving.log"
+      },
+      {
+        "name": "dual-resources-guest-bindings",
+        "exitCode": 0,
+        "seconds": 0.003,
+        "log": "/root/codex-components-p2-20261021/perry-async-runtime-v186/wasm/guest/dual-resources-guest-bindings.log"
+      },
+      {
+        "name": "dual-resources-compile-guest",
+        "exitCode": 0,
+        "seconds": 0.114,
+        "log": "/root/codex-components-p2-20261021/perry-async-runtime-v186/wasm/guest/dual-resources-compile-guest.log"
+      },
+      {
+        "name": "dual-resources-link-guest-component",
+        "exitCode": 0,
+        "seconds": 0.264,
+        "log": "/root/codex-components-p2-20261021/perry-async-runtime-v186/wasm/guest/dual-resources-link-guest-component.log"
+      },
+      {
+        "name": "run-dual-resources",
+        "exitCode": 0,
+        "seconds": 7.471,
+        "log": "/root/codex-components-p2-20261021/perry-async-runtime-v186/wasm/guest/run-dual-resources.log"
+      },
+      {
+        "name": "perry-host-bindings",
+        "exitCode": 0,
+        "seconds": 0.001,
+        "log": "/root/codex-components-p2-20261021/perry-async-runtime-v186/wasm/guest/perry-host-bindings.log"
+      },
+      {
+        "name": "perry-host-compile",
+        "exitCode": 0,
+        "seconds": 5.27,
+        "log": "/root/codex-components-p2-20261021/perry-async-runtime-v186/wasm/guest/perry-host-compile.log"
+      },
+      {
+        "name": "perry-host-run",
+        "exitCode": 0,
+        "seconds": 8.072,
+        "log": "/root/codex-components-p2-20261021/perry-async-runtime-v186/wasm/guest/perry-host-run.log"
+      },
+      {
+        "name": "perry-host-moving-bindings",
+        "exitCode": 0,
+        "seconds": 0.003,
+        "log": "/root/codex-components-p2-20261021/perry-async-runtime-v186/wasm/guest/perry-host-moving-bindings.log"
+      },
+      {
+        "name": "perry-host-moving-compile",
+        "exitCode": 0,
+        "seconds": 5.269,
+        "log": "/root/codex-components-p2-20261021/perry-async-runtime-v186/wasm/guest/perry-host-moving-compile.log"
+      },
+      {
+        "name": "perry-host-moving-run",
+        "exitCode": 0,
+        "seconds": 8.172,
+        "log": "/root/codex-components-p2-20261021/perry-async-runtime-v186/wasm/guest/perry-host-moving-run.log"
+      },
+      {
+        "name": "capabilities-guest-bindings",
+        "exitCode": 0,
+        "seconds": 0.003,
+        "log": "/root/codex-components-p2-20261021/perry-async-runtime-v186/wasm/guest/capabilities-guest-bindings.log"
+      },
+      {
+        "name": "capabilities-compile-guest",
+        "exitCode": 0,
+        "seconds": 0.114,
+        "log": "/root/codex-components-p2-20261021/perry-async-runtime-v186/wasm/guest/capabilities-compile-guest.log"
+      },
+      {
+        "name": "capabilities-link-guest-component",
+        "exitCode": 0,
+        "seconds": 0.264,
+        "log": "/root/codex-components-p2-20261021/perry-async-runtime-v186/wasm/guest/capabilities-link-guest-component.log"
+      },
+      {
+        "name": "host-bindings",
+        "exitCode": 0,
+        "seconds": 0.003,
+        "log": "/root/codex-components-p2-20261021/perry-async-runtime-v186/wasm/guest/host-bindings.log"
+      },
+      {
+        "name": "host-compile",
+        "exitCode": 0,
+        "seconds": 5.469,
+        "log": "/root/codex-components-p2-20261021/perry-async-runtime-v186/wasm/guest/host-compile.log"
+      },
+      {
+        "name": "host-run",
+        "exitCode": 0,
+        "seconds": 36.646,
+        "log": "/root/codex-components-p2-20261021/perry-async-runtime-v186/wasm/guest/host-run.log"
+      }
+    ]
+  },
+  "artifactSha256": {
+    "/root/codex-components-p2-20261021/async-runtime-target/perry-dev/perry": "d51c79904251eca59506fc2724aa91caa86b2a03f173ff015cdd05d71c8cb850",
+    "/root/codex-components-p2-20261021/async-runtime-target/perry-dev/perry-wit": "d0f5f1983176b4c2d263958a41e0a91059bc52ecf00027228f55fe9b8b47d505",
+    "/root/codex-components-p2-20261021/async-runtime-target/perry-dev/perry-gc-effects": "a8df52cef880c2255f74a9df7c790beef3dbe9204089cdb6ceaaa900695ba015",
+    "/root/codex-components-p2-20261021/async-runtime-target/perry-dev/libperry_runtime.a": "5c62f6502d850e73b6b8e94c2d43b1c690458a090dee00149fadaebf00e14248",
+    "/root/codex-components-p2-20261021/async-runtime-target/perry-dev/libperry_stdlib.a": "438fa88230204385aa75c1fae19f04552dbf1d8851510a8de7c45eca084f91c3",
+    "/root/codex-components-p2-20261021/async-runtime-target/perry-dev/libperry_component_host.a": "fa9675935ed62cb919f06c6a06d1819e59094acabc47c27f215ce7783bbfee41",
+    "/root/codex-components-p2-20261021/async-runtime-target/perry-dev/libperry_runtime_instr.a": "3e575e8dd716a0f62f2d9844f348d7c09a592f0addf064f5fa785b86136684e8",
+    "/root/codex-components-p2-20261021/async-runtime-target/perry-dev/libperry_stdlib_instr.a": "7ae0b51bc0075aa50d6b8e37ad60624888048902ca4d46bdcd9c35043332dd7e",
+    "/root/codex-components-p2-20261021/async-runtime-target/perry-dev/examples/component_wat": "937f4ef2d1363a1cf776a656a88375ee3de9d13f35b2255ed10080cdc15b541f",
+    "/root/codex-components-p2-20261021/async-runtime-target/perry-dev/libperry_runtime.a.gc-effects": "48bffd93aaccbe33302af03740813dbda8482b78692b42b32d910c83d8ed9935",
+    "/root/codex-components-p2-20261021/async-runtime-target/perry-dev/libperry_runtime_instr.a.gc-effects": "31027c40399e2cf92fb2bc0ec1f641e8423fb5b3a5ad725d0a6b2944a47de87e",
+    "/root/codex-components-p2-20261021/guest-owned-frame-v183-target/wasm32-wasip2/release/libperry_runtime.a": "0b23af4ed890838543278cd5a79657d422568435cbfb9c1aeb0a0824535c869f"
+  },
+  "ordinaryArchiveBackup": {
+    "sha256": "840cb66c4d33505a074d895f4ae3e6769af22d23328c9d8f4e675fac7addf0fd",
+    "size": 405722438,
+    "files": {
+      "/root/codex-components-p2-20261021/async-runtime-target/perry-dev/perry": "d51c79904251eca59506fc2724aa91caa86b2a03f173ff015cdd05d71c8cb850",
+      "/root/codex-components-p2-20261021/async-runtime-target/perry-dev/perry-wit": "d0f5f1983176b4c2d263958a41e0a91059bc52ecf00027228f55fe9b8b47d505",
+      "/root/codex-components-p2-20261021/async-runtime-target/perry-dev/perry-gc-effects": "a8df52cef880c2255f74a9df7c790beef3dbe9204089cdb6ceaaa900695ba015",
+      "/root/codex-components-p2-20261021/async-runtime-target/perry-dev/libperry_runtime.a": "5c62f6502d850e73b6b8e94c2d43b1c690458a090dee00149fadaebf00e14248",
+      "/root/codex-components-p2-20261021/async-runtime-target/perry-dev/libperry_stdlib.a": "438fa88230204385aa75c1fae19f04552dbf1d8851510a8de7c45eca084f91c3",
+      "/root/codex-components-p2-20261021/async-runtime-target/perry-dev/libperry_component_host.a": "fa9675935ed62cb919f06c6a06d1819e59094acabc47c27f215ce7783bbfee41",
+      "/root/codex-components-p2-20261021/async-runtime-target/perry-dev/examples/component_wat": "937f4ef2d1363a1cf776a656a88375ee3de9d13f35b2255ed10080cdc15b541f",
+      "/root/codex-components-p2-20261021/async-runtime-target/perry-dev/libperry_runtime.a.gc-effects": "48bffd93aaccbe33302af03740813dbda8482b78692b42b32d910c83d8ed9935",
+      "/root/codex-components-p2-20261021/async-runtime-target/perry-dev/libperry_runtime_instr.a.gc-effects": "88f858a4507734bb77a8cedc945f23e7c9938e241d796a49b27b744de726fab0"
+    }
+  },
+  "fixtureProviderTree": {
+    "wasmtime": "48.0.7",
+    "provider": "perry-wasi/Turnloop",
+    "tokio": false
+  },
+  "prototypeOnly": {
+    "productionBindingsImplemented": false,
+    "proofs": {
+      "proof-v7.tar.gz": {
+        "sha256": "b03c75000a27ad5a62cbf761076a90f5377b3d91a68f930d374219c3bdbdbcfc",
+        "bytes": 17732
+      },
+      "proof-stream-v2.tar.gz": {
+        "sha256": "6d169218a82bcf02b15c65be5bef786d8cdbbaa99bcb8a63f03102a03e3e57b7",
+        "bytes": 18492
+      },
+      "proof-compound-v1.tar.gz": {
+        "sha256": "4a9ed5803db1ab1a69ea5d2f7cca7dccda5084cc81b03f124fa28bd7409396b6",
+        "bytes": 19574
+      },
+      "proof-host-v2.tar.gz": {
+        "sha256": "73050abf560f7eea974b8d211ec17a9ca33b9eade21a71855eed8c09c98e8928",
+        "bytes": 20074
+      }
+    },
+    "negativeCrossInstance": {
+      "exitCode": 124,
+      "expected": "Engine rejects mismatched payload, but subsequent read does not complete before timeout.",
+      "requirement": "Preflight private component identity and payload shape before entering the engine."
+    },
+    "covers": [
+      "early task.return before producer exit",
+      "dynamic indirect compound results",
+      "guest resource type identity",
+      "exactly-once destructor and duplicate rejection",
+      "unread future/stream cancellation",
+      "stream payload versus EOF",
+      "Unicode and 3145865 exact bytes",
+      "shared imported host-resource identity and destructor"
+    ]
+  },
+  "limitations": [
+    "Generic future/stream bindings and async guest adapters remain unfinished.",
+    "Current qualification is Linux only; other platforms and packages remain open.",
+    "Turnloop provider qualification uses immutable source overrides, not released dependencies.",
+    "Existing address-class and root-holder lint debt is not waived."
+  ],
+  "evidenceArchive": {
+    "file": "perry-guest-owned-frame-v187-evidence.tar.gz",
+    "sha256": "98ba1764e7874ab12f61bf5d8c3461f6c65e144ec7859329c904fedaa800095c",
+    "bytes": 12513658,
+    "verifiedMembers": 408,
+    "allMembersVerifiedLocally": true
+  },
+  "postQualificationChanges": [
+    "docs/WASI_COMPONENTS.md: add receipt link and qualification paragraph",
+    "docs/validation/wasi-owned-guest-frames-20261025.json: this receipt",
+    "changelog.d/PENDING-wasi-owned-guest-frames.md: changeset"
+  ]
+}

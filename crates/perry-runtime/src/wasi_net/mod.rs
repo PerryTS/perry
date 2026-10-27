@@ -24,7 +24,12 @@ pub use sink::{
     register_link_sink, register_sink, sink_installed, NetCompletion, MAX_LINK_ROUTES,
     MAX_SUBSYSTEMS,
 };
-pub use transport::{TransportCore, TRANSPORT_CORE_WORDS};
+// The completion kinds, as the native `turnloop_net` exports them.
+pub use sink::{
+    NET_ACCEPT, NET_CLOSED, NET_CONNECT, NET_DATA, NET_EOF, NET_ERROR, NET_FLAG_HANDLE_PARTS,
+    NET_FLAG_LINK, NET_FLAG_PLAINTEXT, NET_FLAG_STALE, NET_SHUTDOWN, NET_TIMER, NET_WROTE,
+};
+pub use transport::{TransportCore, TransportPayload, TRANSPORT_CORE_WORDS};
 type NetResult<T> = Result<T, NodeError>;
 
 extern "C" {
@@ -67,6 +72,8 @@ struct Handle {
     connecting: bool,
     connected_event: bool,
     reading: bool,
+    /// `read_once`: stop after one buffer until the caller rearms.
+    read_once: bool,
     nodelay: bool,
     referenced: bool,
     writes: VecDeque<Write>,
@@ -84,6 +91,7 @@ impl Handle {
             connecting: false,
             connected_event: false,
             reading: false,
+            read_once: false,
             nodelay: false,
             referenced: true,
             writes: VecDeque::new(),
@@ -153,7 +161,7 @@ pub fn tcp_listen(
     backlog: u32,
     reuse_port: bool,
     nodelay: bool,
-) -> NetResult<()> {
+) -> NetResult<SocketAddr> {
     initialize();
     STATE.with(|state| {
         let mut state = state.borrow_mut();
@@ -179,7 +187,9 @@ pub fn tcp_listen(
         handle.nodelay = nodelay;
         state.handles.insert(id, handle);
         Ok(())
-    })
+    })?;
+    // The bound address, which `listen(0)` callers report as `server.address()`.
+    Ok(local_addr(id).unwrap_or(addr))
 }
 pub fn tcp_connect_host(
     id: i64,
@@ -253,6 +263,16 @@ pub fn accept_start(id: i64) -> NetResult<()> {
 pub fn read_start(id: i64) -> NetResult<()> {
     with_handle(id, "read", |h| {
         h.reading = true;
+        h.read_once = false;
+        Ok(())
+    })
+}
+/// Read one buffer; the caller rearms after consuming it, so downstream
+/// backpressure leaves the socket unread without closing it.
+pub fn read_once(id: i64) -> NetResult<()> {
+    with_handle(id, "read", |h| {
+        h.reading = true;
+        h.read_once = true;
         Ok(())
     })
 }
@@ -591,6 +611,10 @@ extern "C" fn pump() -> i32 {
                         bytes,
                         h.owner.clone(),
                     ));
+                    if h.read_once {
+                        h.reading = false;
+                        break;
+                    }
                 }
             }
         }

@@ -132,6 +132,42 @@ fn resource_tokens_are_private_and_plain_objects_cannot_forge_them() {
 }
 
 #[test]
+fn provider_borrow_capabilities_preserve_private_identity_after_moving_gc() {
+    let _nursery = crate::gc::CopyingNurseryTestGuard::new(0);
+    let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _evacuate = crate::gc::knob_overrides::ForcedEvacuationTestGuard::on();
+    crate::gc::register_runtime_handle_root_scanner_for_tests();
+    let scope = RuntimeHandleScope::new();
+    let owner = object(&scope);
+    let lifetime = scope.root_raw_mut_ptr(crate::array::js_array_alloc_with_length(1));
+    crate::array::js_array_set_f64(lifetime.get_raw_mut_ptr(), 0, 1.0);
+    let descriptor = json!({"$resource":"provider-store-nonce:123456789", "owned":false, "$borrow":"provider-store-nonce:123456789"});
+    let decoded = scope.root_nanbox_f64(value::decode_with_lifetime(
+        &descriptor,
+        &json!({"kind":"borrow","value":"network"}),
+        &json!({"types":{}}),
+        owner.get_nanbox_f64(),
+        crate::value::js_nanbox_pointer(
+            lifetime.get_raw_mut_ptr::<crate::array::ArrayHeader>() as i64
+        ),
+    ));
+    assert!(
+        JSValue::from_bits(field(decoded.get_nanbox_f64(), b"$borrow").to_bits()).is_undefined()
+    );
+    assert_eq!(value::encode(decoded.get_nanbox_f64()), descriptor);
+    let before = decoded.get_nanbox_f64().to_bits();
+    crate::gc::gc_collect_minor();
+    assert_ne!(
+        decoded.get_nanbox_f64().to_bits(),
+        before,
+        "the wrapper must actually move"
+    );
+    assert_eq!(value::encode(decoded.get_nanbox_f64()), descriptor);
+    crate::array::js_array_set_f64(lifetime.get_raw_mut_ptr(), 0, 0.0);
+    assert!(crate::exception::catch_js_throw(|| value::encode(decoded.get_nanbox_f64())).is_err());
+}
+
+#[test]
 fn proxy_arrays_are_not_read_as_array_headers() {
     let scope = RuntimeHandleScope::new();
     let array = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(

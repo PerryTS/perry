@@ -495,7 +495,6 @@ pub extern "C" fn js_process_emit_exit(code: f64) {
 }
 
 /// Whether the one-shot `exit` emit has already happened on this thread.
-#[cfg(test)]
 pub(crate) fn process_exit_event_emitted() -> bool {
     PROCESS_EXIT_EVENT_EMITTED.with(|emitted| emitted.get())
 }

@@ -555,15 +555,15 @@ pub(crate) fn test_seed_promise_scanner_roots(
     TASK_QUEUE.with(|q| {
         let mut q = q.borrow_mut();
         q.clear();
-        q.push_back(Task::Promise(promise_ptr, value, true, context.clone()));
-        q.push_back(Task::Inline(
+        q.enqueue_promise_job(Task::Promise(promise_ptr, value, true, context.clone()));
+        q.enqueue_promise_job(Task::Inline(
             callback_ptr,
             value,
             next_ptr,
             true,
             context.clone(),
         ));
-        q.push_back(Task::AsyncStep(
+        q.enqueue_promise_job(Task::AsyncStep(
             callback_ptr,
             value,
             next_ptr,
@@ -603,7 +603,7 @@ pub(crate) fn test_seed_many_promise_task_roots(values: &[f64]) {
         let mut q = q.borrow_mut();
         q.clear();
         for &value in values {
-            q.push_back(Task::Promise(
+            q.enqueue_promise_job(Task::Promise(
                 std::ptr::null_mut(),
                 value,
                 true,

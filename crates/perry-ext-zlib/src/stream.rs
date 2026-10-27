@@ -40,6 +40,7 @@ pub(crate) use driver::{decode_bytes, decode_options_bytes, is_trailing_garbage}
 pub(crate) use inflate_context::needs_dictionary;
 mod one_shot_callback;
 mod zlib_encoder;
+mod zsys;
 pub(crate) use one_shot_callback::queue_one_shot_callback;
 
 /// Runs a test body as its own agent, the way a worker runs (#11417). Unclaimed

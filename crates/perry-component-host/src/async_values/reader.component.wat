@@ -1,0 +1,172 @@
+(component
+  @imports@
+  @types@
+  (import @control@ (instance $control (export "wait" (func async (param "id" u32)))))
+  (alias export $control "wait" (func $wait))
+  (core func $wait (canon lower (func $wait) async))
+  @heap@
+  (core instance $heap (instantiate $heap))
+  (alias core export $heap "memory" (core memory $memory))
+  (core func $read (canon @kind@.read @reader@ async (memory $memory) (realloc (core func $heap "realloc"))))
+  (core func $cancel-read (canon @kind@.cancel-read @reader@))
+  (core func $drop-read (canon @kind@.drop-readable @reader@))
+  (core func $return (canon task.return (result @packet@) (memory $memory)))
+  (core func $get (canon context.get i32 0))
+  (core func $set (canon context.set i32 0))
+  (core func $new (canon waitable-set.new))
+  (core func $join (canon waitable.join))
+  (core func $drop-set (canon waitable-set.drop))
+  (core func $cancel-task (canon subtask.cancel))
+  (core func $drop-task (canon subtask.drop))
+  @writer-intrinsics@
+  @dispose-intrinsics@
+  (core module $code
+    (import "host" "memory" (memory 1))
+    (import "host" "alloc" (func $alloc (param i32) (result i32)))
+    (import "host" "free" (func $free (param i32)))
+    (import "host" "get" (func $get (result i32)))
+    (import "host" "set" (func $set (param i32)))
+    (import "host" "wait" (func $wait (param i32) (result i32)))
+    (import "host" "read" (func $read (param @read-params@) (result i32)))
+    (import "host" "cancel-read" (func $cancel-read (param i32) (result i32)))
+    (import "host" "drop-read" (func $drop-read (param i32)))
+    (import "host" "return" (func $return (param i32)))
+    (import "host" "new" (func $new (result i32)))
+    (import "host" "join" (func $join (param i32 i32)))
+    (import "host" "drop-set" (func $drop-set (param i32)))
+    (import "host" "cancel-task" (func $cancel-task (param i32) (result i32)))
+    (import "host" "drop-task" (func $drop-task (param i32)))
+    @writer-imports@
+    @dispose-imports@
+    @cleanup@
+    @dispose-functions@
+    @writer-functions@
+    (func (export "dispose") (param $ptr i32) (param $len i32) (local $header i32)
+      (local.set $header (call $alloc (i32.const 8)))
+      (i32.store (local.get $header) (local.get $ptr))
+      (i32.store offset=4 (local.get $header) (local.get $len))
+      (call $discard@list-id@ (local.get $header))
+      (call $clean@list-id@ (local.get $header))
+      (call $free (local.get $header)))
+    ;; Context slot zero points to this task's frame. No mutable global can
+    ;; confuse overlapping reads. The helper's memory is charged to Store limits.
+    ;; reader0,set4,signal8,done12,cancelled16,id20,buffer24,capacity28,packet32,status36.
+    (func $waiting (result i32)
+      (i32.or (i32.const 2) (i32.shl (i32.load offset=4 (call $get)) (i32.const 4))))
+    (func $drop-signal
+      (call $drop-task (i32.load offset=8 (call $get)))
+      (i32.store offset=8 (call $get) (i32.const 0)))
+    (func $finish (result i32) (local $f i32) (local $packet i32) (local $count i32) (local $status i32)
+      (local.set $f (call $get))
+      (if (i32.load offset=8 (local.get $f)) (then unreachable))
+      (local.set $packet (i32.load offset=32 (local.get $f)))
+      (local.set $count (i32.shr_u (i32.load offset=36 (local.get $f)) (i32.const 4)))
+      (local.set $status (i32.and (i32.load offset=36 (local.get $f)) (i32.const 15)))
+      ;; Unlike streams, completed future operations encode no element count.
+      ;; A completed read carries exactly one value, including when native
+      ;; cancellation raced its completion and will discard that lifted value.
+      (if (i32.and (i32.eqz (i32.const @stream@))
+            (i32.and (i32.load offset=12 (local.get $f)) (i32.eqz (local.get $status))))
+        (then (local.set $count (i32.const 1))))
+      (if (i32.or (i32.gt_u (local.get $count) (i32.load offset=28 (local.get $f)))
+                  (i32.gt_u (local.get $status) (i32.const 2))) (then unreachable))
+      (if (i32.load offset=16 (local.get $f)) (then (local.set $status (i32.const 2))))
+      (i32.store offset=@status@ (local.get $packet) (local.get $status))
+      (i32.store offset=@count@ (local.get $packet) (local.get $count))
+      (i32.store offset=@values@ (local.get $packet) (i32.load offset=24 (local.get $f)))
+      (i32.store offset=@values-length@ (local.get $packet) (i32.mul (local.get $count) (i32.const @has-payload@)))
+      ;; A dropped stream may include a final chunk. Preserve its count even
+      ;; when there is no continuation; the native wrapper publishes EOF later.
+      (if (i32.and (i32.const @stream@) (i32.eqz (local.get $status)))
+        (then
+          (i32.store8 offset=@continuation@ (local.get $packet) (i32.const 1))
+          (i32.store offset=@reader-offset@ (local.get $packet) (i32.load (local.get $f))))
+        (else (call $drop-read (i32.load (local.get $f)))))
+      (call $drop-set (i32.load offset=4 (local.get $f)))
+      (call $return (local.get $packet))
+      ;; task.return lifts allocations and transfers handles before this frees
+      ;; the private canonical buffers. Scalars, including handles, are inert.
+      (call $clean@cleanup-id@ (local.get $packet))
+      (call $free (local.get $packet))
+      (call $set (i32.const 0))
+      (call $free (local.get $f))
+      (i32.const 0))
+    (func $io-complete (param $status i32) (result i32)
+      (i32.store offset=12 (call $get) (i32.const 1))
+      (i32.store offset=36 (call $get) (local.get $status))
+      (if (i32.eqz (i32.load offset=8 (call $get))) (then (return (call $finish))))
+      ;; The baseline synchronous cancellation intrinsics may suspend this
+      ;; guest fiber; the embedding can continue polling other work meanwhile.
+      (call $join (i32.load offset=8 (call $get)) (i32.const 0))
+      (local.set $status (call $cancel-task (i32.load offset=8 (call $get))))
+      (if (result i32) (i32.ge_u (i32.and (local.get $status) (i32.const 15)) (i32.const 2))
+        (then (call $drop-signal) (call $finish))
+        (else (call $waiting))))
+    (func $signal-complete (param $code i32) (result i32) (local $status i32)
+      (call $drop-signal)
+      (if (i32.eq (local.get $code) (i32.const 2)) (then (i32.store offset=16 (call $get) (i32.const 1))))
+      (if (i32.load offset=12 (call $get)) (then (return (call $finish))))
+      (call $join (i32.load (call $get)) (i32.const 0))
+      (local.set $status (call $cancel-read (i32.load (call $get))))
+      (if (result i32) (i32.eq (local.get $status) (i32.const -1))
+        (then (call $waiting))
+        (else
+          (i32.store offset=12 (call $get) (i32.const 1))
+          (i32.store offset=36 (call $get) (local.get $status))
+          (call $finish))))
+    (func (export "read") (param $reader i32) (param $capacity i32) (param $id i32) (result i32)
+      (local $f i32) (local $status i32) (local $bytes i64) (local $packet i32)
+      (if (i32.or (i32.eqz (local.get $capacity)) (i32.gt_u (local.get $capacity) (i32.const 65536))) (then unreachable))
+      (if (i32.and (i32.eqz (i32.const @stream@)) (i32.ne (local.get $capacity) (i32.const 1))) (then unreachable))
+      (local.set $bytes (i64.mul (i64.extend_i32_u (local.get $capacity)) (i64.const @element-size@)))
+      (if (i64.gt_u (local.get $bytes) (i64.const 2147483632)) (then unreachable))
+      (local.set $f (call $alloc (i32.const 48)))
+      (memory.fill (local.get $f) (i32.const 0) (i32.const 48))
+      (call $set (local.get $f))
+      (i32.store (local.get $f) (local.get $reader))
+      (i32.store offset=4 (local.get $f) (call $new))
+      (i32.store offset=20 (local.get $f) (local.get $id))
+      (i32.store offset=24 (local.get $f) (call $alloc (i32.wrap_i64 (local.get $bytes))))
+      (i32.store offset=28 (local.get $f) (local.get $capacity))
+      (local.set $packet (call $alloc (i32.const @packet-size@)))
+      (memory.fill (local.get $packet) (i32.const 0) (i32.const @packet-size@))
+      (i32.store offset=32 (local.get $f) (local.get $packet))
+      (local.set $status (call $wait (local.get $id)))
+      (i32.store offset=8 (local.get $f) (i32.shr_u (local.get $status) (i32.const 4)))
+      (if (i32.eq (i32.and (local.get $status) (i32.const 15)) (i32.const 2))
+        (then
+          (if (i32.load offset=8 (local.get $f)) (then (call $drop-signal)))
+          (i32.store offset=16 (local.get $f) (i32.const 1))
+          (return (call $finish))))
+      (call $join (i32.load offset=8 (local.get $f)) (i32.load offset=4 (local.get $f)))
+      (local.set $status (call $read (local.get $reader) (i32.load offset=24 (local.get $f)) @read-capacity@))
+      (if (result i32) (i32.eq (local.get $status) (i32.const -1))
+        (then (call $join (local.get $reader) (i32.load offset=4 (local.get $f))) (call $waiting))
+        (else (call $io-complete (local.get $status)))))
+    (func (export "callback") (param $event i32) (param $waitable i32) (param $code i32) (result i32)
+      (if (i32.eq (local.get $event) (i32.const 1))
+        (then
+          (if (i32.ne (local.get $waitable) (i32.load offset=8 (call $get))) (then unreachable))
+          (if (i32.lt_u (local.get $code) (i32.const 2)) (then (return (call $waiting))))
+          (return (call $signal-complete (local.get $code)))))
+      (if (i32.ne (local.get $event) (i32.const @io-event@)) (then unreachable))
+      (if (i32.ne (local.get $waitable) (i32.load (call $get))) (then unreachable))
+      (call $io-complete (local.get $code)))
+    (func (export "pages") (result i32) (memory.size)))
+  (core instance $code (instantiate $code (with "host" (instance
+    @writer-exports@
+    @dispose-exports@
+    (export "memory" (memory $memory))
+    (export "alloc" (func $heap "alloc")) (export "free" (func $heap "free"))
+    (export "get" (func $get)) (export "set" (func $set))
+    (export "wait" (func $wait)) (export "read" (func $read))
+    (export "cancel-read" (func $cancel-read)) (export "drop-read" (func $drop-read))
+    (export "return" (func $return)) (export "new" (func $new))
+    (export "join" (func $join)) (export "drop-set" (func $drop-set))
+    (export "cancel-task" (func $cancel-task)) (export "drop-task" (func $drop-task))))))
+  (func (export "read") async (param "value" @reader@) (param "capacity" u32) (param "id" u32) (result @packet@)
+    (canon lift (core func $code "read") async (memory $memory) (callback (core func $code "callback"))))
+  (func (export "dispose") (param "values" @list-type@)
+    (canon lift (core func $code "dispose") (memory $memory) (realloc (core func $heap "realloc"))))
+  @writer-interface@
+  (func (export "pages") (result u32) (canon lift (core func $code "pages"))))

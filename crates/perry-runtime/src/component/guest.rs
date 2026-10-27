@@ -136,7 +136,7 @@ pub extern "C" fn js_component_import(interface: f64, function: f64, args: f64) 
     let args = scope.root_nanbox_f64(args);
     let mut interface_name = String::new();
     let mut function_name = String::new();
-    let mut frame = frame::Frame::new();
+    let mut frame = Box::new(frame::Frame::allocate_guest_frame());
     let result = crate::exception::catch_js_throw(|| {
         let ops = ops();
         let owner = scope.root_nanbox_f64(registry());
@@ -163,7 +163,7 @@ pub extern "C" fn js_component_import(interface: f64, function: f64, args: f64) 
         let input = frame.add(args.get_nanbox_f64());
         let output = unsafe {
             (ops.import)(
-                (&raw mut frame).cast(),
+                (&raw mut *frame).cast(),
                 interface as u32,
                 function as u32,
                 input,
@@ -174,7 +174,8 @@ pub extern "C" fn js_component_import(interface: f64, function: f64, args: f64) 
         }
         frame.get(output)
     });
-    drop((frame, interface_name, function_name));
+    frame.release_import();
+    drop((interface_name, function_name));
     finish(result)
 }
 

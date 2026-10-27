@@ -1,0 +1,13 @@
+package test:async-values@1.0.0;
+
+interface values {
+    resource item;
+    record packet { sequence: u64, bytes: list<u8>, entry: own<item> }
+    create: async func() -> future<packet>;
+    nested: async func() -> future<future<packet>>;
+    bytes: func() -> stream<u8>;
+    units: func() -> stream;
+    empty: func() -> future;
+}
+
+world plugin { export values; }

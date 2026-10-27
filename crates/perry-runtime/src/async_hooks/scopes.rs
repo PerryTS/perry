@@ -54,7 +54,17 @@ pub fn try_enter_resource_scope_at(mark: usize, ids: AsyncResourceIds) -> Result
     let context = super::resource_state::get(ids.async_id)
         .map(|meta| unsafe { (*meta).context.clone() })
         .unwrap_or_default();
+    try_enter_scope_at(mark, ids, context, false)
+}
+
+fn try_enter_scope_at(
+    mark: usize,
+    ids: AsyncResourceIds,
+    context: crate::async_context::AsyncContextSnapshot,
+    promise: bool,
+) -> Result<(), f64> {
     let previous = crate::async_context::enter_context(&context);
+    drop(context);
     crate::async_context::push_context_guard_at(
         mark,
         crate::async_context::ContextGuardAction::RestoreSnapshot(previous),
@@ -64,7 +74,11 @@ pub fn try_enter_resource_scope_at(mark: usize, ids: AsyncResourceIds) -> Result
         crate::async_context::ContextGuardAction::RestoreExecutionIds,
     );
     let outcome = crate::exception::js_call_catching(|| {
-        before(ids.async_id, ids.trigger_async_id);
+        if promise {
+            super::before_promise(ids.async_id, ids.trigger_async_id);
+        } else {
+            before(ids.async_id, ids.trigger_async_id);
+        }
         TAG_UNDEFINED_F64
     });
     if let Err(error) = outcome {
@@ -90,8 +104,16 @@ pub fn enter_resource_scope(ids: AsyncResourceIds) {
 
 /// Leave a provider scope entered by [`enter_resource_scope`].
 pub fn try_leave_resource_scope(async_id: u64) -> Result<(), f64> {
+    try_leave_scope(async_id, false)
+}
+
+fn try_leave_scope(async_id: u64, promise: bool) -> Result<(), f64> {
     let outcome = crate::exception::js_call_catching(|| {
-        after(async_id);
+        if promise {
+            super::after_promise(async_id);
+        } else {
+            after(async_id);
+        }
         TAG_UNDEFINED_F64
     });
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -134,13 +156,54 @@ pub fn try_run_resource_scope(
     completion: impl FnOnce() -> f64,
 ) -> Result<f64, f64> {
     try_enter_resource_scope(ids)?;
+    try_run_entered_scope(ids, false, completion)
+}
+
+/// Run a native Promise producer in its submission context, including when
+/// async hooks were disabled at creation (and no resource metadata exists).
+/// The caller must keep the Promise rooted throughout this call.
+pub(crate) unsafe fn try_run_promise_scope(
+    promise: *mut crate::promise::Promise,
+    completion: impl FnOnce() -> f64,
+) -> Result<f64, f64> {
+    let ids = AsyncResourceIds {
+        async_id: (*promise).async_id,
+        trigger_async_id: (*promise).trigger_async_id,
+    };
+    let context = crate::promise::context_for_promise(promise);
+    crate::async_hooks::try_run_captured_promise_scope(ids, context, completion)
+}
+
+/// Continue an invocation after its public Promise has been released. The
+/// caller owns the captured snapshot in traced state and supplies its native
+/// execution IDs; the execution scope does not retain or resurrect the Promise.
+/// Observed IDs may be opaque resource-state cell tokens: callers must retain
+/// those cells in traced state across polls, or capture public serial IDs instead.
+/// A resource-state cell holds only a weak edge to its Promise.
+pub(crate) fn try_run_captured_promise_scope(
+    ids: AsyncResourceIds,
+    context: crate::async_context::AsyncContextSnapshot,
+    completion: impl FnOnce() -> f64,
+) -> Result<f64, f64> {
+    try_enter_scope_at(crate::exception::frame_mark(), ids, context, true)?;
+    try_run_entered_scope(ids, true, completion)
+}
+
+#[cfg(test)]
+mod tests;
+
+fn try_run_entered_scope(
+    ids: AsyncResourceIds,
+    promise: bool,
+    completion: impl FnOnce() -> f64,
+) -> Result<f64, f64> {
     let scope = crate::gc::RuntimeHandleScope::new();
     let outcome = crate::exception::js_call_catching(completion);
     let (threw, result) = match outcome {
         Ok(value) => (false, scope.root_nanbox_f64(value)),
         Err(error) => (true, scope.root_nanbox_f64(error)),
     };
-    if let Err(error) = try_leave_resource_scope(ids.async_id) {
+    if let Err(error) = try_leave_scope(ids.async_id, promise) {
         if threw {
             return Err(result.get_nanbox_f64());
         }

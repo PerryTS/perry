@@ -29,6 +29,7 @@ pub(crate) mod sync_program;
 // `pub(crate)` so `commands::deps` can reuse `cjs_wrap::detect`'s
 // comment/string masker for its source scans (D005) instead of duplicating a
 // subtle scanner.
+mod cjs_link;
 pub(crate) mod cjs_wrap;
 mod class_imports;
 mod codegen_steps;
@@ -79,6 +80,7 @@ mod sandbox_buildrs;
 mod strip_dedup;
 mod targets;
 mod tool_output;
+mod wasi_flavour;
 pub mod well_known;
 pub(crate) mod widget_build;
 use android_target::{android_target, is_android_target};

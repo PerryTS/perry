@@ -150,6 +150,10 @@ pub struct Gen<'a> {
     pub cell_flows: std::collections::BTreeSet<(FnIdx, u32, String)>,
     pub cell_flow_toks: crate::pts::FxHashSet<Tok>,
     pub cells_read: Vec<String>,
+    /// The node each read cell's other-unit writes are seeded into, by the
+    /// cell's node (`seed_cell_now`): what the unit read there, which its
+    /// own write leaves to their writers.
+    pub cell_seeds: FxHashMap<NodeId, NodeId>,
     /// DECISIONS 171: the cells seeded once their node is consumed.
     pub cells_deferred: Vec<(String, NodeId)>,
     /// The other units' layouts it looked up by display (DECISIONS 103).
@@ -270,10 +274,6 @@ pub struct Gen<'a> {
     /// The constant first argument of the call `call_expr` is lowering,
     /// taken by `call_with` (`Model::call_lit`).
     pub(crate) call_lit_arg: Option<Atom>,
-    /// `(module, local)` of a `let require = <closure>` binding, the
-    /// wrapper's synthetic require (`Gen::require_helper_body`).
-    pub(crate) require_helpers: FxHashMap<(u32, u32), &'a [Stmt]>,
-    pub(crate) require_helpers_indexed: std::collections::HashSet<u32>,
     /// FVA 4.3b: (module, `__keys` local) -> the `__forin_obj` local whose
     /// `ForInKeys` it holds.
     pub(crate) for_in_keys_of: FxHashMap<(u32, u32), u32>,
@@ -394,6 +394,7 @@ impl<'a> Gen<'a> {
             cell_flows: Default::default(),
             cell_flow_toks: Default::default(),
             cells_read: Vec::new(),
+            cell_seeds: FxHashMap::default(),
             cells_deferred: Vec::new(),
             layouts_read: Vec::new(),
             fns_read: Vec::new(),
@@ -447,8 +448,6 @@ impl<'a> Gen<'a> {
             cell_locals: Default::default(),
             lit_births: FxHashMap::default(),
             call_lit_arg: None,
-            require_helpers: FxHashMap::default(),
-            require_helpers_indexed: std::collections::HashSet::new(),
             for_in_keys_of: FxHashMap::default(),
             for_in_key: Vec::new(),
             const_inits: FxHashMap::default(),
@@ -1061,8 +1060,12 @@ impl<'a> Gen<'a> {
                 let a = self.m.atom(&meth.name);
                 push_unique(&mut v, a);
             }
-            let a = self.m.atom("constructor");
-            push_unique(&mut v, a);
+            // A literal has no own `constructor`: it reads
+            // `Object.prototype`'s, which a store into ⊤ may replace.
+            if !c.is_literal_shape() {
+                let a = self.m.atom("constructor");
+                push_unique(&mut v, a);
+            }
             v
         };
         if !c.is_literal_shape() {
@@ -1088,6 +1091,7 @@ impl<'a> Gen<'a> {
             proto_members,
             parent_value: None,
             parent_links: Vec::new(),
+            null_proto: c.declared_keys_null_proto(),
         });
         self.mods[mi as usize].classes.insert(c.name.clone(), tm);
         for a in &c.aliases {
@@ -1552,6 +1556,7 @@ impl<'a> Gen<'a> {
             proto_members: vec![],
             parent_value: None,
             parent_links: Vec::new(),
+            null_proto: false,
         });
         tm
     }
@@ -1587,6 +1592,7 @@ impl<'a> Gen<'a> {
             proto_members: vec![],
             parent_value: None,
             parent_links: Vec::new(),
+            null_proto: false,
         });
         tm
     }
@@ -1614,14 +1620,14 @@ impl ModInfo {
 }
 
 pub fn short_path(p: &str) -> String {
-    // node_modules/<pkg>/... keeps the package; otherwise the file name.
-    if let Some(i) = p.rfind("node_modules/") {
-        return p[i + "node_modules/".len()..].to_string();
-    }
-    match p.rfind('/') {
-        Some(i) => p[i + 1..].to_string(),
-        None => p.to_string(),
-    }
+    // The module's path: a display names a function, class or array across
+    // units (one name, one contract, DECISIONS 106), so it names its module.
+    // A shortened one did not: two versions of a package (jose@6.0.11 and
+    // jose@6.2.9: `jose/dist/webapi/jwks/local.js`), or files of one name in
+    // two directories (`instructions.ts`), published one function contract
+    // name twice, and its readers saw one owner's contract and the other's
+    // at the end of every round (opencode: 13 units solved in every round).
+    p.to_string()
 }
 
 pub(crate) fn push_unique(v: &mut Vec<Atom>, a: Atom) {

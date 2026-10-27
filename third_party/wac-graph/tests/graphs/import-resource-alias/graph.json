@@ -1,0 +1,14 @@
+{
+    "packages": [
+        {
+            "name": "test:foo",
+            "path": "world.wit"
+        }
+    ],
+    "nodes": [
+        {
+            "type": "instantiation",
+            "package": 0
+        }
+    ]
+}

@@ -34,6 +34,8 @@ class Reader:
         self.data, self.pos = data, pos
 
     def byte(self) -> int:
+        if self.pos >= len(self.data):
+            raise ValueError("truncated wasm module")
         value = self.data[self.pos]
         self.pos += 1
         return value
@@ -49,6 +51,8 @@ class Reader:
 
     def name(self) -> str:
         length = self.leb()
+        if self.pos + length > len(self.data):
+            raise ValueError("truncated wasm module")
         text = self.data[self.pos:self.pos + length].decode("utf-8")
         self.pos += length
         return text
@@ -165,6 +169,13 @@ def self_test() -> int:
         return out
 
     assert module_imports(wasm(("a", "b"), ("c", "d"))) == [("a", "b"), ("c", "d")]
+    for cut in (1, 3):
+        try:
+            module_imports(wasm((PREVIEW1, "fd_write"))[:-cut])
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"a module truncated by {cut} bytes must be rejected")
     allowed = {PREVIEW1}
     good = wasm((PREVIEW1, "fd_write"))
     cases = [

@@ -40,6 +40,11 @@ def main() -> int:
     if not os.environ.get(f"CC_{target.replace('-', '_')}"):
         sys.exit("Configure wasi-sdk first (scripts/wasi_toolchain.ps1 or wasi_toolchain.sh)")
     features = ",".join(f"perry-runtime/{f}" for f in runtime_features())
+    if target == "wasm32-wasip1":
+        # The one wasip1 archive also carries perry-stdlib and the Node module
+        # crates; the perry-stdlib feature list lives in perry-runtime-static's
+        # Cargo.toml.
+        features += ",perry-runtime-static/wasi-node-modules"
     if args.gc_instruments:
         features += ",perry-runtime/gc-instruments"
     if args.image_selftest:

@@ -5,6 +5,7 @@
 //! hash preserves both its algorithm and buffered bytes. No EVP allocation
 //! or application-level backend selection is needed.
 
+#[cfg(not(target_os = "wasi"))]
 use openssl_sys::{SHA384_Init, SHA512_Final, SHA512_Init, SHA512_Update, SHA512_CTX};
 
 #[derive(Clone, Copy)]
@@ -13,6 +14,7 @@ pub enum Algorithm {
     Sha512,
 }
 
+#[cfg(not(target_os = "wasi"))]
 #[derive(Clone)]
 pub struct Context(SHA512_CTX);
 
@@ -27,6 +29,7 @@ impl AsRef<[u8]> for Output {
     }
 }
 
+#[cfg(not(target_os = "wasi"))]
 impl Context {
     pub fn new(algorithm: Algorithm) -> Self {
         // SHA*_Init initializes the words, counters and digest length, but
@@ -57,6 +60,48 @@ impl Context {
         let finalized = unsafe { SHA512_Final(bytes.as_mut_ptr(), &mut self.0) };
         assert_eq!(finalized, 1);
         Output { bytes, len }
+    }
+}
+
+// wasm32 WASI has no OpenSSL (a C build): the same state shape over RustCrypto.
+// Like OpenSSL's fixed context, a clone keeps the algorithm and buffered bytes.
+#[cfg(target_os = "wasi")]
+#[derive(Clone)]
+pub enum Context {
+    Sha384(sha2::Sha384),
+    Sha512(sha2::Sha512),
+}
+
+#[cfg(target_os = "wasi")]
+impl Context {
+    pub fn new(algorithm: Algorithm) -> Self {
+        use sha2::Digest;
+        match algorithm {
+            Algorithm::Sha384 => Self::Sha384(sha2::Sha384::new()),
+            Algorithm::Sha512 => Self::Sha512(sha2::Sha512::new()),
+        }
+    }
+
+    pub fn update(&mut self, bytes: &[u8]) {
+        use sha2::Digest;
+        match self {
+            Self::Sha384(state) => state.update(bytes),
+            Self::Sha512(state) => state.update(bytes),
+        }
+    }
+
+    pub fn finish(self) -> Output {
+        use sha2::Digest;
+        let mut bytes = [0; 64];
+        let digest = match self {
+            Self::Sha384(state) => state.finalize().to_vec(),
+            Self::Sha512(state) => state.finalize().to_vec(),
+        };
+        bytes[..digest.len()].copy_from_slice(&digest);
+        Output {
+            bytes,
+            len: digest.len(),
+        }
     }
 }
 

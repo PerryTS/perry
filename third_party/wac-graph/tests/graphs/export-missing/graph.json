@@ -1,0 +1,19 @@
+{
+    "packages": [
+        {
+            "name": "test:foo",
+            "path": "foo.wat"
+        }
+    ],
+    "nodes": [
+        {
+            "type": "instantiation",
+            "package": 0
+        },
+        {
+            "type": "alias",
+            "source": 0,
+            "export": "foo"
+        }
+    ]
+}

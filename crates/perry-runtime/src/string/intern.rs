@@ -121,26 +121,40 @@ impl AtomTable {
     /// its text. Rust-heap only: never allocates on the GC heap.
     fn insert(&mut self, hash: u64, atom: *const StringHeader) {
         if (self.len + 1) * 2 > self.slots.len() {
-            let cap = (self.slots.len() * 2).max(256);
-            let old = std::mem::replace(
-                &mut self.slots,
-                vec![
-                    InternEntry {
-                        hash: 0,
-                        string_ptr: 0,
-                    };
-                    cap
-                ],
-            );
-            for entry in old.into_iter().filter(|e| e.string_ptr != 0) {
-                self.place(entry);
-            }
+            self.resize((self.slots.len() * 2).max(256));
         }
         self.place(InternEntry {
             hash,
             string_ptr: atom as usize,
         });
         self.len += 1;
+    }
+
+    /// Room for `additional` more atoms without growing on the way.
+    fn reserve(&mut self, additional: usize) {
+        let cap = ((self.len + additional) * 2).next_power_of_two().max(256);
+        if cap > self.slots.len() {
+            self.resize(cap);
+        }
+    }
+
+    fn resize(&mut self, cap: usize) {
+        // A filled table, not a zeroed allocation: freed tables of earlier
+        // growth are reused already mapped (a zeroed allocation took fresh
+        // pages on every growth: +70 faults on fastify_inject).
+        let old = std::mem::replace(
+            &mut self.slots,
+            vec![
+                InternEntry {
+                    hash: 0,
+                    string_ptr: 0,
+                };
+                cap
+            ],
+        );
+        for entry in old.into_iter().filter(|e| e.string_ptr != 0) {
+            self.place(entry);
+        }
     }
 
     fn place(&mut self, entry: InternEntry) {
@@ -190,6 +204,13 @@ pub(crate) unsafe fn atom_for_key(
         .try_with(|t| (*t.get()).lookup_from(key as usize, bytes, hash))
         .ok()
         .flatten()
+}
+
+/// Size this agent's atom table for `count` static atoms at once: the static
+/// seed knows its count up front, while growing to it one doubling at a time
+/// rehashed and re-zeroed every intermediate table.
+pub(crate) fn reserve_static_atoms(count: usize) {
+    let _ = ATOMS.try_with(|t| unsafe { (*t.get()).reserve(count) });
 }
 
 /// Object model step 0: make `string` (an immutable image string, a static

@@ -241,6 +241,18 @@ pub fn claim_agent_loop_route() -> bool {
     loop_hooks::claim_route()
 }
 
+// A WASI guest has exactly one agent and no loop to wake from another thread:
+// the cross-agent wake entry points exist so `worker_threads` compiles, and do
+// nothing (a Worker cannot be spawned there).
+#[cfg(target_os = "wasi")]
+pub fn notify_agent_loop(_agent: crate::agent::AgentId) {}
+#[cfg(target_os = "wasi")]
+pub fn notify_agent_work(_agent: crate::agent::AgentId) {}
+#[cfg(target_os = "wasi")]
+pub fn claim_agent_loop_route() -> bool {
+    false
+}
+
 /// turnloop P4 (DESIGN §9, "`run_pending` becomes a bounded `turn`"): drive
 /// this agent's loop for at most `budget_ms`, dispatching whatever completes.
 ///
