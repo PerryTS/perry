@@ -30,7 +30,7 @@ fn compose(args: &[String]) -> Result<()> {
     let mut graph = CompositionGraph::new();
     let mut packages = Vec::new();
     for (name, path) in ["provider", "guest", "caller"].into_iter().zip(&args[1..4]) {
-        let package = Package::from_file(format!("test:{name}"), None, path, graph.types_mut())?;
+        let package = Package::from_file(&format!("test:{name}"), None, path, graph.types_mut())?;
         packages.push(graph.register_package(package)?);
     }
     let provider = graph.instantiate(packages[0]);
