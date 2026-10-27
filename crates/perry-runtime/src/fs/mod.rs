@@ -414,11 +414,11 @@ pub(crate) unsafe fn read_file_value_result(
     validate::validate_string_or_object_options("options", options_value);
     Ok(if let Some(encoding) = encoding {
         let str_ptr = read_file_string_with_options(path_value, options_value, encoding)
-            .map_err(|failure| failure.async_error_value(path_value))?;
+            .map_err(|failure| failure.async_error_value())?;
         f64::from_bits(crate::value::JSValue::string_ptr(str_ptr).bits())
     } else {
         let bytes = read_file_bytes_with_options(path_value, options_value)
-            .map_err(|failure| failure.async_error_value(path_value))?;
+            .map_err(|failure| failure.async_error_value())?;
         let buf = buffer_from_file_bytes(&bytes);
         f64::from_bits(crate::value::JSValue::pointer(buf as *const u8).bits())
     })

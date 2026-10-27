@@ -27,7 +27,7 @@ fn with_source<T>(
             return Err(FsReadFailure::open(enoent_os_error(), ""));
         };
         if let Some(bytes) = crate::embedded::lookup(&path) {
-            return embedded(bytes).map_err(FsReadFailure::read);
+            return embedded(bytes).map_err(|error| FsReadFailure::read_at(error, &path));
         }
         if crate::embedded::is_virtual_path(&path) {
             return Err(FsReadFailure::open(enoent_os_error(), &path));
@@ -39,7 +39,7 @@ fn with_source<T>(
             .ok()
             .filter(|m| m.is_file())
             .map_or(0, |m| m.len());
-        read(&mut file, hint).map_err(FsReadFailure::read)
+        read(&mut file, hint).map_err(|error| FsReadFailure::read_at(error, &path))
     }
 }
 
