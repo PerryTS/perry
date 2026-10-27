@@ -941,6 +941,9 @@ pub fn resolve_target_triple(name: &str) -> Option<String> {
         // Standalone WASI (#11375): only a compiler built with `target-wasi`
         // knows the name; a default build keeps resolving it to None.
         "wasi" if cfg!(feature = "target-wasi") => Some("wasm32-unknown-wasip2".to_string()),
+        // The WASI preview1 flavour: a core module for hosts without the
+        // component model. The runtime and the link use `wasm32-wasip1`.
+        "wasip1" if cfg!(feature = "target-wasi") => Some("wasm32-unknown-wasip1".to_string()),
         "tvos" => Some("aarch64-apple-tvos".to_string()),
         "tvos-simulator" => Some("arm64-apple-tvos17.0-simulator".to_string()),
         "harmonyos" => Some("aarch64-unknown-linux-ohos".to_string()),
@@ -985,6 +988,7 @@ pub const TARGET_NAMES: &[&str] = &[
     "watchos",
     "watchos-simulator",
     "wasi",
+    "wasip1",
     "tvos",
     "tvos-simulator",
     "harmonyos",
@@ -1091,7 +1095,7 @@ mod target_os_tests {
                 "ios" | "ios-simulator" => "ios",
                 "visionos" | "visionos-simulator" => "visionos",
                 "watchos" | "watchos-simulator" => "watchos",
-                "wasi" => "wasi",
+                "wasi" | "wasip1" => "wasi",
                 "tvos" | "tvos-simulator" => "tvos",
                 "harmonyos" | "harmonyos-simulator" => "ohos",
                 "android" | "android-x86_64" | "wearos" => "android",
@@ -1105,7 +1109,7 @@ mod target_os_tests {
             assert_eq!(target_os_of(name), Some(expected), "alias {name}");
             let Some(triple) = resolve_target_triple(name) else {
                 // WASI is deliberately available only in target-wasi builds.
-                assert_eq!(*name, "wasi");
+                assert!(matches!(*name, "wasi" | "wasip1"));
                 assert_eq!(target_os_of(name), Some(expected));
                 continue;
             };
@@ -1122,6 +1126,7 @@ mod target_os_tests {
             ("aarch64-pc-windows-msvc", "windows"),
             ("x86_64-unknown-linux-musl", "linux"),
             ("wasm32-unknown-wasip2", "wasi"),
+            ("wasm32-unknown-wasip1", "wasi"),
             ("aarch64-apple-ios", "ios"),
             ("arm64-apple-tvos17.0-simulator", "tvos"),
             ("arm64-apple-watchos10.0-simulator", "watchos"),

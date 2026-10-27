@@ -20,6 +20,8 @@ pub(crate) fn register_static_layouts() {
             };
             let got = if (*desc).variant == crate::codegen_abi::LAYOUT_VARIANT_NAMESPACE {
                 reserve_namespace_layout(desc)
+            } else if is_runtime_layout_word((*desc).layout_id) {
+                register_bound(desc, id, &[], None, Registration::Reserve)
             } else {
                 register_one(desc, id)
             };
@@ -40,6 +42,55 @@ pub(super) unsafe fn reserve_namespace_layout(desc: *const PerryLayoutDesc) -> u
     )
     .identity
     .0
+}
+
+/// Is `word` a layout of the runtime's own image (the ABI's native rows)?
+/// Generated code never names such a descriptor, so every object carrying
+/// one is born by a runtime funnel ([`layout_word_for_birth`]); startup only
+/// draws its id.
+#[inline]
+pub(super) fn is_runtime_layout_word(word: u32) -> bool {
+    word & crate::codegen_abi::LAYOUT_TAG != 0
+        && LayoutWord(word).row().0 < crate::codegen_abi::NATIVE_LAYOUT_ROWS
+}
+
+/// The registered word of `desc` for a birth in this agent. A runtime
+/// layout's shape is installed by its first birth here, under the id startup
+/// drew for it; every other registered layout was installed at startup.
+#[inline]
+pub(crate) unsafe fn layout_word_for_birth(desc: *const PerryLayoutDesc) -> Option<u32> {
+    let id = registered_layout_id(load_layout_id(desc))?;
+    if is_runtime_layout_word(id)
+        && super::super::shapes::shape_record_for_word(LayoutWord(id)).is_none()
+    {
+        install_runtime_layout(desc)?;
+    }
+    Some(id)
+}
+
+#[cold]
+#[inline(never)]
+unsafe fn install_runtime_layout(desc: *const PerryLayoutDesc) -> Option<()> {
+    let requested = layout_id_of_index(descriptor_index(desc)?)?;
+    let id = register_bound(desc, requested, &[], None, Registration::Install);
+    (id != 0 && super::super::shapes::shape_record_for_word(LayoutWord(id)).is_some()).then_some(())
+}
+
+#[cfg(any(test, debug_assertions))]
+thread_local! {
+    /// Runtime layouts whose shape this agent installed (debug and test
+    /// builds only): startup installs none.
+    pub(crate) static RUNTIME_LAYOUT_INSTALLS: std::cell::Cell<u32> =
+        const { std::cell::Cell::new(0) };
+}
+
+/// What [`register_bound`] does with a descriptor that passed validation.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Registration {
+    /// Draw the id only (a runtime layout at startup).
+    Reserve,
+    /// Draw the id if not drawn yet, then build and install the shape.
+    Install,
 }
 
 /// The installed layout of module namespace descriptor `desc`, installing
@@ -108,7 +159,7 @@ pub(crate) unsafe fn register_one_bound(
     requested: u32,
     bound: &[u64],
 ) -> u32 {
-    register_bound(desc, requested, bound, None)
+    register_bound(desc, requested, bound, None, Registration::Install)
 }
 
 /// An ordinary function's layout, with the actual prototype serial carried
@@ -119,7 +170,13 @@ pub(crate) unsafe fn register_function_layout(
     bound: &[u64],
     proto_id: u64,
 ) -> u32 {
-    register_bound(desc, requested, bound, Some(proto_id))
+    register_bound(
+        desc,
+        requested,
+        bound,
+        Some(proto_id),
+        Registration::Install,
+    )
 }
 
 pub(super) unsafe fn register_bound(
@@ -127,6 +184,7 @@ pub(super) unsafe fn register_bound(
     requested: u32,
     bound: &[u64],
     function_proto: Option<u64>,
+    mode: Registration,
 ) -> u32 {
     use std::sync::atomic::{AtomicU32, Ordering};
     let word = AtomicU32::from_ptr(std::ptr::addr_of!((*desc).shape_id).cast_mut());
@@ -236,6 +294,25 @@ pub(super) unsafe fn register_bound(
             Ok(_) => (*desc).layout_id,
             Err(_) => (*desc).layout_id,
         };
+    }
+    if mode == Registration::Reserve {
+        // The id the installation below would publish, drawn in section order.
+        let proposed = if let Some(id) = existing {
+            id
+        } else if proto_id == super::super::shapes::PROTO_ID_DEFAULT
+            || class_family
+            || d.variant == crate::codegen_abi::LAYOUT_VARIANT_FUNCTION_CONSTRUCTOR
+        {
+            requested
+        } else {
+            super::super::shapes::allocate_declared_layout_id(proto_id).0
+        };
+        let _ = word.compare_exchange(0, proposed, Ordering::AcqRel, Ordering::Acquire);
+        return (*desc).layout_id;
+    }
+    #[cfg(any(test, debug_assertions))]
+    if is_runtime_layout_word(d.layout_id) {
+        RUNTIME_LAYOUT_INSTALLS.with(|n| n.set(n.get() + 1));
     }
     let key_count = keys.len() as u32;
     let slot_count = d.slot_count;

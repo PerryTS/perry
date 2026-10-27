@@ -1,0 +1,1 @@
+{ "wasmtime_args": ["--dir", "."] }
