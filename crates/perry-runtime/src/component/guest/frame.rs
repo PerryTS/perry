@@ -267,7 +267,12 @@ pub unsafe extern "C" fn perry_component_frame_bootstrap(
     let error = result.err().map(|error| scope.root_nanbox_f64(error));
     let mut frame = Frame::allocate_guest_frame();
     if let Some(error) = error {
-        crate::array::js_array_set_f64(array(frame.values()), 0, error.get_nanbox_f64());
+        let values = scope.root_nanbox_f64(frame.values());
+        crate::array::js_array_set_f64(
+            array(values.get_nanbox_f64()),
+            0,
+            error.get_nanbox_f64(),
+        );
         frame.failed = true;
     }
     Box::into_raw(Box::new(frame)).cast()
