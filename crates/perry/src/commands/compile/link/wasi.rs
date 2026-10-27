@@ -218,6 +218,11 @@ pub(crate) fn link_wasi(
     if optimizer.is_some() && flavour == Flavour::P2 {
         args.insert(0, "-Wl,--skip-wit-component".to_string());
     }
+    // PERRY_EXTRA_LINK_ARGS: the native link's diagnostic escape hatch
+    // (e.g. `-Wl,--emit-relocs`), appended verbatim to the wasm-ld link.
+    if let Ok(extra) = std::env::var("PERRY_EXTRA_LINK_ARGS") {
+        args.extend(extra.split_whitespace().map(str::to_string));
+    }
     let clang = sdk_clang(&sdk);
     if verbose > 0 {
         eprintln!("  wasi link: {} {}", clang.display(), args.join(" "));
