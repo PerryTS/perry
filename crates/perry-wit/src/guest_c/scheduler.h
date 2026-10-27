@@ -201,6 +201,7 @@ static $W_callback_code_t perry_task_cancel(perry_task *t) {
         child->complete = true;
     }
     perry_task_reap(t);
+    perry_require(perry_component_frame_resource_scope_end(t->frame) == 0);
     $W_task_cancel();
     $W_context_set_0(NULL);
     perry_task_drop(t);

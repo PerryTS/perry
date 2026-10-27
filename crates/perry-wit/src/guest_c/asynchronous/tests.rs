@@ -132,3 +132,74 @@ fn canonical_child_ownership_survives_cancel_acknowledgement_and_return_races() 
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn async_export_commits_owned_results_and_retires_borrows_before_canonical_return() {
+    let source = "package test:return-resource; interface api { resource item; } world plugin { import api; use api.{item}; export give: async func() -> own<item>; }";
+    let dir = tempfile::tempdir().unwrap();
+    let files = custody_files(source);
+    let adapter = String::from_utf8(files["perry_adapter.c"].clone()).unwrap();
+    let return_function = adapter
+        .lines()
+        .find_map(|line| {
+            line.strip_suffix("(data.result);")
+                .filter(|name| name.ends_with("_return"))
+        })
+        .unwrap();
+    for (name, bytes) in files {
+        std::fs::write(dir.path().join(name), bytes).unwrap();
+    }
+    let harness =
+        include_str!("tests/export_resource.c").replace("$RETURN_FUNCTION", return_function);
+    let path = dir.path().join("export_resource.c");
+    std::fs::write(&path, harness).unwrap();
+    for negative in [false, true] {
+        if negative {
+            std::fs::write(
+                dir.path().join("perry_adapter.c"),
+                adapter.replace("perry_component_frame_resource_commit(data.frame);", ""),
+            )
+            .unwrap();
+        }
+        let exe = dir
+            .path()
+            .join(if negative { "negative" } else { "positive" });
+        let output = std::process::Command::new("clang")
+            .args([
+                "-std=c11",
+                "-Wall",
+                "-Werror",
+                "-Wno-unused-function",
+                "-ffunction-sections",
+                "-fdata-sections",
+                "-Wl,--gc-sections",
+                "-O1",
+            ])
+            .arg(&path)
+            .arg("-o")
+            .arg(&exe)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let output = std::process::Command::new(&exe).output().unwrap();
+        if negative {
+            assert!(
+                !output.status.success(),
+                "missing ownership commit must fail"
+            );
+            assert!(String::from_utf8_lossy(&output.stderr).contains("committed"));
+        } else {
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(String::from_utf8_lossy(&output.stdout).contains("PASS: async export commits"));
+        }
+    }
+}
