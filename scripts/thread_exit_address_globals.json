@@ -3940,6 +3940,14 @@
    ],
    "verdict": "no_heap_address",
    "why": "Linker-retention sentinel only: family is SENTINEL_FAMILY; proto is LAYOUT_PROTO_OBJECT (null), and keys/index/methods are null. Every pointer field remains null for process lifetime. bounds() observes only its image address; first_birth() rejects SENTINEL_FAMILY before identity reservation or registration. Neither the sentinel nor its zero identity cell can acquire a thread-arena address, so thread exit leaves no dangling pointer."
+  },
+  {
+   "file": "crates/perry-runtime/src/gc/roots/shadow_stack.rs",
+   "names": [
+    "PERRY_SHADOW_STATE"
+   ],
+   "verdict": "main_thread_only",
+   "why": "The shadow-stack state of a single-threaded wasm module: the static is declared only under cfg(all(target_family = \"wasm\", not(target_feature = \"atomics\"))), where the module cannot start a second thread, so its one writer is the main thread and thread exit is process exit. Every other target keeps the per-thread SHADOW thread_local."
   }
  ]
 }

@@ -97,11 +97,24 @@ fn proven_set(pf: &ProgramFacts) -> std::collections::BTreeSet<String> {
 /// `C`'s unit reads through its override token (DECISIONS 59); what it
 /// costs shows in `lost`.
 fn assert_parity(mods: &[(&str, &str)]) {
+    assert_parity_but(mods, &[]);
+}
+
+/// `assert_parity` where per unit is known to prove exactly `gaps` less
+/// than the whole program (each named where it is used): it fails when
+/// more is lost, and when a gap closes.
+fn assert_parity_but(mods: &[(&str, &str)], gaps: &[&str]) {
     let (pf, wp) = (units_of(mods), whole_of(mods));
     let lost: Vec<_> = proven_set(&wp)
         .difference(&proven_set(&pf))
+        .filter(|s| !gaps.contains(&s.as_str()))
         .cloned()
         .collect();
+    let closed: Vec<_> = gaps
+        .iter()
+        .filter(|g| proven_set(&pf).contains(**g) || !proven_set(&wp).contains(**g))
+        .collect();
+    assert!(closed.is_empty(), "named gaps no longer lost: {closed:?}");
     let broken: Vec<_> = pf
         .broken
         .iter()

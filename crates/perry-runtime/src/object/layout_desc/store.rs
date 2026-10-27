@@ -148,7 +148,7 @@ pub(super) unsafe fn desc_position_by_bytes(d: &PerryLayoutDesc, bytes: &[u8]) -
 }
 
 /// [`desc_position_by_bytes`] for `bytes` whose hash is `hash`.
-#[inline]
+#[inline(always)]
 pub(crate) unsafe fn desc_position_hashed(
     d: &PerryLayoutDesc,
     bytes: &[u8],
@@ -219,7 +219,12 @@ pub(crate) unsafe fn family_own_key_hashed(
     {
         return None;
     }
-    let d = &*family_for_word(word)?;
+    // The live receiver carries its own word. Registration established the
+    // record's family membership; an evaluation relink copies that fact only
+    // after checking the family's keys and slots. Consume that proof with the
+    // checked span decoder instead of reclassifying a generic held word.
+    let record = super::super::shapes::shape_record_of_receiver(word)?;
+    let d = evaluation_layout_desc(record.family_desc_index_plus_one())?;
     desc_own_key(d, bytes, hash)
 }
 

@@ -111,7 +111,11 @@ fn a_write_into_an_unknown_value_elsewhere_keeps_the_runs_per_key() {
         .iter()
         .find(|t| t.kind == "litclass" && t.fields.iter().any(|f| f.key == "a" && !f.data_field))
         .unwrap_or_else(|| panic!("the target's layout\n{}", pf.dump_text()));
-    assert!(ns.hard.is_none() && ns.escape.is_none(), "{}", pf.dump_text());
+    assert!(
+        ns.hard.is_none() && ns.escape.is_none(),
+        "{}",
+        pf.dump_text()
+    );
 }
 
 #[test]
@@ -198,7 +202,12 @@ fn per_unit_a_write_into_an_unknown_value_elsewhere_is_the_same_two() {
         let w = facts(&src);
         assert_eq!(per_key(&w), exact, "whole program\n{}", w.dump_text());
         assert_eq!(target_named(&w), exact, "whole program\n{}", w.dump_text());
-        assert_eq!(target_named_keys(&w), exact, "whole program\n{}", w.dump_text());
+        assert_eq!(
+            target_named_keys(&w),
+            exact,
+            "whole program\n{}",
+            w.dump_text()
+        );
         if exact {
             assert!(target_named_keys(&u), "per unit\n{}", u.dump_text());
         } else {
@@ -207,7 +216,10 @@ fn per_unit_a_write_into_an_unknown_value_elsewhere_is_the_same_two() {
             // solve's runs per key stay, and no layout of the target is
             // claimed.
             let published = |t: &crate::TemplateFacts| {
-                t.kind == "litclass" && t.escape.as_deref().is_some_and(|e| e.starts_with("published"))
+                t.kind == "litclass"
+                    && t.escape
+                        .as_deref()
+                        .is_some_and(|e| e.starts_with("published"))
             };
             assert!(
                 u.templates.iter().filter(|t| published(t)).count() >= 2,

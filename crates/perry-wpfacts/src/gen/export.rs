@@ -1451,6 +1451,12 @@ impl<'a> Gen<'a> {
             }
         }
         let n = self.m.field_any(t);
+        // Other units' stores under a computed key are published into the
+        // element cell: the named keys read them as well.
+        if self.m.is_elem_array(t) {
+            let na = self.m.named_any(t);
+            self.m.edge(n, na);
+        }
         // DECISIONS 184: a container's elements are primitives besides
         // what was stored (`builtins::tok_load`): its cell says so, as a
         // reader's own container of the same kind reads them.
@@ -1793,15 +1799,24 @@ impl<'a> Gen<'a> {
                         }
                         continue;
                     }
+                    // Its readers find an unknown value: what it holds leaves
+                    // beyond any contract (DECISIONS 203, 212), unless it
+                    // holds only functions they call through their
+                    // contracts (`note_field_fns`).
                     self.sunk_fields.insert((tm, a));
                     self.field_layouts.remove(&(tm, a));
                     self.field_values.remove(&(tm, a));
                     self.field_tas.remove(&(tm, a));
                     self.field_prims.remove(&(tm, a));
+                    let ru = self.m.reason(UNDESCRIBED);
                     for &t in &ts {
                         if let Some(&n) = self.m.fields.get(&(t, a)) {
                             if self.sunk_field_toks.insert((t, a)) {
-                                self.m.sink_node(n, r);
+                                let rf = match self.field_fns.contains_key(&(t, a)) {
+                                    true => r,
+                                    false => ru,
+                                };
+                                self.m.sink_node(n, rf);
                                 changed = true;
                             }
                         }

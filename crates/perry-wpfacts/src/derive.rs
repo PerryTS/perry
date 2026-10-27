@@ -922,10 +922,14 @@ fn judge(
     // Birth-site tokens of one template are one receiver layout.
     let mut seen_r: FxHashSet<String> = FxHashSet::default();
     receivers.retain(|r| seen_r.insert(r.clone()));
-    if toks.is_empty() && prim == 0 {
+    // A closed marker names no receiver: its callers' values sit beside it.
+    // With nothing beside it no receiver flows, and a proof names the
+    // receivers it is over (the value-call rule, `callee_set`).
+    let none = toks.iter().all(|&t| m.closed_marker(t));
+    if none && prim == 0 {
         verdict.get_or_insert(Verdict::No("dead site (no receiver flows)".into()));
     }
-    if toks.is_empty() && prim != 0 {
+    if none && prim != 0 {
         verdict.get_or_insert(Verdict::No("primitive receiver".into()));
     }
     let mut targets = FxHashMap::default();

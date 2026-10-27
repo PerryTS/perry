@@ -255,7 +255,7 @@ pub(crate) use intern::test_evict_interned;
 pub(crate) use intern::IMAGE_ATOM_FLAGS;
 pub(crate) use intern::INTERN_MAX_BYTE_LEN;
 pub(crate) use intern::{
-    atom_colour, atom_for_key, atom_lookup, seed_static_atom, set_atom_colour,
+    atom_colour, atom_for_key, atom_lookup, reserve_static_atoms, seed_static_atom, set_atom_colour,
 };
 #[cfg(test)]
 pub(crate) use intern::{test_clear_intern_table, test_init_string_bytes, test_intern_slot_ptr};

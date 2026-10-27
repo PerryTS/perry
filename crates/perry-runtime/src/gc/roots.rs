@@ -70,8 +70,8 @@ pub(crate) use shadow_layout::{ShadowEntry, SLOT_ACTIVE, SLOT_PTR_MASK};
 #[allow(unused_imports)]
 pub use shadow_layout::{
     ShadowStackState, SHADOW_ENTRY_META_OFFSET, SHADOW_ENTRY_SIZE, SHADOW_SLOT_ACTIVE_BIT,
-    SHADOW_STACK_GROW_RESERVE, SHADOW_STACK_HEADER_SLOTS, SHADOW_STATE_FRAME_TOP_OFFSET,
-    SHADOW_STATE_LEN_OFFSET, SHADOW_STATE_PTR_OFFSET,
+    SHADOW_STACK_GROW_RESERVE, SHADOW_STACK_HEADER_SLOTS, SHADOW_STATE_CAP_OFFSET,
+    SHADOW_STATE_FRAME_TOP_OFFSET, SHADOW_STATE_LEN_OFFSET, SHADOW_STATE_PTR_OFFSET,
 };
 #[cfg(any(test, not(perry_native_stack_maps)))]
 pub(crate) use shadow_stack::bound_slot_meta;

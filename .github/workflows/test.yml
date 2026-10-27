@@ -5219,6 +5219,14 @@ jobs:
       run: cargo test --locked --profile perry-dev -p perry-codegen --lib --features target-wasi wasm_eh -- --test-threads=1
     - name: Build perry with the WASI target
       run: cargo build --locked --profile perry-dev -p perry --features target-wasi
+    - name: Link-argument and flavour unit tests (feature-enabled)
+      shell: bash
+      run: |
+        set -euo pipefail
+        cargo test --locked --profile perry-dev -p perry --features target-wasi --bin perry commands::compile::link::wasi::tests 2>&1 | tee "$RUNNER_TEMP/wasi-link-tests.log"
+        # A filter that matches nothing also exits 0: require the tests ran.
+        ran="$(sed -n 's/^running \([0-9][0-9]*\) tests\{0,1\}$/\1/p' "$RUNNER_TEMP/wasi-link-tests.log" | head -n 1)"
+        test "${ran:-0}" -ge 5 || { echo "::error::expected at least 5 link::wasi tests, ran ${ran:-0}"; exit 1; }
     - name: wasm32 IR matches the runtime ABI
       run: ./scripts/wasi_ir_check.sh target/perry-dev/perry
     - name: Install the WASI toolchain
@@ -5239,10 +5247,8 @@ jobs:
         python scripts/wasi_imports_check.py --self-test
         archive="$(python scripts/wasi_build_runtime.py wasm32-wasip1 | sed -n 's/^WASI archive: //p' | tail -n 1)"
         python scripts/wasi_imports_check.py "$archive"
-        # The image classifier checks, built for wasip1. Running them needs a
-        # linked program, which comes with the wasip1 compiler target.
-        CARGO_TARGET_DIR=target/wasi-image-selftest-p1 python scripts/wasi_build_runtime.py wasm32-wasip1 --image-selftest | tee "$RUNNER_TEMP/selftest-p1.log"
-        python scripts/wasi_imports_check.py "$(sed -n 's/^WASI archive: //p' "$RUNNER_TEMP/selftest-p1.log" | tail -n 1)"
+    - name: Image classifier checks as a wasip1 program
+      run: python scripts/wasi_image_selftest.py target/perry-dev/perry --flavour p1
     - name: WASI smoke and complete issue 11375 acceptance
       shell: bash
       run: |
@@ -5254,6 +5260,13 @@ jobs:
       run: |
         compiler=target/perry-dev/perry
         python scripts/wasi_run.py "$compiler" --suite gap --output target/wasi-validation/gap --keep-intermediates
+    - name: wasip1 smoke, acceptance and gap probes (core module, preview 1 imports only)
+      shell: bash
+      run: |
+        compiler=target/perry-dev/perry
+        python scripts/wasi_run.py "$compiler" --flavour p1 --suite smoke --output target/wasi-validation/p1-smoke --keep-intermediates
+        python scripts/wasi_run.py "$compiler" --flavour p1 --suite acceptance --output target/wasi-validation/p1-acceptance --keep-intermediates
+        python scripts/wasi_run.py "$compiler" --flavour p1 --suite gap --output target/wasi-validation/p1-gap --keep-intermediates
     - name: Typed components, resources, moving GC and cross-language composition
       run: ./scripts/component_check.sh
     - name: Retain WASI and component execution evidence

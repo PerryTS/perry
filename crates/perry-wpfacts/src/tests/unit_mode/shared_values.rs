@@ -9,7 +9,10 @@ pub(super) fn a_member_function_returning_its_own_layout_is_built_once() {
     let b = "import { make } from './a'; const x = make(); const f = x.k; const y = f(); y.k = 1;";
     let pf = bounded(60, move || units_of(&[("a", a), ("b", b)]))
         .expect("D16: the per-unit fixpoint did not end in 60 s");
-    assert_eq!(pf.rounds, 2, "rounds {:?}", pf.round_work);
+    // ABM3 (static rule, CWN 10-27): `b`'s store into ⊤ (`y.k = 1`) under
+    // `k` writes `k` of every builtin prototype; `a`'s lookups of `k` that
+    // end at `Object.prototype` read it, so `a` solves once more: three.
+    assert_eq!(pf.rounds, 3, "rounds {:?}", pf.round_work);
 }
 
 /// DECISIONS 113: every unit storing under a computed global key writes ⊤
@@ -304,7 +307,12 @@ pub(super) fn a_primitive_method_box_in_another_units_storage_keeps_its_elements
     // program.
     let a = "export class P { x: number; constructor(x: number) { this.x = x; } get(): number { return this.x; } } export class Vector { storage: any[]; n: number; constructor() { this.storage = new Array(2); this.n = 0; } append(e: any) { if (this.n >= this.storage.length) { const s = this.storage.slice(); this.storage = new Array(this.n * 2); for (let i = 0; i < this.n; i++) this.storage[i] = s[i]; } this.storage[this.n] = e; this.n = this.n + 1; } at(i: number): any { return this.storage[i]; } }";
     let m = "import { P, Vector } from './a'; class J { input: string; v: Vector; constructor(s: string) { this.input = s; this.v = new Vector(); } run() { for (let i = 0; i < 4; i++) { this.v.append(new P(i)); this.v.append(this.input.substring(i, i + 1)); } return this.v.at(0).get(); } } function main() { const j = new J(process.argv.length > 9 ? 'abcdef' : 'xyzuvw'); console.log(j.run()); } main(); main();";
-    assert_parity(&[("a", a), ("m", m)]);
+    // Gap: `m` reads `this.v.at(0)` as ⊤ (the element `at` returns is
+    // `m`'s own value in `a`'s storage), so no unit publishes `P` as the
+    // receiver of `get`: per unit `this.x` there is E0 over `P` (the
+    // guarded body), the whole program T0. It was "proven" before only by
+    // a proof over no receiver (`tests/proof_receivers.rs`).
+    assert_parity_but(&[("a", a), ("m", m)], &["a.ts@91.x"]);
 }
 
 #[test]
@@ -512,10 +520,13 @@ pub(super) fn an_escaped_value_beside_top_is_that_top() {
     // Rewritten for #13294 (decision 151: every unit replays the shared
     // objects' writes): (939, 2563, 8115) -> (964, 2612, 8212); for
     // DECISIONS 210 (the published `f`'s prototype stays its own: two
-    // entries fewer at every `n`) -> the pin below.
+    // entries fewer at every `n`) -> (962, 2610, 8210); for the builtin
+    // namespaces' prototype chain and every array's named-key node
+    // (`Model::named_any`, beside its elements, which a store under a
+    // computed key fills) -> the pin below (the same n² growth).
     assert_eq!(
         (e8, e16, e32),
-        (962, 2610, 8210),
+        (1068, 2948, 9396),
         "entries {e8} {e16} {e32}"
     );
 }
@@ -804,4 +815,37 @@ pub(super) fn a_published_literal_field_may_hold_another_units_layout() {
             assert!(!s.top, ".{k} reads ⊤\n{}", pf.dump_text());
         }
     }
+}
+
+/// Per unit, the boundary's store standing in for other units' stores into
+/// what this unit gives them is no write of the intrinsics: each unit
+/// publishes its own stores into ⊤, and every unit replays them under their
+/// key. A class key read on a string stays absent until some unit stores
+/// into ⊤ under it.
+#[test]
+pub(super) fn the_boundary_store_writes_no_intrinsic_member() {
+    let b = "export function poke(t: any) { t.inner = function () { return 1; }; }";
+    let m = |w: &str| {
+        format!(
+            "import {{ poke }} from './b';
+            class A {{ a = 1; }}
+            class M {{ m(o: any) {{ return o.a; }} }}
+            class N {{ inner: any; constructor() {{ this.inner = new M(); }} }}
+            declare const k: number;
+            {w}
+            const v: any = k > 1 ? new N() : \"text\";
+            const i = v.inner;
+            if (i) console.log(i.m(new A()));"
+        )
+    };
+    let proven_m = |pf: &ProgramFacts| {
+        let s: Vec<_> = pf.sites.iter().filter(|s| s.key == "m").collect();
+        !s.is_empty()
+            && s.iter()
+                .all(|s| !s.top && matches!(s.verdict, Verdict::T0Mono | Verdict::T0Set))
+    };
+    let pf = units_of(&[("b", b), ("m", &m(""))]);
+    assert!(proven_m(&pf), "{}", pf.dump_text());
+    let pf = units_of(&[("b", b), ("m", &m("poke((globalThis as any).u);"))]);
+    assert!(!proven_m(&pf), "{}", pf.dump_text());
 }

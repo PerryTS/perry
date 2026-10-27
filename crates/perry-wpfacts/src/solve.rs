@@ -457,7 +457,12 @@ impl Model {
             let r = self.keyed_reach_of(t, a);
             self.add_tok(n, r);
         } else {
-            let any = self.field_any(t);
+            // An array's named non-index key is its own key: its elements
+            // (`field_any`) are read under an index only (`named_any`).
+            let any = match self.is_elem_array(t) && !numeric_key(&self.atoms[a as usize]) {
+                true => self.named_any(t),
+                false => self.field_any(t),
+            };
             self.edge(any, n);
         }
         let all = self.all_fields(t);
@@ -501,7 +506,7 @@ impl Model {
             TokKind::Obj(tm, _) => matches!(self.tmpls[*tm as usize].kind, TmplKind::BObj { .. }),
             _ => false,
         };
-        let fa_d = self.field_any(d);
+        let fa_d = self.any_key_node(d);
         if opaque {
             self.add_top(fa_d, |_| "spread of an unmodeled object".into());
             self.add_prim(fa_d, prim::ALL);
@@ -536,6 +541,45 @@ impl Model {
         let all = self.all_fields(t);
         self.edge(n, all);
         // Arrays and primitive boxes hold primitives at unknown indices.
+        n
+    }
+
+    /// An Array of the program: its elements (`field_any`: what its
+    /// construction, `push` and the like put at an index, and every store
+    /// under a computed key) are no value of a named non-index key, which
+    /// reads `named_any` instead. A marker's fields are its reach markers.
+    pub fn is_elem_array(&self, t: Tok) -> bool {
+        matches!(self.toks[t as usize], TokKind::Obj(tm, _)
+            if matches!(self.tmpls[tm as usize].kind, TmplKind::Arr { .. }))
+            && !self.is_marker(t)
+    }
+
+    /// The values of `t` under a key no store named: for an Array the ones
+    /// its named non-index keys read (`named_any`, flowing on into its
+    /// elements: the key may be an index too), else `field_any`. Every
+    /// write under an unknown key goes here: a computed-key store, unknown
+    /// code's writes (escape, hard), a spread, a computed-key accessor.
+    pub fn any_key_node(&mut self, t: Tok) -> NodeId {
+        match self.is_elem_array(t) {
+            true => self.named_any(t),
+            false => self.field_any(t),
+        }
+    }
+
+    /// An Array's values under a computed key that may be no index
+    /// (`is_elem_array`): its named non-index keys read them, and they are
+    /// among its elements as well.
+    pub fn named_any(&mut self, t: Tok) -> NodeId {
+        if let Some(&n) = self.named_any.get(&t) {
+            return n;
+        }
+        let n = self.node_named("namedany", || format!("namedany({t})"));
+        self.nodes[n as usize].obs = self.obs_toks.contains(&t);
+        self.nodes[n as usize].frame = self.fam_home(t);
+        self.named_any.insert(t, n);
+        self.rel(|| format!("namedany {n} {t}"));
+        let any = self.field_any(t);
+        self.edge(n, any);
         n
     }
 
@@ -581,38 +625,6 @@ impl Model {
             self.add_tok(n, s);
         }
         n
-    }
-
-    /// Which builtin prototype `ObjectProto` stands for on the chain of
-    /// `t` when `t`'s kind puts it there (`proto_node` seeds it): a
-    /// function's is `Function.prototype` (with the async/generator
-    /// function prototypes above it), an array's `Array.prototype`, a site
-    /// builtin object's its own builtin's, anything else's
-    /// `Object.prototype`. `None`: the chain's prototypes are values
-    /// (`new f()`, `extends <value>`, `Object.create(p)`, whose seed is no
-    /// prototype it has) or a class's.
-    pub fn seed_proto(&self, t: Tok) -> Option<SeedProto> {
-        match &self.toks[t as usize] {
-            TokKind::Obj(tm, _) => match &self.tmpls[*tm as usize].kind {
-                TmplKind::Class { .. } | TmplKind::FnInst { .. } | TmplKind::ObjCreate { .. } => None,
-                _ if self.virt_protos.contains_key(&t) => None,
-                TmplKind::Arr { .. } => Some(SeedProto::Array),
-                TmplKind::BObj { .. } => Some(SeedProto::Builtin),
-                TmplKind::Lit { .. } => Some(SeedProto::Object),
-            },
-            TokKind::Proto(tm) => {
-                let tm = &self.tmpls[*tm as usize];
-                (tm.parent.is_none() && tm.native_parent.is_none() && tm.parent_value.is_none())
-                    .then_some(SeedProto::Object)
-            }
-            TokKind::NativeProto(_) => Some(SeedProto::Object),
-            TokKind::Func(_, _) | TokKind::Bound(_) | TokKind::BuiltinFn => Some(SeedProto::Function),
-            TokKind::ClassObj(tm) => {
-                let tm = &self.tmpls[*tm as usize];
-                (tm.parent.is_none() && tm.parent_value.is_none()).then_some(SeedProto::Function)
-            }
-            _ => None,
-        }
     }
 
     /// The node holding the prototype objects of `t`.
@@ -670,7 +682,10 @@ impl Model {
                 },
             },
             TokKind::NativeProto(_) => self.add_tok(n, objproto),
-            TokKind::Func(_, _) | TokKind::Bound(_) | TokKind::BuiltinFn => {
+            // A builtin namespace's prototype is `Function.prototype` (a
+            // constructor's) or `Object.prototype` (`Math`, `JSON`, the
+            // global object's chain): `ObjectProto` stands for both.
+            TokKind::Func(_, _) | TokKind::Bound(_) | TokKind::BuiltinFn | TokKind::Builtin(_) => {
                 self.add_tok(n, objproto)
             }
             TokKind::ClassObj(tm) => match self.tmpls[tm as usize].parent {
@@ -1540,6 +1555,12 @@ impl Model {
                 reason.map_or(-1, |r| r as i64)
             ),
             Cons::Hard { kind, reason } => format!("hard {n} {} {reason}", kind.code()),
+            Cons::DeleteKey { key, reason } => {
+                format!(
+                    "deletekey {n} {} {reason}",
+                    esc_key(&self.atoms[*key as usize])
+                )
+            }
             Cons::AddsKeys => format!("addskeys {n}"),
             Cons::DefineKey { key, data, reason } => {
                 format!(
@@ -1673,4 +1694,11 @@ impl Model {
     pub fn fn_tokens(&self, n: NodeId) -> Vec<Tok> {
         self.fns_of(n)
     }
+}
+
+/// May key `name` be ToString of a Number (an index, `1.5`, `-1`, `1e+21`,
+/// `NaN`, `Infinity`)? A store under a Number key lands there. A superset
+/// is safe: such a key reads the elements as well.
+pub(crate) fn numeric_key(name: &str) -> bool {
+    name.parse::<f64>().is_ok() || matches!(name, "NaN" | "Infinity" | "-Infinity")
 }

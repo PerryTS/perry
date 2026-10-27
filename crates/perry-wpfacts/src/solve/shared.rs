@@ -55,6 +55,7 @@ impl Model {
             SharedWrite::Store(s, k) => {
                 let t = self.shared_tok(s);
                 let key = match k {
+                    Some(k) if k == NUM_KEY => self.elem_key(),
                     Some(k) => Key::Named(self.atom(k)),
                     None => Key::Any,
                 };

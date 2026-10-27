@@ -92,3 +92,40 @@ fn object_prototype_method_value_runs_on_its_receiver() {
     assert_eq!(d_escape("const t: any = {}; t[k](d);"), None);
     assert!(d_escape("const t: any = {}; t[k]('y', () => d);").is_some());
 }
+
+/// The family a chain's `ObjectProto` stands for answers with that
+/// family's members (`members`) and the written-key rule beside them: a
+/// store into ⊤ under `constructor`, or under any key for a computed read,
+/// may have replaced the member, before or after the read in the solve.
+/// (A literal's and a class instance's `constructor` is their class's own,
+/// on its prototype: the chain stops there.)
+#[test]
+fn a_store_into_top_reaches_the_seeded_chains() {
+    let f = "function (o: any) { o.y = 'x'; }";
+    let named = format!("t.constructor = {f};");
+    let computed = format!("declare const kk: string; t[kk] = {f};");
+    let elsewhere = format!("t.unrelated = {f};");
+    let cases = |recv: &str, read: &str| {
+        let r = format!("const o: any = {recv}; {read}");
+        let mut v = Vec::new();
+        for (w, by_name) in [(&named, true), (&computed, true), (&elsewhere, false)] {
+            v.push((format!("{TOP}{w} {r}"), by_name));
+            v.push((format!("{TOP}{r} {w}"), by_name));
+        }
+        v
+    };
+    for read in ["o.constructor(d);", "const C = o.constructor; C(d);"] {
+        assert_eq!(d_escape(&format!("{TOP}const o: any = [1]; {read}")), None);
+        for (body, want) in cases("[1]", read) {
+            assert_eq!(d_escape(&body).is_some(), want, "{body}");
+        }
+    }
+    for recv in ["{ a: 1 }", "new (class P {})()"] {
+        assert_eq!(d_escape(&format!("{TOP}const o: any = {recv}; o[k](d);")), None);
+        for (body, _) in cases(recv, "o[k](d);") {
+            assert!(d_escape(&body).is_some(), "{body}");
+        }
+    }
+}
+
+const TOP: &str = "declare const unknown: any; const t: any = unknown.reach(0);";
