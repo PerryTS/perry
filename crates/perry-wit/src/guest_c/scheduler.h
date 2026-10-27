@@ -77,8 +77,7 @@ static int32_t perry_task_resume(perry_task *t, void (*callback)(void *), void *
     return status;
 }
 static perry_task *perry_task_new(bool asynchronous) {
-    void *init = perry_component_frame_new();
-    perry_initialize(init);
+    void *init = perry_initialize();
     bool failed = perry_component_frame_failed(init);
     perry_component_frame_drop(init);
     perry_require(!failed);

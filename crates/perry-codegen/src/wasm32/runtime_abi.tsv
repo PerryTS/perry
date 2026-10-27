@@ -5112,6 +5112,7 @@ perry_component_frame_array_get	i32u	ptr,i32u,i32u
 perry_component_frame_array_len	i32u	ptr,i32u
 perry_component_frame_array_set	void	ptr,i32u,i32u,i32u
 perry_component_frame_bool	i32u	ptr,i32s
+perry_component_frame_bootstrap	ptr	ptr,ptr
 perry_component_frame_bytes	i32u	ptr,ptr,usize
 perry_component_frame_bytes_copy	void	ptr,i32u,ptr,usize
 perry_component_frame_bytes_len	usize	ptr,i32u

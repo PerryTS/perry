@@ -1,6 +1,8 @@
 //! Owned traced arrays retain canonical values across suspension and interleaving.
 //! Every potentially throwing operation catches before returning to C.
 use super::super::*;
+#[cfg(test)]
+mod bootstrap_tests;
 mod promise;
 mod suspended;
 mod task;
@@ -240,6 +242,35 @@ unsafe fn span<'a>(pointer: *const u8, len: usize) -> &'a [u8] {
 #[no_mangle]
 pub extern "C" fn perry_component_frame_new() -> *mut c_void {
     Box::into_raw(Box::new(Frame::allocate_guest_frame())).cast()
+}
+/// Initialize the image before allocating any managed adapter state. Module
+/// initialization binds the image's static layout prefix; an earlier frame
+/// allocation would instead bind the runtime-only prefix permanently.
+///
+/// # Safety
+/// A non-null initializer must be a C ABI callback taking `*mut c_void`;
+/// Perry exceptions are caught here. `data` must remain valid until the
+/// callback returns. No callback or data is retained.
+#[no_mangle]
+pub unsafe extern "C" fn perry_component_frame_bootstrap(
+    initializer: *const c_void,
+    data: *mut c_void,
+) -> *mut c_void {
+    if initializer.is_null() {
+        return std::ptr::null_mut();
+    }
+    let initializer: unsafe extern "C" fn(*mut c_void) = std::mem::transmute(initializer);
+    let result = crate::exception::catch_js_throw(|| initializer(data));
+    // Trap setup and the initializer precede every managed frame allocation.
+    // Root a thrown value before constructing the frame that will own it.
+    let scope = RuntimeHandleScope::new();
+    let error = result.err().map(|error| scope.root_nanbox_f64(error));
+    let mut frame = Frame::allocate_guest_frame();
+    if let Some(error) = error {
+        crate::array::js_array_set_f64(array(frame.values()), 0, error.get_nanbox_f64());
+        frame.failed = true;
+    }
+    Box::into_raw(Box::new(frame)).cast()
 }
 #[no_mangle]
 pub unsafe extern "C" fn perry_component_frame_drop(pointer: *mut c_void) {
@@ -663,7 +694,7 @@ const fn adapter_entry(code: *const ()) -> AdapterEntry {
 }
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
-static KEEP_ADAPTER_ENTRIES: [AdapterEntry; 47] = [
+static KEEP_ADAPTER_ENTRIES: [AdapterEntry; 48] = [
     adapter_entry(super::resources::payload::js_component_resource_create as *const ()),
     adapter_entry(super::resources::payload::js_component_resource_value as *const ()),
     adapter_entry(super::resources::payload::perry_component_frame_resource_destroy as *const ()),
@@ -671,6 +702,7 @@ static KEEP_ADAPTER_ENTRIES: [AdapterEntry; 47] = [
     adapter_entry(super::resources::perry_component_frame_resource_lower as *const ()),
     adapter_entry(super::resources::perry_component_frame_resource_commit as *const ()),
     adapter_entry(perry_component_frame_new as *const ()),
+    adapter_entry(perry_component_frame_bootstrap as *const ()),
     adapter_entry(perry_component_frame_drop as *const ()),
     adapter_entry(perry_component_frame_failed as *const ()),
     adapter_entry(perry_component_frame_initialize as *const ()),
