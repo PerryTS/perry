@@ -433,13 +433,24 @@ mod tests {
                 "null"
             );
             let ir = module.to_ir();
+            let literal = |bits: u64| {
+                if crate::target_layout::target_is_ilp32(triple) {
+                    format!(
+                        "i32 {}, i32 {}",
+                        bits as u32 as i32,
+                        (bits >> 32) as u32 as i32
+                    )
+                } else {
+                    format!("i64 {}", bits as i64)
+                }
+            };
             assert!(
-                ir.contains(&format!("i64 {}", crate::nanbox::TAG_UNDEFINED as i64)),
+                ir.contains(&literal(crate::nanbox::TAG_UNDEFINED)),
                 "{triple}: {ir}"
             );
             let expected = perry_abi::canonical_key_attribute_word(0, 1, 0, None);
             assert!(
-                ir.contains(&format!("i64 {}", expected as i64)),
+                ir.contains(&literal(expected)),
                 "symbol attributes carry no string Bloom bit: {ir}"
             );
             let context = inkwell::context::Context::create();
