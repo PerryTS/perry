@@ -43,6 +43,9 @@ async function main(): Promise<void> {
   try { fs.readFileSync(null as any, orderOptions as any); }
   catch (error: any) { console.log('getter-order', error.message); }
   fs.writeFileSync(file, 'abcdef');
+  let getterReads = 0;
+  const getterOptions = { get encoding() { getterReads++; return 'utf8'; } };
+  console.log('getter-result', fs.readFileSync(file, getterOptions), getterReads);
   const fd = fs.openSync(file, 'r');
   const one = Buffer.alloc(1);
   fs.readSync(fd, one, 0, 1, null);
