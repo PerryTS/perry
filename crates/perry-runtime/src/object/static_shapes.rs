@@ -607,9 +607,34 @@ fn install_image_seeds() {
         return;
     }
     // SAFETY: the entry's layout image names the program's seed table.
-    for seed in unsafe { (*table).seeds() } {
+    let seeds = unsafe { (*table).seeds() };
+    #[cfg(all(feature = "wasm-image-selftest", target_family = "wasm"))]
+    let before = SEED_BY_NAMES_MINTS.with(|count| count.get());
+    for seed in seeds {
         install_image_seed(seed);
     }
+    #[cfg(all(feature = "wasm-image-selftest", target_family = "wasm"))]
+    {
+        let by_names = SEED_BY_NAMES_MINTS.with(|count| count.get() - before);
+        let unimageable = seeds
+            .iter()
+            .filter(|seed| seed.keys.is_null() || seed.list.is_null())
+            .count();
+        assert_eq!(
+            by_names as usize, unimageable,
+            "an imageable seed fell back to a by-names mint"
+        );
+        eprintln!(
+            "wasm static seeds: {} seeds, {} image, {by_names} by-names mints",
+            seeds.len(),
+            seeds.len() - unimageable
+        );
+    }
+}
+
+#[cfg(all(feature = "wasm-image-selftest", target_family = "wasm"))]
+thread_local! {
+    static SEED_BY_NAMES_MINTS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
 /// One seed: link its image key list and publish the record, or, without an
@@ -895,6 +920,8 @@ pub(crate) fn seed_plain_by_names(
     if let Some(word) = unsafe { shapes::published_static_request(request, count) } {
         return census_layout_request("seed", request, word);
     }
+    #[cfg(all(feature = "wasm-image-selftest", target_family = "wasm"))]
+    SEED_BY_NAMES_MINTS.with(|count| count.set(count.get() + 1));
     let names = crate::object::packed_key_names(unsafe {
         std::slice::from_raw_parts(packed, packed_len as usize)
     });
@@ -931,6 +958,8 @@ pub(crate) fn seed_plain_constfn_by_names(
     if let Some(word) = unsafe { shapes::published_static_request(request, count) } {
         return census_layout_request("seed-constfn", request, word);
     }
+    #[cfg(all(feature = "wasm-image-selftest", target_family = "wasm"))]
+    SEED_BY_NAMES_MINTS.with(|count| count.set(count.get() + 1));
     let names = crate::object::packed_key_names(unsafe {
         std::slice::from_raw_parts(packed, packed_len as usize)
     });

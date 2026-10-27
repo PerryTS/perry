@@ -62,17 +62,37 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="perry-image-selftest-") as temporary:
         work = Path(temporary)
         source = work / "selftest.ts"
-        source.write_text('console.log("image selftest program ran");\n')
+        (work / "peer.ts").write_text(
+            'export function peer() { return { wrt2cSharedKey: 19, peerOnly: "peer" }; }\n')
+        source.write_text(
+            'import { peer } from "./peer";\n'
+            'import { collect } from "perry/gc";\n'
+            'const local = { wrt2cSharedKey: 23, localOnly: "local" };\n'
+            'const remote = peer();\n'
+            'for (let i = 0; i < 4; i++) collect();\n'
+            'console.log(local.wrt2cSharedKey + remote.wrt2cSharedKey);\n'
+            'console.log(Object.keys(local).join(","), Object.keys(remote).join(","));\n'
+            'console.log("image selftest program ran");\n')
         wasm = work / "selftest.wasm"
+        (work / "ir").mkdir()
         compile_env = dict(os.environ, PERRY_NO_AUTO_OPTIMIZE="1", PERRY_NO_CACHE="1",
-                           PERRY_RUNTIME_DIR=str(archive_dir))
+                           PERRY_RUNTIME_DIR=str(archive_dir), PERRY_SAVE_LL=str(work / "ir"))
         compiled = subprocess.run([str(perry), "compile", str(source), "--target", perry_target, "-o", str(wasm)],
                                   cwd=work, env=compile_env, capture_output=True, text=True)
         if compiled.returncode or not wasm.is_file():
             sys.exit(f"compile failed ({compiled.returncode}):\n{compiled.stdout}{compiled.stderr}")
         if args.flavour == "p1" and wasi_imports_check.check(wasm, {wasi_imports_check.PREVIEW1}):
             sys.exit("the linked wasip1 module imports more than wasi_snapshot_preview1")
-        executed = subprocess.run([args.wasmtime, "run", *wasmtime_flags, str(wasm)], cwd=work, capture_output=True, text=True)
+        definitions = sum(
+            '@perry_atom_77727432635368617265644b6579 = weak_odr' in ir.read_text()
+            for ir in (work / "ir").rglob("*.ll"))
+        if definitions < 2:
+            sys.exit(f"coalescing gate needs two defining LLVM modules, found {definitions}")
+        executed = subprocess.run(
+            [args.wasmtime, "run", *wasmtime_flags,
+             "--env", "PERRY_GC_FORCE_EVACUATE=1", "--env", "PERRY_GC_VERIFY_EVACUATION=1",
+             "--env", "PERRY_GC_DIAG=1", "--env", "PERRY_GC_LOG=1", str(wasm)],
+            cwd=work, capture_output=True, text=True)
     sys.stdout.write(executed.stdout)
     sys.stderr.write(executed.stderr)
     if executed.returncode:
@@ -84,7 +104,19 @@ def main() -> int:
     passed, section_bytes = int(summary.group(1)), int(summary.group(4))
     if passed < MINIMUM_CHECKS or section_bytes == 0:
         sys.exit(f"selftest too weak: {passed} checks, {section_bytes}-byte perry_strings section")
-    print(f"wasm image selftest passed: {passed} checks, {section_bytes}-byte perry_strings section")
+    copying = re.search(r"copying_minors=(\d+)", executed.stderr)
+    if not copying or int(copying.group(1)) == 0 or executed.stderr.count("[gc-log] kind=full") < 4:
+        sys.exit("the moving/full-collection subject was not live")
+    seeds = re.search(r"wasm static seeds: (\d+) seeds, (\d+) image, (\d+) by-names mints", executed.stderr)
+    if not seeds or int(seeds.group(1)) < 2 or seeds.group(1) != seeds.group(2) or int(seeds.group(3)) != 0:
+        sys.exit("the linked fixture must install at least two image seeds and mint none by names")
+    atom = re.search(r"wrt2cSharedKey atom=(0x[0-9a-f]+) string=(0x[0-9a-f]+) intern=(0x[0-9a-f]+) copies=1", executed.stderr)
+    if not atom or atom.group(2) != atom.group(3):
+        sys.exit("two-module atom coalescing / intern identity gate did not run")
+    if "42\nwrt2cSharedKey,localOnly wrt2cSharedKey,peerOnly\nimage selftest program ran\n" != executed.stdout:
+        sys.exit("moving collections changed the fixture's values or keys")
+    print(f"wasm image selftest passed: {passed} checks, {section_bytes}-byte perry_strings section; "
+          f"{definitions} defining modules, {seeds.group(1)} image seeds, zero by-names mints")
     return 0
 
 

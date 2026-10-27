@@ -690,10 +690,9 @@ pub(crate) fn set_colours(layouts: &ProgramLayouts) {
 /// Whether this compile emits layout descriptors at all (executables only:
 /// atoms point at image strings, which only executables carry).
 /// `PERRY_LAYOUT_DESCS=0` disables emission and with it every family.
-pub(crate) fn layouts_enabled(output_type: &str, target_triple: &str) -> bool {
+pub(crate) fn layouts_enabled(output_type: &str, _target_triple: &str) -> bool {
     output_type != "dylib"
         && output_type != "staticlib"
-        && !target_triple.contains("wasm")
         && std::env::var("PERRY_LAYOUT_DESCS").as_deref() != Ok("0")
 }
 

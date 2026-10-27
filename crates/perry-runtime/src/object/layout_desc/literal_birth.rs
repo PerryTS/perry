@@ -7,7 +7,7 @@ use super::*;
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_litlay")]
 #[cfg_attr(target_os = "windows", link_section = ".perrylit$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
+    not(any(target_vendor = "apple", target_os = "windows")),
     link_section = "perry_literal_layouts"
 )]
 static mut SENTINEL: PerryLayoutDesc = PerryLayoutDesc {
@@ -62,7 +62,7 @@ fn bounds() -> (usize, usize) {
             std::ptr::addr_of!(END) as usize,
         )
     }
-    #[cfg(not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")))]
+    #[cfg(not(any(target_vendor = "apple", target_os = "windows")))]
     {
         unsafe extern "C" {
             static __start_perry_literal_layouts: u8;
@@ -72,10 +72,6 @@ fn bounds() -> (usize, usize) {
             std::ptr::addr_of!(__start_perry_literal_layouts) as usize,
             std::ptr::addr_of!(__stop_perry_literal_layouts) as usize,
         )
-    }
-    #[cfg(target_family = "wasm")]
-    {
-        (0, 0)
     }
 }
 
@@ -101,7 +97,16 @@ pub(super) fn descriptor_at(index: u32) -> Option<(*const PerryLayoutDesc, bool)
     }
     let literal = bounds();
     let offset = offset - bytes;
-    if offset >= literal.1.saturating_sub(literal.0) {
+    let literal_bytes = literal.1.saturating_sub(literal.0);
+    if offset >= literal_bytes {
+        // Runtime inventory follows both program spans. Program births only
+        // subtract linker bounds; they never walk or count the inventory.
+        #[cfg(target_family = "wasm")]
+        return inventory::iter::<crate::wasm_image::Layout>
+            .into_iter()
+            .nth((offset - literal_bytes) / std::mem::size_of::<PerryLayoutDesc>())
+            .map(|item| (item.0.cast_const(), false));
+        #[cfg(not(target_family = "wasm"))]
         return None;
     }
     Some(((literal.0 + offset) as *const PerryLayoutDesc, true))
@@ -133,8 +138,38 @@ pub(super) fn literal_index(desc: *const PerryLayoutDesc) -> Option<u32> {
     if address < start || address >= end || (address - start) % size != 0 {
         return None;
     }
-    let index = count(layout_bounds()) + ((address - start) / size) as u32;
+    let eager = count(layout_bounds());
+    let index = eager + ((address - start) / size) as u32;
     (index < LAYOUT_INDEX_LIMIT).then_some(index)
+}
+
+/// Runtime descriptors retain their existing inventory; they follow both
+/// linker-owned program spans in the same checked index space.
+#[cfg(target_family = "wasm")]
+pub(super) fn runtime_index(desc: *const PerryLayoutDesc) -> Option<u32> {
+    let position = inventory::iter::<crate::wasm_image::Layout>
+        .into_iter()
+        .position(|item| std::ptr::eq(item.0, desc))?;
+    let index = count(layout_bounds()) + count(bounds()) + u32::try_from(position).ok()?;
+    (index < LAYOUT_INDEX_LIMIT).then_some(index)
+}
+
+#[cfg(all(feature = "wasm-image-selftest", target_family = "wasm"))]
+pub(super) fn check_image_indices() {
+    let eager = records::<PerryLayoutDesc>(layout_bounds()).map(|desc| (desc, false));
+    let literal = records::<PerryLayoutDesc>(bounds()).map(|desc| (desc, true));
+    let runtime = inventory::iter::<crate::wasm_image::Layout>
+        .into_iter()
+        .map(|item| (item.0, false));
+    let mut checked = 0;
+    for (desc, expected_literal) in eager.chain(literal).chain(runtime) {
+        let index = descriptor_index(desc).expect("image descriptor has an index");
+        let (decoded, is_literal) = descriptor_at(index).expect("image index decodes");
+        assert!(std::ptr::eq(desc, decoded), "descriptor index round trip");
+        assert_eq!(is_literal, expected_literal, "section owns the family kind");
+        checked += 1;
+    }
+    eprintln!("wasm layout bounds: {checked} descriptor index round trips passed");
 }
 
 /// Check the current agent's authoritative record, even when another agent

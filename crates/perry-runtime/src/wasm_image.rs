@@ -6,8 +6,10 @@
 //! These are immutable image addresses, never pointers into the managed heap.
 //!
 //! This covers the runtime's own images, which live outside the `perry_strings`
-//! section. Program string literals are inside it, and `value::addr_class`
-//! admits them by the linker-synthesized `__start_/__stop_perry_strings` bounds.
+//! section. Program string literals, atoms, descriptors and realm cells use
+//! ordinary linear-memory sections and linker-synthesized `__start_/__stop_`
+//! bounds. This inventory enumerates runtime records only; program records
+//! never need constructors or a runtime address registry.
 
 #[cfg(target_family = "wasm")]
 mod records {
