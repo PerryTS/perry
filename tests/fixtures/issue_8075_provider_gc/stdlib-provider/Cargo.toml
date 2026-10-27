@@ -29,3 +29,10 @@ panic = "abort"
 strip = false
 
 [workspace]
+
+# Cargo patches are scoped to workspace roots, even when the dependencies
+# inherit Perry's workspace versions. Keep this isolated provider on the same
+# qualified Turnloop sources as the runtime provider and the seeded lockfile.
+[patch.crates-io]
+turnloop = { path = "../../../../third_party/turnloop/turnloop" }
+turnloop-http = { path = "../../../../third_party/turnloop/turnloop-http" }
