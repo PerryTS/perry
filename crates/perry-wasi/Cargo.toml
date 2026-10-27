@@ -37,7 +37,7 @@ rustix = { version = "1.1", features = ["time", "fs", "event", "net"] }
 rustix-linux-procfs = { version = "0.1.1" }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_System_Performance", "Wdk_Storage_FileSystem", "Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Ioctl", "Win32_Networking_WinSock"] }
+windows-sys = { version = "0.61", features = ["Win32_System_Performance", "Wdk_Storage_FileSystem", "Wdk_Foundation", "Win32_Security", "Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Ioctl", "Win32_Networking_WinSock"] }
 winx = { version = "0.36.0" }
 
 [dev-dependencies]
