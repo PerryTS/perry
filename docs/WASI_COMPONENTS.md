@@ -457,7 +457,11 @@ was absent from the supported runtime-only WASI link, producing an unresolved
 runtime, with stdlib compatibility re-exports and the existing extern context
 provider calls retained. Updated import/export guests assert public ALS isolation
 across overlapping calls, native completions, nested scopes and collecting
-getters; their fresh source-matched execution qualification is in progress.
+getters. Linux execution now passes with source-matched ordinary/instrumented
+archives and verified moving GC, with four native before/after checks retaining
+existing behavior. The [experimental resource and ALS receipt](validation/wasi-experimental-resources-als-20261028.json)
+records that newer qualification; it does not qualify all host platforms,
+distribution packages or the shared-provider native regression.
 The earlier export receipt does not qualify that guest API, resource cancellation, other host
 platforms or distribution packages. Public `--guest-c` async output remains
 guarded while those adapters are completed.
@@ -513,8 +517,8 @@ records native runtime checks, actual moving GC, ordinary import/export
 regressions and a negative probe that removes cancelled-job ownership. This
 adds guest-to-guest canonical cancellation; dropping a public native
 `DriverCall` still retires its Store. The resource extension is described below.
-Guest future/stream values, final WASI ALS execution qualification and public
-async CLI generation remain separate unfinished work.
+Guest future/stream values and public async CLI generation remain separate
+unfinished work.
 
 Guest frames now retain committed canonical borrow leases independently of
 Promise settlement and task cancellation. Each frame roots the wrapper and
@@ -565,9 +569,9 @@ carry 14 owners; the other two carry text or a payload-free variant. Moving GC
 copies 14,943 objects. See the [compound resource receipt](validation/wasi-async-compound-resources-20261027.json)
 for exact sources, retained failures and artifact identities. The experimental
 generator now accepts resource interfaces, and fixture generation uses that
-entry point directly. Guest future/stream values and public async CLI generation
-remain guarded; current-source qualification of the entry-point and ALS changes
-is in progress.
+entry point directly. Those entry-point and ALS changes also pass the later
+source-matched qualification linked above. Guest future/stream values and public
+async CLI generation remain guarded.
 
 The internal generic-reader checks additionally cover canonical layouts from
 `wit-parser::SizeAlign`, shared metadata for repeated aliases, a reusable
