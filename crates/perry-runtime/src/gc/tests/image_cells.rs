@@ -39,7 +39,7 @@ const fn fixture() -> RealmFixture {
         closure_gc: GcHeader {
             obj_type: GC_TYPE_CLOSURE,
             gc_flags: IMAGE_FLAGS,
-            _reserved: 0,
+            _reserved: GC_LAYOUT_POINTER_FREE,
             size: CLOSURE_CELL,
         },
         closure: ClosureHeader {
@@ -52,7 +52,7 @@ const fn fixture() -> RealmFixture {
         object_gc: GcHeader {
             obj_type: PARKED,
             gc_flags: IMAGE_FLAGS,
-            _reserved: 0,
+            _reserved: OBJ_FLAG_PLAIN_ORDINARY,
             size: OBJECT_CELL,
         },
         object: ObjectHeader {
@@ -98,6 +98,8 @@ fn done_slot() -> *mut u64 {
 fn reset_image() {
     unsafe {
         let f = image();
+        (*f).object_gc._reserved = OBJ_FLAG_PLAIN_ORDINARY;
+        (*f).closure_gc._reserved = GC_LAYOUT_POINTER_FREE;
         (*f).object.parent_class_id = ITERATOR_RESULT;
         (*f).object.meta = std::ptr::null_mut();
         (*f).slots = [POINTER_TAG | closure_user() as u64, crate::value::TAG_FALSE];
@@ -457,18 +459,19 @@ fn knockout_image_root_marking_loses_the_child_in_a_budgeted_minor() {
     lost_without(sabotage::ROOTS, Collector::BudgetedMinor);
 }
 
-/// The image object is the only carrier of its layout here: without the full
-/// trace's visit, its shape's keys die and every lookup misses.
+/// An image object is the only carrier of its transitioned record: without
+/// the full trace visit that dynamic record retires and lookup misses.
 #[test]
-fn knockout_image_root_visits_lose_the_image_shape_keys() {
+fn knockout_image_root_visits_lose_a_transitioned_shape() {
     let _image = ImageFixture::take();
     let _quiet = quiet();
+    reprototype_image_object();
     let _knock = sabotage::Guard::arm(sabotage::ROOTS);
     collect(Collector::FullMarkSweep);
     assert_ne!(
         get("value") & TAG_MASK,
         POINTER_TAG,
-        "the lookup should miss once the keys are gone"
+        "the lookup should miss once the dynamic record retires"
     );
 }
 
@@ -775,5 +778,108 @@ fn knockout_forwarding_leaves_words_naming_the_image() {
             .iter()
             .any(|&(at, _)| at > copy && at < copy + OBJECT_CELL as usize),
         "the object copy's `value` slot must still name the image: {leftovers:x?}"
+    );
+}
+
+#[test]
+fn image_birth_facts_match_heap_births_and_integrity_changes_pass_the_audit() {
+    for change in [
+        crate::object::js_object_freeze,
+        crate::object::js_object_seal,
+        crate::object::js_object_prevent_extensions,
+    ] {
+        let _image = ImageFixture::take();
+        let _quiet = quiet();
+        unsafe {
+            let heap = crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(
+                crate::object::runtime_layouts::ITERATOR_RESULT
+            ));
+            let heap_header = crate::gc::header_from_trusted_user_ptr(heap.cast());
+            assert_eq!((*heap_header)._reserved, (*object_header())._reserved);
+            assert_eq!((*heap).meta, (*(object_user() as *const ObjectHeader)).meta);
+            let closure = crate::closure::js_closure_alloc(
+                &crate::value::addr_class::realm::perry_realm_fixture_info,
+                0,
+            );
+            let heap_header = crate::gc::header_from_trusted_user_ptr(closure.cast());
+            assert_eq!((*heap_header)._reserved, (*image()).closure_gc._reserved);
+            assert_eq!((*closure).props, (*image()).closure.props);
+            let object = object_user() as *mut ObjectHeader;
+            assert!(crate::object::shapes::store_kind::store_facts_agree(object));
+            change(f64::from_bits(POINTER_TAG | object_user() as u64));
+            crate::object::shapes::store_kind::check_store_facts(object);
+            assert_eq!(call_value(), 42.0);
+        }
+    }
+}
+
+#[test]
+fn knockout_missing_image_birth_facts_fails_the_store_audit() {
+    let _image = ImageFixture::take();
+    let _quiet = quiet();
+    unsafe {
+        (*object_header())._reserved &= !OBJ_FLAG_PLAIN_ORDINARY;
+        let object = object_user() as *mut ObjectHeader;
+        assert!(!crate::object::shapes::store_kind::store_facts_agree(
+            object
+        ));
+        let result = std::panic::catch_unwind(|| {
+            crate::object::shapes::store_kind::check_store_facts(object);
+        });
+        (*object_header())._reserved |= OBJ_FLAG_PLAIN_ORDINARY;
+        assert!(
+            result.is_err(),
+            "DEBUG audit must reject the missing birth mark"
+        );
+    }
+}
+
+#[test]
+fn runtime_layout_image_keys_need_no_full_trace_visit() {
+    let _image = ImageFixture::take();
+    let _quiet = quiet();
+    let record = crate::object::shapes::shape_record_for_word(LayoutWord(ITERATOR_RESULT)).unwrap();
+    assert!(record.is_static_record());
+    assert!(crate::value::addr_class::realm::is_image_object(
+        record.keys() as usize
+    ));
+    assert!(!crate::gc::image_cells::full_trace_roots().contains(&object_header()));
+    // Knock out the shape-selection visit too: the descriptor's image keys
+    // must survive without the object acting as a carrier.
+    let _knock = sabotage::Guard::arm(sabotage::DYNAMIC);
+    for _ in 0..3 {
+        collect(Collector::FullMarkSweep);
+        assert_eq!(get("done"), crate::value::TAG_FALSE);
+        assert_eq!(call_value(), 42.0);
+    }
+}
+
+#[test]
+fn evacuation_shares_lists_and_copies_realm_objects_and_functions() {
+    let _image = ImageFixture::take();
+    let _quiet = quiet();
+    let record = crate::object::shapes::shape_record_for_word(LayoutWord(ITERATOR_RESULT)).unwrap();
+    let keys = record.keys() as usize;
+    assert!(crate::value::addr_class::realm::is_image_object(keys));
+    set("done", POINTER_TAG | keys as u64);
+    let evacuation = crate::gc::image_evacuate::evacuate_realm_image();
+    assert!(evacuation.cell_count() >= 2);
+    assert_eq!(
+        evacuation.forward(keys),
+        None,
+        "a shared list never forwards"
+    );
+    let copy = evacuation.forward(object_user()).expect("object copied");
+    let function = evacuation.forward(closure_user()).expect("function copied");
+    unsafe {
+        let slots = (copy as *const u8)
+            .add(std::mem::size_of::<ObjectHeader>())
+            .cast::<u64>();
+        assert_eq!(*slots, POINTER_TAG | function as u64);
+        assert_eq!(*slots.add(1), POINTER_TAG | keys as u64);
+    }
+    assert!(
+        crate::gc::image_evacuate::words_pointing_into_image(&evacuation).is_empty(),
+        "every remaining image pointer must name a shared list cell"
     );
 }

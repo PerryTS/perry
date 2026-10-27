@@ -306,14 +306,25 @@ pub struct PerryLayoutDesc {
     pub methods: *const methods::PerryFamilyMethods,
     pub shape_id: u32,
     pub _layout_pad: u32,
+    /// Immutable descriptor-owned canonical key-list cell; null for bindings
+    /// whose keys are local to an evaluation, and on the wasm fallback arm.
+    pub image_keys: *mut crate::array::ArrayHeader,
 }
 
 const _: () = assert!(
+    std::mem::offset_of!(PerryLayoutDesc, image_keys)
+        == if cfg!(target_pointer_width = "64") {
+            80
+        } else {
+            64
+        }
+);
+const _: () = assert!(
     std::mem::size_of::<PerryLayoutDesc>()
         == if cfg!(target_pointer_width = "32") {
-            64
+            72
         } else {
-            80
+            88
         }
 );
 const _: () = assert!(
@@ -424,6 +435,7 @@ section_sentinel!(
     LAYOUT_SECTION_SENTINEL,
     PerryLayoutDesc,
     PerryLayoutDesc {
+        image_keys: std::ptr::null_mut(),
         shape_id: 0,
         _layout_pad: 0,
         family: SENTINEL_FAMILY,
@@ -677,7 +689,6 @@ pub(crate) fn seed_static_atoms() {
 mod registration;
 use registration::binding_symbol_keys;
 use registration::declared_kind;
-use registration::layout_key_word;
 pub(crate) use registration::layout_word_for_birth;
 
 /// Runtime layouts this agent installed (test builds).
@@ -685,6 +696,7 @@ pub(crate) use registration::layout_word_for_birth;
 pub(crate) fn registration_installs() -> u32 {
     registration::RUNTIME_LAYOUT_INSTALLS.with(|n| n.get())
 }
+pub(crate) use registration::layout_key_word;
 pub(crate) use registration::register_function_layout;
 pub(crate) use registration::register_namespace_layout;
 pub(crate) use registration::register_one;
@@ -1793,7 +1805,7 @@ fn image_atoms() -> impl Iterator<Item = *mut StaticAtom> {
         records::<StaticAtom>(atom_bounds())
     }
 }
-fn image_layouts() -> impl Iterator<Item = *mut PerryLayoutDesc> {
+pub(super) fn image_layouts() -> impl Iterator<Item = *mut PerryLayoutDesc> {
     #[cfg(target_family = "wasm")]
     {
         records::<PerryLayoutDesc>(layout_bounds()).chain(
@@ -1809,6 +1821,12 @@ fn image_layouts() -> impl Iterator<Item = *mut PerryLayoutDesc> {
 }
 
 fn descriptor_index(desc: *const PerryLayoutDesc) -> Option<u32> {
+    // WASI owns descriptors through inventory constructors, not native
+    // section bounds. Keep the existing lazy first-birth registrar there too.
+    #[cfg(target_family = "wasm")]
+    if let Some(index) = image_layouts().position(|item| std::ptr::eq(item, desc)) {
+        return u32::try_from(index).ok();
+    }
     let (start, end) = layout_bounds();
     let at = desc as usize;
     let size = std::mem::size_of::<PerryLayoutDesc>();

@@ -117,7 +117,7 @@ pub(super) unsafe fn binding_symbol_keys(d: &PerryLayoutDesc) -> usize {
 /// The key word of key `key` of a descriptor: a string's, a symbol atom's
 /// symbol, or for the `j`-th module-local symbol key, `bound[j]` (`j` counts
 /// those keys before it, `next` the running count).
-pub(super) unsafe fn layout_key_word(key: &PerryLayoutKey, bound: &[u64], next: &mut usize) -> u64 {
+pub(crate) unsafe fn layout_key_word(key: &PerryLayoutKey, bound: &[u64], next: &mut usize) -> u64 {
     if (*key.atom).kind == crate::codegen_abi::ATOM_KIND_BINDING_SYMBOL {
         let word = bound[*next];
         *next += 1;
@@ -282,6 +282,15 @@ pub(super) unsafe fn register_bound(
     let _no_gc = crate::gc::GcSuppressScope::new();
     let list = if key_count == 0 {
         std::ptr::null_mut()
+    } else if super::super::image_keys::prepare(keys, d.image_keys) {
+        super::super::canonical_keys::static_seed::link_image_list(
+            &super::super::canonical_keys::SharedLayout::shape_cache_entry(),
+            keys,
+            d.image_keys,
+        )
+        .expect("descriptor image list agrees with its keys and attributes")
+        .view()
+        .arr()
     } else if let Some(canonical) = (!function)
         .then(|| {
             super::super::canonical_keys::from_static_layout(

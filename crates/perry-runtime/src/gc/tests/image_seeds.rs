@@ -8,7 +8,6 @@
 //! synchronous full collection, and a seed the image cannot serve (no list,
 //! or a list that does not hold the atoms' strings) is minted by names.
 #![cfg(target_pointer_width = "64")]
-use super::support::*;
 use crate::array::ArrayHeader;
 use crate::codegen_abi::{LayoutWord, PerryStaticLayoutRequestV1, PerryStaticSeedV1};
 use crate::gc::*;
@@ -30,8 +29,8 @@ const fn list_cell() -> ListCell {
     ListCell {
         gc: GcHeader {
             obj_type: GC_TYPE_ARRAY,
-            gc_flags: GC_FLAG_MARKED | GC_FLAG_PINNED | GC_FLAG_SHAPE_SHARED,
-            _reserved: 0,
+            gc_flags: crate::value::addr_class::realm::IMAGE_CELL_FLAGS | GC_FLAG_SHAPE_SHARED,
+            _reserved: GC_LAYOUT_SIDE_MASK | GC_LAYOUT_ALL_POINTERS,
             size: LIST_CELL,
         },
         arr: ArrayHeader {

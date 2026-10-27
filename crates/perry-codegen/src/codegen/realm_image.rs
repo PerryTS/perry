@@ -147,8 +147,9 @@ pub(crate) fn emit_closure_cell(llmod: &mut LlModule, name: &str, info_symbol: &
     let size = GC_HEADER_SIZE + crate::target_layout::closure_header_size_bytes(&triple);
     llmod.add_raw_global(format!(
         "@{name} = internal global {{ i8, i8, i16, i32, i32, i32, ptr, ptr }} \
-         {{ i8 {GC_TYPE_CLOSURE}, i8 {IMAGE_CELL_FLAGS}, i16 0, i32 {size}, i32 0, i32 {}, ptr @{info_symbol}, ptr null }}, \
+         {{ i8 {GC_TYPE_CLOSURE}, i8 {IMAGE_CELL_FLAGS}, i16 {}, i32 {size}, i32 0, i32 {}, ptr @{info_symbol}, ptr null }}, \
          section \"{}\", align 8",
+        perry_abi::GC_LAYOUT_POINTER_FREE,
         shape as i32,
         section(&triple)
     ));
@@ -161,6 +162,7 @@ pub(crate) fn emit_object_cell(
     llmod: &mut LlModule,
     name: &str,
     layout_word: u32,
+    reserved: u16,
     slots: &[Slot],
 ) -> Vec<TagFixup> {
     let triple = llmod.target_triple.clone();
@@ -190,7 +192,7 @@ pub(crate) fn emit_object_cell(
     }
     llmod.add_raw_global(format!(
         "@{name} = internal global {{ i8, i8, i16, i32, i32, i32, {pad_ty}ptr, {{ {} }} }} \
-         {{ i8 {GC_TYPE_OBJECT}, i8 {IMAGE_CELL_FLAGS}, i16 0, i32 {size}, i32 0, i32 {}, {pad_init}ptr null, {{ {} }} {{ {} }} }}, \
+         {{ i8 {GC_TYPE_OBJECT}, i8 {IMAGE_CELL_FLAGS}, i16 {reserved}, i32 {size}, i32 0, i32 {}, {pad_init}ptr null, {{ {} }} {{ {} }} }}, \
          section \"{}\", align 8",
         types.join(", "),
         layout_word as i32,
@@ -212,12 +214,81 @@ pub(crate) fn emit_key_list_cell(
     name: &str,
     records: &[String],
 ) -> Vec<TagFixup> {
+    emit_array_cell(
+        llmod,
+        name,
+        &records
+            .iter()
+            .cloned()
+            .map(Slot::ImageString)
+            .collect::<Vec<_>>(),
+        records.len(),
+        perry_abi::GC_LAYOUT_SIDE_MASK | perry_abi::GC_LAYOUT_ALL_POINTERS,
+    )
+}
+
+/// A descriptor's string keys, attributes and storage permutation as image
+/// cells. Symbol bindings cannot be constants of a program descriptor.
+pub(crate) fn emit_layout_key_list(
+    llmod: &mut LlModule,
+    name: &str,
+    keys: &[(String, u64, u8, u32)],
+) -> String {
+    if keys.is_empty() {
+        return "null".into();
+    }
+    let mut slots = Vec::new();
+    for (atom, _, _, _) in keys {
+        let Some(hex) = atom.strip_prefix("perry_atom_") else {
+            return "null".into();
+        };
+        if hex.is_empty() || hex.len() % 2 != 0 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return "null".into();
+        }
+        slots.push(Slot::ImageString(format!("perry_image_literal_0_{hex}")));
+    }
+    let mapped = keys.iter().enumerate().any(|(i, key)| key.3 as usize != i);
+    let attributes = mapped || keys.iter().any(|key| key.2 != 0);
+    let mut reserved = perry_abi::GC_LAYOUT_SIDE_MASK | perry_abi::GC_LAYOUT_ALL_POINTERS;
+    if attributes {
+        let attrs_name = format!("{name}_attrs");
+        let mut previous = 0;
+        let mut words = Vec::new();
+        for (_, hash, entry, slot) in keys {
+            previous = perry_abi::canonical_key_attribute_word(
+                previous,
+                *entry,
+                1u16 << (*hash >> 60),
+                mapped.then_some(*slot),
+            );
+            words.push(Slot::Bits(previous));
+        }
+        emit_array_cell(
+            llmod,
+            &attrs_name,
+            &words,
+            words.len(),
+            perry_abi::GC_LAYOUT_POINTER_FREE,
+        );
+        slots.insert(0, Slot::Cell(attrs_name));
+        reserved |= 0x100; // GC_ARRAY_KEY_ATTRS, existing front-reserve ABI.
+    }
+    // Apple slots are tagged on the descriptor's first registration, alongside
+    // runtime-owned cells. Literal seeds keep their existing unit constructor.
+    emit_array_cell(llmod, name, &slots, keys.len(), reserved);
+    format!("getelementptr (i8, ptr @{name}, i64 {GC_HEADER_SIZE})")
+}
+
+fn emit_array_cell(
+    llmod: &mut LlModule,
+    name: &str,
+    slots: &[Slot],
+    count: usize,
+    reserved: u16,
+) -> Vec<TagFixup> {
     let triple = llmod.target_triple.clone();
-    let size = GC_HEADER_SIZE + ARRAY_HEADER_SIZE + 8 * records.len() as u64;
-    let ilp32 = crate::target_layout::target_is_ilp32(&triple);
-    // ILP32 keeps the element kind words at the same offsets with a pad word
-    // after `named`.
-    let (pad_ty, pad_init) = if ilp32 {
+    let size = GC_HEADER_SIZE + ARRAY_HEADER_SIZE + 8 * slots.len() as u64;
+    let (pad_ty, pad_init) = if crate::target_layout::target_is_ilp32(&triple) {
         ("i32, ", "i32 0, ")
     } else {
         ("", "")
@@ -225,8 +296,8 @@ pub(crate) fn emit_key_list_cell(
     let mut fixups = Vec::new();
     let mut types = Vec::new();
     let mut inits = Vec::new();
-    for (index, record) in records.iter().enumerate() {
-        let (ty, init, tag_at_startup) = slot_init(&triple, &Slot::ImageString(record.clone()));
+    for (index, slot) in slots.iter().enumerate() {
+        let (ty, init, tag_at_startup) = slot_init(&triple, slot);
         types.push(ty);
         inits.push(format!("{ty} {init}"));
         if let Some(tag) = tag_at_startup {
@@ -237,15 +308,11 @@ pub(crate) fn emit_key_list_cell(
             });
         }
     }
-    let count = records.len();
     llmod.add_raw_global(format!(
         "@{name} = internal global {{ i8, i8, i16, i32, i32, i32, ptr, {pad_ty}i32, i32, {{ {} }} }} \
-         {{ i8 {GC_TYPE_ARRAY}, i8 {KEY_LIST_FLAGS}, i16 0, i32 {size}, i32 {count}, i32 {count}, ptr null, {pad_init}i32 0, i32 0, {{ {} }} {{ {} }} }}, \
+         {{ i8 {GC_TYPE_ARRAY}, i8 {KEY_LIST_FLAGS}, i16 {reserved}, i32 {size}, i32 {count}, i32 {count}, ptr null, {pad_init}i32 0, i32 0, {{ {} }} {{ {} }} }}, \
          section \"{}\", align 8",
-        types.join(", "),
-        types.join(", "),
-        inits.join(", "),
-        section(&triple)
+        types.join(", "), types.join(", "), inits.join(", "), section(&triple)
     ));
     fixups
 }
@@ -294,6 +361,7 @@ pub(crate) fn emit_test_fixture(llmod: &mut LlModule) -> TestFixture {
         llmod,
         object,
         perry_abi::native_layout_word("ITERATOR_RESULT", 0),
+        perry_abi::OBJ_FLAG_PLAIN_ORDINARY,
         &[
             Slot::Cell(function.to_string()),
             Slot::Bits(crate::nanbox::TAG_FALSE),
@@ -387,10 +455,10 @@ mod tests {
     fn the_cell_sizes_are_the_runtime_layouts() {
         let linux = fixture_ir("x86_64-unknown-linux-gnu");
         // GcHeader 8 + ClosureHeader 24; GcHeader 8 + ObjectHeader 16 + 2 slots.
-        assert!(linux.contains("{ i8 4, i8 5, i16 0, i32 32,"));
-        assert!(linux.contains("{ i8 2, i8 5, i16 0, i32 40,"));
+        assert!(linux.contains("{ i8 4, i8 5, i16 16384, i32 32,"));
+        assert!(linux.contains("{ i8 2, i8 5, i16 512, i32 40,"));
         let wasm = fixture_ir("wasm32-wasip2");
-        assert!(wasm.contains("{ i8 4, i8 5, i16 0, i32 24,"), "{wasm}");
-        assert!(wasm.contains("{ i8 2, i8 5, i16 0, i32 40,"), "{wasm}");
+        assert!(wasm.contains("{ i8 4, i8 5, i16 16384, i32 24,"), "{wasm}");
+        assert!(wasm.contains("{ i8 2, i8 5, i16 512, i32 40,"), "{wasm}");
     }
 }

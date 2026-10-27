@@ -360,6 +360,7 @@ fn static_layout_slot_order_rejects_slots_that_are_not_a_permutation() {
         },
     ];
     let mut desc = PerryLayoutDesc {
+        image_keys: std::ptr::null_mut(),
         shape_id: 0,
         _layout_pad: 0,
         family: 0x7f000005,

@@ -576,7 +576,7 @@ mod tests {
             ll.contains("@perry_image_literal_0_76 = weak_odr constant"),
             "{ll}"
         );
-        assert!(ll.contains("@perry_static_seed_list_0 = internal global { i8, i8, i16, i32, i32, i32, ptr, i32, i32, { i64, i64 } } { i8 1, i8 13, i16 0, i32 48, i32 2, i32 2, ptr null, i32 0, i32 0, { i64, i64 } { i64 add (i64 ptrtoint (ptr getelementptr (i8, ptr @perry_image_literal_0_75, i64 8) to i64), i64 9223090561878065152), i64 add (i64 ptrtoint (ptr getelementptr (i8, ptr @perry_image_literal_0_76, i64 8) to i64), i64 9223090561878065152) } }, section \"perry_realm\""), "{ll}");
+        assert!(ll.contains("@perry_static_seed_list_0 = internal global { i8, i8, i16, i32, i32, i32, ptr, i32, i32, { i64, i64 } } { i8 1, i8 13, i16 40960, i32 48, i32 2, i32 2, ptr null, i32 0, i32 0, { i64, i64 } { i64 add (i64 ptrtoint (ptr getelementptr (i8, ptr @perry_image_literal_0_75, i64 8) to i64), i64 9223090561878065152), i64 add (i64 ptrtoint (ptr getelementptr (i8, ptr @perry_image_literal_0_76, i64 8) to i64), i64 9223090561878065152) } }, section \"perry_realm\""), "{ll}");
         assert!(
             ll.contains("@perry_static_seeds = constant { i32, i32, [1 x"),
             "{ll}"

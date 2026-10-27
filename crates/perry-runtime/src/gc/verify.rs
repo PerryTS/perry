@@ -1398,6 +1398,7 @@ unsafe fn verify_image_cell_child_marks(
     });
 }
 
+#[allow(dead_code)] // Test-facing whole-heap verifier; release uses the nonfatal report.
 pub(super) fn verify_marked_heap_no_unmarked_children() -> MarkInvariantVerifyStats {
     let mut stats = MarkInvariantVerifyStats::default();
     crate::arena::arena_walk_objects(|hp| unsafe {

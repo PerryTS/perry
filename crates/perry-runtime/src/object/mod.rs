@@ -46,6 +46,7 @@ use std::sync::RwLock;
 pub(crate) const INLINE_SLOT_FLOOR: usize = 2;
 // Submodules (issue #1103): behavior-preserving split of the former
 // 11.2k-line object.rs. Public re-exports keep FFI symbols stable.
+mod image_keys;
 #[cfg(test)]
 mod test_root_helpers;
 #[cfg(test)]

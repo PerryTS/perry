@@ -11,6 +11,7 @@ use super::*;
     link_section = "perry_literal_layouts"
 )]
 static mut SENTINEL: PerryLayoutDesc = PerryLayoutDesc {
+    image_keys: std::ptr::null_mut(),
     family: SENTINEL_FAMILY,
     variant: 0,
     kind: 0,

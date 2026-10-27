@@ -120,12 +120,36 @@ pub(crate) unsafe fn link_image_list(
         return None;
     }
     let slots = crate::array::array_elements_ptr(cell) as *const u64;
+    let mapped = keys
+        .iter()
+        .enumerate()
+        .any(|(i, key)| key.slot as usize != i);
     for (i, key) in keys.iter().enumerate() {
-        if key.atom.is_null()
-            || (*key.atom).kind != crate::codegen_abi::ATOM_KIND_STRING
-            || (*key.atom).string.is_null()
-            || !crate::string::is_image_string((*key.atom).string)
-            || *slots.add(i) != JSValue::string_ptr((*key.atom).string.cast_mut()).bits()
+        if key.atom.is_null() {
+            return None;
+        }
+        let atom = &*key.atom;
+        if atom.kind == crate::codegen_abi::ATOM_KIND_BINDING_SYMBOL {
+            return None;
+        }
+        if atom.kind == crate::codegen_abi::ATOM_KIND_STRING
+            && (atom.string.is_null() || !crate::string::is_image_string(atom.string))
+        {
+            return None;
+        }
+        let expected = crate::object::layout_desc::layout_key_word(key, &[], &mut 0);
+        if *slots.add(i) != expected {
+            return None;
+        }
+        let entry = u64::from(key.attrs)
+            | if mapped {
+                (u64::from(key.slot) + 1) << 8
+            } else {
+                0
+            };
+        if crate::object::key_attrs::token_of_word(crate::object::key_attrs::key_word(
+            cell, i as u32,
+        )) != entry
         {
             return None;
         }
@@ -135,12 +159,24 @@ pub(crate) unsafe fn link_image_list(
         let mut missing = false;
         for (i, key) in keys.iter().enumerate() {
             let atom = &*key.atom;
-            let entry = u64::from(key.attrs);
-            let hash = edge_hash_with_entry(atom.hash, entry);
+            let entry = u64::from(key.attrs)
+                | if mapped {
+                    (u64::from(key.slot) + 1) << 8
+                } else {
+                    0
+                };
+            let appended = if atom.kind == crate::codegen_abi::ATOM_KIND_STRING {
+                Appended::Key(atom.string)
+            } else {
+                Appended::Slot(JSValue::from_bits(*slots.add(i)))
+            };
+            let hash = if atom.kind == crate::codegen_abi::ATOM_KIND_STRING {
+                edge_hash_with_entry(atom.hash, entry)
+            } else {
+                appended.edge_hash(entry)
+            };
             if !missing {
-                if let Some(id) =
-                    probe_node(t, parent, i as u32, Appended::Key(atom.string), entry, hash)
-                {
+                if let Some(id) = probe_node(t, parent, i as u32, appended, entry, hash) {
                     parent = id;
                     continue;
                 }

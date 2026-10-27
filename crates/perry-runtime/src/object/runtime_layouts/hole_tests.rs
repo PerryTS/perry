@@ -100,6 +100,7 @@ runtime_layout!(
     link_section = "perry_layouts"
 )]
 static mut CLASS_HOLEY: PerryLayoutDesc = PerryLayoutDesc {
+    image_keys: crate::object::image_keys::image_key_list!(HOLEY::KEYS),
     shape_id: 0,
     _layout_pad: 0,
     family: 0x41574203,
@@ -136,6 +137,7 @@ runtime_layout!(
     link_section = "perry_literal_layouts"
 )]
 static mut LITERAL_FAMILY: PerryLayoutDesc = PerryLayoutDesc {
+    image_keys: crate::object::image_keys::image_key_list!(LITERAL_OPTIONAL::KEYS),
     shape_id: 0,
     _layout_pad: 0,
     family: 0x7f000016,
@@ -820,6 +822,7 @@ mod first_birth {
         link_section = "perry_literal_layouts"
     )]
     static mut LITERAL: PerryLayoutDesc = PerryLayoutDesc {
+        image_keys: crate::object::image_keys::image_key_list!(KEYS),
         shape_id: 0,
         _layout_pad: 0,
         family: 0x7f000015,

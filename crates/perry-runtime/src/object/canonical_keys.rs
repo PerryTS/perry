@@ -92,7 +92,7 @@ use crate::array::ArrayHeader;
 use crate::JSValue;
 use crate::StringHeader;
 
-mod static_seed;
+pub(crate) mod static_seed;
 pub(crate) use static_seed::from_static_layout;
 pub(crate) use static_seed::link_image_list;
 

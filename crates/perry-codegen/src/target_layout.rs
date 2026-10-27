@@ -647,7 +647,7 @@ mod dense_layout_tests {
 #[test]
 fn emitted_descriptor_type_has_exact_llvm_target_layout() {
     use inkwell::{context::Context, targets::TargetData};
-    for (layout, size, identity) in [("e-p:64:64-i64:64", 80, 72), ("e-p:32:32-i64:64", 64, 56)] {
+    for (layout, size, identity) in [("e-p:64:64-i64:64", 88, 72), ("e-p:32:32-i64:64", 72, 56)] {
         let context = Context::create();
         let ir = format!(
             "%Desc = type {}\n@descriptor = global %Desc zeroinitializer\n",
@@ -660,5 +660,6 @@ fn emitted_descriptor_type_has_exact_llvm_target_layout() {
         assert_eq!(data.offset_of_element(&ty, 5), Some(12));
         assert_eq!(data.offset_of_element(&ty, 15), Some(identity));
         assert_eq!(data.offset_of_element(&ty, 16), Some(identity + 4));
+        assert_eq!(data.offset_of_element(&ty, 17), Some(identity + 8));
     }
 }

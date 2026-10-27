@@ -262,21 +262,12 @@ impl Word {
     /// This position's word: `entry` for `key`, after the cumulative `prev`.
     #[inline(always)]
     unsafe fn after(prev: Word, entry: u8, key: impl AttributeKey) -> Word {
-        let mut w = Word { entry, ..prev };
-        if prev.summary & WORD_SLOT != 0 {
-            w.summary &= !WORD_SLOT;
-            w.entry_bloom = u16::MAX;
-            w.accessor_bloom = u16::MAX;
-        }
-        if entry != 0 {
-            w.summary |= entry_summary(entry);
-            let bit = key.bloom_bit();
-            w.entry_bloom |= bit;
-            if entry & ENTRY_ACCESSOR != 0 {
-                w.accessor_bloom |= bit;
-            }
-        }
-        w
+        Word::decode(perry_abi::canonical_key_attribute_word(
+            prev.encode(),
+            entry,
+            key.bloom_bit(),
+            None,
+        ))
     }
 }
 

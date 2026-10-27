@@ -1,7 +1,7 @@
 //! Evacuating the realm image into this agent's heap (DESIGN §2.5, owner
 //! decision §7.1): the mechanism a worker agent's realm is born by.
 //!
-//! Every image cell is copied into an ordinary heap cell of its type and size,
+//! Realm objects and function cells are copied into an ordinary heap cell of its type and size,
 //! then the layout tracer visits each copy's traced slots and rewrites every
 //! slot that names an image cell to the same offset in that cell's copy.
 //! Pointers to image strings, `JsFunctionInfo` statics and atoms lie outside
@@ -67,6 +67,11 @@ pub(crate) fn evacuate_realm_image() -> RealmEvacuation {
     let _no_collection = GcSuppressScope::new();
     let mut cells = Vec::new();
     crate::value::addr_class::realm::for_each_cell(&mut |header| unsafe {
+        // Canonical lists are immutable facts shared by all agents. Their
+        // addresses, including prefix/interior addresses, never forward.
+        if (*header).obj_type == GC_TYPE_ARRAY && (*header).gc_flags & GC_FLAG_SHAPE_SHARED != 0 {
+            return;
+        }
         let size = (*header).size as usize;
         let payload = size - GC_HEADER_SIZE;
         let user = crate::arena::arena_alloc_gc(payload, 8, (*header).obj_type);
@@ -120,7 +125,14 @@ pub(crate) fn words_pointing_into_image(evacuation: &RealmEvacuation) -> Vec<(us
             } else {
                 (bits & POINTER_MASK) as usize
             };
-            if (start..end).contains(&addr) {
+            if (start..end).contains(&addr)
+                && !unsafe {
+                    crate::value::addr_class::realm::header(addr).is_some_and(|h| {
+                        h.as_ref().obj_type == GC_TYPE_ARRAY
+                            && h.as_ref().gc_flags & GC_FLAG_SHAPE_SHARED != 0
+                    })
+                }
+            {
                 found.push((at, bits));
             }
             at += 8;
