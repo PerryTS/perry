@@ -66,7 +66,7 @@ unsafe fn install_runtime_layout(desc: *const PerryLayoutDesc) -> Option<()> {
 }
 
 #[cfg(any(test, debug_assertions))]
-thread_local! {
+crate::perry_thread_local! {
     /// Runtime layouts whose shape this agent installed (debug and test
     /// builds only): startup installs none.
     pub(crate) static RUNTIME_LAYOUT_INSTALLS: std::cell::Cell<u32> =
