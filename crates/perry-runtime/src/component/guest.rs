@@ -136,7 +136,7 @@ pub extern "C" fn js_component_import(interface: f64, function: f64, args: f64) 
     let args = scope.root_nanbox_f64(args);
     let mut interface_name = String::new();
     let mut function_name = String::new();
-    let mut frame = Box::new(frame::Frame::new());
+    let mut frame = Box::new(frame::Frame::allocate_guest_frame());
     let result = crate::exception::catch_js_throw(|| {
         let ops = ops();
         let owner = scope.root_nanbox_f64(registry());

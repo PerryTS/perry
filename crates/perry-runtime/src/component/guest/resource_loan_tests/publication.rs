@@ -73,7 +73,7 @@ fn throwing_promise_init_preserves_staged_owners_original_error_and_runtime_cust
     let scope = RuntimeHandleScope::new();
     let _registry = Registry::new(&scope);
     let domain = job_domain::JobDomain::new();
-    let mut child = Box::new(Frame::new());
+    let mut child = Box::new(Frame::allocate_guest_frame());
     let owner = owned(&mut child, 4, 1);
     child.guard(|f| lower(f, owner, 4, true, false));
     let error = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
@@ -116,7 +116,7 @@ fn disposal_in_promise_init_prevents_partial_transfer_and_deferral_publication()
     let _registry = Registry::new(&scope);
     let _ops = TestOps::new(record_drop);
     let domain = job_domain::JobDomain::new();
-    let mut child = Box::new(Frame::new());
+    let mut child = Box::new(Frame::allocate_guest_frame());
     let a = owned(&mut child, 4, 1);
     let b = owned(&mut child, 4, 2);
     for slot in [a, b] {
@@ -138,7 +138,7 @@ fn disposal_in_promise_init_prevents_partial_transfer_and_deferral_publication()
     assert_eq!(get(data(child.get(b)), STATE), DISPOSED);
     assert_eq!(COLLECTED.load(Ordering::SeqCst), 1 << 16);
     drop(enabled);
-    let mut retry = Frame::new();
+    let mut retry = Frame::allocate_guest_frame();
     let slot = retry.add(child.get(a));
     retry.guard(|f| lower(f, slot, 4, true, false));
     retry.guard(commit);
@@ -158,7 +158,7 @@ fn successful_begin_commits_owned_and_borrowed_arguments_after_collecting_init_h
     let scope = RuntimeHandleScope::new();
     let _registry = Registry::new(&scope);
     let domain = job_domain::JobDomain::new();
-    let mut child = Box::new(Frame::new());
+    let mut child = Box::new(Frame::allocate_guest_frame());
     let a = owned(&mut child, 4, 1);
     let b = owned(&mut child, 4, 2);
     child.guard(|f| lower(f, a, 4, true, false));
@@ -180,7 +180,7 @@ fn successful_begin_commits_owned_and_borrowed_arguments_after_collecting_init_h
     assert_eq!(get(data(borrowed.get_nanbox_f64()), BORROW_COUNT), 1.0);
     drop(child);
     assert_eq!(get(data(borrowed.get_nanbox_f64()), BORROW_COUNT), 0.0);
-    let mut transfer = Frame::new();
+    let mut transfer = Frame::allocate_guest_frame();
     let slot = transfer.add(borrowed.get_nanbox_f64());
     transfer.guard(|f| lower(f, slot, 4, true, false));
     transfer.guard(commit);

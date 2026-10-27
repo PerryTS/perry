@@ -67,7 +67,7 @@ pub(super) struct Frame {
 }
 
 impl Frame {
-    pub fn new() -> Self {
+    pub fn allocate_guest_frame() -> Self {
         let scope = RuntimeHandleScope::new();
         let values = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
             crate::array::js_array_alloc_with_length(1) as i64,
@@ -239,7 +239,7 @@ unsafe fn span<'a>(pointer: *const u8, len: usize) -> &'a [u8] {
 
 #[no_mangle]
 pub extern "C" fn perry_component_frame_new() -> *mut c_void {
-    Box::into_raw(Box::new(Frame::new())).cast()
+    Box::into_raw(Box::new(Frame::allocate_guest_frame())).cast()
 }
 #[no_mangle]
 pub unsafe extern "C" fn perry_component_frame_drop(pointer: *mut c_void) {

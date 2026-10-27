@@ -97,7 +97,7 @@ fn pending_imports_keep_heap_frames_and_als_through_moving_gc_and_reverse_c_resu
         let mut entries = Vec::new();
         for marker in [11.0, 22.0] {
             let parent = perry_component_frame_task_new();
-            let mut owner = Box::new(Frame::new());
+            let mut owner = Box::new(Frame::allocate_guest_frame());
             let pointer = (&raw mut *owner).cast();
             let mut data = Begin {
                 frame: pointer,
@@ -192,7 +192,7 @@ fn immediate_import_completion_waits_for_the_runtime_handoff_before_c_drops_the_
     let domain = job_domain::JobDomain::new();
     let scope = RuntimeHandleScope::new();
     unsafe {
-        let mut owner = Box::new(Frame::new());
+        let mut owner = Box::new(Frame::allocate_guest_frame());
         let pointer = (&raw mut *owner).cast();
         let slot = domain.run(|| perry_component_frame_import_begin(pointer));
         let value = perry_component_frame_number(pointer, 42.0);
@@ -209,7 +209,7 @@ fn immediate_import_completion_waits_for_the_runtime_handoff_before_c_drops_the_
         assert!(alive.upgrade().is_none());
         crate::gc::gc_collect_minor();
         assert_eq!((*promise(public.get_nanbox_f64())).value, 42.0);
-        let ordinary = Box::new(Frame::new());
+        let ordinary = Box::new(Frame::allocate_guest_frame());
         let alive = Arc::downgrade(&ordinary.alive);
         ordinary.release_import();
         assert!(

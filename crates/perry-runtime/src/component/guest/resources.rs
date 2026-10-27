@@ -175,7 +175,7 @@ extern "C" fn dispose(
 fn release(fields: f64) -> f64 {
     let scope = RuntimeHandleScope::new();
     let fields = scope.root_nanbox_f64(fields);
-    let mut frame = Frame::new();
+    let mut frame = Frame::allocate_guest_frame();
     let result = crate::exception::catch_js_throw(|| {
         if get(fields.get_nanbox_f64(), STATE) != OWNED {
             return undefined();

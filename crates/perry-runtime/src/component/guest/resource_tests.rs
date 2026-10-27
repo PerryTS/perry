@@ -45,7 +45,7 @@ fn duplicate_transfer_fails_without_consuming_the_first_owner() {
     let scope = RuntimeHandleScope::new();
     let _registry = Registry::new(&scope);
     let resource = scope.root_nanbox_f64(undefined());
-    let mut frame = Frame::new();
+    let mut frame = Frame::allocate_guest_frame();
     let slot = owned(&mut frame, 4, 11);
     assert_eq!(frame.guard(|f| lower(f, slot, 4, true, false)), 11);
     // A second reference can come from a different argument or nested list.
@@ -57,7 +57,7 @@ fn duplicate_transfer_fails_without_consuming_the_first_owner() {
     // Abandoning the failed call does not consume ownership either.
     resource.set_nanbox_f64(frame.get(slot));
     drop(frame);
-    let mut retry = Frame::new();
+    let mut retry = Frame::allocate_guest_frame();
     let slot = retry.add(resource.get_nanbox_f64());
     assert_eq!(retry.guard(|f| lower(f, slot, 4, true, false)), 11);
     retry.guard(commit);
@@ -72,7 +72,7 @@ fn own_and_borrow_aliases_are_rejected_in_either_argument_order() {
     let scope = RuntimeHandleScope::new();
     let _registry = Registry::new(&scope);
     for own_first in [false, true] {
-        let mut frame = Frame::new();
+        let mut frame = Frame::allocate_guest_frame();
         let slot = owned(&mut frame, 4, 7);
         let borrowed = wrap(4, 7, 0, false, undefined(), frame.get(slot));
         let borrowed = frame.add(borrowed);
@@ -94,7 +94,7 @@ fn escaped_borrow_expires_and_owned_lift_survives_frame_exit() {
     let _registry = Registry::new(&scope);
     let borrowed = scope.root_nanbox_f64(undefined());
     let owned = scope.root_nanbox_f64(undefined());
-    let mut frame = Frame::new();
+    let mut frame = Frame::allocate_guest_frame();
     let lifetime = frame.lifetime();
     borrowed.set_nanbox_f64(wrap(4, 7, 0, false, lifetime, undefined()));
     owned.set_nanbox_f64(wrap(4, 8, 0, true, undefined(), undefined()));
@@ -108,7 +108,7 @@ fn escaped_borrow_expires_and_owned_lift_survives_frame_exit() {
 fn all_transfers_are_revalidated_before_any_owner_is_consumed() {
     let scope = RuntimeHandleScope::new();
     let _registry = Registry::new(&scope);
-    let mut frame = Frame::new();
+    let mut frame = Frame::allocate_guest_frame();
     let a = owned(&mut frame, 4, 7);
     let b = owned(&mut frame, 4, 8);
     frame.guard(|f| lower(f, a, 4, true, false));
@@ -124,7 +124,7 @@ fn all_transfers_are_revalidated_before_any_owner_is_consumed() {
 fn private_capabilities_reject_forgery_wrong_types_and_cross_instance_use() {
     let scope = RuntimeHandleScope::new();
     let _registry = Registry::new(&scope);
-    let mut frame = Frame::new();
+    let mut frame = Frame::allocate_guest_frame();
     let slot = owned(&mut frame, 4, 7);
     frame.guard(|f| lower(f, slot, 5, true, false));
     assert!(frame.error().is_some());
@@ -147,7 +147,7 @@ fn staged_resource_owners_and_borrows_survive_actual_moving_gc() {
     crate::gc::gc_init();
     let scope = RuntimeHandleScope::new();
     let _registry = Registry::new(&scope);
-    let mut frame = Frame::new();
+    let mut frame = Frame::allocate_guest_frame();
     let slot = owned(&mut frame, 4, 7);
     frame.guard(|f| lower(f, slot, 4, true, false));
     let before = frame.get(slot).to_bits();
@@ -262,7 +262,7 @@ fn exported_payload_survives_transfer_and_gc_then_is_destroyed_exactly_once() {
     let before = object.get_nanbox_f64().to_bits();
     object.set_nanbox_f64(undefined());
     label.set_nanbox_f64(undefined());
-    let mut frame = Frame::new();
+    let mut frame = Frame::allocate_guest_frame();
     let slot = frame.add(resource.get_nanbox_f64());
     frame.guard(|f| lower(f, slot, 9, true, true));
     frame.guard(commit);
@@ -287,7 +287,7 @@ fn exported_payload_survives_transfer_and_gc_then_is_destroyed_exactly_once() {
     );
     assert_eq!(string(field(value, b"label")), "rooted payload 🌍");
     drop(frame);
-    let mut frame = Frame::new();
+    let mut frame = Frame::allocate_guest_frame();
     unsafe {
         fake_resource((&mut frame as *mut Frame).cast(), 9, 1, handle);
     }
@@ -314,7 +314,7 @@ fn exported_payload_survives_transfer_and_gc_then_is_destroyed_exactly_once() {
         callback.get_nanbox_f64(),
     ));
     let handle = get(data(resource.get_nanbox_f64()), HANDLE) as u32;
-    let mut frame = Frame::new();
+    let mut frame = Frame::allocate_guest_frame();
     let slot = frame.add(resource.get_nanbox_f64());
     frame.guard(|f| lower(f, slot, 9, true, true));
     frame.guard(commit);
@@ -327,7 +327,7 @@ fn exported_payload_survives_transfer_and_gc_then_is_destroyed_exactly_once() {
     );
     assert_eq!(DROPS.load(std::sync::atomic::Ordering::SeqCst), 2);
     drop(frame);
-    let mut retry = Frame::new();
+    let mut retry = Frame::allocate_guest_frame();
     unsafe {
         fake_resource((&mut retry as *mut Frame).cast(), 9, 1, handle);
     }
