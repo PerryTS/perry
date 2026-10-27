@@ -14,6 +14,7 @@ use std::{
 use wac_graph::{types::Package, CompositionGraph, EncodeOptions};
 
 const FOREIGN: &str = "test:async-guest-resources/foreign@1.0.0";
+const COMPOUND_FOREIGN: &str = "test:async-compound-resources/foreign@1.0.0";
 const INTERNAL: &[&str] = &[
     "cancel-exchange",
     "cancel-loan",
@@ -23,6 +24,8 @@ const INTERNAL: &[&str] = &[
 ];
 
 fn compose(args: &[String]) -> Result<()> {
+    let compound = args[0] == "--compose-compound";
+    let foreign_name = if compound { COMPOUND_FOREIGN } else { FOREIGN };
     ensure!(
         args.len() == 5,
         "--compose <provider> <perry> <caller> <output>"
@@ -34,15 +37,22 @@ fn compose(args: &[String]) -> Result<()> {
         packages.push(graph.register_package(package)?);
     }
     let provider = graph.instantiate(packages[0]);
-    let foreign = graph.alias_instance_export(provider, FOREIGN)?;
-    let item = graph.alias_instance_export(foreign, "item")?;
+    let foreign = graph.alias_instance_export(provider, foreign_name)?;
     let guest = graph.instantiate(packages[1]);
-    graph.set_instantiation_argument(guest, FOREIGN, foreign)?;
-    graph.set_instantiation_argument(guest, "item", item)?;
+    graph.set_instantiation_argument(guest, foreign_name, foreign)?;
     let caller = graph.instantiate(packages[2]);
     // Both consumers receive the same instance, including its nominal type.
-    graph.set_instantiation_argument(caller, FOREIGN, foreign)?;
-    graph.set_instantiation_argument(caller, "item", item)?;
+    graph.set_instantiation_argument(caller, foreign_name, foreign)?;
+    let aliases: &[&str] = if compound {
+        &["item", "request", "response"]
+    } else {
+        &["item"]
+    };
+    for name in aliases {
+        let alias = graph.alias_instance_export(foreign, *name)?;
+        graph.set_instantiation_argument(guest, *name, alias)?;
+        graph.set_instantiation_argument(caller, *name, alias)?;
+    }
     for name in INTERNAL {
         let function = graph.alias_instance_export(guest, *name)?;
         graph.set_instantiation_argument(caller, *name, function)?;
@@ -63,6 +73,7 @@ struct Events {
     gates: BTreeMap<u32, oneshot::Sender<()>>,
     proceed: Option<Proceed>,
     submitted: BTreeSet<u32>,
+    rejected: BTreeSet<u32>,
     entered: BTreeSet<u32>,
     ready: BTreeSet<u32>,
     prepared: BTreeSet<u32>,
@@ -70,6 +81,24 @@ struct Events {
     acknowledged: BTreeMap<u32, (u32, u32)>,
 }
 type Shared = Arc<Mutex<Events>>;
+
+fn input_offsets(compound: bool, mode: u32) -> &'static [u32] {
+    if compound && mode != 1 {
+        &[1, 3, 4, 5, 6]
+    } else {
+        &[1]
+    }
+}
+fn result_offsets(compound: bool, base: u32) -> &'static [u32] {
+    if !compound {
+        return &[1];
+    }
+    match ((base / 100) % 10) % 5 {
+        0 => &[1, 3, 4, 5, 6],
+        1 | 2 => &[1],
+        _ => &[],
+    }
+}
 
 fn tick(driver: &mut Driver) -> Result<()> {
     if let Some(reply) = block_on(poll_once(driver)) {
@@ -80,7 +109,10 @@ fn tick(driver: &mut Driver) -> Result<()> {
 }
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
-    if args.first().is_some_and(|s| s == "--compose") {
+    if args
+        .first()
+        .is_some_and(|s| s == "--compose" || s == "--compose-compound")
+    {
         return compose(&args);
     }
     ensure!(
@@ -88,7 +120,11 @@ fn main() -> Result<()> {
         "<world.wit> <composed.wasm> [--moving]"
     );
     let mut world = perry_wit::parse_file(Path::new(&args[0]), Some("supervisor"))?;
-    world.imports.retain(|interface| interface.name != FOREIGN);
+    let compound = world.name.contains("async-compound-resources");
+    let foreign_name = if compound { COMPOUND_FOREIGN } else { FOREIGN };
+    world
+        .imports
+        .retain(|interface| interface.name != foreign_name);
     for interface in &mut world.imports {
         if interface.name.is_empty() {
             interface
@@ -99,14 +135,28 @@ fn main() -> Result<()> {
     let events: Shared = Arc::default();
     let mut imports = Imports::new();
     let root = imports.entry(String::new()).or_default();
-    for name in ["submitted", "entered", "ready", "prepared", "dropped"] {
+    for name in [
+        "submitted",
+        "rejected",
+        "entered",
+        "ready",
+        "prepared",
+        "dropped",
+    ] {
         let observed = events.clone();
         let callback: Import = Arc::new(move |args| {
             let id = args[0].as_u64().context("observer ID")? as u32;
             let mut events = observed.lock().unwrap();
             match name {
                 "submitted" => ensure!(events.submitted.insert(id)),
-                "entered" => ensure!(events.entered.insert(id)),
+                "rejected" => ensure!(events.rejected.insert(id)),
+                "entered" => {
+                    ensure!(
+                        !compound || id % 100 == 10,
+                        "duplicate-owner request reached the provider"
+                    );
+                    ensure!(events.entered.insert(id));
+                }
                 "prepared" => ensure!(events.prepared.insert(id)),
                 "dropped" => {
                     let count = events.dropped.entry(id).or_default();
@@ -139,10 +189,14 @@ fn main() -> Result<()> {
         let base = args[1].as_u64().unwrap() as u32;
         let state = args[2].as_u64().unwrap() as u32;
         let mut events = observed.lock().unwrap();
-        ensure!(
-            events.dropped.get(&(base + 1)) == Some(&1),
-            "input owner was not released at acknowledgement"
-        );
+        for offset in input_offsets(compound, mode) {
+            ensure!(
+                events.dropped.get(&(base + offset)) == Some(&1),
+                "input owner {} was not released at acknowledgement",
+                base + offset
+            );
+        }
+        ensure!(!compound || mode == 1 || events.rejected.contains(&(base + 10)));
         ensure!(
             !events.dropped.contains_key(&(base + 2)),
             "live sibling lost its owner"
@@ -173,10 +227,12 @@ fn main() -> Result<()> {
                     "no owned result raced cancellation"
                 );
                 ensure!(events.entered.contains(&(base + 10)));
-                ensure!(
-                    events.dropped.get(&(base + 1 + 1000000)) == Some(&1),
-                    "returned owner was leaked or published without cleanup"
-                );
+                for offset in result_offsets(compound, base) {
+                    ensure!(
+                        events.dropped.get(&(base + offset + 1000000)) == Some(&1),
+                        "returned owner was leaked or published without cleanup"
+                    );
+                }
             }
             3 => {
                 ensure!(state == 4, "Perry published a result after cancellation");
@@ -184,10 +240,12 @@ fn main() -> Result<()> {
                 ensure!(events.entered.contains(&(base + 10)));
                 ensure!(!events.ready.contains(&(base + 10)));
                 ensure!(events.gates[&(base + 10)].is_canceled());
-                ensure!(
-                    events.dropped.get(&(base + 1 + 1000000)) == Some(&1),
-                    "unclaimed canonical result owner was not discarded"
-                );
+                for offset in result_offsets(compound, base) {
+                    ensure!(
+                        events.dropped.get(&(base + offset + 1000000)) == Some(&1),
+                        "unclaimed canonical result owner was not discarded"
+                    );
+                }
             }
             _ => anyhow::bail!("unknown scenario"),
         }
@@ -362,12 +420,15 @@ fn main() -> Result<()> {
     }
     let events = events.lock().unwrap();
     ensure!(events.acknowledged.len() == 32);
-    // Two owners per call, plus one result owner in each mode-2/mode-3 call.
+    // Compound requests contain five owners. Responses exercise five choices:
+    // held list, held without the optional list, owned error, text and nothing.
     ensure!(
-        events.dropped.len() == 80,
+        events.dropped.len() == if compound { 188 } else { 80 },
         "unexpected drop census: {}",
         events.dropped.len()
     );
+    ensure!(!compound || events.rejected.len() == 24);
+    ensure!(events.entered.len() == 16);
     let mut race_states = BTreeMap::<u32, usize>::new();
     let mut unclaimed_states = BTreeMap::<u32, usize>::new();
     for (mode, state) in events.acknowledged.values() {
@@ -386,6 +447,10 @@ fn main() -> Result<()> {
         "RESOURCE_UNCLAIMED_CANCEL_STATES={}",
         serde_json::to_string(&unclaimed_states)?
     );
-    println!("PASS: resource canonical cancellation, 8 pre-start owners, 8 suspended borrows, 8 ready owned results, 8 unclaimed owned results, 32 live siblings and reusable Store");
+    if compound {
+        println!("PASS: compound resource canonical cancellation, records, lists, options, tuples, variants, owned errors, 24 duplicate-owner rejections, 188 exactly-once drops and 32 live siblings");
+    } else {
+        println!("PASS: resource canonical cancellation, 8 pre-start owners, 8 suspended borrows, 8 ready owned results, 8 unclaimed owned results, 32 live siblings and reusable Store");
+    }
     Ok(())
 }

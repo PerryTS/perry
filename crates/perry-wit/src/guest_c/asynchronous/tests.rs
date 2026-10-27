@@ -17,16 +17,20 @@ world plugin { import api; export run: async func(); }
 // Deliberately exercise code below the resource profile guard. There is no
 // public or experimental entry point which bypasses that guard.
 fn custody_files(source: &str) -> BTreeMap<String, Vec<u8>> {
+    custody_world_files(source, None)
+}
+
+fn custody_world_files(source: &str, selected: Option<&str>) -> BTreeMap<String, Vec<u8>> {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("world.wit");
     std::fs::write(&path, source).unwrap();
-    assert!(experimental_async_guest(&path, None)
+    assert!(experimental_async_guest(&path, selected)
         .unwrap_err()
         .to_string()
         .contains("resources"));
     let mut resolve = Resolve::default();
     let (package, _) = resolve.push_path(&path).unwrap();
-    let id = resolve.select_world(&[package], None).unwrap();
+    let id = resolve.select_world(&[package], selected).unwrap();
     resolve.generate_nominal_type_ids(id);
     let world = crate::resolve::convert(&resolve, id).unwrap();
     let anchor = add_wake_anchor(&mut resolve, id).unwrap();
@@ -39,10 +43,20 @@ fn custody_files(source: &str) -> BTreeMap<String, Vec<u8>> {
 #[test]
 #[ignore = "fixture producer for source-matched WASI resource qualification"]
 fn async_resource_guest_fixture() {
+    resource_fixture("async-guest-resources", None);
+}
+
+#[test]
+#[ignore = "fixture producer for source-matched compound resource qualification"]
+fn async_compound_resource_guest_fixture() {
+    resource_fixture("async-compound-resources", Some("plugin"));
+}
+
+fn resource_fixture(name: &str, selected: Option<&str>) {
     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../test-wasi/components/async-guest-resources");
+        .join("../../test-wasi/components").join(name);
     let source = std::fs::read_to_string(fixture.join("world.wit")).unwrap();
-    let files = custody_files(&source);
+    let files = custody_world_files(&source, selected);
     let output = tempfile::tempdir().unwrap().keep();
     let generated = output.join("generated");
     std::fs::create_dir(&generated).unwrap();
@@ -51,7 +65,7 @@ fn async_resource_guest_fixture() {
     }
     std::fs::write(
         generated.join("guest.ts"),
-        crate::typescript_guest(&crate::parse(&source, None).unwrap()),
+        crate::typescript_guest(&crate::parse(&source, selected).unwrap()),
     )
     .unwrap();
     for name in ["world.wit", "guest.ts"] {
