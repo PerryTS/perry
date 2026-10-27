@@ -71,7 +71,6 @@ pub(super) fn read_file_string_with_options(
             crate::string::read_utf8(&mut bytes, hint)
         });
     }
-    let encoding = encoding.to_ascii_lowercase();
     // Node accepts this common fs option but Buffer decoding rejects it,
     // except for an empty read (whose toString returns before decoding).
     if encoding == "buffer" {
@@ -81,8 +80,9 @@ pub(super) fn read_file_string_with_options(
         }
         validate::throw_type_error_with_code("Unknown encoding: buffer", "ERR_UNKNOWN_ENCODING");
     }
+    let lower = encoding.to_ascii_lowercase();
     if !matches!(
-        encoding.as_str(),
+        lower.as_str(),
         "hex"
             | "base64"
             | "base64url"
@@ -100,7 +100,7 @@ pub(super) fn read_file_string_with_options(
         );
     }
     let bytes = read_file_bytes_with_options(path, options)?;
-    Ok(decode_bytes(&bytes, &encoding))
+    Ok(decode_bytes(&bytes, &lower))
 }
 
 fn decode_bytes(bytes: &[u8], encoding: &str) -> *mut StringHeader {

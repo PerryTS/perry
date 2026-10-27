@@ -60,7 +60,7 @@ async function main(): Promise<void> {
     try { fs.readFileSync(target, 'utf8'); }
     catch (error: any) { console.log('error', error.code, error.syscall); }
   }
-  for (const encoding of ['not-an-encoding', 'buffer', { encoding: 42 }]) {
+  for (const encoding of ['not-an-encoding', 'buffer', 'BUFFER', { encoding: 42 }]) {
     try { fs.readFileSync(file, encoding as any); }
     catch (error: any) { console.log('encoding-error', error.code); }
   }
