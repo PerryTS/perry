@@ -295,9 +295,11 @@ pub(super) fn a_broken_namespace_field_function_resolves_only_the_units_that_see
     // Rewritten for DECISIONS 196 (each reader an argument marker gains is
     // solve work): [699, 725, 908, 406, 334] -> [709, 731, 914, 410, 334];
     // for #13294 (decision 151: every unit replays the shared objects'
-    // writes) -> the pin below.
+    // writes) -> [709, 779, 956, 443, 392]; for the intrinsic member
+    // descriptions (a name no builtin prototype defines reads nothing from
+    // a builtin object, so fewer opaque values flow) -> the pin below.
     assert!(pf.round_work[1] < w("a.ts") + w("m.ts") + w("b.ts") + w("c.ts"));
-    assert_eq!(pf.round_work, [709, 779, 956, 443, 392], "{:?}", pf.units);
+    assert_eq!(pf.round_work, [709, 779, 918, 443, 392], "{:?}", pf.units);
 }
 
 #[test]

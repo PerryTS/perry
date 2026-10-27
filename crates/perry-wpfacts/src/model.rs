@@ -390,6 +390,8 @@ pub enum NativeMiss {
     /// A program-owned global (`builtins::global_user_key`) read into the
     /// first node; the second is the global's field.
     Global(NodeId, NodeId),
+    /// A method call on a primitive receiver of these kinds.
+    PrimCall(u16, CallId),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -1269,6 +1271,12 @@ pub struct Model {
     /// dynamic code may hand it out (`Function('return this')()`). Until
     /// then a store into ⊤ cannot write a global.
     pub global_in_top: bool,
+    /// A ⊤ value may be a builtin prototype: one reached unmodeled code
+    /// (`Model::escape`). Until then a store into ⊤ cannot write a member
+    /// of the intrinsic prototypes (`builtins::intrinsic_written`).
+    pub proto_in_top: bool,
+    /// Explain: builtin function values minted, by the arm that minted them.
+    pub bf_mints: FxHashMap<&'static str, u32>,
     /// Per unit (design §17.16 (b)): the global object's program-owned
     /// fields are cells (`global:<key>`), made at the unit boundary. A field
     /// first named later holds ⊤ and sets `global_late`: the unit then

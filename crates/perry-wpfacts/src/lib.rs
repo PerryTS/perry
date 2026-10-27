@@ -414,6 +414,11 @@ pub(crate) fn compute_in<'a>(
         }
     }
     g.m.dump_meta();
+    if g.m.explain && !g.m.bf_mints.is_empty() {
+        let mut v: Vec<(&str, u32)> = g.m.bf_mints.iter().map(|(k, n)| (*k, *n)).collect();
+        v.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+        eprintln!("perry: wpfacts explain: builtin-fn minted: {v:?}");
+    }
     let solve_ms = t1.elapsed().as_secs_f64() * 1000.0;
     // Decision 150: interpreted code is the ⊤ summary node, never a
     // program-wide kill. Every value it can receive (arguments and results
