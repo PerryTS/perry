@@ -2,10 +2,15 @@
 
 Objective: complete supported WASI 0.3.0 hosting and Perry-authored component
 output, including reusable typed plugin interfaces. The implementation branch
-is based on main `034939356199d1cb47f3ac303fafd1de8c6223d2`; the previous merged
+is based on main `c790227a805c57849a857d986ec6a96151d67ea1`; the previous merged
 WASI milestone is `315930289939d39cb0cf0c876c03e82da6000d3a`. Existing historical receipts
 retain their original scope. An implemented helper or passing narrow test does
 not establish completion of a row below.
+
+The resource cancellation receipt qualifies the earlier integration base
+`034939356199d1cb47f3ac303fafd1de8c6223d2`. Main's subsequent async-context,
+generator and code-generation changes require fresh coherent builds and
+execution; the earlier receipt is not evidence for those changes.
 
 | Requirement | Required evidence | Current state |
 | --- | --- | --- |
