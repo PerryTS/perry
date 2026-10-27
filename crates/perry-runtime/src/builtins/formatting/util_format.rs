@@ -383,7 +383,7 @@ pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f
                         let f = if ptr.is_null() {
                             f64::NAN
                         } else {
-                            crate::bigint::js_bigint_to_f64(ptr)
+                            crate::bigint_hooks::js_bigint_to_f64(ptr)
                         };
                         if f.is_nan() {
                             out.push_str("NaN");

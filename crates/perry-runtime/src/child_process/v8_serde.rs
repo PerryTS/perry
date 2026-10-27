@@ -397,18 +397,18 @@ impl Serializer {
 
     fn write_bigint(&mut self, value: f64) {
         let ptr = JSValue::from_bits(value.to_bits()).as_bigint_ptr();
-        let negative = crate::bigint::js_bigint_is_negative(ptr) != 0;
+        let negative = crate::bigint_hooks::js_bigint_is_negative(ptr) != 0;
         // Read the magnitude as big-endian bytes (negate first if needed), then
         // reverse to the little-endian order V8's bigint digits use.
         let mag_ptr = if negative {
             {
-                crate::bigint::js_bigint_neg(ptr) as *const crate::bigint::BigIntHeader
+                crate::bigint_hooks::js_bigint_neg(ptr) as *const crate::bigint::BigIntHeader
             }
         } else {
             ptr
         };
         let nbytes = unsafe { (*mag_ptr).limb_count * 8 };
-        let be_buf = crate::bigint::js_bigint_to_buffer(mag_ptr, nbytes as i32);
+        let be_buf = crate::bigint_hooks::js_bigint_to_buffer(mag_ptr, nbytes as i32);
         let mut le: Vec<u8> = if be_buf.is_null() {
             Vec::new()
         } else {
@@ -790,9 +790,9 @@ impl<'a> Deserializer<'a> {
             mag |= (b as u64) << (i * 8);
         }
         let ptr = if negative {
-            crate::bigint::js_bigint_from_i64((mag as i64).wrapping_neg())
+            crate::bigint_hooks::js_bigint_from_i64((mag as i64).wrapping_neg())
         } else {
-            crate::bigint::js_bigint_from_u64(mag)
+            crate::bigint_hooks::js_bigint_from_u64(mag)
         };
         Some(crate::value::js_nanbox_bigint(ptr as i64))
     }

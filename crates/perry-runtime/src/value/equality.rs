@@ -71,7 +71,7 @@ pub extern "C" fn js_jsvalue_equals(a: f64, b: f64) -> i32 {
     if a_val.is_bigint() && b_val.is_bigint() {
         let a_ptr = a_val.as_bigint_ptr();
         let b_ptr = b_val.as_bigint_ptr();
-        return crate::bigint::js_bigint_eq(a_ptr, b_ptr);
+        return crate::bigint_hooks::js_bigint_eq(a_ptr, b_ptr);
     }
 
     // String comparison: compare by content, not by pointer. Must
@@ -378,7 +378,7 @@ pub extern "C" fn js_jsvalue_loose_equals(a: f64, b: f64) -> i32 {
     if a_val.is_bigint() && b_val.is_bigint() {
         let a_ptr = a_val.as_bigint_ptr();
         let b_ptr = b_val.as_bigint_ptr();
-        return crate::bigint::js_bigint_eq(a_ptr, b_ptr);
+        return crate::bigint_hooks::js_bigint_eq(a_ptr, b_ptr);
     }
 
     0
@@ -399,7 +399,7 @@ pub extern "C" fn js_jsvalue_compare(a: f64, b: f64) -> i32 {
     if a_val.is_bigint() && b_val.is_bigint() {
         let a_ptr = a_val.as_bigint_ptr();
         let b_ptr = b_val.as_bigint_ptr();
-        return crate::bigint::js_bigint_cmp(a_ptr, b_ptr);
+        return crate::bigint_hooks::js_bigint_cmp(a_ptr, b_ptr);
     }
 
     // String comparison (lexicographic). Accepts SSO in either
@@ -449,7 +449,7 @@ pub extern "C" fn js_jsvalue_compare(a: f64, b: f64) -> i32 {
     let af = if a_val.is_int32() {
         a_val.as_int32() as f64
     } else if a_val.is_bigint() {
-        crate::bigint::js_bigint_to_f64(a_val.as_bigint_ptr())
+        crate::bigint_hooks::js_bigint_to_f64(a_val.as_bigint_ptr())
     } else if !(0x7FF8..=0x7FFF).contains(&a_tag) {
         a
     } else {
@@ -458,7 +458,7 @@ pub extern "C" fn js_jsvalue_compare(a: f64, b: f64) -> i32 {
     let bf = if b_val.is_int32() {
         b_val.as_int32() as f64
     } else if b_val.is_bigint() {
-        crate::bigint::js_bigint_to_f64(b_val.as_bigint_ptr())
+        crate::bigint_hooks::js_bigint_to_f64(b_val.as_bigint_ptr())
     } else if !(0x7FF8..=0x7FFF).contains(&b_tag) {
         b
     } else {

@@ -273,7 +273,7 @@ pub(super) unsafe fn dispatch_common(
                     }
                     Some("BigInt") if payload_jsv.is_bigint() => {
                         let ptr = payload_jsv.as_bigint_ptr();
-                        let str_ptr = crate::bigint::js_bigint_to_string(ptr);
+                        let str_ptr = crate::bigint_hooks::js_bigint_to_string(ptr);
                         return Some(f64::from_bits(JSValue::string_ptr(str_ptr).bits()));
                     }
                     Some("Symbol") => {
@@ -289,7 +289,7 @@ pub(super) unsafe fn dispatch_common(
                 return Some(object);
             } else if jsval.is_bigint() {
                 let ptr = jsval.as_bigint_ptr();
-                let str_ptr = crate::bigint::js_bigint_to_string(ptr);
+                let str_ptr = crate::bigint_hooks::js_bigint_to_string(ptr);
                 return Some(f64::from_bits(JSValue::string_ptr(str_ptr).bits()));
             } else if jsval.is_number() {
                 let n = jsval.as_number();

@@ -150,7 +150,7 @@ pub unsafe extern "C" fn perry_component_frame_bool(pointer: *mut c_void, value:
 pub unsafe extern "C" fn perry_component_frame_s64(pointer: *mut c_void, value: i64) -> u32 {
     frame(pointer).guard(|frame| {
         frame.add(crate::value::js_nanbox_bigint(
-            crate::bigint::js_bigint_from_i64(value) as i64,
+            crate::bigint_hooks::js_bigint_from_i64(value) as i64,
         ))
     })
 }
@@ -158,7 +158,7 @@ pub unsafe extern "C" fn perry_component_frame_s64(pointer: *mut c_void, value: 
 pub unsafe extern "C" fn perry_component_frame_u64(pointer: *mut c_void, value: u64) -> u32 {
     frame(pointer).guard(|frame| {
         frame.add(crate::value::js_nanbox_bigint(
-            crate::bigint::js_bigint_from_u64(value) as i64,
+            crate::bigint_hooks::js_bigint_from_u64(value) as i64,
         ))
     })
 }

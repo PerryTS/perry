@@ -835,7 +835,7 @@ pub(crate) unsafe fn stringify_value_pretty(
 
     if tag == BIGINT_TAG {
         let bigint_ptr = (bits & POINTER_MASK) as *const crate::BigIntHeader;
-        let str_ptr = crate::bigint::js_bigint_to_string(bigint_ptr);
+        let str_ptr = crate::bigint_hooks::js_bigint_to_string(bigint_ptr);
         if let Some(s) = str_from_header(str_ptr) {
             write_escaped_string(buf, s);
         } else {

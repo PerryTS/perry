@@ -191,6 +191,7 @@ const RUNTIME_INSTALLS: &[(&str, &[&str])] = &[
     ("js_runtime_install_global_math", &["global-math"]),
     ("js_runtime_install_global_json", &["global-json"]),
     ("js_runtime_install_turnloop", &["turnloop"]),
+    ("js_runtime_install_bigint", &["bigint"]),
     ("js_runtime_install_global_reflect", &["global-reflect"]),
     ("js_runtime_install_global_atomics", &["global-atomics"]),
     ("js_runtime_install_global_url", &["global-url"]),

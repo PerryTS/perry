@@ -423,7 +423,7 @@ pub(crate) extern "C" fn global_this_bigint_thunk(
     _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
-    let ptr = crate::bigint::js_bigint_from_f64(value);
+    let ptr = crate::bigint_hooks::js_bigint_from_f64(value);
     crate::value::js_nanbox_bigint(ptr as i64)
 }
 

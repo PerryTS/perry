@@ -344,7 +344,7 @@ pub fn js_data_view_get(buf_f64: f64, offset_value: f64, kind: DataViewKind, lit
                 } else {
                     i64::from_be_bytes(b)
                 };
-                crate::value::js_nanbox_bigint(crate::bigint::js_bigint_from_i64(v) as i64)
+                crate::value::js_nanbox_bigint(crate::bigint_hooks::js_bigint_from_i64(v) as i64)
             }
             DataViewKind::BigUint64 => {
                 let b = read_bytes::<8>(buf, offset);
@@ -353,7 +353,7 @@ pub fn js_data_view_get(buf_f64: f64, offset_value: f64, kind: DataViewKind, lit
                 } else {
                     u64::from_be_bytes(b)
                 };
-                crate::value::js_nanbox_bigint(crate::bigint::js_bigint_from_u64(v) as i64)
+                crate::value::js_nanbox_bigint(crate::bigint_hooks::js_bigint_from_u64(v) as i64)
             }
         }
     }

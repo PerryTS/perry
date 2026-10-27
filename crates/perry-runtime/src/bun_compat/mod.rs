@@ -242,7 +242,7 @@ pub extern "C" fn js_bun_hash(input: f64, seed: f64) -> f64 {
         Err(_) => Vec::new(),
     };
     let h = wyhash(seed, &bytes);
-    let ptr = crate::bigint::js_bigint_from_u64(h);
+    let ptr = crate::bigint_hooks::js_bigint_from_u64(h);
     crate::value::js_nanbox_bigint(ptr as i64)
 }
 

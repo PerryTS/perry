@@ -99,6 +99,7 @@ pub mod async_hooks;
 pub mod atomics;
 pub mod atomics_futex;
 pub mod bigint;
+mod bigint_hooks;
 pub mod r#box;
 pub mod buffer;
 mod build_stamp;

@@ -63,7 +63,7 @@ fn encode_at(
         return Ok(json!(string(root.get_nanbox_f64())));
     }
     if js.is_bigint() {
-        let text = crate::bigint::js_bigint_to_string(js.as_bigint_ptr());
+        let text = crate::bigint_hooks::js_bigint_to_string(js.as_bigint_ptr());
         return Ok(json!({"$bigint":string(crate::value::js_nanbox_string(text as i64))}));
     }
     if super::array_pointer(root.get_nanbox_f64()).is_some() {
@@ -233,7 +233,7 @@ fn decode_at(
                 );
             }
             if let Some(text) = object.get("$bigint").and_then(Value::as_str) {
-                return crate::value::js_nanbox_bigint(crate::bigint::js_bigint_from_string(
+                return crate::value::js_nanbox_bigint(crate::bigint_hooks::js_bigint_from_string(
                     text.as_ptr(),
                     text.len() as u32,
                 ) as i64);

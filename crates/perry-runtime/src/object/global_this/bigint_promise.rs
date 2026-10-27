@@ -370,9 +370,9 @@ pub(crate) fn bigint_as_n_dispatch(bits_arg: f64, value_arg: f64, signed: bool) 
     let bits = bits_int as u32;
     let ptr = jv.as_bigint_ptr() as *const crate::bigint::BigIntHeader;
     let r = if signed {
-        crate::bigint::js_bigint_as_int_n(bits, ptr)
+        crate::bigint_hooks::js_bigint_as_int_n(bits, ptr)
     } else {
-        crate::bigint::js_bigint_as_uint_n(bits, ptr)
+        crate::bigint_hooks::js_bigint_as_uint_n(bits, ptr)
     };
     f64::from_bits(crate::value::js_nanbox_bigint(r as i64).to_bits())
 }

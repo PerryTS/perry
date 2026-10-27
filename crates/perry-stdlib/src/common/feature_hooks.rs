@@ -141,6 +141,7 @@ pub extern "C" fn js_stdlib_install_bundled_nodemailer() {
 #[cfg(feature = "database-sqlite")]
 #[no_mangle]
 pub extern "C" fn js_stdlib_install_database_sqlite() {
+    perry_runtime::feature_hooks::js_runtime_install_bigint();
     install_once!({
         super::dispatch::install_sqlite();
     });
@@ -149,6 +150,7 @@ pub extern "C" fn js_stdlib_install_database_sqlite() {
 #[cfg(feature = "crypto")]
 #[no_mangle]
 pub extern "C" fn js_stdlib_install_crypto() {
+    perry_runtime::feature_hooks::js_runtime_install_bigint();
     install_once!({
         super::dispatch::install_crypto();
     });

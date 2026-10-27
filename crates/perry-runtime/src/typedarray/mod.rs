@@ -906,11 +906,11 @@ pub(crate) unsafe fn load_at(ta: *const TypedArrayHeader, idx: usize) -> f64 {
         // low limb; widen via the signed/unsigned constructor for `> i64::MAX`.
         KIND_BIGINT64 => {
             let v = *(base.add(off) as *const i64);
-            crate::value::js_nanbox_bigint(crate::bigint::js_bigint_from_i64(v) as i64)
+            crate::value::js_nanbox_bigint(crate::bigint_hooks::js_bigint_from_i64(v) as i64)
         }
         KIND_BIGUINT64 => {
             let v = *(base.add(off) as *const u64);
-            crate::value::js_nanbox_bigint(crate::bigint::js_bigint_from_u64(v) as i64)
+            crate::value::js_nanbox_bigint(crate::bigint_hooks::js_bigint_from_u64(v) as i64)
         }
         _ => 0.0,
     }

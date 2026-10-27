@@ -156,6 +156,7 @@ pub extern "C" fn js_runtime_install_compiled() {
     js_runtime_install_intl_segmenter();
     js_runtime_install_intl_locale();
     js_runtime_install_turnloop();
+    js_runtime_install_bigint();
     js_runtime_install_global_math();
     js_runtime_install_global_json();
     js_runtime_install_global_reflect();
@@ -214,6 +215,7 @@ pub(crate) static NODE_TEST_ROOT_SCANNER: Hook<crate::gc::MutableRootScanner> = 
 /// shutdown. perry installs it for a program with an approved native addon.
 #[no_mangle]
 pub extern "C" fn js_runtime_install_node_api_host() {
+    js_runtime_install_bigint();
     js_runtime_install_turnloop();
     crate::os::os_process_emitter::install_process_signal_sync();
     perry_install_once!({
@@ -227,6 +229,7 @@ pub extern "C" fn js_runtime_install_node_api_host() {
 /// keeps its graceful-failure behavior.
 #[no_mangle]
 pub extern "C" fn js_runtime_install_wasm_host() {
+    js_runtime_install_bigint();
     perry_install_once!({
         crate::webassembly::install();
     });
@@ -255,6 +258,7 @@ pub extern "C" fn js_runtime_install_dyn_eval() {
 #[cfg(feature = "bun-cli-utils")]
 #[no_mangle]
 pub extern "C" fn js_runtime_install_bun_cli_utils() {
+    js_runtime_install_bigint();
     perry_install_once!({
         crate::bun_compat::install_cli_utils();
     });
@@ -271,6 +275,7 @@ pub extern "C" fn js_runtime_install_intl_namespace() {
 #[cfg(feature = "temporal")]
 #[no_mangle]
 pub extern "C" fn js_runtime_install_temporal() {
+    js_runtime_install_bigint();
     perry_install_once!({
         crate::temporal::hooked::install();
     });
@@ -390,6 +395,7 @@ pub extern "C" fn js_runtime_install_global_webfetch() {
 
 #[no_mangle]
 pub extern "C" fn js_runtime_install_proc_ipc() {
+    js_runtime_install_bigint();
     perry_install_once!({
         crate::os::os_process_emitter::install_process_signal_sync();
         crate::process::ipc::install();
@@ -433,4 +439,17 @@ mod diagnostics_install_tests {
             &json[..json.len().min(80)]
         );
     }
+}
+
+/// Install the integer operations used by generic value hubs.
+#[no_mangle]
+pub extern "C" fn js_runtime_install_bigint() {
+    perry_install_once!({
+        crate::bigint_hooks::install();
+    });
+}
+
+/// Format an already produced BigInt from a cross-crate generic value hub.
+pub fn bigint_to_string(value: *const crate::bigint::BigIntHeader) -> *mut crate::StringHeader {
+    crate::bigint_hooks::js_bigint_to_string(value)
 }

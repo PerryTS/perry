@@ -15,7 +15,7 @@ unsafe fn coerce_to_bigint_ptr(val: f64) -> *mut crate::bigint::BigIntHeader {
     if jsval.is_bigint() {
         jsval.as_bigint_ptr() as *mut _
     } else {
-        crate::bigint::js_bigint_from_f64(val)
+        crate::bigint_hooks::js_bigint_from_f64(val)
     }
 }
 
@@ -30,7 +30,7 @@ unsafe fn coerce_to_bigint_ptr(val: f64) -> *mut crate::bigint::BigIntHeader {
 unsafe fn describe_mix_operand(v: f64) -> String {
     let jv = JSValue::from_bits(v.to_bits());
     if jv.is_bigint() {
-        let s = crate::bigint::js_bigint_to_string(jv.as_bigint_ptr());
+        let s = crate::bigint_hooks::js_bigint_to_string(jv.as_bigint_ptr());
         format!("bigint({}n)", crate::exception::string_header_to_string(s))
     } else if jv.is_int32() {
         format!("int32({})", jv.as_int32())
@@ -478,7 +478,7 @@ pub unsafe extern "C" fn js_dynamic_mul(a: f64, b: f64) -> f64 {
             &scope,
             &a_handle,
             &b_handle,
-            crate::bigint::js_bigint_mul,
+            crate::bigint_hooks::js_bigint_mul,
         );
     }
     numify_arith_operand(a) * numify_arith_operand(b)
@@ -488,7 +488,7 @@ pub unsafe extern "C" fn js_dynamic_mul(a: f64, b: f64) -> f64 {
 #[no_mangle]
 pub unsafe extern "C" fn js_dynamic_add(a: f64, b: f64) -> f64 {
     if both_bigint_or_throw(a, b) {
-        return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_add);
+        return dynamic_bigint_binary_op(a, b, crate::bigint_hooks::js_bigint_add);
     }
     numify_arith_operand(a) + numify_arith_operand(b)
 }
@@ -524,12 +524,12 @@ pub unsafe extern "C" fn js_numeric_step(numeric: f64, is_increment: i32) -> f64
         // the pre-existing operand is the one at risk.
         let scope = crate::gc::RuntimeHandleScope::new();
         let numeric_handle = scope.root_nanbox_f64(numeric);
-        let one_ptr = crate::bigint::js_bigint_from_i64(1);
+        let one_ptr = crate::bigint_hooks::js_bigint_from_i64(1);
         let one_handle = scope.root_nanbox_f64(js_nanbox_bigint(one_ptr as i64));
         let op = if is_increment != 0 {
-            crate::bigint::js_bigint_add
+            crate::bigint_hooks::js_bigint_add
         } else {
-            crate::bigint::js_bigint_sub
+            crate::bigint_hooks::js_bigint_sub
         };
         dynamic_bigint_binary_op_from_handles(&scope, &numeric_handle, &one_handle, op)
     } else if is_increment != 0 {
@@ -637,7 +637,7 @@ pub unsafe extern "C" fn js_dynamic_string_or_number_add(a: f64, b: f64) -> f64 
             &scope,
             &a_prim_handle,
             &b_prim_handle,
-            crate::bigint::js_bigint_add,
+            crate::bigint_hooks::js_bigint_add,
         );
     }
 
@@ -679,7 +679,7 @@ pub unsafe extern "C" fn js_dynamic_sub(a: f64, b: f64) -> f64 {
             &scope,
             &a_handle,
             &b_handle,
-            crate::bigint::js_bigint_sub,
+            crate::bigint_hooks::js_bigint_sub,
         );
     }
     numify_arith_operand(a) - numify_arith_operand(b)
@@ -700,7 +700,7 @@ pub unsafe extern "C" fn js_dynamic_div(a: f64, b: f64) -> f64 {
             &scope,
             &a_handle,
             &b_handle,
-            crate::bigint::js_bigint_div,
+            crate::bigint_hooks::js_bigint_div,
         );
     }
     numify_arith_operand(a) / numify_arith_operand(b)
@@ -769,7 +769,7 @@ pub unsafe extern "C" fn js_dynamic_mod(a: f64, b: f64) -> f64 {
             &scope,
             &a_handle,
             &b_handle,
-            crate::bigint::js_bigint_mod,
+            crate::bigint_hooks::js_bigint_mod,
         );
     }
     let a = numify_arith_operand(a);
@@ -797,7 +797,7 @@ pub unsafe extern "C" fn js_dynamic_neg(a: f64) -> f64 {
     if a_val.is_bigint() {
         let scope = crate::gc::RuntimeHandleScope::new();
         let a_handle = scope.root_bigint_ptr(a_val.as_bigint_ptr());
-        let result = crate::bigint::js_bigint_neg(
+        let result = crate::bigint_hooks::js_bigint_neg(
             a_handle.get_raw_const_ptr::<crate::bigint::BigIntHeader>(),
         );
         return js_nanbox_bigint(result as i64);
@@ -824,7 +824,7 @@ pub unsafe extern "C" fn js_dynamic_bitnot(a: f64) -> f64 {
     if a_val.is_bigint() {
         let scope = crate::gc::RuntimeHandleScope::new();
         let a_handle = scope.root_bigint_ptr(a_val.as_bigint_ptr());
-        let result = crate::bigint::js_bigint_not(
+        let result = crate::bigint_hooks::js_bigint_not(
             a_handle.get_raw_const_ptr::<crate::bigint::BigIntHeader>(),
         );
         return js_nanbox_bigint(result as i64);
@@ -917,7 +917,7 @@ pub unsafe extern "C" fn js_dynamic_shr(a: f64, b: f64) -> f64 {
             &scope,
             &a_handle,
             &b_handle,
-            crate::bigint::js_bigint_shr,
+            crate::bigint_hooks::js_bigint_shr,
         );
     }
     // JS ToInt32(a); ToUint32(b) & 0x1F for the shift count (#6079).
@@ -941,7 +941,7 @@ pub unsafe extern "C" fn js_dynamic_shl(a: f64, b: f64) -> f64 {
             &scope,
             &a_handle,
             &b_handle,
-            crate::bigint::js_bigint_shl,
+            crate::bigint_hooks::js_bigint_shl,
         );
     }
     // JS ToInt32(a); ToUint32(b) & 0x1F for the shift count (#6079).
@@ -967,7 +967,7 @@ pub unsafe extern "C" fn js_dynamic_bitand(a: f64, b: f64) -> f64 {
             &scope,
             &a_handle,
             &b_handle,
-            crate::bigint::js_bigint_and,
+            crate::bigint_hooks::js_bigint_and,
         );
     }
     // JS ToInt32 both operands (#6079).
@@ -989,7 +989,7 @@ pub unsafe extern "C" fn js_dynamic_bitor(a: f64, b: f64) -> f64 {
             &scope,
             &a_handle,
             &b_handle,
-            crate::bigint::js_bigint_or,
+            crate::bigint_hooks::js_bigint_or,
         );
     }
     // JS ToInt32 both operands (#6079).
@@ -1011,7 +1011,7 @@ pub unsafe extern "C" fn js_dynamic_bitxor(a: f64, b: f64) -> f64 {
             &scope,
             &a_handle,
             &b_handle,
-            crate::bigint::js_bigint_xor,
+            crate::bigint_hooks::js_bigint_xor,
         );
     }
     // JS ToInt32 both operands (#6079).
@@ -1036,7 +1036,7 @@ pub unsafe extern "C" fn js_dynamic_pow(a: f64, b: f64) -> f64 {
             &scope,
             &a_handle,
             &b_handle,
-            crate::bigint::js_bigint_pow,
+            crate::bigint_hooks::js_bigint_pow,
         );
     }
     crate::math::js_math_pow(a, b)

@@ -442,6 +442,53 @@ pub(super) fn detect_optional_feature_usage(
     // false-negative class for every gate at once (the rule is zero false
     // negatives; including more HIR can only over-include a feature).
     let hir_debug = module_hir_debug(hir_module);
+    // Literals, constructors, BigInt views and value-form builtin references.
+    // An escaped global object can obtain the constructor through a runtime key.
+    if hir_debug.contains("BigInt")
+        || hir_debug.contains("Bigint")
+        || hir_debug.contains("bigint")
+        || hir_debug.contains("Buffer")
+        || hir_debug.contains("BigUint64Array")
+        || hir_debug.contains("GlobalThisExpr")
+        || hir_debug.contains("property: \"globalThis\"")
+    {
+        ctx.uses_bigint = true;
+    }
+    if hir_module.imports.iter().any(|import| {
+        !import.type_only
+            && !import.runtime_erased
+            && matches!(
+                import
+                    .source
+                    .strip_prefix("node:")
+                    .unwrap_or(&import.source),
+                "v8" | "worker_threads"
+                    | "child_process"
+                    | "fs"
+                    | "fs/promises"
+                    | "os"
+                    | "perf_hooks"
+                    | "bun"
+                    | "bun:ffi"
+            )
+    }) || [
+        "v8",
+        "worker_threads",
+        "child_process",
+        "fs",
+        "fs/promises",
+        "os",
+        "perf_hooks",
+        "bun",
+        "bun:ffi",
+    ]
+    .iter()
+    .any(|name| {
+        hir_debug.contains(&format!(r#"module: "{name}""#))
+            || hir_debug.contains(&format!(r#"NativeModuleRef("{name}")"#))
+    }) {
+        ctx.uses_bigint = true;
+    }
     let computed = computed_members::scan(hir_module);
     ctx.uses_computed_member_keys |= computed.opaque_members;
     ctx.uses_file_handle_capability |= computed.file_handles;

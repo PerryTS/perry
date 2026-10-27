@@ -1275,8 +1275,8 @@ pub(crate) fn number_to_locale_string(value: f64, locales: f64, options: f64) ->
 
 pub(crate) fn bigint_to_locale_string(value: f64, locales: f64, options: f64) -> *mut StringHeader {
     let ptr = JSValue::from_bits(value.to_bits()).as_bigint_ptr();
-    let negative = crate::bigint::js_bigint_is_negative(ptr) != 0;
-    let digits_ptr = crate::bigint::js_bigint_to_string(ptr);
+    let negative = crate::bigint_hooks::js_bigint_is_negative(ptr) != 0;
+    let digits_ptr = crate::bigint_hooks::js_bigint_to_string(ptr);
     // Copy into an owned `String` right away — `digits_ptr` is GC-managed and
     // `make_instance` below allocates, which can move/free it.
     let digits = unsafe { string_header_as_str(digits_ptr) };

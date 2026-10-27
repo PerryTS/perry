@@ -346,9 +346,9 @@ fn bigint_bits(value: f64) -> u64 {
 
 fn bigint_result_for_kind(kind: u8, bits: u64) -> f64 {
     let ptr = match kind {
-        KIND_BIGINT64 => crate::bigint::js_bigint_from_i64(bits as i64),
-        KIND_BIGUINT64 => crate::bigint::js_bigint_from_u64(bits),
-        _ => crate::bigint::js_bigint_from_i64(bits as i64),
+        KIND_BIGINT64 => crate::bigint_hooks::js_bigint_from_i64(bits as i64),
+        KIND_BIGUINT64 => crate::bigint_hooks::js_bigint_from_u64(bits),
+        _ => crate::bigint_hooks::js_bigint_from_i64(bits as i64),
     };
     f64::from_bits(JSValue::bigint_ptr(ptr).bits())
 }

@@ -109,11 +109,11 @@ pub(crate) fn to_bigint_for_store(value: f64) -> f64 {
     }
     if jsval.is_bool() {
         let n = if jsval.as_bool() { 1 } else { 0 };
-        return crate::value::js_nanbox_bigint(crate::bigint::js_bigint_from_i64(n) as i64);
+        return crate::value::js_nanbox_bigint(crate::bigint_hooks::js_bigint_from_i64(n) as i64);
     }
     if jsval.is_any_string() {
         // StringToBigInt (a malformed numeric string throws SyntaxError).
-        let bi = crate::bigint::js_bigint_from_f64(value);
+        let bi = crate::bigint_hooks::js_bigint_from_f64(value);
         return crate::value::js_nanbox_bigint(bi as i64);
     }
     // ToBigInt(object): `ToPrimitive(value, number)` (its `Symbol.toPrimitive` /

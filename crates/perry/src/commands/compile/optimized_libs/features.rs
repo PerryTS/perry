@@ -218,6 +218,39 @@ pub(crate) fn auto_optimized_cross_features(
                 | "crypto"
         )
     });
+    // Native producers include binary deserialization, bigint-valued OS/fs
+    // metadata, FFI, histogram and WebAssembly results. Their returned values
+    // must keep the generic BigInt operators and formatting paths installed.
+    if features.contains("crypto")
+        || features.contains("database-sqlite")
+        || features.contains("bundled-ethers")
+        || ctx.uses_bigint
+        || ctx.uses_proc_ipc
+        || ctx.uses_get_builtin_module
+        || ctx.uses_temporal
+        || ctx.needs_wasm_runtime
+        || !ctx.native_addons.is_empty()
+        || needs_dyn_eval
+        || ctx.native_module_imports.iter().any(|m| {
+            matches!(
+                m.as_str(),
+                "v8" | "worker_threads"
+                    | "child_process"
+                    | "fs"
+                    | "fs/promises"
+                    | "os"
+                    | "perf_hooks"
+                    | "bun"
+                    | "bun:ffi"
+                    | "crypto"
+                    | "ethers"
+                    | "sqlite"
+                    | "bun:sqlite"
+            )
+        })
+    {
+        cross_features.push("perry-runtime/bigint".to_string());
+    }
     if ctx.uses_turnloop
         || io_module
         || ctx.uses_fetch

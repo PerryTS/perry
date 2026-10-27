@@ -36,12 +36,12 @@ pub(crate) unsafe fn make_stats_predicate(value: bool) -> f64 {
 }
 
 pub(crate) fn bigint_u64_value(value: u64) -> f64 {
-    let ptr = crate::bigint::js_bigint_from_u64(value);
+    let ptr = crate::bigint_hooks::js_bigint_from_u64(value);
     crate::value::js_nanbox_bigint(ptr as i64)
 }
 
 pub(crate) fn bigint_i64_value(value: i64) -> f64 {
-    let ptr = crate::bigint::js_bigint_from_i64(value);
+    let ptr = crate::bigint_hooks::js_bigint_from_i64(value);
     crate::value::js_nanbox_bigint(ptr as i64)
 }
 

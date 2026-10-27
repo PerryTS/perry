@@ -1180,7 +1180,7 @@ pub unsafe extern "C" fn napi_create_bigint_int64(
 ) -> NapiStatus {
     write_handle(
         env,
-        bigint_bits(crate::bigint::js_bigint_from_i64(value)),
+        bigint_bits(crate::bigint_hooks::js_bigint_from_i64(value)),
         result,
     )
 }
@@ -1193,7 +1193,7 @@ pub unsafe extern "C" fn napi_create_bigint_uint64(
 ) -> NapiStatus {
     write_handle(
         env,
-        bigint_bits(crate::bigint::js_bigint_from_u64(value)),
+        bigint_bits(crate::bigint_hooks::js_bigint_from_u64(value)),
         result,
     )
 }

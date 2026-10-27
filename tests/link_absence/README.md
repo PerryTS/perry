@@ -83,3 +83,9 @@ The turnloop driver is installed for native I/O, timers, agents and process
 listeners. Generic event-pump operations call its installer-filled slots.
 A promise-only negative requires the driver absent, while timers and a real
 self-delivered process signal exercise installed waits and signal dispatch.
+
+Generic BigInt arithmetic, formatting, equality and querystring formatting
+use the BigInt installer slots. Literals, constructors and native producers
+select the installer. Number-only arithmetic and querystring negatives
+require absence; independent constructor, clock, crypto and operator positives
+exercise installed paths, including constructor names supplied through argv.

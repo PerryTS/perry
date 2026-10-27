@@ -536,7 +536,7 @@ pub extern "C" fn js_number_coerce(value: f64) -> f64 {
     } else if jsval.is_bigint() {
         // BigInt → number conversion
         let ptr = jsval.as_bigint_ptr();
-        crate::bigint::js_bigint_to_f64(ptr)
+        crate::bigint_hooks::js_bigint_to_f64(ptr)
     } else if jsval.is_handle() {
         // HANDLE_TAG carries a native registry id, not a heap pointer. It is
         // still a JavaScript object and follows ToPrimitive/ToNumber, but
@@ -708,7 +708,7 @@ pub extern "C" fn js_string_coerce(value: f64) -> *mut StringHeader {
         if ptr.is_null() {
             "0".to_string()
         } else {
-            let str_ptr = crate::bigint::js_bigint_to_string(ptr);
+            let str_ptr = crate::bigint_hooks::js_bigint_to_string(ptr);
             return str_ptr as *mut StringHeader;
         }
     } else if jsval.is_reference() {

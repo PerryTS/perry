@@ -681,7 +681,7 @@ fn bigint_decimal(value: f64) -> String {
     if ptr.is_null() {
         return "0".to_string();
     }
-    let s = crate::bigint::js_bigint_to_string(ptr);
+    let s = crate::bigint_hooks::js_bigint_to_string(ptr);
     if s.is_null() {
         return "0".to_string();
     }

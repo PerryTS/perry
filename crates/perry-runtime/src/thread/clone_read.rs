@@ -178,7 +178,7 @@ impl<'s, 'm> Reader<'s, 'm> {
             SerializedValue::Ref(index) => self.resolve(*index as usize),
             SerializedValue::String(bytes) => string_bits(bytes),
             SerializedValue::BigInt(limbs) => {
-                let ptr = crate::bigint::bigint_alloc_with_limbs(limbs);
+                let ptr = crate::bigint_hooks::bigint_alloc_with_limbs(limbs);
                 BIGINT_TAG | (ptr as u64 & POINTER_MASK)
             }
             // #2089: a fresh DateCell in this thread's arena.

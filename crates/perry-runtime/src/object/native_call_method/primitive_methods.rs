@@ -357,7 +357,7 @@ pub(super) unsafe fn dispatch_primitive(
                                 (payload.to_bits() & 0x0000_FFFF_FFFF_FFFF)
                                     as *const crate::bigint::BigIntHeader,
                             );
-                            let str_ptr = crate::bigint::js_bigint_to_string(ptr);
+                            let str_ptr = crate::bigint_hooks::js_bigint_to_string(ptr);
                             return Some(f64::from_bits(JSValue::string_ptr(str_ptr).bits()));
                         }
                     }
@@ -802,15 +802,15 @@ pub(super) unsafe fn dispatch_primitive(
         );
         match method_name {
             "isZero" => {
-                let result = crate::bigint::js_bigint_is_zero(bigint_ptr);
+                let result = crate::bigint_hooks::js_bigint_is_zero(bigint_ptr);
                 return Some(f64::from_bits(JSValue::bool(result != 0).bits()));
             }
             "isNeg" | "isNegative" => {
-                let result = crate::bigint::js_bigint_is_negative(bigint_ptr);
+                let result = crate::bigint_hooks::js_bigint_is_negative(bigint_ptr);
                 return Some(f64::from_bits(JSValue::bool(result != 0).bits()));
             }
             "toNumber" => {
-                return Some(crate::bigint::js_bigint_to_f64(bigint_ptr));
+                return Some(crate::bigint_hooks::js_bigint_to_f64(bigint_ptr));
             }
             "toString" => {
                 // #2864: ToNumber/ToInteger-coerce + validate the radix
@@ -821,8 +821,8 @@ pub(super) unsafe fn dispatch_primitive(
                     None
                 };
                 let result_ptr = match radix {
-                    Some(r) => crate::bigint::js_bigint_to_string_radix(bigint_ptr, r),
-                    None => crate::bigint::js_bigint_to_string(bigint_ptr),
+                    Some(r) => crate::bigint_hooks::js_bigint_to_string_radix(bigint_ptr, r),
+                    None => crate::bigint_hooks::js_bigint_to_string(bigint_ptr),
                 };
                 return Some(f64::from_bits(JSValue::string_ptr(result_ptr).bits()));
             }

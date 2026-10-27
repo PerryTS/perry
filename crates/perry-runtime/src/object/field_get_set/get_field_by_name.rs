@@ -550,14 +550,14 @@ mod primitive_proto_accessor_tests_10648 {
                 "positive bigint",
                 "BigInt",
                 scope.root_nanbox_f64(crate::value::js_nanbox_bigint(
-                    crate::bigint::js_bigint_from_i64(1) as i64,
+                    crate::bigint_hooks::js_bigint_from_i64(1) as i64,
                 )),
             ),
             (
                 "negative bigint",
                 "BigInt",
                 scope.root_nanbox_f64(crate::value::js_nanbox_bigint(
-                    crate::bigint::js_bigint_from_i64(-1) as i64,
+                    crate::bigint_hooks::js_bigint_from_i64(-1) as i64,
                 )),
             ),
         ];

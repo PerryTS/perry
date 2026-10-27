@@ -593,7 +593,7 @@ extern "C" fn xxhash64_closure(
 ) -> f64 {
     let bytes = payload_bytes(input).unwrap_or_default();
     let hash = xxhash_rust::xxh64::xxh64(&bytes, super::hash_seed(seed));
-    let bigint = crate::bigint::js_bigint_from_u64(hash);
+    let bigint = crate::bigint_hooks::js_bigint_from_u64(hash);
     crate::value::js_nanbox_bigint(bigint as i64)
 }
 

@@ -208,7 +208,7 @@ pub(crate) fn format_bigint_literal(val: f64) -> String {
         return "0n".to_string();
     }
     unsafe {
-        let str_ptr = crate::bigint::js_bigint_to_string(ptr);
+        let str_ptr = crate::bigint_hooks::js_bigint_to_string(ptr);
         if str_ptr.is_null() {
             return "0n".to_string();
         }
@@ -613,7 +613,7 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
             if ptr.is_null() {
                 "null".to_string()
             } else {
-                let str_ptr = crate::bigint::js_bigint_to_string(ptr);
+                let str_ptr = crate::bigint_hooks::js_bigint_to_string(ptr);
                 if str_ptr.is_null() {
                     "0n".to_string()
                 } else {
@@ -1428,7 +1428,7 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
             if ptr.is_null() {
                 "null".to_string()
             } else {
-                let str_ptr = crate::bigint::js_bigint_to_string(ptr);
+                let str_ptr = crate::bigint_hooks::js_bigint_to_string(ptr);
                 if str_ptr.is_null() {
                     "0n".to_string()
                 } else {

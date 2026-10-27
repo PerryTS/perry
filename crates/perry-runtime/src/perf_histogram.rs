@@ -394,7 +394,7 @@ fn bool_value(value: bool) -> f64 {
 }
 
 fn bigint(value: i64) -> f64 {
-    let ptr = crate::bigint::js_bigint_from_i64(value);
+    let ptr = crate::bigint_hooks::js_bigint_from_i64(value);
     f64::from_bits(JSValue::bigint_ptr(ptr).bits())
 }
 
@@ -698,7 +698,7 @@ pub(crate) unsafe fn histogram_method(
             let value = arg(0);
             let jv = JSValue::from_bits(value.to_bits());
             let recorded = if jv.is_bigint() {
-                crate::bigint::js_bigint_to_f64(jv.as_bigint_ptr()) as i64
+                crate::bigint_hooks::js_bigint_to_f64(jv.as_bigint_ptr()) as i64
             } else {
                 validate_integer(value, "val", 1.0, 9007199254740991.0)
             };

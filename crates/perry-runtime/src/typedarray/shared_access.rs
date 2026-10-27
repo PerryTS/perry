@@ -51,10 +51,10 @@ pub(super) unsafe fn load(base: *const u8, kind: u8) -> f64 {
         KIND_FLOAT64 => crate::array::canonical_raw_f64(f64::from_bits(
             (&*base.cast::<AtomicU64>()).load(Relaxed),
         )),
-        KIND_BIGINT64 => crate::value::js_nanbox_bigint(crate::bigint::js_bigint_from_i64(
+        KIND_BIGINT64 => crate::value::js_nanbox_bigint(crate::bigint_hooks::js_bigint_from_i64(
             (&*base.cast::<AtomicU64>()).load(Relaxed) as i64,
         ) as i64),
-        KIND_BIGUINT64 => crate::value::js_nanbox_bigint(crate::bigint::js_bigint_from_u64(
+        KIND_BIGUINT64 => crate::value::js_nanbox_bigint(crate::bigint_hooks::js_bigint_from_u64(
             (&*base.cast::<AtomicU64>()).load(Relaxed),
         ) as i64),
         _ => 0.0,

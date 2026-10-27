@@ -732,7 +732,7 @@ pub extern "C" fn js_process_versions() -> f64 {
 /// process.hrtime.bigint() -> bigint of nanoseconds
 #[no_mangle]
 pub extern "C" fn js_process_hrtime_bigint() -> f64 {
-    use crate::bigint::js_bigint_from_u64;
+    use crate::bigint_hooks::js_bigint_from_u64;
     use crate::value::js_nanbox_bigint;
 
     let elapsed = get_hrtime_start().elapsed();
