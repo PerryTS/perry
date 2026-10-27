@@ -88,7 +88,7 @@ fn collected_owners_drop_once_while_borrows_and_reused_handles_remain_live() {
         let explicit = temporary.root_nanbox_f64(wrap(4, 3, 0, true, undefined(), undefined()));
         method(explicit.get_nanbox_f64(), b"dispose");
         method(explicit.get_nanbox_f64(), b"dispose");
-        let mut transfer = Frame::new();
+        let mut transfer = Frame::allocate_guest_frame();
         let old = owned(&mut transfer, 4, 4);
         transfer.guard(|f| lower(f, old, 4, true, false));
         transfer.guard(commit);

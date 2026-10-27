@@ -46,7 +46,7 @@ impl Frame {
 
 #[no_mangle]
 pub extern "C" fn perry_component_frame_task_new() -> *mut c_void {
-    let mut frame = Box::new(Frame::new());
+    let mut frame = Box::new(Frame::allocate_guest_frame());
     let saved = als::alloc_snapshot_holder(als::capture_context());
     let snapshot = frame.add(crate::value::js_nanbox_pointer(saved as i64));
     frame.task = Some(TaskContext {

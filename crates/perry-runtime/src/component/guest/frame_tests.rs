@@ -376,7 +376,7 @@ fn failed_frame_keeps_the_original_heap_exception_rooted() {
     let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _evacuate = crate::gc::knob_overrides::ForcedEvacuationTestGuard::on();
     crate::gc::gc_init();
-    let mut frame = Frame::new();
+    let mut frame = Frame::allocate_guest_frame();
     frame.guard::<()>(|_| {
         let thrown =
             crate::value::js_nanbox_pointer(crate::array::js_array_alloc_with_length(3) as i64);
@@ -450,8 +450,8 @@ fn guest_frames_can_finish_out_of_order_without_truncating_other_roots() {
     let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _evacuate = crate::gc::knob_overrides::ForcedEvacuationTestGuard::on();
     crate::gc::gc_init();
-    let older = Frame::new();
-    let mut suspended = Frame::new();
+    let older = Frame::allocate_guest_frame();
+    let mut suspended = Frame::allocate_guest_frame();
     let slot = suspended.add(crate::value::js_nanbox_pointer(
         crate::array::js_array_alloc_with_length(3) as i64,
     ));
@@ -471,7 +471,7 @@ fn guest_frames_survive_the_native_scope_that_created_them() {
     let (frame, slot, before) = {
         let temporary = RuntimeHandleScope::new();
         let _temporary_value = temporary.root_nanbox_f64(undefined());
-        let mut frame = Frame::new();
+        let mut frame = Frame::allocate_guest_frame();
         let slot = frame.add(crate::value::js_nanbox_pointer(
             crate::array::js_array_alloc_with_length(5) as i64,
         ));
@@ -493,7 +493,7 @@ fn guest_frame_growth_publishes_live_heads_and_keeps_all_slots_traced() {
     let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _evacuate = crate::gc::knob_overrides::ForcedEvacuationTestGuard::on();
     crate::gc::gc_init();
-    let mut frame = Frame::new();
+    let mut frame = Frame::allocate_guest_frame();
     for n in 0..1025 {
         let value =
             crate::value::js_nanbox_pointer(crate::array::js_array_alloc_with_length(n % 7) as i64);
@@ -528,7 +528,7 @@ fn dropping_a_guest_frame_preserves_later_temporary_handle_scopes() {
     let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _evacuate = crate::gc::knob_overrides::ForcedEvacuationTestGuard::on();
     crate::gc::gc_init();
-    let frame = Frame::new();
+    let frame = Frame::allocate_guest_frame();
     let temporary = RuntimeHandleScope::new();
     let value = temporary.root_nanbox_f64(crate::value::js_nanbox_pointer(
         crate::array::js_array_alloc_with_length(7) as i64,
@@ -551,11 +551,11 @@ fn dropping_a_guest_frame_preserves_later_temporary_handle_scopes() {
 fn guest_frame_drop_after_cell_teardown_never_resolves_its_stale_link() {
     crate::gc::gc_init();
     let domain = crate::async_context::job_domain::JobDomain::new();
-    let mut deferred = Box::new(Frame::new());
+    let mut deferred = Box::new(Frame::allocate_guest_frame());
     let pointer = (&raw mut *deferred).cast();
     assert!(domain.run(|| unsafe { perry_component_frame_import_begin(pointer) }) > 0);
     let frames = [
-        Box::new(Frame::new()),
+        Box::new(Frame::allocate_guest_frame()),
         unsafe { Box::from_raw(perry_component_frame_task_new().cast::<Frame>()) },
         deferred,
     ];

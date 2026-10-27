@@ -17,7 +17,7 @@ fn committed_loans_block_disposal_and_transfer_until_every_borrower_retires() {
     let alias = scope.root_nanbox_f64(method(owner.get_nanbox_f64(), b"borrow"));
     let mut borrowers = Vec::new();
     for _ in 0..2 {
-        let mut frame = Frame::new();
+        let mut frame = Frame::allocate_guest_frame();
         for resource in [owner.get_nanbox_f64(), alias.get_nanbox_f64()] {
             let slot = frame.add(resource);
             assert_eq!(frame.guard(|f| lower(f, slot, 4, false, false)), 1);
@@ -36,7 +36,7 @@ fn committed_loans_block_disposal_and_transfer_until_every_borrower_retires() {
             crate::exception::catch_js_throw(|| method(owner.get_nanbox_f64(), b"dispose"))
                 .is_err()
         );
-        let mut transfer = Frame::new();
+        let mut transfer = Frame::allocate_guest_frame();
         let slot = transfer.add(owner.get_nanbox_f64());
         transfer.guard(|f| lower(f, slot, 4, true, false));
         assert!(transfer.error().is_some());
@@ -56,13 +56,13 @@ fn a_loan_started_after_lowering_prevents_partial_ownership_commit() {
     crate::gc::gc_init();
     let scope = RuntimeHandleScope::new();
     let _registry = Registry::new(&scope);
-    let mut transfer = Frame::new();
+    let mut transfer = Frame::allocate_guest_frame();
     let a = owned(&mut transfer, 4, 1);
     let b = owned(&mut transfer, 4, 2);
     for slot in [a, b] {
         transfer.guard(|f| lower(f, slot, 4, true, false));
     }
-    let mut borrower = Frame::new();
+    let mut borrower = Frame::allocate_guest_frame();
     let slot = borrower.add(transfer.get(b));
     borrower.guard(|f| lower(f, slot, 4, false, false));
     borrower.guard(commit);
@@ -71,7 +71,7 @@ fn a_loan_started_after_lowering_prevents_partial_ownership_commit() {
     assert_eq!(get(data(transfer.get(a)), STATE), OWNED);
     assert_eq!(get(data(transfer.get(b)), STATE), OWNED);
     drop(borrower);
-    let mut retry = Frame::new();
+    let mut retry = Frame::allocate_guest_frame();
     for original in [a, b] {
         let slot = retry.add(transfer.get(original));
         retry.guard(|f| lower(f, slot, 4, true, false));
@@ -95,7 +95,7 @@ fn cancelling_the_parent_and_failing_the_import_do_not_release_unacknowledged_lo
     }
     unsafe {
         let parent = abi::perry_component_frame_task_new();
-        let mut child = Box::new(Frame::new());
+        let mut child = Box::new(Frame::allocate_guest_frame());
         let resource = child.add(owner.get_nanbox_f64());
         child.guard(|f| lower(f, resource, 4, false, false));
         let pointer = (&raw mut *child).cast();
@@ -124,7 +124,7 @@ fn cancelling_the_parent_and_failing_the_import_do_not_release_unacknowledged_lo
         // must release the lease even though the frame error boundary is inert.
         abi::perry_component_frame_drop(pointer);
         assert_eq!(get(data(owner.get_nanbox_f64()), BORROW_COUNT), 0.0);
-        let mut transfer = Frame::new();
+        let mut transfer = Frame::allocate_guest_frame();
         let slot = transfer.add(owner.get_nanbox_f64());
         transfer.guard(|f| lower(f, slot, 4, true, false));
         transfer.guard(commit);
@@ -138,7 +138,7 @@ fn promise_settlement_keeps_the_native_loan_until_frame_retirement() {
     let scope = RuntimeHandleScope::new();
     let _registry = Registry::new(&scope);
     let domain = job_domain::JobDomain::new();
-    let mut child = Box::new(Frame::new());
+    let mut child = Box::new(Frame::allocate_guest_frame());
     let resource = owned(&mut child, 4, 1);
     child.guard(|f| lower(f, resource, 4, false, false));
     unsafe {
@@ -154,7 +154,7 @@ fn promise_settlement_keeps_the_native_loan_until_frame_retirement() {
         child.release_import();
         abi::perry_component_frame_drop(pointer);
         assert_eq!(get(data(owner.get_nanbox_f64()), BORROW_COUNT), 0.0);
-        let mut transfer = Frame::new();
+        let mut transfer = Frame::allocate_guest_frame();
         let slot = transfer.add(owner.get_nanbox_f64());
         transfer.guard(|f| lower(f, slot, 4, true, false));
         transfer.guard(commit);
@@ -167,7 +167,7 @@ fn loan_retirement_uses_rooted_private_state_after_the_current_registry_changes(
     crate::gc::gc_init();
     let scope = RuntimeHandleScope::new();
     let _registry = Registry::new(&scope);
-    let mut borrower = Frame::new();
+    let mut borrower = Frame::allocate_guest_frame();
     let slot = owned(&mut borrower, 4, 1);
     borrower.guard(|f| lower(f, slot, 4, false, false));
     borrower.guard(commit);
@@ -183,7 +183,7 @@ fn a_full_loan_counter_rejects_the_whole_commit_before_consuming_an_owner() {
     crate::gc::gc_init();
     let scope = RuntimeHandleScope::new();
     let _registry = Registry::new(&scope);
-    let mut frame = Frame::new();
+    let mut frame = Frame::allocate_guest_frame();
     let a = owned(&mut frame, 4, 1);
     let b = owned(&mut frame, 4, 2);
     frame.guard(|f| lower(f, a, 4, true, false));
