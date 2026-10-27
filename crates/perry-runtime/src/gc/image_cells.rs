@@ -21,9 +21,10 @@
 //! Every collection therefore treats each remembered cell as a root object: a
 //! minor marks or copies its young and malloc children, a full marks all of
 //! them, a moving collection rewrites its slots, and the verifiers check every
-//! image cell. The set is bounded by the image's cell count. Stores made
-//! before #7187's lazy arming are recovered by the arming reconstruct, which
-//! walks the image.
+//! image cell. A full trace also visits the cells whose shape record is not
+//! static image data ([`root_cells`]). The set is bounded by the image's
+//! cell count. Stores made before #7187's lazy arming are recovered by the
+//! arming reconstruct, which walks the image.
 //!
 //! The set is per agent (thread). The primary agent uses the image in place;
 //! a worker agent never reaches it, because its realm is an evacuated copy
@@ -170,20 +171,57 @@ pub(crate) fn image_cell_remembered(header: *const GcHeader) -> bool {
 
 /// The cells a collection visits as root objects. A minor needs only the
 /// remembered ones: a cell holding no collectable child has nothing young to
-/// keep. A full trace visits every cell, because visiting an object does more
+/// keep. A full trace also visits the cells whose shape is not static image
+/// data ([`cell_shape_needs_visit`]), because visiting an object does more
 /// than mark its slots: the layout visitor notes the object as its shape's
 /// carrier and emits the shape record's keys edge
 /// (`visit_gc_layout_slot_descriptors_inline`). Shape records are weak with
 /// respect to receivers, so an image object no trace visited would lose its
 /// shape's keys (and the record) at the first full collection, even with no
-/// heap child of its own.
+/// heap child of its own. A static record with image keys (WRT step 2) is
+/// never pruned and its keys never die, so a cell on it needs no visit.
 fn root_cells(minor_only: bool) -> Vec<*mut GcHeader> {
     if minor_only {
         return image_remembered_headers();
     }
-    let mut cells = Vec::new();
-    for_each_image_cell(|header| cells.push(header));
+    let mut cells = image_remembered_headers();
+    for_each_image_cell(|header| {
+        if !image_cell_remembered(header) && unsafe { cell_shape_needs_visit(header) } {
+            cells.push(header);
+        }
+    });
     cells
+}
+
+/// Does a full trace have to visit this cell for its shape's sake? Not when
+/// the shape record is static and its keys are image data (or it has none):
+/// such a record and its keys outlive every trace without a carrier. Every
+/// other case (a dynamic shape with heap keys, a static record whose keys
+/// are a heap list, an unknown word) is visited.
+unsafe fn cell_shape_needs_visit(header: *mut GcHeader) -> bool {
+    #[cfg(test)]
+    if sabotage::knocked(sabotage::DYNAMIC) {
+        return false;
+    }
+    if (*header).obj_type != GC_TYPE_OBJECT {
+        return true;
+    }
+    let object = (header as *mut u8).add(GC_HEADER_SIZE) as *const crate::object::ObjectHeader;
+    let word = crate::codegen_abi::LayoutWord((*object).parent_class_id);
+    match crate::object::shapes::shape_record_for_word(word) {
+        Some(record) => {
+            let keys = record.keys();
+            !(record.is_static_record()
+                && (keys == 0 || crate::value::addr_class::realm::is_image_object(keys as usize)))
+        }
+        None => true,
+    }
+}
+
+/// Test-only: the cells a full trace visits as roots.
+#[cfg(test)]
+pub(crate) fn full_trace_roots() -> Vec<*mut GcHeader> {
+    root_cells(false)
 }
 
 /// Mark the children of the root cells ([`root_cells`]). A minor marks young
@@ -336,6 +374,8 @@ pub(crate) mod sabotage {
     pub(crate) const REWRITE: u8 = 1 << 3;
     pub(crate) const RECONSTRUCT: u8 = 1 << 4;
     pub(crate) const FORWARD: u8 = 1 << 5;
+    /// The full trace's shape selection: no cell is visited for its shape.
+    pub(crate) const DYNAMIC: u8 = 1 << 6;
 
     thread_local! {
         static KNOCKED: Cell<u8> = const { Cell::new(0) };

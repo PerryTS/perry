@@ -574,6 +574,92 @@ fn a_key_added_with_a_primitive_keeps_the_image_shape_through_full_collections()
     }
 }
 
+/// WRT step 2 (a): an image object on a static shape whose keys are image
+/// data is visited by no full trace, and its keys resolve afterwards.
+#[test]
+fn an_image_object_on_a_seeded_shape_needs_no_visit_to_survive_full_collections() {
+    // The seed first, as in a program (`js_shape_run_static_seed` precedes
+    // every birth): the fixture layout's `{value, done}` then reaches the
+    // seed's image cell as its canonical list instead of publishing a heap
+    // list the seed would have to share.
+    crate::test_support::bootstrap_test_thread();
+    let word = super::image_seeds::install_value_done_seed(0x305);
+    let _image = ImageFixture::take();
+    let _quiet = quiet();
+    unsafe { (*(object_user() as *mut ObjectHeader)).parent_class_id = word.0 };
+    assert!(
+        !crate::gc::image_cells::full_trace_roots().contains(&object_header()),
+        "a cell on a static image-keyed shape is not a full-trace root"
+    );
+    for collector in [
+        Collector::FullMarkSweep,
+        Collector::BudgetedFull,
+        Collector::FullMarkSweep,
+    ] {
+        collect(collector);
+        assert_eq!(call_value(), 42.0, "after {collector:?}");
+        assert_eq!(get("done"), crate::value::TAG_FALSE, "after {collector:?}");
+    }
+}
+
+unsafe extern "C" {
+    fn js_object_set_prototype_of(obj: f64, proto: f64) -> f64;
+}
+
+/// A transition that stores no heap child into the cell: a prototype change
+/// keeps the keys and the inline slots and gives the object a new, dynamic
+/// shape (the prototype identity lives on the shape record), so only the
+/// full trace's shape selection keeps that record alive.
+fn reprototype_image_object() {
+    let proto = crate::object::js_object_alloc(0, 1) as u64;
+    unsafe {
+        js_object_set_prototype_of(
+            f64::from_bits(POINTER_TAG | object_user() as u64),
+            f64::from_bits(POINTER_TAG | proto),
+        )
+    };
+    assert!(
+        !crate::gc::image_cells::image_cell_remembered(object_header()),
+        "a prototype change stores no heap child into the cell"
+    );
+}
+
+/// WRT step 2 (b): an image object transitioned to a dynamic shape is a
+/// full-trace root for its shape's sake; without that selection its shape
+/// dies.
+#[test]
+fn an_image_object_on_a_dynamic_shape_is_a_full_trace_root() {
+    let _image = ImageFixture::take();
+    let _quiet = quiet();
+    reprototype_image_object();
+    assert!(
+        crate::gc::image_cells::full_trace_roots().contains(&object_header()),
+        "a cell on a dynamic shape is visited by every full trace"
+    );
+    for collector in [
+        Collector::FullMarkSweep,
+        Collector::BudgetedFull,
+        Collector::FullMarkSweep,
+    ] {
+        collect(collector);
+        assert_eq!(call_value(), 42.0, "after {collector:?}");
+    }
+}
+
+#[test]
+fn knockout_dynamic_shape_selection_loses_the_image_shape_keys() {
+    let _image = ImageFixture::take();
+    let _quiet = quiet();
+    reprototype_image_object();
+    let _knock = sabotage::Guard::arm(sabotage::DYNAMIC);
+    collect(Collector::FullMarkSweep);
+    assert_ne!(
+        get("value") & TAG_MASK,
+        POINTER_TAG,
+        "with the shape selection knocked out, the dynamic shape should have died"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // (d) the sabotage: a store that bypasses the barrier is caught by the gate
 // ---------------------------------------------------------------------------
