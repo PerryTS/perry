@@ -265,7 +265,7 @@ impl Word {
         Word::decode(perry_abi::canonical_key_attribute_word(
             prev.encode(),
             entry,
-            key.bloom_bit(),
+            if entry != 0 { key.bloom_bit() } else { 0 },
             None,
         ))
     }
