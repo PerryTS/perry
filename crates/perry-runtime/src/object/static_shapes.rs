@@ -633,7 +633,7 @@ fn install_image_seeds() {
 }
 
 #[cfg(all(feature = "wasm-image-selftest", target_family = "wasm"))]
-thread_local! {
+crate::perry_thread_local! {
     static SEED_BY_NAMES_MINTS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
