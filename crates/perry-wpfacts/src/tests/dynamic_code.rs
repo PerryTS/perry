@@ -152,9 +152,9 @@ fn a_numeric_key_names_no_object_prototype_method() {
 
 /// Soundness (DECISIONS 217): a literal's prototype is `Object.prototype`,
 /// where every object's `y` lookup finds a store, also when the prototype
-/// comes as a value: under `__proto__`, from `Object.getPrototypeOf`, or
-/// under a computed key that may be the string `"__proto__"` (the literal's
-/// shape class prototype is a layout, no object). More forms in
+/// comes as a value: under `__proto__` or from `Object.getPrototypeOf`
+/// (the literal's shape class prototype is a layout, no object). A
+/// computed key is never taken to be `"__proto__"` (owner). More forms in
 /// `tests/proto_value.rs`.
 #[test]
 fn a_store_through_a_literals_prototype_reaches_every_object() {
@@ -175,7 +175,7 @@ fn a_store_through_a_literals_prototype_reaches_every_object() {
     };
     // Seen: the store names `Object.prototype` itself.
     assert!(sees_e("Object.prototype"));
-    for get in ["o.__proto__", "Object.getPrototypeOf(o)", "o[k]"] {
+    for get in ["o.__proto__", "o['__proto__']", "Object.getPrototypeOf(o)"] {
         assert!(sees_e(get), "{get}");
     }
 }

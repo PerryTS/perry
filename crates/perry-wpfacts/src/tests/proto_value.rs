@@ -1,8 +1,10 @@
 //! DECISIONS 217: a prototype taken as a value is the runtime's prototype,
 //! and a computed key carries its values. `__proto__` is Object.prototype's
-//! accessor, found on every chain: under it (or under a computed key that
-//! may be the string `"__proto__"`) a read returns the receiver's
-//! prototype, as `Object.getPrototypeOf` does. A literal's prototype is
+//! accessor, found on every chain: under it (named, or the string literal
+//! key `"__proto__"`) a read returns the receiver's prototype, as
+//! `Object.getPrototypeOf` does. A computed key is never taken to be
+//! `"__proto__"` (owner: no program reaches a prototype through an unknown
+//! string key). A literal's prototype is
 //! `Object.prototype` (its `__AnonShape` class is a layout, no object). A
 //! number key names no member of an intrinsic prototype and not
 //! `__proto__`, but it does name a program prototype's numeric member.
@@ -36,9 +38,6 @@ fn a_literals_prototype_as_a_value_is_object_prototype() {
         "Object.getPrototypeOf(o)",
         "Reflect.getPrototypeOf(o)",
         "Reflect.get(o, '__proto__')",
-        // A key that may be any string may be "__proto__".
-        "o[k]",
-        "Reflect.get(o, k)",
         // An array's prototype's prototype.
         "Object.getPrototypeOf(Object.getPrototypeOf([1]))",
     ] {
@@ -66,11 +65,19 @@ fn sees_e_on_instances(get: &str) -> bool {
 }
 
 #[test]
+fn a_computed_key_is_never_proto() {
+    // DECISIONS 217 (owner): an unknown string key does not reach the
+    // prototype, so no store through it is seen on other objects.
+    for get in ["o[k]", "Reflect.get(o, k)"] {
+        assert!(!sees_e_on_literals(get), "{get}");
+    }
+}
+
+#[test]
 fn a_class_instances_prototype_as_a_value_is_its_class_prototype() {
     for get in [
         "c.__proto__",
         "Object.getPrototypeOf(c)",
-        "c[k]",
         "C.prototype",
     ] {
         assert!(sees_e_on_instances(get), "{get}");
@@ -205,15 +212,14 @@ fn a_number_key_calls_what_a_store_into_an_intrinsic_wrote() {
 
 const PROTO_OF_PARAM: &str = r#"
 export function protoOf(o: any) { return o.__proto__; }
-export function at(o: any, k: any) { return o[k]; }
 export function getProto(o: any) { return Object.getPrototypeOf(o); }
 "#;
 
 #[test]
 fn a_parameters_prototype_is_its_arguments_in_every_unit() {
-    for get in ["protoOf(o)", "at(o, String(Math.random()))", "getProto(o)"] {
+    for get in ["protoOf(o)", "getProto(o)"] {
         let m = format!(
-            "import {{ protoOf, at, getProto }} from './a';
+            "import {{ protoOf, getProto }} from './a';
             class E {{ z = 3; }}
             const o: any = {{ a: 1 }};
             const p: any = {get};
@@ -243,7 +249,7 @@ fn a_parameters_prototype_is_its_class_prototype_in_every_unit() {
     // which `new C().y` reads; `Object.prototype` would not be seen there.
     for get in ["protoOf(c)", "getProto(c)"] {
         let m = format!(
-            "import {{ protoOf, at, getProto }} from './a';
+            "import {{ protoOf, getProto }} from './a';
             class E {{ z = 3; }}
             class C {{ a = 1; }}
             const c: any = new C();

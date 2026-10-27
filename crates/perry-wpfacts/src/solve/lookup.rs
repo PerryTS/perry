@@ -472,9 +472,9 @@ impl Model {
                     Key::Any => self.all_fields(start),
                 };
                 self.edge(f, dst);
-                // DECISIONS 217: `super.__proto__` (or `super[k]`) runs
-                // Object.prototype's getter on the receiver.
-                if key == Key::Any || self.is_proto_key(key) {
+                // DECISIONS 217: `super.__proto__` runs Object.prototype's
+                // getter on the receiver.
+                if self.is_proto_key(key) {
                     let pk = self.atom("__proto__");
                     self.load_from(origin, origin, Key::Named(pk), dst);
                 }

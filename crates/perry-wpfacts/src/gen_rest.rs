@@ -1804,9 +1804,8 @@ impl<'a> Gen<'a> {
                     _ => Key::Any,
                 };
                 // DECISIONS 217: a computed key is `o[k]`'s (`IdxLoad`: the
-                // key's values decide what it names, the target's prototype
-                // included). Under `__proto__`, or a key that may be it,
-                // Object.prototype's getter runs on the receiver too.
+                // key's values decide what it names). Under `__proto__`
+                // Object.prototype's getter runs on the receiver.
                 let out = match key {
                     Key::Any => {
                         let dst = self.tmp("reflect.get");
@@ -1815,7 +1814,7 @@ impl<'a> Gen<'a> {
                     }
                     _ => self.load(t, key),
                 };
-                if key == Key::Any || self.m.is_proto_key(key) {
+                if self.m.is_proto_key(key) {
                     self.m.cons(rv, Cons::ProtoOf { dst: out });
                 }
                 out

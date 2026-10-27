@@ -823,13 +823,6 @@ impl Model {
                 if named && self.idx_done.insert((n, obj, dst, 1)) {
                     self.load_from(obj, obj, Key::Any, dst);
                 }
-                // DECISIONS 217: a key that may be a string (ToPrimitive of
-                // an object may return any) may be `"__proto__"`.
-                let string = prim & prim::STR != 0 || !toks.is_empty();
-                if string && self.idx_done.insert((n, obj, dst, IDX_PROTO_KEY)) {
-                    let pk = self.atom("__proto__");
-                    self.load_from(obj, obj, Key::Named(pk), dst);
-                }
                 // ToPropertyKey of `true`, `null`, `undefined` is a named key.
                 if !named {
                     for (bit, keys) in [

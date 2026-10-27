@@ -26,13 +26,12 @@ pub const NUM_KEY: &str = "#num";
 pub const ITER_ELEM: &str = "#iter";
 
 /// `Model::idx_done` rules of DECISIONS 217 (`IdxKey` uses 0-18): a
-/// prototype read as a value, a number key's chain (read, call), a key
-/// that may be `"__proto__"`, a computed call's full lookup, and (plus the
-/// primitive bit) a call under ToPropertyKey of `true`/`null`/`undefined`.
+/// prototype read as a value, a number key's chain (read, call), a
+/// computed call's full lookup, and (plus the primitive bit) a call under
+/// ToPropertyKey of `true`/`null`/`undefined`.
 pub const IDX_PROTO_VALUE: u8 = 32;
 pub const IDX_PLAIN_LOAD: u8 = 33;
 pub const IDX_PLAIN_CALL: u8 = 34;
-pub const IDX_PROTO_KEY: u8 = 35;
 pub const IDX_CALL_ANY: u8 = 36;
 pub const IDX_CALL_NAMED: u8 = 64;
 
@@ -767,8 +766,9 @@ pub enum Cons {
     /// members) runs only if `idx` can hold a non-number key (`IdxKey`).
     IdxLoad { idx: NodeId, dst: NodeId },
     /// The node is the key of `o[k]` for object token `obj`: a string,
-    /// symbol or object key runs the full lookup; a key that may be a
-    /// string may be `"__proto__"`, which reads `obj`'s prototype value.
+    /// symbol or object key runs the full lookup. It is never taken to be
+    /// `"__proto__"` (DECISIONS 217: no program reaches a prototype through
+    /// an unknown string key; only the named forms read it).
     IdxKey { obj: Tok, dst: NodeId },
     /// The node is the receiver of `o[idx](...)` with a computed key: its
     /// objects' own and program members under a number key; the full
