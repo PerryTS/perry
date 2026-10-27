@@ -41,8 +41,8 @@ perry-wasi = { path = "../perry-wasi", features = ["p3"] }
 wac-graph = { version = "=0.12.0", path = "../../third_party/wac-graph" }
 wat = "1.254"
 
-wasm-encoder = { version = "=0.258.0", features = ["wasmparser"] }
-wasmparser = "=0.258.0"
+wasm-encoder = { version = "=0.258.3", features = ["wasmparser"] }
+wasmparser = "=0.258.3"
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
