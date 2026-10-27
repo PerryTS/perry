@@ -5,9 +5,13 @@ function capture(re: any, input: any, n: number): void {
   console.log(m === null ? null : m[n]);
 }
 function one(re: any, input: any): void {
-  const m = re.exec(input);
-  if (m !== null) console.log(m[1]);
-  else console.log("no match");
+  let iteration = 0;
+  while (iteration < 1) {
+    const m = re.exec(input);
+    if (m !== null) console.log(m[1]);
+    else console.log("no match");
+    iteration++;
+  }
 }
 one(/(a)?b/, "b");
 one(/(a|ab)+b/, "aabb");
@@ -91,8 +95,12 @@ one(bound, "b");
 function inheritedOutOfRange(): void {
   Object.defineProperty(Array.prototype, "3", { configurable: true, get() { return this[0] + ":" + this.index + ":" + this.input; } });
   const re = /(x)/;
-  const m = re.exec("x");
-  if (m !== null) console.log(m[3]);
+  let iteration = 0;
+  while (iteration < 1) {
+    const m = re.exec("x");
+    if (m !== null) console.log(m[3]);
+    iteration++;
+  }
   delete (Array.prototype as any)[3];
 }
 inheritedOutOfRange();

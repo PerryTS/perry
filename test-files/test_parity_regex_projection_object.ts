@@ -1,9 +1,13 @@
 // No RegExp construction: the projection must retain exact ordinary calls,
 // including in a runtime built without the optional matching engine.
 function run(receiver: any): void {
-  const m = receiver.exec("argument");
-  if (m !== null) console.log(m[1]);
-  else console.log("null");
+  let iteration = 0;
+  while (iteration < 1) {
+    const m = receiver.exec("argument");
+    if (m !== null) console.log(m[1]);
+    else console.log("null");
+    iteration++;
+  }
 }
 const receiver: any = { exec(input: string) { console.log(this === receiver, input); return ["", "ordinary"]; } };
 run(receiver);
