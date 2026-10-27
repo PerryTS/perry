@@ -1406,6 +1406,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_array_flat_depth", I64, &[I64, DOUBLE]);
     module.declare_function("js_array_flatMap", I64, &[I64, I64]);
     module.declare_function("js_array_sort_with_comparator", I64, &[I64, I64]);
+    module.declare_function("js_array_sort_numeric_order", I64, &[I64, I64, I32]);
     // #2796: validate sort/toSorted comparator (function | undefined) before sorting.
     module.declare_function("js_validate_array_comparator", I64, &[DOUBLE]);
     // #4091: non-callable callback validators for higher-order array /

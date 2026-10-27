@@ -558,11 +558,27 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // sorting — throws TypeError for any other value, returns 0
             // (default sort) for undefined.
             let cmp_handle = blk.call(I64, "js_validate_array_comparator", &[(DOUBLE, &cmp_box)]);
-            let result = blk.call(
-                I64,
-                "js_array_sort_with_comparator",
-                &[(I64, &arr_handle), (I64, &cmp_handle)],
-            );
+            // The HIR certificate proves only callback effects/ordering.
+            // The runtime admits the actual receiver shape and key domain;
+            // type annotations never establish either of those facts.
+            let result = match perry_hir::analysis::pure_numeric_order(comparator) {
+                Some(order) => {
+                    let direction = match order {
+                        perry_hir::analysis::NumericOrder::Ascending => "1",
+                        perry_hir::analysis::NumericOrder::Descending => "-1",
+                    };
+                    blk.call(
+                        I64,
+                        "js_array_sort_numeric_order",
+                        &[(I64, &arr_handle), (I64, &cmp_handle), (I32, direction)],
+                    )
+                }
+                None => blk.call(
+                    I64,
+                    "js_array_sort_with_comparator",
+                    &[(I64, &arr_handle), (I64, &cmp_handle)],
+                ),
+            };
             let rooted_result = nanbox_pointer_inline(blk, &result);
             rooted_group.release(ctx);
             Ok(rooted_result)
