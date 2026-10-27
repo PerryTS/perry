@@ -1821,12 +1821,6 @@ pub(super) fn image_layouts() -> impl Iterator<Item = *mut PerryLayoutDesc> {
 }
 
 fn descriptor_index(desc: *const PerryLayoutDesc) -> Option<u32> {
-    // WASI owns descriptors through inventory constructors, not native
-    // section bounds. Keep the existing lazy first-birth registrar there too.
-    #[cfg(target_family = "wasm")]
-    if let Some(index) = image_layouts().position(|item| std::ptr::eq(item, desc)) {
-        return u32::try_from(index).ok();
-    }
     let (start, end) = layout_bounds();
     let at = desc as usize;
     let size = std::mem::size_of::<PerryLayoutDesc>();
