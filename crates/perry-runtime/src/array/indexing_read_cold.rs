@@ -42,7 +42,12 @@ pub unsafe extern "C" fn perry_array_read_cold_shared(
         // the exact entry reads its attribute summary.
         "cmp qword ptr [rdi + {named}], 0",
         "jne 2f",
-        "cmp byte ptr [rip + {invalidated}], 0",
+        // The exported flag is interposable in a separate runtime provider.
+        // Load its address through the GOT: a direct PC-relative data access
+        // cannot link into an ELF shared image. rax is caller-saved and none
+        // of the original SysV arguments live there.
+        "mov rax, qword ptr [rip + {invalidated}@GOTPCREL]",
+        "cmp byte ptr [rax], 0",
         "jne 2f",
         "movabs rax, {undefined}",
         "movq xmm0, rax",
