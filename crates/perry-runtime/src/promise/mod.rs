@@ -14,7 +14,7 @@ use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
 
 use crate::async_context::{
-    capture_context, enter_context, restore_context, scan_snapshot_roots_mut, AsyncContextSnapshot,
+    capture_context, restore_context, scan_snapshot_roots_mut, AsyncContextSnapshot,
 };
 
 pub mod assimilate;
@@ -815,8 +815,8 @@ pub(crate) fn clear_promise_context_for_gc(promise: *mut Promise) {
     clear_promise_context(promise);
 }
 
-pub(crate) fn enter_microtask_context(snapshot: &AsyncContextSnapshot) {
-    let previous = enter_context(snapshot);
+pub(crate) fn enter_microtask_context(snapshot: AsyncContextSnapshot) {
+    let previous = crate::async_context::enter_owned_context(snapshot);
     MICROTASK_PREV_CONTEXTS.with(|stack| stack.borrow_mut().push(previous));
 }
 
