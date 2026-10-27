@@ -559,6 +559,13 @@ impl<'scope> RuntimeHandle<'scope> {
         f64::from_bits(self.get_nanbox_u64())
     }
 
+    /// Read a handle consumed by an owned iterator or optional-root mapping.
+    /// The enclosing scope continues to own the root slot.
+    #[inline]
+    pub(crate) fn into_nanbox_f64(self) -> f64 {
+        self.get_nanbox_f64()
+    }
+
     #[inline]
     pub fn get_nanbox_u64(&self) -> u64 {
         self.with_slot(|slot| match slot {

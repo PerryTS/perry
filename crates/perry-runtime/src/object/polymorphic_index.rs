@@ -204,7 +204,7 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
         if let Some(proxy) =
             crate::array::array_ptr_as_proxy(raw as *const crate::array::ArrayHeader)
         {
-            return crate::proxy::js_proxy_get(proxy, idx);
+            return crate::proxy_hooks::proxy_get(proxy, idx);
         }
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
@@ -401,7 +401,7 @@ pub extern "C" fn js_object_set_index_polymorphic(obj_handle: i64, idx: f64, val
     };
     // Resolve ids only at this legacy raw-receiver boundary.
     if let Some(proxy) = crate::array::array_ptr_as_proxy(raw as *const crate::array::ArrayHeader) {
-        crate::proxy::js_proxy_set(proxy, idx, value);
+        crate::proxy_hooks::proxy_set(proxy, idx, value);
         return;
     }
     if raw < 0x1000 {

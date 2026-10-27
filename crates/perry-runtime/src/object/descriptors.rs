@@ -236,7 +236,7 @@ pub(crate) unsafe fn own_property(obj_value: f64, key_value: f64) -> Option<OwnP
         // Reflect entry point shares `[[GetOwnProperty]]` semantics (trap +
         // invariant checks + FromPropertyDescriptor) and forwards non-proxies
         // straight back here, so there's no recursion. (Proxy crash cluster.)
-        if crate::proxy::js_proxy_is_proxy(obj_value) != 0 {
+        if crate::proxy_hooks::proxy_is_proxy(obj_value) != 0 {
             return OwnProperty::public(crate::proxy::js_reflect_get_own_property_descriptor(
                 obj_value, key_value,
             ));
@@ -1194,8 +1194,8 @@ fn js_object_get_own_property_names_shape(obj_value: f64) -> f64 {
         // A Proxy is a small registered id, not a heap object — route it to the
         // `ownKeys` trap (string subset) before the handle-dispatch fallback,
         // which would mis-read the fake pointer and return an empty array.
-        if crate::proxy::js_proxy_is_proxy(obj_value) != 0 {
-            return crate::proxy::proxy_own_property_names(obj_value);
+        if crate::proxy_hooks::proxy_is_proxy(obj_value) != 0 {
+            return crate::proxy_hooks::proxy_own_property_names(obj_value);
         }
         if obj_jv.is_handle() {
             let raw = obj_jv.as_handle();
@@ -1656,7 +1656,7 @@ unsafe fn proxy_get_own_property_descriptors(obj_value: f64) -> f64 {
     // live in handles (same discipline as the generic path below).
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj_handle = scope.root_nanbox_f64(obj_value);
-    let keys_boxed = crate::proxy::js_proxy_own_keys(obj_value);
+    let keys_boxed = crate::proxy_hooks::proxy_own_keys(obj_value);
     let keys_arr =
         (keys_boxed.to_bits() & crate::value::POINTER_MASK) as *mut crate::array::ArrayHeader;
     let keys_handle = scope.root_raw_mut_ptr(keys_arr);
@@ -1733,7 +1733,7 @@ pub extern "C" fn js_object_get_own_property_descriptors(obj_value: f64) -> f64 
         // enumerates string and symbol keys through two separate helpers,
         // each firing its own `ownKeys` trap — an observably extra call
         // (test262 getOwnPropertyDescriptors/observable-operations).
-        if crate::proxy::js_proxy_is_proxy(obj_value) != 0 {
+        if crate::proxy_hooks::proxy_is_proxy(obj_value) != 0 {
             return proxy_get_own_property_descriptors(obj_value);
         }
         // Root the receiver before the allocating name snapshot. Ordinary

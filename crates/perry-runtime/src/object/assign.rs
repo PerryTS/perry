@@ -679,7 +679,7 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
     // A proxy has no heap header. Feed it to the same descriptor-driven
     // copy used whenever [[Set]] can run code, before any heap admission.
     // That funnel preserves source key order and target set/define traps.
-    if crate::proxy::js_proxy_is_proxy(target_f64) != 0 {
+    if crate::proxy_hooks::proxy_is_proxy(target_f64) != 0 {
         let scope = crate::gc::RuntimeHandleScope::new();
         let target = scope.root_nanbox_f64(target_f64);
         let source = scope.root_nanbox_f64(source_f64);
@@ -741,7 +741,7 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
     // (getOwnPropertyDescriptor) for the enumerable test, then `[[Get]]` for
     // each value — with every trap's abrupt completion propagating out (test262
     // Object/assign/source-own-prop-error + source-own-prop-keys-error).
-    if crate::proxy::js_proxy_is_proxy(source_f64) != 0 {
+    if crate::proxy_hooks::proxy_is_proxy(source_f64) != 0 {
         // #7200: every proxy trap is user code; the target can be anywhere by
         // the time the last one returns.
         let scope = crate::gc::RuntimeHandleScope::new();

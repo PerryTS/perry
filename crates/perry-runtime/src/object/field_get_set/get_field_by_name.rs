@@ -45,11 +45,11 @@ fn handle_proto_inherited_field(
 #[inline(never)]
 fn proxy_receiver_get(raw_addr: u64, key: *const crate::StringHeader) -> Option<JSValue> {
     let boxed = f64::from_bits(crate::value::POINTER_TAG | (raw_addr & 0x0000_FFFF_FFFF_FFFF));
-    if crate::proxy::js_proxy_is_proxy(boxed) == 0 {
+    if crate::proxy_hooks::proxy_is_proxy(boxed) == 0 {
         return None;
     }
     let key_f64 = f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
-    let v = crate::proxy::js_proxy_get(boxed, key_f64);
+    let v = crate::proxy_hooks::proxy_get(boxed, key_f64);
     Some(JSValue::from_bits(v.to_bits()))
 }
 

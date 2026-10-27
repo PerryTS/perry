@@ -405,7 +405,7 @@ pub(crate) unsafe fn dispatch_function_proto_method(
             }
             // Proxy receiver (#3656): `p.call(thisArg, ...args)` routes through
             // the proxy `apply` trap (or, absent a trap, forwards to the target).
-            if crate::proxy::js_proxy_is_proxy(object) == 1 {
+            if crate::proxy_hooks::proxy_is_proxy(object) == 1 {
                 let this_arg = if args_len >= 1 && !args_ptr.is_null() {
                     *args_ptr
                 } else {
@@ -419,7 +419,7 @@ pub(crate) unsafe fn dispatch_function_proto_method(
                 } else {
                     &[]
                 };
-                return Some(crate::proxy::call_proxy_value_with_this(
+                return Some(crate::proxy_hooks::call_proxy_value_with_this(
                     object, this_arg, args,
                 ));
             }
@@ -462,7 +462,7 @@ pub(crate) unsafe fn dispatch_function_proto_method(
             }
             // Proxy receiver (#3656): `p.apply(thisArg, argsArray)` routes
             // through the proxy `apply` trap (or forwards to the target).
-            if crate::proxy::js_proxy_is_proxy(object) == 1 {
+            if crate::proxy_hooks::proxy_is_proxy(object) == 1 {
                 let this_arg = if args_len >= 1 && !args_ptr.is_null() {
                     *args_ptr
                 } else {
@@ -554,7 +554,7 @@ unsafe fn apply_argument_list(
     }
     // IsArray follows proxy targets; their handles must never be
     // interpreted as ArrayHeader pointers, even for wrapped arrays.
-    let buf: Vec<f64> = if crate::proxy::js_proxy_is_proxy(args_arr_val) == 1 {
+    let buf: Vec<f64> = if crate::proxy_hooks::proxy_is_proxy(args_arr_val) == 1 {
         rooted(&mut callee, &mut receiver, || {
             generic_array_like_to_vec(args_arr_val)
         })

@@ -120,7 +120,7 @@ pub fn is_proxy_cell(addr: usize) -> bool {
         && addr % std::mem::align_of::<GcHeader>() == 0
         && addr as u64 <= crate::value::POINTER_MASK
         // SAFETY: the honest-pointer invariant above.
-        && crate::proxy::is_proxy_header(unsafe { &*((addr - GC_HEADER_SIZE) as *const GcHeader) })
+        && crate::proxy_hooks::is_proxy_header(unsafe { &*((addr - GC_HEADER_SIZE) as *const GcHeader) })
 }
 
 /// True when `id` is in the Web Streams sub-band of the handle band. Only a

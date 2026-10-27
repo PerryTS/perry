@@ -201,13 +201,13 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
     // test262 proxy-revoked-during-get-call).
     if jsv.is_pointer()
         && crate::value::addr_class::is_proxy_cell(raw_addr)
-        && crate::proxy::js_proxy_is_proxy(value) != 0
+        && crate::proxy_hooks::proxy_is_proxy(value) != 0
     {
         const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
         let is_array = crate::array::js_array_is_array(value).to_bits() == TAG_TRUE;
         let builtin_tag = if is_array {
             "Array"
-        } else if crate::proxy::proxy_wraps_callable(value) {
+        } else if crate::proxy_hooks::proxy_wraps_callable(value) {
             "Function"
         } else {
             "Object"
@@ -217,7 +217,7 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
             None
         } else {
             let sym_f64 = f64::from_bits(POINTER_TAG | (sym as u64 & POINTER_MASK));
-            string_value_to_owned(crate::proxy::js_proxy_get(value, sym_f64))
+            string_value_to_owned(crate::proxy_hooks::proxy_get(value, sym_f64))
         };
         let formatted = match tag {
             Some(tag) => format!("[object {}]", tag),

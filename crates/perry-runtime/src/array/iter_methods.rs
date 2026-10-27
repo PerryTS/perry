@@ -1523,8 +1523,8 @@ fn resolve_callback_ptr(cb_boxed: f64) -> Option<i64> {
         // that bare id anyway: DirectCallN falls back to js_closure_callN,
         // whose proxy-callee path performs the Proxy [[Call]].
         if !crate::closure::get_valid_func_ptr(ptr).is_null()
-            || (crate::proxy::js_proxy_is_proxy(cb_boxed) == 1
-                && crate::proxy::proxy_wraps_callable(cb_boxed))
+            || (crate::proxy_hooks::proxy_is_proxy(cb_boxed) == 1
+                && crate::proxy_hooks::proxy_wraps_callable(cb_boxed))
         {
             return Some(ptr as i64);
         }

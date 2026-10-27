@@ -425,7 +425,7 @@ fn read_concat_spreadable(value: f64) -> Option<bool> {
     // excluded: their `get` trap can materialize the property without any
     // install having happened.
     if !crate::symbol::concat_spreadable_symbol_ever_set()
-        && crate::proxy::js_proxy_is_proxy(value) == 0
+        && crate::proxy_hooks::proxy_is_proxy(value) == 0
     {
         return None;
     }
@@ -1315,7 +1315,7 @@ unsafe fn append_concat_proxy(result: *mut ArrayHeader, proxy: f64) -> *mut Arra
             let present =
                 crate::object::js_object_has_property(proxy.get_nanbox_f64(), key.get_nanbox_f64());
             let value = if crate::value::js_is_truthy(present) != 0 {
-                crate::proxy::js_proxy_get(proxy.get_nanbox_f64(), key.get_nanbox_f64())
+                crate::proxy_hooks::proxy_get(proxy.get_nanbox_f64(), key.get_nanbox_f64())
             } else {
                 f64::from_bits(crate::value::TAG_HOLE)
             };

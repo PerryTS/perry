@@ -707,7 +707,7 @@ pub(crate) extern "C" fn proxy_revocable_thunk(
     target: f64,
     handler: f64,
 ) -> f64 {
-    crate::proxy::js_proxy_revocable(target, handler)
+    crate::proxy_hooks::proxy_revocable(target, handler)
 }
 
 #[cfg(test)]

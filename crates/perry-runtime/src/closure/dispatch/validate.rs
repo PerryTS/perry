@@ -143,8 +143,8 @@ pub fn dispatch_proxy_callee_or_throw(
 ) -> f64 {
     // The pointer constructor boxes a raw Proxy id under HANDLE_TAG.
     let boxed = crate::value::js_nanbox_pointer(closure as i64);
-    if crate::proxy::js_proxy_is_proxy(boxed) == 1 {
-        return crate::proxy::call_proxy_value_with_this(boxed, this.as_f64(), args);
+    if crate::proxy_hooks::proxy_is_proxy(boxed) == 1 {
+        return crate::proxy_hooks::call_proxy_value_with_this(boxed, this.as_f64(), args);
     }
     throw_not_callable()
 }

@@ -100,7 +100,7 @@ fn ptr_derefable(ptr: usize) -> bool {
 }
 
 unsafe fn apply_to_json(value: f64) -> f64 {
-    if crate::proxy::js_proxy_is_proxy(value) != 0 {
+    if crate::proxy_hooks::proxy_is_proxy(value) != 0 {
         return super::stringify_proxy::to_json(value).unwrap_or(value);
     }
     let bits = value.to_bits();
@@ -1569,7 +1569,7 @@ pub unsafe extern "C" fn js_json_stringify_full(
         let value_after_to_json = apply_to_json(value);
         let after_bits = value_after_to_json.to_bits();
         if after_bits == TAG_UNDEFINED
-            || crate::proxy::proxy_wraps_callable(value_after_to_json)
+            || crate::proxy_hooks::proxy_wraps_callable(value_after_to_json)
             || is_closure_value(after_bits)
             || is_symbol_value(after_bits)
         {

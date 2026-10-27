@@ -135,12 +135,12 @@ pub(crate) fn js_jsvalue_to_string_impl(
         let ptr = (jsval.bits() & POINTER_MASK) as *const u8;
         // Proxy ids can be SMALLER than the 0x10000 heap floor — check the
         // registry (a by-value lookup, no deref) before the gate.
-        if crate::proxy::js_proxy_is_proxy(value) != 0 {
-            if crate::proxy::proxy_wraps_callable(value) {
+        if crate::proxy_hooks::proxy_is_proxy(value) != 0 {
+            if crate::proxy_hooks::proxy_wraps_callable(value) {
                 let s = "function () { [native code] }";
                 return crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
             }
-            let target = crate::proxy::js_proxy_target(value);
+            let target = crate::proxy_hooks::proxy_target(value);
             if target.to_bits() != value.to_bits() {
                 return js_jsvalue_to_string_impl(target, reject_symbol);
             }
@@ -159,17 +159,17 @@ pub(crate) fn js_jsvalue_to_string_impl(
             // toString/valueOf trap of its own, so resolve to the target and
             // stringify that ("[object Object]" for an ordinary object target),
             // which matches Node for the trap-less case. (Proxy crash cluster.)
-            if crate::proxy::js_proxy_is_proxy(value) != 0 {
+            if crate::proxy_hooks::proxy_is_proxy(value) != 0 {
                 // A callable-target proxy's default ToString runs
                 // Function.prototype.toString with the PROXY as receiver —
                 // never introspectable, so the NativeFunction form (matches
                 // Node: `String(new Proxy(fn, {}))`). Non-callable targets
                 // resolve through the target.
-                if crate::proxy::proxy_wraps_callable(value) {
+                if crate::proxy_hooks::proxy_wraps_callable(value) {
                     let s = "function () { [native code] }";
                     return crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
                 }
-                let target = crate::proxy::js_proxy_target(value);
+                let target = crate::proxy_hooks::proxy_target(value);
                 if target.to_bits() != value.to_bits() {
                     return js_jsvalue_to_string_impl(target, reject_symbol);
                 }

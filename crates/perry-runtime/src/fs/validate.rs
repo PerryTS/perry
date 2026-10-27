@@ -311,8 +311,8 @@ fn received_property(value: f64, name: &str) -> f64 {
         );
     }
     let key = scope.root_nanbox_f64(received_key(name));
-    if crate::proxy::js_proxy_is_proxy(value.get_nanbox_f64()) != 0 {
-        return crate::proxy::proxy_get_with_receiver(
+    if crate::proxy_hooks::proxy_is_proxy(value.get_nanbox_f64()) != 0 {
+        return crate::proxy_hooks::proxy_get_with_receiver(
             value.get_nanbox_f64(),
             key.get_nanbox_f64(),
             value.get_nanbox_f64(),
@@ -444,7 +444,7 @@ fn received_native_prototype_shape(prototype: f64, intrinsic: f64) -> ReceivedNa
         }
         if current.get_nanbox_u64() == ordinary.get_nanbox_u64()
             || !JSValue::from_bits(current.get_nanbox_u64()).is_pointer()
-            || crate::proxy::js_proxy_is_proxy(current.get_nanbox_f64()) != 0
+            || crate::proxy_hooks::proxy_is_proxy(current.get_nanbox_f64()) != 0
         {
             return ReceivedNativePrototype::Ordinary;
         }

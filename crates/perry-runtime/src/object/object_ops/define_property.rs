@@ -188,7 +188,7 @@ pub(crate) unsafe fn throw_definition_rejected(
     key: &crate::gc::RuntimeHandle<'_>,
 ) -> ! {
     let obj = f64::from_bits(receiver.get_nanbox_u64());
-    if crate::proxy::js_proxy_is_proxy(obj) != 0 {
+    if crate::proxy_hooks::proxy_is_proxy(obj) != 0 {
         throw_object_type_error(b"'defineProperty' on proxy: trap returned falsish");
     }
     let current = scope.root_nanbox_f64(js_object_get_own_property_descriptor(
@@ -215,7 +215,7 @@ pub(crate) unsafe fn throw_definition_rejected(
 pub(crate) unsafe fn definition_target_is_object(value: f64) -> bool {
     value_is_object_like(value)
         || super::super::class_ref_id(value).is_some()
-        || crate::proxy::js_proxy_is_proxy(value) != 0
+        || crate::proxy_hooks::proxy_is_proxy(value) != 0
         || crate::JSValue::from_bits(value.to_bits()).is_handle()
 }
 
@@ -238,8 +238,10 @@ pub(crate) unsafe fn define_own_property_decoded(
     {
         crate::array::subclass_elements::deopt_value(current);
     }
-    if crate::proxy::js_proxy_is_proxy(f64::from_bits(receiver.get_nanbox_u64())) != 0 {
-        return crate::proxy::proxy_define_own_property_decoded(scope, receiver, key, descriptor);
+    if crate::proxy_hooks::proxy_is_proxy(f64::from_bits(receiver.get_nanbox_u64())) != 0 {
+        return crate::proxy_hooks::proxy_define_own_property_decoded(
+            scope, receiver, key, descriptor,
+        );
     }
     // A complete, default-attribute data definition is exactly
     // CreateDataProperty. Use its existing shape-owned definition mechanism:

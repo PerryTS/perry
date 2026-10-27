@@ -534,10 +534,10 @@ fn copy_within_length_of_array_like(receiver: f64) -> i64 {
     // to the target when untrapped) — the raw dynamic read doesn't route
     // proxies (test262 copyWithin/return-abrupt-from-has-start needs the
     // subsequent HasProperty trap to fire, which requires a real `len` here).
-    let length = if crate::proxy::js_proxy_is_proxy(receiver) != 0 {
+    let length = if crate::proxy_hooks::proxy_is_proxy(receiver) != 0 {
         let key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
         let key_v = f64::from_bits(crate::value::JSValue::string_ptr(key).bits());
-        crate::proxy::js_proxy_get(receiver, key_v)
+        crate::proxy_hooks::proxy_get(receiver, key_v)
     } else {
         unsafe {
             crate::value::js_dynamic_object_get_property(
@@ -559,8 +559,8 @@ fn copy_within_index_key(index: i64) -> f64 {
 fn copy_within_has_property(receiver: f64, index: i64) -> bool {
     // `HasProperty(O, fromKey)` fires a Proxy `has` trap, propagating its
     // throw (test262 copyWithin/return-abrupt-from-has-start).
-    if crate::proxy::js_proxy_is_proxy(receiver) != 0 {
-        let v = crate::proxy::js_proxy_has(receiver, copy_within_index_key(index));
+    if crate::proxy_hooks::proxy_is_proxy(receiver) != 0 {
+        let v = crate::proxy_hooks::proxy_has(receiver, copy_within_index_key(index));
         return crate::value::js_is_truthy(v) != 0;
     }
     crate::value::js_is_truthy(crate::object::js_object_has_own(receiver, index as f64)) != 0
@@ -613,23 +613,23 @@ pub extern "C" fn js_array_copy_within_value(
     };
 
     let receiver_bits = receiver.to_bits() as i64;
-    let is_proxy = crate::proxy::js_proxy_is_proxy(receiver) != 0;
+    let is_proxy = crate::proxy_hooks::proxy_is_proxy(receiver) != 0;
     for _ in 0..count {
         if copy_within_has_property(receiver, from_idx) {
             let value = if is_proxy {
-                crate::proxy::js_proxy_get(receiver, copy_within_index_key(from_idx))
+                crate::proxy_hooks::proxy_get(receiver, copy_within_index_key(from_idx))
             } else {
                 crate::object::js_object_get_index_polymorphic(receiver_bits, from_idx as f64)
             };
             if is_proxy {
-                crate::proxy::js_proxy_set(receiver, copy_within_index_key(to_idx), value);
+                crate::proxy_hooks::proxy_set(receiver, copy_within_index_key(to_idx), value);
             } else {
                 crate::object::js_object_set_index_polymorphic(receiver_bits, to_idx as f64, value);
             }
         } else if is_proxy {
             // `DeletePropertyOrThrow` through the Proxy `deleteProperty` trap
             // (test262 copyWithin/return-abrupt-from-delete-proxy-target).
-            let ok = crate::proxy::js_proxy_delete(receiver, copy_within_index_key(to_idx));
+            let ok = crate::proxy_hooks::proxy_delete(receiver, copy_within_index_key(to_idx));
             if crate::value::js_is_truthy(ok) == 0 {
                 throw_copy_within_type_error(b"Cannot delete property");
             }

@@ -543,8 +543,8 @@ pub(crate) fn install_intl_locale_feature() {
 fn js_has_index(obj: &crate::gc::RuntimeHandle<'_>, index: u32) -> bool {
     let scope = crate::gc::RuntimeHandleScope::new();
     let key = scope.root_nanbox_f64(string_value(&index.to_string()));
-    if crate::proxy::js_proxy_is_proxy(obj.get_nanbox_f64()) != 0 {
-        return crate::proxy::js_proxy_has(obj.get_nanbox_f64(), key.get_nanbox_f64()).to_bits()
+    if crate::proxy_hooks::proxy_is_proxy(obj.get_nanbox_f64()) != 0 {
+        return crate::proxy_hooks::proxy_has(obj.get_nanbox_f64(), key.get_nanbox_f64()).to_bits()
             == crate::value::TAG_TRUE;
     }
     crate::object::js_object_has_property(obj.get_nanbox_f64(), key.get_nanbox_f64()).to_bits()
@@ -554,7 +554,7 @@ fn js_has_index(obj: &crate::gc::RuntimeHandle<'_>, index: u32) -> bool {
 fn proxy_get_from_value_handle(value: &crate::gc::RuntimeHandle<'_>, key: &str) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let key = scope.root_nanbox_f64(string_value(key));
-    crate::proxy::js_proxy_get(value.get_nanbox_f64(), key.get_nanbox_f64())
+    crate::proxy_hooks::proxy_get(value.get_nanbox_f64(), key.get_nanbox_f64())
 }
 
 fn locales_from_value(locales: f64) -> Vec<String> {
@@ -581,7 +581,7 @@ fn locales_from_value(locales: f64) -> Vec<String> {
     // those probes reinterpret pointer payloads and a Proxy has a distinct GC
     // layout. CanonicalizeLocaleList observes it through [[Get]]/[[HasProperty]]
     // regardless of the target's underlying kind.
-    if crate::proxy::js_proxy_is_proxy(locales_handle.get_nanbox_f64()) != 0 {
+    if crate::proxy_hooks::proxy_is_proxy(locales_handle.get_nanbox_f64()) != 0 {
         let len = crate::builtins::js_number_coerce(proxy_get_from_value_handle(
             &locales_handle,
             "length",
@@ -930,7 +930,8 @@ fn get_options_object(options: f64) -> f64 {
     if jv.is_undefined() {
         return options;
     }
-    if crate::proxy::js_proxy_is_proxy(options) != 0 || object_ptr_from_value(options).is_some() {
+    if crate::proxy_hooks::proxy_is_proxy(options) != 0 || object_ptr_from_value(options).is_some()
+    {
         return options;
     }
     throw_type_error("Cannot convert undefined or null to object");
@@ -946,7 +947,8 @@ fn coerce_options_reject_null(options: f64) -> f64 {
 
 /// Box a primitive so inherited Object.prototype option getters stay observable.
 fn to_object_for_options(options: f64) -> f64 {
-    if crate::proxy::js_proxy_is_proxy(options) != 0 || object_ptr_from_value(options).is_some() {
+    if crate::proxy_hooks::proxy_is_proxy(options) != 0 || object_ptr_from_value(options).is_some()
+    {
         return options;
     }
     js_nanbox_pointer(js_object_alloc(0, 0) as i64)

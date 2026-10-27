@@ -2264,7 +2264,7 @@ pub extern "C" fn js_typed_feedback_array_index_get_fallback_boxed(
         if let Some(proxy) =
             crate::array::array_ptr_as_proxy(receiver.to_bits() as *const ArrayHeader)
         {
-            return crate::proxy::js_proxy_get(proxy, index);
+            return crate::proxy_hooks::proxy_get(proxy, index);
         }
     }
     if receiver_value.is_handle() {

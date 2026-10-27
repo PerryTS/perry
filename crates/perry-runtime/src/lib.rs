@@ -1344,3 +1344,5 @@ pub extern "C" fn perry_runtime_widget_init() {
 mod hot_text;
 
 mod source_read_log;
+
+pub mod proxy_hooks;

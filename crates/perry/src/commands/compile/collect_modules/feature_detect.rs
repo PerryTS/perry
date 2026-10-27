@@ -442,6 +442,12 @@ pub(super) fn detect_optional_feature_usage(
     // false-negative class for every gate at once (the rule is zero false
     // negatives; including more HIR can only over-include a feature).
     let hir_debug = module_hir_debug(hir_module);
+    if hir_debug.contains("Proxy")
+        || hir_debug.contains("GlobalThisExpr")
+        || hir_debug.contains("property: \"globalThis\"")
+    {
+        ctx.uses_proxy = true;
+    }
     // Literals, constructors, BigInt views and value-form builtin references.
     // An escaped global object can obtain the constructor through a runtime key.
     if hir_debug.contains("BigInt")

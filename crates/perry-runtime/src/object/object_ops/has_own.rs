@@ -163,7 +163,7 @@ fn object_has_own_generic(obj_value: f64, key_value: f64) -> f64 {
         // `hasOwnProperty` through `[[GetOwnProperty]]` (a present own property
         // is one whose descriptor is not undefined) rather than dereferencing
         // the fake pointer. (Proxy crash cluster.)
-        if crate::proxy::js_proxy_is_proxy(obj_value) != 0 {
+        if crate::proxy_hooks::proxy_is_proxy(obj_value) != 0 {
             let desc = crate::proxy::js_reflect_get_own_property_descriptor(obj_value, key_value);
             return f64::from_bits(if desc.to_bits() != crate::value::TAG_UNDEFINED {
                 TAG_TRUE
@@ -551,7 +551,7 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
         // Proxy receiver: resolve the descriptor via `[[GetOwnProperty]]` and
         // report its `enumerable` attribute (absent property → false) rather
         // than dereferencing the fake pointer. (Proxy crash cluster.)
-        if crate::proxy::js_proxy_is_proxy(obj_value) != 0 {
+        if crate::proxy_hooks::proxy_is_proxy(obj_value) != 0 {
             let desc = crate::proxy::js_reflect_get_own_property_descriptor(obj_value, key_value);
             if desc.to_bits() == crate::value::TAG_UNDEFINED {
                 return f64::from_bits(TAG_FALSE);

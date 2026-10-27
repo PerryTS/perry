@@ -314,7 +314,7 @@ pub extern "C" fn js_array_length(arr: *const ArrayHeader) -> u32 {
     if let Some(proxy) = array_ptr_as_proxy(arr) {
         let key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
         let key_f64 = crate::value::js_nanbox_string(key as i64);
-        let n = crate::builtins::js_number_coerce(crate::proxy::js_proxy_get(proxy, key_f64));
+        let n = crate::builtins::js_number_coerce(crate::proxy_hooks::proxy_get(proxy, key_f64));
         return if n.is_finite() && n > 0.0 {
             n.min(u32::MAX as f64) as u32
         } else {
@@ -677,7 +677,7 @@ pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
         // is the proxy's `[[Get]]` (the `get` trap, else the target), the same
         // route `js_array_length` takes for its `length`.
         if let Some(proxy) = array_ptr_as_proxy(arr) {
-            return crate::proxy::js_proxy_get(proxy, index as f64);
+            return crate::proxy_hooks::proxy_get(proxy, index as f64);
         }
         // #7574: `a[i]` on a `class X extends Array` instance held in a
         // `T[]`-annotated binding. Read the object's indexed property through

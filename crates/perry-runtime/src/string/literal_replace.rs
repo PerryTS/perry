@@ -182,7 +182,7 @@ fn substitute(out: &mut Vec<u16>, template: &[u16], input: &[u16], start: usize,
     }
 }
 pub(crate) fn callable(value: &RuntimeHandle<'_>) -> bool {
-    if crate::proxy::proxy_wraps_callable(value.get_nanbox_f64()) {
+    if crate::proxy_hooks::proxy_wraps_callable(value.get_nanbox_f64()) {
         return true;
     }
     if !crate::proxy::reflect_value_is_object(value.get_nanbox_f64()) {
@@ -200,7 +200,7 @@ pub(crate) fn call(method: &RuntimeHandle<'_>, this: f64, arguments: &[f64]) -> 
         .iter()
         .map(|v| scope.root_nanbox_f64(*v))
         .collect();
-    if crate::proxy::js_proxy_is_proxy(method.get_nanbox_f64()) == 1 {
+    if crate::proxy_hooks::proxy_is_proxy(method.get_nanbox_f64()) == 1 {
         let array = scope.root_raw_mut_ptr(crate::array::js_array_alloc(args.len() as u32));
         for arg in &args {
             let grown =
@@ -209,7 +209,7 @@ pub(crate) fn call(method: &RuntimeHandle<'_>, this: f64, arguments: &[f64]) -> 
         }
         let array =
             array.with_mut_ptr::<crate::array::ArrayHeader, _>(|p| js_nanbox_pointer(p as i64));
-        crate::proxy::js_proxy_apply(method.get_nanbox_f64(), this.get_nanbox_f64(), array)
+        crate::proxy_hooks::proxy_apply(method.get_nanbox_f64(), this.get_nanbox_f64(), array)
     } else {
         let args: Vec<_> = args.iter().map(|v| v.get_nanbox_f64()).collect();
         unsafe {

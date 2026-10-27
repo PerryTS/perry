@@ -962,7 +962,7 @@ pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
     // `array_values_iter` stores the proxy value as a dedicated live backing,
     // so the default Array iterator performs `Get(length)` / `Get(index)`
     // through traps instead of dereferencing the id or unwrapping the target.
-    if crate::proxy::js_proxy_is_proxy(value()) != 0 {
+    if crate::proxy_hooks::proxy_is_proxy(value()) != 0 {
         return js_iterator_to_array(crate::symbol::js_get_iterator(value()));
     }
 

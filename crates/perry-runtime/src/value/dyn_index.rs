@@ -383,7 +383,7 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
         let receiver = scope.root_nanbox_f64(value);
         // SAFETY: a NaN-boxed key; ToPropertyKey may run user code.
         let key = scope.root_nanbox_f64(unsafe { crate::object::js_to_property_key(index) });
-        return crate::proxy::js_proxy_get(receiver.get_nanbox_f64(), key.get_nanbox_f64());
+        return crate::proxy_hooks::proxy_get(receiver.get_nanbox_f64(), key.get_nanbox_f64());
     }
     if receiver_tag.is_some_and(|(obj_type, _)| is_registered_collection(raw_ptr, obj_type)) {
         let Some(index) = finite_nonnegative_u32_index(index) else {
@@ -620,8 +620,8 @@ pub extern "C" fn js_dyn_index_set_strict(obj: f64, index: f64, value: f64, stri
     let jsval = JSValue::from_bits(bits);
     // Proxies use small tagged handles rather than heap addresses. They must
     // take their [[Set]] path before any direct-property fast path.
-    if crate::proxy::js_proxy_is_proxy(obj) != 0 {
-        crate::proxy::js_proxy_set(obj, index, value);
+    if crate::proxy_hooks::proxy_is_proxy(obj) != 0 {
+        crate::proxy_hooks::proxy_set(obj, index, value);
         return value;
     }
     // Sloppy assignment still targets only the ephemeral ToObject wrapper,

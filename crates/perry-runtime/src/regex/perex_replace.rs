@@ -28,7 +28,7 @@ pub(super) fn callable(value: &RuntimeHandle<'_>) -> Result<bool, EngineError> {
     if crate::value::JSValue::from_bits(value.get_nanbox_u64()).is_any_string() {
         return Ok(false);
     }
-    if crate::proxy::proxy_wraps_callable(value.get_nanbox_f64()) {
+    if crate::proxy_hooks::proxy_wraps_callable(value.get_nanbox_f64()) {
         return Ok(true);
     }
     if !crate::proxy::reflect_value_is_object(value.get_nanbox_f64()) {
@@ -461,7 +461,7 @@ pub(crate) fn string(
     // An ordinary replacer's arguments go straight into shadow-stack slots;
     // a proxy's reach its `apply` trap as an array.
     let mut native_args =
-        if functional && crate::proxy::js_proxy_is_proxy(replacement.get_nanbox_f64()) != 1 {
+        if functional && crate::proxy_hooks::proxy_is_proxy(replacement.get_nanbox_f64()) != 1 {
             Some(NativeArgs::new(3)?)
         } else {
             None

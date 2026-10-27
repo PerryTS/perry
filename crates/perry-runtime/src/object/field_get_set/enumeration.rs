@@ -145,8 +145,8 @@ pub extern "C" fn js_object_keys_value(value: f64) -> *mut ArrayHeader {
     }
     // A Proxy is a small registered id — route through the `ownKeys` trap +
     // enumerability filter rather than the handle-dispatch fallback below.
-    if crate::proxy::js_proxy_is_proxy(value) != 0 {
-        let arr = crate::proxy::proxy_enum_own_keys(value);
+    if crate::proxy_hooks::proxy_is_proxy(value) != 0 {
+        let arr = crate::proxy_hooks::proxy_enum_own_keys(value);
         return (arr.to_bits() & crate::value::POINTER_MASK) as *mut ArrayHeader;
     }
     if jv.is_any_string() {
@@ -794,7 +794,7 @@ unsafe fn proxy_values_or_entries(value: f64, want_pairs: bool) -> *mut ArrayHea
     // handles and are re-read after each call.
     let scope = crate::gc::RuntimeHandleScope::new();
     let recv_h = scope.root_nanbox_f64(value);
-    let keys_boxed = crate::proxy::js_proxy_own_keys(value);
+    let keys_boxed = crate::proxy_hooks::proxy_own_keys(value);
     let keys_arr = (keys_boxed.to_bits() & crate::value::POINTER_MASK) as *mut ArrayHeader;
     let keys_h = scope.root_raw_mut_ptr(keys_arr);
     let len = crate::array::js_array_length(keys_h.get_raw_const_ptr::<ArrayHeader>());
@@ -827,7 +827,7 @@ unsafe fn proxy_values_or_entries(value: f64, want_pairs: bool) -> *mut ArrayHea
         {
             continue;
         }
-        let val = crate::proxy::js_proxy_get(recv_h.get_nanbox_f64(), key_h.get_nanbox_f64());
+        let val = crate::proxy_hooks::proxy_get(recv_h.get_nanbox_f64(), key_h.get_nanbox_f64());
         val_h.set_nanbox_f64(val);
         if want_pairs {
             let pair = crate::array::js_array_alloc(2);
@@ -855,7 +855,7 @@ unsafe fn proxy_values_or_entries(value: f64, want_pairs: bool) -> *mut ArrayHea
 #[no_mangle]
 pub extern "C" fn js_object_values_value(value: f64) -> *mut ArrayHeader {
     let jv = JSValue::from_bits(value.to_bits());
-    if crate::proxy::js_proxy_is_proxy(value) != 0 {
+    if crate::proxy_hooks::proxy_is_proxy(value) != 0 {
         return unsafe {
             proxy_values_or_entries(value, /*want_pairs=*/ false)
         };
@@ -968,7 +968,7 @@ fn handle_own_entries(value: f64, what: HandleEnum) -> *mut ArrayHeader {
 #[no_mangle]
 pub extern "C" fn js_object_entries_value(value: f64) -> *mut ArrayHeader {
     let jv = JSValue::from_bits(value.to_bits());
-    if crate::proxy::js_proxy_is_proxy(value) != 0 {
+    if crate::proxy_hooks::proxy_is_proxy(value) != 0 {
         return unsafe {
             proxy_values_or_entries(value, /*want_pairs=*/ true)
         };

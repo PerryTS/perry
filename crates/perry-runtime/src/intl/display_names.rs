@@ -79,7 +79,8 @@ fn get_options_object(options: f64) -> f64 {
     if jv.is_undefined() {
         return options;
     }
-    if crate::proxy::js_proxy_is_proxy(options) != 0 || object_ptr_from_value(options).is_some() {
+    if crate::proxy_hooks::proxy_is_proxy(options) != 0 || object_ptr_from_value(options).is_some()
+    {
         return options;
     }
     throw_type_error("Intl.DisplayNames: options must be an object");

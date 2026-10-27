@@ -231,7 +231,7 @@ fn proxy_named_key(name: &str) -> f64 {
 
 fn classify_pointer(recv: f64) -> Option<PtrKind> {
     let b = recv.to_bits();
-    if crate::proxy::js_proxy_is_proxy(recv) != 0 {
+    if crate::proxy_hooks::proxy_is_proxy(recv) != 0 {
         return Some(PtrKind::Proxy);
     }
     if top16(b) != 0x7FFD {
@@ -241,7 +241,7 @@ fn classify_pointer(recv: f64) -> Option<PtrKind> {
     // — classify BEFORE any address-based probe. All array-like ops route
     // through the proxy traps (so a revoked proxy's Get(length) throws —
     // test262 {map,filter,splice,concat}/create-revoked-proxy).
-    if crate::proxy::js_proxy_is_proxy(recv) != 0 {
+    if crate::proxy_hooks::proxy_is_proxy(recv) != 0 {
         return Some(PtrKind::Proxy);
     }
     let raw = (b & 0x0000_FFFF_FFFF_FFFF) as usize;
@@ -310,7 +310,7 @@ pub(super) fn al_length(recv: f64) -> i64 {
         Some(PtrKind::IndexedNative) => to_length(crate::value::js_value_length_f64(recv)),
         // Proxy: Get("length") through the `get` trap (throws on revoked).
         Some(PtrKind::Proxy) => to_length(crate::builtins::js_number_coerce(
-            crate::proxy::js_proxy_get(recv, proxy_named_key("length")),
+            crate::proxy_hooks::proxy_get(recv, proxy_named_key("length")),
         )),
         // Date/RegExp/Error expando receiver: `length` lives in the exotic
         // side table.
@@ -397,7 +397,7 @@ pub(super) fn al_get(recv: f64, k: i64) -> f64 {
                 None => undef(),
             }
         }
-        Some(PtrKind::Proxy) => crate::proxy::js_proxy_get(recv, proxy_string_key(k)),
+        Some(PtrKind::Proxy) => crate::proxy_hooks::proxy_get(recv, proxy_string_key(k)),
         Some(PtrKind::Exotic) | None => undef(),
     }
 }
@@ -513,7 +513,8 @@ pub(super) fn al_has(recv: f64, k: i64) -> bool {
             crate::object::exotic_expando::exotic_has_own_property(kind, raw, &k.to_string())
         }
         Some(PtrKind::Proxy) => {
-            crate::value::js_is_truthy(crate::proxy::js_proxy_has(recv, proxy_string_key(k))) != 0
+            crate::value::js_is_truthy(crate::proxy_hooks::proxy_has(recv, proxy_string_key(k)))
+                != 0
         }
         Some(PtrKind::Exotic) | None => false,
     }

@@ -251,6 +251,13 @@ pub(crate) fn auto_optimized_cross_features(
     {
         cross_features.push("perry-runtime/bigint".to_string());
     }
+    if ctx.uses_proxy
+        || ctx.uses_get_builtin_module
+        || needs_dyn_eval
+        || !ctx.native_addons.is_empty()
+    {
+        cross_features.push("perry-runtime/proxy".to_string());
+    }
     if ctx.uses_turnloop
         || io_module
         || ctx.uses_fetch

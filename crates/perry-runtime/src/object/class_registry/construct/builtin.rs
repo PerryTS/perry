@@ -270,7 +270,7 @@ pub(super) unsafe fn construct(
         BuiltinConstructorIdentity::Proxy => {
             let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
             let arg = |i: usize| args.get(i).copied().unwrap_or(undefined);
-            return Some(crate::proxy::js_proxy_new(arg(0), arg(1)));
+            return Some(crate::proxy_hooks::proxy_new(arg(0), arg(1)));
         }
         // #2889: `new (rebound RegExp)(pattern, flags)`.
         #[cfg(feature = "regex-engine")]

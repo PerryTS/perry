@@ -1756,7 +1756,7 @@ pub(crate) unsafe fn native_call_method_tower(
                 // non-callable own value. The prototype-object probe may
                 // allocate, so keep the resolved method in a mutable root.
                 if own_override
-                    && !crate::proxy::proxy_wraps_callable(dyn_val.get_nanbox_f64())
+                    && !crate::proxy_hooks::proxy_wraps_callable(dyn_val.get_nanbox_f64())
                     && !crate::object::is_function_prototype_object_value(dyn_val.get_nanbox_f64())
                 {
                     crate::error::js_throw_type_error_not_a_function(
@@ -1782,8 +1782,8 @@ pub(crate) unsafe fn native_call_method_tower(
                 // introduced `refreshed_args` and reached ten sites but not
                 // this one.
                 let call_args = refreshed_args();
-                let result = if crate::proxy::js_proxy_is_proxy(f64::from_bits(bound)) == 1 {
-                    crate::proxy::call_proxy_value_with_this(
+                let result = if crate::proxy_hooks::proxy_is_proxy(f64::from_bits(bound)) == 1 {
+                    crate::proxy_hooks::call_proxy_value_with_this(
                         f64::from_bits(bound),
                         object(),
                         &call_args,
@@ -1916,15 +1916,17 @@ pub(crate) unsafe fn native_call_method_tower(
     // Mirror the spec: `Get(proxy, "method")` (honors the get trap / forwards
     // through the target's prototype chain) then `Call(method, proxy, args)`
     // with `this` bound to the proxy itself.
-    if crate::proxy::js_proxy_is_proxy(object()) == 1 {
+    if crate::proxy_hooks::proxy_is_proxy(object()) == 1 {
         let key = crate::string::js_string_from_bytes(
             method_name_ptr as *const u8,
             method_name_len as u32,
         );
         let key_box = f64::from_bits(JSValue::string_ptr(key).bits());
         let key_handle = root_scope.root_nanbox_f64(key_box);
-        let method_value =
-            crate::proxy::js_proxy_get(object_handle.get_nanbox_f64(), key_handle.get_nanbox_f64());
+        let method_value = crate::proxy_hooks::proxy_get(
+            object_handle.get_nanbox_f64(),
+            key_handle.get_nanbox_f64(),
+        );
         let method_handle = root_scope.root_nanbox_f64(method_value);
         // First Get the method through the trap. Only the actual Array
         // builtin may enter the generic engine; a trap's replacement must
@@ -1950,7 +1952,8 @@ pub(crate) unsafe fn native_call_method_tower(
         // of a normal `obj.method(args)` invocation. A canonical class-method
         // value takes it via `canonical_bound_method_receiver` (#6699 routes a
         // proxy receiver through there).
-        let proxy_class_id = crate::proxy::proxy_target_class_id(object_handle.get_nanbox_f64());
+        let proxy_class_id =
+            crate::proxy_hooks::proxy_target_class_id(object_handle.get_nanbox_f64());
         let is_static_class_method = proxy_class_id.is_some_and(|class_id| {
             crate::object::class_registry::lookup_static_method_in_chain(class_id, method_name)
                 .is_some()

@@ -157,6 +157,7 @@ pub extern "C" fn js_runtime_install_compiled() {
     js_runtime_install_intl_locale();
     js_runtime_install_turnloop();
     js_runtime_install_bigint();
+    js_runtime_install_proxy();
     js_runtime_install_global_math();
     js_runtime_install_global_json();
     js_runtime_install_global_reflect();
@@ -452,4 +453,11 @@ pub extern "C" fn js_runtime_install_bigint() {
 /// Format an already produced BigInt from a cross-crate generic value hub.
 pub fn bigint_to_string(value: *const crate::bigint::BigIntHeader) -> *mut crate::StringHeader {
     crate::bigint_hooks::js_bigint_to_string(value)
+}
+
+#[no_mangle]
+pub extern "C" fn js_runtime_install_proxy() {
+    crate::perry_install_once!({
+        crate::proxy_hooks::install();
+    });
 }

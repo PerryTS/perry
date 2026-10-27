@@ -251,7 +251,7 @@ pub(crate) fn dense_spread_copy(value: f64) -> *mut ArrayHeader {
 pub(crate) fn flattenable_array_ptr(value: f64) -> *const ArrayHeader {
     // IsArray recurses through proxies and must throw for a revoked proxy.
     let mut value = value;
-    while let Some(target) = crate::proxy::is_array_proxy_step(value) {
+    while let Some(target) = crate::proxy_hooks::is_array_proxy_step(value) {
         value = target;
     }
 

@@ -32,7 +32,7 @@ struct InstanceofRhs {
 impl InstanceofRhs {
     #[inline]
     fn classify(value: f64) -> Self {
-        if crate::proxy::js_proxy_is_proxy(value) != 0 {
+        if crate::proxy_hooks::proxy_is_proxy(value) != 0 {
             return Self {
                 kind: RhsKind::Proxy,
                 closure: None,
@@ -100,8 +100,8 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
     let mut value = value;
     let lhs_non_proxy = {
         let mut depth = 0;
-        while depth < 16 && crate::proxy::js_proxy_is_proxy(value) != 0 {
-            value = crate::proxy::js_proxy_target(value);
+        while depth < 16 && crate::proxy_hooks::proxy_is_proxy(value) != 0 {
+            value = crate::proxy_hooks::proxy_target(value);
             depth += 1;
         }
         depth < 16

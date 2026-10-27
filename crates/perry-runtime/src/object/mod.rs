@@ -1908,3 +1908,5 @@ mod record_layout_tests;
 
 #[cfg(test)]
 mod address_free_slots_tests;
+
+pub(crate) mod property_ops;

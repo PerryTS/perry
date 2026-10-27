@@ -940,14 +940,14 @@ pub(crate) fn resolve_inherited_field_from_prototype(
     // `Object.create(proxy)[k]`.)
     {
         let proto_val = f64::from_bits(proto_bits);
-        if crate::proxy::js_proxy_is_proxy(proto_val) != 0 {
+        if crate::proxy_hooks::proxy_is_proxy(proto_val) != 0 {
             if key.is_null() {
                 return None;
             }
             let key_val = f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
             let receiver = super::field_get_set::accessor_receiver_override_take()
                 .unwrap_or_else(|| crate::value::js_nanbox_pointer(obj_ptr as i64));
-            let v = crate::proxy::proxy_get_from_prototype(proto_val, key_val, receiver);
+            let v = crate::proxy_hooks::proxy_get_from_prototype(proto_val, key_val, receiver);
             return Some(crate::value::JSValue::from_bits(v.to_bits()));
         }
     }
@@ -999,7 +999,7 @@ pub(crate) fn resolve_inherited_field_from_prototype(
     let prev_override_handle = prev_override.map(|value| scope.root_nanbox_f64(value));
     let v = super::js_object_get_field_by_name(proto, key);
     super::field_get_set::accessor_receiver_override_end(
-        prev_override_handle.map(|handle| handle.get_nanbox_f64()),
+        prev_override_handle.map(crate::gc::RuntimeHandle::into_nanbox_f64),
     );
     if v.bits() == 0x7FFC_0000_0000_0001 {
         // undefined — treat as "not present" so callers fall back cleanly.

@@ -712,8 +712,8 @@ pub extern "C" fn js_validate_array_comparator(cmp_boxed: f64) -> i64 {
         // this bare proxy id, which then performs the Proxy [[Call]]. Check
         // callability here so a Proxy of a non-callable still throws before
         // sorting starts.
-        if crate::proxy::js_proxy_is_proxy(cmp_boxed) == 1
-            && crate::proxy::proxy_wraps_callable(cmp_boxed)
+        if crate::proxy_hooks::proxy_is_proxy(cmp_boxed) == 1
+            && crate::proxy_hooks::proxy_wraps_callable(cmp_boxed)
         {
             return ptr as i64;
         }

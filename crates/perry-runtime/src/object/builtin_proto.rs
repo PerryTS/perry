@@ -731,7 +731,7 @@ unsafe fn select_and_call(
     // must keep the receiver intact and perform its operations through traps.
     if !call_builtin
         && is_builtin_method(selected)
-        && crate::proxy::js_proxy_is_proxy(this_h.get_nanbox_f64()) == 0
+        && crate::proxy_hooks::proxy_is_proxy(this_h.get_nanbox_f64()) == 0
     {
         if let Some((recv, out)) = refresh {
             *recv = this_h.get_nanbox_f64();

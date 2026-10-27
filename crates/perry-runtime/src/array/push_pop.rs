@@ -277,7 +277,7 @@ unsafe fn proxy_array_length(proxy: f64) -> u64 {
 pub(super) unsafe fn proxy_set_str_key(proxy: f64, key_bytes: &[u8], value: f64) {
     let key = crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
     let key_f64 = crate::value::js_nanbox_string(key as i64);
-    if crate::proxy::js_proxy_set(proxy, key_f64, value).to_bits() != crate::value::TAG_TRUE {
+    if crate::proxy_hooks::proxy_set(proxy, key_f64, value).to_bits() != crate::value::TAG_TRUE {
         crate::collection_iter::throw_type_error(&format!(
             "'set' on proxy: trap returned falsish for property '{}'",
             String::from_utf8_lossy(key_bytes),
@@ -290,14 +290,14 @@ pub(super) unsafe fn proxy_set_str_key(proxy: f64, key_bytes: &[u8], value: f64)
 unsafe fn proxy_get_str_key(proxy: f64, key_bytes: &[u8]) -> f64 {
     let key = crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
     let key_f64 = crate::value::js_nanbox_string(key as i64);
-    crate::proxy::js_proxy_get(proxy, key_f64)
+    crate::proxy_hooks::proxy_get(proxy, key_f64)
 }
 
 /// `HasProperty(proxy, <string key>)` through the proxy's `has` trap.
 unsafe fn proxy_has_str_key(proxy: f64, key_bytes: &[u8]) -> bool {
     let key = crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
     let key_f64 = crate::value::js_nanbox_string(key as i64);
-    crate::proxy::js_proxy_has(proxy, key_f64).to_bits() == crate::value::TAG_TRUE
+    crate::proxy_hooks::proxy_has(proxy, key_f64).to_bits() == crate::value::TAG_TRUE
 }
 
 /// Spec `DeletePropertyOrThrow(proxy, <string key>)`: routes the
@@ -307,7 +307,7 @@ unsafe fn proxy_has_str_key(proxy: f64, key_bytes: &[u8]) -> bool {
 pub(super) unsafe fn proxy_delete_str_key_or_throw(proxy: f64, key_bytes: &[u8]) {
     let key = crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
     let key_f64 = crate::value::js_nanbox_string(key as i64);
-    if crate::proxy::js_proxy_delete(proxy, key_f64).to_bits() != crate::value::TAG_TRUE {
+    if crate::proxy_hooks::proxy_delete(proxy, key_f64).to_bits() != crate::value::TAG_TRUE {
         let msg = format!(
             "'deleteProperty' on proxy: trap returned falsish for property '{}'",
             String::from_utf8_lossy(key_bytes)

@@ -353,7 +353,7 @@ pub unsafe extern "C" fn js_dynamic_object_get_property(
         let addr = js_nanbox_get_pointer(obj_value);
         if addr != 0 && crate::value::addr_class::is_proxy_cell(addr as usize) {
             let boxed = f64::from_bits(crate::value::POINTER_TAG | (addr as u64 & POINTER_MASK));
-            if crate::proxy::js_proxy_is_proxy(boxed) != 0 {
+            if crate::proxy_hooks::proxy_is_proxy(boxed) != 0 {
                 let name_slice = if property_name_len > 0 {
                     std::slice::from_raw_parts(property_name_ptr as *const u8, property_name_len)
                 } else {
@@ -362,7 +362,7 @@ pub unsafe extern "C" fn js_dynamic_object_get_property(
                 };
                 let key = crate::string::intern_ascii_literal(name_slice);
                 let key_f64 = crate::value::js_nanbox_string(key as i64);
-                return crate::proxy::js_proxy_get(boxed, key_f64);
+                return crate::proxy_hooks::proxy_get(boxed, key_f64);
             }
         }
     }

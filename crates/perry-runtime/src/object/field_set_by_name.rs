@@ -159,7 +159,7 @@ pub extern "C" fn js_object_set_field_by_name(
         if crate::value::addr_class::is_proxy_cell(raw_addr as usize) && !key.is_null() {
             let boxed = f64::from_bits(crate::value::POINTER_TAG | raw_addr);
             let key_f64 = f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
-            crate::proxy::js_proxy_set(boxed, key_f64, value);
+            crate::proxy_hooks::proxy_set(boxed, key_f64, value);
             return;
         }
     }

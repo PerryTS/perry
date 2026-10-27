@@ -523,7 +523,7 @@ pub(crate) extern "C" fn function_prototype_has_instance_thunk(
 fn ordinary_has_instance(constructor: f64, value: f64) -> bool {
     // The inherited Function.prototype hook must perform OrdinaryHasInstance
     // on the proxy itself, without consulting @@hasInstance a second time.
-    if crate::proxy::js_proxy_is_proxy(constructor) != 0 {
+    if crate::proxy_hooks::proxy_is_proxy(constructor) != 0 {
         return proxy_rhs::ordinary_proxy_has_instance(constructor, value);
     }
     let prev = SUPPRESS_INSTANCEOF_RHS_THROW.with(|c| c.replace(true));

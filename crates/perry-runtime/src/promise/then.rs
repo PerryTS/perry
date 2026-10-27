@@ -1104,7 +1104,7 @@ fn is_promise_species_object(value: f64) -> bool {
     let raw = (bits & crate::value::POINTER_MASK) as usize;
     if crate::value::addr_class::is_handle_band(raw) {
         // Proxies are encoded as handle-band values but are valid objects.
-        return crate::proxy::js_proxy_is_proxy(value) != 0;
+        return crate::proxy_hooks::proxy_is_proxy(value) != 0;
     }
     !crate::symbol::is_registered_symbol(raw)
 }

@@ -40,8 +40,8 @@ pub unsafe extern "C" fn js_object_get_own_property_symbols(obj_f64: f64) -> i64
     }
     // A Proxy is a small registered id — route through the `ownKeys` trap
     // (symbol subset) before the heap-object paths below.
-    if crate::proxy::js_proxy_is_proxy(obj_f64) != 0 {
-        let arr = crate::proxy::proxy_own_property_symbols(obj_f64);
+    if crate::proxy_hooks::proxy_is_proxy(obj_f64) != 0 {
+        let arr = crate::proxy_hooks::proxy_own_property_symbols(obj_f64);
         return (arr.to_bits() & POINTER_MASK) as i64;
     }
     if let Some(class_id) = crate::object::class_ref_id(obj_f64) {
@@ -218,7 +218,7 @@ pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
     // below (so a get trap / custom @@iterator remains observable); the
     // forwarded builtin iterator now uses KIND_PROXY_VALUES for live trapped
     // length/index reads.
-    let is_proxy = crate::proxy::js_proxy_is_proxy(value()) != 0;
+    let is_proxy = crate::proxy_hooks::proxy_is_proxy(value()) != 0;
     // `class X extends Array` — the instance is object-backed (a plain
     // `ObjectHeader` with indexed fields + `length`), but `array_values_iter`
     // reads a dense `ArrayHeader`. `js_array_is_array` now reports true for such
@@ -531,14 +531,14 @@ pub unsafe extern "C" fn js_to_primitive(value: f64, hint: i32) -> f64 {
     // not callable falls through to the "not a method" return below, matching
     // how this path already treats a non-callable `@@toPrimitive` value.
     let method_now = method_handle.get_nanbox_f64();
-    if crate::proxy::js_proxy_is_proxy(method_now) == 1 {
-        if !crate::proxy::proxy_wraps_callable(method_now) {
+    if crate::proxy_hooks::proxy_is_proxy(method_now) == 1 {
+        if !crate::proxy_hooks::proxy_wraps_callable(method_now) {
             return value_handle.get_nanbox_f64();
         }
         let hint_f64 = f64::from_bits(
             STRING_TAG | (hint_handle.get_raw_const_ptr::<StringHeader>() as u64 & POINTER_MASK),
         );
-        return crate::proxy::call_proxy_value_with_this(
+        return crate::proxy_hooks::call_proxy_value_with_this(
             method_handle.get_nanbox_f64(),
             value_handle.get_nanbox_f64(),
             &[hint_f64],

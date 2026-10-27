@@ -363,7 +363,7 @@ pub extern "C" fn js_util_types_is_native_error(value: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_util_types_is_proxy(value: f64) -> f64 {
-    nanbox_bool(crate::proxy::js_proxy_is_proxy(value) != 0)
+    nanbox_bool(crate::proxy_hooks::proxy_is_proxy(value) != 0)
 }
 
 #[no_mangle]

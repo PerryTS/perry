@@ -94,7 +94,7 @@ pub extern "C" fn js_object_create(proto_value: f64) -> f64 {
                 )
             }
             .is_some())
-        || crate::proxy::js_proxy_is_proxy(proto_value) != 0
+        || crate::proxy_hooks::proxy_is_proxy(proto_value) != 0
         || (!proto_is_symbol
             && (unsafe { value_is_object_like(proto_value) }
                 || super::class_ref_id(proto_value).is_some()));
@@ -297,8 +297,8 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
     // `Object.getPrototypeOf(proxy)` matches the target. drizzle aliases columns
     // as `new Proxy(column, …)` and `is(value, type)` reads
     // `getPrototypeOf(value).constructor`, which crashed on `null.constructor`.
-    if crate::proxy::js_proxy_is_proxy(obj_value) != 0 {
-        return crate::proxy::js_proxy_get_prototype_of(obj_value);
+    if crate::proxy_hooks::proxy_is_proxy(obj_value) != 0 {
+        return crate::proxy_hooks::proxy_get_prototype_of(obj_value);
     }
     // A Temporal value is a NaN-boxed opaque cell, not an `ObjectHeader` — the
     // heap-object resolution below would deref its boxed payload as a class id

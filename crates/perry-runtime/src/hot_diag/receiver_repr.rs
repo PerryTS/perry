@@ -434,7 +434,7 @@ mod tests {
                 f64::from_bits(crate::value::JSValue::pointer(ptr.cast()).bits())
             };
             (
-                crate::proxy::js_proxy_new(object(), object()).to_bits() as usize,
+                crate::proxy_hooks::proxy_new(object(), object()).to_bits() as usize,
                 true,
             )
         });

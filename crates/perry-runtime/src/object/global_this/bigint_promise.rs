@@ -851,7 +851,7 @@ fn value_is_constructor(value: f64) -> bool {
     if crate::object::class_value::legacy_class_value_word(bits).is_some() {
         return true; // class-ref constructor
     }
-    if crate::proxy::js_proxy_is_proxy(value) == 1 {
+    if crate::proxy_hooks::proxy_is_proxy(value) == 1 {
         return true;
     }
     if (bits >> 48) == 0x7FFD {

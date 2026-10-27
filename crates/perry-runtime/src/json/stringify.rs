@@ -268,7 +268,7 @@ pub(crate) unsafe fn object_get_to_json(ptr: *const u8) -> Option<f64> {
     // the existing `gc_obj_type == GC_TYPE_OBJECT && !is_registered_buffer`
     // guard the replacer path already applies before calling this helper.
     let recv = f64::from_bits(make_pointer_bits(ptr));
-    let is_proxy = crate::proxy::js_proxy_is_proxy(recv) != 0;
+    let is_proxy = crate::proxy_hooks::proxy_is_proxy(recv) != 0;
     if !is_proxy
         && (gc_obj_type(ptr) != crate::gc::GC_TYPE_OBJECT
             || crate::buffer::is_registered_buffer(ptr as usize))
@@ -401,7 +401,7 @@ pub(crate) unsafe fn array_get_to_json(arr: *const crate::ArrayHeader) -> Option
 /// can't leak the flag onto an unrelated later object/array.
 #[inline]
 pub(crate) unsafe fn arm_to_json_result_guard(result: f64) {
-    if crate::proxy::js_proxy_is_proxy(result) != 0 {
+    if crate::proxy_hooks::proxy_is_proxy(result) != 0 {
         SUPPRESS_NEXT_TO_JSON.with(|c| c.set(true));
         return;
     }

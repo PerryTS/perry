@@ -93,8 +93,8 @@ fn instanceof_dispatch(
     let mut value = value;
     if !lhs_non_proxy {
         let mut depth = 0;
-        while depth < 16 && crate::proxy::js_proxy_is_proxy(value) != 0 {
-            value = crate::proxy::js_proxy_target(value);
+        while depth < 16 && crate::proxy_hooks::proxy_is_proxy(value) != 0 {
+            value = crate::proxy_hooks::proxy_target(value);
             depth += 1;
         }
     }

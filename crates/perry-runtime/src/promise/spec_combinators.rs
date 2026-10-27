@@ -132,7 +132,7 @@ fn is_callable(value: f64) -> bool {
     if crate::value::addr_class::is_handle_band(raw) || (raw as u64) >= HEAP_ADDR_CEILING {
         return false;
     }
-    crate::closure::is_closure_ptr(raw) || crate::proxy::js_proxy_is_proxy(value) == 1
+    crate::closure::is_closure_ptr(raw) || crate::proxy_hooks::proxy_is_proxy(value) == 1
 }
 
 // ---------------------------------------------------------------------------

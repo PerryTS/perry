@@ -673,7 +673,7 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                 // RegExp literals have their own GC kind and no enumerable
                 // keys; render `/source/flags` instead (#800).
                 collections::format_regexp(ptr as *const crate::regex::RegExpHeader)
-            } else if crate::proxy::js_proxy_is_proxy(value) != 0 {
+            } else if crate::proxy_hooks::proxy_is_proxy(value) != 0 {
                 format_proxy_value(value, depth, false)
             } else if crate::date::is_date_cell_addr(ptr as usize) {
                 // #2089: a Date is a NaN-boxed `DateCell` pointer. Node's
@@ -933,7 +933,7 @@ unsafe fn format_buffer_value(buf_ptr: *const crate::buffer::BufferHeader) -> St
 }
 
 fn format_proxy_value(value: f64, depth: usize, json: bool) -> String {
-    let target = crate::proxy::js_proxy_target(value);
+    let target = crate::proxy_hooks::proxy_target(value);
     if !inspect_show_proxy() {
         let target_str = if json {
             format_jsvalue_for_json(target, depth)
@@ -943,7 +943,7 @@ fn format_proxy_value(value: f64, depth: usize, json: bool) -> String {
         return format!("Proxy({target_str})");
     }
 
-    let handler = crate::proxy::js_proxy_handler(value);
+    let handler = crate::proxy_hooks::proxy_handler(value);
     let target_str = if json {
         format_jsvalue_for_json(target, depth + 1)
     } else {
@@ -1458,7 +1458,7 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                 // A small registry-id handle (`< 0x200000`, e.g. a Web Fetch
                 // Request) carries no GC header, so reading `ptr - 8` would
                 // deref unmapped memory — print a placeholder instead.
-                if crate::proxy::js_proxy_is_proxy(value) != 0 {
+                if crate::proxy_hooks::proxy_is_proxy(value) != 0 {
                     format_proxy_value(value, depth, true)
                 } else if crate::date::is_date_cell_addr(ptr as usize) {
                     // #2089: Date inside an inspected object — ISO string

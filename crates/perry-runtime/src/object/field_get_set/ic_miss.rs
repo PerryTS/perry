@@ -244,9 +244,9 @@ pub(crate) fn get_field_miss(obj: *const ObjectHeader, key: *const crate::String
         let addr = obj as u64;
         if crate::value::addr_class::is_proxy_cell(addr as usize) {
             let boxed = f64::from_bits(crate::value::POINTER_TAG | (addr & 0x0000_FFFF_FFFF_FFFF));
-            if crate::proxy::js_proxy_is_proxy(boxed) != 0 {
+            if crate::proxy_hooks::proxy_is_proxy(boxed) != 0 {
                 let key_f64 = f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
-                return crate::proxy::js_proxy_get(boxed, key_f64);
+                return crate::proxy_hooks::proxy_get(boxed, key_f64);
             }
         }
     }
@@ -307,9 +307,9 @@ pub(crate) fn get_field_miss(obj: *const ObjectHeader, key: *const crate::String
         {
             let boxed =
                 f64::from_bits(crate::value::POINTER_TAG | ((obj as u64) & 0x0000_FFFF_FFFF_FFFF));
-            if crate::proxy::js_proxy_is_proxy(boxed) != 0 {
+            if crate::proxy_hooks::proxy_is_proxy(boxed) != 0 {
                 let key_f64 = f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
-                return crate::proxy::js_proxy_get(boxed, key_f64);
+                return crate::proxy_hooks::proxy_get(boxed, key_f64);
             }
         }
         unsafe {
@@ -1121,7 +1121,7 @@ fn private_guard_checked(
     let brand_owner_root = scope.root_nanbox_f64(brand_owner);
     let field_name = interned.unwrap_or("");
     if is_static
-        && (crate::proxy::js_proxy_is_proxy(obj) != 0
+        && (crate::proxy_hooks::proxy_is_proxy(obj) != 0
             || !private_static_receiver_is_constructor(obj))
     {
         throw_private_brand_mismatch(

@@ -179,7 +179,7 @@ unsafe fn construct_function_impl(
     // trap (or forwards to the target). Reached when the compiler can't prove
     // the callee is a proxy statically (e.g. `new record.proxy()`). newTarget
     // for a plain `new` is the constructor being invoked — the proxy itself.
-    if crate::proxy::js_proxy_is_proxy(func_value) == 1 {
+    if crate::proxy_hooks::proxy_is_proxy(func_value) == 1 {
         let arr = crate::array::js_array_alloc(0);
         let mut a = arr;
         if !args_ptr.is_null() {
@@ -188,7 +188,7 @@ unsafe fn construct_function_impl(
             }
         }
         let arr_box = f64::from_bits(0x7FFD_0000_0000_0000 | (a as u64 & 0x0000_FFFF_FFFF_FFFF));
-        return crate::proxy::js_proxy_construct(func_value, arr_box, func_value);
+        return crate::proxy_hooks::proxy_construct(func_value, arr_box, func_value);
     }
     if is_non_constructable_builtin_function_value(func_value) {
         throw_non_constructable_builtin_function();
@@ -460,7 +460,7 @@ pub(crate) fn js_value_is_constructor(value: f64) -> bool {
     if constructor_class_ref_id(value).is_some() || is_class_object_value(value) {
         return true;
     }
-    if crate::proxy::js_proxy_is_proxy(value) == 1 {
+    if crate::proxy_hooks::proxy_is_proxy(value) == 1 {
         return true;
     }
     if !is_callable_function_value(value) {
@@ -510,8 +510,8 @@ pub(crate) fn extends_target_must_throw(value: f64) -> bool {
         return false;
     }
     // A Proxy is a constructor iff its `[[ProxyTarget]]` is — recurse.
-    if crate::proxy::js_proxy_is_proxy(value) == 1 {
-        return extends_target_must_throw(crate::proxy::js_proxy_target(value));
+    if crate::proxy_hooks::proxy_is_proxy(value) == 1 {
+        return extends_target_must_throw(crate::proxy_hooks::proxy_target(value));
     }
     // Non-object primitives (number, string, boolean, undefined, symbol, bigint)
     // can never be a superclass.
@@ -806,7 +806,7 @@ fn new_target_custom_object_prototype(new_target: f64) -> Option<u64> {
 /// `Get(newTarget, "prototype")` for an object or Proxy `newTarget`.
 fn new_target_prototype_get(new_target: f64) -> Option<f64> {
     let bits = new_target.to_bits();
-    let proxy = crate::proxy::js_proxy_is_proxy(new_target) != 0;
+    let proxy = crate::proxy_hooks::proxy_is_proxy(new_target) != 0;
     if !proxy && (bits >> 48) != 0x7FFD {
         return None;
     }
@@ -817,7 +817,7 @@ fn new_target_prototype_get(new_target: f64) -> Option<f64> {
     let key = crate::string::js_string_from_bytes(b"prototype".as_ptr(), b"prototype".len() as u32);
     if proxy {
         let key = crate::value::js_nanbox_string(key as i64);
-        return Some(crate::proxy::js_proxy_get(new_target, key));
+        return Some(crate::proxy_hooks::proxy_get(new_target, key));
     }
     Some(js_object_get_field_by_name_f64(
         raw as *const ObjectHeader,
@@ -871,7 +871,7 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
     if nt.to_bits() == func_value.to_bits() {
         return js_new_function_construct(func_value, args_ptr, args_len);
     }
-    if crate::proxy::js_proxy_is_proxy(func_value) == 1 {
+    if crate::proxy_hooks::proxy_is_proxy(func_value) == 1 {
         let arr = crate::array::js_array_alloc(0);
         let mut a = arr;
         if !args_ptr.is_null() {
@@ -880,7 +880,7 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
             }
         }
         let arr_box = f64::from_bits(0x7FFD_0000_0000_0000 | (a as u64 & 0x0000_FFFF_FFFF_FFFF));
-        return crate::proxy::js_proxy_construct(func_value, arr_box, nt);
+        return crate::proxy_hooks::proxy_construct(func_value, arr_box, nt);
     }
     if let Some(target_cid) = constructor_class_ref_id(func_value) {
         let instance_cid = new_target_class_id(nt).unwrap_or(target_cid);

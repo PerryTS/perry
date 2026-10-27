@@ -138,7 +138,7 @@ fn proxy_get_with_receiver_impl(
             .map(|value| scope.root_nanbox_f64(value));
     let result = target_get_property_key(target_h.get_nanbox_f64(), key_h.get_nanbox_f64());
     crate::object::accessor_receiver_override_end(
-        previous_override.map(|value| value.get_nanbox_f64()),
+        previous_override.map(crate::gc::RuntimeHandle::into_nanbox_f64),
     );
     result
 }
