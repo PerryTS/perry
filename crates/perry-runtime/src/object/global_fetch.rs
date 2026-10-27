@@ -122,7 +122,7 @@ pub extern "C" fn js_fetch_input_ptr(input: f64) -> i64 {
         return input_ptr;
     }
 
-    let href = crate::url::url_class::js_url_href_if_url(input);
+    let href = crate::url_hooks::url_href_if_url(input);
     if href.to_bits() != crate::value::TAG_UNDEFINED {
         crate::value::js_nanbox_get_pointer(href)
     } else {

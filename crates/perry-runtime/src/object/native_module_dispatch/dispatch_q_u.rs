@@ -652,20 +652,20 @@ pub(crate) unsafe fn nm_dispatch_url(ctx: &NmCtx, module_name: &str, method_name
         typed_kind
     );
     match (module_name, method_name) {
-        ("url", "fileURLToPath") => crate::url::js_url_file_url_to_path(arg(0), arg(1)),
+        ("url", "fileURLToPath") => crate::url_hooks::url_file_url_to_path(arg(0), arg(1)),
         ("url", "fileURLToPathBuffer") => {
-            crate::url::js_url_file_url_to_path_buffer(arg(0), arg(1))
+            crate::url_hooks::url_file_url_to_path_buffer(arg(0), arg(1))
         }
-        ("url", "pathToFileURL") => crate::url::js_url_path_to_file_url(arg(0), arg(1)),
-        ("url", "domainToASCII") => crate::url::js_url_domain_to_ascii(arg(0)),
-        ("url", "domainToUnicode") => crate::url::js_url_domain_to_unicode(arg(0)),
-        ("url", "urlToHttpOptions") => crate::url::js_url_to_http_options(arg(0)),
-        ("url", "URLPattern") => crate::url::js_url_pattern_constructor_call(arg(0), arg(1)),
-        ("url", "Url") => crate::url::js_url_legacy_url_new(),
-        ("url", "format") => crate::url::js_url_format(arg(0), arg(1)),
-        ("url", "parse") => crate::url::js_url_legacy_parse(arg(0), arg(1), arg(2)),
-        ("url", "resolve") => crate::url::js_url_legacy_resolve(arg(0), arg(1)),
-        ("url", "resolveObject") => crate::url::js_url_legacy_resolve_object(arg(0), arg(1)),
+        ("url", "pathToFileURL") => crate::url_hooks::url_path_to_file_url(arg(0), arg(1)),
+        ("url", "domainToASCII") => crate::url_hooks::url_domain_to_ascii(arg(0)),
+        ("url", "domainToUnicode") => crate::url_hooks::url_domain_to_unicode(arg(0)),
+        ("url", "urlToHttpOptions") => crate::url_hooks::url_to_http_options(arg(0)),
+        ("url", "URLPattern") => crate::url_hooks::url_pattern_constructor_call(arg(0), arg(1)),
+        ("url", "Url") => crate::url_hooks::url_legacy_url_new(),
+        ("url", "format") => crate::url_hooks::url_format(arg(0), arg(1)),
+        ("url", "parse") => crate::url_hooks::url_legacy_parse(arg(0), arg(1), arg(2)),
+        ("url", "resolve") => crate::url_hooks::url_legacy_resolve(arg(0), arg(1)),
+        ("url", "resolveObject") => crate::url_hooks::url_legacy_resolve_object(arg(0), arg(1)),
 
         // ── punycode module (deprecated, #2513) ──
         _ => f64::from_bits(JSValue::undefined().bits()),

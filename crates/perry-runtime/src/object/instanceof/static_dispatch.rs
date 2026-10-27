@@ -303,7 +303,8 @@ fn native_instanceof(
     }
     if class_id == CLASS_ID_URL {
         let addr = value_addr(value);
-        let branded = addr != 0 && crate::url::is_url_object_shape(addr as *mut ObjectHeader);
+        let branded =
+            addr != 0 && crate::object::url_layout::is_url_object_shape(addr as *mut ObjectHeader);
         return if branded
             || recorded_prototype_instanceof_builtin(rooted_value, "URL", constructor) == Some(true)
         {

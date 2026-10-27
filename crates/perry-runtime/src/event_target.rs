@@ -138,7 +138,7 @@ unsafe fn listener_signal(options: f64) -> Option<*mut ObjectHeader> {
     if js_value.is_undefined() || js_value.is_null() || !js_value.is_pointer() {
         return None;
     }
-    crate::url::abort::abort_signal_ptr_from_value(own_option_value(options, b"signal"))
+    crate::event_target::abort::abort_signal_ptr_from_value(own_option_value(options, b"signal"))
 }
 
 fn set_event_field(event: *mut ObjectHeader, name: u32, value: f64) {
@@ -1241,3 +1241,5 @@ pub extern "C" fn js_event_target_subclass_init(this: f64, kind: u32) -> f64 {
 #[used(compiler)]
 static KEEP_JS_EVENT_TARGET_SUBCLASS_INIT: extern "C" fn(f64, u32) -> f64 =
     js_event_target_subclass_init;
+
+pub(crate) mod abort;

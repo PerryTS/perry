@@ -1234,15 +1234,14 @@ pub(crate) unsafe fn decode_path_value_named(path_value: f64, arg_name: &str) ->
         if obj.is_null() {
             return None;
         }
-        let protocol = crate::url::get_string_content(crate::object::js_object_get_field_f64(
-            obj,
-            crate::url::parse::URL_PROTOCOL,
-        ));
+        let protocol = crate::value::boxed_text::get_string_content(
+            crate::object::js_object_get_field_f64(obj, crate::url::parse::URL_PROTOCOL),
+        );
         if protocol != "file:" {
             return None;
         }
         return Some(reject_null_bytes(
-            crate::url::node_compat::file_url_to_path_string_posix(path_value),
+            crate::url_hooks::file_url_to_path_string_posix(path_value),
             arg_name,
         ));
     }

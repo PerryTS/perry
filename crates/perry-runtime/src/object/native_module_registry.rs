@@ -416,6 +416,7 @@ pub extern "C" fn js_nm_install_inspector() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_module() {
+    crate::feature_hooks::js_runtime_install_url_engine();
     crate::feature_hooks::install_json_engine();
     nm_register_attach(
         NmBucket::Module,
@@ -622,6 +623,8 @@ pub extern "C" fn js_nm_install_tty() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_url() {
+    crate::feature_hooks::js_runtime_install_url_engine();
+    crate::feature_hooks::js_runtime_install_global_url();
     crate::feature_hooks::install_json_engine();
     NM_DISPATCH_REGISTRY[NmBucket::Url as usize].store(
         nm_dispatch_url as NmDispatchFn as *mut (),

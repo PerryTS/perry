@@ -347,16 +347,16 @@ pub(crate) fn js_jsvalue_to_string_impl(
                 #[cfg(feature = "url-engine")]
                 {
                     let boxed = f64::from_bits(POINTER_TAG | ((ptr as u64) & POINTER_MASK));
-                    let url_href = crate::url::url_class::js_url_href_if_url(boxed);
+                    let url_href = crate::url_hooks::url_href_if_url(boxed);
                     if url_href.to_bits() != crate::value::TAG_UNDEFINED {
                         return js_jsvalue_to_string_impl(url_href, reject_symbol);
                     }
-                    if crate::url::try_read_as_search_params(
+                    if crate::url_hooks::try_read_as_search_params(
                         ptr as *mut crate::object::ObjectHeader,
                     )
                     .is_some()
                     {
-                        return crate::url::search_params::js_url_search_params_to_string(
+                        return crate::url_hooks::url_search_params_to_string(
                             ptr as *mut crate::object::ObjectHeader,
                         );
                     }

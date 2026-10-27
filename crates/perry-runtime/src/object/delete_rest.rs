@@ -957,7 +957,7 @@ unsafe fn try_delete_stable_sso(obj: *mut ObjectHeader, key: JSValue) -> Option<
         || gc._reserved & BLOCKING_FLAGS != 0
         || !super::object_is_regular(obj)
         || crate::array::object_prototype_addr_matches(obj as usize)
-        || ((*obj).class_id == 0 && crate::url::is_url_object_shape(obj))
+        || ((*obj).class_id == 0 && crate::object::url_layout::is_url_object_shape(obj))
     {
         return None;
     }

@@ -1589,7 +1589,7 @@ pub(crate) unsafe fn native_call_method_tower(
     // call on a type-erased receiver lands here — dispatch the covered surface
     // to the natives (shape-probed for the native form, hidden backing for the
     // subclass) before the generic field-scan misses.
-    if let Some(result) = crate::url::search_params::try_url_search_params_dynamic_dispatch(
+    if let Some(result) = crate::url_hooks::try_url_search_params_dynamic_dispatch(
         object(),
         method_name,
         args_ptr,

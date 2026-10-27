@@ -180,7 +180,9 @@ unsafe fn stringify_object_walk(
     // `is_url_object_shape` declines every class id but 0, so only those pay
     // for it; reading the class id is no more of a dereference than the shape
     // read just below, which every caller already relied on.
-    if (*obj).class_id == 0 && crate::url::is_url_object_shape(ptr as *mut crate::ObjectHeader) {
+    if (*obj).class_id == 0
+        && crate::object::url_layout::is_url_object_shape(ptr as *mut crate::ObjectHeader)
+    {
         *global_proof = false;
         write_url_href_json(ptr as *mut crate::ObjectHeader, buf);
         return;

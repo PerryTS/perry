@@ -54,7 +54,7 @@ pub(crate) fn register_module(env: NapiEnv, path: &Path, api_version: i32) -> Op
     // A canonical Windows path carries the verbatim prefix, which is not part
     // of the file URL Node reports.
     let text = text.strip_prefix(r"\\?\").unwrap_or(&text);
-    let url = crate::url::node_compat::path_to_file_url_string(text, cfg!(windows));
+    let url = crate::module_require::file_url_text::path_to_file_url_string(text, cfg!(windows));
     let file_url = CString::new(url).ok()?;
     with_env_mut(env, |env| {
         let index = u32::try_from(env.modules.len()).ok()?;

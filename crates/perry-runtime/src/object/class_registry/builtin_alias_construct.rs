@@ -47,7 +47,7 @@ pub(crate) fn construct(name: BuiltinConstructorIdentity, args: &[f64]) -> f64 {
             return crate::value::js_nanbox_pointer(target as i64);
         }
         BuiltinConstructorIdentity::AbortController => {
-            let controller = crate::url::abort::js_abort_controller_new();
+            let controller = crate::event_target::abort::js_abort_controller_new();
             return crate::value::js_nanbox_pointer(controller as i64);
         }
         BuiltinConstructorIdentity::TextEncoder => {
@@ -63,7 +63,7 @@ pub(crate) fn construct(name: BuiltinConstructorIdentity, args: &[f64]) -> f64 {
                 }
                 _ => std::ptr::null_mut(),
             };
-            let params = crate::url::search_params::js_url_search_params_new(init_str);
+            let params = crate::url_hooks::url_search_params_new(init_str);
             return crate::value::js_nanbox_pointer(params as i64);
         }
         BuiltinConstructorIdentity::DisposableStack => {

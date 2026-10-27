@@ -202,7 +202,7 @@ fn option_signal_value(options_value: f64) -> Result<Option<f64>, f64> {
         if is_nullish(signal) {
             return Ok(None);
         }
-        if crate::url::abort::abort_signal_ptr_from_value(signal).is_some() {
+        if crate::event_target::abort::abort_signal_ptr_from_value(signal).is_some() {
             Ok(Some(signal))
         } else {
             Err(signal_type_error(signal))
@@ -211,12 +211,12 @@ fn option_signal_value(options_value: f64) -> Result<Option<f64>, f64> {
 }
 
 fn signal_is_aborted(signal: f64) -> bool {
-    crate::url::abort::abort_signal_ptr_from_value(signal)
+    crate::event_target::abort::abort_signal_ptr_from_value(signal)
         .is_some_and(|ptr| crate::url::js_abort_signal_is_aborted(ptr) != 0)
 }
 
 fn signal_abort_reason(signal: f64) -> f64 {
-    let Some(ptr) = crate::url::abort::abort_signal_ptr_from_value(signal) else {
+    let Some(ptr) = crate::event_target::abort::abort_signal_ptr_from_value(signal) else {
         return crate::url::js_abort_error_value();
     };
     let reason = crate::object::js_object_get_field_f64(ptr, 1);
@@ -228,7 +228,7 @@ fn signal_abort_reason(signal: f64) -> f64 {
 }
 
 fn add_abort_listener(signal: f64, id: usize, func: *const crate::closure::JsFunctionInfo) -> f64 {
-    let Some(signal_ptr) = crate::url::abort::abort_signal_ptr_from_value(signal) else {
+    let Some(signal_ptr) = crate::event_target::abort::abort_signal_ptr_from_value(signal) else {
         return undefined_value();
     };
     let closure = js_closure_alloc(func, 1);
@@ -242,7 +242,7 @@ fn remove_abort_listener(signal: f64, listener: f64) {
     if is_nullish(signal) || is_nullish(listener) {
         return;
     }
-    if let Some(signal_ptr) = crate::url::abort::abort_signal_ptr_from_value(signal) {
+    if let Some(signal_ptr) = crate::event_target::abort::abort_signal_ptr_from_value(signal) {
         crate::url::js_abort_signal_remove_listener(signal_ptr, string_value(b"abort"), listener);
     }
 }

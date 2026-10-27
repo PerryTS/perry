@@ -90,14 +90,14 @@ extern "C" fn aborted_resolve_listener(
 
 #[no_mangle]
 pub extern "C" fn js_util_aborted(signal: f64, resource: f64) -> f64 {
-    let signal_ptr = match crate::url::abort::abort_signal_ptr_from_value(signal) {
+    let signal_ptr = match crate::event_target::abort::abort_signal_ptr_from_value(signal) {
         Some(signal_ptr) => signal_ptr,
         None => return rejected_promise(invalid_aborted_signal_error()),
     };
     if !is_object_resource(resource) {
         return rejected_promise(invalid_resource_error(resource));
     }
-    if crate::url::abort::js_abort_signal_is_aborted(signal_ptr) != 0 {
+    if crate::event_target::abort::js_abort_signal_is_aborted(signal_ptr) != 0 {
         return resolved_promise(undefined());
     }
 
@@ -122,7 +122,7 @@ pub extern "C" fn js_util_transferable_abort_controller() -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_util_transferable_abort_signal(signal: f64) -> f64 {
-    if !crate::url::abort::is_abort_signal_value(signal) {
+    if !crate::event_target::abort::is_abort_signal_value(signal) {
         crate::exception::js_throw(invalid_signal_error(signal));
     }
     signal

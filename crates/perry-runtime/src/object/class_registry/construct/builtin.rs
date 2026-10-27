@@ -662,20 +662,20 @@ pub(in crate::object) unsafe fn web_url_construct(
                 .first()
                 .copied()
                 .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
-            let input_ptr = crate::url::js_url_coerce_string(input);
+            let input_ptr = crate::url_hooks::url_coerce_string(input);
             let url = if let Some(base) = args.get(1).copied() {
-                let base_ptr = crate::url::js_url_coerce_string(base);
-                crate::url::js_url_new_with_base(input_ptr, base_ptr)
+                let base_ptr = crate::url_hooks::url_coerce_string(base);
+                crate::url_hooks::url_new_with_base(input_ptr, base_ptr)
             } else {
-                crate::url::js_url_new(input_ptr)
+                crate::url_hooks::url_new(input_ptr)
             };
             return Some(crate::value::js_nanbox_pointer(url as i64));
         }
         BuiltinConstructorIdentity::URLSearchParams => {
             let params = if let Some(init) = args.first().copied() {
-                crate::url::js_url_search_params_new_any(init)
+                crate::url_hooks::url_search_params_new_any(init)
             } else {
-                crate::url::js_url_search_params_new_empty()
+                crate::url_hooks::url_search_params_new_empty()
             };
             return Some(crate::value::js_nanbox_pointer(params as i64));
         }

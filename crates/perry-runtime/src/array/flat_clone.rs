@@ -594,8 +594,8 @@ pub extern "C" fn js_array_clone(src: *const ArrayHeader) -> *mut ArrayHeader {
             // The previous heuristic required `keys_array.length == 1`, but a
             // URL-adopted URLSearchParams also carries an owner key (2 keys),
             // so spread fell through to the array-like path and produced `[]`.
-            if crate::url::try_read_as_search_params(obj).is_some() {
-                let boxed = crate::url::js_url_search_params_entries_arr(obj);
+            if crate::url_hooks::try_read_as_search_params(obj).is_some() {
+                let boxed = crate::url_hooks::url_search_params_entries_arr(obj);
                 let bits = boxed.to_bits();
                 let ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as *mut ArrayHeader;
                 if !ptr.is_null() {

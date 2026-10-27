@@ -598,7 +598,7 @@ unsafe fn define_append_transition_eligible(
         || crate::object::class_registry::is_class_object_ptr(obj.cast())
         || crate::object::reserved_slot_floor_for_class_id(class_id) != 0
         || crate::array::object_prototype_addr_matches(obj as usize)
-        || crate::url::is_url_object_shape(obj)
+        || crate::object::url_layout::is_url_object_shape(obj)
         || crate::typedarray::lookup_typed_array_kind(obj as usize).is_some()
     {
         #[cfg(feature = "shape-mint-diag")]

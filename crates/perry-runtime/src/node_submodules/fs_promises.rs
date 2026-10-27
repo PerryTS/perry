@@ -11,11 +11,11 @@ use crate::closure::{
     get_valid_func_ptr, js_closure_alloc, js_closure_get_capture_f64, js_closure_set_capture_f64,
     js_native_call_value, ClosureHeader,
 };
+use crate::event_target::abort::abort_signal_ptr_from_value;
 use crate::object::{
     js_object_alloc, js_object_get_field_by_name_f64, js_object_set_field_by_name, ObjectHeader,
 };
 use crate::string::{js_string_from_bytes, StringHeader};
-use crate::url::abort::abort_signal_ptr_from_value;
 use crate::value::{js_jsvalue_to_string, JSValue};
 
 pub(crate) fn promise_value(value: f64) -> f64 {

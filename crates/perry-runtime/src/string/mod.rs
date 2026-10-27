@@ -1400,3 +1400,5 @@ pub(crate) use intern::{
 pub(crate) mod byte_scan;
 pub(crate) mod quote;
 pub(crate) mod short_copy;
+
+pub(crate) mod form_codec;

@@ -189,7 +189,7 @@ pub extern "C" fn js_node_stream_set_default_hwm(object_mode: f64, value: f64) -
 }
 
 pub(crate) fn attach_abort_signal(signal: f64, stream: f64) {
-    if !crate::url::abort::is_abort_signal_value(signal) {
+    if !crate::event_target::abort::is_abort_signal_value(signal) {
         let message = format!(
             "The \"signal\" argument must be an instance of AbortSignal. Received {}",
             crate::fs::validate::describe_received(signal)

@@ -445,7 +445,11 @@ pub(super) fn detect_optional_feature_usage(
     // negatives; including more HIR can only over-include a feature).
     let hir_debug = module_hir_debug(hir_module);
     ctx.uses_json_format |= module_uses_json_format(hir_module);
-    ctx.uses_global_json |= global_object::may_escape(hir_module);
+    if global_object::may_escape(hir_module) {
+        ctx.uses_global_json = true;
+        ctx.uses_url = true;
+        ctx.uses_global_url = true;
+    }
     if hir_debug.contains("Proxy")
         || hir_debug.contains("GlobalThisExpr")
         || hir_debug.contains("property: \"globalThis\"")

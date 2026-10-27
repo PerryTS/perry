@@ -305,8 +305,8 @@ pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
         if jsv.is_pointer() {
             let obj =
                 jsv.as_pointer::<crate::object::ObjectHeader>() as *mut crate::object::ObjectHeader;
-            if crate::url::search_params::shape_is_url_search_params(obj) {
-                let entries = crate::url::js_url_search_params_entries_arr(obj);
+            if crate::url_hooks::shape_is_url_search_params(obj) {
+                let entries = crate::url_hooks::url_search_params_entries_arr(obj);
                 return crate::array::array_values_iter(entries);
             }
             // #6710: a `class X extends URLSearchParams` instance (Next's
@@ -314,9 +314,8 @@ pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
             // backing rather than its own `_entries`/`_owner` fields, so the
             // shape probe above misses. Default `for (const [k, v] of r)` still
             // yields `[key, value]` pairs from the backing.
-            if let Some(backing) = crate::url::search_params::url_search_params_backing_of(value())
-            {
-                let entries = crate::url::js_url_search_params_entries_arr(backing);
+            if let Some(backing) = crate::url_hooks::url_search_params_backing_of(value()) {
+                let entries = crate::url_hooks::url_search_params_entries_arr(backing);
                 return crate::array::array_values_iter(entries);
             }
         }

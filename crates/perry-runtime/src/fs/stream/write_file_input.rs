@@ -38,7 +38,7 @@ fn write_file_signal_from_options(options_value: f64) -> Result<Option<*mut Obje
         if signal_js.is_undefined() {
             return Ok(None);
         }
-        match crate::url::abort::abort_signal_ptr_from_value(signal_f64) {
+        match crate::event_target::abort::abort_signal_ptr_from_value(signal_f64) {
             Some(signal) => Ok(Some(signal)),
             None => Err(write_file_signal_type_error(signal_f64)),
         }

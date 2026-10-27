@@ -124,7 +124,7 @@ pub(crate) extern "C" fn global_this_url_pattern_call_thunk(
     input: f64,
     base: f64,
 ) -> f64 {
-    crate::url::js_url_pattern_constructor_call(input, base)
+    crate::url_hooks::url_pattern_constructor_call(input, base)
 }
 
 fn error_constructor_call(kind: u32, message: f64) -> f64 {

@@ -103,7 +103,7 @@ extern "C" fn url_prototype_href_thunk(
     _closure: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,
 ) -> f64 {
-    crate::url::js_url_get_href(web_method_receiver(this, "URL"))
+    crate::url_hooks::url_get_href(web_method_receiver(this, "URL"))
 }
 
 fn web_method_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
@@ -1128,7 +1128,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_noop_proto_methods(proto_obj, &[("compile", 2)]);
             install_object_proto_copies(builtin_name, proto_obj);
         }
-        "URLPattern" => {
+        "URLPattern" | "URLSearchParams" => {
             super::web_hooks::proto_methods(
                 super::web_hooks::WebGroup::Url,
                 builtin_name,
@@ -1148,81 +1148,6 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
         // `install_web_builtin_to_string_tag` keeps
         // `Object.getOwnPropertyDescriptor(URLSearchParams.prototype,
         // Symbol.toStringTag)` reflecting a real descriptor.
-        "URLSearchParams" => {
-            use crate::closure::{FN_BUILTIN, FN_NON_CONSTRUCTOR};
-            use crate::url::search_params as usp;
-            for (name, info, arity) in [
-                (
-                    "append",
-                    crate::fn_info!(usp::usp_proto_append, 2; with_declared(2), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
-                    2,
-                ),
-                (
-                    "delete",
-                    crate::fn_info!(usp::usp_proto_delete, 2; with_declared(2), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
-                    1,
-                ),
-                (
-                    "entries",
-                    crate::fn_info!(usp::usp_proto_entries, 0; with_declared(0), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
-                    0,
-                ),
-                (
-                    "forEach",
-                    crate::fn_info!(usp::usp_proto_for_each, 2; with_declared(2), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
-                    1,
-                ),
-                (
-                    "get",
-                    crate::fn_info!(usp::usp_proto_get, 1; with_declared(1), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
-                    1,
-                ),
-                (
-                    "getAll",
-                    crate::fn_info!(usp::usp_proto_get_all, 1; with_declared(1), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
-                    1,
-                ),
-                (
-                    "has",
-                    crate::fn_info!(usp::usp_proto_has, 2; with_declared(2), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
-                    1,
-                ),
-                (
-                    "keys",
-                    crate::fn_info!(usp::usp_proto_keys, 0; with_declared(0), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
-                    0,
-                ),
-                (
-                    "set",
-                    crate::fn_info!(usp::usp_proto_set, 2; with_declared(2), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
-                    2,
-                ),
-                (
-                    "sort",
-                    crate::fn_info!(usp::usp_proto_sort, 0; with_declared(0), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
-                    0,
-                ),
-                (
-                    "toString",
-                    crate::fn_info!(usp::usp_proto_to_string, 0; with_declared(0), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
-                    0,
-                ),
-                (
-                    "values",
-                    crate::fn_info!(usp::usp_proto_values, 0; with_declared(0), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
-                    0,
-                ),
-            ] {
-                install_proto_method(proto_obj, name, info, arity);
-            }
-            install_web_getter_accessor(
-                proto_obj,
-                "size",
-                crate::fn_info!(usp::usp_proto_size_getter, 0; with_declared(0)),
-            );
-            install_object_proto_copies(builtin_name, proto_obj);
-            unsafe { install_web_builtin_to_string_tag(proto_obj, "URLSearchParams") };
-        }
         "Promise" => {
             install_proto_method(
                 proto_obj,
@@ -1531,6 +1456,81 @@ fn install_webcrypto_proto_getter(
 /// The `global-url` prototype member tables, installed by `web_hooks`.
 pub(super) fn web_url_proto_methods(builtin_name: &str, proto_obj: *mut ObjectHeader) {
     match builtin_name {
+        "URLSearchParams" => {
+            use crate::closure::{FN_BUILTIN, FN_NON_CONSTRUCTOR};
+            use crate::url::search_params as usp;
+            for (name, info, arity) in [
+                (
+                    "append",
+                    crate::fn_info!(usp::usp_proto_append, 2; with_declared(2), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
+                    2,
+                ),
+                (
+                    "delete",
+                    crate::fn_info!(usp::usp_proto_delete, 2; with_declared(2), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
+                    1,
+                ),
+                (
+                    "entries",
+                    crate::fn_info!(usp::usp_proto_entries, 0; with_declared(0), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
+                    0,
+                ),
+                (
+                    "forEach",
+                    crate::fn_info!(usp::usp_proto_for_each, 2; with_declared(2), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
+                    1,
+                ),
+                (
+                    "get",
+                    crate::fn_info!(usp::usp_proto_get, 1; with_declared(1), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
+                    1,
+                ),
+                (
+                    "getAll",
+                    crate::fn_info!(usp::usp_proto_get_all, 1; with_declared(1), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
+                    1,
+                ),
+                (
+                    "has",
+                    crate::fn_info!(usp::usp_proto_has, 2; with_declared(2), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
+                    1,
+                ),
+                (
+                    "keys",
+                    crate::fn_info!(usp::usp_proto_keys, 0; with_declared(0), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
+                    0,
+                ),
+                (
+                    "set",
+                    crate::fn_info!(usp::usp_proto_set, 2; with_declared(2), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
+                    2,
+                ),
+                (
+                    "sort",
+                    crate::fn_info!(usp::usp_proto_sort, 0; with_declared(0), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
+                    0,
+                ),
+                (
+                    "toString",
+                    crate::fn_info!(usp::usp_proto_to_string, 0; with_declared(0), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
+                    0,
+                ),
+                (
+                    "values",
+                    crate::fn_info!(usp::usp_proto_values, 0; with_declared(0), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
+                    0,
+                ),
+            ] {
+                install_proto_method(proto_obj, name, info, arity);
+            }
+            install_web_getter_accessor(
+                proto_obj,
+                "size",
+                crate::fn_info!(usp::usp_proto_size_getter, 0; with_declared(0)),
+            );
+            install_object_proto_copies(builtin_name, proto_obj);
+            unsafe { install_web_builtin_to_string_tag(proto_obj, "URLSearchParams") };
+        }
         "URLPattern" => {
             install_proto_method_rest(
                 proto_obj,

@@ -161,7 +161,7 @@ pub(crate) unsafe fn build_shape_prefix_template(first_elem_bits: u64) -> Option
     // as a templated dump of its 12 internal fields (which would also walk the
     // `searchParams` back-reference and throw). Bail so an array whose first
     // element is a URL routes every element through the per-element slow path.
-    if crate::url::is_url_object_shape(obj as *mut crate::ObjectHeader) {
+    if crate::object::url_layout::is_url_object_shape(obj as *mut crate::ObjectHeader) {
         return None;
     }
     let keys_arr_view = crate::object::object_keys(obj);

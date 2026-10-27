@@ -114,7 +114,7 @@ pub(crate) fn install_url() {
     URL.statics.set(st::web_url_statics);
     URL.construct
         .set(crate::object::class_registry::web_url_construct);
-    URL_PROTOTYPE_ACCESSORS.set(crate::url::prototype::install_url_prototype_accessors);
+    URL_PROTOTYPE_ACCESSORS.set(crate::url_hooks::install_url_prototype_accessors);
 }
 
 pub(crate) fn install_text() {

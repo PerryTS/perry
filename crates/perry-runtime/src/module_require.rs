@@ -263,7 +263,7 @@ fn validate_create_require_base(filename_or_url: f64) {
         }
         throw_invalid_value("filename", filename_or_url);
     }
-    if crate::url::node_compat::module_base_to_path(filename_or_url).is_some() {
+    if crate::module_require::file_url_text::module_base_to_path(filename_or_url).is_some() {
         return;
     }
     throw_invalid_value("filename", filename_or_url);
@@ -1030,7 +1030,7 @@ fn make_require(base: f64, main_value: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_module_create_require(filename_or_url: f64) -> f64 {
     validate_create_require_base(filename_or_url);
-    let base = crate::url::node_compat::module_base_to_path(filename_or_url)
+    let base = crate::module_require::file_url_text::module_base_to_path(filename_or_url)
         .unwrap_or_else(|| value_to_string(filename_or_url, "filename"));
     make_require(string_value(&base), undefined())
 }
@@ -1755,3 +1755,5 @@ mod builtin_allowlist_parity_tests {
 #[cfg(test)]
 #[path = "module_require/init_guard_tests.rs"]
 mod init_guard_tests;
+
+pub(crate) mod file_url_text;

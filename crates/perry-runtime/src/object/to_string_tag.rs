@@ -54,10 +54,10 @@ pub(crate) fn web_builtin_to_string_tag(value: f64) -> Option<&'static str> {
         Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT => addr as *const ObjectHeader,
         _ => return None,
     };
-    if crate::url::is_url_object_shape(obj as *mut ObjectHeader) {
+    if crate::object::url_layout::is_url_object_shape(obj as *mut ObjectHeader) {
         return Some("URL");
     }
-    if crate::url::search_params::shape_is_url_search_params(obj) {
+    if crate::url_hooks::shape_is_url_search_params(obj) {
         return Some("URLSearchParams");
     }
     None

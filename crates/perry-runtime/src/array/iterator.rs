@@ -1086,10 +1086,12 @@ pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
             // `try_read_as_search_params` interns its own key string, so the
             // receiver address is re-read from the root for the entries call
             // rather than reused from before that probe.
-            if crate::url::try_read_as_search_params(raw_ptr() as *mut crate::object::ObjectHeader)
-                .is_some()
+            if crate::url_hooks::try_read_as_search_params(
+                raw_ptr() as *mut crate::object::ObjectHeader
+            )
+            .is_some()
             {
-                let boxed = crate::url::js_url_search_params_entries_arr(
+                let boxed = crate::url_hooks::url_search_params_entries_arr(
                     raw_ptr() as *mut crate::object::ObjectHeader
                 );
                 let ptr = crate::value::js_nanbox_get_pointer(boxed) as *mut ArrayHeader;

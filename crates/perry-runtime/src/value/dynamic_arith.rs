@@ -311,14 +311,14 @@ unsafe fn to_primitive_default_for_add(value: f64) -> f64 {
             let boxed = f64::from_bits(
                 crate::value::POINTER_TAG | ((ptr as u64) & crate::value::POINTER_MASK),
             );
-            let href = crate::url::url_class::js_url_href_if_url(boxed);
+            let href = crate::url_hooks::url_href_if_url(boxed);
             if href.to_bits() != crate::value::TAG_UNDEFINED {
                 let s = js_jsvalue_to_string(href);
                 return crate::value::js_nanbox_string(s as i64);
             }
             let obj = ptr as *mut crate::object::ObjectHeader;
-            if crate::url::try_read_as_search_params(obj).is_some() {
-                let s = crate::url::search_params::js_url_search_params_to_string(obj);
+            if crate::url_hooks::try_read_as_search_params(obj).is_some() {
+                let s = crate::url_hooks::url_search_params_to_string(obj);
                 return crate::value::js_nanbox_string(s as i64);
             }
         }

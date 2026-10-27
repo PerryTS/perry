@@ -688,7 +688,7 @@ pub(super) fn cp_install_abort_signal(handle: u64, signal: Option<f64>, opts_val
     let Some(signal) = signal else {
         return;
     };
-    let Some(signal_ptr) = crate::url::abort::abort_signal_ptr_from_value(signal) else {
+    let Some(signal_ptr) = crate::event_target::abort::abort_signal_ptr_from_value(signal) else {
         return;
     };
 
@@ -757,7 +757,7 @@ fn cp_cleanup_abort_listener(signal_bits: u64, listener_bits: u64) {
         return;
     }
     let signal = f64::from_bits(signal_bits);
-    let Some(signal_ptr) = crate::url::abort::abort_signal_ptr_from_value(signal) else {
+    let Some(signal_ptr) = crate::event_target::abort::abort_signal_ptr_from_value(signal) else {
         return;
     };
     crate::url::js_abort_signal_remove_listener(

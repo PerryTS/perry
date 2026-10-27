@@ -1006,12 +1006,12 @@ pub(crate) unsafe fn stringify_object(ptr: *const u8, buf: &mut String) {
 /// `searchParams` field points back at the URL, so the generic object walk trips
 /// the circular-structure detector; every stringify walker (compact, pretty, and
 /// replacer, in both `stringify.rs` and `replacer.rs`) short-circuits URL objects
-/// through here. Callers must have confirmed `crate::url::is_url_object_shape`.
+/// through here. Callers must have confirmed `crate::object::url_layout::is_url_object_shape`.
 /// `href` is a string by construction, so this never recurses into an object and
 /// is depth-independent (emitting it just escapes + quotes the string).
 #[inline]
 pub(crate) unsafe fn write_url_href_json(url: *mut crate::ObjectHeader, buf: &mut String) {
-    let href = crate::url::url_class::js_url_get_href(url);
+    let href = crate::url_hooks::url_get_href(url);
     stringify_value(href, TYPE_UNKNOWN, buf);
 }
 

@@ -37,6 +37,7 @@ NEGATIVES = {
     "without_turnloop": ["turnloop"],
     "without_bigint": ["bigint"],
     "without_proxy": ["proxy"],
+    "without_url": ["url_engine", "global_url"],
     "without_bigint_querystring": ["bigint"],
     "fs_promises_without_streams": ["bundled_web_streams"],
 }

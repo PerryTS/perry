@@ -98,7 +98,7 @@ pub(crate) fn cp_read_abort_signal(opts_val: f64) -> Option<f64> {
     if JSValue::from_bits(signal.to_bits()).is_undefined() {
         return None;
     }
-    if crate::url::abort::abort_signal_ptr_from_value(signal).is_some() {
+    if crate::event_target::abort::abort_signal_ptr_from_value(signal).is_some() {
         return Some(signal);
     }
     let message = format!(
@@ -109,7 +109,7 @@ pub(crate) fn cp_read_abort_signal(opts_val: f64) -> Option<f64> {
 }
 
 pub(crate) fn cp_abort_signal_is_aborted(signal: f64) -> bool {
-    crate::url::abort::abort_signal_ptr_from_value(signal)
+    crate::event_target::abort::abort_signal_ptr_from_value(signal)
         .is_some_and(|ptr| crate::url::js_abort_signal_is_aborted(ptr) != 0)
 }
 
