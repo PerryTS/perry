@@ -4,11 +4,11 @@
 # Use with docker-compose: docker compose run --rm perry-dev bash
 #
 # This image includes:
-# - Rust stable toolchain with rustfmt and clippy
+# - Perry's pinned Rust toolchain with rustfmt and clippy
 # - All build dependencies
 # - Useful development tools
 
-FROM rust:1.75-bookworm
+FROM rust:1.99-bookworm
 
 WORKDIR /perry
 
@@ -20,13 +20,25 @@ RUN apt-get update && apt-get install -y \
     git \
     curl \
     vim \
+    python3 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Rust components
-RUN rustup component add rustfmt clippy
+COPY scripts/install-llvm22-debian.sh /opt/perry-build-tools/install-llvm22-debian.sh
+RUN sh /opt/perry-build-tools/install-llvm22-debian.sh
+ENV LLVM_SYS_221_PREFIX=/usr/lib/llvm-22
+ENV PATH="/usr/lib/llvm-22/bin:${PATH}"
+
+# Install the matching prebuilt development toolchain outside the checkout mount.
+COPY scripts/setup-blaze.sh scripts/build-tools.ref /opt/perry-build-tools/
+RUN MBX_BLAZE_ROOT=/opt/mbx-blaze sh /opt/perry-build-tools/setup-blaze.sh
+ENV MBX_BLAZE_ROOT=/opt/mbx-blaze
+ENV RUSTFLAGS="-C force-unwind-tables=yes"
 
 # Set up cargo cache volume mount points
 ENV CARGO_HOME=/root/.cargo
+
+# Activate the Cargo shim even for direct `docker compose run ... cargo` commands.
+ENTRYPOINT ["sh", "-c", ". /opt/mbx-blaze/env.sh; exec \"$@\"", "--"]
 
 # Default command
 CMD ["bash"]

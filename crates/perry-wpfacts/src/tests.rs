@@ -18,6 +18,7 @@ mod for_in_keys;
 mod function_values;
 mod hub_tokens;
 mod layout_key;
+mod named_accessors;
 mod native_proto;
 mod parent_value;
 mod prim_result;

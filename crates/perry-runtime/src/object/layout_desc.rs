@@ -28,6 +28,10 @@
 //! full ShapeId value, and bit 30 ([`LAYOUT_SHADOW_BIT`]) is the shadow bit,
 //! which no ShapeId carries (object model §3.6; set by `object::shadow`).
 
+mod literal_birth;
+pub use literal_birth::perry_alloc_literal_layout;
+mod optional_family;
+
 use super::ObjectHeader;
 mod define_field;
 pub(crate) mod methods;
@@ -679,7 +683,6 @@ use registration::declared_kind;
 use registration::layout_key_word;
 pub(crate) use registration::register_function_layout;
 pub(crate) use registration::register_namespace_layout;
-#[cfg(test)]
 pub(crate) use registration::register_one;
 pub(crate) use registration::register_one_bound;
 pub(crate) use registration::register_static_layouts;
@@ -696,7 +699,7 @@ pub unsafe extern "C" fn perry_alloc_layout(desc: *const PerryLayoutDesc) -> *mu
     #[cfg(test)]
     crate::test_support::bootstrap_test_thread();
     let d = &*desc;
-    let Some(id) = registered_layout_id(d.layout_id) else {
+    let Some(id) = registered_layout_id(load_layout_id(desc)) else {
         eprintln!(
             "Perry internal error: perry_alloc_layout of an unregistered layout (family {:#x})",
             d.family
@@ -842,7 +845,7 @@ pub(crate) unsafe fn alloc_derived_layout_object(
     proto: &crate::gc::RuntimeHandle<'_>,
     recorded: LayoutWord,
 ) -> Option<*mut ObjectHeader> {
-    let id = registered_layout_id(d.layout_id)?;
+    let id = registered_layout_id(load_layout_id(d))?;
     let size = std::mem::size_of::<ObjectHeader>() + d.slot_count as usize * 8;
     let obj =
         crate::arena::arena_alloc_gc(size, 8, crate::gc::GC_TYPE_OBJECT).cast::<ObjectHeader>();
@@ -921,7 +924,7 @@ pub(crate) unsafe fn alloc_layout_prototype(
     room: u32,
 ) -> *mut ObjectHeader {
     let d = &*desc;
-    let Some(id) = registered_layout_id(d.layout_id) else {
+    let Some(id) = registered_layout_id(load_layout_id(d)) else {
         eprintln!(
             "Perry internal error: a prototype born on an unregistered layout (family {:#x})",
             d.family
@@ -1064,7 +1067,7 @@ pub(crate) unsafe fn prototype_image(
     serial: u64,
     bound: &[u64],
 ) -> Option<f64> {
-    let id = registered_layout_id(d.layout_id)?;
+    let id = registered_layout_id(load_layout_id(d))?;
     if bound.len() != binding_symbol_keys(d)
         || !bound
             .iter()
@@ -1228,7 +1231,7 @@ unsafe fn family_birth(d: &PerryLayoutDesc, proto: f64) -> Option<*mut ObjectHea
     if d.proto.addr() < LAYOUT_PROTO_TAG_END {
         return None;
     }
-    let id = registered_layout_id(d.layout_id)?;
+    let id = registered_layout_id(load_layout_id(d))?;
     let serial = proto_family_serial_registered(d.proto);
     let bits = proto.to_bits();
     if serial == 0 || bits & !crate::value::POINTER_MASK != crate::value::POINTER_TAG {
@@ -1349,11 +1352,10 @@ static KEEP_PERRY_BIND_FAMILY_PROTOTYPE: unsafe extern "C" fn(
 // ---------------------------------------------------------------------------
 // Case 2c (OBJECT_MODEL_2026-10-13.md §3.7): static class families.
 //
-// Every descriptor's layout id is `LAYOUT_BASE + i`, where `i` is its record
-// index in `perry_layouts` (the static band's upper half, which no counter
-// mints from). So a read site maps a layout word to its descriptor with
-// arithmetic: strip the shadow bit, subtract `LAYOUT_BASE`, compare with the
-// record count.
+// The whole-image ordinal plan owns immutable DPA header words. Each agent's
+// current ShapeRecord names its descriptor through family_desc_index_plus_one;
+// the checked decoder spans eager nominal and lazy literal descriptors. ShapeId
+// identities remain separate from both the dense row and descriptor position.
 //
 // A static family's layout word never changes after birth. A key its layout
 // does not hold goes to the object's overflow (`object/overflow.rs`, §3.4):
@@ -1371,22 +1373,15 @@ fn layout_id_of_index(index: u32) -> Option<u32> {
     (index < LAYOUT_INDEX_LIMIT).then_some(LAYOUT_BASE + index)
 }
 
-/// The descriptor record index a layout word names (shadow bit ignored), or
-/// `None` for every word outside the section's ids.
+/// The current agent record owns the descriptor index. The header word is
+/// the independent DPA row; generic words receive one checked family decode.
 #[inline]
-pub(crate) fn layout_index_of_word(word: u32) -> Option<u32> {
+fn family_for_word(word: u32) -> Option<*const PerryLayoutDesc> {
     if !super::shapes::is_layout_word(layout_id_of_word(word)) {
         return None;
     }
     let record = super::shapes::shape_record_for_word(LayoutWord(word))?;
-    record.family_desc_index_plus_one().checked_sub(1)
-}
-
-/// Descriptor `index` of the section.
-#[inline]
-fn desc_at(index: u32) -> *const PerryLayoutDesc {
-    (layout_bounds().0 + index as usize * std::mem::size_of::<PerryLayoutDesc>())
-        as *const PerryLayoutDesc
+    literal_birth::family_at(record.family_desc_index_plus_one().checked_sub(1)?)
 }
 
 /// The class declaration owns the immutable pointer to its instance layout.
@@ -1543,7 +1538,7 @@ pub(crate) unsafe fn adopt_family_layout(obj: *mut ObjectHeader) -> *mut ObjectH
         // GC_STORE_AUDIT(POINTER_FREE): All three stores write the immediate TAG_HOLE to physical object slots. They introduce no pointer/child edge; allocation or rooted object custody surrounds the fill and shape publication follows.
         *fields.add(i) = crate::value::TAG_HOLE;
     }
-    super::shapes::stamp_object_shape_id_with_carrier_note(obj, LayoutWord(d.layout_id));
+    super::shapes::stamp_object_shape_id_with_carrier_note(obj, LayoutWord(load_layout_id(d)));
     // A birth linked to another prototype (a class evaluation's, a
     // newTarget's) keeps that link as its shape's identity: the funnel moves
     // the object to that evaluation's copy of the layout (or off the family,
@@ -1627,9 +1622,8 @@ static KEEP_PERRY_LAYOUT_INDEX_PROBE: unsafe extern "C" fn(
 /// own id; an evaluation's copy is an object fact, [`is_family_object`])?
 #[inline]
 pub(crate) fn is_family_layout_word(word: u32) -> bool {
-    layout_index_of_word(word).is_some_and(|i| unsafe {
-        let d = &*desc_at(i);
-        d.class_id != 0 && registered_layout_id(d.layout_id) == Some(layout_id_of_word(word))
+    family_for_word(word).is_some_and(|desc| unsafe {
+        registered_layout_id(load_layout_id(desc)) == Some(layout_id_of_word(word))
     })
 }
 
@@ -1679,8 +1673,7 @@ pub(crate) unsafe fn family_desc_of(obj: *const ObjectHeader) -> Option<&'static
     let index = super::shapes::shape_record_of_receiver(word)?
         .family_desc_index_plus_one()
         .checked_sub(1)?;
-    let d = &*desc_at(index);
-    (d.class_id != 0).then_some(d)
+    literal_birth::family_at(index).map(|desc| &*desc)
 }
 
 /// Is `obj` a class family object: on its family layout, or on a class
@@ -1700,12 +1693,10 @@ pub(crate) unsafe fn is_family_object(obj: *const ObjectHeader) -> bool {
 /// `family` is a record's `family_desc_index_plus_one` fact.
 #[inline]
 pub(crate) unsafe fn evaluation_layout_desc(family: u32) -> Option<&'static PerryLayoutDesc> {
-    match family {
-        0 => None,
-        // The record names a registered class family layout: only
-        // [`note_family_relink`] writes it, from one.
-        family => Some(&*desc_at(family - 1)),
-    }
+    // Publication already established family membership. Consume that record
+    // proof with the one checked span decoder, without classifying it again.
+    let index = family.checked_sub(1)?;
+    literal_birth::descriptor_at(index).map(|(desc, _)| &*desc)
 }
 
 /// Is `word` (an `ObjectHeader` layout word) a static class family layout
@@ -1729,9 +1720,8 @@ pub(crate) fn note_family_relink(previous: LayoutWord, id: LayoutWord) {
         return;
     };
     let index = record.family_desc_index_plus_one();
-    if index != 0 {
-        let family_word = unsafe { (*desc_at(index - 1)).layout_id };
-        super::shapes::note_evaluation_layout(id, LayoutWord(family_word));
+    if let Some(desc) = unsafe { evaluation_layout_desc(index) } {
+        super::shapes::note_evaluation_layout(id, LayoutWord(desc.layout_id));
     }
 }
 
@@ -1812,8 +1802,12 @@ fn image_layouts() -> impl Iterator<Item = *mut PerryLayoutDesc> {
 fn descriptor_index(desc: *const PerryLayoutDesc) -> Option<u32> {
     let (start, end) = layout_bounds();
     let at = desc as usize;
-    (at >= start && at < end)
-        .then(|| ((at - start) / std::mem::size_of::<PerryLayoutDesc>()) as u32)
+    let size = std::mem::size_of::<PerryLayoutDesc>();
+    if at >= start && at < end && (at - start) % size == 0 {
+        Some(((at - start) / size) as u32)
+    } else {
+        literal_birth::literal_index(desc)
+    }
 }
 const _: () = assert!(
     std::mem::offset_of!(PerryLayoutDesc, shape_id)

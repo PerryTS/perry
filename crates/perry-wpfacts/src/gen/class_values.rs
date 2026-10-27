@@ -223,8 +223,34 @@ impl<'a> Gen<'a> {
         }
         for fc in &c.fns {
             if broken(self, &format!("fn:{}", fc.name)) {
-                self.m
-                    .add_top(n, |_| "broken function of another unit".into());
+                // DECISIONS 209: the census broke what its owner assumed
+                // about its callers (decisions 13, 107, 148), not what the
+                // binding holds: the function is still this one. Its owner
+                // solves again on the break (`units::resolve_again`) and
+                // publishes the contract it runs it by for any caller, so
+                // the call goes through that (read by name, as every
+                // reader's, DECISIONS 106). The contract describes its
+                // calls, not the function as an object: that escaped (some
+                // unit used it beyond the contract, e.g. read or wrote a
+                // property), so its properties hold anything, what is
+                // stored into it escapes and unknown code calls it. With no
+                // contract of its owner, it is ⊤.
+                let own = self.owner_fn(fc);
+                if self.unit_in.and_then(|u| u.own_fn(&fc.name)).is_some() {
+                    let v = self.stand_in_fn(mi, own);
+                    let t = self.stand_in_fns[&(own.name.clone(), None)].1;
+                    let fa = self.m.field_any(t);
+                    self.m.add_top(fa, |_| {
+                        "property of a broken function of another unit".into()
+                    });
+                    self.m.add_prim(fa, prim::ALL);
+                    let r = self.m.reason("broken function of another unit");
+                    self.m.sink_node(v, r);
+                    self.m.edge(v, n);
+                } else {
+                    self.m
+                        .add_top(n, |_| "broken function of another unit".into());
+                }
                 continue;
             }
             let v = self.stand_in_fn(mi, fc);

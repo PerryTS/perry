@@ -310,7 +310,23 @@ impl Model {
             }
         }
         self.note_fnproto_write(t, Some(key), "store");
-        builtins::note_native_write(self, t, Some(key), "store");
+        // Explain: the first store into ⊤ under a key names its site and why
+        // the receiver is ⊤.
+        let what = match (self.explain && t == TOP, self.store_at) {
+            (true, Some(n)) => {
+                let (desc, func) = self
+                    .stores
+                    .get(site as usize)
+                    .map_or(("(no site)", u32::MAX), |s| (s.desc.as_str(), s.func));
+                let f = self
+                    .funcs
+                    .get(func as usize)
+                    .map_or("(no function)", |f| f.name.as_str());
+                format!("store `{desc}` in {f} (receiver: {})", self.top_origin(n))
+            }
+            _ => "store".to_string(),
+        };
+        builtins::note_native_write(self, t, Some(key), &what);
         if matches!(key, Key::Any)
             || matches!(key, Key::Named(a) if self.atoms[a as usize] == "__proto__")
         {

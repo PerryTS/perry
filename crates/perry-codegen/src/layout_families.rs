@@ -42,6 +42,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use perry_hir::{Class, ClassFieldOrigin, Expr, Module as HirModule, Stmt};
 
+#[path = "layout_families/literal.rs"]
+mod literal;
+
 /// One key of a family layout. Only a [`FamilyKey::Name`] is a property: it
 /// alone compares equal to a property name (`== "x"`), so no consumer that
 /// looks a property up by name can reach a private element.
@@ -215,6 +218,8 @@ pub struct ProgramLayouts {
     pub run_once_evaluated: BTreeSet<u32>,
     /// By class id.
     pub families: BTreeMap<u32, FamilyLayout>,
+    /// Literal prototype identity and source-ordered base slots; compile facts only.
+    pub literal_families: BTreeSet<u32>,
     /// Classes not admitted, counted once each by the first failed proof.
     pub refused: BTreeMap<String, u32>,
     pub digest: u64,
@@ -565,6 +570,9 @@ fn node_event_emitter_heritage(class: &Class) -> bool {
 /// evaluations name their private elements per evaluation, never by the
 /// template's spelling.
 fn own_keys(class: &Class, has_parent: bool, fresh: bool) -> Result<OwnKeys, String> {
+    if class.is_literal_shape() {
+        return literal::own_keys(class);
+    }
     if (class.native_extends.is_some() && !node_event_emitter_heritage(class))
         || !class.decorators.is_empty()
         || class.is_literal_shape()
@@ -1125,7 +1133,7 @@ fn program_families(
             members,
             chain: chain.iter().map(|x| x.id).collect(),
             init,
-            params: if chain.len() == 1 {
+            params: if chain.len() == 1 && !c.is_literal_shape() {
                 param_keys(c)
             } else {
                 Vec::new()
@@ -1501,6 +1509,11 @@ fn layouts_of(
     layouts
 }
 
+/// Compile-time candidates only; each emitted read checks its current shape.
+pub(crate) fn receiver_candidates(hir: &HirModule, layouts: &ProgramLayouts) -> BTreeMap<u32, u32> {
+    late::receiver_candidates(hir, layouts)
+}
+
 /// The program's families and colouring over every module's final HIR.
 pub fn compute<'a>(
     modules: impl IntoIterator<Item = (&'a str, &'a HirModule)>,
@@ -1509,12 +1522,25 @@ pub fn compute<'a>(
 ) -> ProgramLayouts {
     let program: Vec<(&str, &HirModule)> = modules.into_iter().collect();
     let modules: Vec<&HirModule> = program.iter().map(|(_, m)| *m).collect();
+    let literal_ids: BTreeSet<u32> = modules
+        .iter()
+        .flat_map(|m| &m.classes)
+        .filter(|c| c.is_literal_shape())
+        .map(|c| c.id)
+        .collect();
     let colours = colouring(&modules);
     let mut refused = BTreeMap::new();
     let mut fams: Vec<RawFamily> = Vec::new();
     if families && !families_disabled() {
         fams = program_families(&program, reexports, &mut refused);
     }
+    // Literal admission must not change the nominal-family use census.
+    // Put them in separate compiler-only analysis slices, retaining order.
+    fams.sort_by_key(|f| literal_ids.contains(&f.class_id));
+    let nominal_count = fams
+        .iter()
+        .take_while(|f| !literal_ids.contains(&f.class_id))
+        .count();
     let mut owns: Vec<usize> = fams.iter().map(|f| f.keys.len()).collect();
     let late = if fams.is_empty() || late_budget() == 0 {
         0
@@ -1522,8 +1548,17 @@ pub fn compute<'a>(
         let before: usize = owns.iter().sum();
         let groups: Vec<(Option<u32>, Group)> =
             modules.iter().flat_map(|hir| module_groups(hir)).collect();
-        add_variants(&mut fams, &groups);
-        add_late_keys(&mut fams, &groups);
+        let (nominal, literals) = fams.split_at_mut(nominal_count);
+        add_variants(nominal, &groups);
+        add_late_keys(nominal, &groups);
+        // An unknown receiver can nominate a guarded read candidate later;
+        // it cannot widen or admit a literal family merely by shared names.
+        let creations: Vec<_> = groups
+            .iter()
+            .filter(|(this, g)| this.is_none() && g.creation && !g.classes.is_empty())
+            .cloned()
+            .collect();
+        add_late_keys(literals, &creations);
         fams.iter().map(|f| f.keys.len()).sum::<usize>() - before
     };
     // A family that neither stores nor receives a key has the empty layout:
@@ -1534,6 +1569,7 @@ pub fn compute<'a>(
     // `symbolLinks[id] ?? (symbolLinks[id] = new SymbolLinks())`) gets its
     // keys through loads no census here follows, so its class keeps the
     // runtime birth that learns them.
+    literal::retain_late(&mut fams, &mut owns, &literal_ids);
     let filled = filled_records(&modules);
     let names: HashMap<u32, &str> = modules
         .iter()
@@ -1580,6 +1616,7 @@ pub fn compute<'a>(
             f.init_count = init.min(f.own_count);
         }
     }
+    literal::finish(&mut layouts, &literal_ids);
     layouts.late_total = late as u32;
     layouts.refused = refused;
     // A module body is once per record; exposing the CommonJS loader/cache

@@ -257,3 +257,5 @@ android-build/app/src/main/jniLibs/
 
 # Stray build/install logs at the repo root
 /*.log
+
+/.blaze/

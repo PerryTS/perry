@@ -207,7 +207,7 @@ pub(super) unsafe fn register_bound(
         }
     }
     // Case 2c: a class family's instances have the class's prototype, and
-    // its id is its record's (`layout_index_of_word`).
+    // its id is its descriptor record's.
     let class_family = d.class_id != 0;
     let proto_id = match d.proto.addr() {
         3 => super::super::shapes::PROTO_ID_DEFAULT,
@@ -354,7 +354,7 @@ pub(super) unsafe fn register_bound(
         super::super::shapes::install_declared_layout(
             ShapeId(id),
             LayoutWord((*desc).layout_id),
-            if (*desc).class_id != 0 {
+            if (*desc).class_id != 0 || literal_birth::contains(desc) {
                 descriptor_index(desc).map_or(0, |i| i + 1)
             } else {
                 0

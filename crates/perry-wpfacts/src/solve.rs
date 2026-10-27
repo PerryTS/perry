@@ -9,6 +9,7 @@
 //! design section 3.2; `scripts/wpfacts_recompute.py` re-implements them.
 
 mod copy;
+mod define;
 mod lookup;
 
 use crate::builtins;
@@ -320,6 +321,7 @@ impl Model {
                     && self.marker_links.is_empty()
                     && !self.settle_bf_written()
                     && !self.settle_for_in()
+                    && !self.settle_define()
                 {
                     break;
                 }
@@ -535,6 +537,31 @@ impl Model {
         self.edge(n, all);
         // Arrays and primitive boxes hold primitives at unknown indices.
         n
+    }
+
+    /// dst ⊇ the values of `t`'s own properties (`Cons::OwnValues`).
+    pub(crate) fn own_values_of(&mut self, t: Tok, dst: NodeId) {
+        let opaque = match &self.toks[t as usize] {
+            TokKind::Top | TokKind::Builtin(_) | TokKind::BuiltinFn | TokKind::NativeProto(_) => {
+                true
+            }
+            TokKind::Obj(tm, _) => matches!(self.tmpls[*tm as usize].kind, TmplKind::BObj { .. }),
+            _ => false,
+        };
+        if opaque {
+            self.add_top(dst, |_| "own values of an unmodeled object".into());
+            self.add_prim(dst, prim::ALL);
+        }
+        if t == TOP {
+            return;
+        }
+        let fields = self.all_fields(t);
+        self.edge(fields, dst);
+        let act = ChainAct::Load(dst);
+        // Any-key lookups subscribe through the holder relation;
+        // named-key replay in `visits` does not cover them.
+        self.any_walk_holders.entry(t).or_default().push((t, act));
+        self.accessor_hit(t, t, Key::Any, act);
     }
 
     pub fn all_fields(&mut self, t: Tok) -> NodeId {
@@ -1484,12 +1511,29 @@ impl Model {
             ),
             Cons::Hard { kind, reason } => format!("hard {n} {} {reason}", kind.code()),
             Cons::AddsKeys => format!("addskeys {n}"),
-            Cons::DefineAccessor { key, reason } => {
+            Cons::DefineKey { key, data, reason } => {
                 format!(
-                    "defineaccessor {n} {} {reason}",
-                    self.key_name(Key::Named(*key))
+                    "definekey {n} {} {} {reason}",
+                    self.key_name(Key::Named(*key)),
+                    *data as u8
                 )
             }
+            Cons::DefineAll {
+                o,
+                descs,
+                value,
+                site,
+                reason,
+            } => format!("defineall {n} {o} {descs} {value} {site} {reason}"),
+            Cons::DefineDesc {
+                o,
+                key,
+                site,
+                reason,
+            } => format!(
+                "definedesc {n} {o} {} {site} {reason}",
+                self.key_name(Key::Named(*key))
+            ),
             Cons::Implicit { reason, proto } => {
                 format!("implicit {n} {reason} {}", proto.name())
             }

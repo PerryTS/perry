@@ -2998,6 +2998,10 @@ fn lower_module(
         wpfacts: opts.program_facts.elision.clone(),
         capture_type_proofs: Default::default(),
         program_layouts: Arc::clone(&opts.program_layouts),
+        receiver_families: Arc::new(crate::layout_families::receiver_candidates(
+            hir,
+            &opts.program_layouts,
+        )),
         program_has_worker: opts.program_has_worker,
         program_has_thread_agents: thread_agents,
         class_hierarchy: class_hierarchy::ClassHierarchy::default(),
