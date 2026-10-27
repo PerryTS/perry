@@ -6815,7 +6815,12 @@ pub(crate) fn recompute_record_handle_carriers() {
         }
     });
     while let Some(word) = pending.pop() {
-        let ptr = ShapeSlab::agent_record_for_word(word);
+        // A handle is weak: the record it names may have been retired by an
+        // earlier prune. An absent word answers the shared read-only
+        // `EMPTY_RECORD`, which must never be written; it carries nothing.
+        let Some(ptr) = ShapeSlab::agent_record_for_word_present(word) else {
+            continue;
+        };
         unsafe {
             let r = &*ptr;
             if !r.has(RECORD_FLAG_CACHE_CARRIER) {
