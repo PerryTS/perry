@@ -17,6 +17,11 @@ pub type SiteId = u32;
 
 /// The atom of the element key (`Model::elem_key`).
 pub const ELEM: &str = "#elem";
+/// The key an element store (`push`, `set.add`) writes on a value that may
+/// be a builtin prototype: an index, or no property at all (a collection's
+/// entries). A write under it is a write of every key that may be ToString
+/// of a Number (`builtins::native_written`, `solve::numeric_key`).
+pub const NUM_KEY: &str = "#num";
 /// The atom of the iteration key (`Model::iter_key`).
 pub const ITER_ELEM: &str = "#iter";
 
@@ -634,6 +639,9 @@ pub enum Cons {
     },
     /// Every object token reaches a HARD operation.
     Hard { kind: Hard, reason: u32 },
+    /// `delete o.key`: E7 HARD on every object token; on ⊤ (which may be a
+    /// builtin prototype) a write of `key` only.
+    DeleteKey { key: Atom, reason: u32 },
     /// `Object.defineProperty(o, key, desc)` with a constant key (FVA 4.3a).
     /// An accessor descriptor (`data` false) on a literal layout that does
     /// not hold `key` as data: the key becomes an accessor key (the getter
@@ -850,6 +858,7 @@ impl Cons {
             Cons::OverrideThis { .. } => "overridethis",
             Cons::TopIfAny { .. } => "topifany",
             Cons::Hard { .. } => "hard",
+            Cons::DeleteKey { .. } => "deletekey",
             Cons::AddsKeys => "addskeys",
             Cons::DefineKey { .. } => "definekey",
             Cons::DefineAll { .. } => "defineall",
@@ -1017,6 +1026,9 @@ pub struct Model {
     pub bound: Vec<(NodeId, NodeId, Vec<NodeId>)>,
     pub fields: FxHashMap<(Tok, Atom), NodeId>,
     pub field_any: FxHashMap<Tok, NodeId>,
+    /// An array's values under a key no store named (`Model::named_any`):
+    /// what its named non-index keys read. Its elements are not among them.
+    pub named_any: FxHashMap<Tok, NodeId>,
     pub all_fields: FxHashMap<Tok, NodeId>,
     pub proto_node: FxHashMap<Tok, NodeId>,
     pub field_keys: FxHashMap<Tok, Vec<Atom>>,

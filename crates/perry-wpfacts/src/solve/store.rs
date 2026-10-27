@@ -274,6 +274,12 @@ impl Model {
     }
 
     pub(crate) fn store_into(&mut self, t: Tok, key: Key, src: NodeId, site: SiteId) {
+        // An element store (`push`, `unshift`, `splice`: the element key) is
+        // an index store: on an Array it writes its elements only, which no
+        // named non-index key reads (`is_elem_array`); on anything else it
+        // is a store under a computed key.
+        let elem = self.is_elem_key(key);
+        let key = if elem { Key::Any } else { key };
         {
             self.virt_revoke(
                 t,
@@ -293,6 +299,7 @@ impl Model {
         {
             let k = match key {
                 Key::Named(a) => Some(self.atoms[a as usize].clone()),
+                Key::Any if elem => Some(NUM_KEY.to_string()),
                 Key::Any => None,
             };
             self.note_shared(SharedWrite::Store(s, k));
@@ -309,7 +316,12 @@ impl Model {
                 return;
             }
         }
-        self.note_fnproto_write(t, Some(key), "store");
+        // An element store writes an index of a builtin prototype at most.
+        let wkey = match elem {
+            true => Key::Named(self.atom(NUM_KEY)),
+            false => key,
+        };
+        self.note_fnproto_write(t, Some(wkey), "store");
         // Explain: the first store into ⊤ under a key names its site and why
         // the receiver is ⊤.
         let what = match (self.explain && t == TOP, self.store_at) {
@@ -326,7 +338,12 @@ impl Model {
             }
             _ => "store".to_string(),
         };
-        builtins::note_native_write(self, t, Some(key), &what);
+        // Not the boundary's store for other units' code: what they store
+        // into ⊤ they publish (`SharedWrite::Store(Top, _)`; a unit past the
+        // bound publishes every key), and every unit replays it under its key.
+        if !theirs {
+            builtins::note_native_write(self, t, Some(wkey), &what);
+        }
         if matches!(key, Key::Any)
             || matches!(key, Key::Named(a) if self.atoms[a as usize] == "__proto__")
         {
@@ -607,7 +624,10 @@ impl Model {
                 }
             }
             Key::Any => {
-                let f = self.field_any(t);
+                let f = match elem && self.is_elem_array(t) {
+                    true => self.field_any(t),
+                    false => self.any_key_node(t),
+                };
                 self.edge(src, f);
                 if let Some(tm) = tm {
                     let birth = self.stores[site as usize].birth;

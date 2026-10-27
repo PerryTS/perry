@@ -1418,6 +1418,12 @@ impl<'a> Gen<'a> {
             }
         }
         let n = self.m.field_any(t);
+        // Other units' stores under a computed key are published into the
+        // element cell: the named keys read them as well.
+        if self.m.is_elem_array(t) {
+            let na = self.m.named_any(t);
+            self.m.edge(n, na);
+        }
         // DECISIONS 184: a container's elements are primitives besides
         // what was stored (`builtins::tok_load`): its cell says so, as a
         // reader's own container of the same kind reads them.

@@ -1087,8 +1087,14 @@ pub(super) fn a_reader_that_exposes_a_typed_array_field_breaks_ta_stable() {
         u.broken,
         u.dump_text()
     );
+    // ABM3: `mark` stores into ⊤ under `tag` in its first solve, before
+    // `Arena`'s contract describes `a.left`; that write stays published (the
+    // driver's shared writes only grow). Under the static rule (CWN 10-27) a
+    // computed-key protocol touch of `right` in the reader finds
+    // `Object.prototype`'s written `tag`: an unknown callee with `right` as
+    // its receiver, so `right` is reported too. Imprecise, not unsound.
     assert!(
-        field(tmpl(&u, "Arena"), "right").ta_stable,
+        !field(tmpl(&u, "Arena"), "right").ta_stable,
         "{}",
         u.dump_text()
     );
@@ -1352,12 +1358,16 @@ pub(super) fn a_store_effect_ascends_so_the_units_reach_a_fixpoint() {
     // no longer holds only a function and `b` reads it as unknown: no
     // store. Rebuilt from the latest solves only, the effect would drop,
     // `k` would hold the function again, and the driver would cycle.
-    // Joined with last round's, the effect stays: two rounds.
+    // Joined with last round's, the effect stays: two rounds (three since
+    // ABM3, below).
     let a = "function k() { return o; } const o = { k: k }; export const obj = o;";
     let b = "import { obj } from './a'; const f = (obj as any).k; const y = f(); y.k = 1;";
     let pf = bounded(60, move || units_of(&[("a", a), ("b", b)]))
         .expect("D16: the per-unit fixpoint did not end in 60 s");
-    assert_eq!(pf.rounds, 2, "rounds {:?}", pf.round_work);
+    // ABM3 (static rule, CWN 10-27): `b`'s store into ⊤ (`y.k = 1`) under
+    // `k` writes `k` of every builtin prototype; `a`'s lookups of `k` that
+    // end at `Object.prototype` read it, so `a` solves once more: three.
+    assert_eq!(pf.rounds, 3, "rounds {:?}", pf.round_work);
     // `a` keeps performing the store: `k` is written after construction.
     let o = pf
         .templates

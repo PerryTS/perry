@@ -366,10 +366,21 @@ fn builtin_fn(m: &mut Model, why: &'static str) -> Tok {
     m.tok(TokKind::BuiltinFn)
 }
 
-/// The opaque member: a builtin function value or any primitive (what a
-/// program-written key of a builtin prototype may hold).
+/// The opaque member: what a key a store into ⊤ (or unmodeled code) may
+/// have written onto a builtin prototype holds: any value (⊤), a builtin
+/// function value, any primitive.
 fn opaque_member(m: &mut Model, dst: NodeId) {
     let bf = builtin_fn(m, "opaque member (written key)");
+    m.add_tok(dst, bf);
+    m.add_top(dst, |_| "member of a builtin prototype written through ⊤".into());
+    m.add_prim(dst, prim::ALL);
+}
+
+/// A member of an intrinsic the model does not describe (a typed array's,
+/// a `Date`'s): a builtin function value or any primitive. Unless written
+/// (`opaque_member`), it is no value of the program.
+fn undescribed_member(m: &mut Model, dst: NodeId) {
+    let bf = builtin_fn(m, "undescribed member");
     m.add_tok(dst, bf);
     m.add_prim(dst, prim::ALL);
 }
@@ -415,7 +426,11 @@ fn family_ctor(m: &mut Model, fam: Family, dst: NodeId) {
 fn family_load(m: &mut Model, fam: Family, a: Atom, dst: NodeId) {
     let name = m.atoms[a as usize].clone();
     if fam == Family::Opaque {
-        return opaque_member(m, dst);
+        undescribed_member(m, dst);
+        if !intrinsic_miss(m, a, NativeMiss::Load(dst)) {
+            opaque_member(m, dst);
+        }
+        return;
     }
     match members::member(fam, &name) {
         Some(Mem::Fn) => {
@@ -428,11 +443,12 @@ fn family_load(m: &mut Model, fam: Family, a: Atom, dst: NodeId) {
             let op = m.tok(TokKind::ObjectProto);
             m.add_tok(dst, op);
         }
-        None => {
-            if !intrinsic_miss(m, a, NativeMiss::Load(dst)) {
-                opaque_member(m, dst);
-            }
-        }
+        None => {}
+    }
+    // Described or not, a key a store into ⊤ may have written onto the
+    // chain reads what was stored (a described member may be replaced).
+    if !intrinsic_miss(m, a, NativeMiss::Load(dst)) {
+        opaque_member(m, dst);
     }
 }
 
@@ -444,7 +460,12 @@ fn family_load(m: &mut Model, fam: Family, a: Atom, dst: NodeId) {
 fn ns_load(m: &mut Model, t: Tok, ns: BuiltinNs, a: Atom, dst: NodeId) {
     let name = m.atoms[a as usize].clone();
     let Some(mem) = members::ns_member(ns, &name) else {
-        return opaque_member(m, dst);
+        undescribed_member(m, dst);
+        if native_written(m, t, a) {
+            return opaque_member(m, dst);
+        }
+        m.native_missing.push((t, a, NativeMiss::Load(dst)));
+        return;
     };
     if native_written(m, t, a) {
         return opaque_member(m, dst);
@@ -523,11 +544,11 @@ pub fn prim_load(m: &mut Model, prim: u16, key: Key, dst: NodeId) {
             let op = m.tok(TokKind::ObjectProto);
             m.add_tok(dst, op);
         }
-        None => {
-            if !intrinsic_miss(m, a, NativeMiss::Load(dst)) {
-                opaque_member(m, dst);
-            }
-        }
+        None => {}
+    }
+    // Described or not: a key written onto the chain reads what was stored.
+    if !intrinsic_miss(m, a, NativeMiss::Load(dst)) {
+        opaque_member(m, dst);
     }
 }
 
@@ -673,8 +694,21 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
             Some("call" | "apply" | "bind" | "toString") => {
                 let bf = builtin_fn(m, "function call/apply/bind/toString");
                 m.add_tok(dst, bf);
+                let Key::Named(a) = key else { unreachable!() };
+                if !intrinsic_miss(m, a, NativeMiss::Load(dst)) {
+                    opaque_member(m, dst);
+                }
             }
-            _ => m.add_prim(dst, prim::UNDEF),
+            // An inherited key a store into ⊤ may have written onto
+            // `Function.prototype` (or `Object.prototype`).
+            Some(_) => {
+                m.add_prim(dst, prim::UNDEF);
+                let Key::Named(a) = key else { unreachable!() };
+                if !intrinsic_miss(m, a, NativeMiss::Load(dst)) {
+                    opaque_member(m, dst);
+                }
+            }
+            None => m.add_prim(dst, prim::UNDEF),
         },
         TokKind::ClassObj(_) => match name.as_deref() {
             Some("constructor") => {
@@ -763,10 +797,26 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 m.add_tok(dst, b);
             }
             m.add_prim(dst, prim::UNDEF);
+            // A computed read may find any key a store into ⊤ wrote.
+            if name.is_none() {
+                let star = m.atom(crate::STAR_KEY);
+                if m.native_writes.keys().any(|(w, _)| *w == TOP)
+                    || !intrinsic_miss(m, star, NativeMiss::Load(dst))
+                {
+                    opaque_member(m, dst);
+                }
+            }
         }
-        TokKind::ModNs(_) | TokKind::ObjectProto | TokKind::Proto(_) => {
-            m.add_prim(dst, prim::UNDEF)
+        // A program object's lookup that reaches `Object.prototype`: a key
+        // a store into ⊤ may have written there reads what was stored.
+        TokKind::ObjectProto => {
+            m.add_prim(dst, prim::UNDEF);
+            let Key::Named(a) = key else { unreachable!() };
+            if !intrinsic_miss(m, a, NativeMiss::Load(dst)) {
+                opaque_member(m, dst);
+            }
         }
+        TokKind::ModNs(_) | TokKind::Proto(_) => m.add_prim(dst, prim::UNDEF),
         // A key the native prototype does not define: the chain goes on.
         TokKind::NativeProto(_) if native_skips(m, t, key, NativeMiss::Load(dst)) => {}
         // A builtin function value (or a bound function): the members of
@@ -826,6 +876,11 @@ pub fn prim_method(m: &mut Model, prim: u16, key: Key, call: CallId) {
         return prim_method_generic(m, call);
     };
     let name = m.atoms[a as usize].clone();
+    // A key a store into ⊤ may have written onto the chain: the call runs
+    // what was stored (a described method may be replaced too).
+    if !intrinsic_miss(m, a, NativeMiss::PrimCall(prim, call)) {
+        unknown_method(m, call, &format!("argument of a written primitive method {name}"));
+    }
     match members::prim_member(prim, &name) {
         // `Object.prototype`'s methods on a primitive (no own chain here).
         Some(Mem::Fn) if name == "valueOf" => ret_prim(m, call, prim),
@@ -851,11 +906,8 @@ pub fn prim_method(m: &mut Model, prim: u16, key: Key, call: CallId) {
         Some(Mem::Fn) => prim_method_generic(m, call),
         // A data member is no function: TypeError.
         Some(_) => {}
-        None => {
-            if !intrinsic_miss(m, a, NativeMiss::PrimCall(prim, call)) {
-                prim_method_generic(m, call);
-            }
-        }
+        // Absent: a TypeError, unless written (above).
+        None => {}
     }
 }
 
@@ -928,6 +980,13 @@ fn own_method_inner(m: &mut Model, t: Tok, key: Key, call: CallId) {
         Some(n) if n.starts_with(WK_PREFIX) && !described => None,
         n => n,
     };
+    // A described receiver's method under a key a store into ⊤ may have
+    // written onto its chain runs what was stored, beside the description.
+    if let (true, Some(n), Key::Named(a)) = (described, name.as_deref(), key) {
+        if !intrinsic_miss(m, a, NativeMiss::Call(t, call)) {
+            unknown_method(m, call, &format!("argument of a written method {n}"));
+        }
+    }
     match m.toks[t as usize].clone() {
         TokKind::Builtin(ns) => ns_method(m, ns, name.as_deref(), call),
         TokKind::Func(_, _) | TokKind::Bound(_) => function_method(m, t, name.as_deref(), call),
@@ -1756,8 +1815,16 @@ pub fn native_proto_keys(name: &str) -> &'static [&'static str] {
 
 /// May native prototype `np`'s key `a` be written ([`Model::native_writes`])?
 pub fn native_written(m: &Model, np: Tok, a: Atom) -> bool {
+    // An element store's write (`NUM_KEY`) is one of every numeric key and
+    // of `length` (`push` on an array-like moves it).
+    let num = m.atom_index.get(crate::model::NUM_KEY).copied().filter(|_| {
+        let n = &m.atoms[a as usize];
+        crate::solve::numeric_key(n) || n == "length"
+    });
     let hit = |t: Tok| {
-        m.native_writes.contains_key(&(t, None)) || m.native_writes.contains_key(&(t, Some(a)))
+        m.native_writes.contains_key(&(t, None))
+            || m.native_writes.contains_key(&(t, Some(a)))
+            || num.is_some_and(|n| m.native_writes.contains_key(&(t, Some(n))))
     };
     let global = match &m.toks[np as usize] {
         TokKind::NativeProto(n) => ns_by_name(n).is_some(),
@@ -1866,6 +1933,7 @@ fn replay_native_missing(m: &mut Model) {
                 NativeMiss::Load(dst) => {
                     let bf = builtin_fn(m, "written key replay");
                     m.add_tok(dst, bf);
+                    m.add_top(dst, |_| "member of a builtin prototype written through ⊤".into());
                     m.add_prim(dst, prim::ALL);
                 }
                 NativeMiss::Global(dst, f) => {
@@ -1903,7 +1971,10 @@ fn replay_native_missing(m: &mut Model) {
                     unknown_method(m, call, &format!("argument of native {native}.{name}"));
                     m.cur_this = prev;
                 }
-                NativeMiss::PrimCall(_, call) => prim_method_generic(m, call),
+                NativeMiss::PrimCall(_, call) => {
+                    let name = m.atoms[a as usize].clone();
+                    unknown_method(m, call, &format!("argument of a written primitive method {name}"));
+                }
             }
         }
     });

@@ -300,9 +300,14 @@ pub(super) fn a_broken_namespace_field_function_resolves_only_the_units_that_see
     // a builtin object, so fewer opaque values flow) -> [709, 779, 918, 443,
     // 392]; for a store into ⊤ writing the intrinsics under its key and the
     // builtin namespaces' prototype chain (their lookups reach
-    // `Object.prototype`) -> the pin below.
+    // `Object.prototype`) -> [773, 891, 1035, 511, 452]; ABM3: the unit
+    // boundary's store standing in for other units' code writes no builtin
+    // member (they publish their own stores into ⊤) -> [773, 891, 1000, 511,
+    // 452]; a stand-in class's prototype defines its contract's methods (a
+    // lookup of one stops there) and an undescribed builtin member is no
+    // written one -> the pin below.
     assert!(pf.round_work[1] < w("a.ts") + w("m.ts") + w("b.ts") + w("c.ts"));
-    assert_eq!(pf.round_work, [773, 891, 1035, 511, 452], "{:?}", pf.units);
+    assert_eq!(pf.round_work, [768, 886, 1000, 511, 452], "{:?}", pf.units);
 }
 
 #[test]

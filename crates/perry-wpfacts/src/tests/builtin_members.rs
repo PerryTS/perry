@@ -186,7 +186,9 @@ fn a_store_into_top_writes_the_intrinsics_under_its_key() {
         "function () {}",
         "Map.prototype",
     ] {
-        for other in ["Object", "\"text\"", "new Map()", "[1]"] {
+        // A program object's lookup ends at `Object.prototype` too (ABM2
+        // fixtures FE/FF: a miscompile on main, fixed by the static rule).
+        for other in ["Object", "\"text\"", "new Map()", "[1]", "new A()", "{ q: 1 }"] {
             for (w, want) in [(named, false), (computed, false), (elsewhere, true)] {
                 let src = body(hand, w, other);
                 let pf = facts(&src);
@@ -347,12 +349,59 @@ fn a_runtime_global_function_called_on_the_global_object_hands_nothing() {
         )
     };
     let w = "(globalThis as any).gc = unknown.f;";
-    for (src, want) in [
-        (body("", ""), true),
-        (body(w, ""), false),
-        (body("", w), false),
-    ] {
+    // ABM3 (static rule, CWN 10-27): the store into ⊤ under
+    // `__perry_t_held` writes that key of `Object.prototype`, which the
+    // global object's lookup reaches beside its own field (the model holds
+    // no flow-sensitive "own key present"): the read is unknown with or
+    // without the global object handed over. What the call hands over still
+    // decides the global field itself.
+    for src in [body("", ""), body(w, ""), body("", w)] {
         let pf = facts(&src);
-        assert_eq!(proven(&pf, "m"), want, "{src}\n{}", pf.dump_text());
+        assert!(!proven(&pf, "m"), "{src}\n{}", pf.dump_text());
+    }
+    let held = |src: &str| {
+        let pf = facts(src);
+        pf.sites
+            .iter()
+            .filter(|s| s.key == "m")
+            .any(|s| s.receivers.iter().any(|r| r.ends_with(":M")))
+    };
+    assert!(held(&body("", "")), "the global field keeps its M");
+}
+
+/// Soundness (ABM2 fixtures FB/FC, CWN 10-27): a store into ⊤ under the key
+/// of a described builtin method (`Map.prototype.get`) may replace it: the
+/// method read or called runs what was stored, beside its description. A
+/// store under another key leaves the description alone.
+#[test]
+fn a_store_into_top_replaces_a_described_member_under_its_key() {
+    let body = |w: &str| {
+        format!(
+            "{CLASSES}
+            declare const unknown: any;
+            class Q {{ x = 5; b = 1; }}
+            const t: any = unknown.reach(Map);
+            {w}
+            const mp = new Map<number, any>(); mp.set(1, new B());
+            const g = mp.get(1);
+            if (g) console.log(g.b);
+            const s = \"abc\".charAt(0);
+            console.log(s.length);"
+        )
+    };
+    let site_b = |pf: &ProgramFacts| {
+        pf.sites
+            .iter()
+            .filter(|s| s.key == "b")
+            .all(|s| !s.top && matches!(s.verdict, Verdict::T0Mono | Verdict::T0Set))
+    };
+    let pf = facts(&body("t.unrelated = function () { return new Q(); };"));
+    assert!(site_b(&pf), "{}", pf.dump_text());
+    for w in [
+        "t.get = function () { return new Q(); };",
+        "declare const kk: string; t[kk] = function () { return new Q(); };",
+    ] {
+        let pf = facts(&body(w));
+        assert!(!site_b(&pf), "{w}\n{}", pf.dump_text());
     }
 }

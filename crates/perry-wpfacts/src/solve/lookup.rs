@@ -751,10 +751,29 @@ impl Model {
     }
 
     /// The `this` half of `call_tok(_, t, Some(origin))`.
-    pub(super) fn this_to(&mut self, t: Tok, origin: Tok) {
+    pub(super) fn this_to(&mut self, t: Tok, origin: Tok, calls: &[CallId]) {
         match self.toks[t as usize] {
             TokKind::Top | TokKind::BuiltinFn => {
-                let r = self.reason("receiver of a call of an unknown function value");
+                let r = if self.explain {
+                    let fs: Vec<String> = calls
+                        .iter()
+                        .map(|&c| {
+                            let f = self.node_fn[self.calls[c as usize].ret as usize];
+                            let p = if self.protocol_calls.contains(&c) { " protocol" } else { "" };
+                            let name = self.funcs.get(f as usize).map_or("(no function)", |f| f.name.as_str());
+                            format!("{name}#{c}{p}")
+                        })
+                        .collect();
+                    let why = format!(
+                        "receiver of a call of an unknown function value ({} callee, receiver {}, calls [{}])",
+                        if t == TOP { "⊤" } else { "builtin-fn" },
+                        self.tok_name(origin),
+                        fs.join(", ")
+                    );
+                    self.reason(&why)
+                } else {
+                    self.reason("receiver of a call of an unknown function value")
+                };
                 self.escape(origin, r);
             }
             TokKind::Func(f, _) => {

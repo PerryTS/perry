@@ -34,7 +34,20 @@ impl Model {
             // An unknown callee sees only its own receiver token: that one
             // escapes; arguments and result are per call.
             if let Some(x) = this_tok {
-                let r = self.reason("receiver of a call of an unknown function value");
+                let r = if self.explain {
+                    let ret = self.calls[call as usize].ret;
+                    let f = self.node_fn[ret as usize];
+                    let why = format!(
+                        "receiver of a call of an unknown function value ({} callee in {}, call {call}{}, receiver {})",
+                        if t == TOP { "⊤" } else { "builtin-fn" },
+                        self.funcs.get(f as usize).map_or("(no function)", |f| f.name.as_str()),
+                        if self.protocol_calls.contains(&call) { ", protocol" } else { "" },
+                        self.tok_name(x)
+                    );
+                    self.reason(&why)
+                } else {
+                    self.reason("receiver of a call of an unknown function value")
+                };
                 self.escape(x, r);
             }
             if !self.bind_done.insert((call, t, u32::MAX - 2)) {
@@ -1245,7 +1258,7 @@ impl Model {
         // Unknown code reads every field and can write any key.
         let all = self.all_fields(t);
         self.cons(all, Cons::TopSink { reason });
-        let any = self.field_any(t);
+        let any = self.any_key_node(t);
         self.add_top(any, |m| {
             format!(
                 "field of escaped {}: {}",
@@ -1399,7 +1412,7 @@ impl Model {
         self.rel(|| format!("hardmark {t} {}", kind.code()));
         // Deleting / redefining can move values or install accessors: the
         // object's fields are now written by unknown code as well.
-        let any = self.field_any(t);
+        let any = self.any_key_node(t);
         self.add_prim(any, prim::ALL);
         if let Some(tm) = self.tmpl_of(t) {
             *self.adds_keys.entry(tm).or_default() += 1;
