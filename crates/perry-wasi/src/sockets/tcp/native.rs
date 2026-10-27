@@ -152,13 +152,13 @@ pub(super) fn peer(socket: &Resource<NativeTcp>) -> SocketResult<SocketAddr> {
             };
             #[cfg(windows)]
             let address = {
-                use std::os::windows::io::BorrowedSocket;
+                use std::os::windows::io::{BorrowedSocket, RawSocket};
                 let turnloop::RawTransport::Socket(socket) = raw else {
                     return Err(Failure::Socket(ErrorCode::InvalidState));
                 };
                 // SAFETY: live socket protected by the driver borrow and native
                 // owner. The borrowed socket is used only for a read-only query.
-                let socket = unsafe { BorrowedSocket::borrow_raw(socket) };
+                let socket = unsafe { BorrowedSocket::borrow_raw(socket as RawSocket) };
                 socket2::SockRef::from(&socket).peer_addr()?
             };
             address
