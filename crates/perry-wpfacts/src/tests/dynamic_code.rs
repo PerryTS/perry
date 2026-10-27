@@ -151,3 +151,41 @@ fn a_numeric_key_names_no_object_prototype_method() {
     let n = "const n = Math.random() > 0.5 ? 0 : 1;";
     assert_eq!(d_escape(&format!("{table} {n} table[n]('y', () => d);")), None);
 }
+
+/// Open, SOUNDNESS (on main too): a literal's prototype is
+/// `Object.prototype`, where every object's `y` lookup finds a store. The
+/// model loses such a store when the prototype comes as a value: under
+/// `__proto__` or from `Object.getPrototypeOf` it is the literal's shape
+/// class prototype (or nothing), which no other object's chain reaches;
+/// under a computed key (which may be `"__proto__"`) no prototype is read
+/// at all (`family_any`: `ObjectProto` as a value installs accessors on
+/// every builtin prototype). So `q.y` reads nothing and `r.z` claims no
+/// receiver. A store through `Object.prototype` itself is seen. Closing it
+/// needs a literal's prototype value to be `Object.prototype`, and the
+/// computed key's values on the load / call (a key that may be the string
+/// `"__proto__"` yields the prototype), as
+/// `a_numeric_key_names_no_object_prototype_method` does.
+#[test]
+#[ignore = "open soundness: a literal's prototype as a value is not Object.prototype"]
+fn a_store_through_a_literals_prototype_reaches_every_object() {
+    let sees_e = |get: &str| {
+        let pf = facts(&format!(
+            "class E {{ z = 3; }}
+            const k = String(Math.random());
+            const o: any = {{ a: 1 }};
+            const p: any = {get};
+            p.y = new E();
+            const q: any = {{}};
+            const r = q.y;
+            if (r) console.log(r.z);"
+        ));
+        let s: Vec<_> = pf.sites.iter().filter(|s| s.key == "z").collect();
+        assert_eq!(s.len(), 1, "{}", pf.dump_text());
+        s[0].top || s[0].receivers.iter().any(|r| r.ends_with(":E"))
+    };
+    // Seen: the store names `Object.prototype` itself.
+    assert!(sees_e("Object.prototype"));
+    for get in ["o.__proto__", "Object.getPrototypeOf(o)", "o[k]"] {
+        assert!(sees_e(get), "{get}");
+    }
+}
