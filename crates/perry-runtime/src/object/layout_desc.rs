@@ -1809,14 +1809,25 @@ fn image_layouts() -> impl Iterator<Item = *mut PerryLayoutDesc> {
     }
 }
 
+#[cfg(any(test, target_family = "wasm"))]
+#[path = "layout_desc/enumeration.rs"]
+mod enumeration;
+
 fn descriptor_index(desc: *const PerryLayoutDesc) -> Option<u32> {
-    let (start, end) = layout_bounds();
-    let at = desc as usize;
-    let size = std::mem::size_of::<PerryLayoutDesc>();
-    if at >= start && at < end && (at - start) % size == 0 {
-        Some(((at - start) / size) as u32)
-    } else {
-        literal_birth::literal_index(desc)
+    #[cfg(target_family = "wasm")]
+    {
+        enumeration::enumerated_layout_index(image_layouts(), desc)
+    }
+    #[cfg(not(target_family = "wasm"))]
+    {
+        let (start, end) = layout_bounds();
+        let at = desc as usize;
+        let size = std::mem::size_of::<PerryLayoutDesc>();
+        if at >= start && at < end && (at - start) % size == 0 {
+            Some(((at - start) / size) as u32)
+        } else {
+            literal_birth::literal_index(desc)
+        }
     }
 }
 const _: () = assert!(
@@ -1863,3 +1874,7 @@ mod windows_atom_bounds_tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "layout_section_tests.rs"]
+mod layout_section_tests;

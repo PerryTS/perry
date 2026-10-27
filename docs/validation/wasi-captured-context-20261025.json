@@ -1,0 +1,173 @@
+{
+  "scope": "Captured Promise execution context after public Promise collection; persistent TypeScript driver integration remains unfinished",
+  "baseRevision": "463f04879ccc35f02caa89f83b1af1cb31bb0abc",
+  "snapshot": "v302",
+  "sourceFilesVerified": 38813,
+  "manifestSha256": "c51cb765fa6501a1a676387a7280c188eac9b77e61a87cc880b045322f83a579",
+  "shippingLockSha256": "c0c77b202d422016fdb7fc1e3312f5fc500d35fbb8923c17a851f6917b2626ab",
+  "validationLockSha256": "b312b6670c24f567e7f1e69991cb5cfb6d5b0d1774acd40568fba04a68ea73fb",
+  "abi": 9,
+  "tests": {
+    "developmentComponent": 47,
+    "productionComponent": 47,
+    "developmentAsyncHooks": 12,
+    "productionAsyncHooks": 12,
+    "productionClosureAbi": 1,
+    "productionPanicAbort": true,
+    "uid": 65534,
+    "gid": 65534
+  },
+  "subject": "captured_promise_context_survives_promise_collection_and_restores_after_a_throw",
+  "assertions": [
+    "Public Promise collects independently of the saved context, with and without observed resource metadata.",
+    "Captured snapshot holder actually moves during collection and preserves its ALS store.",
+    "A traced resource-state cell retains only a weak Promise edge; opaque cell tokens must not be cached untraced.",
+    "Callback-triggered collection preserves the active store; success and throw restore caller ALS and execution IDs."
+  ],
+  "negativeControl": {
+    "mutation": "Replace the saved context with an empty snapshot",
+    "passed": 0,
+    "failed": 1,
+    "exitCode": 101,
+    "diagnostic": "Option::unwrap()"
+  },
+  "productionBinary": {
+    "path": "/root/codex-components-p2-20261021/async-runtime-target/prod/build/perry-runtime/d71d6d2d7042b42b/out/perry_runtime-d71d6d2d7042b42b",
+    "sha256": "be8cba86676bdec26eb5ce1057664c83593b3e2e50727529659be65d11e0354a",
+    "fresh": false,
+    "uid": 65534,
+    "gid": 65534,
+    "protectedPath": "/root/codex-components-p2-20261021/perry-captured-context-v302-artifacts/perry-runtime-tests"
+  },
+  "testOnlyCorrection": "Closure ABI table test now checks extern C under panic-abort and extern C-unwind otherwise; product declarations are unchanged.",
+  "unchanged": [
+    "Native component engine, ABI table, manifests and shipping lock.",
+    "Existing crypto-bigint advisory and global lint debt remain open."
+  ],
+  "remaining": [
+    "Per-origin persistent runtime frame batches and traced invocation records.",
+    "Precise import-result root release from ownership receipts.",
+    "Owned future/stream wrappers, persistent HTTP, other platforms and combined production/package qualification."
+  ],
+  "sourceSha256": {
+    "crates/perry-runtime/src/async_hooks.rs": "79ee018699fbebc53074630a46be48e69d7006e28e0fd022d2f323f678a42d44",
+    "crates/perry-runtime/src/async_hooks/scopes.rs": "8b886977e7722df7bc1a5d93516c4d3270c7c1efea0a4a349203dc5161cd14c3",
+    "crates/perry-runtime/src/async_hooks/scopes/tests.rs": "c45e3d246b333173202b4a805cd3b7356e56c0da52025ce1b76a634c2a9890fc",
+    "crates/perry-runtime/src/closure/dispatch/calln.rs": "1e5e30226a654b6b10334962dd4119af11d775a04f9371d18b23dd7f07c1c82c"
+  },
+  "archiveName": "perry-captured-context-v302-evidence.tar.gz",
+  "evidenceFiles": {
+    "development/runtime-component-tests.log": {
+      "sha256": "371eb53f8dec473f2f78313489d87e63f099810dfae349657bf53d62bdbd4645",
+      "bytes": 54723
+    },
+    "development/runtime-async-hooks-tests.log": {
+      "sha256": "ac54bf2b725e6c34a89f48bc3ab034628a2f766eb803625ac75b4a33ac4cdc70",
+      "bytes": 50560
+    },
+    "development/phases.json": {
+      "sha256": "d103dbd9343c6df640105cf2023aa88bed3e1e3cfcb02a053cc5bc9770f1cccc",
+      "bytes": 193
+    },
+    "development/invalidate.log": {
+      "sha256": "171a4fee0291993ee9c898741bd5b92d1d0d8974a8108374c7688813efaee6d4",
+      "bytes": 83
+    },
+    "production/build.log": {
+      "sha256": "0cd738a4a21ea61e0b1192a49da0d3e9f6158f916149ee7c3e06fff4ab92fbf2",
+      "bytes": 576283
+    },
+    "production/async-hooks-tests.log": {
+      "sha256": "69035595d0ffe138e4bdef54a4d512a4d0d29f337bc86784466602b56a727040",
+      "bytes": 1411
+    },
+    "production/phases.json": {
+      "sha256": "259950495d71df14baba15a40ff57ab08a968aa6349d44df8b26fef008d53551",
+      "bytes": 286
+    },
+    "production/component-tests.log": {
+      "sha256": "5d328dbab5a12f554052107ec5b7b847268c45168b6e86fc13392213af5ef770",
+      "bytes": 5335
+    },
+    "production/binary.json": {
+      "sha256": "c7a966eed8e8f6d62f72627969d0b710451dcf8ef9ab4e6b1632d5800ee118b8",
+      "bytes": 279
+    },
+    "production/closure-abi-test.log": {
+      "sha256": "311ec20442f1bb080ee8bfde5429d206a74382669a460bc5d469cf717b881e8a",
+      "bytes": 256
+    },
+    "production/invalidate.log": {
+      "sha256": "e52eaa351428ca3c822c41dc0d2f0c4c91100ed48b550951ac1944d8e7b0245c",
+      "bytes": 81
+    },
+    "negative/phases.json": {
+      "sha256": "39b53cc41711b2ac0debb9380111c85bbf5f337aa1152114edc63bfd9b2737b1",
+      "bytes": 111
+    },
+    "negative/negative.log": {
+      "sha256": "e757d0ee00bcd582cb080052f5b0e75fbf828e820aff50c9b3f8ab5bf96b0121",
+      "bytes": 50216
+    },
+    "negative/invalidate.log": {
+      "sha256": "7fbf7ed7b43e9e816f6e7be78e1d770b6d4ad037c901adae8e4fb83efd127b88",
+      "bytes": 83
+    },
+    "source/crates/perry-runtime/src/async_hooks.rs": {
+      "sha256": "79ee018699fbebc53074630a46be48e69d7006e28e0fd022d2f323f678a42d44",
+      "bytes": 68919
+    },
+    "source/crates/perry-runtime/src/async_hooks/scopes.rs": {
+      "sha256": "8b886977e7722df7bc1a5d93516c4d3270c7c1efea0a4a349203dc5161cd14c3",
+      "bytes": 8140
+    },
+    "source/crates/perry-runtime/src/async_hooks/scopes/tests.rs": {
+      "sha256": "c45e3d246b333173202b4a805cd3b7356e56c0da52025ce1b76a634c2a9890fc",
+      "bytes": 5564
+    },
+    "source/crates/perry-runtime/src/closure/dispatch/calln.rs": {
+      "sha256": "1e5e30226a654b6b10334962dd4119af11d775a04f9371d18b23dd7f07c1c82c",
+      "bytes": 20883
+    },
+    "negative/mutated-scopes.rs": {
+      "sha256": "f6400e89118b84b8f4c134affad4d99bb66e71364b906b241459d45a0762fdf3",
+      "bytes": 8205
+    },
+    "harness/perry-driver-ffi-runtime-check.py": {
+      "sha256": "676ebd01945bcc6d37b38b61f0af3258192d276ae78784adf5fbd2e2e763cb6b",
+      "bytes": 2247
+    },
+    "harness/perry-captured-context-prod.py": {
+      "sha256": "0c90cfc703be2436eacf0fcb28c6876927f75dced82d2f437245577ebd7772c2",
+      "bytes": 2609
+    },
+    "harness/perry-captured-context-prod-v2.py": {
+      "sha256": "418d0939e7920d4a360ca4e2f47f538d7165264e52ea7ffcc085eb11aeed335a",
+      "bytes": 3033
+    },
+    "harness/perry-captured-context-negative.py": {
+      "sha256": "3b26fc74ab70795af3af6cb12caa5ad4c592f13b63a887ee8f1ab8ef83ce03b4",
+      "bytes": 2093
+    },
+    "harness/perry-captured-context-verify.py": {
+      "sha256": "882293517dba79b1380d4a8e85bc573859230a1d2842a058a52dd8cbac1dfcff",
+      "bytes": 5646
+    },
+    "snapshots/perry-http-runtime-v302-manifest.json": {
+      "sha256": "c51cb765fa6501a1a676387a7280c188eac9b77e61a87cc880b045322f83a579",
+      "bytes": 5694987
+    },
+    "snapshots/perry-http-runtime-v302-overlay.tar.gz": {
+      "sha256": "d76cf78e4b82119a60d8f0d5ebefcc4b0360f39182e1bcf56ff770eb8bfa39d2",
+      "bytes": 1028121
+    },
+    "prior-production-v301/phases.json": {
+      "sha256": "70fe67a442f4d58ddbf74a5c97d40a27fe45c87c0bddcc087d8919e7542314ce",
+      "bytes": 108
+    },
+    "prior-production-v301/build.log": {
+      "sha256": "722ece87eca929d9eb9a1375144c7161a3da78a44dd478a7d4f7f1576d8bbebc",
+      "bytes": 459386
+    }
+  }
+}

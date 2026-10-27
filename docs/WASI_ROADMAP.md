@@ -1,14 +1,29 @@
 # WASI hosting and reusable components
 
-Implementation roadmap, 2026-10-21. The P2 restoration is implemented in
-main, and P1 hosting is now implemented. The initial synchronous typed
-component profile is qualified on Linux. The remaining P2 component work
-and P3 native async are still in progress.
+Implementation roadmap, updated 2026-10-27. P2 commands and P1 hosting are
+implemented. Typed components work in both directions for the synchronous
+Linux profile. Native P3 hosting includes concurrent calls, typed future/stream
+readers and producers, and supported concurrent HTTP handlers. Async
+Perry-authored guest adapters and full platform/package qualification remain open.
 The audited baseline is
 `20fde48d3fa03d0a77699b7374f55e38cb143b59`.
 See [WASI_SUPPORT.md](WASI_SUPPORT.md) for the implemented standalone profile.
 
-## Decision: support P1 inputs and a qualified P1 output
+| Format and direction | Implemented profile | Remaining gap |
+| --- | --- | --- |
+| WASI 0.1 / Preview 1 input | Native `node:wasi` hosting and `--target wasip1` core-module output; see [P1 scope](WASI_P1_HOSTING.md) | Wider API/platform qualification; optional host networking extensions |
+| WASI 0.2 / Preview 2 output | Standalone commands; staged packages qualified on Linux x86_64, macOS ARM64 and Windows x64 | Requalify changed artifacts before shipping; publication is separate |
+| Typed synchronous components | Native Perry hosts third-party components; Perry libraries import/export WIT services and compose with Rust | Current combined execution qualification is Linux; broader platform/package coverage remains open |
+| WASI 0.3.0 input | Turnloop providers, async calls, native TypeScript future/stream readers and producers, command hosting and supported concurrent HTTP layouts | Nested/imported HTTP implementations use serialized fallback; broader platform qualification and final packages remain open |
+| Async Perry-authored components | Experimental generated Promise exports/imports, typed buffers and cooperative cancellation qualified on Linux | Public CLI async generation, resource-bearing async adapters and guest future/stream values remain guarded |
+
+The 0.3.0 hosting profile does not establish a 0.3 compiler output target or
+complete bidirectional async support. Detailed current evidence is linked from
+[the component record](WASI_COMPONENTS.md); older receipts describe their own
+source snapshots and should not be treated as qualification of every later change.
+
+## Decision: support P1 inputs and qualified P1 output
+
 
 Support WASI 0.1 / Preview 1 as an interoperability format for running
 third-party core modules inside native Perry. P1 output was deferred until an
@@ -142,8 +157,20 @@ moving GC, plus opt-in WASI
 providers. See [the component record](WASI_COMPONENTS.md) for the separately
 qualified host-defined resources, native/guest deferred cleanup, command
 worlds and TCP/UDP/DNS interoperability. Their combined integration is
-qualified on Linux; HTTP, blocking-I/O cancellation, broader platform qualification
-and engine shipping costs remain open. This milestone is not complete.
+qualified on Linux. HTTP client and incoming-handler resources and transports
+now have separate Linux engine/canonical-component qualification, including real
+HTTP payloads, TLS verification and streamed server exchanges through the Rust
+embedding API. The TypeScript server API and Perry-authored incoming/outgoing
+HTTP components now pass Linux development and production qualification with
+independent host/guest moving GC. Blocking-I/O cancellation,
+broader platform qualification and engine shipping costs remain open. The Tokio-free Turnloop provider
+replacement is now selected and qualified on Linux in both component directions;
+its [earlier receipt](validation/wasi-turnloop-selected-20261023.json) records
+validation-only upstream repairs. The exact qualified sources now live in the
+repository through [pinned Cargo patches](../third_party/turnloop/VENDORED.md),
+so builds no longer need those external overrides. Released dependency adoption
+remains a future replacement for these local source repairs.
+This milestone is not complete.
 
 Introduce an optional component-capable host boundary, for example a separate
 `perry-component-host` crate backed by Wasmtime. Keep it off the default native
@@ -189,6 +216,35 @@ exports still need a specified WIT contract and matching bindings.
 
 ## 4. Add P3 native async
 
+The optional provider feature implements 0.3.0 clocks/random, CLI, filesystem,
+sockets and HTTP through Turnloop. Canonical provider tests cover suspended
+calls, streams, result futures, large transfers and Store retirement. The
+optional Perry component engine now links these providers and exposes native
+async functions through Promise-based TypeScript host bindings. Standalone
+component worlds support concurrent calls, and locally observable P3 HTTP
+handlers now complete requests independently on one Store. P2 incoming handlers
+and nested/imported P3 implementations retain serialized handling. One-shot 0.3.0 command hosting
+and TypeScript/Rust async HTTP handler entry points have separate Linux
+qualification, including task exit after a result is published. The Rust
+persistent driver supports concurrent calls, post-return work and generic WIT
+future/stream reads, transfers and native producer factories. Bounded writes
+preserve backpressure and unconsumed ownership through cancellation, retry and
+peer closure. Traced TypeScript readers, producer factories/writers and
+per-invocation runtime frames are implemented. Resource/future/stream guest adapters, broader
+handler layout support and complete host/guest composition remain unfinished.
+See [the component qualification record](WASI_COMPONENTS.md) for exact APIs and
+receipts.
+
+Canonical guest frames now own traced slot arrays through stable native links.
+Their lifetime is independent of a native handle scope, and frames can finish
+out of order. A nonblocking C Promise poll preserves fulfilled values and the
+original rejection in those frames without running another task's jobs. These
+supply the rooting and observation foundations for suspension. An internal
+generated C adapter now schedules async imports/exports with canonical waits,
+typed child storage and cooperative cancellation. Public async generation stays
+guarded while resource and future/stream guest ownership is completed. Native
+host future/stream bindings are implemented.
+
 Pin an explicit WASI 0.3 interface version and supported Component Model
 feature set. Integrate native async lifting/lowering with Perry's promise
 scheduler, task suspension/resumption, futures and streams. Upgrading a host
@@ -201,9 +257,22 @@ traps/unload. Run collections while component tasks are suspended to prove
 their captured Perry values remain rooted. Add cross-language async
 composition and a streaming HTTP example before claiming P3 support.
 
+The internal guest task checkpoint foundation now isolates Promise/nextTick and
+cleanup jobs by canonical task while preserving ALS across C entries. A separate
+maintained-C fixture proves unit-stream wakeups between suspended tasks. These
+are now connected to stable async import frames and generated callbacks, with
+actual Perry guest execution and a C caller exercising canonical cancellation.
+Typed resource/future/stream guest ownership, broader cross-language value
+profiles and platform/package qualification remain required before removing the
+guest generator guards. The current
+[component support notes](WASI_COMPONENTS.md) distinguish these internal checks
+from supported public output.
+
 Retain the P2 command/profile tests during adoption. Specify the minor
 version: the official release table records additional Component Model
 features for 0.3.1, so a generic "P3 supported" label is insufficient.
+The current 0.3.0 target does not require `error-context`: the official roadmap
+still lists that type among experimental candidate features.
 
 ## Sources
 

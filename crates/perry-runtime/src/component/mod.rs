@@ -1,5 +1,7 @@
 //! Perry's typed component boundary. Native engines and guest canonical
 //! adapters are optional; module code owns all JS roots and exceptions.
+mod async_value;
+mod asynchronous;
 mod callback;
 mod cleanup;
 mod command;
@@ -8,10 +10,15 @@ mod context;
 mod guest;
 mod host;
 mod host_resource;
+mod http;
 #[cfg(not(target_arch = "wasm32"))]
 mod io;
+mod persistent;
+mod producer;
+
 mod resource;
 mod value;
+mod writer;
 
 #[cfg(test)]
 mod cleanup_tests;
@@ -155,6 +162,30 @@ pub extern "C" fn js_component_load(bytes: f64, contract: f64, imports: f64, opt
             crate::buffer::bytes::bytes(bytes.get_nanbox_f64(), no_gc).map(<[u8]>::to_vec)
         })
         .unwrap_or_else(|_| fail("Expected component bytes"));
+        let incoming_http = world["exports"].as_array().is_some_and(|items| {
+            items.iter().any(|item| {
+                item["name"].as_str().is_some_and(|name| {
+                    name.starts_with("wasi:http/incoming-handler@")
+                        || name.starts_with("wasi:http/handler@")
+                })
+            })
+        });
+        let p3_http_only = world["exports"].as_array().is_some_and(|items| {
+            items
+                .iter()
+                .any(|item| item["name"] == "wasi:http/handler@0.3.0")
+                && !items.iter().any(|item| {
+                    item["name"]
+                        .as_str()
+                        .is_some_and(|name| name.starts_with("wasi:http/incoming-handler@"))
+                })
+        });
+        let concurrent_http =
+            incoming_http && p3_http_only && persistent::http::profile(&wasm, contract.as_bytes());
+        if !incoming_http || concurrent_http {
+            persistent::construct(owner.get_nanbox_f64(), &wasm, contract.as_bytes(), &options);
+            return owner.get_nanbox_f64();
+        }
         let mut buffer = Buffer::default();
         unsafe {
             let pointer = (ops.perry_component_host_new)(
@@ -223,9 +254,49 @@ pub extern "C" fn js_component_call(owner: f64, interface: f64, function: f64, a
         if unsafe { (*context).host.is_null() } {
             fail("Component is not initialized");
         }
-        args = serde_json::to_vec(&value::encode_for(
+        if persistent::enabled(owner.get_nanbox_f64()) {
+            let asynchronous = context::signature(
+                unsafe { &(*context).world },
+                "exports",
+                &interface,
+                &function,
+            )["async"]
+                == true;
+            return persistent::call(
+                owner.get_nanbox_f64(),
+                &interface,
+                &function,
+                args_input.get_nanbox_f64(),
+                asynchronous,
+            );
+        }
+        if context::signature(
+            unsafe { &(*context).world },
+            "exports",
+            &interface,
+            &function,
+        )["async"]
+            == true
+        {
+            return asynchronous::submit(
+                owner.get_nanbox_f64(),
+                &interface,
+                &function,
+                args_input.get_nanbox_f64(),
+            );
+        }
+        let retained = scope.root_nanbox_f64(value::retention::new_plan());
+        let world = unsafe { &(*context).world };
+        let signature = context::signature(world, "exports", &interface, &function);
+        let params = signature["params"]
+            .as_array()
+            .unwrap_or_else(|| fail("Invalid WIT parameter manifest"));
+        args = serde_json::to_vec(&value::typed::arguments(
             args_input.get_nanbox_f64(),
+            params,
+            world,
             owner.get_nanbox_f64(),
+            retained.get_nanbox_f64(),
         ))
         .unwrap();
         let mut buffer = Buffer::default();
@@ -268,6 +339,9 @@ pub extern "C" fn js_component_call(owner: f64, interface: f64, function: f64, a
 
 #[no_mangle]
 pub extern "C" fn js_component_dispose(owner: f64) -> f64 {
+    if persistent::enabled(owner) {
+        return persistent::dispose(owner);
+    }
     let scope = RuntimeHandleScope::new();
     let frame = callback::Frame::new(&scope, owner);
     let mut error = Vec::new();

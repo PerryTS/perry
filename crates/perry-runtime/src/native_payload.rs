@@ -252,8 +252,9 @@ crate::perry_thread_local! {
 }
 
 const _: () = assert!(
-    crate::native_class_ids::ZLIB_BASE - crate::native_class_ids::WEB_BUILTIN_BLOCK_START
-        < PROTOTYPE_SLOTS as u32,
+    crate::native_class_ids::COMPONENT_HTTP_OPERATION
+        - crate::native_class_ids::WEB_BUILTIN_BLOCK_START
+        < (PROTOTYPE_SLOTS - 2) as u32,
     "a native-payload family id outgrew the prototype slot array"
 );
 

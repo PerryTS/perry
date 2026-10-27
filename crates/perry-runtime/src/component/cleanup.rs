@@ -99,6 +99,9 @@ extern "C" fn collected(
 }
 
 pub(super) fn drain(owner: f64) {
+    if persistent::enabled(owner) {
+        return persistent::collections::drain_collections(owner);
+    }
     let scope = RuntimeHandleScope::new();
     let owner = scope.root_nanbox_f64(owner);
     let first_error = scope.root_nanbox_f64(undefined());
@@ -181,4 +184,47 @@ pub(super) fn finish_call(owner: f64, result: Result<f64, f64>) -> f64 {
         crate::exception::js_throw(error);
     }
     value.get_nanbox_f64()
+}
+
+/// A ready native result can be refused by a before hook or decoder before
+/// JavaScript receives it. Retire its owned capabilities without manufacturing
+/// wrapper objects; stale duplicate finalizer requests are safe to retry.
+pub(super) fn returned(owner: f64, value: &Value) {
+    fn gather(value: &Value, requests: &mut Vec<Value>) {
+        match value {
+            Value::Array(values) => {
+                for value in values {
+                    gather(value, requests)
+                }
+            }
+            Value::Object(object) => {
+                if value["$writer"].is_string() {
+                    requests.push(serde_json::json!({"kind":"async-writer","writer":value}));
+                    return;
+                }
+                if value["owned"] == true {
+                    if let Some(token) = value["$resource"].as_str() {
+                        requests.push(serde_json::json!({"kind":"guest","token":token}));
+                        return;
+                    }
+                    if value["$hostResource"].is_string() {
+                        requests.push(serde_json::json!({"kind":"host","resource":{"token":value["$hostResource"],"type":value["type"],"generation":value["generation"]}}));
+                        return;
+                    }
+                }
+                if value["$future"].is_string() || value["$stream"].is_string() {
+                    requests.push(serde_json::json!({"kind":"async-value","value":value}));
+                    return;
+                }
+                for value in object.values() {
+                    gather(value, requests);
+                }
+            }
+            _ => {}
+        }
+    }
+    let context = context::get(owner);
+    if unsafe { (*context).alive } {
+        unsafe { gather(value, &mut (*context).pending_collections) }
+    }
 }
