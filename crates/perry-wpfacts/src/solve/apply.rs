@@ -721,13 +721,60 @@ impl Model {
                 }
             }
             Cons::ProtoOf { dst } => {
+                let pk = self.atom("__proto__");
                 for &t in toks {
-                    if t == TOP {
-                        self.add_tok(dst, TOP);
+                    // A parameter marker has no prototype here (DECISIONS
+                    // 119): the read is a `__proto__` step its reader
+                    // replays on the argument.
+                    if self.is_marker(t) && !self.virt_protos.contains_key(&t) {
+                        self.load_from(t, t, Key::Named(pk), dst);
                         continue;
                     }
-                    let pn = self.proto_node(t);
-                    self.edge(pn, dst);
+                    self.proto_value(t, dst);
+                }
+            }
+            Cons::ProtoValues { dst } => {
+                self.add_prim(dst, prim & prim::NULL);
+                for &p in toks {
+                    match self.toks[p as usize] {
+                        TokKind::Proto(tm)
+                            if matches!(
+                                self.tmpls[tm as usize].kind,
+                                TmplKind::Class {
+                                    literal_shape: true,
+                                    ..
+                                }
+                            ) =>
+                        {
+                            self.proto_value(p, dst)
+                        }
+                        _ => self.add_tok(dst, p),
+                    }
+                }
+            }
+            Cons::PlainKey { origin, act } => {
+                for &q in toks {
+                    match self.toks[q as usize] {
+                        TokKind::Top => match act {
+                            ChainAct::Load(dst) => self.add_tok(dst, TOP),
+                            ChainAct::Call(call) => self.call_tok(call, TOP, Some(origin)),
+                            ChainAct::Store(_) => {}
+                        },
+                        TokKind::ObjectProto
+                        | TokKind::NativeProto(_)
+                        | TokKind::Builtin(_)
+                        | TokKind::BuiltinFn => {
+                            self.with_b(|m| builtins::plain_key(m, origin, act));
+                        }
+                        _ => {
+                            let f = self.num_fields(q);
+                            match act {
+                                ChainAct::Load(dst) => self.edge(f, dst),
+                                ChainAct::Call(call) => self.bind_via(f, call, origin),
+                                ChainAct::Store(_) => {}
+                            }
+                        }
+                    }
                 }
             }
             Cons::IterNext { dst } => {
@@ -766,6 +813,7 @@ impl Model {
                     self.edge(all, dst);
                     self.add_prim(dst, prim::UNDEF);
                     if self.idx_done.insert((idx, t, dst, 0)) {
+                        self.plain_key(t, ChainAct::Load(dst));
                         self.cons(idx, Cons::IdxKey { obj: t, dst });
                     }
                 }
@@ -774,6 +822,13 @@ impl Model {
                 let named = prim & (prim::STR | prim::SYMBOL) != 0 || !toks.is_empty();
                 if named && self.idx_done.insert((n, obj, dst, 1)) {
                     self.load_from(obj, obj, Key::Any, dst);
+                }
+                // DECISIONS 217: a key that may be a string (ToPrimitive of
+                // an object may return any) may be `"__proto__"`.
+                let string = prim & prim::STR != 0 || !toks.is_empty();
+                if string && self.idx_done.insert((n, obj, dst, IDX_PROTO_KEY)) {
+                    let pk = self.atom("__proto__");
+                    self.load_from(obj, obj, Key::Named(pk), dst);
                 }
                 // ToPropertyKey of `true`, `null`, `undefined` is a named key.
                 if !named {
@@ -786,6 +841,83 @@ impl Model {
                             for k in keys {
                                 let a = self.atom(k);
                                 self.load_program_key(obj, a, dst);
+                            }
+                        }
+                    }
+                }
+            }
+            Cons::IdxMCall { idx, call } => {
+                // Primitive receivers (`MCall`'s rule): a number key calls
+                // a key a store into ⊤ wrote on their prototype.
+                if prim != 0 && !self.nodes[n as usize].pts.contains_tok(TOP) {
+                    self.with_b(|m| builtins::prim_plain_key(m, prim, call));
+                    let p = prim & !(prim::NULL | prim::UNDEF);
+                    if p != 0 && self.idx_done.insert((idx, TOP, call, 128 | p as u8)) {
+                        self.cons(
+                            idx,
+                            Cons::IdxKeyCall {
+                                obj: TOP,
+                                prim: p,
+                                call,
+                            },
+                        );
+                    }
+                }
+                for &t in toks {
+                    // ⊤ and a parameter marker take any key (the call
+                    // escapes; the marker's reader replays the call).
+                    if t == TOP || (self.is_marker(t) && !self.virt_protos.contains_key(&t)) {
+                        self.method_on(t, Key::Any, call);
+                        continue;
+                    }
+                    if self.idx_done.insert((idx, t, call, 0)) {
+                        self.mark_use(t, crate::model::MARK_ESCAPE);
+                        let own = self.all_fields(t);
+                        self.bind_via(own, call, t);
+                        self.plain_key(t, ChainAct::Call(call));
+                        self.cons(
+                            idx,
+                            Cons::IdxKeyCall {
+                                obj: t,
+                                prim: 0,
+                                call,
+                            },
+                        );
+                    }
+                }
+            }
+            Cons::IdxKeyCall {
+                obj,
+                prim: recv_prim,
+                call,
+            } => {
+                let named = prim & (prim::STR | prim::SYMBOL) != 0 || !toks.is_empty();
+                // One rule per receiver: a token, or (⊤) primitive kinds.
+                let rule = match obj {
+                    TOP => 128 | recv_prim as u8,
+                    _ => IDX_CALL_ANY,
+                };
+                if named && self.idx_done.insert((n, obj, call, rule)) {
+                    match obj {
+                        TOP => self.with_b(|m| builtins::prim_method(m, recv_prim, Key::Any, call)),
+                        _ => self.method_on(obj, Key::Any, call),
+                    }
+                }
+                // ToPropertyKey of `true`, `null`, `undefined` is a named key.
+                if !named && obj != TOP {
+                    for (bit, keys) in [
+                        (prim::BOOL, &["true", "false"][..]),
+                        (prim::NULL, &["null"][..]),
+                        (prim::UNDEF, &["undefined"][..]),
+                    ] {
+                        if prim & bit != 0
+                            && self
+                                .idx_done
+                                .insert((n, obj, call, IDX_CALL_NAMED + bit as u8))
+                        {
+                            for k in keys {
+                                let a = self.atom(k);
+                                self.method_on(obj, Key::Named(a), call);
                             }
                         }
                     }

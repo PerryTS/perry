@@ -137,36 +137,26 @@ fn a_store_into_top_reaches_the_seeded_chains() {
 
 const TOP: &str = "declare const unknown: any; const t: any = unknown.reach(0);";
 
-/// Open (BFI census, 6,450 sites in the all-knobs-off arm): a key whose
-/// values are all numbers names no `Object.prototype` method (no intrinsic
+/// BFI census (6,450 sites in the all-knobs-off arm): a key whose values
+/// are all numbers names no `Object.prototype` method (no intrinsic
 /// prototype has a numeric member), so `table[n](...)` cannot run
-/// `__defineGetter__` and sink its accessor argument. The model has no key
-/// values: every index that is no string literal is `Key::Any` (`key_of`).
-/// Closing it needs the key's values on the load / call (ToPropertyKey of
-/// its primitives), not its type.
+/// `__defineGetter__` and sink its accessor argument. The call carries its
+/// key node (`Cons::IdxMCall`, DECISIONS 217): its values decide, not its
+/// type.
 #[test]
-#[ignore = "open: computed keys carry no values (numeric key reads Object.prototype methods)"]
 fn a_numeric_key_names_no_object_prototype_method() {
     let table = "const table: any = { 0(a: any, b: any) { return 1; }, 1(a: any, b: any) { return 2; } };";
     let n = "const n = Math.random() > 0.5 ? 0 : 1;";
     assert_eq!(d_escape(&format!("{table} {n} table[n]('y', () => d);")), None);
 }
 
-/// Open, SOUNDNESS (on main too): a literal's prototype is
-/// `Object.prototype`, where every object's `y` lookup finds a store. The
-/// model loses such a store when the prototype comes as a value: under
-/// `__proto__` or from `Object.getPrototypeOf` it is the literal's shape
-/// class prototype (or nothing), which no other object's chain reaches;
-/// under a computed key (which may be `"__proto__"`) no prototype is read
-/// at all (`family_any`: `ObjectProto` as a value installs accessors on
-/// every builtin prototype). So `q.y` reads nothing and `r.z` claims no
-/// receiver. A store through `Object.prototype` itself is seen. Closing it
-/// needs a literal's prototype value to be `Object.prototype`, and the
-/// computed key's values on the load / call (a key that may be the string
-/// `"__proto__"` yields the prototype), as
-/// `a_numeric_key_names_no_object_prototype_method` does.
+/// Soundness (DECISIONS 217): a literal's prototype is `Object.prototype`,
+/// where every object's `y` lookup finds a store, also when the prototype
+/// comes as a value: under `__proto__`, from `Object.getPrototypeOf`, or
+/// under a computed key that may be the string `"__proto__"` (the literal's
+/// shape class prototype is a layout, no object). More forms in
+/// `tests/proto_value.rs`.
 #[test]
-#[ignore = "open soundness: a literal's prototype as a value is not Object.prototype"]
 fn a_store_through_a_literals_prototype_reaches_every_object() {
     let sees_e = |get: &str| {
         let pf = facts(&format!(

@@ -1160,7 +1160,7 @@ impl<'a> Gen<'a> {
             let this = self.m.funcs[f as usize].this;
             self.m.this_class.insert(this, tm);
             let a = self.m.atom(name);
-            self.m.accessor_atoms.insert(a);
+            self.m.add_accessor_atom(a);
             let ft = self.m.funcs[f as usize].token;
             self.m.accessors.entry((proto, a)).or_default().0.push(ft);
             push_unique(self.m.accessor_keys.entry(proto).or_default(), a);
@@ -1171,7 +1171,7 @@ impl<'a> Gen<'a> {
             let this = self.m.funcs[f as usize].this;
             self.m.this_class.insert(this, tm);
             let a = self.m.atom(name);
-            self.m.accessor_atoms.insert(a);
+            self.m.add_accessor_atom(a);
             let ft = self.m.funcs[f as usize].token;
             self.m.accessors.entry((proto, a)).or_default().1.push(ft);
             push_unique(self.m.accessor_keys.entry(proto).or_default(), a);
@@ -1189,7 +1189,7 @@ impl<'a> Gen<'a> {
                 // Under a constant key: that key's accessor.
                 let this = self.m.funcs[f as usize].this;
                 self.m.this_class.insert(this, tm);
-                self.m.accessor_atoms.insert(a);
+                self.m.add_accessor_atom(a);
                 let ft = self.m.funcs[f as usize].token;
                 let e = self.m.accessors.entry((proto, a)).or_default();
                 if setter { &mut e.1 } else { &mut e.0 }.push(ft);
