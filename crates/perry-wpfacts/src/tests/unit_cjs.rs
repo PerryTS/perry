@@ -227,7 +227,16 @@ fn a_class_bound_through_its_self_cell_is_a_contract() {
     };
     assert!(pw.len() >= 8, "whole-program proves {:?}", pw);
     let _ = (lost, classes);
-    assert_cjs_per_unit(&w, &u, 8);
+    // Per unit 7 of 13. `T::run` calls `a.append(b, NONE)` with `a` read
+    // from `this.k`, which per unit is ⊤ (DECISIONS 186): a ⊤ callee, so
+    // the `S` instance `a` also holds escapes as its receiver, which
+    // reports `S` and its parent `R`. Broken, `super()` in the `S` and `T`
+    // constructors is ⊤, and `this.v = v`, `this.k = S` store into ⊤: under
+    // the static ⊤-store rule (#13338) that writes `v` and `k` on every
+    // intrinsic prototype, so the read `this.k` in `run` is no longer
+    // proven per unit (it was the 8th site before the rule). Whole program
+    // proves all 13.
+    assert_cjs_per_unit(&w, &u, 7);
     // `T.k = S` holds the class and the cell's `undefined` both ways: the
     // reader's import carries the binding's primitives.
     let k_kind = |pf: &ProgramFacts| {
