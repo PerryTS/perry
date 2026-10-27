@@ -532,7 +532,10 @@ fn direct_stream_promises_pipeline(source: f64, destination: f64, options: f64) 
     ) {
         return promise_rejected(err);
     }
-    let signal = options_signal(options.get_nanbox_f64()).map(|value| scope.root_nanbox_f64(value));
+    let signal = match options_signal(options.get_nanbox_f64()) {
+        Some(value) => Some(scope.root_nanbox_f64(value)),
+        None => None,
+    };
     if let Some(signal) = &signal {
         if signal_aborted(signal.get_nanbox_f64()) {
             return promise_rejected(signal_reason(signal.get_nanbox_f64()));

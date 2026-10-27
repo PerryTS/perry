@@ -1363,3 +1363,6 @@ pub mod proxy_hooks;
 pub mod url_hooks;
 
 pub mod async_hook_slots;
+
+mod fs_hook_slots;
+mod io_error;

@@ -87,6 +87,7 @@ fn install_compiled_for_tests() {
     ONCE.call_once(|| {
         js_runtime_install_compiled();
         crate::object::js_nm_install_events();
+        crate::object::js_nm_install_fs();
     });
 }
 
@@ -484,3 +485,5 @@ pub extern "C" fn js_runtime_install_json_engine() {
 pub extern "C" fn js_runtime_install_async_hooks() {
     crate::async_hook_slots::install();
 }
+
+pub(crate) static FS_REGISTER_ROOTS: Hook<fn()> = Hook::empty();

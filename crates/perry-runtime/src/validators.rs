@@ -14,11 +14,13 @@
 //! built on top of it. New stdlib validation should call these helpers
 //! rather than hand-formatting messages so the wording stays centralized.
 
-use crate::fs::validate::{
+pub mod received;
+
+use crate::value::JSValue;
+use received::{
     describe_received, format_received_number, is_numeric, throw_range_error_named,
     throw_type_error_with_code,
 };
-use crate::value::JSValue;
 
 /// `Number.MIN_SAFE_INTEGER` / `Number.MAX_SAFE_INTEGER` — the default
 /// bounds of node's `validateInteger`.

@@ -201,8 +201,8 @@ fn cp_stdio_number_fd(value: f64) -> Option<i32> {
 
 pub(crate) fn cp_stdio_stream_fd(value: f64, fd_index: usize) -> Option<i32> {
     let expected_stream = match fd_index {
-        0 => crate::fs::is_fs_stream_instance_value(value, "ReadStream"),
-        1 | 2 => crate::fs::is_fs_stream_instance_value(value, "WriteStream"),
+        0 => crate::fs_hook_slots::is_fs_stream_instance_value(value, "ReadStream"),
+        1 | 2 => crate::fs_hook_slots::is_fs_stream_instance_value(value, "WriteStream"),
         _ => false,
     };
     if !expected_stream {
@@ -355,7 +355,7 @@ pub(crate) fn cp_apply_live_stdio(
 pub(crate) fn cp_stdio_from_fd(fd: i32) -> Stdio {
     use std::os::fd::FromRawFd;
 
-    if let Some(file) = crate::fs::try_clone_registered_fd(fd) {
+    if let Some(file) = crate::fs_hook_slots::try_clone_registered_fd(fd) {
         return Stdio::from(file);
     }
 

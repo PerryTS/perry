@@ -293,7 +293,10 @@ pub(crate) fn regexp(receiver: f64, argument: f64, limit_value: f64) -> Result<f
     if let Some(result) = canonical_split(&scope, &receiver, &input, &limit_value)? {
         return Ok(result);
     }
-    let constructor = super::match_all::species(&receiver)?.map(|v| scope.root_nanbox_f64(v));
+    let constructor = match super::match_all::species(&receiver)? {
+        Some(v) => Some(scope.root_nanbox_f64(v)),
+        None => None,
+    };
     let flags = scope.root_nanbox_f64(dispatch::get(&receiver, b"flags")?);
     let flags = text(&scope, &flags)?;
     let mut budget = Budget::new(api::WORK);

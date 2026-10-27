@@ -202,7 +202,10 @@ fn construct_event(
     let scope = crate::gc::RuntimeHandleScope::new();
     let type_value = scope.root_nanbox_f64(type_value);
     let options = scope.root_nanbox_f64(options);
-    let detail = detail.map(|value| scope.root_nanbox_f64(value));
+    let detail = match detail {
+        Some(value) => Some(scope.root_nanbox_f64(value)),
+        None => None,
+    };
     note_constructed();
     let event = scope.root_raw_mut_ptr(js_object_alloc(class_id, 0));
     let (_, result) = event.across_mut(|| {
@@ -234,7 +237,10 @@ fn init_event_fields(
     let scope = crate::gc::RuntimeHandleScope::new();
     let event = scope.root_raw_mut_ptr(event);
     let options = scope.root_nanbox_f64(options);
-    let detail = detail.map(|value| scope.root_nanbox_f64(value));
+    let detail = match detail {
+        Some(value) => Some(scope.root_nanbox_f64(value)),
+        None => None,
+    };
     let type_ptr = string_from_value(type_value);
     event.with_mut_ptr(|ptr| {
         set_event_field(

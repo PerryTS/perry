@@ -1080,7 +1080,10 @@ fn take_source_done_result() -> f64 {
 fn finish_take_source(iterator: f64, reason: Option<f64>, close_source: bool) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let iterator = scope.root_nanbox_f64(iterator);
-    let reason = reason.map(|reason| scope.root_nanbox_f64(reason));
+    let reason = match reason {
+        Some(reason) => Some(scope.root_nanbox_f64(reason)),
+        None => None,
+    };
     let iterator_value = iterator.get_nanbox_f64();
     if has_truthy_hidden(
         iterator_value,

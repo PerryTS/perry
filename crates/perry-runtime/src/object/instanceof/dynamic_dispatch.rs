@@ -520,7 +520,9 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
                 "Dir" => crate::fs::is_fs_dir_instance_value(value),
                 "Dirent" => crate::fs::is_fs_dirent_instance_value(value),
                 "ReadStream" | "FileReadStream" | "WriteStream" | "FileWriteStream"
-                | "Utf8Stream" => crate::fs::is_fs_stream_instance_value(value, method.as_str()),
+                | "Utf8Stream" => {
+                    crate::fs_hook_slots::is_fs_stream_instance_value(value, method.as_str())
+                }
                 _ => false,
             };
             if matched {

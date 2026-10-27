@@ -428,7 +428,10 @@ fn with_fs_watch_scope(
             undefined_value()
         });
         let scope = crate::gc::RuntimeHandleScope::new();
-        let error = outcome.err().map(|error| scope.root_nanbox_f64(error));
+        let error = match outcome {
+            Err(error) => Some(scope.root_nanbox_f64(error)),
+            Ok(_) => None,
+        };
         let leave = crate::async_hook_slots::try_leave_resource_scope(current_id());
         if let Some(error) = error {
             crate::exception::js_throw(error.get_nanbox_f64());

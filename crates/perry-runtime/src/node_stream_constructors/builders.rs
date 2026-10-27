@@ -585,13 +585,19 @@ fn init_transform_kind(
         crate::node_stream::native_hooks::init_runner_slots(t());
     }
     let subclass_transform = match how {
-        StreamInit::Subclass => subclass_hook(t(), crate::runtime_state_key!(b"_transform"))
-            .map(|v| scope.root_nanbox_f64(v)),
+        StreamInit::Subclass => {
+            match subclass_hook(t(), crate::runtime_state_key!(b"_transform")) {
+                Some(v) => Some(scope.root_nanbox_f64(v)),
+                None => None,
+            }
+        }
         StreamInit::Direct => None,
     };
     let subclass_flush = match how {
-        StreamInit::Subclass => subclass_hook(t(), crate::runtime_state_key!(b"_flush"))
-            .map(|v| scope.root_nanbox_f64(v)),
+        StreamInit::Subclass => match subclass_hook(t(), crate::runtime_state_key!(b"_flush")) {
+            Some(v) => Some(scope.root_nanbox_f64(v)),
+            None => None,
+        },
         StreamInit::Direct => None,
     };
     if let Some(callback) = transform_callback_from_options(&opts) {
@@ -823,9 +829,10 @@ pub extern "C" fn js_node_stream_readable_from_options(iterable: f64, opts: f64)
         }) {
             Ok(normalized) => {
                 let chunks = scope.root_nanbox_f64(normalized.chunks);
-                let source_iterator = normalized
-                    .source_iterator
-                    .map(|source_iterator| scope.root_nanbox_f64(source_iterator));
+                let source_iterator = match normalized.source_iterator {
+                    Some(source_iterator) => Some(scope.root_nanbox_f64(source_iterator)),
+                    None => None,
+                };
                 set_hidden_value(
                     readable.get_nanbox_f64(),
                     hidden_chunks_key(),

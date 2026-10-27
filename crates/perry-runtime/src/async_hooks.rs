@@ -1370,7 +1370,10 @@ fn new_async_resource_with_public_value(
     let scope = crate::gc::RuntimeHandleScope::new();
     let type_handle = scope.root_nanbox_f64(type_value);
     let options_handle = scope.root_nanbox_f64(options);
-    let public_resource = public_resource.map(|value| scope.root_nanbox_f64(value));
+    let public_resource = match public_resource {
+        Some(value) => Some(scope.root_nanbox_f64(value)),
+        None => None,
+    };
     let type_name = require_string_arg("type", type_handle.get_nanbox_f64());
     if type_name.is_empty() && hooks_active() {
         crate::fs::validate::throw_type_error_with_code(

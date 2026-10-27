@@ -134,8 +134,10 @@ fn proxy_get_with_receiver_impl(
     // Clear/restore the override around the operation; getters and Proxy hops
     // consume it before entering user code so nested reads bind independently.
     let previous_override =
-        crate::object::accessor_receiver_override_begin(receiver.get_nanbox_f64())
-            .map(|value| scope.root_nanbox_f64(value));
+        match crate::object::accessor_receiver_override_begin(receiver.get_nanbox_f64()) {
+            Some(value) => Some(scope.root_nanbox_f64(value)),
+            None => None,
+        };
     let result = target_get_property_key(target_h.get_nanbox_f64(), key_h.get_nanbox_f64());
     crate::object::accessor_receiver_override_end(
         previous_override.map(crate::gc::RuntimeHandle::into_nanbox_f64),

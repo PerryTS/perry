@@ -1340,9 +1340,10 @@ pub fn gc_init() {
     // stable until reported, so the program-end report is not a stale/UAF read.
     reg_scanner!(crate::promise::scan_unhandled_rejection_roots_mut);
     reg_scanner!(crate::os::scan_process_stream_singleton_roots_mut);
-    reg_scanner!(crate::fs::scan_fs_handle_roots_mut);
-    reg_scanner!(crate::fs::scan_fs_stream_roots_mut);
-    reg_scanner!(crate::fs::scan_fs_watcher_roots_mut);
+    if let Some(register) = crate::feature_hooks::FS_REGISTER_ROOTS.peek() {
+        register();
+    }
+
     #[cfg(feature = "full")]
     reg_scanner!(crate::plugin::scan_plugin_roots_mut);
     reg_scanner!(crate::geisterhand_registry::scan_geisterhand_roots_mut);

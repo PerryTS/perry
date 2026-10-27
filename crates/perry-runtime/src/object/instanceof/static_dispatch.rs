@@ -407,21 +407,21 @@ fn native_instanceof(
         };
     }
     if class_id == crate::fs::CLASS_ID_FS_READ_STREAM {
-        return if crate::fs::is_fs_stream_instance_value(value, "ReadStream") {
+        return if crate::fs_hook_slots::is_fs_stream_instance_value(value, "ReadStream") {
             true_val
         } else {
             false_val
         };
     }
     if class_id == crate::fs::CLASS_ID_FS_WRITE_STREAM {
-        return if crate::fs::is_fs_stream_instance_value(value, "WriteStream") {
+        return if crate::fs_hook_slots::is_fs_stream_instance_value(value, "WriteStream") {
             true_val
         } else {
             false_val
         };
     }
     if class_id == crate::fs::CLASS_ID_FS_UTF8_STREAM {
-        return if crate::fs::is_fs_stream_instance_value(value, "Utf8Stream") {
+        return if crate::fs_hook_slots::is_fs_stream_instance_value(value, "Utf8Stream") {
             true_val
         } else {
             false_val

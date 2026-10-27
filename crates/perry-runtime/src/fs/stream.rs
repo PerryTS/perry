@@ -1609,26 +1609,6 @@ fn stream_on_common(id: usize, event_value: f64, cb: f64, once: bool) {
     add_listener(id, &event, cb, once);
 }
 
-/// Extract a raw ClosureHeader pointer from a NaN-boxed f64.
-pub(crate) fn extract_closure_ptr(v: f64) -> *const ClosureHeader {
-    let bits = v.to_bits();
-    let top16 = bits >> 48;
-    // An inline SSO string (0x7FF9) carries characters, not an address: its
-    // masked bits used to reach `is_closure_ptr` as a pointer (#11519).
-    let raw = if (0x7FF8..=0x7FFF).contains(&top16) && top16 != 0x7FF9 {
-        (bits & 0x0000_FFFF_FFFF_FFFF) as usize
-    } else if top16 == 0 {
-        bits as usize
-    } else {
-        return std::ptr::null();
-    };
-    if raw < 0x1000 || !crate::closure::is_closure_ptr(raw) {
-        std::ptr::null()
-    } else {
-        raw as *const ClosureHeader
-    }
-}
-
 fn create_write_stream_with_state(state: StreamState) -> f64 {
     let id = alloc_stream(state);
     let method_funcs: [(&str, *const crate::closure::JsFunctionInfo); 8] = [
@@ -1909,3 +1889,5 @@ pub(crate) fn js_fs_create_write_stream_from_filehandle(
     let state = init_write_state_from_options(path_value, options_value, Some((fd, Some(handle))));
     create_write_stream_with_state(state)
 }
+
+pub(crate) use crate::closure::extract_closure_ptr;

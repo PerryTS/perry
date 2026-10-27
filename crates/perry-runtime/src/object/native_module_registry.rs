@@ -373,6 +373,7 @@ pub extern "C" fn js_nm_install_events() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_fs() {
+    crate::fs::install_roots();
     js_nm_install_stream();
     nm_register_attach(
         NmBucket::Fs,

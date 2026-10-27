@@ -123,11 +123,15 @@ pub extern "C" fn js_node_stream_duplex_from_options(body: f64, _opts: f64) -> f
         let scope = crate::gc::RuntimeHandleScope::new();
         let body = scope.root_nanbox_f64(body);
         let readable_key = crate::runtime_state_key!(b"readable");
-        let readable = get_hidden_value(body.get_nanbox_f64(), readable_key)
-            .map(|readable| scope.root_nanbox_f64(readable));
+        let readable = match get_hidden_value(body.get_nanbox_f64(), readable_key) {
+            Some(readable) => Some(scope.root_nanbox_f64(readable)),
+            None => None,
+        };
         let writable_key = crate::runtime_state_key!(b"writable");
-        let writable = get_hidden_value(body.get_nanbox_f64(), writable_key)
-            .map(|writable| scope.root_nanbox_f64(writable));
+        let writable = match get_hidden_value(body.get_nanbox_f64(), writable_key) {
+            Some(writable) => Some(scope.root_nanbox_f64(writable)),
+            None => None,
+        };
         if readable.is_some() || writable.is_some() {
             let options = readable_from_options(f64::from_bits(TAG_UNDEFINED));
             let duplex = scope.root_nanbox_f64(js_node_stream_duplex_new(options));
