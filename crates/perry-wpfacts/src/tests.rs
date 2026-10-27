@@ -23,6 +23,7 @@ mod native_proto;
 mod parent_value;
 mod prim_result;
 mod protocol_calls;
+mod proof_receivers;
 mod protocol_keys;
 mod receiver_this;
 mod run_once_closed;
