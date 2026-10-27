@@ -192,10 +192,6 @@
       "perry_runtime::gc::verify_diag::panic_stale_forwarded_reference_detailed",
       "perry_runtime::gc::verify_diag::type_name"
     ],
-    "node_api_host": [
-      "perry_runtime::node_api_host::metadata::PENDING_FINALIZERS::resolve",
-      "perry_runtime::node_api_host::metadata::enqueue_finalizer"
-    ],
     "string_normalize": [
       "perry_runtime::string::normalize_hooked::ccc"
     ]

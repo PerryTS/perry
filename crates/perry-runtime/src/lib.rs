@@ -1405,3 +1405,5 @@ mod dgram_registry_owner;
 mod wasm_hook_slots;
 
 mod segmenter_hook_roots;
+
+mod native_finalizer_hook;
