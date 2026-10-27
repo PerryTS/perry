@@ -39,7 +39,7 @@ static supervisor_callback_code_t finish_if_ready(void) {
     return SUPERVISOR_CALLBACK_CODE_EXIT;
 }
 supervisor_callback_code_t exports_supervisor_exercise(uint32_t mode, uint32_t base) {
-    CHECK(!task.active && mode <= 2);
+    CHECK(!task.active && mode <= 3);
     memset(&task, 0, sizeof(task));
     task.active = true; task.mode = mode; task.base = base;
     task.set = supervisor_waitable_set_new();
@@ -47,6 +47,7 @@ supervisor_callback_code_t exports_supervisor_exercise(uint32_t mode, uint32_t b
     task.input = F(constructor_item)(base + 1);
     task.sibling_owner = F(constructor_item)(base + 2);
     if (mode == 0) F(block)();
+    if (mode == 3) F(complete_on_cancel)();
     if (mode == 1) {
         task.call = begin(supervisor_cancel_loan(base + 10, F(borrow_item)(task.input), &task.ignored));
     } else {

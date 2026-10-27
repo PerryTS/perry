@@ -68,7 +68,7 @@ def main():
                               generated / (world + ".c"), folder / source, generated / (world + "_component_type.o"),
                               "-Wl,--export=cabi_realloc", "-Wl,--fatal-warnings", "-o", component])
         peers.append(component)
-    marker = "PASS: resource canonical cancellation, 8 pre-start owners, 8 suspended borrows, 8 ready owned results, 24 live siblings and reusable Store"
+    marker = "PASS: resource canonical cancellation, 8 pre-start owners, 8 suspended borrows, 8 ready owned results, 8 unclaimed owned results, 32 live siblings and reusable Store"
     components = []
     for kind in ["plain", "instrumented"]:
         component = out / (kind + ".composed.wasm")
