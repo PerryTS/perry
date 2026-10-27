@@ -26,7 +26,7 @@ use std::fmt::Write as _;
 pub(crate) const SPECIFIER: &str = "perry:cjs";
 
 /// The import every wrapped module carries first.
-pub(super) const SUPPORT_IMPORT: &str = "import { cache as __perry_cjs_cache, main as __perry_cjs_main, extensions as __perry_cjs_extensions, setPending as __perry_cjs_set_pending, takePending as __perry_cjs_take_pending, link as __perry_cjs_link, requireComputed as __perry_cjs_require_computed, requireError as __perry_cjs_require_error } from 'perry:cjs';";
+pub(super) const SUPPORT_IMPORT: &str = "import { cache as __perry_cjs_cache, main as __perry_cjs_main, extensions as __perry_cjs_extensions, setPending as __perry_cjs_set_pending, takePending as __perry_cjs_take_pending, link as __perry_cjs_link, requireComputed as __perry_cjs_require_computed, requireError as __perry_cjs_require_error, reload as __perry_cjs_reload } from 'perry:cjs';";
 
 /// The support module's source for a graph whose CommonJS modules are
 /// `paths` (canonical source paths, as the wrapper spells its cache key).
@@ -74,6 +74,24 @@ export function takePending() {{
     return record;
 }}
 let base;
+// A static edge whose target was evaluated and then deleted from the cache
+// re-runs it, as Node does, with the requiring module as its parent (the
+// handoff its record reads). One loader for the program: the path is
+// absolute. One body, so the edges of every module share it (the facts solve
+// it once). The edge links the new record: it reads the cache by its literal
+// path, a declared slot. A read here by the parameter is a computed key that
+// reaches `Object.prototype` (its `constructor`), and the link would store
+// the parent on it.
+let reloader;
+export function reload(path, parent) {{
+    if (__perry_cjs_open()) {{
+        if (reloader === undefined) reloader = __perry_cjs_support_create_require({base_path});
+        pendingParent = parent;
+        try {{ return reloader(path); }} finally {{ pendingParent = undefined; }}
+    }} else {{
+        throw requireError('error', 'ERR_PERRY_CJS_CLOSED', 'a closed program has no CommonJS loader');
+    }}
+}}
 // A literal builtin `require` is a static native binding (#13296); only a
 // computed specifier reaches this loader, and only a program that is not
 // closed has one. A closed program links no `createRequire`.

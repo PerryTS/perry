@@ -134,10 +134,9 @@ fn an_open_edge_links_each_record_once() {
         "{source}"
     );
     assert!(
-        source.contains("required = __perry_cjs_create_require("),
+        source.contains("const required = __perry_cjs_reload("),
         "{source}"
     );
-    assert!(!source.contains("__perry_cjs_reload("), "{source}");
     // A module that can require by a computed path scans on its first link
     // of a cached record: the runtime loader may have linked it already.
     let source = wrapped(

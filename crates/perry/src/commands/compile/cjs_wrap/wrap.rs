@@ -1583,15 +1583,12 @@ function __perry_require_static_{i}() {{
             {warn_cached}return cached.exports;
         }}
         // Evaluated before (its record binding is set) and its entry is gone:
-        // Node re-runs it with this module as its parent (the handoff, as a
-        // fresh evaluation below); the loader may link the new record into
-        // `children` as it loads, so the scan keeps it once. A `var`, so the
-        // read before evaluation is `undefined`, with no lookup in the path
-        // registry.
+        // Node re-runs it with this module as its parent (the support
+        // module's one loader) and this edge links the new record. A `var`,
+        // so the read before evaluation is `undefined`, with no lookup in the
+        // path registry.
         if (__perry_cjs_rec_{i} !== undefined) {{
-            __perry_cjs_set_pending(__perry_cjs_record);
-            let required;
-            try {{ required = {create_require}({module_filename_literal})({path}); }} finally {{ __perry_cjs_set_pending(undefined); }}
+            const required = __perry_cjs_reload({path}, __perry_cjs_record);
             const fresh = __perry_cjs_cache[{path}];
             if (fresh !== undefined) {{ __perry_cjs_lk_{i} = true; __perry_cjs_link(__perry_cjs_record, fresh); }}
             return required;
