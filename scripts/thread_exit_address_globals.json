@@ -3845,14 +3845,6 @@
    "why": "Shared all-empty shape-slab structure (a chunk of EMPTY records, a page of pointers to that chunk, an empty ordinary-band directory). Every pointer inside is the address of another immutable static in the program image, never an arena or heap address; nothing ever writes them, so an exited thread's Arena::drop cannot leave them dangling."
   },
   {
-   "file": "crates/perry-runtime/src/object/static_shapes.rs",
-   "names": [
-    "STATIC_SEED"
-   ],
-   "verdict": "no_heap_address",
-   "why": "Holds the address of the generated seed unit's `extern \"C\" fn()` (a code address in the program image, stored by js_shape_register_static_seed from a global_ctors entry before any heap exists), or 0 for none. It is never an arena or heap address, so an exited thread's Arena::drop cannot leave it dangling."
-  },
-  {
    "file": "crates/perry-runtime/src/arena/block/decommit.rs",
    "names": [
     "SIZE"

@@ -23,13 +23,21 @@ use crate::block::LlBlock;
 use crate::module::LlModule;
 use crate::types::{DOUBLE, I64, I8, VOID};
 
+const GC_TYPE_ARRAY: u8 = 1;
 const GC_TYPE_OBJECT: u8 = 2;
 const GC_TYPE_CLOSURE: u8 = 4;
 /// `GC_FLAG_MARKED | GC_FLAG_PINNED`: an image cell is never white and never
 /// moves (perry-runtime `realm::IMAGE_CELL_FLAGS`).
 const IMAGE_CELL_FLAGS: u8 = 0x01 | 0x04;
+/// A canonical key list also carries `GC_FLAG_SHAPE_SHARED`
+/// (`js_array_alloc_canonical_keys`).
+const KEY_LIST_FLAGS: u8 = IMAGE_CELL_FLAGS | 0x08;
 const GC_HEADER_SIZE: u64 = crate::target_layout::GC_HEADER_SIZE_BYTES;
+/// `ArrayHeader`: length, capacity, `named`, element kind prefix and kind;
+/// 24 bytes on LP64 and (with its pad word) on ILP32.
+const ARRAY_HEADER_SIZE: u64 = 24;
 const POINTER_TAG: u64 = crate::nanbox::POINTER_TAG;
+const STRING_TAG: u64 = crate::nanbox::STRING_TAG;
 
 /// The section name per object format (same scheme as `perry_strings`).
 pub(crate) fn section(triple: &str) -> &'static str {
@@ -49,6 +57,9 @@ pub(crate) enum Slot {
     Bits(u64),
     /// A NaN-boxed pointer to the image cell with this symbol.
     Cell(String),
+    /// A NaN-boxed string pointer to the image string whose record has this
+    /// symbol (`perry_image_literal_*`): a key of a canonical key list.
+    ImageString(String),
 }
 
 /// A slot `main` must tag before the program runs (64-bit Apple targets).
@@ -56,6 +67,7 @@ pub(crate) enum Slot {
 pub(crate) struct TagFixup {
     pub(crate) cell: String,
     pub(crate) offset: u64,
+    pub(crate) tag: u64,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -79,44 +91,48 @@ fn user_address(cell: &str) -> String {
     format!("getelementptr (i8, ptr @{cell}, i64 {GC_HEADER_SIZE})")
 }
 
-/// One 8-byte slot as `(llvm type, initializer)`, plus whether `main` must tag
-/// it.
-fn slot_init(triple: &str, slot: &Slot) -> (&'static str, String, bool) {
+/// One 8-byte slot as `(llvm type, initializer)`, plus the tag startup code
+/// must OR in when the format cannot carry it.
+fn slot_init(triple: &str, slot: &Slot) -> (&'static str, String, Option<u64>) {
     let mode = pointer_slots(triple);
-    match (slot, mode) {
-        (Slot::Bits(bits), PointerSlots::SplitHalves) => (
+    let (address, tag) = match slot {
+        Slot::Bits(bits) => {
+            return match mode {
+                PointerSlots::SplitHalves => (
+                    "{ i32, i32 }",
+                    format!(
+                        "{{ i32 {}, i32 {} }}",
+                        *bits as u32 as i32,
+                        (*bits >> 32) as u32 as i32
+                    ),
+                    None,
+                ),
+                _ => ("i64", crate::nanbox::i64_literal(*bits), None),
+            };
+        }
+        Slot::Cell(cell) => (user_address(cell), POINTER_TAG),
+        Slot::ImageString(record) => (user_address(record), STRING_TAG),
+    };
+    match mode {
+        PointerSlots::SplitHalves => (
             "{ i32, i32 }",
             format!(
-                "{{ i32 {}, i32 {} }}",
-                *bits as u32 as i32,
-                (*bits >> 32) as u32 as i32
+                "{{ i32 ptrtoint (ptr {address} to i32), i32 {} }}",
+                (tag >> 32) as u32 as i32
             ),
-            false,
+            None,
         ),
-        (Slot::Bits(bits), _) => ("i64", crate::nanbox::i64_literal(*bits), false),
-        (Slot::Cell(cell), PointerSlots::SplitHalves) => (
-            "{ i32, i32 }",
-            format!(
-                "{{ i32 ptrtoint (ptr {} to i32), i32 {} }}",
-                user_address(cell),
-                (POINTER_TAG >> 32) as u32 as i32
-            ),
-            false,
-        ),
-        (Slot::Cell(cell), PointerSlots::TaggedRelocation) => (
+        PointerSlots::TaggedRelocation => (
             "i64",
             format!(
-                "add (i64 ptrtoint (ptr {} to i64), i64 {})",
-                user_address(cell),
-                crate::nanbox::i64_literal(POINTER_TAG)
+                "add (i64 ptrtoint (ptr {address} to i64), i64 {})",
+                crate::nanbox::i64_literal(tag)
             ),
-            false,
+            None,
         ),
-        (Slot::Cell(cell), PointerSlots::TaggedAtStartup) => (
-            "i64",
-            format!("ptrtoint (ptr {} to i64)", user_address(cell)),
-            true,
-        ),
+        PointerSlots::TaggedAtStartup => {
+            ("i64", format!("ptrtoint (ptr {address} to i64)"), Some(tag))
+        }
     }
 }
 
@@ -164,10 +180,11 @@ pub(crate) fn emit_object_cell(
         let (ty, init, tag_at_startup) = slot_init(&triple, slot);
         types.push(ty);
         inits.push(format!("{ty} {init}"));
-        if tag_at_startup {
+        if let Some(tag) = tag_at_startup {
             fixups.push(TagFixup {
                 cell: name.to_string(),
                 offset: GC_HEADER_SIZE + header + 8 * index as u64,
+                tag,
             });
         }
     }
@@ -184,14 +201,64 @@ pub(crate) fn emit_object_cell(
     fixups
 }
 
-/// OR the pointer tag into each listed slot. Runs in `main` before any module
-/// initializer, on targets whose relocations cannot carry the tag.
+/// A canonical key list cell (WRT step 2): `GcHeader` + `ArrayHeader` + one
+/// slot per key, laid out as `js_array_alloc_canonical_keys` lays out a heap
+/// list with no attributes: length and capacity are the key count, `named`
+/// is null, the element kind words are zero. Each slot is the NaN-boxed
+/// pointer of a key's image string record (`records`, in key order).
+/// Returns the slots startup code must tag ([`emit_tag_fixups`]).
+pub(crate) fn emit_key_list_cell(
+    llmod: &mut LlModule,
+    name: &str,
+    records: &[String],
+) -> Vec<TagFixup> {
+    let triple = llmod.target_triple.clone();
+    let size = GC_HEADER_SIZE + ARRAY_HEADER_SIZE + 8 * records.len() as u64;
+    let ilp32 = crate::target_layout::target_is_ilp32(&triple);
+    // ILP32 keeps the element kind words at the same offsets with a pad word
+    // after `named`.
+    let (pad_ty, pad_init) = if ilp32 {
+        ("i32, ", "i32 0, ")
+    } else {
+        ("", "")
+    };
+    let mut fixups = Vec::new();
+    let mut types = Vec::new();
+    let mut inits = Vec::new();
+    for (index, record) in records.iter().enumerate() {
+        let (ty, init, tag_at_startup) = slot_init(&triple, &Slot::ImageString(record.clone()));
+        types.push(ty);
+        inits.push(format!("{ty} {init}"));
+        if let Some(tag) = tag_at_startup {
+            fixups.push(TagFixup {
+                cell: name.to_string(),
+                offset: GC_HEADER_SIZE + ARRAY_HEADER_SIZE + 8 * index as u64,
+                tag,
+            });
+        }
+    }
+    let count = records.len();
+    llmod.add_raw_global(format!(
+        "@{name} = internal global {{ i8, i8, i16, i32, i32, i32, ptr, {pad_ty}i32, i32, {{ {} }} }} \
+         {{ i8 {GC_TYPE_ARRAY}, i8 {KEY_LIST_FLAGS}, i16 0, i32 {size}, i32 {count}, i32 {count}, ptr null, {pad_init}i32 0, i32 0, {{ {} }} {{ {} }} }}, \
+         section \"{}\", align 8",
+        types.join(", "),
+        types.join(", "),
+        inits.join(", "),
+        section(&triple)
+    ));
+    fixups
+}
+
+/// OR each listed slot's tag in. Runs before any module initializer (in
+/// `main`, or a constructor of the unit that owns the cells), on targets
+/// whose relocations cannot carry the tag.
 pub(crate) fn emit_tag_fixups(blk: &mut LlBlock, fixups: &[TagFixup]) {
     for fixup in fixups {
         let offset = fixup.offset.to_string();
         let slot = blk.gep(I8, &format!("@{}", fixup.cell), &[(I64, offset.as_str())]);
         let raw = blk.load(I64, &slot);
-        let tagged = blk.or(I64, &raw, crate::nanbox::POINTER_TAG_I64);
+        let tagged = blk.or(I64, &raw, &crate::nanbox::i64_literal(fixup.tag));
         blk.store(I64, &tagged, &slot);
     }
 }

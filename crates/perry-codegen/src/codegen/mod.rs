@@ -334,6 +334,7 @@ mod string_pool;
 pub(crate) fn string_pool_image_pointer(entry: &crate::strings::StringEntry) -> String {
     string_pool::image_pointer(entry)
 }
+pub(crate) use string_pool::{emit_image_record, image_record_symbol};
 #[cfg(test)]
 mod testing_feature_gate_tests;
 #[cfg(test)]

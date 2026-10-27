@@ -94,6 +94,7 @@ use crate::StringHeader;
 
 mod static_seed;
 pub(crate) use static_seed::from_static_layout;
+pub(crate) use static_seed::link_image_list;
 
 /// Retain the image spelling of a confirmed equal key in its existing owner.
 /// This changes only a string's representation, never its value, position,

@@ -6573,7 +6573,7 @@ pub fn run_with_parse_cache(
         class_canonical_path,
         exported_object_literals,
         program_facts,
-        program_layouts,
+        std::sync::Arc::clone(&program_layouts),
         constructor_contracts,
         static_shape_ids,
         short_spread_method_candidates,
@@ -7402,15 +7402,15 @@ pub fn run_with_parse_cache(
         obj_fingerprints.push(None);
     }
 
-    // Design step 4: the static shape seed unit (see
-    // `perry_codegen::stubs::static_shape_seed_ll`). No seedable id = no unit;
-    // the runtime's seed hook then does nothing.
+    // Design step 4, WRT step 2: the static shape seed unit (see
+    // `perry_codegen::stubs::static_shape_seed_ll`), the seed table the
+    // entry's layout image names; empty when the program has no seedable id.
     let program_static_seeds: Vec<(u32, perry_codegen::BirthShape)> = program_static_seeds
         .into_inner()
         .unwrap_or_else(|e| e.into_inner())
         .into_iter()
         .collect();
-    if !program_static_seeds.is_empty() {
+    {
         if matches!(format, OutputFormat::Text) && verbose > 0 {
             eprintln!("  static shape seeds: {}", program_static_seeds.len());
         }
@@ -7418,6 +7418,8 @@ pub fn run_with_parse_cache(
             &program_static_seeds,
             &program_layout_ordinals,
             target.as_deref(),
+            &args.output_type,
+            &program_layouts,
         )?;
         let seed_path = object_output_dir.join("_perry_static_shape_seeds.o");
         fs::write(&seed_path, &seed_bytes)?;

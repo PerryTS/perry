@@ -259,7 +259,7 @@ pub(crate) fn image_colour_flags(bytes: &[u8]) -> u32 {
 }
 
 /// The static atom global of `key` (emitting it once per module).
-fn atom(
+pub(crate) fn atom(
     llmod: &mut LlModule,
     strings: &mut StringPool,
     emitted: &mut BTreeMap<String, String>,
@@ -679,6 +679,12 @@ fn module_literals(hir: &HirModule) -> Vec<Vec<String>> {
     }
     out.extend(lits.into_iter().filter_map(literal_keys));
     out
+}
+
+/// Install the program's key colouring on this thread, which [`atom`] reads:
+/// the static seed unit emits atoms outside any module's codegen.
+pub(crate) fn set_colours(layouts: &ProgramLayouts) {
+    COLOURS.with(|c| *c.borrow_mut() = layouts.colored.clone());
 }
 
 /// Whether this compile emits layout descriptors at all (executables only:
