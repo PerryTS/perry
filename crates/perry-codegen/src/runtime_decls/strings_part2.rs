@@ -851,9 +851,12 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
         module.declare_function("js_eh_handle_height", I64, &[]);
     }
     if module.target_triple.starts_with("wasm32") {
-        module.declare_function("js_try_push", PTR, &[PTR]);
-        module.declare_function("setjmp", I32, &[PTR]);
-        module.declare_function("js_try_end", VOID, &[]);
+        module.declare_function("js_wasm_eh_checkpoint_save", VOID, &[PTR]);
+        module.declare_function("js_wasm_eh_pad_enter", VOID, &[PTR]);
+        module.declare_function("js_wasm_eh_is_perry", I1, &[PTR]);
+        module.declare_function("js_wasm_eh_exit_uncaught", VOID, &[]);
+        module.declare_function("llvm.wasm.get.exception", PTR, &["token"]);
+        module.declare_function("llvm.wasm.rethrow", VOID, &[]);
     }
     module.declare_personality();
     module.declare_function("js_get_exception", DOUBLE, &[]);

@@ -200,6 +200,13 @@ pub(crate) fn resolution_stack_unwind_to(sp: usize) {
     });
 }
 
+#[cfg(any(test, target_os = "wasi"))]
+pub(crate) fn resolution_stack_restore_depth(depth: usize) {
+    PROTOTYPE_RESOLUTION_STACK.with(|stack| {
+        stack.borrow_mut().restore_depth(depth);
+    });
+}
+
 pub(crate) fn resolution_stack_check_marks(sp: usize) {
     PROTOTYPE_RESOLUTION_STACK.with(|stack| {
         crate::exception::marks::check_marks(stack.borrow().marks(), sp, "prototype_resolution")

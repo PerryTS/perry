@@ -80,7 +80,7 @@ pub(crate) use shadow_stack::SHADOW;
 #[cfg(any(test, not(perry_native_stack_maps)))]
 pub(crate) use shadow_stack::{frame_root_restore, frame_root_savepoint};
 // Only the WASI exception handlers name the savepoint type.
-#[cfg(target_os = "wasi")]
+#[cfg(any(test, target_os = "wasi"))]
 pub(crate) use shadow_stack::FrameRootSavepoint;
 #[cfg(any(test, not(perry_native_stack_maps)))]
 pub use shadow_stack::{
@@ -96,7 +96,7 @@ pub(crate) use temp_roots::temp_root_len;
 pub(crate) use temp_roots::temp_root_push_at;
 /// #7469: consumed by `crate::tls_hot::fill`, which lives outside `gc`.
 pub(crate) use temp_roots::temp_roots_hot_addr;
-#[cfg(target_os = "wasi")]
+#[cfg(any(test, target_os = "wasi"))]
 pub(crate) use temp_roots::temp_roots_truncate_to;
 pub use temp_roots::{
     js_array_push_f64_temp_rooted, js_gc_temp_root_get, js_gc_temp_root_push, js_gc_temp_root_set,

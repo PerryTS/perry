@@ -52,7 +52,6 @@ pub(super) fn link_args(
     ];
     args.extend(objects.iter().map(|o| o.display().to_string()));
     args.push(runtime.display().to_string());
-    args.push("-lsetjmp".to_string());
     if !keep_symbols {
         // Compression changes instruction offsets and cannot preserve DWARF.
         args.extend([
@@ -130,7 +129,7 @@ pub(crate) fn archive_library(
         "entry_symbol": "perry_module_init",
         "target": "wasi",
         "link_archives": [{"role": "runtime", "path": runtime.canonicalize()?.display().to_string()}],
-        "system_libraries": ["setjmp"]
+        "system_libraries": []
     });
     std::fs::write(
         output.with_extension("linkdeps.json"),

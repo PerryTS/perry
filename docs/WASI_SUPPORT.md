@@ -121,10 +121,13 @@ skips relocation compression and wasm-opt, which change debug offsets.
   catchable error.
 - UTC date operations. Local-time operations use the existing UTC fallback.
 - Nested exceptions, catch/finally/rethrow, runtime-originated errors and
-  errors crossing promise callbacks. Generated try blocks and the C runtime
-  use LLVM's wasm SjLj lowering, modern wasm EH, and wasi-libc `libsetjmp`.
-  Unwinding restores the GC shadow stack and async context. Locals visible
-  after setjmp stay in volatile stack slots through optimization.
+  errors crossing promise callbacks. Generated regions use wasm-native
+  `invoke`/`catchswitch`/`catchpad` lowering and the standard tag-0 ABI, with a
+  Perry exception-class check that forwards foreign exceptions. Each lexical
+  boundary owns a depth-only checkpoint restoring the GC shadow stack,
+  runtime handles, and managed guards. Runtime callbacks use the same wasm
+  catch shape; an outer command boundary reports uncaught throws. Generated
+  functions contain no `setjmp`, and linking does not require `libsetjmp`.
 - Perry's collector, including moving collections. GC slot descriptors
   distinguish native 32-bit pointers from 64-bit tagged values, including
   object metadata, promises, errors, regexps, buffer owners and lazy JSON.

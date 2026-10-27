@@ -355,7 +355,11 @@ impl LlModule {
     /// varargs — the symbol is only ever *named* on define lines and in the
     /// unwind tables; generated code never calls it.
     pub fn declare_personality(&mut self) {
-        let name = "perry_eh_personality";
+        let name = if self.target_triple.starts_with("wasm32") {
+            "__gxx_wasm_personality_v0"
+        } else {
+            "perry_eh_personality"
+        };
         if self.declared_names.insert(name.to_string()) {
             self.declarations
                 .push((name.to_string(), format!("declare i32 @{name}(...)")));

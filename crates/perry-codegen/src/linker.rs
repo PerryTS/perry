@@ -470,8 +470,9 @@ fn build_clang_compile_plan(
         for args in [&mut clang_args, &mut analysis_clang_args] {
             args.extend(
                 [
+                    "-mexception-handling",
                     "-mllvm",
-                    "-wasm-enable-sjlj",
+                    "-wasm-enable-eh",
                     "-mllvm",
                     "-wasm-use-legacy-eh=false",
                 ]

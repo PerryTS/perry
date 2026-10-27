@@ -1,0 +1,8 @@
+derived 3000
+new.target true
+private 7
+repeated catches 10000 10
+inner callback caught
+outer callback caught
+callback context continued
+exit 0

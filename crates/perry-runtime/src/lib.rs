@@ -555,7 +555,7 @@ pub(crate) mod stdlib_pump {
     }
 
     /// The re-entrant stdlib-pump depth.
-    #[cfg(test)]
+    #[cfg(any(test, target_os = "wasi"))]
     pub(crate) fn pump_depth() -> u32 {
         PUMP_DEPTH.with(|depth| depth.borrow().len() as u32)
     }
@@ -570,6 +570,19 @@ pub(crate) mod stdlib_pump {
         let emptied = PUMP_DEPTH.with(|depth| {
             let mut depth = depth.borrow_mut();
             depth.unwind_to(sp) > 0 && depth.is_empty()
+        });
+        if emptied {
+            end_outer_pump();
+        }
+    }
+
+    #[cfg(any(test, target_os = "wasi"))]
+    pub(crate) fn pump_depth_restore_depth(keep: usize) {
+        let emptied = PUMP_DEPTH.with(|depth| {
+            let mut depth = depth.borrow_mut();
+            let popped = depth.len() > keep;
+            depth.restore_depth(keep);
+            popped && depth.is_empty()
         });
         if emptied {
             end_outer_pump();

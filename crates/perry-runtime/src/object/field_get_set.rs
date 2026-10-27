@@ -333,9 +333,9 @@ pub(crate) use ic_miss::get_field_miss;
 pub(crate) use ic_miss::intrinsic_private_add;
 #[cfg(feature = "regex-engine")]
 pub(crate) use ic_miss::intrinsic_private_set;
-#[cfg(test)]
+#[cfg(any(test, target_os = "wasi"))]
 pub(crate) use ic_miss::private_lexical_brand_depth;
-#[cfg(test)]
+#[cfg(any(test, target_os = "wasi"))]
 pub(crate) use ic_miss::private_member_access_hints_depth;
 pub(crate) use ic_miss::{
     bind_primitive_proto_method_static, cannot_be_private_member_name, class_evaluation_of,
@@ -458,3 +458,8 @@ mod buffer_ic_miss_tests {
 
 #[cfg(any(test, feature = "regex-engine"))]
 pub(crate) mod runtime_store_site;
+
+#[cfg(any(test, target_os = "wasi"))]
+pub(crate) use ic_miss::{
+    private_lexical_brand_restore_depth, private_member_access_hints_restore_depth,
+};

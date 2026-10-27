@@ -305,6 +305,14 @@ impl<T> CatchStack<T> {
         popped
     }
 
+    /// Restore a live prefix captured by a wasm lexical handler. Never
+    /// resurrect entries already closed by normal control flow.
+    #[cfg(any(test, target_os = "wasi"))]
+    pub(crate) fn restore_depth(&mut self, depth: usize) {
+        debug_assert!(depth <= self.entries.len(), "invalid wasm EH prefix");
+        self.entries.truncate(depth);
+    }
+
     /// The marks, bottom to top (`PERRY_EH_CHECK`).
     pub(crate) fn marks(&self) -> Vec<usize> {
         self.entries.iter().map(|&(mark, _)| mark).collect()
@@ -355,6 +363,17 @@ macro_rules! catch_stacks {
             if eh_check_enabled() {
                 $( $(#[$attr])* $check(sp); )*
             }
+        }
+
+        #[cfg(all(test, not(windows)))]
+        mod wasm_checkpoint_tests {
+            use super::tests;
+            $($(#[$attr])*
+                #[test]
+                fn $name() {
+                    tests::assert_wasm_depth_restore(stringify!($name), tests::$name::depth, tests::$name::push);
+                }
+            )*
         }
 
         #[cfg(test)]

@@ -513,6 +513,13 @@ pub(crate) fn private_lexical_brand_unwind_to(sp: usize) {
     });
 }
 
+#[cfg(any(test, target_os = "wasi"))]
+pub(crate) fn private_lexical_brand_restore_depth(depth: usize) {
+    PRIVATE_LEXICAL_BRAND_STACK.with(|stack| {
+        stack.borrow_mut().restore_depth(depth);
+    });
+}
+
 pub(crate) fn private_lexical_brand_check_marks(sp: usize) {
     PRIVATE_LEXICAL_BRAND_STACK.with(|stack| {
         crate::exception::marks::check_marks(stack.borrow().marks(), sp, "private_lexical_brand")
