@@ -14,8 +14,8 @@ interface api {
 world plugin { import api; export run: async func(); }
 "#;
 
-// Deliberately exercise code below the resource profile guard. There is no
-// public or experimental entry point which bypasses that guard.
+// Exercise the actual experimental generator, while ensuring the public CLI
+// still rejects async output. No resource-specific guard is bypassed here.
 fn custody_files(source: &str) -> BTreeMap<String, Vec<u8>> {
     custody_world_files(source, None)
 }
@@ -24,20 +24,14 @@ fn custody_world_files(source: &str, selected: Option<&str>) -> BTreeMap<String,
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("world.wit");
     std::fs::write(&path, source).unwrap();
-    assert!(experimental_async_guest(&path, selected)
+    assert!(canonical_guest(&path, selected)
         .unwrap_err()
         .to_string()
-        .contains("resources"));
-    let mut resolve = Resolve::default();
-    let (package, _) = resolve.push_path(&path).unwrap();
-    let id = resolve.select_world(&[package], selected).unwrap();
-    resolve.generate_nominal_type_ids(id);
-    let world = crate::resolve::convert(&resolve, id).unwrap();
-    let anchor = add_wake_anchor(&mut resolve, id).unwrap();
-    generate_resolved(resolve, id, world, Some(anchor)).unwrap()
+        .contains("async guest functions"));
+    experimental_async_guest(&path, selected).unwrap()
 }
 
-/// Produce a real resource-bearing guest below the retained shipping guard.
+/// Produce a real resource-bearing guest through the experimental entry point.
 /// The external acceptance harness compiles/executes it with matching tools;
 /// generating these files alone is never a passing component qualification.
 #[test]
@@ -75,7 +69,7 @@ fn resource_fixture(name: &str, selected: Option<&str>) {
 }
 
 #[test]
-fn guarded_async_resource_cleanup_compiles_with_imported_and_local_handles() {
+fn experimental_async_resource_cleanup_compiles_with_imported_and_local_handles() {
     for source in [
         CUSTODY_WORLD.to_string(),
         // An exported interface retains imported resource identity, while its

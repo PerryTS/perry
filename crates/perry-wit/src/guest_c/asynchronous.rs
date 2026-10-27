@@ -4,22 +4,6 @@ mod imports;
 mod tests;
 use super::*;
 
-pub(super) fn check_profile(world: &crate::World) -> Result<()> {
-    ensure!(
-        world
-            .imports
-            .iter()
-            .chain(&world.exports)
-            .all(|i| i.resources.is_empty())
-            && world
-                .types
-                .values()
-                .all(|d| !matches!(d.ty, crate::Type::Resource)),
-        "experimental async exports do not yet support resources"
-    );
-    Ok(())
-}
-
 pub(super) fn add_wake_anchor(resolve: &mut Resolve, id: WorldId) -> Result<String> {
     let mut n = 0;
     let name = loop {

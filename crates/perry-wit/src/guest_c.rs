@@ -21,9 +21,9 @@ pub fn canonical_guest(path: &Path, selected: Option<&str>) -> Result<BTreeMap<S
     generate_guest(path, selected, false)
 }
 
-/// Internal acceptance probe for generated async functions. This deliberately
-/// does not enable --guest-c async output: resources, cooperative cancellation
-/// and async values need qualification before the public guard can be removed.
+/// Experimental async generation, including the Linux-qualified resource
+/// ownership/cancellation profile. Public --guest-c async output and guest
+/// future/stream values remain guarded pending their complete qualification.
 #[doc(hidden)]
 pub fn experimental_async_guest(
     path: &Path,
@@ -62,7 +62,6 @@ fn generate_guest(
         "async guest functions require the P3 rooted-frame adapter"
     );
     let anchor = if experimental {
-        asynchronous::check_profile(&world)?;
         Some(asynchronous::add_wake_anchor(&mut resolve, id)?)
     } else {
         None
