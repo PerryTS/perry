@@ -257,7 +257,8 @@ mod tests {
         ] {
             let mut ctx = context();
             detect(&mut ctx, source, "bun.ts");
-            assert!(ctx.uses_global_json, "{source}");
+            assert!(ctx.uses_json_engine, "{source}");
+            assert!(!ctx.uses_global_json, "{source}");
         }
         for source in [
             r#"Bun.file(process.argv[2]).text();"#,
@@ -265,6 +266,7 @@ mod tests {
         ] {
             let mut ctx = context();
             detect(&mut ctx, source, "bun.ts");
+            assert!(!ctx.uses_json_engine, "{source}");
             assert!(!ctx.uses_global_json, "{source}");
         }
     }
@@ -279,7 +281,8 @@ mod tests {
             for i in order {
                 detect(&mut ctx, sources[i], &format!("bun{i}.ts"));
             }
-            assert!(ctx.uses_global_json);
+            assert!(ctx.uses_json_engine);
+            assert!(!ctx.uses_global_json);
         }
     }
 }
