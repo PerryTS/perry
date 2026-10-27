@@ -1293,9 +1293,9 @@ impl Model {
     /// DECISIONS 210: unknown code holds function `t` (published through
     /// its contract): it reads and writes any own property but `prototype`
     /// (that one is the published layout's chain, `escape`). Each named
-    /// property leaves, now and when made later (`Model::field`); what a
-    /// computed key stores leaves; a read under an unknown key reads what
-    /// unknown code wrote; its accessors run as for any escaped object.
+    /// property leaves; what a computed key stores leaves; a read under an
+    /// unknown key reads what unknown code wrote; its accessors run as for
+    /// any escaped object.
     pub(crate) fn escape_props(&mut self, t: Tok, reason: u32) {
         if self.props_escaped.insert(t, reason).is_some() {
             return;

@@ -1498,7 +1498,6 @@ pub struct Model {
     /// function and result node. The instance's layout is published to them
     /// (`Gen::contract_check`, `fn_inst_published`).
     pub own_ctor_runs: Vec<(FnIdx, NodeId)>,
-    pub ctor_run_fns: crate::pts::FxHashSet<FnIdx>,
     pub fn_inst_published: crate::pts::FxHashSet<TmplId>,
     /// DECISIONS 210: stand-ins of other units' functions this unit used as
     /// objects beyond their contract (a store into one, its `prototype`
@@ -1506,8 +1505,8 @@ pub struct Model {
     pub fn_touched: crate::pts::FxHashSet<Tok>,
     /// DECISIONS 210: this unit's contract functions published to other
     /// units (`Model::escape_props`): every own property but `prototype`
-    /// left with the function (unknown code reads and writes them), so a
-    /// field made later leaves too; the reason it left.
+    /// left with the function (unknown code reads and writes them); the
+    /// reason it left.
     pub props_escaped: FxHashMap<Tok, u32>,
     /// Solving one unit (`FactsConfig::unit`): what escapes reaches other
     /// units' code, which the whole program sees.

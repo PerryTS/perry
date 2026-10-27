@@ -899,12 +899,9 @@ impl Model {
     /// DECISIONS 165: a method no unit runs (`Gen::published_args`), once
     /// the solve knows it is a method of a published class
     /// (`published_this`): its parameter markers stand for no value.
-    /// DECISIONS 210: or a constructor function other units construct
-    /// (`Gen::published_ctors`): this unit constructs it with what they
-    /// pass, and a unit calling it publishes that run as a method's
-    /// (`ProgramFacts::method_runs_out`).
     pub(crate) fn method_described(&self, f: FnIdx) -> Option<&Vec<bool>> {
-        (self.published_this.contains_key(&f) || self.ctor_run_fns.contains(&f))
+        self.published_this
+            .contains_key(&f)
             .then(|| self.method_described.get(&f))
             .flatten()
     }

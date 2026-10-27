@@ -228,10 +228,7 @@ impl<'a> Gen<'a> {
             self.m.cons(fnode, Cons::New { call });
             match broken {
                 true => self.m.sink_node(ret, rb),
-                false => {
-                    self.m.own_ctor_runs.push((f, ret));
-                    self.m.ctor_run_fns.insert(f);
-                }
+                false => self.m.own_ctor_runs.push((f, ret)),
             }
         }
     }

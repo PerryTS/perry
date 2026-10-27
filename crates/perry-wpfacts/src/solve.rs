@@ -462,13 +462,6 @@ impl Model {
         }
         let all = self.all_fields(t);
         self.edge(n, all);
-        // DECISIONS 210: a property of a published function made after its
-        // properties left (`escape_props`) leaves too; its `prototype` stays.
-        if let Some(&r) = self.props_escaped.get(&t) {
-            if self.atoms[a as usize] != "prototype" {
-                self.escape_prop(t, n, r);
-            }
-        }
         // A key gained after a spread of `t`: the targets get it too.
         if let Some(v) = self.spread_to.get(&t).cloned() {
             for (d, site) in v {

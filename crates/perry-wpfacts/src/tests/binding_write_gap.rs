@@ -395,3 +395,70 @@ fn a_store_into_another_units_constructor_function_prototype_breaks_it() {
         w.dump_text()
     );
 }
+
+/// Per unit never stronger than whole program on `new ..:name`, the layout
+/// stays described (no census report against it), and field `key` carries
+/// the kinds the whole program finds.
+fn field_alike(h: &[(String, Module)], name: &str, key: &str) {
+    let (u, w) = (run(h, true), run(h, false));
+    let (tu, tw) = (fninst(&u, name), fninst(&w, name));
+    let diff = stronger(tu, tw);
+    assert!(
+        diff.is_empty(),
+        "per unit stronger: {diff:?}\nper unit:\n{}\nwhole program:\n{}",
+        u.dump_text(),
+        w.dump_text()
+    );
+    let kind = |pf: &ProgramFacts, t: &crate::TemplateFacts| {
+        t.fields
+            .iter()
+            .find(|f| f.key == key)
+            .map(|f| kind_text(&f.kind))
+            .unwrap_or_else(|| panic!("{}.{key}:\n{}", t.display, pf.dump_text()))
+    };
+    assert_eq!(
+        kind(&u, tu),
+        kind(&w, tw),
+        "{key} per unit as whole program:\nper unit:\n{}\nwhole program:\n{}",
+        u.dump_text(),
+        w.dump_text()
+    );
+}
+
+#[test]
+fn an_instance_handed_back_to_its_owner_is_the_owners_own_layout() {
+    // Another unit (`hold`) constructs the owner's function and writes the
+    // instance into a module binding the owner's unit (`make`'s) reads: the
+    // binding's value contract describes the `new Reply` layout, which in
+    // its owner is its own template (`Gen::own_layout`), whose facts this
+    // solve makes. `bump`'s store `n` is a writer of the owner's layout, as
+    // in the whole program; into a stand-in of its own layout it would be
+    // a census report against the layout.
+    let a = r#"
+        export var rec: any;
+        export var held: any;
+        function make() {
+            function Reply(this: any, res: any) { this.raw = res; }
+            rec = { exports: Reply, bump: function () { held.n = 1; } };
+        }
+        function hold() {
+            held = new rec.exports(2);
+            rec.bump();
+        }
+        make();
+        make();
+        hold();
+    "#;
+    let main = r#"
+        import { held } from "./a";
+        console.log(held.raw);
+    "#;
+    let h = hirs(&[("a", a), ("main", main)]);
+    let u = run(&h, true);
+    assert!(
+        !u.broken.iter().any(|d| d.contains(":Reply")),
+        "the owner's store into its own layout breaks nothing:\n{}",
+        u.dump_text()
+    );
+    field_alike(&h, "Reply", "n");
+}
