@@ -165,25 +165,28 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
         // element kind word carries over exactly.
         (*new_ptr).ek_prefix = (*arr).ek_prefix;
         (*new_ptr).ek_kind = (*arr).ek_kind;
-        crate::gc::runtime_write_barrier_slot(
-            new_ptr as usize,
-            std::ptr::addr_of_mut!((*new_ptr).named) as usize,
-            crate::value::js_nanbox_pointer((*new_ptr).named as i64).to_bits(),
-        );
+        // A null named layout contributes no old-to-young edge. The
+        // fresh replacement needs this barrier only when that edge exists.
+        if !(*new_ptr).named.is_null() {
+            crate::gc::runtime_write_barrier_slot(
+                new_ptr as usize,
+                std::ptr::addr_of_mut!((*new_ptr).named) as usize,
+                crate::value::js_nanbox_pointer((*new_ptr).named as i64).to_bits(),
+            );
+        }
         // Copy the live dense prefix; sparse indices remain in the named layout.
         let used = (*arr).length.min(old_capacity) as usize;
         // GC_STORE_AUDIT(BARRIERED): growth normalizes the live backing
         // prefix, transfers its layout, and replays its write barriers below.
         ptr::copy_nonoverlapping(array_elements_ptr(arr), array_elements_ptr(new_ptr), used);
-        // Hole-fill unused slack so the from-space scan sees no stale pointers.
-        {
-            let new_elems =
-                crate::array::array_elements_ptr(new_ptr as *const ArrayHeader) as *mut u64;
-            for i in used..new_capacity as usize {
-                // GC_STORE_AUDIT(INIT): unpublished slack contains only
-                // TAG_HOLE; the copied live prefix replays barriers below.
-                ptr::write(new_elems.add(i), crate::value::TAG_HOLE);
-            }
+        // A sparse logical length can make the barrier replay below inspect
+        // slots past `used`: initialize those now. For a dense source every
+        // subsequent read is in the copied live prefix. Its slack can wait
+        // until the old backing has become a forwarding stub, avoiding a
+        // resident high-water containing both the dead backing and new slack.
+        let sparse = (*arr).length as usize > used;
+        if sparse {
+            initialize_growth_slack(new_ptr, used, new_capacity as usize);
         }
         let old_header =
             (arr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
@@ -259,7 +262,34 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
             arr as usize
         );
 
+        // A retained stub needs its GC header and first forwarding word, not
+        // the old elements/named slots. Keep its address, extent and allocator
+        // ownership intact; return only complete interior payload pages.
+        // GENERATION_PAGE_SIZE is the minimum supported OS page granularity,
+        // not a workload threshold. Smaller ranges contain no releasable page
+        // and need no OS page-size query during small-array startup work.
+        let stub_bytes = std::mem::size_of::<u64>();
+        if old_size - stub_bytes >= crate::arena::GENERATION_PAGE_SIZE {
+            crate::arena::discard_dead_payload_pages(
+                (arr as *mut u8).add(stub_bytes),
+                old_size - stub_bytes,
+            );
+        }
+        if !sparse {
+            initialize_growth_slack(new_ptr, used, new_capacity as usize);
+        }
+
         new_ptr
+    }
+}
+
+/// No safepoint or user code. The replacement is unpublished and a dense
+/// source's full logical length was copied before retiring its old backing.
+unsafe fn initialize_growth_slack(arr: *mut ArrayHeader, used: usize, capacity: usize) {
+    let elements = array_elements_ptr(arr) as *mut u64;
+    for i in used..capacity {
+        // GC_STORE_AUDIT(INIT): unpublished slack contains only TAG_HOLE.
+        elements.add(i).write(crate::value::TAG_HOLE);
     }
 }
 

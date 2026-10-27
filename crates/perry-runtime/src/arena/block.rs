@@ -212,6 +212,7 @@ fn block_pool_cap_bytes() -> usize {
 #[cfg_attr(target_vendor = "apple", allow(dead_code))]
 #[path = "block/decommit.rs"]
 mod decommit;
+pub(crate) use decommit::release as discard_dead_payload_pages;
 
 /// Offer a released block to the pool. Returns false (caller deallocs) when
 /// the pool is full or the block is null.

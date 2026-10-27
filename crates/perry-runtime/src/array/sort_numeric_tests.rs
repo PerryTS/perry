@@ -40,15 +40,7 @@ fn numeric_sort_admits_integer_domain_and_both_directions() {
 #[test]
 fn numeric_sort_refuses_unsupported_keys_without_writing() {
     let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    for invalid in [
-        f64::NAN,
-        -0.0,
-        f64::INFINITY,
-        f64::NEG_INFINITY,
-        0.25,
-        i32::MAX as f64 + 1.0,
-        i32::MIN as f64 - 1.0,
-    ] {
+    for invalid in [f64::NAN, -0.0] {
         let values = [3.0, invalid, 1.0];
         let a = array(&values);
         unsafe {
@@ -101,7 +93,8 @@ fn numeric_sort_radix_matches_reference_for_duplicate_signed_keys() {
     }
     let mut expected = keys.clone();
     expected.sort();
-    radix_keys(&mut keys, &mut counts);
+    let mut scratch = vec![0; keys.len()];
+    radix::radix(&mut keys, &mut scratch, &mut counts, u64::from);
     assert_eq!(keys, expected);
 }
 
@@ -119,5 +112,72 @@ fn numeric_sort_admits_dense_numbers_without_a_raw_f64_brand() {
     }
     for (i, value) in [1.0, 2.0, 3.0, i32::MAX as f64].into_iter().enumerate() {
         assert_eq!(js_array_get_f64(a, i as u32), value);
+    }
+}
+
+#[test]
+fn numeric_sort_orders_float_domains_exactly_in_both_directions() {
+    let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let mut values = vec![
+        f64::NEG_INFINITY,
+        f64::INFINITY,
+        f64::MIN,
+        f64::MAX,
+        f64::MIN_POSITIVE,
+        f64::from_bits(1),
+        -f64::from_bits(1),
+        -0.25,
+        0.25,
+        0.0,
+        4294967296.0,
+        -4294967296.0,
+    ];
+    let mut seed = 73u64;
+    for _ in 0..4096 {
+        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+        let value = f64::from_bits(seed);
+        if value.is_finite() && value != 0.0 {
+            values.push(value);
+        }
+    }
+    for descending in [false, true] {
+        let a = array(&values);
+        let mut expected = values.clone();
+        expected.sort_by(|a, b| {
+            if descending {
+                b.partial_cmp(a).unwrap()
+            } else {
+                a.partial_cmp(b).unwrap()
+            }
+        });
+        unsafe {
+            assert!(try_sort_numeric(a, descending));
+        }
+        for (i, value) in expected.iter().enumerate() {
+            assert_eq!(js_array_get_f64(a, i as u32).to_bits(), value.to_bits());
+        }
+    }
+}
+
+#[test]
+fn packed_numeric_sort_handles_each_digit_parity_and_preserves_capacity() {
+    let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    for values in [
+        vec![3., 1., 2., 1.],
+        vec![65536., 0., 256., 1.],
+        vec![i32::MIN as f64, i32::MAX as f64, 0.],
+        vec![7.; 33],
+    ] {
+        let a = array(&values);
+        let capacity = unsafe { (*a).capacity };
+        unsafe {
+            assert!(try_sort_numeric(a, false));
+            assert_eq!((*a).capacity, capacity);
+        }
+        let mut expected = values;
+        expected.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        for (i, value) in expected.iter().enumerate() {
+            assert_eq!(js_array_get_f64(a, i as u32), *value);
+        }
     }
 }

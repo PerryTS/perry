@@ -74,7 +74,7 @@ mod shift_queue_tests;
 mod small_capacity_tests;
 mod sort;
 mod sort_numeric;
-pub use sort_numeric::js_array_sort_numeric_order;
+pub use sort_numeric::{js_array_sort_key_order, js_array_sort_numeric_order};
 mod species;
 mod splice_slice;
 mod storage;

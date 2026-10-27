@@ -49,3 +49,26 @@ console.log('override', replaced.sort((a,b) => a-b).join(','));
 
 const parsed: number[] = JSON.parse('[3,1,2]');
 console.log('lazy JSON', parsed.sort((a,b) => a-b).join(','));
+
+const fractional = [Number.MIN_VALUE, -Number.MIN_VALUE, 1.25, -3.75, Number.MAX_VALUE, -Number.MAX_VALUE, Infinity, -Infinity, 4294967296, 0, 1.25];
+console.log('floats up', fractional.sort((a,b) => a-b).join(','));
+console.log('floats down', fractional.sort((a,b) => b-a).join(','));
+const ranks = [{rank:0.25,id:'a'}, {rank:-0,id:'b'}, {rank:0,id:'c'}, {rank:Infinity,id:'d'}, {rank:0.25,id:'e'}, {rank:-Infinity,id:'f'}];
+console.log('keys up', ranks.sort((a,b) => a.rank-b.rank).map(x => x.id).join(','));
+console.log('keys down', ranks.sort((a,b) => b.rank-a.rank).map(x => x.id).join(','));
+let keyReads = 0;
+const accessedKeys = [{get rank(){keyReads++;return 2;},id:'a'}, {rank:1,id:'b'}, {rank:2,id:'c'}];
+console.log('getter keys', accessedKeys.sort((a,b) => a.rank-b.rank).map(x => x.id).join(','), keyReads > 0);
+let proxyKeyReads = 0;
+const proxiedKeys = [new Proxy({rank:2,id:'a'}, {get(t,k,r){if(k==='rank')proxyKeyReads++;return Reflect.get(t,k,r);}}), {rank:1,id:'b'}];
+console.log('proxy keys', proxiedKeys.sort((a,b) => a.rank-b.rank).map(x => x.id).join(','), proxyKeyReads > 0);
+let keyCoercions = 0;
+const coercingKeys = [{rank:{valueOf(){keyCoercions++;return 2;}},id:'a'}, {rank:1,id:'b'}];
+console.log('coercing keys', coercingKeys.sort((a:any,b:any) => a.rank-b.rank).map(x => x.id).join(','), keyCoercions > 0);
+const manyKeys: {rank:number,id:number}[] = [];
+for(let i=4095;i>=0;i--) manyKeys.push({rank:(i%23)+0.5,id:i});
+manyKeys.sort((a,b) => a.rank-b.rank);
+const pressure: any[] = []; for(let i=0;i<4096;i++)pressure.push({i,data:[i,i+1]});
+let stableKeys = true;
+for(let i=1;i<manyKeys.length;i++) if(manyKeys[i-1].rank===manyKeys[i].rank && manyKeys[i-1].id<manyKeys[i].id)stableKeys=false;
+console.log('key gc', manyKeys[0].rank, manyKeys[manyKeys.length-1].rank, stableKeys);

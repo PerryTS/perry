@@ -265,6 +265,7 @@ js_array_some_captureless	f64	ptr,ptr
 js_array_sort_default	ptr	ptr
 js_array_sort_with_comparator	ptr	ptr,ptr
 js_array_sort_numeric_order	ptr	ptr,ptr,i32
+js_array_sort_key_order	ptr	ptr,ptr,i32,f64
 js_array_splice	ptr	ptr,i32s,i32s,ptr,i32u,ptr
 js_array_splice_delete_count	i32s	f64
 js_array_spread_append	ptr	ptr,f64

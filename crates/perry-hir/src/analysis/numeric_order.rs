@@ -2,17 +2,19 @@
 //! consumer. Parameter annotations alone never certify the array's values.
 use crate::{BinaryOp, Expr, Stmt};
 
-/// Closed numeric ordering with identity keys. Field projections require a
-/// separate data-property/layout proof and deliberately have no certificate.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Conditional ordering: the runtime must prove primitive numeric values or
+/// plain own numeric data properties before eliding any callback evaluation.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum NumericOrder {
     Ascending,
     Descending,
+    Keyed { property: String, descending: bool },
 }
 
 /// Prove the callback has no observable work for admitted primitive numbers.
 /// The whole body must be a numeric difference of the two parameters: no
-/// calls, coercions, property reads, captures, defaults, mutation or throws.
+/// calls, captures, defaults or mutation. Identical one-level property reads
+/// are conditional on the consumer proving effect-free own data slots.
 /// Keeping this certificate in HIR makes selection independent of JS/TS
 /// annotations, source spelling, benchmark names and the callback's code ABI.
 pub fn pure_numeric_order(callback: &Expr) -> Option<NumericOrder> {
@@ -55,15 +57,35 @@ pub fn pure_numeric_order(callback: &Expr) -> Option<NumericOrder> {
     else {
         return None;
     };
-    let (Expr::LocalGet(a), Expr::LocalGet(b)) = (left.as_ref(), right.as_ref()) else {
+    let projection = |expr: &Expr| match expr {
+        Expr::LocalGet(id) => Some((*id, None)),
+        Expr::PropertyGet {
+            object, property, ..
+        } => match object.as_ref() {
+            Expr::LocalGet(id) => Some((*id, Some(property.clone()))),
+            _ => None,
+        },
+        _ => None,
+    };
+    let (a, key_a) = projection(left)?;
+    let (b, key_b) = projection(right)?;
+    if key_a != key_b {
+        return None;
+    }
+    let descending = if a == params[0].id && b == params[1].id {
+        false
+    } else if a == params[1].id && b == params[0].id {
+        true
+    } else {
         return None;
     };
-    if *a == params[0].id && *b == params[1].id {
-        Some(NumericOrder::Ascending)
-    } else if *a == params[1].id && *b == params[0].id {
-        Some(NumericOrder::Descending)
-    } else {
-        None
+    match key_a {
+        Some(property) => Some(NumericOrder::Keyed {
+            property,
+            descending,
+        }),
+        None if descending => Some(NumericOrder::Descending),
+        None => Some(NumericOrder::Ascending),
     }
 }
 
@@ -72,7 +94,7 @@ mod tests {
     use super::*;
     use crate::{types::Type, Param};
 
-    fn callback() -> Expr {
+    pub(super) fn callback() -> Expr {
         Expr::Closure {
             func_id: 1,
             params: [17, 23]
@@ -154,5 +176,43 @@ mod tests {
         }
         assert_eq!(pure_numeric_order(&c), None);
         assert_eq!(pure_numeric_order(&Expr::LocalGet(1)), None);
+    }
+}
+
+#[cfg(test)]
+mod projection_tests {
+    use super::*;
+    #[test]
+    fn same_property_order_is_conditional_but_different_or_effectful_keys_are_refused() {
+        let mut callback = super::tests::callback();
+        if let Expr::Closure { body, .. } = &mut callback {
+            if let Stmt::Return(Some(Expr::Binary { left, right, .. })) = &mut body[0] {
+                *left = Box::new(Expr::PropertyGet {
+                    byte_offset: 0,
+                    object: Box::new(Expr::LocalGet(17)),
+                    property: "score".into(),
+                });
+                *right = Box::new(Expr::PropertyGet {
+                    byte_offset: 0,
+                    object: Box::new(Expr::LocalGet(23)),
+                    property: "score".into(),
+                });
+            }
+        }
+        assert_eq!(
+            pure_numeric_order(&callback),
+            Some(NumericOrder::Keyed {
+                property: "score".into(),
+                descending: false
+            })
+        );
+        if let Expr::Closure { body, .. } = &mut callback {
+            if let Stmt::Return(Some(Expr::Binary { right, .. })) = &mut body[0] {
+                if let Expr::PropertyGet { property, .. } = right.as_mut() {
+                    *property = "other".into();
+                }
+            }
+        }
+        assert_eq!(pure_numeric_order(&callback), None);
     }
 }

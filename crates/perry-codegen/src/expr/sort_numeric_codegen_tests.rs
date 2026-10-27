@@ -74,3 +74,33 @@ fn numeric_sort_operation_selected_only_with_a_whole_body_effect_proof() {
         );
     }
 }
+
+#[test]
+fn keyed_sort_certificate_selects_a_rooted_property_operation() {
+    let mut cmp = comparator(false);
+    if let Expr::Closure { body, .. } = &mut cmp {
+        if let Stmt::Return(Some(Expr::Binary { left, right, .. })) = &mut body[0] {
+            *left = Box::new(Expr::PropertyGet {
+                byte_offset: 0,
+                object: Box::new(Expr::LocalGet(17)),
+                property: "rank".into(),
+            });
+            *right = Box::new(Expr::PropertyGet {
+                byte_offset: 0,
+                object: Box::new(Expr::LocalGet(23)),
+                property: "rank".into(),
+            });
+        }
+    }
+    let module = module_with_init(
+        "key_sort.ts",
+        vec![Stmt::Expr(Expr::ArraySort {
+            array: Box::new(Expr::Array(vec![Expr::Number(1.0)], None)),
+            comparator: Box::new(cmp),
+        })],
+    );
+    let ir = String::from_utf8(compile_module(&module, entry_opts()).unwrap()).unwrap();
+    let main = crate::testing::root_slots::function_slice(&ir, "main");
+    assert!(main.contains("@js_array_sort_key_order("), "{main}");
+    assert!(!main.contains("@js_array_sort_numeric_order("), "{main}");
+}
