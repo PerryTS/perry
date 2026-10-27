@@ -17,6 +17,7 @@ mod class_statics;
 mod closed_world;
 mod closure_context;
 mod escaped_method_this;
+mod export_star;
 mod for_in_keys;
 mod function_values;
 mod hub_tokens;

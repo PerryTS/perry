@@ -550,12 +550,21 @@ impl Model {
             self.add_tok(n, r);
         } else {
             // An array's named non-index key is its own key: its elements
-            // (`field_any`) are read under an index only (`named_any`).
-            let any = match self.is_elem_array(t) && !numeric_key(&self.atoms[a as usize]) {
+            // (`field_any`) are read under an index only (`named_any`). A
+            // module namespace's named key is resolved by name (DECISIONS
+            // 215): it never reads the namespace's other keys.
+            let named = matches!(self.toks[t as usize], TokKind::ModNs(_))
+                || self.is_elem_array(t) && !numeric_key(&self.atoms[a as usize]);
+            let any = match named {
                 true => self.named_any(t),
                 false => self.field_any(t),
             };
             self.edge(any, n);
+            if let Some(srcs) = self.star_from.get(&t).cloned() {
+                for s in srcs {
+                    self.star_key(t, s, a, n);
+                }
+            }
         }
         let all = self.all_fields(t);
         self.edge(n, all);
@@ -655,6 +664,46 @@ impl Model {
         match self.is_elem_array(t) {
             true => self.named_any(t),
             false => self.field_any(t),
+        }
+    }
+
+    /// DECISIONS 215 (ECMAScript ResolveExport): `export * from` the module
+    /// of namespace `src` (`TOP`: a source outside the program) makes each
+    /// name of `src` a name of namespace `ns`, unless `ns`'s module exports
+    /// that name itself; `default` is never one. A computed key reads every
+    /// key (`field_any`); a named key reads only that name of each source.
+    pub(crate) fn export_star(&mut self, ns: Tok, src: Tok) {
+        let fa = self.field_any(ns);
+        if src == TOP {
+            self.add_top(fa, |_| "unresolved export * source".into());
+        } else {
+            let all = self.all_fields(src);
+            self.edge(all, fa);
+        }
+        let v = self.star_from.entry(ns).or_default();
+        if v.contains(&src) {
+            return;
+        }
+        v.push(src);
+        // The names asked of `ns` before this source was known.
+        let keys = self.field_keys.get(&ns).cloned().unwrap_or_default();
+        for a in keys {
+            let n = self.fields[&(ns, a)];
+            self.star_key(ns, src, a, n);
+        }
+    }
+
+    /// Name `a` of namespace `ns` (node `n`) through its `export *` source
+    /// `src` (`export_star`).
+    fn star_key(&mut self, ns: Tok, src: Tok, a: Atom, n: NodeId) {
+        if self.ns_own.contains(&(ns, a)) || &*self.atoms[a as usize] == "default" {
+            return;
+        }
+        if src == TOP {
+            self.add_top(n, |_| "unresolved export * source".into());
+        } else {
+            let f = self.field(src, a);
+            self.edge(f, n);
         }
     }
 

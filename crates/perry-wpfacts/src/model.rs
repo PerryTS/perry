@@ -1050,7 +1050,13 @@ pub struct Model {
     pub field_any: FxHashMap<Tok, NodeId>,
     /// An array's values under a key no store named (`Model::named_any`):
     /// what its named non-index keys read. Its elements are not among them.
+    /// A module namespace's values every name reads (DECISIONS 215).
     pub named_any: FxHashMap<Tok, NodeId>,
+    /// DECISIONS 215: a module namespace -> the namespaces of its `export *`
+    /// sources (`TOP`: one outside the program), and the names the module
+    /// exports itself (those shadow every `export *`).
+    pub star_from: FxHashMap<Tok, Vec<Tok>>,
+    pub ns_own: crate::pts::FxHashSet<(Tok, Atom)>,
     pub all_fields: FxHashMap<Tok, NodeId>,
     pub proto_node: FxHashMap<Tok, NodeId>,
     pub field_keys: FxHashMap<Tok, Vec<Atom>>,
