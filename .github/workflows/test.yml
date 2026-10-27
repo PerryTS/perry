@@ -335,6 +335,16 @@ jobs:
       - name: Parity harness compile-budget regression
         run: ./tests/test_parity_compile_budget.sh
 
+      # The parity normalizer is the ONE definition of "Perry printed what Node
+      # printed" shared by run_parity_tests.sh and scripts/node_suite_run.py.
+      # These fixtures were captured from the two implementations it replaced,
+      # so this step is what proves the unification stayed verdict-preserving.
+      # It runs in `lint` rather than beside the parity job because `parity` is
+      # full-tier only: a normalizer regression would otherwise reach `main` and
+      # only surface in the nightly run whose verdict it decides.
+      - name: Parity output normalizer golden fixtures
+        run: python3 -m unittest tests.test_parity_normalize
+
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-10-04 --profile minimal --component rustfmt --component clippy
       - name: Check formatting
