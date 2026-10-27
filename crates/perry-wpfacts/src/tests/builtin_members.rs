@@ -27,11 +27,6 @@ fn proven(pf: &ProgramFacts, key: &str) -> bool {
             .all(|s| !s.top && matches!(s.verdict, Verdict::T0Mono | Verdict::T0Set))
 }
 
-fn unproven(pf: &ProgramFacts, key: &str) -> bool {
-    let s: Vec<_> = pf.sites.iter().filter(|s| s.key == key).collect();
-    !s.is_empty() && s.iter().all(|s| matches!(s.verdict, Verdict::No(_)))
-}
-
 /// A value that may be a string or a class instance: reading a key of the
 /// class on it reads `undefined` on the string, not a builtin function, so
 /// a method called on what was read is the class's method and the class
@@ -155,29 +150,95 @@ fn a_key_written_onto_a_builtin_prototype_is_a_member_again() {
     }
 }
 
-/// Soundness: a builtin prototype handed to unknown code may be written by
-/// a store into ⊤ (`proto_in_top`); without that, a store into ⊤ under a
-/// key is no write of the intrinsics.
+/// Soundness: a store into ⊤ may write any builtin prototype under its key,
+/// whatever reached unknown code: unknown code reaches every intrinsic
+/// prototype without being handed one (`Object.getPrototypeOf` of a
+/// namespace is `Function.prototype`, of the global object or of any
+/// instance's prototype chain ends at `Object.prototype`, interpreted code
+/// reads the globals) and gives it back as ⊤. The runnable twins are the
+/// ABM2 fixtures F2-F9: compiled code writes what unknown code returned.
+/// Only the key is precise: a store into ⊤ under another key leaves `inner`
+/// absent, a computed one may be `inner`.
 #[test]
-fn a_prototype_handed_to_unknown_code_makes_top_stores_writes_of_it() {
-    let base = |hand: &str| {
+fn a_store_into_top_writes_the_intrinsics_under_its_key() {
+    let body = |hand: &str, w: &str, other: &str| {
         format!(
             "{CLASSES}{M}
             declare const unknown: any;
             class N {{ inner: any; constructor() {{ this.inner = new M(); }} }}
-            {hand}
-            const t: any = unknown.value;
-            t.inner = function () {{ return 1; }};
-            const v: any = k > 1 ? new N() : \"text\";
+            const t: any = unknown.reach({hand});
+            {w}
+            const v: any = k > 1 ? new N() : {other};
             const i = v.inner;
             if (i) console.log(i.m(new A()));
             console.log(new A().a);"
         )
     };
-    let pf = facts(&base(""));
-    assert!(proven(&pf, "m"), "{}", pf.dump_text());
-    let pf = facts(&base("unknown.take(String.prototype);"));
-    assert!(unproven(&pf, "m"), "{}", pf.dump_text());
+    let named = "t.inner = function () { return 1; };";
+    let elsewhere = "t.unrelated = function () { return 1; };";
+    let computed = "declare const kk: string; t[kk] = function () { return 1; };";
+    for hand in [
+        "0",
+        "Map",
+        "globalThis",
+        "new Map()",
+        "new B()",
+        "function () {}",
+        "Map.prototype",
+    ] {
+        for other in ["Object", "\"text\"", "new Map()", "[1]"] {
+            for (w, want) in [(named, false), (computed, false), (elsewhere, true)] {
+                let src = body(hand, w, other);
+                let pf = facts(&src);
+                assert_eq!(proven(&pf, "m"), want, "{src}\n{}", pf.dump_text());
+            }
+        }
+    }
+}
+
+/// A namespace's prototype is a builtin prototype (`Function.prototype`
+/// for a constructor, `Object.prototype` at the end of the global object's
+/// chain): a store into what `Object.getPrototypeOf` gives writes the
+/// intrinsics under its key. (Was: no prototype at all, so the store wrote
+/// nothing and the read below stayed proven: fixtures F2/F3 of ABM2 with
+/// the helper module visible.)
+#[test]
+fn the_prototype_of_a_namespace_is_a_builtin_prototype() {
+    for (hand, other) in [("Map", "Object"), ("globalThis", "\"text\"")] {
+        let src = format!(
+            "{CLASSES}{M}
+            class N {{ inner: any; constructor() {{ this.inner = new M(); }} }}
+            const p: any = Object.getPrototypeOf({hand});
+            p.inner = function () {{ return 1; }};
+            const v: any = k > 1 ? new N() : {other};
+            const i = v.inner;
+            if (i) console.log(i.m(new A()));
+            console.log(new A().a);"
+        );
+        let pf = facts(&src);
+        assert!(!proven(&pf, "m"), "{src}\n{}", pf.dump_text());
+    }
+}
+
+/// The rest parameter of a function unknown code calls is the fresh array
+/// the call makes: a store into its elements is no store into ⊤, so it
+/// writes no member of the intrinsics. (Was: the rest local held ⊤, and the
+/// store made every key of every builtin prototype written: tsc's escaped
+/// `(...args)` functions.)
+#[test]
+fn a_store_into_the_rest_array_of_an_escaped_function_writes_no_intrinsic() {
+    let src = format!(
+        "{CLASSES}{M}
+        declare const kk: string;
+        class N {{ inner: any; constructor() {{ this.inner = new M(); }} }}
+        (globalThis as any).h = function (...xs: any[]) {{ xs[kk] = function () {{ return 1; }}; return xs.length; }};
+        const v: any = k > 1 ? new N() : \"text\";
+        const i = v.inner;
+        if (i) console.log(i.m(new A()));
+        console.log(new A().a);"
+    );
+    let pf = facts(&src);
+    assert!(proven(&pf, "m"), "{src}\n{}", pf.dump_text());
 }
 
 /// A primitive's own members keep their kinds: `length` is a Number on a
@@ -229,11 +290,9 @@ fn a_class_key_read_on_a_namespace_is_absent() {
 }
 
 /// Soundness: a key the program stores onto a namespace (before or after
-/// the read), or onto a builtin prototype of its chain, is a member; a
-/// constructor namespace handed to unknown code is reached along a chain, as
-/// an instance's prototype is: no store into ⊤ writes its prototype for
-/// that (a prototype handed over directly does:
-/// `a_prototype_handed_to_unknown_code_makes_top_stores_writes_of_it`).
+/// the read), onto a builtin prototype of its chain, or into ⊤ (which may be
+/// `Function.prototype`: `a_store_into_top_writes_the_intrinsics_under_its_key`)
+/// is a member.
 #[test]
 fn a_key_written_onto_a_namespace_is_a_member() {
     let body = |before: &str, after: &str| {
@@ -256,9 +315,9 @@ fn a_key_written_onto_a_namespace_is_a_member() {
         (body("(Object as any).inner = function () { return 1; };", ""), false),
         (body("", "(Object as any).inner = function () { return 1; };"), false),
         (body(fw, ""), false),
-        (body(top, ""), true),
-        (body(&format!("unknown.take(Map); {top}"), ""), true),
-        (body(&format!("unknown.take(Map.prototype); {top}"), ""), false),
+        (body(top, ""), false),
+        (body(&format!("unknown.take(Map); {top}"), ""), false),
+        (body("", top), false),
     ] {
         let pf = facts(&src);
         assert_eq!(proven(&pf, "m"), want, "{src}\n{}", pf.dump_text());
@@ -292,36 +351,6 @@ fn a_runtime_global_function_called_on_the_global_object_hands_nothing() {
         (body("", ""), true),
         (body(w, ""), false),
         (body("", w), false),
-    ] {
-        let pf = facts(&src);
-        assert_eq!(proven(&pf, "m"), want, "{src}\n{}", pf.dump_text());
-    }
-}
-
-/// The runtime's own methods run on a builtin prototype (what a protocol
-/// touch of it calls: the CommonJS glue's `getOwnPropertyDescriptor`)
-/// give the prototype to no one: a store into ⊤ stays no
-/// write of the intrinsics. Soundness: the prototype passed as an argument
-/// to an opaque builtin is handed over.
-#[test]
-fn an_own_method_of_a_prototype_hands_nothing() {
-    let body = |hand: &str| {
-        format!(
-            "{CLASSES}{M}
-            declare const unknown: any;
-            class N {{ inner: any; constructor() {{ this.inner = new M(); }} }}
-            {hand}
-            const t: any = unknown.value;
-            t.inner = function () {{ return 1; }};
-            const v: any = k > 1 ? new N() : \"text\";
-            const i = v.inner;
-            if (i) console.log(i.m(new A()));
-            console.log(new A().a);"
-        )
-    };
-    for (src, want) in [
-        (body("(String.prototype as any).toString.call(\"x\"); console.log((String.prototype as any).concat(\"y\"));"), true),
-        (body("unknown.take(String.prototype);"), false),
     ] {
         let pf = facts(&src);
         assert_eq!(proven(&pf, "m"), want, "{src}\n{}", pf.dump_text());

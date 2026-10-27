@@ -638,7 +638,10 @@ impl Model {
                 },
             },
             TokKind::NativeProto(_) => self.add_tok(n, objproto),
-            TokKind::Func(_, _) | TokKind::Bound(_) | TokKind::BuiltinFn => {
+            // A builtin namespace's prototype is `Function.prototype` (a
+            // constructor's) or `Object.prototype` (`Math`, `JSON`, the
+            // global object's chain): `ObjectProto` stands for both.
+            TokKind::Func(_, _) | TokKind::Bound(_) | TokKind::BuiltinFn | TokKind::Builtin(_) => {
                 self.add_tok(n, objproto)
             }
             TokKind::ClassObj(tm) => match self.tmpls[tm as usize].parent {

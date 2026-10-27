@@ -1271,10 +1271,6 @@ pub struct Model {
     /// dynamic code may hand it out (`Function('return this')()`). Until
     /// then a store into ⊤ cannot write a global.
     pub global_in_top: bool,
-    /// A ⊤ value may be a builtin prototype: one reached unmodeled code
-    /// (`Model::escape`). Until then a store into ⊤ cannot write a member
-    /// of the intrinsic prototypes (`builtins::intrinsic_written`).
-    pub proto_in_top: bool,
     /// Explain: builtin function values minted, by the arm that minted them.
     pub bf_mints: FxHashMap<&'static str, u32>,
     /// Per unit (design §17.16 (b)): the global object's program-owned

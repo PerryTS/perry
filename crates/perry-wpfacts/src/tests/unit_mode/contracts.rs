@@ -297,9 +297,12 @@ pub(super) fn a_broken_namespace_field_function_resolves_only_the_units_that_see
     // for #13294 (decision 151: every unit replays the shared objects'
     // writes) -> [709, 779, 956, 443, 392]; for the intrinsic member
     // descriptions (a name no builtin prototype defines reads nothing from
-    // a builtin object, so fewer opaque values flow) -> the pin below.
+    // a builtin object, so fewer opaque values flow) -> [709, 779, 918, 443,
+    // 392]; for a store into ⊤ writing the intrinsics under its key and the
+    // builtin namespaces' prototype chain (their lookups reach
+    // `Object.prototype`) -> the pin below.
     assert!(pf.round_work[1] < w("a.ts") + w("m.ts") + w("b.ts") + w("c.ts"));
-    assert_eq!(pf.round_work, [709, 779, 918, 443, 392], "{:?}", pf.units);
+    assert_eq!(pf.round_work, [773, 891, 1035, 511, 452], "{:?}", pf.units);
 }
 
 #[test]
@@ -379,9 +382,13 @@ pub(super) fn a_unit_over_the_bound_is_not_solved_again() {
         .filter(|(q, s)| crate::decl_units::module_of(q) == "o.ts" && !s.aborted)
         .map(|(_, s)| s.work)
         .sum();
-    assert_eq!(
-        pf.round_work[1],
-        module_work(&pf, "a.ts") + module_work(&pf, "m.ts") + small_o,
+    // Since the builtin namespaces have a prototype chain (`Map`'s lookups
+    // reach `Object.prototype`) a third round solves `a` and `m` again; no
+    // later round solves the unit of `o` over the bound. (The units report
+    // their last solve, so each later round is at most their sum.)
+    let small = module_work(&pf, "a.ts") + module_work(&pf, "m.ts") + small_o;
+    assert!(
+        pf.round_work[1..].iter().all(|&w| w <= small),
         "{:?} {:?}",
         pf.round_work,
         pf.units

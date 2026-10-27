@@ -820,21 +820,6 @@ impl Model {
                 self.note_shared(SharedWrite::Handed(s));
             }
         }
-        // A builtin prototype handed to unknown code (not one reached along
-        // an escaped value's chain): a store into ⊤ may be a store into it
-        // from now on, which decides the members of every builtin object.
-        // A constructor namespace (or the global object) is not one: its
-        // `prototype` is one step from it as an instance's prototype is one
-        // step from the instance (`constructor`, `Object.getPrototypeOf`),
-        // and a computed read of any object yields `Object` and `Function`
-        // through `Object.prototype.constructor`.
-        let hands_proto = matches!(
-            self.toks[t as usize],
-            TokKind::ObjectProto | TokKind::NativeProto(_)
-        );
-        if !self.chain_escape && hands_proto {
-            crate::builtins::note_proto_in_top(self, t, reason);
-        }
         // Runtime-owned objects do not "escape": unknown code already holds
         // them. Object.prototype's unmodeled mutations are E5/E6 (modeled
         // operations) or E14 (interpreted code), never a side effect of some
@@ -910,9 +895,13 @@ impl Model {
                 }
             }
         }
-        for &p in fi.rest.iter() {
-            self.add_top(p, why);
-            self.add_prim(p, prim::ALL);
+        // The rest parameter is the fresh array the call makes, whoever
+        // calls: unknown arguments are its elements, never the array itself
+        // (a store into its elements is no store into ⊤).
+        if let Some(rest) = fi.rest {
+            let r = self.field_any_node_of_node(rest);
+            self.add_top(r, why);
+            self.add_prim(r, prim::ALL);
         }
         if self.contract_fns.contains(&f) {
             // Design §11.2: other units call it through its contract.
@@ -934,10 +923,6 @@ impl Model {
             self.add_top(fi.args_all, why);
             self.contract_rets.push((f, fi.ret));
             return;
-        }
-        if let Some(rest) = fi.rest {
-            let r = self.field_any_node_of_node(rest);
-            self.add_top(r, why);
         }
         self.add_top(fi.args_all, why);
         self.sink_node(fi.ret, reason);

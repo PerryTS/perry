@@ -103,25 +103,12 @@ fn unknown_method_proto(m: &mut Model, call: CallId, why: &str, proto: Option<us
     // A method run on one receiver token sees that token as `this`, not
     // every token of the receiver node.
     let kept = |m: &Model, t: Tok| own && m.named_shared(t).is_some();
-    // The runtime's own method of a builtin prototype or namespace gives
-    // that object to no one (`Model::escape`: not handed, as one reached
-    // along a chain is not): a store into ⊤ is no store into it for that.
-    let own_escape = |m: &mut Model, t: Tok| {
-        let runtime_owned = matches!(
-            m.toks[t as usize],
-            TokKind::ObjectProto | TokKind::NativeProto(_) | TokKind::Builtin(_)
-        );
-        let saved = m.chain_escape;
-        m.chain_escape |= own && runtime_owned;
-        m.escape(t, r);
-        m.chain_escape = saved;
-    };
     match (m.cur_this, &c.this) {
         (Some(t), _) if kept(m, t) => {}
-        (Some(t), _) => own_escape(m, t),
+        (Some(t), _) => m.escape(t, r),
         (None, ThisArg::Node(n)) => m.sink_node(*n, r),
         (None, ThisArg::Tok(t)) if kept(m, *t) => {}
-        (None, ThisArg::Tok(t)) => own_escape(m, *t),
+        (None, ThisArg::Tok(t)) => m.escape(*t, r),
         (None, ThisArg::Undef) => {}
     }
     m.add_top(c.ret, |_| format!("result: {why}"));
@@ -348,7 +335,7 @@ pub fn adopt(m: &mut Model, by: CallId, v: NodeId, dst: NodeId) {
 /// May key `a` have been written onto a builtin prototype (`Object.prototype`
 /// stands for every one of them here): a store, an accessor, a delete or a
 /// reach into unmodeled code on it, another unit's such write, or a store
-/// into ⊤ once a builtin prototype reached unmodeled code (`proto_in_top`)?
+/// into ⊤ (a ⊤ value may be any builtin prototype: `native_written`)?
 /// Until then the intrinsic's description (`members`) decides what a
 /// builtin object or primitive reads under `a`.
 pub fn intrinsic_written(m: &mut Model, a: Atom) -> bool {
@@ -368,23 +355,6 @@ fn intrinsic_miss(m: &mut Model, a: Atom, miss: NativeMiss) -> bool {
     let op = m.tok(TokKind::ObjectProto);
     m.native_missing.push((op, a, miss));
     true
-}
-
-/// A builtin prototype reached unmodeled code (`Model::escape`): a store
-/// into ⊤ may now write one, so a key stored into ⊤ may be a member of every
-/// builtin object and primitive.
-pub fn note_proto_in_top(m: &mut Model, t: Tok, reason: u32) {
-    if !m.proto_in_top {
-        m.proto_in_top = true;
-        if m.explain && !m.shared_replay {
-            eprintln!(
-                "perry: wpfacts explain: a builtin prototype reaches unmodeled code: {} ({})",
-                m.tok_name(t),
-                m.reasons[reason as usize]
-            );
-        }
-        replay_native_missing(m);
-    }
 }
 
 /// The opaque builtin function value; in explain mode, counted by the
@@ -1795,13 +1765,12 @@ pub fn native_written(m: &Model, np: Tok, a: Atom) -> bool {
         _ => false,
     };
     let is_global = matches!(m.toks[np as usize], TokKind::Builtin(BuiltinNs::GlobalThis));
-    // A store into ⊤ writes the global object or a builtin prototype only
-    // once that object reached unmodeled code.
-    let is_proto = matches!(
-        m.toks[np as usize],
-        TokKind::ObjectProto | TokKind::Builtin(_)
-    ) && !is_global;
-    (hit(TOP) && (!is_global || m.global_in_top) && (!is_proto || m.proto_in_top))
+    // A store into ⊤ writes the global object only once it reached
+    // unmodeled code. It may always write a builtin prototype: unknown code
+    // reaches every one of them without being handed one (the chain of any
+    // object or function it holds, the globals interpreted code reads), and
+    // gives them to compiled code as ⊤.
+    (hit(TOP) && (!is_global || m.global_in_top))
         || hit(np)
         || (global
             && m.tok_index
@@ -1849,6 +1818,9 @@ pub fn note_native_write(m: &mut Model, t: Tok, key: Option<Key>, what: &str) {
         Some(Key::Named(a)) if a != star => Some(a),
         _ => None,
     };
+    if m.explain && !m.shared_replay && t == TOP && k.is_none() {
+        eprintln!("perry: wpfacts explain: computed write on ⊤: {what}");
+    }
     if m.native_writes.contains_key(&(t, None)) || m.native_writes.contains_key(&(t, k)) {
         return;
     }
