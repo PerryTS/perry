@@ -1295,7 +1295,7 @@ pub(crate) unsafe fn native_call_method_tower(
         // unrelated 16-byte method (for example TLSSocket#getSharedSigalgs)
         // must not be dereferenced as a PerformanceObserverEntryList.
         if matches!(name, b"getEntriesByName" | b"getEntriesByType")
-            && crate::perf_hooks::is_perf_observer_list_value(object)
+            && crate::perf_hook_slots::is_perf_observer_list_value(object)
         {
             let arg0 = if args_len > 0 && !args_ptr.is_null() {
                 *args_ptr
@@ -1303,9 +1303,9 @@ pub(crate) unsafe fn native_call_method_tower(
                 f64::from_bits(crate::value::TAG_UNDEFINED)
             };
             if name == b"getEntriesByName" {
-                crate::perf_hooks::validate_perf_list_filter_arg(arg0, "name", args_len == 0);
+                crate::perf_hook_slots::validate_perf_list_filter_arg(arg0, "name", args_len == 0);
             } else {
-                crate::perf_hooks::validate_perf_list_filter_arg(arg0, "type", args_len == 0);
+                crate::perf_hook_slots::validate_perf_list_filter_arg(arg0, "type", args_len == 0);
             }
         }
     }
@@ -2189,9 +2189,9 @@ pub(crate) unsafe fn native_call_method_tower(
         // `obj` is a validated heap object (gc_type read above).
         if method_name == "toJSON"
             && gc_type == crate::gc::GC_TYPE_OBJECT
-            && crate::perf_hooks::is_perf_entry_object(obj)
+            && crate::perf_hook_slots::is_perf_entry_object(obj)
         {
-            return crate::perf_hooks::perf_entry_to_json(object());
+            return crate::perf_hook_slots::perf_entry_to_json(object());
         }
 
         // Same shape of synthesis for `performance.nodeTiming.toJSON()`: the
@@ -2200,9 +2200,9 @@ pub(crate) unsafe fn native_call_method_tower(
         // key here (`Object.keys(nodeTiming)` is pinned at the 12 milestones).
         if method_name == "toJSON"
             && gc_type == crate::gc::GC_TYPE_OBJECT
-            && crate::perf_hooks::is_node_timing_object(obj)
+            && crate::perf_hook_slots::is_node_timing_object(obj)
         {
-            return crate::perf_hooks::node_timing_to_json(object());
+            return crate::perf_hook_slots::node_timing_to_json(object());
         }
 
         // WeakMap/WeakSet dynamic method dispatch (issue #1757/#1758): these

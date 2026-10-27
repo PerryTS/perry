@@ -271,6 +271,14 @@ pub(crate) fn auto_optimized_cross_features(
     {
         cross_features.push("perry-runtime/date".to_string());
     }
+    if ctx.uses_perf_hooks
+        || ctx.uses_get_builtin_module
+        || needs_dyn_eval
+        || !ctx.native_addons.is_empty()
+        || ctx.native_module_imports.contains("perf_hooks")
+    {
+        cross_features.push("perry-runtime/perf-hooks".to_string());
+    }
     // Clone-producing APIs and worker completions share the thread codec.
     if ctx.uses_thread_codec
         || ctx.uses_worker_threads

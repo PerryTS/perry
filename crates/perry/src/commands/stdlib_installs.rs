@@ -198,6 +198,7 @@ const RUNTIME_INSTALLS: &[(&str, &[&str])] = &[
     ("js_runtime_install_async_hooks", &["async-hooks"]),
     ("js_runtime_install_thread", &["thread"]),
     ("js_runtime_install_date", &["date"]),
+    ("js_runtime_install_perf_hooks", &["perf-hooks"]),
     ("js_runtime_install_global_reflect", &["global-reflect"]),
     ("js_runtime_install_global_atomics", &["global-atomics"]),
     ("js_runtime_install_global_url", &["global-url"]),

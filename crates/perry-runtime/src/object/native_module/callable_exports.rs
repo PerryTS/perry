@@ -197,7 +197,7 @@ pub fn bound_native_callable_export_value(module_name: &str, property_name: &str
         // optional module hook. Their prototypes are intrinsic constructor
         // state, so install them at this common callable-creation seam.
         unsafe {
-            crate::perf_hooks::attach_perf_hooks_constructor(
+            crate::perf_hook_slots::attach_perf_hooks_constructor(
                 property_name,
                 value.get_nanbox_f64(),
                 crate::value::js_nanbox_get_pointer(value.get_nanbox_f64()) as usize,

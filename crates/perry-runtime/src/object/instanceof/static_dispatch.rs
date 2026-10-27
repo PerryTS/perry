@@ -898,12 +898,12 @@ fn native_instanceof(
 
         if gc_type == crate::gc::GC_TYPE_OBJECT {
             if let Some(matches) =
-                crate::perf_hooks::is_perf_hooks_shape_instance_of(value, class_id)
+                crate::perf_hook_slots::is_perf_hooks_shape_instance_of(value, class_id)
             {
                 return if matches { true_val } else { false_val };
             }
             if let Some(matches) =
-                crate::perf_hooks::is_perf_entry_object_instance_of(obj_ptr, class_id)
+                crate::perf_hook_slots::is_perf_entry_object_instance_of(obj_ptr, class_id)
             {
                 return if matches { true_val } else { false_val };
             }

@@ -433,8 +433,8 @@ pub(crate) unsafe fn get_native_module_constant(
         // node:perf_hooks — `performance.timeOrigin` (ms since epoch at start)
         // and `performance.nodeTiming`.
         "perf_hooks" => match property {
-            "timeOrigin" => Some(crate::perf_hooks::time_origin_ms()),
-            "nodeTiming" => Some(crate::perf_hooks::js_perf_node_timing()),
+            "timeOrigin" => Some(crate::perf_clock::time_origin_ms()),
+            "nodeTiming" => Some(crate::perf_hook_slots::js_perf_node_timing()),
             // `constants` used to share the `perf_hooks` tag, which made
             // `Object.keys(constants)` enumerate the MODULE's export list
             // instead of the GC constants. It is its own namespace in Node.
@@ -919,7 +919,7 @@ pub(crate) unsafe fn get_native_module_constant(
         // .createHistogram. Every stat accessor (`count`/`min`/`max`/`mean`/
         // `stddev`/`exceeds`, their BigInt twins, and the `percentiles` Map)
         // reads per-instance HDR state keyed off the receiver.
-        "perf_histogram" => crate::perf_histogram::histogram_property(namespace_obj, property),
+        "perf_histogram" => crate::perf_hook_slots::histogram_property(namespace_obj, property),
         _ => None,
     }
 }

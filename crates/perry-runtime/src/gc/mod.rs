@@ -1057,7 +1057,7 @@ pub fn gc_init() {
     }
     // Publish this agent's intrinsic function layouts before any JS birth.
     let _ = crate::state::state();
-    crate::perf_hooks::init_time_origin();
+    crate::perf_clock::init_time_origin();
     #[cfg(not(perry_gc_instruments))]
     instruments::refuse_instrument_knobs_without_instruments();
     crate::entry_contracts::require_check_build_if_requested();
@@ -1145,8 +1145,7 @@ pub fn gc_init() {
     // or Proxy trap can re-enter after moving GC. Rewrite that temporary
     // identity so malformed prototype cycles remain bounded.
     reg_scanner!(crate::object::prototype_chain::scan_prototype_resolution_stack_roots_mut,);
-    reg_scanner!(crate::perf_hooks::scan_perf_entries_roots_mut);
-    reg_scanner!(crate::perf_histogram::scan_histogram_roots_mut);
+
     reg_scanner!(crate::v8::scan_v8_promise_hook_roots_mut);
     reg_scanner!(transition_cache_mutable_root_scanner);
     reg_scanner!(crate::object::scan_object_cache_roots_mut);
@@ -1340,6 +1339,7 @@ pub fn gc_init() {
     // stable until reported, so the program-end report is not a stale/UAF read.
     reg_scanner!(crate::promise::scan_unhandled_rejection_roots_mut);
     reg_scanner!(crate::os::scan_process_stream_singleton_roots_mut);
+    crate::perf_hook_slots::register_installed_roots();
     if let Some(register) = crate::feature_hooks::FS_REGISTER_ROOTS.peek() {
         register();
     }

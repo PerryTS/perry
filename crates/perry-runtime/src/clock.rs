@@ -14,5 +14,5 @@ pub(crate) fn wall_millis() -> f64 {
 /// Returns ms since performance.timeOrigin as f64.
 #[no_mangle]
 pub extern "C" fn js_performance_now() -> f64 {
-    crate::perf_hooks::performance_now_ms()
+    crate::perf_clock::performance_now_ms()
 }

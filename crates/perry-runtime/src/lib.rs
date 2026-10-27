@@ -1373,3 +1373,6 @@ mod calendar;
 mod clock;
 pub mod date_hook_slots;
 mod date_layout;
+
+mod perf_clock;
+mod perf_hook_slots;

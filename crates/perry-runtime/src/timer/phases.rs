@@ -56,7 +56,7 @@ use super::{
 pub(crate) fn run_timers_phase() -> i32 {
     // First turn of the codegen event loop — `nodeTiming.loopStart` stops being
     // the "not started" sentinel here.
-    crate::perf_hooks::note_event_loop_start();
+    crate::perf_hook_slots::note_event_loop_start();
     if in_timer_callback_dispatch() {
         return 0;
     }

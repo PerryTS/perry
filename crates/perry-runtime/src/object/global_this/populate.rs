@@ -845,7 +845,7 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
     {
         let pname = b"performance";
         let pkey = crate::string::js_string_from_bytes(pname.as_ptr(), pname.len() as u32);
-        let pval = crate::perf_hooks::performance_namespace();
+        let pval = crate::perf_hook_slots::performance_namespace();
         js_object_set_field_by_name(singleton(), pkey, pval);
     }
     // Perf_hooks constructors are globals identical to the module exports.

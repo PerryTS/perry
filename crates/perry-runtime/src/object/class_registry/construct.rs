@@ -209,7 +209,7 @@ unsafe fn construct_function_impl(
         }
         if module == "perf_hooks" {
             if let Some(result) =
-                crate::perf_hooks::construct_perf_hooks_class(&method, args_ptr, args_len)
+                crate::perf_hook_slots::construct_perf_hooks_class(&method, args_ptr, args_len)
             {
                 return result;
             }
@@ -217,7 +217,7 @@ unsafe fn construct_function_impl(
         if module == "perf_histogram"
             && matches!(method.as_str(), "RecordableHistogram" | "ELDHistogram")
         {
-            return crate::perf_hooks::js_perf_illegal_constructor();
+            return crate::perf_hook_slots::js_perf_illegal_constructor();
         }
         if module == "sqlite"
             && matches!(

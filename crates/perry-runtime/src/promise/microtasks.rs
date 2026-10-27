@@ -114,7 +114,7 @@ pub extern "C" fn js_promise_run_microtasks_event_loop() -> i32 {
     // this pump reached through its timer phase; turnloop P3 moved that phase
     // into the generated loop, so the pump stamps it directly rather than
     // depending on which phase happens to run first.
-    crate::perf_hooks::note_event_loop_start();
+    crate::perf_hook_slots::note_event_loop_start();
     run_microtasks(MicrotaskDrainMode::EventLoop)
 }
 
@@ -262,7 +262,7 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
         // The ordinary callback-timer phase stamps this even with no timers.
         // Keep nodeTiming.loopStart/eventLoopUtilization observable on beforeExit.
         if matches!(mode, MicrotaskDrainMode::EventLoop) {
-            crate::perf_hooks::note_event_loop_start();
+            crate::perf_hook_slots::note_event_loop_start();
         }
         finish_gc_boundary();
         MICROTASK_RUN_DEPTH.with(|depth| depth.set(MicrotaskRunDepths { pump: 0, jobs: 0 }));

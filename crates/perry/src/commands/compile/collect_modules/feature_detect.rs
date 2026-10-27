@@ -444,6 +444,9 @@ pub(super) fn detect_optional_feature_usage(
     // false-negative class for every gate at once (the rule is zero false
     // negatives; including more HIR can only over-include a feature).
     let hir_debug = module_hir_debug(hir_module);
+    ctx.uses_perf_hooks |= global_object::may_escape(hir_module)
+        || hir_debug.contains(r#""performance""#)
+        || hir_debug.contains(r#""perf_hooks""#);
     // The legacy locale-string node also represents ordinary numbers.
     let date_debug = hir_debug.replace("DateToLocaleString(", "ToLocaleString(");
     ctx.uses_date |= global_object::may_escape(hir_module)

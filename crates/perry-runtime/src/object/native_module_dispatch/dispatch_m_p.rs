@@ -615,64 +615,68 @@ pub(crate) unsafe fn nm_dispatch_perf(ctx: &NmCtx, module_name: &str, method_nam
     );
     match (module_name, method_name) {
         ("perf_hooks", "now") => crate::date::js_performance_now(),
-        ("perf_hooks", "mark") => crate::perf_hooks::js_perf_mark(arg(0), arg(1)),
-        ("perf_hooks", "measure") => crate::perf_hooks::js_perf_measure(arg(0), arg(1), arg(2)),
-        ("perf_hooks", "getEntries") => crate::perf_hooks::js_perf_get_entries(),
+        ("perf_hooks", "mark") => crate::perf_hook_slots::js_perf_mark(arg(0), arg(1)),
+        ("perf_hooks", "measure") => {
+            crate::perf_hook_slots::js_perf_measure(arg(0), arg(1), arg(2))
+        }
+        ("perf_hooks", "getEntries") => crate::perf_hook_slots::js_perf_get_entries(),
         ("perf_hooks", "getEntriesByType") => {
-            crate::perf_hooks::js_perf_get_entries_by_type(arg(0))
+            crate::perf_hook_slots::js_perf_get_entries_by_type(arg(0))
         }
         ("perf_hooks", "getEntriesByName") => {
-            crate::perf_hooks::js_perf_get_entries_by_name(arg(0), arg(1))
+            crate::perf_hook_slots::js_perf_get_entries_by_name(arg(0), arg(1))
         }
-        ("perf_hooks", "clearMarks") => crate::perf_hooks::js_perf_clear_marks(arg(0)),
-        ("perf_hooks", "clearMeasures") => crate::perf_hooks::js_perf_clear_measures(arg(0)),
+        ("perf_hooks", "clearMarks") => crate::perf_hook_slots::js_perf_clear_marks(arg(0)),
+        ("perf_hooks", "clearMeasures") => crate::perf_hook_slots::js_perf_clear_measures(arg(0)),
         ("perf_hooks", "eventLoopUtilization") => {
-            crate::perf_hooks::js_perf_event_loop_utilization(arg(0), arg(1))
+            crate::perf_hook_slots::js_perf_event_loop_utilization(arg(0), arg(1))
         }
-        ("perf_hooks", "toJSON") => crate::perf_hooks::js_perf_to_json(),
+        ("perf_hooks", "toJSON") => crate::perf_hook_slots::js_perf_to_json(),
         ("perf_hooks", "clearResourceTimings") => {
-            crate::perf_hooks::js_perf_clear_resource_timings()
+            crate::perf_hook_slots::js_perf_clear_resource_timings()
         }
         ("perf_hooks", "setResourceTimingBufferSize") => {
-            crate::perf_hooks::js_perf_set_resource_timing_buffer_size(arg(0))
+            crate::perf_hook_slots::js_perf_set_resource_timing_buffer_size(arg(0))
         }
-        ("perf_hooks", "markResourceTiming") => crate::perf_hooks::js_perf_mark_resource_timing(
-            arg(0),
-            arg(1),
-            arg(2),
-            arg(3),
-            arg(4),
-            arg(5),
-            arg(6),
-            arg(7),
-        ),
-        ("perf_hooks", "timerify") => crate::perf_hooks::js_perf_timerify(arg(0), arg(1)),
+        ("perf_hooks", "markResourceTiming") => {
+            crate::perf_hook_slots::js_perf_mark_resource_timing(
+                arg(0),
+                arg(1),
+                arg(2),
+                arg(3),
+                arg(4),
+                arg(5),
+                arg(6),
+                arg(7),
+            )
+        }
+        ("perf_hooks", "timerify") => crate::perf_hook_slots::js_perf_timerify(arg(0), arg(1)),
 
         // ── PerformanceObserver instance (perf_observer) ──
         // The registry index lives in field[1] of the namespace object; the
         // runtime fns re-derive it from the object value.
         ("perf_observer", "observe") => {
             let obs_val = crate::value::js_nanbox_pointer(obj as i64);
-            crate::perf_hooks::js_perf_observer_observe(obs_val, arg(0))
+            crate::perf_hook_slots::js_perf_observer_observe(obs_val, arg(0))
         }
         ("perf_observer", "disconnect") => {
             let obs_val = crate::value::js_nanbox_pointer(obj as i64);
-            crate::perf_hooks::js_perf_observer_disconnect(obs_val)
+            crate::perf_hook_slots::js_perf_observer_disconnect(obs_val)
         }
         ("perf_observer", "takeRecords") => {
             let obs_val = crate::value::js_nanbox_pointer(obj as i64);
-            crate::perf_hooks::js_perf_observer_take_records(obs_val)
+            crate::perf_hook_slots::js_perf_observer_take_records(obs_val)
         }
 
         // ── PerformanceObserverEntryList (the callback `list` arg) ──
-        ("perf_observer_list", "getEntries") => crate::perf_hooks::current_list_get_entries(),
+        ("perf_observer_list", "getEntries") => crate::perf_hook_slots::current_list_get_entries(),
         ("perf_observer_list", "getEntriesByType") => {
-            crate::perf_hooks::validate_perf_list_filter_arg(arg(0), "type", args_len == 0);
-            crate::perf_hooks::current_list_get_by_type(arg(0))
+            crate::perf_hook_slots::validate_perf_list_filter_arg(arg(0), "type", args_len == 0);
+            crate::perf_hook_slots::current_list_get_by_type(arg(0))
         }
         ("perf_observer_list", "getEntriesByName") => {
-            crate::perf_hooks::validate_perf_list_filter_arg(arg(0), "name", args_len == 0);
-            crate::perf_hooks::current_list_get_by_name(arg(0))
+            crate::perf_hook_slots::validate_perf_list_filter_arg(arg(0), "name", args_len == 0);
+            crate::perf_hook_slots::current_list_get_by_name(arg(0))
         }
 
         // ── Histogram instance methods ──
@@ -685,7 +689,7 @@ pub(crate) unsafe fn nm_dispatch_perf(ctx: &NmCtx, module_name: &str, method_nam
             } else {
                 std::slice::from_raw_parts(args_ptr, args_len)
             };
-            crate::perf_histogram::histogram_method(obj, method_name, args)
+            crate::perf_hook_slots::histogram_method(obj, method_name, args)
                 .unwrap_or_else(|| f64::from_bits(JSValue::undefined().bits()))
         }
 

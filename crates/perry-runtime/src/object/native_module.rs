@@ -873,7 +873,7 @@ unsafe fn native_module_property_by_name_impl(
     {
         // Singleton so `require("perf_hooks").performance` and the global
         // `performance` are the same object (Node identity guarantee, #1327).
-        return crate::perf_hooks::performance_namespace();
+        return crate::perf_hook_slots::performance_namespace();
     }
     if matches!(module_name, "perf_hooks" | "perf_hooks.default") && property_name == "constants" {
         // Its OWN tag. Sharing the `perf_hooks` tag made every read of the

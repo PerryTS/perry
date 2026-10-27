@@ -1195,7 +1195,7 @@ pub(crate) fn get_field_by_name_object_tail(
             let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
             let key_len = (*key).byte_len as usize;
             let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
-            if key_bytes == b"toJSON" && crate::perf_hooks::is_perf_entry_object(obj) {
+            if key_bytes == b"toJSON" && crate::perf_hook_slots::is_perf_entry_object(obj) {
                 let this_f64 =
                     f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
                 let result = js_class_method_bind(this_f64, b"toJSON".as_ptr(), 6);
