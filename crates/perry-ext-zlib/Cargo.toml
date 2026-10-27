@@ -31,7 +31,7 @@ brotli = "9.0"
 # One zlib per target: zlib-ng (C, built with cmake) natively, and on wasm32 the
 # pure-Rust libz-rs-sys, through the `stream/zsys.rs` facade.
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
-libz-ng-sys = "=1.1.29"
+libz-ng-sys = "=1.1.30"
 
 [target.'cfg(target_family = "wasm")'.dependencies]
 libz-rs-sys = { version = "=0.6.8", default-features = false, features = ["std"] }
