@@ -683,6 +683,13 @@ impl Model {
                         // Every lookup reaches Object.prototype: rather than
                         // replay them all, the derivation turns every fact
                         // off (an accessor on Object.prototype is E23).
+                        if self.explain && !self.objproto_accessor {
+                            eprintln!(
+                                "perry: wpfacts explain: E23 accessor {} on Object.prototype key {}",
+                                self.tok_name(f),
+                                self.atoms[key as usize]
+                            );
+                        }
                         self.objproto_accessor = true;
                     }
                     self.accessor_installed(t, key, f, setter, !objproto);

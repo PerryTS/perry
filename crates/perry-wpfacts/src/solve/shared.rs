@@ -80,7 +80,17 @@ impl Model {
                 match s {
                     Shared::Top => {}
                     // E23: every lookup that reaches it may run the accessor.
-                    Shared::ObjectProto => self.objproto_accessor = true,
+                    // Under a computed key it is what the installing unit
+                    // (and the whole program) makes of it: an escaped
+                    // accessor whose holder reads anything (below).
+                    Shared::ObjectProto if k != crate::STAR_KEY => {
+                        if self.explain && !self.objproto_accessor {
+                            eprintln!(
+                                "perry: wpfacts explain: E23 another unit's accessor on Object.prototype key {k}"
+                            );
+                        }
+                        self.objproto_accessor = true
+                    }
                     // A lookup of the key there runs that unit's function as
                     // getter or setter (`builtins::other_unit_accessor`).
                     _ => {
@@ -109,6 +119,11 @@ impl Model {
             // Its effect is the stores and accessors the driver derives
             // (`units::shared_closure`).
             SharedWrite::Handed(_) => {}
+            SharedWrite::Hard(s, kind) => {
+                let t = self.shared_tok(s);
+                let r = self.reason(&format!("{} by another unit", kind.code()));
+                self.mark_hard(t, *kind, r);
+            }
         }
         self.shared_replay = false;
     }
