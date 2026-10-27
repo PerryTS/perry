@@ -1504,10 +1504,7 @@ impl<'a> Gen<'a> {
         if self.m.named_shared(t).is_some() {
             return true;
         }
-        if let Some(tm) = self.m.tmpl_of(t).filter(|tm| {
-            self.m.ta_elem.contains_key(tm)
-                && (self.m.ta_birth_input.contains_key(tm) || self.m.ta_min_len.contains_key(tm))
-        }) {
+        if let Some((tm, _)) = crate::bindings::sealed_owner(&self.m, t) {
             let d = &self.m.tmpls[tm as usize].display;
             if !self
                 .unit_in
