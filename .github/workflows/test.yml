@@ -345,6 +345,12 @@ jobs:
       - name: Parity output normalizer golden fixtures
         run: python3 -m unittest tests.test_parity_normalize
 
+      # The normalizer probe is what stops the harness from comparing empty
+      # output against empty output and reporting the whole suite green. It is
+      # invisible in any green run, so it gets its own gate.
+      - name: Parity harness normalizer guard
+        run: ./tests/test_parity_normalize_guard.sh
+
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-10-04 --profile minimal --component rustfmt --component clippy
       - name: Check formatting
@@ -3966,13 +3972,14 @@ jobs:
   # test-parity/node_suite_baseline.json by
   # scripts/node_suite_regression_check.py.
   #
-  # It already runs on its own daily schedule in compiler-runtime.yml, but a
-  # workflow cannot `needs:` a job from another workflow, and `full-suite-gate`
-  # is the gate release-packages.yml's await-tests keys on. A 4442-case corpus
-  # that no release waits for is a corpus nobody reads: node:dns once went
-  # 83% -> 0% behind a green build (the checker's own docstring records it), and
-  # that is the failure mode this job exists to close. The scheduled run stays
-  # as the on-demand/dispatch lens; this is the blocking half.
+  # It also runs from compiler-runtime.yml's compatibility routing on the merge
+  # queue and on demand (`workflow_dispatch`), but a workflow cannot `needs:` a
+  # job from another workflow, and `full-suite-gate` is the gate
+  # release-packages.yml's await-tests keys on. A 4442-case corpus that no
+  # release waits for is a corpus nobody reads: node:dns once went 83% -> 0%
+  # behind a green build (the checker's own docstring records it), and that is
+  # the failure mode this job exists to close. The merge-queue arm is coverage
+  # this file does not provide; this job is the blocking half.
   #
   # The baseline is a FLOOR per module (pass >= floor.pass and
   # total >= floor.total), not a 100% demand: it blocks a regression at today's

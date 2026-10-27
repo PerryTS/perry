@@ -10,7 +10,7 @@ that unifying them changed no verdict in either lane.
 
 The last test asserts the fixture inventory is live. A golden-file suite whose
 subject silently empties out otherwise reports the same green verdict for "all
-38 cases match" and "there were no cases".
+29 cases match" and "there were no cases".
 """
 
 import os
@@ -59,6 +59,28 @@ class ParityProfileTest(unittest.TestCase):
                     parity_normalize.normalize_parity_failure(_read(source)),
                     _read(expected),
                 )
+
+    def test_trim_sits_between_the_two_delete_stages(self):
+        # The historical chain trimmed trailing whitespace BEFORE its
+        # `$`-anchored console-warning delete but AFTER its prefix-anchored
+        # ones, so the two directions are separately observable:
+        #   - padding HIDES a warning from the delete (it must survive only if
+        #     the delete moves back into the shared, earlier stage);
+        #   - a padded `Debugger listening …` line still SURVIVES, because its
+        #     delete ran before the trim ever happened.
+        # Moving the trim above the whole delete stage satisfies the first
+        # line and breaks the second, which is exactly why this assertion pins
+        # both. An independent review found this ordering unpacked by the
+        # fixture set; this is the assertion that now covers it.
+        text = (
+            "Warning: Count for label 'x' does not exist   \n"
+            "Debugger listening on ws://127.0.0.1:9229/abc   \n"
+            "kept   \n"
+        )
+        self.assertEqual(
+            parity_normalize.normalize_parity_output(text),
+            "Debugger listening on ws://127.0.0.1:9229/abc\nkept\n",
+        )
 
 
 class NodeSuiteProfileTest(unittest.TestCase):

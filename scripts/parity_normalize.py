@@ -79,14 +79,6 @@ _PARITY_DELETE = (
     re.compile(r"^Reparsing as ES module because module syntax was detected"),
     re.compile(r'^To eliminate this warning, add "type": "module"'),
     re.compile(r"^\(Use `node --trace-warnings"),
-    # Node reports an out-of-range timer duration as a process warning; Perry
-    # writes it eagerly. The pid is unstable, so it is masked but the message
-    # is kept — a dropped unit or a wrong bound must still surface.
-    re.compile(
-        r"^(\(node:[0-9]+\) )?Warning: (Count for .* does not exist"
-        r"|No such label .* for console\.(timeLog|timeEnd)\(\)"
-        r"|Label .* already exists for console\.time\(\))$"
-    ),
     # Stack frames: Node's `at <symbol> (<location>)`, Perry's `N: <symbol>`
     # native frames, and the `(… N more identical frames)` collapse. Paths and
     # line numbers vary by machine, so the frames are dropped whole; the
@@ -94,6 +86,25 @@ _PARITY_DELETE = (
     re.compile(r"^[ \t\r\v\f]+at "),
     re.compile(r"^[ \t\r\v\f]+[0-9]+: "),
     re.compile(r"^[ \t\r\v\f]+[(].*more identical frames[)]"),
+)
+
+# Node reports these console-timer warnings as process warnings; Perry writes
+# them eagerly. The pid is unstable, so it is masked but the message is kept — a
+# dropped unit or a wrong bound must still surface.
+#
+# This one rule runs at a LATER stage than the deletions above, and the position
+# is load-bearing: it is `$`-anchored, and the historical chain trimmed trailing
+# whitespace in an earlier stage than this delete but in a LATER stage than the
+# prefix-anchored ones. Running it here is what keeps `Warning: No such label 'y'
+# for console.timeEnd()  ` (padded) deleted while `Debugger listening on …   `
+# (also padded) survives, exactly as before. Trimming first instead would delete
+# both; deleting first instead would delete neither.
+_PARITY_WARNING_AFTER_TRIM = (
+    re.compile(
+        r"^(\(node:[0-9]+\) )?Warning: (Count for .* does not exist"
+        r"|No such label .* for console\.(timeLog|timeEnd)\(\)"
+        r"|Label .* already exists for console\.time\(\))$"
+    ),
 )
 
 _PARITY_TIMEOUT_PREFIX = re.compile(
@@ -201,6 +212,10 @@ def normalize_parity_output(text: str) -> str:
                 line = "%s (<duration>)" % match.group(1)
         if _REPORTER_DURATION.match(line):
             line = "ℹ duration_ms <duration>"
+
+        # Position matters — see _PARITY_WARNING_AFTER_TRIM.
+        if any(pattern.search(line) for pattern in _PARITY_WARNING_AFTER_TRIM):
+            continue
 
         line = _PARITY_PID.sub("(node:<pid>) ", line)
         out.append(line)

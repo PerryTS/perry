@@ -132,6 +132,19 @@ PARITY_CASES = {
         "(node:5) Warning: Label 'z' already exists for console.time()\n"
         "kept\n"
     ),
+    # The historical chain trimmed trailing whitespace BEFORE its `$`-anchored
+    # console-warning delete, but AFTER the prefix-anchored deletions. So
+    # padding on a warning line HIDES it from the delete, while padding on a
+    # `Debugger listening …` / `For help, see: …` line does NOT make those
+    # survive — they were evaluated before the trim. This pair pins that
+    # ordering, which is observable and was wrong in the first extraction.
+    "output__warning-after-trim": (
+        "Warning: Count for label 'x' does not exist   \n"
+        "(node:5) Warning: Label 'y' already exists for console.time()\t\n"
+        "Debugger listening on ws://127.0.0.1:9229/abc   \n"
+        "For help, see: https://nodejs.org/en/docs/inspector\t \n"
+        "kept   \n"
+    ),
     "output__trailing-empty-lines": (
         "line one\n"
         "line two\n"
@@ -229,12 +242,11 @@ NODE_SUITE_CASES = {
 def _require(path, marker, env_name):
     if os.path.isfile(path) and marker in open(path, encoding="utf-8").read():
         return
+    rel = os.path.relpath(path, ROOT)
     sys.stderr.write(
-        "ERROR: %s does not contain %s.\n"
-        "Point %s at a pre-refactor revision, for example\n"
-        "  %s=%(rev)s:%(rel)s %%(script)s\n"
-        % (path, marker, env_name, {"rev": "<rev>", "rel": os.path.relpath(path, ROOT),
-                                    "script": os.path.basename(__file__)})
+        f"ERROR: {rel} does not contain {marker}.\n"
+        f"Point {env_name} at a pre-refactor revision, for example\n"
+        f"  {env_name}=<rev>:{rel} {os.path.basename(__file__)}\n"
     )
     raise SystemExit(2)
 
