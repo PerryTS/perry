@@ -444,6 +444,7 @@ pub(super) fn detect_optional_feature_usage(
     // false-negative class for every gate at once (the rule is zero false
     // negatives; including more HIR can only over-include a feature).
     let hir_debug = module_hir_debug(hir_module);
+    ctx.uses_temporal |= global_object::may_escape(hir_module);
     ctx.uses_typedarray |= global_object::may_escape(hir_module)
         || [
             "TypedArray",
@@ -684,6 +685,7 @@ pub(super) fn detect_optional_feature_usage(
         ctx.uses_bigint = true;
     }
     let computed = computed_members::scan(hir_module);
+    ctx.uses_temporal |= ctx.uses_date && computed.opaque_members;
     ctx.uses_computed_member_keys |= computed.opaque_members;
     ctx.uses_file_handle_capability |= computed.file_handles;
     ctx.uses_bun_file_capability |= computed.bun_files;
@@ -874,7 +876,9 @@ pub(super) fn detect_optional_feature_usage(
     // user identifiers like `myTemporal` / `temporalLog`, spuriously enabling
     // the engine and undercutting the size win. JS `Date` is a separate impl.
     {
-        if hir_debug.contains("property: \"Temporal\"") {
+        if hir_debug.contains("property: \"Temporal\"")
+            || hir_debug.contains("\"toTemporalInstant\"")
+        {
             ctx.uses_temporal = true;
         }
     }

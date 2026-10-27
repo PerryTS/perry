@@ -175,7 +175,14 @@ pub(crate) fn auto_optimized_cross_features(
     {
         cross_features.push("perry-runtime/regex-engine".to_string());
     }
-    if ctx.uses_temporal {
+    let needs_dyn_eval = perry_hir::has_deferred_dynamic_code_sites()
+        || ctx.native_module_imports.contains("vm")
+        || ctx.uses_data_url_dynamic_import;
+    if ctx.uses_temporal
+        || ctx.uses_get_builtin_module
+        || needs_dyn_eval
+        || !ctx.native_addons.is_empty()
+    {
         cross_features.push("perry-runtime/temporal".to_string());
     }
     if ctx.uses_url || ctx.uses_get_builtin_module || !ctx.native_addons.is_empty() {
@@ -190,9 +197,6 @@ pub(crate) fn auto_optimized_cross_features(
     // `Intl.*` namespace surface — see perry-runtime's `intl-namespace`.
     // A deferred dynamic-code site can construct `Intl.…` from a runtime
     // string, so force it on there too (mirrors the dyn-eval regex rule).
-    let needs_dyn_eval = perry_hir::has_deferred_dynamic_code_sites()
-        || ctx.native_module_imports.contains("vm")
-        || ctx.uses_data_url_dynamic_import;
     if ctx.uses_intl_namespace || needs_dyn_eval {
         cross_features.push("perry-runtime/intl-namespace".to_string());
     }

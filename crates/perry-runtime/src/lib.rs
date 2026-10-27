@@ -1394,3 +1394,7 @@ mod builtin_value_support;
 mod bun_hook_slots;
 
 mod node_test_hook_slots;
+
+#[path = "temporal/hooked.rs"]
+pub mod temporal_hook_slots;
+mod temporal_layout;

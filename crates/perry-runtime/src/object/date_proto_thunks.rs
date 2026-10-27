@@ -141,7 +141,7 @@ extern "C" fn date_to_temporal_instant(
     this: crate::closure::JsThis,
 ) -> f64 {
     let timestamp = require_date_timestamp(this);
-    crate::temporal::instant::from_epoch_milliseconds_static(&[timestamp])
+    crate::temporal_hook_slots::from_epoch_milliseconds(&[timestamp])
 }
 
 #[cfg(not(feature = "temporal"))]

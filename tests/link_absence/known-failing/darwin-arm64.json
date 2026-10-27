@@ -213,15 +213,6 @@
     "string_normalize": [
       "perry_runtime::string::normalize_hooked::ccc"
     ],
-    "temporal": [
-      "<temporal_rs::error::ErrorKind as core::fmt::Display>::fmt",
-      "<temporal_rs::error::ErrorMessage>::to_string",
-      "perry_runtime::temporal::alloc_temporal_cell",
-      "perry_runtime::temporal::dispatch::throw_temporal",
-      "perry_runtime::temporal::instant::from_epoch_milliseconds_static",
-      "perry_runtime::temporal::is_temporal_cell_addr",
-      "perry_runtime::temporal::temporal_kind"
-    ],
     "wasm_host": [
       "perry_runtime::webassembly::define_host_property"
     ]
