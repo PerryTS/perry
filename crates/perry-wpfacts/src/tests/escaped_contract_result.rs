@@ -8,7 +8,6 @@ fn check_result_escape(summarized: bool, field_publication: bool, contract: bool
     let hir = perry_hir::lower_module(&ast, "owner", "owner.ts").unwrap();
     let mut g = Gen::new(vec![("owner.ts", &hir)], false, false);
     g.m.max_work = 50_000_000;
-    g.m.per_unit = contract;
     g.register_all();
     g.link_exports();
     g.walk_all();
@@ -98,7 +97,6 @@ fn a_closed_publication_escapes_results_only_when_callers_are_unknown() {
             let hir = perry_hir::lower_module(&ast, "owner", "owner.ts").unwrap();
             let mut g = Gen::new(vec![("owner.ts", &hir)], false, false);
             g.m.max_work = 50_000_000;
-            g.m.per_unit = true;
             g.register_all();
             g.link_exports();
             g.walk_all();
