@@ -119,6 +119,7 @@ impl ImageFixture {
         let lock = IMAGE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         crate::test_support::bootstrap_test_thread();
         reset_image();
+        crate::value::addr_class::realm::install_fixture_layout();
         unsafe { (*object_header()).obj_type = GC_TYPE_OBJECT };
         crate::gc::image_cells::hold_image_for_tests(true);
         crate::gc::image_cells::forget_for_tests();
@@ -151,7 +152,11 @@ fn set(name: &str, bits: u64) {
 }
 fn call_value() -> f64 {
     let bits = get("value");
-    assert_eq!(bits & TAG_MASK, POINTER_TAG, "value must be a function object");
+    assert_eq!(
+        bits & TAG_MASK,
+        POINTER_TAG,
+        "value must be a function object"
+    );
     crate::closure::js_closure_call0(
         (bits & POINTER_MASK) as *const ClosureHeader,
         crate::closure::plain_call_receiver(),
@@ -170,9 +175,19 @@ fn names_live_object(bits: u64) -> bool {
 }
 
 unsafe fn assert_string_slot(bits: u64, expected: &str) {
-    assert_eq!(bits & TAG_MASK, STRING_TAG, "slot no longer holds a string: {bits:#x}");
-    assert!(names_live_object(bits), "slot names no live object: {bits:#x}");
-    assert_string_bytes((bits & POINTER_MASK) as *const crate::StringHeader, expected.as_bytes());
+    assert_eq!(
+        bits & TAG_MASK,
+        STRING_TAG,
+        "slot no longer holds a string: {bits:#x}"
+    );
+    assert!(
+        names_live_object(bits),
+        "slot names no live object: {bits:#x}"
+    );
+    assert_string_bytes(
+        (bits & POINTER_MASK) as *const crate::StringHeader,
+        expected.as_bytes(),
+    );
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -220,7 +235,10 @@ fn collect(collector: Collector) {
             let just_due = crate::arena::arena_total_bytes().saturating_sub(1);
             GC_NEXT_TRIGGER_BYTES.with(|trigger| trigger.set(just_due));
             let mut result = JsGcStepResult::default();
-            assert_eq!(js_gc_step_work_units(1, &mut result), JS_GC_STEP_STATUS_ACTIVE);
+            assert_eq!(
+                js_gc_step_work_units(1, &mut result),
+                JS_GC_STEP_STATUS_ACTIVE
+            );
             assert_eq!(result.collection_kind, GcCollectionKind::Minor.ffi_code());
             complete_budgeted_gc_cycle();
             GC_NEXT_TRIGGER_BYTES.with(|trigger| trigger.set(usize::MAX));
@@ -234,7 +252,10 @@ fn collect(collector: Collector) {
             GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.set(old_in_use));
             GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(true));
             let mut result = JsGcStepResult::default();
-            assert_eq!(js_gc_step_work_units(1, &mut result), JS_GC_STEP_STATUS_ACTIVE);
+            assert_eq!(
+                js_gc_step_work_units(1, &mut result),
+                JS_GC_STEP_STATUS_ACTIVE
+            );
             assert_eq!(result.collection_kind, GcCollectionKind::Full.ffi_code());
             complete_budgeted_gc_cycle();
         }
@@ -266,8 +287,12 @@ fn image_cells_are_classified_by_range_not_by_header_bits() {
     let _image = ImageFixture::take();
     let realm = crate::value::addr_class::realm::bounds();
     assert!(realm.0 < realm.1, "the perry_realm section must exist");
-    assert!(crate::value::addr_class::realm::is_image_object(object_user()));
-    assert!(crate::value::addr_class::realm::is_image_object(closure_user()));
+    assert!(crate::value::addr_class::realm::is_image_object(
+        object_user()
+    ));
+    assert!(crate::value::addr_class::realm::is_image_object(
+        closure_user()
+    ));
     let mut walked = Vec::new();
     crate::value::addr_class::realm::for_each_cell(&mut |h| walked.push(h as usize));
     let closure_header = closure_user() - GC_HEADER_SIZE;
@@ -275,10 +300,26 @@ fn image_cells_are_classified_by_range_not_by_header_bits() {
         .iter()
         .position(|&h| h == closure_header)
         .expect("the walk finds the function cell");
-    assert_eq!(walked.get(at + 1), Some(&(object_header() as usize)), "and the object cell after it");
+    assert_eq!(
+        walked.get(at + 1),
+        Some(&(object_header() as usize)),
+        "and the object cell after it"
+    );
     unsafe {
-        assert!(crate::value::addr_class::try_read_tracked_gc_header_of_type(object_user(), GC_TYPE_OBJECT).is_some());
-        assert!(crate::value::addr_class::try_read_tracked_gc_header_of_type(closure_user(), GC_TYPE_CLOSURE).is_some());
+        assert!(
+            crate::value::addr_class::try_read_tracked_gc_header_of_type(
+                object_user(),
+                GC_TYPE_OBJECT
+            )
+            .is_some()
+        );
+        assert!(
+            crate::value::addr_class::try_read_tracked_gc_header_of_type(
+                closure_user(),
+                GC_TYPE_CLOSURE
+            )
+            .is_some()
+        );
         // The counterfeit carries the same header bytes outside the section.
         let fake = std::ptr::addr_of_mut!((*std::ptr::addr_of_mut!(COUNTERFEIT)).object) as usize;
         assert!(!crate::value::addr_class::realm::is_image_object(fake));
@@ -317,7 +358,11 @@ fn reads_through_the_image_survive_every_collector() {
     for collector in EVERY_COLLECTOR {
         collect(collector);
         unsafe {
-            assert_eq!((*object_header()).gc_flags, IMAGE_FLAGS, "{collector:?} touched the image header");
+            assert_eq!(
+                (*object_header()).gc_flags,
+                IMAGE_FLAGS,
+                "{collector:?} touched the image header"
+            );
         }
         assert_eq!(call_value(), 42.0, "after {collector:?}");
         let back = crate::object::js_object_get_field_by_name(
@@ -325,7 +370,11 @@ fn reads_through_the_image_survive_every_collector() {
             key("realm"),
         )
         .bits();
-        assert_eq!(back, POINTER_TAG | object_user() as u64, "heap→image edge after {collector:?}");
+        assert_eq!(
+            back,
+            POINTER_TAG | object_user() as u64,
+            "heap→image edge after {collector:?}"
+        );
     }
 }
 
@@ -370,7 +419,9 @@ fn a_heap_child_stored_like_generated_code_survives_every_collector() {
         // live header (an image header has no ARENA bit, so it is taken),
         // then `js_write_barrier_slot` with the NaN-boxed parent.
         *done_slot() = bits;
-        assert!(parent_flags_may_need_remembering((*object_header()).gc_flags));
+        assert!(parent_flags_may_need_remembering(
+            (*object_header()).gc_flags
+        ));
         js_write_barrier_slot(POINTER_TAG | object_user() as u64, done_slot() as u64, bits);
     });
 }
@@ -414,7 +465,11 @@ fn knockout_image_root_visits_lose_the_image_shape_keys() {
     let _quiet = quiet();
     let _knock = sabotage::Guard::arm(sabotage::ROOTS);
     collect(Collector::FullMarkSweep);
-    assert_ne!(get("value") & TAG_MASK, POINTER_TAG, "the lookup should miss once the keys are gone");
+    assert_ne!(
+        get("value") & TAG_MASK,
+        POINTER_TAG,
+        "the lookup should miss once the keys are gone"
+    );
 }
 
 #[test]
@@ -433,7 +488,9 @@ fn knockout_the_barrier_loses_the_child_in_a_copying_minor() {
     let _quiet = quiet();
     let _knock = sabotage::Guard::arm(sabotage::BARRIER);
     set("done", young_payload("unremembered"));
-    assert!(!crate::gc::image_cells::image_cell_remembered(object_header()));
+    assert!(!crate::gc::image_cells::image_cell_remembered(
+        object_header()
+    ));
     collect(Collector::CopyingMinor);
     assert!(!names_live_object(unsafe { *done_slot() }));
 }
@@ -482,7 +539,11 @@ fn adding_keys_to_the_image_object_survives_every_collector() {
         set(&name, young_payload(&format!("value-{i}")));
     }
     unsafe {
-        assert_ne!((*image()).object.parent_class_id, ITERATOR_RESULT, "the shape transitioned");
+        assert_ne!(
+            (*image()).object.parent_class_id,
+            ITERATOR_RESULT,
+            "the shape transitioned"
+        );
     }
     for collector in EVERY_COLLECTOR {
         collect(collector);
@@ -502,7 +563,11 @@ fn a_key_added_with_a_primitive_keeps_the_image_shape_through_full_collections()
     let _image = ImageFixture::take();
     let _quiet = quiet();
     set("n", 7.0f64.to_bits());
-    for collector in [Collector::FullMarkSweep, Collector::BudgetedFull, Collector::FullMarkSweep] {
+    for collector in [
+        Collector::FullMarkSweep,
+        Collector::BudgetedFull,
+        Collector::FullMarkSweep,
+    ] {
         collect(collector);
         assert_eq!(get("n"), 7.0f64.to_bits(), "after {collector:?}");
         assert_eq!(call_value(), 42.0);
@@ -558,18 +623,35 @@ fn evacuating_the_image_forwards_every_pointer_into_the_copy() {
     let evacuation = crate::gc::image_evacuate::evacuate_realm_image();
     assert!(evacuation.cell_count() >= 2);
     let leftovers = crate::gc::image_evacuate::words_pointing_into_image(&evacuation);
-    assert!(leftovers.is_empty(), "words still naming the image: {leftovers:x?}");
-    let copy = evacuation.forward(object_user()).expect("the object cell was copied");
-    let closure_copy = evacuation.forward(closure_user()).expect("the function cell was copied");
+    assert!(
+        leftovers.is_empty(),
+        "words still naming the image: {leftovers:x?}"
+    );
+    let copy = evacuation
+        .forward(object_user())
+        .expect("the object cell was copied");
+    let closure_copy = evacuation
+        .forward(closure_user())
+        .expect("the function cell was copied");
     assert!(!crate::value::addr_class::realm::is_image_object(copy));
-    assert!(build_valid_pointer_set().contains(&copy), "the copy is an ordinary heap cell");
+    assert!(
+        build_valid_pointer_set().contains(&copy),
+        "the copy is an ordinary heap cell"
+    );
     let scope = RuntimeHandleScope::new();
     let rooted = scope.root_raw_mut_ptr(copy as *mut u8);
     let read = |name: &str| {
-        crate::object::js_object_get_field_by_name(rooted.get_raw_mut_ptr::<ObjectHeader>(), key(name))
-            .bits()
+        crate::object::js_object_get_field_by_name(
+            rooted.get_raw_mut_ptr::<ObjectHeader>(),
+            key(name),
+        )
+        .bits()
     };
-    assert_eq!(read("value"), POINTER_TAG | closure_copy as u64, "the copy names the copied function");
+    assert_eq!(
+        read("value"),
+        POINTER_TAG | closure_copy as u64,
+        "the copy names the copied function"
+    );
     // A patch on the copy is invisible to the image, and vice versa.
     crate::object::js_object_set_field_by_name(
         rooted.get_raw_mut_ptr::<ObjectHeader>(),
@@ -588,7 +670,9 @@ fn evacuating_the_image_forwards_every_pointer_into_the_copy() {
             crate::closure::plain_call_receiver(),
         );
         assert_eq!(call, 42.0, "the copied function after {collector:?}");
-        assert!(!crate::value::addr_class::realm::is_image_object((value & POINTER_MASK) as usize));
+        assert!(!crate::value::addr_class::realm::is_image_object(
+            (value & POINTER_MASK) as usize
+        ));
     }
 }
 
@@ -601,8 +685,9 @@ fn knockout_forwarding_leaves_words_naming_the_image() {
     let leftovers = crate::gc::image_evacuate::words_pointing_into_image(&evacuation);
     let copy = evacuation.forward(object_user()).unwrap();
     assert!(
-        leftovers.iter().any(|&(at, _)| at > copy && at < copy + OBJECT_CELL as usize),
+        leftovers
+            .iter()
+            .any(|&(at, _)| at > copy && at < copy + OBJECT_CELL as usize),
         "the object copy's `value` slot must still name the image: {leftovers:x?}"
     );
 }
-

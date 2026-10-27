@@ -100,7 +100,8 @@ unsafe fn cell_header_is_well_formed(header_addr: usize, end: usize) -> bool {
     let gc = &*(header_addr as *const GcHeader);
     let size = gc.size as usize;
     crate::gc::gc_type_is_known(gc.obj_type)
-        && gc.gc_flags & (IMAGE_CELL_FLAGS | crate::gc::GC_FLAG_ARENA | crate::gc::GC_FLAG_FORWARDED)
+        && gc.gc_flags
+            & (IMAGE_CELL_FLAGS | crate::gc::GC_FLAG_ARENA | crate::gc::GC_FLAG_FORWARDED)
             == IMAGE_CELL_FLAGS
         && size >= GC_HEADER_SIZE
         && size % 8 == 0
@@ -176,12 +177,28 @@ pub static perry_realm_fixture_info: crate::closure::JsFunctionInfo =
         realm_fixture_body as crate::codegen_abi::JsBody0<crate::closure::ClosureHeader>,
     );
 
+/// Install the shape of the fixture object's layout (`ITERATOR_RESULT`) in
+/// this agent. A runtime layout's shape is installed by its first birth
+/// (`layout_desc::layout_word_for_birth`, #13345); an image cell is born by
+/// the image, so whoever first makes it reachable installs it.
+pub(crate) fn install_fixture_layout() {
+    // SAFETY: a runtime descriptor of this binary.
+    let installed = unsafe {
+        crate::object::layout_desc::layout_word_for_birth(std::ptr::addr_of!(
+            crate::object::runtime_layouts::ITERATOR_RESULT
+        ))
+    };
+    assert!(installed.is_some(), "realm fixture layout not installed");
+}
+
 /// Publish the realm fixture object as `globalThis.__perryRealmFixture` (WRT
 /// step 1, `PERRY_REALM_TEST_FIXTURE`), so a program can reach it before
 /// step 3 makes the global object itself an image cell. Only the fixture's
 /// `main` references it.
 #[no_mangle]
 pub extern "C" fn js_realm_test_fixture_publish(value: f64) {
+    // Publishing is the fixture object's birth in this agent.
+    install_fixture_layout();
     let global = crate::object::js_get_global_this().to_bits() & crate::value::POINTER_MASK;
     let key = b"__perryRealmFixture";
     let key = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
