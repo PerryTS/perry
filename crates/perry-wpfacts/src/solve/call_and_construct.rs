@@ -746,18 +746,22 @@ impl Model {
         if self.interp_free
             && self.dyn_eval.is_none()
             && (self.pub_reason == Some(reason) || self.closed_pub_reason == Some(reason))
+            && !self.is_cell_arr(t)
+            && self.stand_in(t)
         {
-            let fwd = |m: &Self, f: Option<FnIdx>| f.is_some_and(|f| m.funcs[f as usize].forwarded);
-            let stand_in = match self.toks[t as usize] {
-                TokKind::Obj(tm, _) | TokKind::ClassObj(tm) | TokKind::Proto(tm) => {
-                    self.foreign.contains_key(&tm) && fwd(self, self.tmpls[tm as usize].ctor)
-                }
-                TokKind::Func(f, _) => fwd(self, Some(f)),
-                _ => false,
-            };
-            if stand_in {
-                return;
-            }
+            return;
+        }
+        // DECISIONS 174: another unit's value read through cell `thrown`
+        // reaches interpreted code as that unit threw it. The first unit to
+        // throw it escaped it (each thrower sinks what it throws), and that
+        // is its write; the others re-escaped it, each publishing ⊤ for
+        // what it reaches (opencode: every unit ⊤ for the ~210 arrays the
+        // program throws, 27M cell writes in round 3).
+        if self.thrown_reason == Some(reason)
+            && self.thrown_in.contains(&t)
+            && self.stand_in(t)
+        {
+            return;
         }
         if self.closed_pub_reason == Some(reason) {
             if let TokKind::Func(f, _) = self.toks[t as usize] {
@@ -840,6 +844,23 @@ impl Model {
         self.with_s(|m| m.escape_inner(t, reason));
         for s in self.wide_sites(t) {
             self.escape(s, reason);
+        }
+    }
+
+    /// Another unit's class, instance, prototype, function or array this
+    /// unit holds through a contract (a stand-in).
+    fn stand_in(&self, t: Tok) -> bool {
+        let fwd = |f: Option<FnIdx>| f.is_some_and(|f| self.funcs[f as usize].forwarded);
+        match self.toks[t as usize] {
+            TokKind::Obj(tm, _) if self.is_cell_arr(t) => matches!(
+                self.tmpls[tm as usize].kind,
+                TmplKind::Arr { site: u32::MAX, .. } | TmplKind::BObj { site: u32::MAX, .. }
+            ),
+            TokKind::Obj(tm, _) | TokKind::ClassObj(tm) | TokKind::Proto(tm) => {
+                self.foreign.contains_key(&tm) && fwd(self.tmpls[tm as usize].ctor)
+            }
+            TokKind::Func(f, _) => fwd(Some(f)),
+            _ => false,
         }
     }
 

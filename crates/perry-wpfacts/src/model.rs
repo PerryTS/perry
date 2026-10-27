@@ -1232,6 +1232,12 @@ pub struct Model {
     /// publishes `global:*` unknown, as for a global unmodeled code writes.
     pub global_cells: bool,
     pub global_late: bool,
+    /// This unit's own code (not a replayed write of another unit's,
+    /// `shared_replay`) put the globals in reach of unmodeled code: the
+    /// global object reached ⊤, a computed key of it was written, a global
+    /// was named after the boundary. Its `global:*` write says so; a
+    /// replayed one is its writer's, published there already.
+    pub global_written_own: bool,
     /// DECISIONS 94: arrays published through an element cell
     /// (`arr:<name>`, `Gen::arr_leaves`) and other units' arrays this unit
     /// holds, each with the seed of cell `arr:<name>#named`: a named field
@@ -1419,6 +1425,12 @@ pub struct Model {
     /// The reason of a publication to another unit (`unit_boundary`): a
     /// published method's receiver is its contract's then (DECISIONS 85).
     pub pub_reason: Option<u32>,
+    /// The reason thrown values reach interpreted code (`compute_in`), and
+    /// what the seed of cell `thrown` holds: the values the other units
+    /// threw (DECISIONS 174), as their contracts name them. Another unit's
+    /// value thrown there escaped in its thrower's solve (`escape`).
+    pub thrown_reason: Option<u32>,
+    pub thrown_in: crate::pts::FxHashSet<Tok>,
     /// The function contracts the census broke (`fn:<name>`): published as
     /// escapes, not contracts.
     pub broken_fns: crate::pts::FxHashSet<String>,

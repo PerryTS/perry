@@ -1006,6 +1006,7 @@ impl<'a> Gen<'a> {
         let Some(u) = self.unit_in else { return };
         let me = self.view.map(|v| v.key.clone()).unwrap_or_default();
         let seed = self.m.node_named("cell", || format!("cell({key})"));
+        self.cell_seeds.insert(n, seed);
         if u.cells_top {
             self.m
                 .add_top(seed, |_| "cell written by a unit over the bound".into());
@@ -1020,6 +1021,10 @@ impl<'a> Gen<'a> {
                 continue;
             }
             let v = self.stand_in_value(0, key, &w.c);
+            if n == self.thrown {
+                let held = self.m.nodes[v as usize].pts.to_sorted();
+                self.m.thrown_in.extend(held);
+            }
             self.m.edge(v, seed);
         }
         self.m.edge(seed, n);

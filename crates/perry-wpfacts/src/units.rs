@@ -1709,8 +1709,12 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
             for &si in &todo {
                 exports_seen[si] = visible(si, &exports);
             }
+            let mut level_max = (0usize, 0u64, 0usize);
             for (si, mut u) in solve_level(&todo, &solves, sorted, &ucfg, &input) {
                 work += u.stats.work;
+                level_max.0 = level_max.0.max(u.stats.nodes);
+                level_max.1 = level_max.1.max(u.stats.pts_entries);
+                level_max.2 = level_max.2.max(u.sites.len());
                 exports[si] = digest(&(&u.contracts_out, &u.fn_contracts_out, &u.values_out));
                 // DECISIONS 197: a unit's write into a cell is its last
                 // write joined with what its latest solve writes, as its
@@ -1734,6 +1738,18 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
                 }
                 per_unit[si] = Some(u);
                 shared_seen[si] = shared_rounds.len() - 1;
+            }
+            if cfg.report && !todo.is_empty() {
+                eprintln!(
+                    "perry: wpfacts census r{rounds} level {}/{} solved {} max nodes {} pts {} sites {} {}",
+                    level_of[todo[0]],
+                    levels.len(),
+                    todo.len(),
+                    level_max.0,
+                    level_max.1,
+                    level_max.2,
+                    census(&per_unit, &input, &shared_rounds)
+                );
             }
             // The level's contracts, published in `order` sequence: the
             // next level's one input.
@@ -2204,6 +2220,13 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
             shared_rounds.push(shared.clone());
         }
         input.shared = shared;
+        if cfg.report {
+            eprintln!(
+                "perry: wpfacts census r{rounds} end seeds {} {}",
+                seeds.len(),
+                census(&per_unit, &input, &shared_rounds)
+            );
+        }
         let fresh: Vec<String> = reports
             .into_iter()
             .filter(|d| !input.broken.contains(d))
@@ -2236,6 +2259,15 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         if cfg.unit_io {
             pf.unit_io = unit_io(sorted, &solves, &order, &per_unit, &input);
         }
+        // The cells' writes at the fixpoint, each once per unit writing it
+        // (each unit holds its own), for the tests to read their size.
+        #[cfg(test)]
+        for (k, ws) in &input.cells {
+            for w in ws {
+                pf.cells_out
+                    .extend(w.writers.iter().map(|_| (k.clone(), w.c.clone())));
+            }
+        }
         for (si, u) in per_unit.into_iter().enumerate() {
             let u = u.expect("every unit solved");
             // Its layouts, for the tests to read the contracts' form
@@ -2264,6 +2296,71 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         pf.shared_out = input.shared.iter().cloned().collect();
         return pf;
     }
+}
+
+/// The driver's held state for the census line (`FactsConfig::report`):
+/// what the latest solves keep and what the round publishes, with the RSS.
+fn census(
+    per_unit: &[Option<ProgramFacts>],
+    input: &Published,
+    shared_rounds: &[std::collections::BTreeSet<crate::model::SharedWrite>],
+) -> String {
+    let us = per_unit.iter().flatten();
+    let sum = |f: &dyn Fn(&ProgramFacts) -> usize| us.clone().map(f).sum::<usize>();
+    let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
+    let mib = |k: &str| {
+        status
+            .lines()
+            .find(|l| l.starts_with(k))
+            .and_then(|l| l.split_whitespace().nth(1))
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(0)
+            >> 10
+    };
+    let handed = input
+        .shared
+        .iter()
+        .filter(|w| matches!(w, crate::model::SharedWrite::Handed(_)))
+        .count();
+    let reads = |u: &ProgramFacts| {
+        u.shared_reads.keys.len()
+            + u.shared_reads
+                .objects
+                .values()
+                .map(|k| k.as_ref().map_or(1, |k| k.len()))
+                .sum::<usize>()
+    };
+    format!(
+        "| rss {} hwm {} MiB | units {} sites {} tmpls {} toks {} shared_out {} cells_out {} cells_read {} layouts_out {} layouts_read {} fns_read {} contracts_out {} values_out {} shared_reads {} | in layouts {} classes {} fns {} values {} own_fns {} cells {} shared {} handed {} writes {} stores {} args {} | shared_rounds {} entries {}",
+        mib("VmRSS:"),
+        mib("VmHWM:"),
+        us.clone().count(),
+        sum(&|u| u.sites.len()),
+        sum(&|u| u.templates.len()),
+        sum(&|u| u.tok_names.len()),
+        sum(&|u| u.shared_out.len()),
+        sum(&|u| u.cells_out.len()),
+        sum(&|u| u.cells_read.len()),
+        sum(&|u| u.layouts_out.len()),
+        sum(&|u| u.layouts_read.len()),
+        sum(&|u| u.fns_read.len()),
+        sum(&|u| u.contracts_out.len()),
+        sum(&|u| u.values_out.len()),
+        sum(&reads),
+        input.layouts.len(),
+        input.classes.len(),
+        input.fns.len(),
+        input.values.len(),
+        input.own_fns.len(),
+        input.cells.len(),
+        input.shared.len(),
+        handed,
+        input.writes.len(),
+        input.stores.values().map(|v| v.len()).sum::<usize>(),
+        input.args.len(),
+        shared_rounds.len(),
+        shared_rounds.iter().map(|s| s.len()).sum::<usize>(),
+    )
 }
 
 /// Does replaying `w` (`Model::replay_shared`) do exactly what the unit

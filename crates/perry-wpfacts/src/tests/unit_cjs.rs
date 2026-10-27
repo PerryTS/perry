@@ -179,7 +179,7 @@ fn a_class_bound_through_its_self_cell_is_a_contract() {
     let classes = |pf: &ProgramFacts| -> Vec<String> {
         escaped(pf)
             .into_iter()
-            .filter(|t| t.starts_with("r.js:R ") || t.starts_with("r.js:S "))
+            .filter(|t| t.starts_with("/t2/r.js:R ") || t.starts_with("/t2/r.js:S "))
             .collect()
     };
     assert!(pw.len() >= 8, "whole-program proves {:?}", pw);
@@ -190,7 +190,7 @@ fn a_class_bound_through_its_self_cell_is_a_contract() {
     let k_kind = |pf: &ProgramFacts| {
         pf.templates
             .iter()
-            .find(|t| t.display == "r.js:T")
+            .find(|t| t.display == "/t2/r.js:T")
             .and_then(|t| t.fields.iter().find(|f| f.key == "k"))
             .map(|f| (f.kind.top, f.kind.prims))
     };
@@ -230,19 +230,17 @@ fn only_a_unit_consuming_the_registry_union_reads_it() {
     modules.dedup();
     // On main's support module the wrappers' computed-specifier arms and the
     // support module's own `requireComputed` and `refresh` consume it too:
-    // still only the consuming units read it (DECISIONS 171).
+    // still only the consuming units read it (DECISIONS 171). A wrapper's
+    // parent link reads no registry writes: per unit the parent is another
+    // unit's record (`linkPathModuleParent`), and a computed require's
+    // result another unit's exports (`requirePathModule`).
     assert_eq!(
         readers,
         [
-            "/t6/benchmark.js#u11",
             "/t6/cd.js#u17",
-            "/t6/cd.js#u42",
             "/t6/perry_cjs.js#u4",
-            "/t6/perry_cjs.js#u10",
             "/t6/perry_cjs.js#u14",
             "/t6/sa_CD.js#u9",
-            "/t6/sa_CD.js#u20",
-            "/t6/som.js#u19"
         ],
         "{units} units, modules {modules:?}"
     );

@@ -85,6 +85,9 @@ pub struct FactsConfig {
     /// Per-unit inputs/outputs digests in the dump (`# uio` / `# uout`):
     /// what an edit changes, unit by unit (design §13.3).
     pub unit_io: bool,
+    /// The per-unit driver prints a census line per dependency level and
+    /// per round (`PERRY_FACTS_REPORT=1`): what each holds, and the RSS.
+    pub report: bool,
 }
 
 /// Module path → `export … from` source → the module path it resolves to.
@@ -1974,6 +1977,7 @@ pub(crate) fn compute_in<'a>(
         // summary node.
         let r = g.m.reason("thrown where interpreted code can catch it");
         let thrown = g.m.thrown;
+        g.m.thrown_reason = Some(r);
         g.m.sink_node(thrown, r);
     }
     g.m.summarize_and_replay();
@@ -2541,10 +2545,13 @@ pub(crate) fn compute_in<'a>(
         })
         .collect();
     // What it writes into each cell (design §17.16 (b)): what the cell node
-    // holds, the other units' writes it read included (a forwarded stand-in
-    // is its owner's contract, a join adds nothing): the cells grow
-    // monotonically to the fixpoint. Undescribed (`Gen::cell_bad`) or over
-    // the bound, unknown.
+    // holds but the other units' writes it read (`Gen::cell_seeds`): those
+    // are their writers' writes, in the cell already, and the cells grow
+    // monotonically to the fixpoint (DECISIONS 197). Written back they
+    // would make every reader a writer of the whole cell (opencode: 2871
+    // readers of `cjs:*` each publishing its 1929 writes, and each next
+    // reader taking one stand-in per such write). Undescribed
+    // (`Gen::cell_bad`) or over the bound, unknown.
     let mut cells_out: Vec<(String, units::ValueContract)> = g
         .cells
         .iter()
@@ -2560,13 +2567,14 @@ pub(crate) fn compute_in<'a>(
             }
             // DECISIONS 162: an own parameter's marker in it is the callers'
             // argument, which their units store there themselves.
+            let read = g.cell_seeds.get(n).map(|&s| &g.m.nodes[s as usize]);
             let toks: Vec<model::Tok> = node
                 .pts
                 .to_sorted()
                 .into_iter()
-                .filter(|t| !g.cell_flow_toks.contains(t))
+                .filter(|t| !g.cell_flow_toks.contains(t) && !read.is_some_and(|r| r.pts.contains_tok(*t)))
                 .collect();
-            let prim = node.prim;
+            let prim = node.prim & !read.map_or(0, |r| r.prim);
             if toks.is_empty() && prim == 0 {
                 return None;
             }
@@ -2584,17 +2592,10 @@ pub(crate) fn compute_in<'a>(
         .collect();
     // Its globals as unmodeled code may write them (the global object
     // reached ⊤, a computed key was written, a key named after the
-    // boundary): every unit's global cells read ⊤.
-    let gt =
-        g.m.tok_index
-            .get(&model::TokKind::Builtin(model::BuiltinNs::GlobalThis))
-            .copied();
-    if g.m.global_cells
-        && (g.m.aborted
-            || g.m.global_in_top
-            || g.m.global_late
-            || gt.is_some_and(|t| g.m.native_writes.contains_key(&(t, None))))
-    {
+    // boundary): every unit's global cells read ⊤. Its own code's, as a
+    // cell write is (`Model::global_written_own`): a replayed write of
+    // another unit's is that unit's `global:*` write.
+    if g.m.global_cells && (g.m.aborted || g.m.global_written_own) {
         let vc = units::ValueContract {
             unknown: true,
             prim: model::prim::ALL,
