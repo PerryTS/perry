@@ -299,6 +299,7 @@ pub(crate) fn install() {
         JS_PROCESS_STDOUT.set(crate::os::js_process_stdout);
         JS_UTIL_CONVERT_PROCESS_SIGNAL_TO_EXIT_CODE
             .set(crate::os::signal::js_util_convert_process_signal_to_exit_code);
+        #[cfg(all(unix, not(target_arch = "wasm32")))]
         ON_SIGNAL_COMPLETION.set(crate::os::signal::on_signal_completion);
         PROCESS_STDIN_NEEDS_PUMP.set(crate::os::process_stdin_needs_pump);
         PUMP_PROCESS_STDIN.set(crate::os::pump_process_stdin);
