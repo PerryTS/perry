@@ -370,11 +370,24 @@ impl<'a> Gen<'a> {
                     self.m.edge(record, self.cjs_registry);
                     // The runtime links the requiring module's cached record,
                     // or a stand-in object it makes for a parent outside the
-                    // cache (`module_require.rs` `link_parent`).
+                    // cache (`module_require.rs` `link_parent`). The whole
+                    // program holds the records of the registry union. Per
+                    // unit the requiring module is another module, its
+                    // record another unit's value: unknown, as all their
+                    // code is (`FactsConfig::unit`). Through the registry
+                    // cell every CommonJS unit would read every unit's
+                    // registry writes for a field its code rarely reads
+                    // (opencode: 14879 units, 1929 writes each).
                     let pa = self.m.atom("parent");
                     let (_, stand_in) = self.bobj(fx.module, "CjsParent");
-                    let registry = self.cjs_registry;
-                    self.m.edge(registry, stand_in);
+                    if self.unit_in.is_some() {
+                        self.m.add_top(stand_in, |_| {
+                            "the requiring module's record: another unit's".into()
+                        });
+                    } else {
+                        let registry = self.cjs_registry;
+                        self.m.edge(registry, stand_in);
+                    }
                     self.store(
                         fx,
                         record,
@@ -412,9 +425,21 @@ impl<'a> Gen<'a> {
                     }
                     _ => true,
                 };
+                // Per unit a computed path is another module's exports:
+                // another unit's value, unknown (`FactsConfig::unit`), as
+                // the parent link's record is. Read through the registry
+                // cell, each such unit took a stand-in of every registry
+                // write and published a ⊤ write for each array it let
+                // escape (opencode: 1122 units x 3660 arrays, 54.6M writes).
                 if whole_registry {
-                    self.m
-                        .cons(self.cjs_registry, Cons::CjsPublish { dst: out });
+                    if self.unit_in.is_some() {
+                        self.m
+                            .add_top(out, |_| "a computed require: another unit's exports".into());
+                        self.m.add_prim(out, prim::ALL);
+                    } else {
+                        self.m
+                            .cons(self.cjs_registry, Cons::CjsPublish { dst: out });
+                    }
                 }
                 self.m.add_prim(out, prim::UNDEF);
                 out

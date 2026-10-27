@@ -2082,6 +2082,9 @@ pub fn note_native_write(m: &mut Model, t: Tok, key: Option<Key>, what: &str) {
         Some(Key::Named(a)) if a != star => Some(a),
         _ => None,
     };
+    if k.is_none() && !m.shared_replay && t != TOP {
+        m.global_written_own |= matches!(m.toks[t as usize], TokKind::Builtin(BuiltinNs::GlobalThis));
+    }
     if m.explain && !m.shared_replay && t == TOP && k.is_none() {
         eprintln!("perry: wpfacts explain: computed write on ⊤: {what}");
     }
@@ -2106,6 +2109,7 @@ pub fn note_native_write(m: &mut Model, t: Tok, key: Option<Key>, what: &str) {
 
 /// The global object may now be ⊤: stores into ⊤ may have written globals.
 pub fn note_global_in_top(m: &mut Model) {
+    m.global_written_own |= !m.shared_replay;
     if !m.global_in_top {
         m.global_in_top = true;
         replay_native_missing(m);
@@ -2263,6 +2267,7 @@ pub fn global_field(m: &mut Model, g: Tok, a: Atom) -> NodeId {
     m.global_fields.push((a, n));
     if m.global_cells {
         m.global_late = true;
+        m.global_written_own |= !m.shared_replay;
         m.add_top(n, |_| "global named after the unit boundary".into());
         m.add_prim(n, prim::ALL);
         let r = m.reason("stored into a global named after the unit boundary");

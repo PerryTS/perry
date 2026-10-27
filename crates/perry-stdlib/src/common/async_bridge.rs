@@ -692,7 +692,6 @@ pub extern "C" fn js_stdlib_has_active_handles() -> i32 {
 /// # Safety
 /// `promise_ptr` must point to a live Perry Promise, as for
 /// [`spawn_for_promise_deferred`].
-#[cfg(not(target_arch = "wasm32"))]
 pub unsafe fn pool_for_promise_deferred<T, W, C>(
     promise_ptr: *mut u8,
     work: W,

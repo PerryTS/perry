@@ -222,7 +222,7 @@ fn a_class_bound_through_its_self_cell_is_a_contract() {
     let classes = |pf: &ProgramFacts| -> Vec<String> {
         escaped(pf)
             .into_iter()
-            .filter(|t| t.starts_with("r.js:R ") || t.starts_with("r.js:S "))
+            .filter(|t| t.starts_with("/t2/r.js:R ") || t.starts_with("/t2/r.js:S "))
             .collect()
     };
     assert!(pw.len() >= 8, "whole-program proves {:?}", pw);
@@ -242,7 +242,7 @@ fn a_class_bound_through_its_self_cell_is_a_contract() {
     let k_kind = |pf: &ProgramFacts| {
         pf.templates
             .iter()
-            .find(|t| t.display == "r.js:T")
+            .find(|t| t.display == "/t2/r.js:T")
             .and_then(|t| t.fields.iter().find(|f| f.key == "k"))
             .map(|f| (f.kind.top, f.kind.prims))
     };
@@ -290,19 +290,16 @@ fn only_a_unit_consuming_the_registry_union_reads_it() {
     modules.dedup();
     // The program is not closed (`sa_CD.js` requires by a computed
     // specifier). Static edges (CJL) read the cache by their literal paths,
-    // so a module's only consumer is the unit holding its wrapper's
-    // `require` (its computed arm), plus the support module's loader units:
-    // 7 of some 200 units.
+    // so a module's consumers are the support module's loader units alone:
+    // a wrapper's parent link reads no registry writes (per unit the parent
+    // is another unit's record, `linkPathModuleParent`), and its computed
+    // arm's `require` result is another unit's exports (`requirePathModule`):
+    // 2 of some 200 units.
     assert_eq!(
         readers,
         [
-            "/t6/benchmark.js#u13",
-            "/t6/cd.js#u48",
             "/t6/perry_cjs.js#u4",
-            "/t6/perry_cjs.js#u6",
-            "/t6/perry_cjs.js#u12",
-            "/t6/sa_CD.js#u23",
-            "/t6/som.js#u21"
+            "/t6/perry_cjs.js#u6"
         ],
         "{units} units, modules {modules:?}"
     );
@@ -611,7 +608,7 @@ fn a_property_of_a_broken_function_holds_anything() {
     let lit = u
         .templates
         .iter()
-        .find(|t| t.display.starts_with("index.js:") && t.birth_keys.iter().any(|k| k == "aliases"))
+        .find(|t| t.display.starts_with("/t10/index.js:") && t.birth_keys.iter().any(|k| k == "aliases"))
         .expect("the parse result literal");
     assert!(lit.escape.is_some(), "{lit:?}");
 }
@@ -671,9 +668,9 @@ fn an_escaped_constructor_function_of_an_unflattened_factory_is_constructed_by_u
     let tmpl = |pf: &ProgramFacts| -> crate::TemplateFacts {
         pf.templates
             .iter()
-            .find(|t| t.display.starts_with("new r.js:Reply"))
+            .find(|t| t.display.starts_with("new /mbw/r.js:Reply"))
             .cloned()
-            .unwrap_or_else(|| panic!("new r.js:Reply in\n{}", pf.dump_text()))
+            .unwrap_or_else(|| panic!("new /mbw/r.js:Reply in\n{}", pf.dump_text()))
     };
     let (tu, tw) = (tmpl(&u), tmpl(&w));
     let raw = |t: &crate::TemplateFacts| {
