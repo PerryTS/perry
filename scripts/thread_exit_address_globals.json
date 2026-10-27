@@ -3940,6 +3940,24 @@
    ],
    "verdict": "main_thread_only",
    "why": "The shadow-stack state of a single-threaded wasm module: the static is declared only under cfg(all(target_family = \"wasm\", not(target_feature = \"atomics\"))), where the module cannot start a second thread, so its one writer is the main thread and thread exit is process exit. Every other target keeps the per-thread SHADOW thread_local."
+  },
+  {
+   "file": "crates/perry-runtime/src/value/addr_class/realm.rs",
+   "names": [
+    "REALM_SECTION_SENTINEL",
+    "REALM_START",
+    "REALM_END"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Linker-owned zero-word section sentinel and COFF section bounds. Their storage and addresses are image data for the process lifetime, never managed-heap or thread-arena allocations; thread exit cannot invalidate them."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/image_keys.rs",
+   "names": [
+    "CELL"
+   ],
+   "verdict": "process_global_allocation",
+   "why": "Descriptor-owned ImageStorage lives in the linker image. ImageList::new points only to static image strings and its own static attribute cell. prepare only tags those addresses or installs symbols from the process-global, never-reset well-known/runtime symbol tables (symbol.rs), whose Box allocations are leaked for process lifetime. Binding symbols are rejected before publication. No word refers to a thread-arena allocation."
   }
  ]
 }
