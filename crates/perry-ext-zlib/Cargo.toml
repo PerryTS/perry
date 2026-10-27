@@ -17,7 +17,6 @@ flate2 = "1"
 # One-shot and streaming encoders keep the same pinned backend.
 # Inflate uses the CPU-dispatched provider through stream/inflate_context.rs.
 miniz_oxide = "=0.9.1"
-libz-ng-sys = "=1.1.29"
 adler2 = "2"
 # zstd codecs: `zlib.zstdCompressSync` / `createZstdDecompress`. When `zlib`
 # routes here, perry-stdlib's `compression` module is compiled out — this
@@ -28,6 +27,14 @@ zstd.workspace = true
 # Brotli stream + one-shot support (#1843). Matches the version the
 # `compression` feature pulls into perry-stdlib.
 brotli = "9.0"
+
+# One zlib per target: zlib-ng (C, built with cmake) natively, and on wasm32 the
+# pure-Rust libz-rs-sys, through the `stream/zsys.rs` facade.
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+libz-ng-sys = "=1.1.29"
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+libz-rs-sys = { version = "=0.6.8", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 # `default` + `stdlib`, as every other perry-ext-* crate (#6303, #6314).

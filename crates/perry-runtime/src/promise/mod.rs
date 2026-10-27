@@ -21,10 +21,15 @@ pub mod assimilate;
 pub mod async_step;
 pub mod checked_dispatch;
 pub mod combinators;
+mod job_queue;
+pub(crate) use job_queue::discard_cancelled_guest_jobs;
+pub(crate) use job_queue::eligible_guest_jobs_pending;
+use job_queue::EnqueuePromiseJob;
 #[cfg(test)]
 mod cross_thread_pin_tests;
 pub mod microtasks;
 pub mod native_async;
+pub(crate) mod operation_owner;
 mod owned_state;
 pub mod reactions;
 pub mod rejection;
@@ -738,7 +743,7 @@ pub(crate) fn enqueue_queue_microtask(callback: i64) {
     }
     crate::async_context::refresh_snapshot_from_roots(&mut context, &context_roots);
     TASK_QUEUE.with(|q| {
-        q.borrow_mut().push_back(Task::Microtask {
+        q.borrow_mut().enqueue_promise_job(Task::Microtask {
             callback: callback as ClosurePtr,
             context,
             async_id: ids.async_id,

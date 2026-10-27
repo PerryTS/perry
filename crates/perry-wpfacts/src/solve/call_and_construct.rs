@@ -645,6 +645,7 @@ impl Model {
             proto_members: vec![],
             parent_value: None,
             parent_links: Vec::new(),
+            null_proto: false,
         });
         self.fn_inst.insert(f, id);
         // DECISIONS 210: a layout made for a function that already left.
@@ -833,18 +834,22 @@ impl Model {
         if self.interp_free
             && self.dyn_eval.is_none()
             && (self.pub_reason == Some(reason) || self.closed_pub_reason == Some(reason))
+            && !self.is_cell_arr(t)
+            && self.stand_in(t)
         {
-            let fwd = |m: &Self, f: Option<FnIdx>| f.is_some_and(|f| m.funcs[f as usize].forwarded);
-            let stand_in = match self.toks[t as usize] {
-                TokKind::Obj(tm, _) | TokKind::ClassObj(tm) | TokKind::Proto(tm) => {
-                    self.foreign.contains_key(&tm) && fwd(self, self.tmpls[tm as usize].ctor)
-                }
-                TokKind::Func(f, _) => fwd(self, Some(f)),
-                _ => false,
-            };
-            if stand_in {
-                return;
-            }
+            return;
+        }
+        // DECISIONS 174: another unit's value read through cell `thrown`
+        // reaches interpreted code as that unit threw it. The first unit to
+        // throw it escaped it (each thrower sinks what it throws), and that
+        // is its write; the others re-escaped it, each publishing ⊤ for
+        // what it reaches (opencode: every unit ⊤ for the ~210 arrays the
+        // program throws, 27M cell writes in round 3).
+        if self.thrown_reason == Some(reason)
+            && self.thrown_in.contains(&t)
+            && self.stand_in(t)
+        {
+            return;
         }
         if self.closed_pub_reason == Some(reason) {
             if let TokKind::Func(f, _) = self.toks[t as usize] {
@@ -957,6 +962,23 @@ impl Model {
         }
     }
 
+    /// Another unit's class, instance, prototype, function or array this
+    /// unit holds through a contract (a stand-in).
+    fn stand_in(&self, t: Tok) -> bool {
+        let fwd = |f: Option<FnIdx>| f.is_some_and(|f| self.funcs[f as usize].forwarded);
+        match self.toks[t as usize] {
+            TokKind::Obj(tm, _) if self.is_cell_arr(t) => matches!(
+                self.tmpls[tm as usize].kind,
+                TmplKind::Arr { site: u32::MAX, .. } | TmplKind::BObj { site: u32::MAX, .. }
+            ),
+            TokKind::Obj(tm, _) | TokKind::ClassObj(tm) | TokKind::Proto(tm) => {
+                self.foreign.contains_key(&tm) && fwd(self.tmpls[tm as usize].ctor)
+            }
+            TokKind::Func(f, _) => fwd(Some(f)),
+            _ => false,
+        }
+    }
+
     /// DECISIONS 212: the reason what a value escaping with `reason`
     /// reaches escapes with: a publication (`pub_reason`, a published
     /// literal's field function) describes the value itself, not what
@@ -1047,6 +1069,15 @@ impl Model {
             }
             self.add_top(fi.args_all, why);
             self.contract_rets.push((f, fi.ret));
+            // Beyond its publication (an export or a published literal's
+            // field, DECISIONS 210, or known closed callers, DECISIONS 19),
+            // unknown code calls it and retains its result.
+            if self.pub_reason != Some(reason)
+                && self.field_fn_reason != Some(reason)
+                && closed.is_none()
+            {
+                self.sink_node(fi.ret, reason);
+            }
             return;
         }
         self.add_top(fi.args_all, why);
@@ -1116,6 +1147,7 @@ impl Model {
             proto_members: Vec::new(),
             parent_value: None,
             parent_links: Vec::new(),
+            null_proto: false,
         });
         let recv = self.tok(TokKind::Obj(rt, NO_CTX));
         let any = self.field_any(recv);
@@ -1297,11 +1329,19 @@ impl Model {
         named
     }
 
-    /// DECISIONS 210: per unit, a function of this unit that escaped is
-    /// held by other units' code too, which may construct it (the whole
-    /// program sees that `new`): unknown code constructs it with unknown
-    /// arguments and its instance escapes, as for an escaped class
-    /// (`escape_inner`). Only a function with a construction layout: one
+    /// DECISIONS 210/211: unknown code constructs a function of this unit
+    /// that escaped, with unknown arguments, and its instance escapes, as
+    /// for an escaped class (`escape_inner`). The one path for "unknown code
+    /// constructs an escaped function", in both modes: whole program, code
+    /// nothing models holds it (an escaped `F` nothing here constructs
+    /// still has instances of its layout); per unit, other units' code holds
+    /// it too and may construct it (the whole program sees that `new`;
+    /// fastify `new Reply`, escaped through `Module._cache`: the units
+    /// constructing it hold it as an unknown value, so only the units
+    /// writing `Reply.prototype` hold the layout, with no instance of their
+    /// own). Callers: an escape (`escape_inner`), a template made after the
+    /// escape (`fn_inst_template`), and a contract-only escape that later
+    /// leaves through no contract (`escape`). Only a function with a construction layout: one
     /// whose body stores into `this` (`fn_birth`) or whose `new <f>`
     /// template exists (`fn_inst_template` constructs it when made later);
     /// any other one's instances would hold nothing a layout claims. Never
@@ -1314,8 +1354,7 @@ impl Model {
         // Published through its contract, the units constructing it pass
         // their arguments (`ctor_runs`): constructed by `Gen::published_ctors`.
         let published = self.pub_reason == Some(reason) || self.field_fn_reason == Some(reason);
-        if !self.per_unit
-            || published
+        if published
             || fi.lexical_this
             || fi.gen_step
             || fi.ctor_of.is_some()

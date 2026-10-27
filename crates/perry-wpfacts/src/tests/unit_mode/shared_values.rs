@@ -52,6 +52,220 @@ pub(super) fn a_cell_written_alike_by_many_units_is_read_once() {
     assert_eq!(few, many, "{dump}");
 }
 
+/// The layouts the units' writes of global `__g` describe at the fixpoint
+/// (each unit's own write), when `writers` modules each store an instance
+/// of their own class there and `readers` modules each read it (cell
+/// `global:__g`) and store an instance of their own.
+fn global_cell_layouts(writers: usize, readers: usize) -> (usize, String) {
+    let srcs: Vec<(String, String)> = (0..writers)
+        .map(|i| {
+            (
+                format!("w{i}"),
+                format!("class W{i} {{ a{i} = {i}; }}\n(globalThis as any).__g = new W{i}();"),
+            )
+        })
+        .chain((0..readers).map(|j| {
+            (
+                format!("r{j}"),
+                format!(
+                    "class R{j} {{ r{j} = {j}; }}\nfunction run() {{ const g: any = globalThis; console.log(g.__g.a0); g.__g = new R{j}(); }}\nrun();"
+                ),
+            )
+        }))
+        .collect();
+    let mods: Vec<(&str, &str)> = srcs.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+    let pf = units_of(&mods);
+    let layouts = pf
+        .cells_out
+        .iter()
+        .filter(|(k, _)| k == "global:__g")
+        .map(|(_, c)| c.layouts.len())
+        .sum();
+    eprintln!("global {writers} writers {readers} readers: {layouts} layouts written");
+    (layouts, pf.dump_text())
+}
+
+/// A unit's write into a cell is what its own code stores there: the other
+/// units' writes it read are their writers', in the cell already (cells
+/// only grow, DECISIONS 197). Written back, every reader of a cell was a
+/// writer of all of it, and each next reader took one stand-in per such
+/// write: one more writer reached every reader once per reader (opencode:
+/// 2871 readers of `cjs:*`'s 1929 writes, the facts stage past 52 GB). One
+/// more writer adds its one write, with 4 readers as with 16.
+#[test]
+fn a_cell_reader_does_not_write_back_what_it_read() {
+    let extra = |readers: usize| {
+        let (few, _) = global_cell_layouts(4, readers);
+        let (more, dump) = global_cell_layouts(8, readers);
+        (few, more, dump)
+    };
+    let (f4, m4, _) = extra(4);
+    let (f16, m16, dump) = extra(16);
+    assert!(m4 > f4, "the writers' instances are in the cell: {f4} {m4}");
+    assert_eq!(
+        m4 - f4,
+        m16 - f16,
+        "a writer is written once per reader: 4 readers {f4} -> {m4}, 16 readers {f16} -> {m16}\n{dump}"
+    );
+}
+
+/// The ⊤ array cells the units write at the fixpoint (each unit's own
+/// write), when `throwers` modules each throw an array of their own and
+/// `others` modules catch what is thrown and leave it, with interpreted code in the
+/// program (it can catch what compiled code throws).
+fn thrown_array_tops(throwers: usize, others: usize) -> (usize, String) {
+    let srcs: Vec<(String, String)> = (0..throwers)
+        .map(|i| {
+            (
+                format!("t{i}"),
+                format!("function f{i}() {{ throw [{i}]; }}\ntry {{ f{i}(); }} catch (e) {{ console.log(0); }}"),
+            )
+        })
+        .chain((0..others).map(|j| {
+            (
+                format!("o{j}"),
+                format!("function run{j}() {{ try {{ console.log({j}); }} catch (e) {{ console.log(0); }} }}\nrun{j}();"),
+            )
+        }))
+        .collect();
+    let mods: Vec<(&str, &str)> = srcs.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+    let mut cfg = FactsConfig::default();
+    cfg.dynamic_code_reach.record_global("Function".into());
+    let pf = units_with(&mods, &cfg);
+    let tops = pf
+        .cells_out
+        .iter()
+        .filter(|(k, c)| k.starts_with("arr:") && c.unknown)
+        .count();
+    eprintln!("thrown {throwers} throwers {others} others: {tops} array tops written");
+    (tops, pf.dump_text())
+}
+
+/// DECISIONS 174: what another unit threw reaches a unit through cell
+/// `thrown`, and reaches interpreted code as its thrower threw it: the
+/// thrower escaped it. Escaped again by every unit that read it, each
+/// published ⊤ for every array the program throws (opencode round 3: 127k
+/// units ⊤ for ~210 arrays each, 54M cell writes, the facts stage past
+/// 43 GB). One more thrower adds its own ⊤s, with 4 other units as with 16.
+#[test]
+fn a_thrown_value_escapes_in_its_thrower_only() {
+    let extra = |others: usize| {
+        let (few, _) = thrown_array_tops(4, others);
+        let (more, dump) = thrown_array_tops(8, others);
+        (few, more, dump)
+    };
+    let (f4, m4, _) = extra(4);
+    let (f16, m16, dump) = extra(16);
+    assert!(m4 > f4, "the throwers' arrays escape: {f4} {m4}");
+    assert_eq!(
+        m4 - f4,
+        m16 - f16,
+        "a thrown array is ⊤ once per catching unit: 4 others {f4} -> {m4}, 16 others {f16} -> {m16}\n{dump}"
+    );
+}
+
+/// A display names a class, function or array across units (one name, one
+/// contract, DECISIONS 106): two modules of one file name in two
+/// directories (or two versions of one package) name theirs apart. Named
+/// alike, one owner's contract replaced the other's, and their readers
+/// were solved again in every round (opencode: 13 units, round 1526).
+#[test]
+fn modules_of_one_file_name_name_their_contracts_apart() {
+    let pf = units_of(&[
+        ("a/x", "export class C { k = 1; }\nexport function f(o: any) { return o.k; }"),
+        ("b/x", "export class C { s = 'a'; }\nexport function f(o: any) { return o.s; }"),
+        (
+            "m",
+            "import { C as C1, f as f1 } from './a/x';\nimport { C as C2, f as f2 } from './b/x';\nconsole.log(f1(new C1()), f2(new C2()));",
+        ),
+    ]);
+    let cs: std::collections::BTreeSet<&str> = pf
+        .templates
+        .iter()
+        .filter(|t| t.display.ends_with("x.ts:C"))
+        .map(|t| t.display.as_str())
+        .collect();
+    assert_eq!(cs.len(), 2, "{cs:?}\n{}", pf.dump_text());
+}
+
+/// Per unit, a CommonJS record's `parent` is the requiring module's record:
+/// another module's, another unit's value (unknown). Linked through the
+/// registry union, every wrapper read every unit's registry writes
+/// (opencode: 14879 units in one dependency level, 1929 writes each); no
+/// wrapper that only links its parent reads `cjs:*`.
+#[test]
+fn linking_a_parent_reads_no_registry_writes() {
+    let srcs: Vec<(String, String)> = (0..4)
+        .map(|i| {
+            (
+                format!("m{i}"),
+                format!(
+                    "class M{i} {{ a{i} = {i}; }}\nfunction factory() {{ const rec: any = {{ exports: new M{i}(), __perry_cjs_record: true, parent: undefined }}; __perry_link_path_module_parent(rec); console.log(rec.parent); __perry_register_path_module(\"/m{i}.js\", rec); }}\nfactory();"
+                ),
+            )
+        })
+        .collect();
+    let mods: Vec<(&str, &str)> = srcs.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+    let pf = units_with(
+        &mods,
+        &FactsConfig {
+            unit_io: true,
+            ..Default::default()
+        },
+    );
+    let writes = pf
+        .unit_io
+        .iter()
+        .filter(|l| l.starts_with("# uout") && l.contains("cell:cjs:*"))
+        .count();
+    let reads: Vec<&String> = pf
+        .unit_io
+        .iter()
+        .filter(|l| l.starts_with("# uread") && l.ends_with("cell:cjs:*"))
+        .collect();
+    assert!(writes > 0, "the records are registry writes: {:?}", pf.unit_io);
+    assert!(reads.is_empty(), "read through the parent link: {reads:?}");
+}
+
+/// Per unit, a computed require's result is another module's exports:
+/// another unit's value (unknown). Through the registry union each such
+/// unit took a stand-in of every registry write (opencode: 1122 units,
+/// each publishing ⊤ for the 3660 arrays it let escape); no unit reads
+/// `cjs:*` for one.
+#[test]
+fn a_computed_require_reads_no_registry_writes() {
+    let srcs: Vec<(String, String)> = (0..4)
+        .map(|i| {
+            (
+                format!("m{i}"),
+                format!(
+                    "class M{i} {{ a{i} = [{i}]; }}\nfunction factory() {{ const rec: any = {{ exports: new M{i}(), __perry_cjs_record: true }}; const m: any = __perry_require_path_module(String(Math.random())); console.log(m.a0); __perry_register_path_module(\"/m{i}.js\", rec); }}\nfactory();"
+                ),
+            )
+        })
+        .collect();
+    let mods: Vec<(&str, &str)> = srcs.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+    let pf = units_with(
+        &mods,
+        &FactsConfig {
+            unit_io: true,
+            ..Default::default()
+        },
+    );
+    let writes = pf
+        .unit_io
+        .iter()
+        .filter(|l| l.starts_with("# uout") && l.contains("cell:cjs:*"))
+        .count();
+    let reads: Vec<&String> = pf
+        .unit_io
+        .iter()
+        .filter(|l| l.starts_with("# uread") && l.ends_with("cell:cjs:*"))
+        .collect();
+    assert!(writes > 0, "the records are registry writes: {:?}", pf.unit_io);
+    assert!(reads.is_empty(), "read through a computed require: {reads:?}");
+}
+
 /// DECISIONS 114: the driver compares what a unit read with what is
 /// published now. Each layout and function contract is digested once per
 /// round, so those compares do not grow with the readers (awfy_Richards:

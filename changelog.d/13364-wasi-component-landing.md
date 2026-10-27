@@ -1,0 +1,7 @@
+Add Turnloop-backed WASI 0.2 and 0.3 providers to the optional native component engine, with capability-scoped commands, files, clocks, randomness, sockets and HTTP. Keep the existing synchronous embedding API and the standalone WASI Preview 1 output profile. Vendor the required Turnloop provider repairs and preserve the repository-wide Tokio ban.
+
+Add concurrent native component calls, typed Promise imports/exports, future/stream transport, ownership receipts and retained invocation contexts. Experimental generated async guests support interleaved calls, moving GC and cooperative cancellation; public async output and resource-bearing async guest profiles remain guarded while their remaining ownership contracts are qualified.
+
+Include native host platform qualification, component-engine/WIT packaging, Windows object/archive discovery fixes, and executable acceptance harnesses. Document the Linux-qualified profiles and remaining macOS/Windows, async resource and final distribution gaps; historical receipts retain their exact source and artifact identities.
+
+Bind generated guest layout images before allocating adapter frames, and resolve lazy Wasm runtime layouts through their constructor inventory. Fix Windows provider feature selection and native socket-option queries.

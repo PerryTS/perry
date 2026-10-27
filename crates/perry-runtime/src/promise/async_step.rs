@@ -313,7 +313,7 @@ pub extern "C" fn js_promise_resolved_then(
         // drain via the `Task::Inline` arm.
         let next = js_promise_new();
         TASK_QUEUE.with(|q| {
-            q.borrow_mut().push_back(Task::Inline(
+            q.borrow_mut().enqueue_promise_job(Task::Inline(
                 on_fulfilled,
                 value,
                 next,
@@ -699,7 +699,7 @@ pub extern "C" fn js_async_step_chain(value: f64, step_closure: ClosurePtr) -> *
     };
     crate::r#box::retain_async_box_activation(trap.box_activation);
     TASK_QUEUE.with(|q| {
-        q.borrow_mut().push_back(Task::AsyncStep(
+        q.borrow_mut().enqueue_promise_job(Task::AsyncStep(
             rooted_step(),
             queued_value_handle.get_nanbox_f64(),
             next,

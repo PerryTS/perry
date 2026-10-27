@@ -129,7 +129,7 @@ pub extern "C" fn js_promise_run_before_exit_checkpoint() -> i32 {
         // A rejection listener can queue more jobs after the ordinary job
         // drain. Finish those here too; microtasks alone must not re-emit
         // beforeExit as if a new timer/I/O turn had occurred.
-        if TASK_QUEUE.with(|queue| queue.borrow().is_empty())
+        if !super::job_queue::eligible_task_pending()
             && !crate::builtins::queued_microtasks_pending()
         {
             return ran;
@@ -163,6 +163,28 @@ pub extern "C" fn js_promise_run_microtasks_await_loop() -> i32 {
 /// Complete one native callback before the next callback is delivered.
 pub fn js_promise_run_microtasks_checkpoint() -> i32 {
     run_microtasks(MicrotaskDrainMode::MicrotasksOnly)
+}
+
+/// Guest errors must leave the runner reusable before the C frame catches them.
+/// The ordinary pump has throw-capable cleanup phases outside its job trap.
+/// Save only native counters here; the existing landing pad restores JS scopes.
+#[inline(never)]
+pub(crate) fn guest_task_checkpoint() -> i32 {
+    debug_assert!(crate::async_context::job_domain::current().is_some());
+    let depths = MICROTASK_RUN_DEPTH.with(std::cell::Cell::get);
+    let bases = ASYNC_BOX_EXECUTION_REF_BASES.with(|bases| bases.borrow().len());
+    let refs = async_box_execution_ref_depth();
+    match crate::exception::catch_js_throw(|| run_microtasks(MicrotaskDrainMode::MicrotasksOnly)) {
+        Ok(count) => count,
+        Err(error) => {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let error = scope.root_nanbox_f64(error);
+            unwind_async_box_execution_refs(refs);
+            ASYNC_BOX_EXECUTION_REF_BASES.with(|stack| stack.borrow_mut().truncate(bases));
+            MICROTASK_RUN_DEPTH.with(|depth| depth.set(depths));
+            crate::exception::js_throw(error.get_nanbox_f64());
+        }
+    }
 }
 
 /// Drain pending promise/queueMicrotask jobs WITHOUT giving the nextTick
@@ -245,6 +267,7 @@ fn rooted_closure(h: &crate::gc::RuntimeHandle<'_>) -> ClosurePtr {
 }
 
 fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
+    let guest_task = crate::async_context::job_domain::current().is_some();
     mt_profile_register();
     bump(&MT_DRAIN_COUNT);
     if matches!(
@@ -282,7 +305,7 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
     });
     let mut ran = 0;
 
-    if !matches!(mode, MicrotaskDrainMode::BeforeExit) {
+    if !guest_task && !matches!(mode, MicrotaskDrainMode::BeforeExit) {
         ran += crate::bun_ffi::callback::drain_threadsafe_callbacks();
     }
 
@@ -296,15 +319,17 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
     ran += crate::weakref::drain_pending_finalization_jobs();
 
     // Native async tokens settle only through the main-thread handoff path.
-    if !matches!(mode, MicrotaskDrainMode::BeforeExit) {
+    if !guest_task && !matches!(mode, MicrotaskDrainMode::BeforeExit) {
         ran += super::native_async::js_native_async_process_pending();
     }
 
     // Process any scheduled resolutions (simulates async completions)
-    ran += super::combinators::process_scheduled_resolves();
+    if !guest_task {
+        ran += super::combinators::process_scheduled_resolves();
+    }
 
     // Process diagnostics_channel publishes queued by perry/thread workers.
-    if !matches!(mode, MicrotaskDrainMode::BeforeExit) {
+    if !guest_task && !matches!(mode, MicrotaskDrainMode::BeforeExit) {
         ran += crate::node_submodules::diagnostics_channel_process_pending();
 
         // Process pending thread results (from perry/thread spawn)
@@ -492,7 +517,7 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
             } else {
                 None
             };
-            let task = TASK_QUEUE.with(|q| q.borrow_mut().pop_front());
+            let task = super::job_queue::pop_task();
             if let Some(t) = t0 {
                 MT_TIME_NS_QUEUE.fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
             }
@@ -1155,18 +1180,19 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
     // before the poll phase. Every OTHER caller is a busy-wait pump with no
     // phases of its own (`for await` over a stream, `fs.cp`, `perry_poll`), and
     // for those "run whatever is due" is still the right approximation.
-    let fire_timers = match mode {
-        MicrotaskDrainMode::AllowTimers => !reentrant,
-        // #5437 (CodeRabbit): the codegen `await` loop calls this drain and then
-        // `js_await_loop_tick_timers` (the guard-suspending timer path) on the
-        // very same iteration — the two are always emitted as a pair and this is
-        // the mode's only caller. Firing timers here too advanced them twice per
-        // await tick (a timer/immediate that schedules another could run in the
-        // same iteration before settlement is observed). Drain microtasks only;
-        // `js_await_loop_tick_timers` is the single timer owner for this path.
-        MicrotaskDrainMode::AwaitLoop => false,
-        _ => false,
-    };
+    let fire_timers = crate::async_context::job_domain::current().is_none()
+        && match mode {
+            MicrotaskDrainMode::AllowTimers => !reentrant,
+            // #5437 (CodeRabbit): the codegen `await` loop calls this drain and then
+            // `js_await_loop_tick_timers` (the guard-suspending timer path) on the
+            // very same iteration — the two are always emitted as a pair and this is
+            // the mode's only caller. Firing timers here too advanced them twice per
+            // await tick (a timer/immediate that schedules another could run in the
+            // same iteration before settlement is observed). Drain microtasks only;
+            // `js_await_loop_tick_timers` is the single timer owner for this path.
+            MicrotaskDrainMode::AwaitLoop => false,
+            _ => false,
+        };
     if fire_timers {
         *ran += crate::timer::js_event_loop_timers_phase();
         *ran += crate::builtins::drain_queued_microtasks_count();

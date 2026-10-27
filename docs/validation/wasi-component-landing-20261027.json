@@ -1,0 +1,502 @@
+{
+  "date": "2026-10-27",
+  "scope": "Combined WASI landing on main, with current Turnloop providers and canonical async guest foundations; partial WASI 0.3",
+  "baseCommit": "b62c444793e90b3b90890d445bf1ba1b18783ff4",
+  "qualifiedSources": {
+    "linuxActualExecution": "c277c9999970a9f7f3dd79a1b7ac654d9fb33875",
+    "windowsAndFullChecks": "52f7e559de2832d00f95ce76e29e152764b2fd26",
+    "generatedApiDocs": "5df5e38c5106e96cb7d247b35c4085385832eff5"
+  },
+  "sourceEquivalence": {
+    "qualifiedCommit": "c277c9999970a9f7f3dd79a1b7ac654d9fb33875",
+    "finalCommit": "52f7e559de2832d00f95ce76e29e152764b2fd26",
+    "checkedFiles": 6946,
+    "changedInputs": [
+      "crates/perry-wasi/Cargo.toml"
+    ]
+  },
+  "qualificationNotes": [
+    "All Linux product Rust/C inputs are identical between the actual-execution and final-check snapshots. The only code-input delta is a Windows-only DEV windows-sys feature for a junction fixture. Later commits add generated API documentation and this receipt only.",
+    "Compiler, native runtime/stdlib, optional engine, WIT tool and GC sidecars were built together using one package union. The instrumented union matches; its _instr archives are distinct from the preserved ordinary archives.",
+    "Wasm ordinary and instrumented production archives are distinct builds. Both were linked and executed. Wasm instrumentation explicitly enabled with PERRY_RUNTIME_INSTRUMENTS=1. Native gc-effects tooling cannot inspect Wasm archives; SDK symbol checks and actual final links were used instead.",
+    "Existing RUSTFLAGS environment policy was preserved: no RUSTFLAGS environment replacement/unset. Cargo CLI configuration arrays appended -D warnings while retaining both required unwind flags."
+  ],
+  "linuxExecution": {
+    "snapshots": "v441",
+    "nativeProfiles": [
+      "persistent",
+      "async",
+      "producer",
+      "http-p3"
+    ],
+    "nativeModes": [
+      "ordinary",
+      "moving GC with protected retired fromspace"
+    ],
+    "wasmAsyncImports": [
+      "64 reverse-order concurrent pairs",
+      "cancellation",
+      "failure",
+      "inline result",
+      "void/scalar/compound/getter lowering",
+      "post-return child work",
+      "idle",
+      "moving GC"
+    ],
+    "wasmCanonicalCancellation": "8 rounds, 16 native children plus sibling work, cancellation and Store reuse; ordinary and moving GC",
+    "wasmAsyncExports": [
+      "64 reverse-order pairs",
+      "cancellation",
+      "moving GC"
+    ],
+    "ordinaryWasmProductionArchive": [
+      "execute",
+      "cancel",
+      "failure",
+      "inline"
+    ],
+    "gcWitnesses": {
+      "persistent": {
+        "copiedObjects": 5361,
+        "evacuationVerified": true,
+        "protectedFromspace": true
+      },
+      "async": {
+        "copiedObjects": 5940,
+        "evacuationVerified": true,
+        "protectedFromspace": true
+      },
+      "producer": {
+        "copiedObjects": 4045,
+        "evacuationVerified": true,
+        "protectedFromspace": true
+      },
+      "http-p3": {
+        "copiedObjects": 5502,
+        "evacuationVerified": true,
+        "protectedFromspace": true
+      },
+      "async-cancellation/guest/moving.json": {
+        "copiedObjects": 34922,
+        "evacuationVerified": true
+      },
+      "async-cancellation/guest/inline-moving.json": {
+        "copiedObjects": 5892,
+        "evacuationVerified": true
+      },
+      "async-cancellation/moving.json": {
+        "copiedObjects": 8236,
+        "evacuationVerified": true
+      },
+      "async-exports/moving.json": {
+        "copiedObjects": 22911,
+        "evacuationVerified": true
+      }
+    },
+    "phases": [
+      {
+        "phase": "windows-check",
+        "exitCode": 101
+      },
+      {
+        "phase": "native-build",
+        "exitCode": 0
+      },
+      {
+        "phase": "native-sidecars",
+        "exitCode": 0
+      },
+      {
+        "phase": "wat-encoder",
+        "exitCode": 0
+      },
+      {
+        "phase": "native-persistent-acceptance",
+        "exitCode": 0
+      },
+      {
+        "phase": "native-async-acceptance",
+        "exitCode": 0
+      },
+      {
+        "phase": "native-producer-acceptance",
+        "exitCode": 0
+      },
+      {
+        "phase": "native-http-p3-acceptance",
+        "exitCode": 0
+      },
+      {
+        "phase": "wasi-plain-build",
+        "exitCode": 0
+      },
+      {
+        "phase": "wasi-plain-symbols",
+        "exitCode": 0
+      },
+      {
+        "phase": "wasi-instrumented-build",
+        "exitCode": 0
+      },
+      {
+        "phase": "wasi-instrumented-symbols",
+        "exitCode": 0
+      },
+      {
+        "phase": "actual-async-cancellation",
+        "exitCode": 0
+      },
+      {
+        "phase": "actual-async-exports",
+        "exitCode": 0
+      },
+      {
+        "phase": "plain-guest-link",
+        "exitCode": 0
+      },
+      {
+        "phase": "plain-guest-execute",
+        "exitCode": 0
+      },
+      {
+        "phase": "plain-guest-cancel",
+        "exitCode": 0
+      },
+      {
+        "phase": "plain-guest-failure",
+        "exitCode": 0
+      },
+      {
+        "phase": "plain-guest-inline",
+        "exitCode": 0
+      },
+      {
+        "phase": "native-instrumented-build",
+        "exitCode": 0
+      },
+      {
+        "phase": "instrumented-native-sidecars",
+        "exitCode": 0
+      },
+      {
+        "phase": "native-persistent-moving",
+        "exitCode": 0
+      },
+      {
+        "phase": "native-async-moving",
+        "exitCode": 0
+      },
+      {
+        "phase": "native-producer-moving",
+        "exitCode": 0
+      },
+      {
+        "phase": "native-http-p3-moving",
+        "exitCode": 0
+      }
+    ]
+  },
+  "targetedUnits": {
+    "earlierIntegratedSnapshot": "v435",
+    "componentHost": 216,
+    "componentIo": 30,
+    "wit": 27,
+    "providersUnprivileged": 277,
+    "latestProviderSnapshot": "v442",
+    "latestProviderTests": 277,
+    "runtimeRegressionSnapshot": "v440",
+    "runtimeComponentTests": 107,
+    "wasmInventoryIndexTests": 1,
+    "notes": "Initial root-run provider permission fixture failed as root; complete unprivileged reruns passed. Runtime component/inventory tests used DEV debug assertions and panic-abort isolation."
+  },
+  "windows": {
+    "snapshot": "v442",
+    "check": "component host, I/O and providers all targets cross-check",
+    "exitCode": 0,
+    "runtimeExecutionQualified": false,
+    "initialV441Failure": "Missing Windows-only DEV SystemServices feature; repaired and rechecked in v442."
+  },
+  "tokioBan": {
+    "offlineManifests": 124,
+    "offlineLockfiles": 26,
+    "manifestEdges": 0,
+    "lockPackages": 0,
+    "sourceLines": 0,
+    "standaloneFixtures": "clean",
+    "waiversAdded": false
+  },
+  "otherChecks": {
+    "vendoredTurnloopIntegrationHashes": {
+      "files": 93,
+      "mismatches": 0
+    },
+    "normalProductAndHostClippy": "pass",
+    "leanBoundariesAndHelperTests": "pass",
+    "prunedFeatureBuilds": "pass",
+    "apiReference": "Both files byte-identical to fresh source-matched compiler output",
+    "lockNoDowngrade": {
+      "dependencyEdgesCompared": 3048,
+      "pass": true
+    },
+    "nativeExports": {
+      "names": 5598,
+      "existingCollisions": 115,
+      "newProviders": 0
+    }
+  },
+  "fullSuites": {
+    "panicAbort": {
+      "devRuntime": {
+        "passed": 6032,
+        "failed": 74,
+        "ignored": 47
+      },
+      "prodRuntime": {
+        "passed": 6031,
+        "failed": 72,
+        "ignored": 48
+      },
+      "stdlibFailuresPerProfile": 4,
+      "baselineComparison": {
+        "baselineCommit": "b62c444793e90b3b90890d445bf1ba1b18783ff4",
+        "baselineProductCodeUnmodified": true,
+        "baselineTestOnlyRepair": "closure/dispatch/calln.rs: make ABI annotation cfg(panic) match the existing closure entry; pristine main cannot compile panic-abort libtests without this repair. Exact patch retained in evidence.",
+        "comparisons": {
+          "base-dev-perry_runtime-failed-tests": {
+            "landingFailures": 74,
+            "baselineFailures": 74,
+            "onlyLanding": [],
+            "matched": true
+          },
+          "base-dev-perry_stdlib-failed-tests": {
+            "landingFailures": 4,
+            "baselineFailures": 4,
+            "onlyLanding": [],
+            "matched": true
+          },
+          "base-prod-perry_runtime-failed-tests": {
+            "landingFailures": 72,
+            "baselineFailures": 72,
+            "onlyLanding": [],
+            "matched": true
+          },
+          "base-prod-perry_stdlib-failed-tests": {
+            "landingFailures": 4,
+            "baselineFailures": 4,
+            "onlyLanding": [],
+            "matched": true
+          }
+        }
+      }
+    },
+    "standard": {
+      "phases": [
+        {
+          "phase": "dev-build",
+          "exitCode": 0
+        },
+        {
+          "phase": "dev-perry_stdlib",
+          "exitCode": 0
+        },
+        {
+          "phase": "dev-perry_runtime",
+          "exitCode": 134
+        },
+        {
+          "phase": "prod-build",
+          "exitCode": 0
+        },
+        {
+          "phase": "prod-perry_stdlib",
+          "exitCode": 0
+        },
+        {
+          "phase": "prod-perry_runtime",
+          "exitCode": 134
+        }
+      ],
+      "stdlib": {
+        "devPassed": 287,
+        "prodPassed": 287,
+        "failed": 0
+      },
+      "runtime": {
+        "devExitCode": 134,
+        "prodExitCode": 134,
+        "stoppedAt": "array::subclass_tests::array_object_receiver_is_safe_for_non_pointers_and_handle_band_ids",
+        "diagnostic": "JSValue::pointer P=Heap proof=pointer-box value=0x0000000000000001",
+        "fixtureAndArraySubclassSourceUnchangedFromMain": true,
+        "fullRuntimePassClaimed": false
+      }
+    }
+  },
+  "lint": {
+    "commandsAttempted": 131,
+    "ciOnlyCommandsSkipped": 2,
+    "failedCommands": 12,
+    "baselinePythonComparisons": [
+      {
+        "gate": "holders",
+        "exitCode": 1,
+        "identicalToMain": true
+      },
+      {
+        "gate": "thread-exit",
+        "exitCode": 1,
+        "identicalToMain": true
+      },
+      {
+        "gate": "sso",
+        "exitCode": 1,
+        "identicalToMain": true
+      },
+      {
+        "gate": "global-sinks",
+        "exitCode": 1,
+        "identicalToMain": true
+      },
+      {
+        "gate": "shape-census",
+        "exitCode": 1,
+        "identicalToMain": true
+      },
+      {
+        "gate": "gc-stores",
+        "exitCode": 1,
+        "identicalToMain": true
+      },
+      {
+        "gate": "raw-handles",
+        "exitCode": 1,
+        "identicalToMain": false
+      }
+    ],
+    "warningsAsErrors": "Product and host-all-target checks on both pristine main and landing fail at identical perry-wpfacts private Family interface warning.",
+    "additionalRawHandleDebt": {
+      "mainMatches": 1434,
+      "landingMatches": 1614,
+      "additionalMatches": 180,
+      "includesTests": true,
+      "recordedTotalCeilingUnchanged": 861,
+      "recordedModuleCeilingsUnchanged": 108,
+      "noRaiseGate": "pass",
+      "status": "Unresolved source debt; the bare gate fails on both trees, with additional sites in this work. No baseline or gate was relaxed."
+    },
+    "otherFailures": [
+      "Main formatting/file-size failures in perry-wpfacts",
+      "Windows runtime/stdlib cross-check OpenSSL environment failure; separate engine/provider all-target check passed",
+      "System pip PEP 668 installation refusal; installed PyYAML and workflow topology checks worked",
+      "Holder/thread-exit/SSO/global sink/shape census/GC store gates have identical normalized main failures",
+      "Snapshot-bound holder self-test fixture failure"
+    ]
+  },
+  "artifactIdentities": {
+    "native/perry": {
+      "bytes": 339971744,
+      "sha256": "6126f60b6339b0bb7a1fdea0e638a1bd3d6ed1ab15f946ac145cff62392b28b2"
+    },
+    "native/perry-gc-effects": {
+      "bytes": 44628064,
+      "sha256": "acebd412ccc07062c9b6b59d58366f5c77d09f72c727ef7a8142ad079847268a"
+    },
+    "native/libperry_runtime.a.gc-effects": {
+      "bytes": 330908,
+      "sha256": "f7c1f0160da54f3a3c87f27df84e44f34c5bd0002910d1e66ae5d2db0af8ab57"
+    },
+    "native/libperry_runtime.a": {
+      "bytes": 391601826,
+      "sha256": "e3e756ce3919cfea860621ca4dff43e193bc60fb4b19f4a6b78c684a79bc46ce"
+    },
+    "native/libperry_component_host.a": {
+      "bytes": 595190044,
+      "sha256": "464f7b8e12e5a941da3ad27b5b879e90eaf401e250ae7c7fa3be5435be82a7bf"
+    },
+    "native/OWNER": {
+      "bytes": 88,
+      "sha256": "77e2c1f468c7d109e268ad05eba9f6801dddc0b1ea9668e0b37627522fbce17f"
+    },
+    "native/component_wat": {
+      "bytes": 10663320,
+      "sha256": "c9a1694f03f5ff9115ff8cb8bde9ca4595558c4e90d3e58b37ec34cb2691a47c"
+    },
+    "native/libperry_stdlib.a": {
+      "bytes": 672380372,
+      "sha256": "60406ca885e7c49baf46c65807fdee53654ff3d1a921ed6e9d16d797d4ffd40d"
+    },
+    "native/perry-wit": {
+      "bytes": 27874008,
+      "sha256": "709bef2309b7223fd083b214712716288edf61dcbffe2f62e15cc7b9645f898f"
+    },
+    "native-instrumented/perry": {
+      "bytes": 339971744,
+      "sha256": "6126f60b6339b0bb7a1fdea0e638a1bd3d6ed1ab15f946ac145cff62392b28b2"
+    },
+    "native-instrumented/perry-gc-effects": {
+      "bytes": 44628064,
+      "sha256": "acebd412ccc07062c9b6b59d58366f5c77d09f72c727ef7a8142ad079847268a"
+    },
+    "native-instrumented/libperry_runtime.a.gc-effects": {
+      "bytes": 330908,
+      "sha256": "f7c1f0160da54f3a3c87f27df84e44f34c5bd0002910d1e66ae5d2db0af8ab57"
+    },
+    "native-instrumented/libperry_runtime.a": {
+      "bytes": 391601826,
+      "sha256": "e3e756ce3919cfea860621ca4dff43e193bc60fb4b19f4a6b78c684a79bc46ce"
+    },
+    "native-instrumented/libperry_component_host.a": {
+      "bytes": 595190044,
+      "sha256": "464f7b8e12e5a941da3ad27b5b879e90eaf401e250ae7c7fa3be5435be82a7bf"
+    },
+    "native-instrumented/OWNER": {
+      "bytes": 94,
+      "sha256": "860fa5c269eef933e45a77bef586c7c003d551b992ae4bc7eddd91cfd7e7d48f"
+    },
+    "native-instrumented/component_wat": {
+      "bytes": 10663320,
+      "sha256": "c9a1694f03f5ff9115ff8cb8bde9ca4595558c4e90d3e58b37ec34cb2691a47c"
+    },
+    "native-instrumented/libperry_stdlib_instr.a": {
+      "bytes": 678497736,
+      "sha256": "8093f84afa3110b99dd919e59ddafbe331e6cd402546c51dcc44d1782e7c33cf"
+    },
+    "native-instrumented/libperry_runtime_instr.a": {
+      "bytes": 397627414,
+      "sha256": "a750fd505dab675814e944b121f5e525a2340f3f32a5d799bfe060fe4f56d057"
+    },
+    "native-instrumented/libperry_runtime_instr.a.gc-effects": {
+      "bytes": 331262,
+      "sha256": "48dc5a69bfd74e0b42563bd6e34630634927efefd2fb2b282830d38ca6e17015"
+    },
+    "native-instrumented/libperry_stdlib.a": {
+      "bytes": 672380372,
+      "sha256": "60406ca885e7c49baf46c65807fdee53654ff3d1a921ed6e9d16d797d4ffd40d"
+    },
+    "native-instrumented/perry-wit": {
+      "bytes": 27874008,
+      "sha256": "709bef2309b7223fd083b214712716288edf61dcbffe2f62e15cc7b9645f898f"
+    },
+    "wasi/plain/libperry_runtime.a": {
+      "bytes": 53243328,
+      "sha256": "34e841c85f12e80da86b3ed67c85fd55f49f9123c604b4ac7c5ffeca48125d5f"
+    },
+    "wasi/instrumented/libperry_runtime.a": {
+      "bytes": 54479800,
+      "sha256": "b5ac83d1b434f3f2dac14a405164b691f19aee24b9001a81a881bc9def017f6d"
+    }
+  },
+  "retainedEvidence": {
+    "archive": "/root/codex-components-p2-20261021/wasi-landing-evidence-20261027.tar.gz",
+    "bytes": 18245607,
+    "sha256": "20c924bc8a82e8b3a884eb5babef4209e15cda90c54f0b5e958d96dabd525558",
+    "members": 366,
+    "checkedSourceFiles": 6946
+  },
+  "limits": [
+    "Public async output CLI remains guarded.",
+    "Resource-bearing async guest adapters and guest future/stream profiles remain guarded.",
+    "No current Turnloop runtime execution qualification on macOS/Windows; Windows compilation alone is not runtime qualification.",
+    "Blocking P2 I/O cancellation, broader capability coverage and final combined distribution validation remain open.",
+    "Full WASI 0.3, WASI 0.3.1 and complete all-green repository gates are not claimed."
+  ]
+}

@@ -272,6 +272,9 @@ pub mod turnloop_proc;
 // is a native-only dependency, and the pool it wraps is turnloop's.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod turnloop_pool;
+#[cfg(target_os = "wasi")]
+#[path = "turnloop_pool_wasm.rs"]
+pub mod turnloop_pool;
 // turnloop P10: run a host job on the loop of the agent this thread acts for
 // (`turnloop_post/mod.rs`). Same target gate as P1, P2 and P4. This is what a
 // thread that could not get a loop of its own uses INSTEAD of keeping a tokio

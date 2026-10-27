@@ -309,6 +309,11 @@ pub struct Template {
     /// Classes whose constructor chain `super()` ran on this class's
     /// instances during the solve (the parent value's class tokens).
     pub parent_links: Vec<TmplId>,
+    /// A declared-keys record born with a null prototype
+    /// (`Class::declared_keys_null_proto`: `require.cache`): its prototype
+    /// stand-in has no members and no prototype, so a lookup through it ends
+    /// there and never reaches `Object.prototype`.
+    pub null_proto: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1380,6 +1385,12 @@ pub struct Model {
     /// publishes `global:*` unknown, as for a global unmodeled code writes.
     pub global_cells: bool,
     pub global_late: bool,
+    /// This unit's own code (not a replayed write of another unit's,
+    /// `shared_replay`) put the globals in reach of unmodeled code: the
+    /// global object reached ⊤, a computed key of it was written, a global
+    /// was named after the boundary. Its `global:*` write says so; a
+    /// replayed one is its writer's, published there already.
+    pub global_written_own: bool,
     /// DECISIONS 94: arrays published through an element cell
     /// (`arr:<name>`, `Gen::arr_leaves`) and other units' arrays this unit
     /// holds, each with the seed of cell `arr:<name>#named`: a named field
@@ -1569,6 +1580,12 @@ pub struct Model {
     /// The reason of a publication to another unit (`unit_boundary`): a
     /// published method's receiver is its contract's then (DECISIONS 85).
     pub pub_reason: Option<u32>,
+    /// The reason thrown values reach interpreted code (`compute_in`), and
+    /// what the seed of cell `thrown` holds: the values the other units
+    /// threw (DECISIONS 174), as their contracts name them. Another unit's
+    /// value thrown there escaped in its thrower's solve (`escape`).
+    pub thrown_reason: Option<u32>,
+    pub thrown_in: crate::pts::FxHashSet<Tok>,
     /// The function contracts the census broke (`fn:<name>`): published as
     /// escapes, not contracts.
     pub broken_fns: crate::pts::FxHashSet<String>,
@@ -1615,10 +1632,7 @@ pub struct Model {
     /// left with the function (unknown code reads and writes them); the
     /// reason it left.
     pub props_escaped: FxHashMap<Tok, u32>,
-    /// Solving one unit (`FactsConfig::unit`): what escapes reaches other
-    /// units' code, which the whole program sees.
-    pub per_unit: bool,
-    /// DECISIONS 210: this unit's functions unknown code constructs
+    /// DECISIONS 210/211: the functions unknown code constructs
     /// (`Model::construct_unknown`), once each.
     pub unknown_new: crate::pts::FxHashSet<FnIdx>,
     /// DECISIONS 210: the `new` calls of other units' functions: no call

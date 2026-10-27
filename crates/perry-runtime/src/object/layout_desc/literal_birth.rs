@@ -92,19 +92,28 @@ pub(super) fn descriptor_at(index: u32) -> Option<(*const PerryLayoutDesc, bool)
     if index >= LAYOUT_INDEX_LIMIT {
         return None;
     }
-    let eager = layout_bounds();
-    let bytes = eager.1.saturating_sub(eager.0);
-    // LAYOUT_INDEX_LIMIT bounds this multiplication even on 32-bit targets.
-    let offset = index as usize * std::mem::size_of::<PerryLayoutDesc>();
-    if offset < bytes {
-        return Some(((eager.0 + offset) as *const PerryLayoutDesc, false));
+    #[cfg(target_family = "wasm")]
+    {
+        // Runtime records live in separate static allocations on Wasm. Use
+        // the same immutable enumeration that startup and lazy birth index.
+        super::enumeration::enumerated_layout_at(image_layouts(), index).map(|desc| (desc, false))
     }
-    let literal = bounds();
-    let offset = offset - bytes;
-    if offset >= literal.1.saturating_sub(literal.0) {
-        return None;
+    #[cfg(not(target_family = "wasm"))]
+    {
+        let eager = layout_bounds();
+        let bytes = eager.1.saturating_sub(eager.0);
+        // LAYOUT_INDEX_LIMIT bounds this multiplication even on 32-bit targets.
+        let offset = index as usize * std::mem::size_of::<PerryLayoutDesc>();
+        if offset < bytes {
+            return Some(((eager.0 + offset) as *const PerryLayoutDesc, false));
+        }
+        let literal = bounds();
+        let offset = offset - bytes;
+        if offset >= literal.1.saturating_sub(literal.0) {
+            return None;
+        }
+        Some(((literal.0 + offset) as *const PerryLayoutDesc, true))
     }
-    Some(((literal.0 + offset) as *const PerryLayoutDesc, true))
 }
 
 /// Generic words need family classification as well as a checked decode.

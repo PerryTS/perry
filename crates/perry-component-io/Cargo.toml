@@ -3,14 +3,21 @@ name = "perry-component-io"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-repository.workspace = true
-description = "Native operation ownership at Perry's optional component boundary"
+description = "Turnloop-owned native I/O tasks for Perry component providers"
+
 [lints]
 workspace = true
-[dependencies]
-perry-abi.workspace = true
-turnloop.workspace = true
 
 [features]
 default = []
 standalone = []
+
+[dependencies]
+perry-abi.workspace = true
+turnloop = { workspace = true, features = ["executor"] }
+futures-util.workspace = true
+futures-channel = "0.3"
+
+[dev-dependencies]
+futures-lite = "2"
+futures-util = { workspace = true, features = ["io"] }

@@ -5,6 +5,24 @@ use std::sync::atomic::{AtomicPtr, Ordering};
 
 static OPS: AtomicPtr<ComponentHostOps> = AtomicPtr::new(std::ptr::null_mut());
 
+#[cfg(test)]
+pub(super) struct TestOpsGuard(*mut ComponentHostOps);
+#[cfg(test)]
+impl TestOpsGuard {
+    pub fn install(ops: &'static ComponentHostOps) -> Self {
+        Self(OPS.swap(
+            (ops as *const ComponentHostOps).cast_mut(),
+            Ordering::AcqRel,
+        ))
+    }
+}
+#[cfg(test)]
+impl Drop for TestOpsGuard {
+    fn drop(&mut self) {
+        OPS.store(self.0, Ordering::Release);
+    }
+}
+
 /// # Safety
 /// A non-null table must be immutable and remain valid for the process lifetime.
 /// Its entries are code addresses, never Perry-managed heap values. The native

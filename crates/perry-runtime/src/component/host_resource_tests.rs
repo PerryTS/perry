@@ -204,6 +204,75 @@ fn host_resources_reject_foreign_types_instances_forgery_and_expired_borrows() {
     context::finish_disposal(foreign.get_nanbox_f64(), perry_abi::component_host::OK);
 }
 
+#[test]
+fn imported_borrow_capabilities_move_with_their_private_wrapper_and_expire() {
+    let _nursery = crate::gc::CopyingNurseryTestGuard::new(0);
+    let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _evacuate = crate::gc::knob_overrides::ForcedEvacuationTestGuard::on();
+    crate::gc::register_runtime_handle_root_scanner_for_tests();
+    let scope = RuntimeHandleScope::new();
+    let owner = scope.root_nanbox_f64(context::publish(world(), undefined()));
+    let ty = text(&scope, "t0");
+    let owned = scope.root_nanbox_f64(payload::js_component_host_resource_create(
+        owner.get_nanbox_f64(),
+        ty.get_nanbox_f64(),
+        42.0,
+        undefined(),
+    ));
+    // Locally created borrow views have no imported canonical lease.
+    let view = scope.root_nanbox_f64(method(owned.get_nanbox_f64(), b"borrow"));
+    assert!(
+        value::encode_for(view.get_nanbox_f64(), owner.get_nanbox_f64())
+            .get("$borrow")
+            .is_none()
+    );
+    transfer(owner.get_nanbox_f64());
+    let lifetime = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+        crate::array::js_array_alloc_with_length(1) as i64,
+    ));
+    crate::array::js_array_set_f64(array_pointer(lifetime.get_nanbox_f64()).unwrap(), 0, 1.0);
+    let mut descriptor = wire(1, false);
+    descriptor["$borrow"] = json!("opaque-native-borrow-with-a-long-store-nonce:123456789");
+    let borrowed = scope.root_nanbox_f64(host_resource::decode(
+        owner.get_nanbox_f64(),
+        &descriptor,
+        lifetime.get_nanbox_f64(),
+    ));
+    assert!(
+        JSValue::from_bits(field(borrowed.get_nanbox_f64(), b"$borrow").to_bits()).is_undefined()
+    );
+    assert_eq!(
+        value::encode_for(borrowed.get_nanbox_f64(), owner.get_nanbox_f64()),
+        descriptor
+    );
+    let before = borrowed.get_nanbox_f64().to_bits();
+    crate::gc::gc_collect_minor();
+    assert_ne!(
+        borrowed.get_nanbox_f64().to_bits(),
+        before,
+        "the wrapper must actually move"
+    );
+    assert_eq!(
+        value::encode_for(borrowed.get_nanbox_f64(), owner.get_nanbox_f64()),
+        descriptor
+    );
+    assert_eq!(
+        read(
+            owner.get_nanbox_f64(),
+            ty.get_nanbox_f64(),
+            borrowed.get_nanbox_f64()
+        ),
+        42.0
+    );
+    crate::array::js_array_set_f64(array_pointer(lifetime.get_nanbox_f64()).unwrap(), 0, 0.0);
+    assert!(crate::exception::catch_js_throw(|| value::encode_for(
+        borrowed.get_nanbox_f64(),
+        owner.get_nanbox_f64(),
+    ))
+    .is_err());
+    context::finish_disposal(owner.get_nanbox_f64(), perry_abi::component_host::OK);
+}
+
 extern "C-unwind" fn destroy(
     closure: *const crate::closure::ClosureHeader,
     _: crate::closure::JsThis,

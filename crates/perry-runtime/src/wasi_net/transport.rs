@@ -14,6 +14,14 @@ pub struct TransportCore {
     referenced: bool,
 }
 const _: () = assert!(std::mem::size_of::<TransportCore>() <= TRANSPORT_CORE_WORDS * 8);
+/// A family payload that owns a transport: the core first, so the runtime
+/// reads it at offset 0 of the payload a link names.
+#[repr(C)]
+pub struct TransportPayload<E> {
+    pub core: TransportCore,
+    pub ext: E,
+}
+
 pub const HANDLE_SNAPSHOT_WORDS: usize = 4;
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct HandleSnapshot(i64);
@@ -103,13 +111,13 @@ pub unsafe fn tcp_listen(
     backlog: u32,
     reuse_port: bool,
     nodelay: bool,
-) -> NetResult<()> {
+) -> NetResult<SocketAddr> {
     let core = bind(core, link, "listen")?;
     idle(core, "listen")?;
     let id = next_id();
-    super::tcp_listen(id, core.route, addr, backlog, reuse_port, nodelay)?;
+    let local = super::tcp_listen(id, core.route, addr, backlog, reuse_port, nodelay)?;
     attach(core, link, id);
-    Ok(())
+    Ok(local)
 }
 pub unsafe fn tcp_connect(
     core: *mut TransportCore,

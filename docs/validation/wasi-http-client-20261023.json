@@ -1,0 +1,117 @@
+{
+  "scope": "Linux canonical WASI HTTP client resources, HTTP/1.1 and TLS transport, synchronous/asynchronous provider linkers, real WASM guest round-trip and exact capability denials through the production component Host facade. Incoming/server handler invocation/transport, Perry-generated TypeScript HTTP GC, platform and final package qualification remain required. External Turnloop/core + IO validation override; shipping registry lock update remains pending.",
+  "platform": "x86_64-unknown-linux-gnu",
+  "snapshot": "turnloop-provider-v59-src",
+  "base_commit": "5adaa158c8",
+  "tests": {
+    "dev": {
+      "provider": 220,
+      "driver": 26,
+      "host": 41
+    },
+    "prod-panic-abort": {
+      "provider": 220,
+      "driver": 25,
+      "host": 41
+    },
+    "httpPrimitives": 20,
+    "httpTransport": 12,
+    "httpWitResourceTests": 7,
+    "hostHttpFacadeTests": 1,
+    "httpWithNativeDriver": 3
+  },
+  "canonical_component": {
+    "fixture": "crates/perry-wasi/src/http/p2/http.component.wat",
+    "imports": "wasi:http@0.2.0 + wasi:io@0.2.0",
+    "providers": "wasi:http@0.2.12",
+    "linkers": [
+      "synchronous",
+      "asynchronous"
+    ],
+    "assertions": [
+      "HTTP request and exact response body",
+      "status and trailer completion",
+      "immediate TCP denial and asynchronous destination denial",
+      "empty resource table after every call"
+    ]
+  },
+  "host_facade": {
+    "explicitWasiRequired": true,
+    "denials": [
+      "missing TCP",
+      "UDP-only",
+      "missing address",
+      "wrong port",
+      "missing DNS"
+    ],
+    "allowed": "localhost resolved to exact granted IP and port; peer verifies GET and chunked body; guest verifies pong; resource table empty"
+  },
+  "clippy": "pass",
+  "doctests": {
+    "passed": 2,
+    "inheritedIllustrativeIgnored": 1
+  },
+  "normalGraphTokioFree": true,
+  "turnloopValidationPatchRevision": "b63a4ee3d3ad73d2df61b35202ed140f05513053",
+  "patchConfigSha256": "10d1092e1877e07df5ef79766bdce706f06a18fe5aeac1aa86c7afbea6ed2828",
+  "sourceSha256": {
+    "crates/perry-wasi/wit/world.wit": "270e000813107c8a6bc9a10574a42c79d359357d6074038bfa84c869133dd939",
+    "crates/perry-wasi/src/lib.rs": "f28389737b7f1bacfe7b9fef13b9a93bad44a8c718cc6983eb9882460631ffb6",
+    "crates/perry-wasi/src/p2.rs": "2c53e248773bec3999b5a072d46b20eb356234004c09a2ea0facc698c21388d9",
+    "crates/perry-wasi/src/http.rs": "e3fac6c69bcbca0b428b0837981b932efedd5564ee2d2fb54ca23e129384b43a",
+    "crates/perry-wasi/src/http/error.rs": "a4ea20de90521a8fe57d055ecbd452f245b798fc962d494fea1cab0e65ede851",
+    "crates/perry-wasi/src/http/body.rs": "124168dcbb5b49a2aecc61384f274a264f49076032db56f8324a32dfbd82e0f5",
+    "crates/perry-wasi/src/http/transport.rs": "7acd1acd319855ed8eea53174567fcc969b797a8b0b5db41a71cfdb772774cd9",
+    "crates/perry-wasi/src/http/fields.rs": "9d3a90ab6c74d3a4caf8d7a0266e5e586fd3b38d035d9d8b577a0e17bf37f28e",
+    "crates/perry-wasi/src/http/p2.rs": "edd9e66ffbc7b510a343a2e3f3926365118ce274ccf236de7427f1f53a55d757",
+    "crates/perry-wasi/src/http/p2/handlers.rs": "dcc1757683c155b5a337fee2ac76b201e5739f0e06af7baeb063ff5db404d9d3",
+    "crates/perry-wasi/src/http/p2/http.component.wat": "bd090ab00769d97b36e65180babf417418c14bd8ed49778f192c98e2016c61bd",
+    "crates/perry-wasi/src/http/p2/error.rs": "97941d9867eab45e8bbbfa8c071cd40a1f695dcbf528bb0260397370b2abaa3a",
+    "crates/perry-wasi/src/http/p2/outgoing.rs": "22a0317a84b4a4e1073dd4e8b730b338f1188521889d5f63ed9eae68895390a3",
+    "crates/perry-wasi/src/http/p2/options.rs": "3ab9d5aa517cdbf4d92c8824f9b270d09b31e041236aa8e496a81e22c4cd3094",
+    "crates/perry-wasi/src/http/p2/tests.rs": "0774c73576d1388b8543edb584ff6c5b59821de62047cdec935a4adee1a3bdd3",
+    "crates/perry-wasi/src/http/p2/resources.rs": "5372f23436c9b65063e733fe26c933a71bad8a101c252fdd1187473c944f5051",
+    "crates/perry-wasi/src/http/transport/tests.rs": "737d285d1dc973e88ad581a9b1f400863b8369044cb22481b597090141616ea6",
+    "crates/perry-wasi/src/http/transport/wire.rs": "681d2a426049cd7065579a8dba41c7566dc6e60fd4d6e9ef80d59bfe235270b4",
+    "crates/perry-wasi/src/http/body/incoming.rs": "4c8b626014f79857ca35d5d849a689e4dea0d9d724835690141ebcdf538d1593",
+    "crates/perry-wasi/src/http/body/tests.rs": "971d143b6e1a91917f989f885037d235baaf8acad4a0f3fc1774f0752feea1df",
+    "crates/perry-wasi/wit/deps/clocks.wit": "6ed8aa65bb8cbe224a0b2cbac9fc1b3bd25bdb17eda5ae0d23c983ed31c447cc",
+    "crates/perry-wasi/wit/deps/cli.wit": "fb6ac5d23fcaf3d231142a3c2f9bb1e9bc1fe5af6f1f329f6b1a5555ce0d3873",
+    "crates/perry-wasi/wit/deps/http.wit": "4bbd58f509700a6637385611f183c5bd5984d81feef85e29dfdc05ebd283045a",
+    "crates/perry-wasi/wit/deps/filesystem.wit": "e675f261017bf9b4fa7df5b9701023fe0249ede71021ac1bf978748e62edcda8",
+    "crates/perry-wasi/wit/deps/io.wit": "96e206d00076fa0480df32c5bcf255a3fa4862805ac2f6b8537a781cce54f433",
+    "crates/perry-wasi/wit/deps/sockets.wit": "ad38dbf3b0bbdf34c0f2b608edcbfee04d71b443a63faff1f5e0053c3f84b377",
+    "crates/perry-wasi/wit/deps/random.wit": "48578c40213d5cab6650980905fa146a0be8c39c4433ee5e7e00637b87dbe08f",
+    "crates/perry-component-host/src/wasi_http_tests.rs": "657b44ccaf49d88abb4134c2d1ec68eebb24441686a07cf1e6d30c5cf87e50fe",
+    "crates/perry-component-host/src/wasi.rs": "f2c00f57294842bbb660c18189ea786523d734314543d36ae1716669a485fd6a"
+  },
+  "evidenceSha256": {
+    "turnloop-provider-v59-clippy.log": "1980b49becca4c2b09a931ab32bc7cf3e0c33c7f85818a3ee85b2109d326c0ea",
+    "turnloop-provider-v59-dev-build.log": "c91e181d0b6e19a6f00b575dff4493a28b86392edba9a76ce469cc0f00d3131e",
+    "turnloop-provider-v59-dev-perry_component_host.log": "a12370a87331cdb557705cb17a27d9d7f66ce4b4739d33ed05958d3238edee19",
+    "turnloop-provider-v59-dev-perry_component_io.log": "937c14ea20b5745225169d0843facd4a83b95702ec0b55bfa2e29264a914ddfe",
+    "turnloop-provider-v59-dev-perry_wasi.log": "61dea305c3b93669f0bf8d156129fc68e43d04e7a7794af00015f52a8f21a3b9",
+    "turnloop-provider-v59-doc.log": "b67b1d4b98d7e246b4ecd270dd24ba9111b9119318f3b387272df8339faae745",
+    "turnloop-provider-v59-lock-update.log": "e39e431b126caa941a80d2109e4ec085d47a47453f6cab19503477cab3f9b5e1",
+    "turnloop-provider-v59-overlap.log": "23f657b8e3c24c03d61e17cf600af0c999abb123090a8ac452df64532426a489",
+    "turnloop-provider-v59-prod-build.log": "f8b372ddb078fcd30fd851061fc9da12904c67edb643b48d7b945a558350a0f1",
+    "turnloop-provider-v59-prod-perry_component_host.log": "d3b5e5c1e74d9d0b13aa04ae6b426d26fb826cda78d9d480f9cfe4bc84f213c4",
+    "turnloop-provider-v59-prod-perry_component_io.log": "9eacf0dc9baba14b5104d97f69b5df6d3c139fcc9fe4b1cf793ebf5bedfe6151",
+    "turnloop-provider-v59-prod-perry_wasi.log": "70ab0de623b6cd33d07a59fb65085bcff6516666b1284a2b5ceb39aa25933e4a",
+    "turnloop-provider-v59-tree.log": "3ca32d3b4fa66bd6ca5539d3f13a5b1a916c87d47658d181060d60ca3de2b1d9",
+    "turnloop-provider-v59-dev-perry_component_host.identity.json": "bcd83f0ecda0ac60930565cfe3c8c7675bf3ce9e3c201c1a1155b0904115eede",
+    "turnloop-provider-v59-dev-perry_component_io.identity.json": "11dac41680e9e5ba94db202b67460961df71bce5b59bbd19fe4cdcafab655f02",
+    "turnloop-provider-v59-dev-perry_wasi.identity.json": "2144dfd98a737256ca3a725e0491f635ccdfefb0fff3ca11e11c5f860458ffb8",
+    "turnloop-provider-v59-prod-perry_component_host.identity.json": "0fba670fb4f2dc489ab25ada3032cba58b6fb18bbf699232050278235d4a6ceb",
+    "turnloop-provider-v59-prod-perry_component_io.identity.json": "3f1a7fbb53bb673fa75713a75223947bf2db977906db05a8a8db6c361eb2c38e",
+    "turnloop-provider-v59-prod-perry_wasi.identity.json": "874b8c6df09e5420dc29b31e236af98b5a1b1667db98efeac65159af5c6767a4"
+  },
+  "stillRequired": [
+    "server/incoming-handler invocation and transport",
+    "Perry-generated TypeScript HTTP guests and moving-GC qualification",
+    "native WASI 0.3",
+    "macOS/Windows provider qualification",
+    "released Turnloop repairs and registry lock resolution",
+    "final production/npm package qualification"
+  ]
+}

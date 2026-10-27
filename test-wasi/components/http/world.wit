@@ -1,0 +1,15 @@
+package wasi:http@0.2.0;
+
+interface types {
+    resource incoming-request;
+    resource response-outparam;
+}
+interface incoming-handler {
+    use types.{incoming-request, response-outparam};
+    handle: func(request: incoming-request, response-out: response-outparam);
+}
+world proxy {
+    import types;
+    export incoming-handler;
+    export configure: func(mode: u32);
+}

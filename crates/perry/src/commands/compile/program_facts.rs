@@ -129,6 +129,7 @@ pub(crate) fn run(
         // else the budget's CPU slots, else cores bounded by memory).
         jobs: perry_codegen::workers::unit_workers(),
         unit_io: dump.is_some(),
+        report: std::env::var("PERRY_FACTS_REPORT").is_ok_and(|v| v == "1"),
     };
     // Entry outlining moves module bindings into compiler-owned functions.
     // Facts need the same logical module scope that codegen's globals and
