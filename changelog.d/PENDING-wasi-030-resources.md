@@ -1,4 +1,5 @@
-Commit ownership of generated async export results before canonical return.
-Retain incoming canonical borrows through suspension and retire them at return
-or cancellation, independently of later task exit. Keep the public async and
-resource-profile guards while the full WASI 0.3.0 profile is qualified.
+Enable experimental async component resources with committed result ownership,
+borrow lifetimes through suspension, and cancellation cleanup for compound
+values. Package AsyncLocalStorage constructors and methods in the WASI runtime,
+preserving native exports and removing obsolete Android stubs. Public async CLI
+generation and guest future/stream values remain guarded.
