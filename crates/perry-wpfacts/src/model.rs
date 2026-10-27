@@ -1016,6 +1016,28 @@ pub struct FieldWriters {
     pub post: Vec<SiteId>,
 }
 
+/// Where the solve work went (PERRY_FACTS_PROFILE only): by the popped node
+/// it was spent for (or the phase outside the worklist), by rule kind
+/// (inclusive of what the rule triggers), by propagation step, and a growth
+/// line every `WorkProfile::STEP` work.
+#[derive(Default)]
+pub struct WorkProfile {
+    /// The work since `at.1` is charged to node `at.0` (`NO_NODE`: phase `at.2`).
+    pub at: (NodeId, u64, &'static str),
+    pub node: FxHashMap<NodeId, u64>,
+    pub phase: FxHashMap<&'static str, u64>,
+    /// Rule kind: (applications, work, attach replays, attach replay work).
+    pub kind: FxHashMap<&'static str, (u64, u64, u64, u64)>,
+    /// Pop charge (delta x constraints), fast copy deliveries, copy visits and
+    /// checks, `copy_to` extra.
+    pub step: [u64; 4],
+    pub next_curve: u64,
+}
+
+impl WorkProfile {
+    pub const STEP: u64 = 5_000_000;
+}
+
 #[derive(Default)]
 pub struct Model {
     pub toks: Vec<TokKind>,
@@ -1044,7 +1066,13 @@ pub struct Model {
     pub field_any: FxHashMap<Tok, NodeId>,
     /// An array's values under a key no store named (`Model::named_any`):
     /// what its named non-index keys read. Its elements are not among them.
+    /// A module namespace's values every name reads (DECISIONS 215).
     pub named_any: FxHashMap<Tok, NodeId>,
+    /// DECISIONS 215: a module namespace -> the namespaces of its `export *`
+    /// sources (`TOP`: one outside the program), and the names the module
+    /// exports itself (those shadow every `export *`).
+    pub star_from: FxHashMap<Tok, Vec<Tok>>,
+    pub ns_own: crate::pts::FxHashSet<(Tok, Atom)>,
     pub all_fields: FxHashMap<Tok, NodeId>,
     pub proto_node: FxHashMap<Tok, NodeId>,
     pub field_keys: FxHashMap<Tok, Vec<Atom>>,
@@ -1344,6 +1372,8 @@ pub struct Model {
     /// With the profile: propagation work by source-node label
     /// (delta × successors, delta × constraints).
     pub label_work: FxHashMap<&'static str, (u64, u64, u64)>,
+    /// With the profile: where the solve work went (`WorkProfile`).
+    pub prof: Option<Box<WorkProfile>>,
     pub fn_inst: FxHashMap<FnIdx, TmplId>,
     /// Per-unit contracts (design §11.2): the methods of a published class
     /// run on its receiver token (`Model::publish_class`), one per published

@@ -108,7 +108,8 @@ impl<'a> Gen<'a> {
             },
         );
         if open {
-            let fa = self.m.field_any(tok);
+            // Under every name (DECISIONS 215: a named key reads `named_any`).
+            let fa = self.m.named_any(tok);
             self.m.add_top(fa, |_| {
                 format!("namespace of {src}: export * from outside the program")
             });
