@@ -319,12 +319,14 @@ fn regenerate_wpfacts_cjs_fixtures() {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../perry-wpfacts/src/tests/fixtures");
     // `t6`'s entry requires by a computed specifier: a program that is not
     // closed, its wrappers keep the open arms.
-    let sets: [(&str, &[&str], bool); 5] = [
+    // `t7`'s `b.js` requires `module` (Node's `Module._cache`): not closed.
+    let sets: [(&str, &[&str], bool); 6] = [
         ("t1", &["b.js", "a.js", "m.js"], false),
         ("t2", &["r.js", "m.js"], false),
         ("t3", &["benchmark.js", "richards.js", "sa_Richards.js"], false),
         ("t5", &["b.js", "r.js", "m.js"], false),
         ("t6", &["benchmark.js", "som.js", "cd.js", "sa_CD.js"], true),
+        ("t7", &["a.js", "b.js", "m.js"], true),
     ];
     for (t, files, open) in sets {
         let dir = tempfile::tempdir().expect("tempdir");

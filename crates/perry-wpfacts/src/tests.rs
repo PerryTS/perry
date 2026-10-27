@@ -14,6 +14,7 @@ mod cjs_require;
 mod class_statics;
 mod closed_world;
 mod closure_context;
+mod escaped_constructor;
 mod for_in_keys;
 mod function_values;
 mod hub_tokens;

@@ -1316,6 +1316,11 @@ pub struct Model {
     /// (delta × successors, delta × constraints).
     pub label_work: FxHashMap<&'static str, (u64, u64, u64)>,
     pub fn_inst: FxHashMap<FnIdx, TmplId>,
+    /// CJL3: the escaped functions unknown code may construct (`new f`
+    /// there), with the reason they escaped: the instance of their layout
+    /// (`fn_inst`) escapes for that reason when the template exists, or
+    /// when it is made (`Model::fn_inst_template`).
+    pub unknown_new: FxHashMap<FnIdx, u32>,
     /// Per-unit contracts (design §11.2): the methods of a published class
     /// run on its receiver token (`Model::publish_class`), one per published
     /// class whose chain inside the unit holds the method.

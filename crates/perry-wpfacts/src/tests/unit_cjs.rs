@@ -92,6 +92,19 @@ const T6: [(&str, &str); 5] = [
     ),
 ];
 
+/// CJL3: `a.js` hands out the constructor function `Reply` (its body writes
+/// `Reply.prototype.f`), `b.js` requires `module` (Node's `Module._cache`:
+/// every record escapes, so `Reply` does), `m.js` runs `new Reply(1)`.
+const T7: [(&str, &str); 4] = [
+    ("/t7/m.js", include_str!("fixtures/cjs_t7/m.js")),
+    ("/t7/a.js", include_str!("fixtures/cjs_t7/a.js")),
+    ("/t7/b.js", include_str!("fixtures/cjs_t7/b.js")),
+    (
+        "/t7/perry_cjs.js",
+        include_str!("fixtures/cjs_t7/perry_cjs.js"),
+    ),
+];
+
 fn hirs(mods: &[(&str, &str)]) -> Vec<(String, perry_hir::Module)> {
     mods.iter()
         .map(|(path, src)| {
@@ -572,4 +585,32 @@ fn a_property_of_a_broken_function_holds_anything() {
         .find(|t| t.display.starts_with("index.js:") && t.birth_keys.iter().any(|k| k == "aliases"))
         .expect("the parse result literal");
     assert!(lit.escape.is_some(), "{lit:?}");
+}
+
+/// CJL3 (fastify `new Reply`): whole program, `new Reply` escapes (its
+/// prototype comes from unknown code: `Reply` escaped through
+/// `Module._cache`). Per unit `m.js` holds `Reply` as an unknown value
+/// (`new` of it is ⊤) and the unit writing `Reply.prototype.f` holds the
+/// layout with no instance of its own: unknown code constructs the escaped
+/// function there, so its copy is escaped too, never a clean layout.
+#[test]
+fn a_constructor_function_escaped_through_the_cache_is_escaped_in_every_unit() {
+    let (w, u) = both(&T7);
+    let wt = super::escaped_constructor::fn_inst(&w, "Reply#9");
+    assert!(
+        !wt.is_empty() && wt.iter().all(|t| t.escape.is_some() && !t.prefix_stable),
+        "{}",
+        w.dump_text()
+    );
+    let ut = super::escaped_constructor::fn_inst(&u, "Reply#9");
+    assert!(!ut.is_empty(), "{}", u.dump_text());
+    for t in ut {
+        assert!(
+            t.escape.is_some() && !t.prefix_stable && !t.fixed_layout,
+            "per unit {} is stronger than whole-program\n{}",
+            t.display,
+            u.dump_text()
+        );
+    }
+    assert_cjs_per_unit(&w, &u, proven_sites(&u).len());
 }

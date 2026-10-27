@@ -613,6 +613,10 @@ impl Model {
             null_proto: false,
         });
         self.fn_inst.insert(f, id);
+        if let Some(&reason) = self.unknown_new.get(&f) {
+            let inst = self.tok(TokKind::Obj(id, NO_CTX));
+            self.escape(inst, reason);
+        }
         id
     }
 
@@ -1292,6 +1296,23 @@ impl Model {
                     self.escape_this(t, reason);
                 }
                 self.escape_fn_params(t, reason);
+                // Unknown code may construct it (`new f` there), as an
+                // escaped class (below): an instance of its layout is born
+                // where nothing models it, with the prototype unknown code
+                // may have given `f`, and reaches that code. Per unit the
+                // units constructing an escaped function hold it as an
+                // unknown value, so this is the instance the layout's copies
+                // describe (CJL3, fastify `new Reply`). A contract function
+                // published to the other units is no such function: they
+                // call and construct it through its contract (§11.2).
+                let contract = self.pub_reason == Some(reason) && self.contract_fns.contains(&f);
+                if !fi.lexical_this && fi.ctor_of.is_none() && !contract {
+                    self.unknown_new.entry(f).or_insert(reason);
+                    if let Some(&tm) = self.fn_inst.get(&f) {
+                        let inst = self.tok(TokKind::Obj(tm, NO_CTX));
+                        self.escape(inst, reason);
+                    }
+                }
             }
             TokKind::ClassObj(tm) => {
                 let p = self.tok(TokKind::Proto(tm));
