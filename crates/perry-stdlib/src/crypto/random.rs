@@ -1078,7 +1078,10 @@ mod tests {
 
     impl OwnAgent {
         fn enter() -> Self {
-            Self(perry_runtime::agent::enter_worker_agent())
+            let agent = perry_runtime::agent::enter_worker_agent();
+            perry_runtime::feature_hooks::js_runtime_install_turnloop();
+            perry_runtime::feature_hooks::js_runtime_install_async_hooks();
+            Self(agent)
         }
     }
 
