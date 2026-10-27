@@ -185,7 +185,14 @@ pub(crate) fn auto_optimized_cross_features(
     {
         cross_features.push("perry-runtime/temporal".to_string());
     }
-    if ctx.uses_url || ctx.uses_get_builtin_module || !ctx.native_addons.is_empty() {
+    if ctx.uses_url
+        || ctx.uses_get_builtin_module
+        || ctx
+            .native_module_imports
+            .iter()
+            .any(|module| matches!(module.as_str(), "url" | "module"))
+        || !ctx.native_addons.is_empty()
+    {
         cross_features.push("perry-runtime/url-engine".to_string());
     }
     if ctx.uses_string_normalize {

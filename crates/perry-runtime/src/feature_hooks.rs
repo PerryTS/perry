@@ -311,12 +311,21 @@ pub extern "C" fn js_runtime_install_regex_engine() {
     });
 }
 
+/// URL value operations are available in every archive. Native module
+/// installers use them even when the optional host canonicalizer is absent.
+pub(crate) fn install_url_values() {
+    perry_install_once!({
+        crate::url_hooks::install_values();
+    });
+}
+
 #[cfg(feature = "url-engine")]
 #[no_mangle]
 pub extern "C" fn js_runtime_install_url_engine() {
     perry_install_once!({
         crate::url::install_engine();
     });
+    install_url_values();
 }
 
 #[no_mangle]

@@ -139,6 +139,12 @@ fn debug_hir_uses_url_engine(hir_debug: &str) -> bool {
         // A TypeScript `require("node:url")` keeps no specifier in the HIR, so
         // the factory name is the only surviving signal (#11560).
         || hir_debug.contains("pathToFileURL")
+        // node:module's createRequire accepts file URLs without a named URL
+        // constructor; its native installer reaches the URL value operations.
+        || hir_debug.contains(r#"module: "module""#)
+        || hir_debug.contains(r#"NativeModuleRef("module")"#)
+        || hir_debug.contains(r#"String("node:module")"#)
+        || hir_debug.contains(r#"String("module")"#)
 }
 
 fn imports_fs_promises_glob(hir_module: &perry_hir::Module) -> bool {

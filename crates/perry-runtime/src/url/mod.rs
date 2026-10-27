@@ -93,7 +93,6 @@ pub(crate) fn install_engine() {
         |domain| idna::domain_to_ascii(domain).ok(),
         |domain| idna::domain_to_unicode(domain).0,
     );
-    crate::url_hooks::install_values();
 }
 
 /// True when `host` is a canonical dotted-quad IPv4 literal. Used by
