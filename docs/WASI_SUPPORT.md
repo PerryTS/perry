@@ -42,6 +42,26 @@ nightly-2026-10-04 and LLVM 22. Fresh Windows x64 qualification is recorded belo
 [Wasmtime platform support](https://docs.wasmtime.dev/stability-platform-support.html)
 and [the agreed scope, #11375](https://github.com/PerryTS/perry/issues/11375).
 
+## Toolchain prerequisites
+
+WASI code generation requires **LLVM >= 22.1.5**. For the default in-process
+backend this is the LLVM linked into Perry, so upgrading a system clang does
+not upgrade an existing Perry binary: rebuild Perry against the supported
+LLVM. If the external clang backend is explicitly selected, that clang must
+also satisfy the minimum. Perry checks the selected backend before code
+generation and does not automatically switch backends. Native targets retain
+their existing requirements.
+
+LLVM [issue #194184](https://github.com/llvm/llvm-project/issues/194184)
+miscounted EH pad depth in `fixCallUnwindMismatches` and could abort on complex
+WASI exception CFGs, including Storage's glob closure. The fix,
+[`5c9647b8e680`](https://github.com/llvm/llvm-project/commit/5c9647b8e680),
+shipped in LLVM 22.1.5. The regression witness is compiled through Perry's
+in-process LLVM in the WASI codegen CI job.
+
+Build hosts also need WASI SDK 34 and the source-matched wasm32 runtime;
+Wasmtime 48.0.0 with exceptions enabled is the tested execution host.
+
 ## Release artifacts
 
 The release pipeline builds a separate `perry-cross-wasm32-wasip2.tar.gz`

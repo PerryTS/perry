@@ -32,6 +32,7 @@ RUN printf '%s\n' \
     && apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       clang-22 libpolly-22-dev llvm-22-dev \
+    && llvm-config-22 --version | awk -F. '$1 == 22 && ($2 > 1 || ($2 == 1 && $3+0 >= 5)) { ok=1 } END { exit !ok }' \
     && rm -rf /var/lib/apt/lists/*
 
 ENV LLVM_SYS_221_PREFIX=/usr/lib/llvm-22

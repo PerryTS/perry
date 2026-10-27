@@ -5237,6 +5237,8 @@ jobs:
       uses: ./.github/actions/perry/actions/setup-node
       with:
         node-version-file: .node-version
+    - name: WASI native EH toolchain and codegen regression
+      run: cargo test --locked --profile perry-dev -p perry-codegen --lib --features target-wasi wasm_eh -- --test-threads=1
     - name: Build perry with the WASI target
       run: cargo build --locked --profile perry-dev -p perry --features target-wasi
     - name: wasm32 IR matches the runtime ABI
