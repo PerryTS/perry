@@ -223,7 +223,7 @@ pub(crate) unsafe fn build_stats_object(
     // whole), so `st.mtime.getTime()` never carries a fraction.
     let set_date_aliases = |base: u32, times_ms: [f64; 4]| {
         for (i, ms) in times_ms.into_iter().enumerate() {
-            set(base + i as u32, crate::date::alloc_date_cell(ms));
+            set(base + i as u32, crate::date_hook_slots::alloc_date_cell(ms));
         }
     };
     set(0, make_stats_predicate(is_file));

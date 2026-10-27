@@ -141,6 +141,7 @@ pub(crate) fn run_feature_installer() {
 pub extern "C" fn js_runtime_install_compiled() {
     js_runtime_install_async_hooks();
     js_runtime_install_thread();
+    js_runtime_install_date();
     #[cfg(feature = "dyn-eval")]
     js_runtime_install_dyn_eval();
     #[cfg(feature = "bun-cli-utils")]
@@ -492,4 +493,9 @@ pub(crate) static FS_REGISTER_ROOTS: Hook<fn()> = Hook::empty();
 #[no_mangle]
 pub extern "C" fn js_runtime_install_thread() {
     crate::thread_hook_slots::install();
+}
+
+#[no_mangle]
+pub extern "C" fn js_runtime_install_date() {
+    crate::date_hook_slots::install();
 }

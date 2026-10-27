@@ -251,6 +251,26 @@ pub(crate) fn auto_optimized_cross_features(
     {
         cross_features.push("perry-runtime/bigint".to_string());
     }
+    if ctx.uses_date
+        || ctx.uses_get_builtin_module
+        || ctx.uses_proc_ipc
+        || needs_dyn_eval
+        || !ctx.native_addons.is_empty()
+        || ctx.native_module_imports.iter().any(|m| {
+            matches!(
+                m.as_str(),
+                "v8" | "worker_threads"
+                    | "child_process"
+                    | "fs"
+                    | "fs/promises"
+                    | "crypto"
+                    | "bun"
+                    | "bun:ffi"
+            )
+        })
+    {
+        cross_features.push("perry-runtime/date".to_string());
+    }
     // Clone-producing APIs and worker completions share the thread codec.
     if ctx.uses_thread_codec
         || ctx.uses_worker_threads

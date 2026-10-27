@@ -382,7 +382,9 @@ pub(crate) fn received_native_fallback(value: f64) -> Option<*mut StringHeader> 
         let payload = if timestamp.is_nan() {
             "Invalid Date".to_string()
         } else {
-            string_header_to_string(crate::date::js_date_to_iso_string(value.get_nanbox_f64()))
+            string_header_to_string(crate::date_hook_slots::js_date_to_iso_string(
+                value.get_nanbox_f64(),
+            ))
         };
         return Some(received_text(&if null_proto {
             format!("[Date{suffix}] {payload}")

@@ -211,7 +211,7 @@ pub(crate) extern "C" fn global_this_date_thunk(
     _this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
-    let string = crate::date::js_date_to_string(crate::date::js_date_new());
+    let string = crate::date_hook_slots::js_date_to_string(crate::date_hook_slots::js_date_new());
     crate::value::js_nanbox_string(string as i64)
 }
 

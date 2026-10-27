@@ -40,6 +40,7 @@ NEGATIVES = {
     "without_url": ["url_engine", "global_url"],
     "without_fs": ["fs"],
     "without_thread": ["thread"],
+    "without_date": ["date"],
     "without_async_hooks": ["async_hooks"],
     "without_bigint_querystring": ["bigint"],
     "fs_promises_without_streams": ["bundled_web_streams"],

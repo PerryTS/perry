@@ -40,7 +40,7 @@ fn date_arg_to_clipped_ms(value: f64) -> f64 {
     }
     let js = JSValue::from_bits(value.to_bits());
     let ms = if js.is_undefined() {
-        crate::date::js_date_now()
+        crate::clock::wall_millis()
     } else {
         // Date cells fast-path to their stored timestamp (identical to
         // ToNumber(date)); `date_cell_timestamp` returns its argument unchanged

@@ -212,3 +212,6 @@ pub(crate) use globals::{
 };
 
 pub(crate) use globals::clone_with_transfers;
+
+mod number_locale;
+pub use number_locale::js_number_to_locale_string;

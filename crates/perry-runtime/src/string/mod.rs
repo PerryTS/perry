@@ -1402,3 +1402,9 @@ pub(crate) mod quote;
 pub(crate) mod short_copy;
 
 pub(crate) mod form_codec;
+
+/// Allocate a StringHeader pointer holding `s`.
+pub(crate) fn alloc_runtime_string(s: &str) -> *mut crate::StringHeader {
+    // Use the standard string allocator which sets both utf16_len and byte_len
+    crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32)
+}

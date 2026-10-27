@@ -238,7 +238,7 @@ unsafe fn rel_to_primitive(value: f64) -> f64 {
     if crate::date::is_date_value(value) {
         // ToPrimitive(date, number) → Date.prototype.valueOf → the ms timestamp,
         // which is itself a Number (a plain `f64` is its own NaN-box).
-        return crate::date::js_date_coerce_number(value);
+        return crate::date_hook_slots::js_date_coerce_number(value);
     }
     // ToPrimitive(temporal, NUMBER) → the type's `valueOf`, which is a hard
     // `TypeError` for every `Temporal.*` value (the spec bans relational ordering

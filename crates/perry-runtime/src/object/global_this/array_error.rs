@@ -281,7 +281,7 @@ pub(crate) extern "C" fn date_prototype_to_string_thunk(
     if !crate::date::is_date_value(this_value) {
         super::super::object_ops::throw_object_type_error(b"this is not a Date object.");
     }
-    let string = crate::date::js_date_to_string(this_value);
+    let string = crate::date_hook_slots::js_date_to_string(this_value);
     crate::value::js_nanbox_string(string as i64)
 }
 

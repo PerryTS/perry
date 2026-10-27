@@ -278,7 +278,7 @@ pub(crate) fn js_jsvalue_to_string_impl(
                     }
                     ExoticOwnToString::UseBuiltin => {}
                 }
-                return crate::date::js_date_to_string(value);
+                return crate::date_hook_slots::js_date_to_string(value);
             }
             // Temporal (#4686): `String(temporal)`, `` `${temporal}` ``, and
             // `temporal.toString()` produce the value's canonical ISO-8601 /

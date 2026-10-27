@@ -53,10 +53,10 @@ pub(super) unsafe fn construct(
         }
         BuiltinConstructorIdentity::Date => {
             if args.is_empty() {
-                return Some(crate::date::js_date_new());
+                return Some(crate::date_hook_slots::js_date_new());
             }
             if args.len() == 1 {
-                return Some(crate::date::js_date_new_from_value(args[0]));
+                return Some(crate::date_hook_slots::js_date_new_from_value(args[0]));
             }
             let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
             let mut vals = [undefined, undefined, 1.0, 0.0, 0.0, 0.0, 0.0];
@@ -65,7 +65,7 @@ pub(super) unsafe fn construct(
                     *slot = args[i];
                 }
             }
-            return Some(crate::date::js_date_new_local_components(
+            return Some(crate::date_hook_slots::js_date_new_local_components(
                 vals[0], vals[1], vals[2], vals[3], vals[4], vals[5], vals[6],
             ));
         }

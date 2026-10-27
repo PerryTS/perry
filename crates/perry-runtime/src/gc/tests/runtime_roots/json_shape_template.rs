@@ -138,8 +138,8 @@ fn assert_initial_prototype_lookup_survives(empty: bool) {
 /// there would move `obj` — a bare local here — out from under the setup.
 unsafe fn probe_object(_trigger_guard: &GcTriggerThresholdTestGuard) -> *mut crate::ObjectHeader {
     let obj = crate::object::js_object_alloc(0, 3);
-    let when = crate::date::alloc_date_cell(0.0);
-    let also = crate::date::alloc_date_cell(86_400_000.0);
+    let when = crate::date_hook_slots::alloc_date_cell(0.0);
+    let also = crate::date_hook_slots::alloc_date_cell(86_400_000.0);
     let when_key = crate::string::js_string_from_bytes(b"when".as_ptr(), 4);
     crate::object::js_object_set_field_by_name(obj, when_key, when);
     let answer_key = crate::string::js_string_from_bytes(b"answer".as_ptr(), 6);

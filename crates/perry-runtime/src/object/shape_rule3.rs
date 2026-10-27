@@ -743,7 +743,7 @@ mod tests {
             -1234.5e10,
         ];
         for ts in timestamps {
-            let value = crate::date::alloc_date_cell(ts);
+            let value = crate::date_hook_slots::alloc_date_cell(ts);
             let addr = crate::value::js_nanbox_get_pointer(value) as usize;
             assert!(addr != 0, "a Date is a NaN-boxed cell pointer");
             let word = unsafe { *((addr + 4) as *const u32) };

@@ -1594,7 +1594,7 @@ fn get_field_by_name_past_data_probe(
                         let receiver = f64::from_bits(
                             crate::value::JSValue::pointer(addr as *const u8).bits(),
                         );
-                        let proto = crate::date::date_cell_prototype(receiver);
+                        let proto = crate::date_hook_slots::date_cell_prototype(receiver);
                         let pv = JSValue::from_bits(proto.to_bits());
                         if pv.is_pointer() {
                             let proto_ptr = pv.as_pointer::<ObjectHeader>();

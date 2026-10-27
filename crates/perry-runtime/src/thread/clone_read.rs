@@ -182,7 +182,7 @@ impl<'s, 'm> Reader<'s, 'm> {
                 BIGINT_TAG | (ptr as u64 & POINTER_MASK)
             }
             // #2089: a fresh DateCell in this thread's arena.
-            SerializedValue::Date(ts) => crate::date::alloc_date_cell(*ts).to_bits(),
+            SerializedValue::Date(ts) => crate::date_hook_slots::alloc_date_cell(*ts).to_bits(),
             SerializedValue::Array(elements) => {
                 return self.array(slot.unwrap(), ArrayElements::Values(elements))
             }

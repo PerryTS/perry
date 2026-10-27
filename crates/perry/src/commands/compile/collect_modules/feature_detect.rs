@@ -444,6 +444,14 @@ pub(super) fn detect_optional_feature_usage(
     // false-negative class for every gate at once (the rule is zero false
     // negatives; including more HIR can only over-include a feature).
     let hir_debug = module_hir_debug(hir_module);
+    // The legacy locale-string node also represents ordinary numbers.
+    let date_debug = hir_debug.replace("DateToLocaleString(", "ToLocaleString(");
+    ctx.uses_date |= global_object::may_escape(hir_module)
+        || hir_debug.contains(r#""Date""#)
+        || date_debug
+            .as_bytes()
+            .windows(5)
+            .any(|w| &w[..4] == b"Date" && w[4].is_ascii_uppercase());
     ctx.uses_turnloop |= hir_debug.contains(r#""perry/thread""#);
     ctx.uses_thread_codec |= global_object::may_escape(hir_module)
         || [

@@ -275,7 +275,7 @@ pub(crate) unsafe fn js_object_default_to_locale_string(receiver: f64) -> f64 {
     // rendering) rather than `[object Date]`.
     if crate::date::is_date_value(receiver) {
         let ts = crate::date::date_cell_timestamp(receiver);
-        let s = crate::date::js_date_to_locale_string(ts);
+        let s = crate::date_hook_slots::js_date_to_locale_string(ts);
         return f64::from_bits(JSValue::string_ptr(s).bits());
     }
     // #5580: a `Temporal.*` value formats via its own `toLocaleString` (a

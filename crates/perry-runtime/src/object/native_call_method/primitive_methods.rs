@@ -744,7 +744,7 @@ pub(super) unsafe fn dispatch_primitive(
         // The cell's own [[Prototype]], not the realm's `Date.prototype`: an
         // instance of `class D extends Date` links `D.prototype`, whose methods
         // override the intrinsic ones (`get` walks on to `Date.prototype`).
-        let proto = crate::date::date_cell_prototype(object_handle.get_nanbox_f64());
+        let proto = crate::date_hook_slots::date_cell_prototype(object_handle.get_nanbox_f64());
         let proto_handle = root_scope.root_nanbox_f64(proto);
         if object_ptr_from_value(proto).is_some() {
             let key = crate::string::js_string_from_bytes(
@@ -769,7 +769,7 @@ pub(super) unsafe fn dispatch_primitive(
             }
         }
         if method_name == "toString" {
-            let string = crate::date::js_date_to_string(object);
+            let string = crate::date_hook_slots::js_date_to_string(object);
             return Some(f64::from_bits(JSValue::string_ptr(string).bits()));
         }
     }

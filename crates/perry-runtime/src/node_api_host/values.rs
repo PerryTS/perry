@@ -1343,7 +1343,8 @@ pub unsafe extern "C" fn napi_create_date(
 ) -> NapiStatus {
     write_handle(
         env,
-        crate::date::js_date_new_from_timestamp(crate::array::canonical_raw_f64(time)).to_bits(),
+        crate::date_hook_slots::js_date_new_from_timestamp(crate::array::canonical_raw_f64(time))
+            .to_bits(),
         result,
     )
 }

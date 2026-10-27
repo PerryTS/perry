@@ -877,12 +877,12 @@ mod structured_clone_tests {
 
     #[test]
     fn structured_clone_date_is_independent_and_preserves_nested_identity() {
-        let source = crate::date::alloc_date_cell(0.0);
+        let source = crate::date_hook_slots::alloc_date_cell(0.0);
         let direct = js_structured_clone(source);
         assert_ne!(direct.to_bits(), source.to_bits());
         assert_eq!(crate::date::date_cell_timestamp(direct), 0.0);
         let next_time = [5000.0];
-        crate::date::js_date_apply_setter(direct, 0, 7, next_time.as_ptr(), 1);
+        crate::date_hook_slots::js_date_apply_setter(direct, 0, 7, next_time.as_ptr(), 1);
         assert_eq!(crate::date::date_cell_timestamp(direct), 5000.0);
         assert_eq!(crate::date::date_cell_timestamp(source), 0.0);
 

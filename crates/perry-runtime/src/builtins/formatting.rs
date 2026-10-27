@@ -554,7 +554,7 @@ impl Drop for InspectCompactGuard {
 
 /// #2089: a Date's `util.inspect` rendering — ISO string (unquoted) or "Invalid Date". DateCell pointer only (gated by callers).
 unsafe fn date_inspect_string(value: f64) -> String {
-    let s_ptr = crate::date::js_date_to_iso_string(value);
+    let s_ptr = crate::date_hook_slots::js_date_to_iso_string(value);
     if s_ptr.is_null() {
         return "Invalid Date".to_string();
     }

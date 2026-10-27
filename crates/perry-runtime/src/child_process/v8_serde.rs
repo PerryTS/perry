@@ -325,7 +325,7 @@ impl Serializer {
                 return true;
             }
             self.out.push(TAG_DATE);
-            self.write_double(crate::date::js_date_get_time(value));
+            self.write_double(crate::date_hook_slots::js_date_get_time(value));
             return true;
         }
         if let Some(header) = unsafe { crate::value::addr_class::try_read_gc_header(raw) } {
@@ -731,7 +731,7 @@ impl<'a> Deserializer<'a> {
                 TAG_TWO_BYTE_STRING => self.read_two_byte_string()?,
                 TAG_DATE => {
                     let ms = self.read_double()?;
-                    let d = crate::date::js_date_new_from_timestamp(ms);
+                    let d = crate::date_hook_slots::js_date_new_from_timestamp(ms);
                     self.id_table.push(d);
                     d
                 }
