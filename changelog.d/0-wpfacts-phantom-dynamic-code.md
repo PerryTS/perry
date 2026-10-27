@@ -19,3 +19,10 @@ function installs an accessor on it.
 Two related gaps closed: a builtin constructor's own `constructor`
 (`Object.constructor`, `Array[k]`) is the Function constructor. A native
 prototype's `constructor` is its native class, not `Function`.
+
+The answers come from the same member descriptions the builtin objects use,
+so a store into an unknown value under `constructor`, or under a computed
+key, replaces the member on these chains too, also when the read comes
+first in the solve. An object literal no longer has its own `constructor`:
+`({}).constructor` reads `Object.prototype`'s, which such a store may
+replace. Before, the facts read nothing there and proved the call safe.
