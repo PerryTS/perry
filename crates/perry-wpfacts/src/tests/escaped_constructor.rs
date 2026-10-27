@@ -51,3 +51,31 @@ fn a_constructor_function_nothing_lets_escape_keeps_its_layout() {
         assert!(t.escape.is_none() && t.prefix_stable, "{}", pf.dump_text());
     }
 }
+
+#[test]
+fn an_escaped_function_whose_layout_is_made_later_has_instances_unknown_code_made() {
+    // The `new F` layout is made after `F` escaped (the `.prototype` load):
+    // unknown code constructs it then (`fn_inst_template`). The body
+    // stores nothing into `this` itself, so nothing constructed it at the
+    // escape.
+    for src in [
+        r#"
+        function F() {}
+        process.on("exit", F);
+        F.prototype.get = function () { return this.x; };
+    "#,
+        r#"
+        function F() { init(this); }
+        function init(o) { o.x = 1; }
+        process.on("exit", F);
+        F.prototype.get = function () { return this.x; };
+    "#,
+    ] {
+        let pf = facts(src);
+        let ts = fn_inst(&pf, "F");
+        assert!(!ts.is_empty(), "{}", pf.dump_text());
+        for t in ts {
+            assert!(t.escape.is_some() && !t.prefix_stable, "{}", pf.dump_text());
+        }
+    }
+}

@@ -170,10 +170,10 @@ impl<'a> Gen<'a> {
     /// `contracts::fn_inst_contract`). A constructing unit that passes what
     /// no contract describes constructs it with unknown arguments. A
     /// function the census broke is held by unknown code, which may
-    /// construct it with anything: constructed with unknown arguments, its
-    /// instance escapes, so a layout of it never claims what no unit wrote
-    /// (one whose `this` stores the construction-phase analysis found,
-    /// `fn_birth`: the only one with a layout to claim).
+    /// construct it with anything: the one rule for that
+    /// (`Model::construct_unknown`, DECISIONS 210/211) constructs it with
+    /// unknown arguments and its instance escapes, so a layout of it never
+    /// claims what no unit wrote.
     pub(crate) fn published_ctors(&mut self) {
         let Some(unit_in) = self.unit_in else {
             return;
@@ -199,13 +199,14 @@ impl<'a> Gen<'a> {
             let name = crate::contracts::fn_contract_name(self, f).0;
             let broken = unit_in.broken(&format!("fn:{name}"));
             let runs = unit_in.ctor_runs.get(&name);
-            if !broken && runs.is_none() {
+            if broken {
+                self.m.construct_unknown(token, f, rb);
                 continue;
             }
-            if broken && !self.m.fn_birth.contains_key(&f) {
+            let Some(runs) = runs else {
                 continue;
-            }
-            let known = runs.filter(|ac| !ac.top && !broken);
+            };
+            let known = Some(runs).filter(|ac| !ac.top);
             let mut args = Vec::with_capacity(n);
             for i in 0..n {
                 let node = match known.and_then(|ac| ac.params.get(i)) {
@@ -226,10 +227,7 @@ impl<'a> Gen<'a> {
             self.m.contract_new.insert(call);
             let fnode = self.tok_node(token);
             self.m.cons(fnode, Cons::New { call });
-            match broken {
-                true => self.m.sink_node(ret, rb),
-                false => self.m.own_ctor_runs.push((f, ret)),
-            }
+            self.m.own_ctor_runs.push((f, ret));
         }
     }
 
