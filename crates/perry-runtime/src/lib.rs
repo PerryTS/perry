@@ -11,6 +11,8 @@
 #![recursion_limit = "256"]
 // Anchors are `#[used(compiler)]`: retained by rustc, not ld64 dead-strip roots.
 #![feature(used_with_arg)]
+// Native file reads initialize only the bytes written into final string storage.
+#![feature(read_buf, core_io_borrowed_buf)]
 #![feature(linkage)]
 // Keep the cold class-cache publisher compact without outlining hot reads.
 #![feature(optimize_attribute)]

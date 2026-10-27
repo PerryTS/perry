@@ -12,6 +12,7 @@ mod export;
 pub(crate) use export::UNDESCRIBED;
 mod for_in;
 mod glue;
+mod native_result;
 mod primitives;
 mod shared_closures;
 mod view;

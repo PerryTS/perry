@@ -194,8 +194,7 @@ impl<'a> Gen<'a> {
                     for n in o.into_iter().chain(a) {
                         self.to_sink(n, &why);
                     }
-                    self.m
-                        .top_val(&format!("result of native module {module}.{method}"))
+                    self.native_success_result(module, object.is_some(), method, args)
                 }
             }
             Expr::PrivateLexicalBrand(x) | Expr::PrivateLexicalBrandPush(x) => {

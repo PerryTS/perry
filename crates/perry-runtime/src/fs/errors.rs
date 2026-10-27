@@ -279,6 +279,17 @@ impl FsReadFailure {
         }
     }
 
+    /// Node attaches the input path to callback/promise read errors. Sync
+    /// reads and numeric descriptors retain their pathless read diagnostic.
+    pub(crate) unsafe fn async_error_value(&self, path_value: f64) -> f64 {
+        if self.path.is_none() && self.syscall == "read" && numeric_fd_value(path_value).is_none() {
+            if let Some(path) = decode_path_value(path_value) {
+                return build_fs_error_value(&self.err, self.syscall, &path);
+            }
+        }
+        self.error_value()
+    }
+
     pub(crate) unsafe fn error_value(&self) -> f64 {
         match &self.path {
             Some(path) => build_fs_error_value(&self.err, self.syscall, path),
