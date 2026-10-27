@@ -225,5 +225,5 @@ fn find_sse2<const CONTROL: bool, const SURROGATE: bool>(bytes: &[u8]) -> Option
 }
 
 #[cfg(test)]
-#[path = "simd_tests.rs"]
+#[path = "byte_scan_tests.rs"]
 mod tests;
