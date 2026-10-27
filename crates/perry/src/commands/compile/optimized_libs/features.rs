@@ -470,7 +470,11 @@ pub(crate) fn auto_optimized_cross_features(
     // archive and installed only for a program that references one. The GC and
     // typed-feedback instruments are not installs at all: they exist only in
     // the instrumented archives (`instrumented_variant_requested`).
-    if ctx.uses_diagnostics {
+    if ctx.uses_diagnostics
+        || ctx.uses_get_builtin_module
+        || needs_dyn_eval
+        || !ctx.native_addons.is_empty()
+    {
         cross_features.push("perry-runtime/diagnostics".to_string());
     }
     if ctx.uses_dgram {

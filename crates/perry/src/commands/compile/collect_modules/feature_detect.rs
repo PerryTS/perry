@@ -445,6 +445,7 @@ pub(super) fn detect_optional_feature_usage(
     // negatives; including more HIR can only over-include a feature).
     let hir_debug = module_hir_debug(hir_module);
     ctx.uses_temporal |= global_object::may_escape(hir_module);
+    ctx.uses_diagnostics |= global_object::may_escape(hir_module);
     ctx.uses_typedarray |= global_object::may_escape(hir_module)
         || [
             "TypedArray",
@@ -685,6 +686,11 @@ pub(super) fn detect_optional_feature_usage(
         ctx.uses_bigint = true;
     }
     let computed = computed_members::scan(hir_module);
+    ctx.uses_diagnostics |= computed.opaque_members
+        && (ctx.native_module_imports.contains("process")
+            || hir_debug.contains(r#"property: "process""#)
+            || hir_debug.contains(r#"NativeModuleRef("process")"#)
+            || hir_debug.contains(r#"module: "process""#));
     ctx.uses_temporal |= ctx.uses_date && computed.opaque_members;
     ctx.uses_computed_member_keys |= computed.opaque_members;
     ctx.uses_file_handle_capability |= computed.file_handles;
@@ -1202,7 +1208,7 @@ pub(super) fn detect_optional_feature_usage(
         if hir_debug.contains("method: \"getHeapSnapshot\"")
             || hir_debug.contains("method: \"writeHeapSnapshot\"")
             || hir_debug.contains("method: \"generateHeapSnapshot\"")
-            || hir_debug.contains("property: \"report\"")
+            || hir_debug.contains(r#""report""#)
         {
             ctx.uses_diagnostics = true;
         }

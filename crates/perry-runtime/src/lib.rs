@@ -1409,3 +1409,5 @@ mod segmenter_hook_roots;
 mod native_finalizer_hook;
 
 mod string_combining_class;
+
+mod diagnostic_report_roots;

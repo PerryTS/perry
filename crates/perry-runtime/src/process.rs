@@ -16,6 +16,7 @@ mod attributes;
 mod credentials;
 mod env_misc;
 mod exec_env;
+mod metadata_values;
 pub(crate) use env_misc::{
     exit_after_current_thread_collection_teardown, format_out_of_range_number,
     process_env_delete_field, process_env_get_field, process_env_has_field, process_env_set_field,
@@ -848,7 +849,7 @@ pub fn process_metadata_property(property: &str) -> Option<f64> {
         "finalization" => finalization::process_finalization_value(),
         "permission" => permission::process_permission_value()?,
         "release" => report::process_release_value(),
-        "report" => report::process_report_value(),
+        "report" => crate::diagnostic_report_roots::report_value(),
         "sourceMapsEnabled" => js_process_source_maps_enabled(),
         "title" => js_process_title(),
         "_eval" => undefined_value(),

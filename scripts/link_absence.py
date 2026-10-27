@@ -56,6 +56,7 @@ NEGATIVES = {
     "without_segmenter": ["intl_segmenter"],
     "without_node_api_host": ["node_api_host"],
     "without_normalize": ["string_normalize"],
+    "without_diagnostics": ["diagnostics"],
     "without_messaging": ["messaging"],
     "without_async_hooks": ["async_hooks"],
     "without_bigint_querystring": ["bigint"],

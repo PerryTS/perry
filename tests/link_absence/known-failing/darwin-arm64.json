@@ -93,9 +93,6 @@
       "rustc_demangle::demangle",
       "rustc_demangle::v0::basic_type"
     ],
-    "diagnostics": [
-      "perry_runtime::process::report::scan_report_cache_roots_mut"
-    ],
     "dyn_eval": [
       "perry_runtime::dyn_eval::function_owner::ACTIVE_FUNCTIONS::resolve",
       "perry_runtime::dyn_eval::function_owner::PIN_TOP::resolve",

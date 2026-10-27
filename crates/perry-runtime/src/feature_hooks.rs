@@ -255,6 +255,7 @@ pub extern "C" fn js_runtime_install_diagnostics() {
     perry_install_once!({
         HEAP_SNAPSHOT_JSON.set(crate::gc::gc_build_v8_heap_snapshot_json_with_format);
         PROCESS_REPORT_JSON.set(crate::process::report::process_report_json_string);
+        crate::diagnostic_report_roots::install();
     });
 }
 

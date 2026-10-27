@@ -704,3 +704,7 @@ indirect exact perry_runtime::native_finalizer_hook::resolve_legacy_storage => e
 indirect exact perry_runtime::native_finalizer_hook::resolve_finalizer_storage => exact perry_runtime::node_api_host::metadata::finalizer_storage::resolve -- host installer fills existing storage resolver before first use
 
 indirect exact perry_runtime::native_finalizer_hook::new_completion_queue => exact perry_runtime::node_api_host::async_work::new_completion_queue -- host installer supplies the existing queue initializer; first-force timing unchanged
+
+indirect exact perry_runtime::diagnostic_report_roots::register_installed_roots => exact perry_runtime::diagnostic_report_roots::register_roots -- diagnostics installer registers existing report-controller scanner per thread
+
+indirect exact perry_runtime::diagnostic_report_roots::report_value => exact perry_runtime::process::report::process_report_value -- diagnostics installer fills generic process report lookup

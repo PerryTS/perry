@@ -1306,7 +1306,7 @@ pub fn gc_init() {
     // collection wrote through a dangling pointer.
     reg_scanner!(crate::process::scan_process_env_cache_roots_mut);
     reg_scanner!(crate::process::scan_permission_cache_roots_mut);
-    reg_scanner!(crate::process::scan_report_cache_roots_mut);
+    crate::diagnostic_report_roots::register_installed_roots();
     // #8220: process EventEmitter listener closures are held as raw
     // `*const ClosureHeader` in a TLS `HashMap` — invisible to the precise
     // root map. Without this scanner a copying minor that evacuates a
