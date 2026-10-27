@@ -1607,6 +1607,9 @@ mod tests {
 
     #[test]
     fn memory_grow_replaces_buffer_and_returns_old_page_count() {
+        // Direct implementation calls need the installer emitted for a Wasm program.
+        crate::gc::ensure_gc_initialized();
+        crate::feature_hooks::js_runtime_install_wasm_host();
         let instance = js_object_alloc(0, 1);
         js_object_set_field_by_name(instance, named_key(b"buffer"), wasm_memory_new_buffer(1));
         let instance_value = crate::value::js_nanbox_pointer(instance as i64);
