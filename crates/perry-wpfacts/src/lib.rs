@@ -1416,7 +1416,7 @@ pub(crate) fn compute_in<'a>(
         relations: g.m.relations.take(),
         tok_names,
         bindings,
-        indexed_metadata_unwritten: g.m.native_writes.is_empty(),
+        indexed_metadata_unwritten: !g.m.aborted && g.m.native_writes.is_empty(),
         units: Vec::new(),
         unit_io: Vec::new(),
         rounds: 0,
