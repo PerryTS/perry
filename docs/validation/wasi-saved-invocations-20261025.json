@@ -1,0 +1,249 @@
+{
+  "scope": "Saved traced invocation records in the existing async runtime path; persistent TypeScript driver routing remains unfinished",
+  "baseRevision": "4855cdc1153a0252522ae7ffa17b757a0224365a",
+  "snapshot": "v308",
+  "documentationSnapshot": "v310",
+  "sourceFilesVerified": 38821,
+  "manifestSha256": "d8327ee1fbc6e7c90e9c62e89f818396a088862f3cb47c1b9e9c6e62a20cb19b",
+  "shippingLockSha256": "c0c77b202d422016fdb7fc1e3312f5fc500d35fbb8923c17a851f6917b2626ab",
+  "validationLockSha256": "b312b6670c24f567e7f1e69991cb5cfb6d5b0d1774acd40568fba04a68ea73fb",
+  "abi": 9,
+  "tests": {
+    "developmentComponent": 49,
+    "productionComponent": 49,
+    "developmentAsyncHooks": 12,
+    "productionAsyncHooks": 12,
+    "productionClosureAbi": 1,
+    "productionPanicAbort": true,
+    "uid": 65534,
+    "gid": 65534
+  },
+  "subject": "saved_invocation_context_outlives_poll_frames_and_public_promise",
+  "assertions": [
+    "The pending operation owns a private traced context record between polls.",
+    "Native operation fields store only public serial IDs; execution tokens are derived from traced observed metadata.",
+    "A first poll and all its frame handles end before minor and full collection.",
+    "The public Promise collects independently while the saved ALS store and observed metadata survive.",
+    "The saved record actually moves; a second fresh poll restores ALS and execution IDs after a throw."
+  ],
+  "negativeControl": {
+    "mutation": "Replace the saved Promise snapshot with an empty snapshot",
+    "passed": 0,
+    "failed": 1,
+    "exitCode": 101,
+    "diagnostic": "Option::unwrap()"
+  },
+  "rejectedControl": "Removing the private context publication caused a planted invariant panic to abort through a C entry; the harness rejected this result. It is archived and not counted as a successful control.",
+  "productionBinary": {
+    "path": "/root/codex-components-p2-20261021/async-runtime-target/prod/build/perry-runtime/d71d6d2d7042b42b/out/perry_runtime-d71d6d2d7042b42b",
+    "sha256": "2d72ebc52f8197eff8134677db37e8414317a6e2adaf65ccc335c90879cd64bf",
+    "fresh": false,
+    "uid": 65534,
+    "gid": 65534,
+    "protectedPath": "/root/codex-components-p2-20261021/perry-saved-context-v308-artifacts/perry-runtime-tests"
+  },
+  "lint": {
+    "phases": [
+      {
+        "phase": "address",
+        "exitCode": 1,
+        "identicalToQualifiedBatch": true
+      },
+      {
+        "phase": "holders",
+        "exitCode": 1,
+        "identicalToQualifiedBatch": true
+      },
+      {
+        "phase": "tokio",
+        "exitCode": 0,
+        "identicalToQualifiedBatch": true
+      },
+      {
+        "phase": "node",
+        "exitCode": 0,
+        "identicalToQualifiedBatch": true
+      }
+    ],
+    "changedRustFileLines": {
+      "crates/perry-runtime/src/component/asynchronous.rs": 476,
+      "crates/perry-runtime/src/component/callback.rs": 221,
+      "crates/perry-runtime/src/component/callback/batch.rs": 208,
+      "crates/perry-runtime/src/component/callback/saved.rs": 45,
+      "crates/perry-runtime/src/component/callback/saved_tests.rs": 114
+    },
+    "unchangedFilesRetainExistingSizeDebt": true
+  },
+  "warningsInChangedCode": 0,
+  "unchanged": [
+    "Native component engine, ABI, dependency manifests and shipping lock.",
+    "Existing crypto-bigint advisory and baseline lint failures remain open."
+  ],
+  "remaining": [
+    "Per-origin persistent TypeScript constructor/submit/poll and callback routing.",
+    "Consume completions before trimming retained records and release import-result wrappers from native ownership receipts.",
+    "Owned future/stream wrappers and producers, persistent HTTP, other platforms and combined production/package qualification."
+  ],
+  "sourceSha256": {
+    "crates/perry-runtime/src/component/asynchronous.rs": "e57d306ee27463e983d597cf0f8206620b073813e64cb18c7afc9f05ace0e6a2",
+    "crates/perry-runtime/src/component/callback.rs": "06e05d41c76b5f20504f520cddbee0e555168a067f045286b86491fb09178177",
+    "crates/perry-runtime/src/component/callback/batch.rs": "e4b641d80499ca2af53eced1e3554996941789c39eb3fd0b03a1045c1a10d4b9",
+    "crates/perry-runtime/src/component/callback/saved.rs": "22f8d780e040515236bcc7ce46b9a16b9f4d144e6ecf904d2b0b05cbe202c272",
+    "crates/perry-runtime/src/component/callback/saved_tests.rs": "2f2b54f7fca6cb6d43ae6268d85be3f54456d66b579dbe3bc0089f2947db4617"
+  },
+  "archiveName": "perry-saved-context-v308-evidence.tar.gz",
+  "evidenceFiles": {
+    "development/runtime-component-tests.log": {
+      "sha256": "ab4acaa1a091eaccb1f42b6d15c51f5e69d4c8bf6c2aefda0a5a661857a410df",
+      "bytes": 54953
+    },
+    "development/runtime-async-hooks-tests.log": {
+      "sha256": "b9ec00728d7fd684e6337206cccb9ec4569502000938884a99858a1cbb80f9c9",
+      "bytes": 50560
+    },
+    "development/phases.json": {
+      "sha256": "d103dbd9343c6df640105cf2023aa88bed3e1e3cfcb02a053cc5bc9770f1cccc",
+      "bytes": 193
+    },
+    "development/invalidate.log": {
+      "sha256": "25e89650856ac7dac7c90beadd323b9c37e32e0094be371ab12609b1fded7514",
+      "bytes": 83
+    },
+    "production/build.log": {
+      "sha256": "a3b2ebc59de3308f7e950eab19a05aa530edea72a03d52a7cfd60227744d0f74",
+      "bytes": 576283
+    },
+    "production/async-hooks-tests.log": {
+      "sha256": "3f2bd92ce2bf544153eb730ab4e48791c9e71a79b7450df57b47b7fd944d4293",
+      "bytes": 1411
+    },
+    "production/phases.json": {
+      "sha256": "259950495d71df14baba15a40ff57ab08a968aa6349d44df8b26fef008d53551",
+      "bytes": 286
+    },
+    "production/component-tests.log": {
+      "sha256": "212f10affb62d5f9f9daecac33e8346707be42d1b0854cb1a7568ba038f072fc",
+      "bytes": 5565
+    },
+    "production/binary.json": {
+      "sha256": "4ff6777565133365cc2a2b4707c6c4d7b2e0889dcbd5f5b6f2494391e897d2a2",
+      "bytes": 279
+    },
+    "production/closure-abi-test.log": {
+      "sha256": "8fbdacf5b9293a3be4f102414c7968e7424e82038712648179efd3add2d6ea55",
+      "bytes": 256
+    },
+    "production/invalidate.log": {
+      "sha256": "8f509fb259f9e8c29b97cac08894a3723581e19d5520109365d0cec00cb770d4",
+      "bytes": 82
+    },
+    "negative/phases.json": {
+      "sha256": "39b53cc41711b2ac0debb9380111c85bbf5f337aa1152114edc63bfd9b2737b1",
+      "bytes": 111
+    },
+    "negative/negative.log": {
+      "sha256": "40dafe506b6fd675751af9442368b15ca746fedddb7e4bbd6fd13076a11816fb",
+      "bytes": 50185
+    },
+    "negative/invalidate.log": {
+      "sha256": "67f7419ffb416a25d27f6acf56d5d8df0d66b8d82124c3522ba82a23629bf2bb",
+      "bytes": 83
+    },
+    "rejected-control/phases.json": {
+      "sha256": "39b53cc41711b2ac0debb9380111c85bbf5f337aa1152114edc63bfd9b2737b1",
+      "bytes": 111
+    },
+    "rejected-control/negative.log": {
+      "sha256": "6e5834cd4648f49582011be0567461b203d947d740ea27eac69e1fdd15117837",
+      "bytes": 49943
+    },
+    "rejected-control/invalidate.log": {
+      "sha256": "67f7419ffb416a25d27f6acf56d5d8df0d66b8d82124c3522ba82a23629bf2bb",
+      "bytes": 83
+    },
+    "rejected-control/mutated-asynchronous.rs": {
+      "sha256": "a979b7fb8cb0c3763607df69eb8af9698592209b49f8d5f2395682d594ff8aff",
+      "bytes": 17615
+    },
+    "negative/mutated-saved.rs": {
+      "sha256": "69a26cd1a6a343a9304ddcef6b9fb19117bf29bdb40ebb8f76fb4e4a01e180b7",
+      "bytes": 1790
+    },
+    "source/crates/perry-runtime/src/component/asynchronous.rs": {
+      "sha256": "e57d306ee27463e983d597cf0f8206620b073813e64cb18c7afc9f05ace0e6a2",
+      "bytes": 17781
+    },
+    "source/crates/perry-runtime/src/component/callback.rs": {
+      "sha256": "06e05d41c76b5f20504f520cddbee0e555168a067f045286b86491fb09178177",
+      "bytes": 7519
+    },
+    "source/crates/perry-runtime/src/component/callback/batch.rs": {
+      "sha256": "e4b641d80499ca2af53eced1e3554996941789c39eb3fd0b03a1045c1a10d4b9",
+      "bytes": 7501
+    },
+    "source/crates/perry-runtime/src/component/callback/saved.rs": {
+      "sha256": "22f8d780e040515236bcc7ce46b9a16b9f4d144e6ecf904d2b0b05cbe202c272",
+      "bytes": 1809
+    },
+    "source/crates/perry-runtime/src/component/callback/saved_tests.rs": {
+      "sha256": "2f2b54f7fca6cb6d43ae6268d85be3f54456d66b579dbe3bc0089f2947db4617",
+      "bytes": 4817
+    },
+    "harness/perry-driver-ffi-runtime-check.py": {
+      "sha256": "676ebd01945bcc6d37b38b61f0af3258192d276ae78784adf5fbd2e2e763cb6b",
+      "bytes": 2247
+    },
+    "harness/perry-saved-context-prod.py": {
+      "sha256": "36d50072696e7d9baba4985a2058609ef26b43461d8b243b1f63e3b72feac9d7",
+      "bytes": 3293
+    },
+    "harness/perry-saved-context-negative.py": {
+      "sha256": "57313ef15df9d1d1997bf96443c382c51a3774ca408fea64c09aadd87369c93e",
+      "bytes": 2053
+    },
+    "harness/perry-saved-context-negative-v2.py": {
+      "sha256": "32ca9a48df37d2e1c0d89eccb63757d74d815c05fc51cc9dd6fc3063e62b7b68",
+      "bytes": 1962
+    },
+    "harness/perry-saved-context-verify.py": {
+      "sha256": "da27ce308e6f314281bc519023de47ecd7be5ea94838d8bb099cfb1f13f9335a",
+      "bytes": 7201
+    },
+    "snapshots/perry-http-runtime-v308-manifest.json": {
+      "sha256": "d8327ee1fbc6e7c90e9c62e89f818396a088862f3cb47c1b9e9c6e62a20cb19b",
+      "bytes": 5695999
+    },
+    "snapshots/perry-http-runtime-v308-overlay.tar.gz": {
+      "sha256": "1121b88f014ff3534d3f7fbcdb84f64a5da287b9174a99011b8262284fc54136",
+      "bytes": 1039402
+    },
+    "snapshots/perry-http-runtime-v310-manifest.json": {
+      "sha256": "99433134f57d2ebd5d2da9fafd8a169b5f56ba3f05ff0e4d1f75983e71ab1c8b",
+      "bytes": 5696120
+    },
+    "snapshots/perry-http-runtime-v310-overlay.tar.gz": {
+      "sha256": "c0f83188e37e91d8a4bd2103dd0b4242037ea8324351ada228d947926ac8eb63",
+      "bytes": 1039839
+    },
+    "lint/verification.json": {
+      "sha256": "beba9bbab922b5b0615814219126f29488c0fc179c78c9a2b3a8fc00c3b208b8",
+      "bytes": 818
+    },
+    "lint/holders.log": {
+      "sha256": "d545b30e51168a7cbe0e17576898ad9ba3ee397b583ad7de0ffeff1fd6a62b48",
+      "bytes": 20899
+    },
+    "lint/tokio.log": {
+      "sha256": "fe4f2bd9190b963378e83eeb8c9f38d5f4b08ff5522c06bbf3b6e3ece97bbf61",
+      "bytes": 138
+    },
+    "lint/node.log": {
+      "sha256": "c5de53a384a6ebd59c492797b73ac9386059d4a59c9e773ac0b343da51785dc3",
+      "bytes": 2481
+    },
+    "lint/address.log": {
+      "sha256": "9ed7255453b910401c7c49ae78b97d438169d390b3321eb349e4bce1f9be05ea",
+      "bytes": 3968
+    }
+  }
+}

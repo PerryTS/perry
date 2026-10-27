@@ -99,7 +99,7 @@ pub(super) fn attach_promise_all_state(promise: *mut Promise, state: PromiseAllS
         match (*promise).state {
             PromiseState::Fulfilled => {
                 TASK_QUEUE.with(|q| {
-                    q.borrow_mut().push_back(Task::PromiseAll(
+                    q.borrow_mut().enqueue_promise_job(Task::PromiseAll(
                         state,
                         (*promise).value,
                         true,
@@ -110,7 +110,7 @@ pub(super) fn attach_promise_all_state(promise: *mut Promise, state: PromiseAllS
             }
             PromiseState::Rejected => {
                 TASK_QUEUE.with(|q| {
-                    q.borrow_mut().push_back(Task::PromiseAll(
+                    q.borrow_mut().enqueue_promise_job(Task::PromiseAll(
                         state,
                         (*promise).reason,
                         false,

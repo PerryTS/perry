@@ -1,0 +1,3 @@
+Update the optional component engine and WASI providers to Wasmtime/Cranelift 48.0.7, including fixes for component stream/future type validation, async cancellation and the AArch64 branch-table compiler vulnerability. Update ctutils to 0.4.4 for RUSTSEC-2026-0385. Keep the repository dependency age policy intact; only the precise security update commands used an age override.
+
+The Linux provider suite passes all 277 tests in development and production panic-abort, with all-target Clippy, doctests and a Tokio-free graph. See `docs/validation/wasi-wasmtime-security-20261025.json`; final combined native engine and distribution qualification remains required.

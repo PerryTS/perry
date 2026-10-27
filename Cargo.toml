@@ -46,6 +46,8 @@ members = [
     "crates/perry-wit",
     "crates/perry-component-host",
     "crates/perry-component-io",
+    "crates/perry-wasi",
+
     "crates/perry-container-compose",
     "crates/perry-container-e2e",
     "crates/perry-stdlib",
@@ -94,6 +96,8 @@ members = [
 # them out of the `crates/perry-ui*` globs used by the GC/lint census gates.
 exclude = [
     "third_party/windows-winui",
+    "third_party/wac-graph",
+    "third_party/turnloop",
 ]
 
 # Build only the host-independent product set by default: the compiler and
@@ -423,6 +427,7 @@ clap = { version = "4.5", features = ["derive"] }
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+futures-util = "0.3"
 
 # Shared low-level deps — single source of truth for versions.
 # Members inherit with `<dep>.workspace = true` (features stay additive
@@ -450,7 +455,10 @@ perex = "0.1.14"
 # The global window is unchanged. Cargo.lock pins the published artifact, verified against the
 # crates.io sparse index and .cargo_vcs_info.json; SHA256:
 # f579fbcc6620a3bda7ea47135ea3c3e8ea0a10f110cd7206350ad78b136d26d2
-turnloop = "0.1.0-alpha.10"
+turnloop = "=0.1.0-alpha.10"
+
+# The component provider uses its own LocalExecutor on the I/O owner thread.
+
 # turnloop P5 (DESIGN §5b, §12 "P5"): the sans-I/O protocol crates that
 # replace hyper's HTTP/1.1 parser and framer on Perry's server path, and
 # `tokio_rustls` on every TLS path the loop owns. Default features only — the
@@ -476,7 +484,7 @@ turnloop = "0.1.0-alpha.10"
 # rustls process-default provider, failing at RUNTIME ("no rustls crypto
 # provider") rather than at compile time. So this line restores exactly what
 # alpha.6 gave Perry; it does not opt into anything new.
-turnloop-http = { version = "0.1.0-alpha.9", default-features = false }
+turnloop-http = { version = "=0.1.0-alpha.9", default-features = false }
 turnloop-tls = { version = "0.1.0-alpha.9", default-features = false, features = [
     "ring",
 ] }
@@ -658,4 +666,10 @@ inherits = "release"
 debug-assertions = true
 lto = false
 codegen-units = 1
+
+# Required provider APIs are not all present in published alpha.10. Keep the
+# exact sources qualified with the component engine; see vendor provenance.
+[patch.crates-io]
+turnloop = { path = "third_party/turnloop/turnloop" }
+turnloop-http = { path = "third_party/turnloop/turnloop-http" }
 

@@ -926,6 +926,9 @@ js_component_call	f64	f64,f64,f64,f64
 js_component_dispose	f64	f64
 js_component_host_resource_create	f64	f64,f64,f64,f64
 js_component_host_resource_value	f64	f64,f64,f64
+js_component_http_handle	f64	f64,f64,f64
+js_component_http_server_close	f64	f64
+js_component_http_server_new	f64	f64
 js_component_import	f64	f64,f64,f64
 js_component_load	f64	f64,f64,f64,f64
 js_component_register	f64	f64,f64

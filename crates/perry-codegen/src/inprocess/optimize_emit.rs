@@ -77,6 +77,7 @@ pub(super) fn optimize_and_emit(
     // machine's real datalayout.
     module.set_triple(&triple);
     module.set_data_layout(&tm.get_target_data().get_data_layout());
+    super::coff::coalesce_helpers(module, effective_target);
 
     // RS4GC must run BEFORE the optimization pipeline, and — critically — in
     // this process, against this LLVM.

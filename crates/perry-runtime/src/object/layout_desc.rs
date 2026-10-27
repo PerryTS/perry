@@ -1863,3 +1863,7 @@ mod windows_atom_bounds_tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "layout_section_tests.rs"]
+mod layout_section_tests;

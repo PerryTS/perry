@@ -1,0 +1,63 @@
+{
+    "packages": [
+        {
+            "name": "test:foo",
+            "path": "component.wit"
+        },
+        {
+            "name": "test:bar",
+            "path": "component.wit"
+        }
+    ],
+    "nodes": [
+        {
+            "type": "instantiation",
+            "package": 0
+        },
+        {
+            "type": "instantiation",
+            "package": 1
+        },
+        {
+            "type": "alias",
+            "source": 1,
+            "export": "foo:bar/qux"
+        },
+        {
+            "type": "alias",
+            "source": 0,
+            "export": "foo:bar/qux"
+        }
+    ],
+    "arguments": [
+        {
+            "source": 2,
+            "target": 0,
+            "name": "foo:bar/qux"
+        }
+    ],
+    "exports": [
+        {
+            "node": 3,
+            "name": "foo:bar/qux"
+        }
+    ],
+    "names": [
+        {
+            "node": 0,
+            "name": "component1"
+        },
+        {
+            "node": 1,
+            "name": "component2"
+        },
+        {
+            "node": 2,
+            "name": "alias"
+        },
+        {
+            "node": 3,
+            "name": "export"
+        }
+    ]
+}

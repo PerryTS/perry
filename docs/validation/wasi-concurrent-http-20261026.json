@@ -1,0 +1,309 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-26",
+  "scope": "Concurrent native TypeScript WASI 0.3 HTTP hosting on Linux",
+  "status": "qualified supported handler layouts; full WASI integration remains open",
+  "sourceParent": "ec29eedd73261b193bc6b45784937f34ae930ef2",
+  "componentHostAbi": 12,
+  "qualifiedSnapshots": {
+    "productionArtifacts": "v377",
+    "expandedHttp": "v380",
+    "engineDevelopment": "v379",
+    "engineProduction": "v379",
+    "runtimeDevelopment": "v374",
+    "runtimeProduction": "v379"
+  },
+  "changes": [
+    "Observe canonical callback EXIT through an appended private hook, preserving original indices, canonical options and nominal resource identity.",
+    "Acknowledge an invocation exit only after the VM poll succeeds; preserve traps during exit validation.",
+    "Release each completed root separately while retaining captured callback leases through cleanup.",
+    "Transfer native HTTP requests/completions through persistent Rust/C submission with deferred callbacks and fresh per-origin runtime frames.",
+    "Wait for each request\u2019s transport flush and task exit independently; preserve ALS context, cleanup, typed HTTP errors and hard Store cancellation.",
+    "Profile before initialization and retain serialized handling for nested/imported handlers without executing initializers twice."
+  ],
+  "development": {
+    "component": 77,
+    "promise": 59,
+    "asyncHooks": 12,
+    "engine": 189,
+    "wit": 22,
+    "engineClippyWarnings": 0
+  },
+  "production": {
+    "component": 77,
+    "promise": 59,
+    "asyncHooks": 12,
+    "closureAbi": 1,
+    "nativeClassGuard": 1,
+    "engine": 189,
+    "wit": 22,
+    "uid": 65534,
+    "gid": 65534,
+    "panicAbort": true
+  },
+  "compiledProduction": {
+    "producer": {
+      "phases": 10,
+      "copiedObjects": 4159,
+      "protectedFromspaceEvents": 4,
+      "movingWitnesses": [
+        {
+          "log": "moving.log",
+          "copiedObjects": 4159,
+          "protectedFromspaceEvents": 4
+        }
+      ]
+    },
+    "reader": {
+      "phases": 14,
+      "copiedObjects": 10225,
+      "protectedFromspaceEvents": 10,
+      "movingWitnesses": [
+        {
+          "log": "moving.log",
+          "copiedObjects": 10225,
+          "protectedFromspaceEvents": 10
+        }
+      ]
+    },
+    "persistent": {
+      "phases": 6,
+      "copiedObjects": 3330,
+      "protectedFromspaceEvents": 7,
+      "movingWitnesses": [
+        {
+          "log": "moving.log",
+          "copiedObjects": 3330,
+          "protectedFromspaceEvents": 7
+        }
+      ]
+    },
+    "async": {
+      "phases": 6,
+      "copiedObjects": 3951,
+      "protectedFromspaceEvents": 19,
+      "movingWitnesses": [
+        {
+          "log": "moving.log",
+          "copiedObjects": 3951,
+          "protectedFromspaceEvents": 19
+        }
+      ]
+    },
+    "p3-command": {
+      "phases": 12
+    },
+    "p3-http": {
+      "phases": 18,
+      "copiedObjects": 5086,
+      "protectedFromspaceEvents": 158,
+      "movingWitnesses": [
+        {
+          "log": "plain-moving-stderr.log",
+          "copiedObjects": 1968,
+          "protectedFromspaceEvents": 64
+        },
+        {
+          "log": "tls-moving-stderr.log",
+          "copiedObjects": 1968,
+          "protectedFromspaceEvents": 64
+        },
+        {
+          "log": "plain-concurrent-moving-stderr.log",
+          "copiedObjects": 575,
+          "protectedFromspaceEvents": 15
+        },
+        {
+          "log": "tls-concurrent-moving-stderr.log",
+          "copiedObjects": 575,
+          "protectedFromspaceEvents": 15
+        }
+      ]
+    },
+    "p3-http-expanded": {
+      "phases": 19,
+      "requests": 52,
+      "copiedObjects": 5502,
+      "protectedFromspaceEvents": 172,
+      "movingWitnesses": [
+        {
+          "log": "plain-moving-stderr.log",
+          "copiedObjects": 2176,
+          "protectedFromspaceEvents": 71
+        },
+        {
+          "log": "tls-moving-stderr.log",
+          "copiedObjects": 2176,
+          "protectedFromspaceEvents": 71
+        },
+        {
+          "log": "plain-concurrent-moving-stderr.log",
+          "copiedObjects": 575,
+          "protectedFromspaceEvents": 15
+        },
+        {
+          "log": "tls-concurrent-moving-stderr.log",
+          "copiedObjects": 575,
+          "protectedFromspaceEvents": 15
+        }
+      ]
+    }
+  },
+  "actualNegativeControl": {
+    "product": "v360",
+    "fixture": "v377",
+    "exitCode": 1,
+    "failure": "(1, False, False, [], ['large', 'fast public Promise did not finish while upload was blocked'])",
+    "responses": [],
+    "diagnostic": "Error: Component already has a pending async call\nUncaught (in promise) Error: HttpResponseBodySize(Some(0))\n    at <anonymous>\n",
+    "sourceSha256": "d95125eca1bb8397b1787f58562c75274782cc5cd7b1bd4f41452b225dfbe65d",
+    "componentSha256": "a83fbe3207802712932934f31312a7a83b56abed69cab6cb612ee1a470be0df0"
+  },
+  "shippingCargoLockSha256": "7a952778e75f08f9375489e6f472d91838a34d2bcbbe026e69810aaf7bcb4c1a",
+  "dependencyChange": "Two direct optional-engine edges to already locked wasm-encoder/wasmparser 0.258.0; no new packages and no Tokio.",
+  "sourceHashes": {
+    "Cargo.lock": "7a952778e75f08f9375489e6f472d91838a34d2bcbbe026e69810aaf7bcb4c1a",
+    "crates/perry-abi/src/component_host.rs": "b85c969e35358b6cdb53ac4a0f317dc6f25f7defc9b051a075a7568e29722727",
+    "crates/perry-component-host/Cargo.toml": "99485eed3f13bd413accd52bb678b38481387a56f791a886c2c30769cb3883f1",
+    "crates/perry-component-host/src/asynchronous/retention.rs": "f14e989593e97fd7706153797f750fcc2ff068ac3a670ab44de92bc6c31fb4dc",
+    "crates/perry-component-host/src/driver.rs": "4f268044bb0d838a915f977eb41df106322b890265e99497aa227576132ddb48",
+    "crates/perry-component-host/src/driver/http.rs": "7b93c12156992508cecbeed77ff7e9b905b5816a0ce2a7aae8711f96034ddfb2",
+    "crates/perry-component-host/src/driver/requests.rs": "117a987fb263d4fed13f70989f542d08c1089d5ed9d69230e8494a58ceaf0850",
+    "crates/perry-component-host/src/driver/tests.rs": "f0a747592597f63bfdb58bd24d48b325906621e2c9b5d220af46983843b3a3c3",
+    "crates/perry-component-host/src/driver/tests/exit_hook.wat": "923d4125fd318bd523501aa9e885d75bd910ad6f77acbf8df6bc58fdb0346e64",
+    "crates/perry-component-host/src/driver/tests/exit_transform.rs": "74bab7d02fe87b81626d31503685f9fadc48c81e0dc90139fe4005b4e466758b",
+    "crates/perry-component-host/src/ffi/driver.rs": "41e6e102aaf6e7698f129f302ae1d1550f586161923ad934270145711209170c",
+    "crates/perry-component-host/src/ffi/http.rs": "8d40973cc0afbbfd48f7d623cff383e52a52ee0c424f9950a755048eaf4d63c5",
+    "crates/perry-component-host/src/ffi/http/tests.rs": "667c8e18248085142cf82e3b23b3d31c098310a70075928d3a0b8717a55eb044",
+    "crates/perry-component-host/src/ffi/http/tests/persistent.rs": "66a373f679d4862393b41e6d640194916d5cb6a935aa614d62662b3b1dcfab09",
+    "crates/perry-component-host/src/http.rs": "bdc4180fe3b0eea58bae455af9dba71f456fa7d5ccb2ac48196e975c823fe245",
+    "crates/perry-component-host/src/http/p3/concurrent.component.wat": "50966be9a6d6db04cfee91ed11722e779d6e60f506f753221394415d9960a575",
+    "crates/perry-component-host/src/http/p3/driver.component.wat": "1fb163f398a3111f99cc46c121f35a5e6e2077d736260c749d736bb1918f2aaf",
+    "crates/perry-component-host/src/http/p3/tests.rs": "1984c023d7f73316c25a8b4a3eb5f4892554b436e4f3d82e6d7918a2a25caf6f",
+    "crates/perry-component-host/src/http/tests.rs": "ab298f9649bb2e13ddece4845340c3766936d48dd04aa8a8822609f332624b28",
+    "crates/perry-component-host/src/lib.rs": "cd2086eba58e9b71da10063c1f09b5d4fc05f1ad5b2854f986e6b70c4dedb800",
+    "crates/perry-component-host/src/task_exit.rs": "1e41df782735cdaec1f356f6bac305214797d9dab113d1ebaf1f68881c99c583",
+    "crates/perry-component-host/src/task_exit/instrument.rs": "c93d6228ee5952a3e5df4e06ab4da075e7a7a1b3d856822c0d41379b3ff09426",
+    "crates/perry-runtime/src/component/http/pump.rs": "5191306ded8ac267f7daa00cfe1bbeafa11b319e5d82ec00c309f09691d82149",
+    "crates/perry-runtime/src/component/mod.rs": "52f1a169dc794b6312a473f298fabcc13d48e02e7535c583fb5a2a1287d3104d",
+    "crates/perry-runtime/src/component/persistent.rs": "1d510380146027ef4d6fe7a3167aeeb1f3d598a99dbb0be549897223e7db4f37",
+    "crates/perry-runtime/src/component/persistent/http.rs": "ed46fc3a752a00c4c91e4de350c71b0114f1ac8225ed9df79f951bf2dc449e83",
+    "crates/perry-runtime/src/component/persistent/submit.rs": "f9f92cfa1b1415594749ab4f36eeac162a8f7057afddfa73aaf1a940523b64e5",
+    "scripts/component_check.sh": "aac882541656a3d4928ffa33cba2eaca4e2a1f6893c3c0808f0adc04f6427368",
+    "scripts/component_http_p3_acceptance.py": "d7536e22f03f4baeda0be8e2d15bdc9abfd2beaace2e5850a3e22b8d3edd5321",
+    "test-wasi/components/http-p3/concurrent.ts": "d95125eca1bb8397b1787f58562c75274782cc5cd7b1bd4f41452b225dfbe65d",
+    "test-wasi/components/http-p3/host.ts": "c9af67a304fd1939b18347b0fd840e878a4065e3df7b7af6cd9cddb7e87e60b7"
+  },
+  "postQualificationFormatting": [
+    {
+      "path": "crates/perry-runtime/src/component/persistent.rs",
+      "qualificationSha256": "1d510380146027ef4d6fe7a3167aeeb1f3d598a99dbb0be549897223e7db4f37",
+      "finalSha256": "24c28994ade6c6e2a61d659d9daedd852eb408095fd88ebaddd71a4ad33aee35",
+      "change": "rustfmt reordered adjacent module declarations only"
+    }
+  ],
+  "protectedArtifacts": {
+    "/root/codex-components-p2-20261021/perry-concurrent-http-v377-artifacts/toolchain/perry": "28ff0a47b850c595e18e171aa3fbe6413dacc20f2cfe5851582e743db5e8b467",
+    "/root/codex-components-p2-20261021/perry-concurrent-http-v377-artifacts/toolchain/perry-wit": "aa969a8f27f03dc57e14880d1a085398b52705e7150da4a4baa729b3a1e7bf7a",
+    "/root/codex-components-p2-20261021/perry-concurrent-http-v377-artifacts/toolchain/perry-gc-effects": "4ad22c8634e14ba54bf6b937d36c7c35b1d82d52eac406f27a01e2c5b6c6b28e",
+    "/root/codex-components-p2-20261021/perry-concurrent-http-v377-artifacts/toolchain/libperry_runtime.a": "42cd078c40a1e0209c74d64884cc8052a229bda0a8e52375bde1b12d380f39cf",
+    "/root/codex-components-p2-20261021/perry-concurrent-http-v377-artifacts/toolchain/libperry_stdlib.a": "898cc481aabda6005e7b598ad78783ecfff81843c99a9547d63e0df9c5f8b741",
+    "/root/codex-components-p2-20261021/perry-concurrent-http-v377-artifacts/toolchain/libperry_component_host.a": "d63d70e9c95aa90cc4ffce5d4f3b3e05045d39807d6883e4b5a31968194f8cd8",
+    "/root/codex-components-p2-20261021/perry-concurrent-http-v377-artifacts/toolchain/libperry_runtime_instr.a": "7793a89f4d971f3f20b03d5739aab518c3e614bb898757eea83e29f69b0b838a",
+    "/root/codex-components-p2-20261021/perry-concurrent-http-v377-artifacts/toolchain/libperry_stdlib_instr.a": "91b944b6acf2f5a43d7f733d67b3b9a2adac9785c07d34f1cde3184e17f70376",
+    "/root/codex-components-p2-20261021/perry-concurrent-http-v377-artifacts/toolchain/component_wat": "344f5f143c8022cf623586d82aaf3e8f7d2f815491999f924687120273da54a1",
+    "/root/codex-components-p2-20261021/perry-concurrent-http-v377-artifacts/toolchain/libperry_runtime.a.gc-effects": "0f3e5213c5b308a759deb199fa6a45ef64b228e5a77ab4ad54271f68c0353fb2",
+    "/root/codex-components-p2-20261021/perry-concurrent-http-v377-artifacts/toolchain/libperry_runtime_instr.a.gc-effects": "0f820b7fa590c2e956d1acd737b00a586846dbbee17e966aca5edf552e108b3a",
+    "/root/codex-components-p2-20261021/perry-concurrent-http-v377-artifacts/producer/host-ordinary": "aa8f568919eb5a3df2673b697c87014ebab0e11fbc1ff131a5d3ab386a858bd9",
+    "/root/codex-components-p2-20261021/perry-concurrent-http-v377-artifacts/producer/host-moving": "3125ea466d382a88cea03f2d896a432e59323a2fa6020f62d9c3caf22c53556e",
+    "/root/codex-components-p2-20261021/perry-concurrent-http-v377-artifacts/producer/scalar.wasm": "78db314770a86a3dcca129c794b6dde6f69d115a1b131ebd30f38d9c651bf263",
+    "/root/codex-components-p2-20261021/perry-concurrent-http-v377-artifacts/producer/resource-stream.wasm": "a93be313c94546833d5d21cec4373dca5a06066fe92d47f0c96cd1576347a0f4",
+    "/root/codex-components-p2-20261021/perry-concurrent-http-v377-artifacts/producer/resources.wasm": "932a3928c9339aaa1f3d3acfa908157fdec631bff2e9ef05eab04a8018e8d3d9",
+    "/root/codex-components-p2-20261021/perry-concurrent-http-v377-artifacts/reader/host-ordinary": "aa51386972005e1c3714e93ac35f9856616028df1f98f6e3a91a7db75aa35439",
+    "/root/codex-components-p2-20261021/perry-concurrent-http-v377-artifacts/reader/host-moving": "c5ef52969d4ea9d7564f544e684f972b92b0579fc606e5180ffd022e294c0be9",
+    "/root/codex-components-p2-20261021/perry-concurrent-http-v377-artifacts/reader/paused.wasm": "6c51994d6aa8aa3870800e8cd5f996510f0f73b52023cabd91508cb5a4c2a666",
+    "/root/codex-components-p2-20261021/perry-concurrent-http-v377-artifacts/reader/compound.wasm": "4b09af35f0b9eff8f6157a81cd45161f2b9ed2c489e45891e2f9039819f9c9e6",
+    "/root/codex-components-p2-20261021/perry-concurrent-http-v377-artifacts/reader/nested.wasm": "6f2ca1485ee892ad15854fbf8565242461c694619aa5b00717c3e9a35aef9c7a",
+    "/root/codex-components-p2-20261021/perry-concurrent-http-v377-artifacts/reader/stream.wasm": "a93be313c94546833d5d21cec4373dca5a06066fe92d47f0c96cd1576347a0f4",
+    "/root/codex-components-p2-20261021/perry-concurrent-http-v377-artifacts/reader/future.wasm": "bf317e0b3698ac79158db1a31022ad35ba3340b7d0841faa156d217f417b54ef",
+    "/root/codex-components-p2-20261021/perry-concurrent-http-v377-artifacts/persistent/host-ordinary": "c02360a69a8f24a665395d28ad8528ab40c09818b6b11b0f52724faa52bbb90e",
+    "/root/codex-components-p2-20261021/perry-concurrent-http-v377-artifacts/persistent/host-moving": "cd5e95ff5e08c6816e82a87acb61910af97400691e2e4229fd47b982529415f3",
+    "/root/codex-components-p2-20261021/perry-concurrent-http-v377-artifacts/persistent/clock.wasm": "0926c2d641c4469b224a88b47639d2599ebf08f254fac13c6b7683287c560f52",
+    "/root/codex-components-p2-20261021/perry-concurrent-http-v377-artifacts/async/host-ordinary": "8a76cbede63021e0e3c302e215daeafc5e5e4be3a7a36a2e69f8150fabef44a5",
+    "/root/codex-components-p2-20261021/perry-concurrent-http-v377-artifacts/async/host-moving": "a2ee4032558c96c949818656884e9658fe181c62e306c2bdf93702ad8bcc0098",
+    "/root/codex-components-p2-20261021/perry-concurrent-http-v377-artifacts/async/clock.wasm": "bb6718d064d60b9f0db240fad92e7f37d1d2bcf48cefbd46ff04a06f2e43780f",
+    "/root/codex-components-p2-20261021/perry-concurrent-http-v377-artifacts/p3-command/host-ordinary": "26569894ad56a9a1dde489afbad7abaf55331e8b6539c8602ad1f0547c0c26ce",
+    "/root/codex-components-p2-20261021/perry-concurrent-http-v377-artifacts/p3-command/bad-init.wasm": "9177d71374df12eb08c9f0f344ad6e35b0bae1594e09b1544617bceff764ffa4",
+    "/root/codex-components-p2-20261021/perry-concurrent-http-v377-artifacts/p3-command/exit.wasm": "bc0fd891b8c5bb9244129a0e883bc2e5da96ca61e9ae33cf6a120b4d58cc1fb3",
+    "/root/codex-components-p2-20261021/perry-concurrent-http-v377-artifacts/p3-command/wrong-version.wasm": "aa3dce4661d36820dddfb0527e2138a12f92ecbd24414b59ce62cbcf9cab10fb",
+    "/root/codex-components-p2-20261021/perry-concurrent-http-v377-artifacts/p3-command/late-trap.wasm": "f2a604877e7e6cb4312780f3bb6fb2312c5ba0025a17cfb95e068e38fc646668",
+    "/root/codex-components-p2-20261021/perry-concurrent-http-v377-artifacts/p3-command/init-exit.wasm": "9ce9bc5378a24114d5a19172d76dda670f533597cb11001ad4f9c17a07bef193",
+    "/root/codex-components-p2-20261021/perry-concurrent-http-v377-artifacts/p3-command/ok.wasm": "3d7aa3448a73ac25a5aba6e43e1ac9604eaa0efce059a064ae168344c48a3d6b",
+    "/root/codex-components-p2-20261021/perry-concurrent-http-v377-artifacts/p3-command/err.wasm": "bafef5203a1a7c645ff8b6e58db6a059de8033ae47d776867a173339b8bacf06",
+    "/root/codex-components-p2-20261021/perry-concurrent-http-v377-artifacts/p3-command/clock.wasm": "6b4ee891e9218991c79f6c6bad40b4589ea08eaf3168daff6a5751912f5c50a9",
+    "/root/codex-components-p2-20261021/perry-concurrent-http-v377-artifacts/p3-command/closed-stdio.wasm": "7653c44fe43f159a860c692ba550fed4b58704af1078bb43033fec4d1a9c6911",
+    "/root/codex-components-p2-20261021/perry-concurrent-http-v377-artifacts/p3-http/host-ordinary": "e43968a2a733e945c16a1f7f4ffdf35d2ddefd78c924c83f0f00aab79a384263",
+    "/root/codex-components-p2-20261021/perry-concurrent-http-v377-artifacts/p3-http/host-moving": "0d20f2870c41db40c6c68740066a9791682e5e74bc7a468792b03da1e459a322",
+    "/root/codex-components-p2-20261021/perry-concurrent-http-v377-artifacts/p3-http/concurrent-moving": "3a1982881b1db60edab3f091db32851db4f21bb6dbfc52c666a596cc8980c3d4",
+    "/root/codex-components-p2-20261021/perry-concurrent-http-v377-artifacts/p3-http/concurrent-ordinary": "8122a622c4069fe25b9debdd243facd241ce91397056504494820b09d3fd11af",
+    "/root/codex-components-p2-20261021/perry-concurrent-http-v377-artifacts/p3-http/trap.wasm": "7f4675b88b4b5c6952e595782d65338fd18e1dccaa01955c3bdabfac9bab79d8",
+    "/root/codex-components-p2-20261021/perry-concurrent-http-v377-artifacts/p3-http/echo.wasm": "1a2a780ec251da91a098c10f08e352fb23b272caefb6260ac3fabe952abb5fb6",
+    "/root/codex-components-p2-20261021/perry-concurrent-http-v377-artifacts/p3-http/denied.wasm": "dc7d77faaaf67ed377071e951953ca7d6071753e260de83dc8e27142986da0e7",
+    "/root/codex-components-p2-20261021/perry-concurrent-http-v377-artifacts/p3-http/late-trap.wasm": "2681325b5634c85dce1452de979b655c63a491024db295318d217c48da9e1161",
+    "/root/codex-components-p2-20261021/perry-concurrent-http-v377-artifacts/p3-http/concurrent.wasm": "a83fbe3207802712932934f31312a7a83b56abed69cab6cb612ee1a470be0df0",
+    "/root/codex-components-p2-20261021/perry-http-v377-v380-tests/runtime-tests": "2f9922b4823a60a9dc094293f81a8b9259229df9d91fbcf5315ccc7141975a09",
+    "/root/codex-components-p2-20261021/perry-http-v377-v380-tests/engine-tests": "47a63105a86a8742ccdf73527ab67ddacb8bbfd7518dd74c9ced92ba7092a701",
+    "/root/codex-components-p2-20261021/perry-http-v377-v380-tests/wit-tests": "28c59a2536261406f5092d82f8f7688611bc3e891eeec677f9233ea4adf0a1e0",
+    "/root/codex-components-p2-20261021/perry-http-v377-v380-tests/negative-legacy/concurrent-ordinary": "bfc11090c3f4cfa63028dbce0dd5294ac386a8d59411f3a3b3b3f590e529514d",
+    "/root/codex-components-p2-20261021/perry-http-v377-v380-tests/http/trap.wasm": "7f4675b88b4b5c6952e595782d65338fd18e1dccaa01955c3bdabfac9bab79d8",
+    "/root/codex-components-p2-20261021/perry-http-v377-v380-tests/http/host-ordinary": "22a9dfd5b1608739006ed7581db0900e3d9bf82757a9a20609857fd564ad90cc",
+    "/root/codex-components-p2-20261021/perry-http-v377-v380-tests/http/concurrent-moving": "bcd1410fee8597cde182ea3676e1e3d76834b4ad34af9ccf91d070eee46d941d",
+    "/root/codex-components-p2-20261021/perry-http-v377-v380-tests/http/concurrent-ordinary": "6bf1db4a92c2890cdbdd6be7e2d85ed611d3b37b20dea84e631edf0986157383",
+    "/root/codex-components-p2-20261021/perry-http-v377-v380-tests/http/echo.wasm": "1a2a780ec251da91a098c10f08e352fb23b272caefb6260ac3fabe952abb5fb6",
+    "/root/codex-components-p2-20261021/perry-http-v377-v380-tests/http/denied.wasm": "dc7d77faaaf67ed377071e951953ca7d6071753e260de83dc8e27142986da0e7",
+    "/root/codex-components-p2-20261021/perry-http-v377-v380-tests/http/nested-echo.wasm": "19e02930364b4d920fea8f885436efa100e357dc962470481d38989eaa128bbd",
+    "/root/codex-components-p2-20261021/perry-http-v377-v380-tests/http/late-trap.wasm": "2681325b5634c85dce1452de979b655c63a491024db295318d217c48da9e1161",
+    "/root/codex-components-p2-20261021/perry-http-v377-v380-tests/http/host-moving": "8be2b2fbcbe03071a6675ac221da66a18f8c0be965c9f7678d0b2d17304909dc",
+    "/root/codex-components-p2-20261021/perry-http-v377-v380-tests/http/concurrent.wasm": "a83fbe3207802712932934f31312a7a83b56abed69cab6cb612ee1a470be0df0"
+  },
+  "evidence": {
+    "file": "perry-concurrent-http-v377-v380-evidence.tar.gz",
+    "sha256": "83aeb62c3d4c00b9288dab5ef2cf4b8e46629268fd50ec857b102abe2802704d",
+    "bytes": 14880195,
+    "members": 330
+  },
+  "lint": [
+    {
+      "gate": "address",
+      "exitCode": 1,
+      "byteIdenticalToQualifiedParent": true,
+      "sha256": "9ed7255453b910401c7c49ae78b97d438169d390b3321eb349e4bce1f9be05ea"
+    },
+    {
+      "gate": "holders",
+      "exitCode": 1,
+      "byteIdenticalToQualifiedParent": true,
+      "sha256": "d545b30e51168a7cbe0e17576898ad9ba3ee397b583ad7de0ffeff1fd6a62b48"
+    },
+    {
+      "gate": "size",
+      "exitCode": 1,
+      "byteIdenticalToQualifiedParent": true,
+      "sha256": "55d717db298ca6fa4e868f701947b560def2009b99707e3d27097da3f8d6845b"
+    }
+  ],
+  "tokioGate": {
+    "exitCode": 0,
+    "manifestEdges": 0,
+    "lockPackages": 0,
+    "sourceLines": 0
+  },
+  "ci": "component_check.sh now runs P3 HTTP acceptance in ordinary and moving-GC modes. Individual coherent production phases and CI routing self-test pass; full SDK component_check.sh pipeline not rerun.",
+  "limits": [
+    "Concurrent profile currently requires a root canonical lift, including interface instances assembled from root functions.",
+    "P2 incoming and nested/imported P3 handlers retain serialized handling. Explicit Rust driver HTTP rejects unsupported layouts.",
+    "Component threading, stackful async, generic Perry async guest adapters and error-context remain unsupported.",
+    "Linux qualification uses the same validation-only Turnloop repairs as the selected provider receipt; registry release/adoption remains open.",
+    "Broader host platforms, final distribution packages and outstanding security debt are not qualified by this receipt."
+  ]
+}

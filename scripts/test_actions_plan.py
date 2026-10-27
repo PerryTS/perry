@@ -34,13 +34,42 @@ class PathPatternTests(unittest.TestCase):
 
 
 class CategoryRoutingTests(unittest.TestCase):
-    def test_workflow_contract_has_38_owned_modules_and_six_parents(self):
+    def test_workflow_contract_has_39_owned_modules_and_six_parents(self):
         categories = CATALOG["categories"]
         self.assertEqual(len(categories), 10)
         self.assertEqual(len({category['entrypoint'] for category in categories.values()}), 6)
         files = [module["file"] for c in categories.values() for module in c["modules"]]
-        self.assertEqual(len(files), 38)
-        self.assertEqual(len(set(files)), 38)
+        self.assertEqual(len(files), 39)
+        self.assertEqual(len(set(files)), 39)
+
+    def test_native_host_qualification_is_an_isolated_manual_suite(self):
+        result = select("ci", "workflow_dispatch", {}, suite="wasi-hosts", catalog=CATALOG)
+        self.assertEqual(result["run_core"], "false")
+        self.assertEqual(selected("ci", "workflow_dispatch", {}, suite="wasi-hosts"), ["wasi-hosts"])
+        event = {"action": "synchronize", "pull_request": {"base": {"ref": "main"}}}
+        self.assertNotIn("wasi-hosts", selected("ci", "pull_request", event,
+                         paths=["scripts/wasi_host_qualification.py"]))
+
+    def test_native_host_summary_rejects_every_non_success(self):
+        import os
+        from pathlib import Path
+        import subprocess
+        import yaml
+        workflow = yaml.load(Path(".github/workflows/test.yml").read_text(), Loader=yaml.BaseLoader)
+        job = workflow["jobs"]["wasi-hosts"]
+        self.assertIn("always()", job["if"])
+        self.assertIn("wasi-hosts__qualify", job["needs"])
+        for outcome in ["success", "failure", "cancelled", "skipped", None]:
+            needs = {} if outcome is None else {"wasi-hosts__qualify": {"result": outcome}}
+            result = subprocess.run(["bash", "-c", job["steps"][0]["run"]],
+                capture_output=True, text=True, env=dict(os.environ,
+                CHILD_JOB_IDS=job["env"]["CHILD_JOB_IDS"], JOB_RESULTS=json.dumps(needs)))
+            self.assertEqual(result.returncode == 0, outcome == "success", result.stdout + result.stderr)
+        qualify = workflow["jobs"]["wasi-hosts__qualify"]
+        self.assertEqual(len(qualify["strategy"]["matrix"]["include"]), 3)
+        self.assertNotIn("continue-on-error", qualify)
+        for step in qualify["steps"]:
+            self.assertNotIn("continue-on-error", step)
 
     def test_each_gc_cron_selects_only_its_suite(self):
         for module in CATALOG["categories"]["gc"]["modules"]:
@@ -93,6 +122,8 @@ class CategoryRoutingTests(unittest.TestCase):
                      "test-wasi/components/values/world.wit",
                      "scripts/component_check.sh",
                      "scripts/component_guest_acceptance.py",
+                     "scripts/component_reader_acceptance.py",
+                     "scripts/component_producer_acceptance.py",
                      "scripts/wasi_run.py", "scripts/test_wasi_run.py",
                      "scripts/wasi_acceptance/tcp.ts"]:
             with self.subTest(path=path):
@@ -141,6 +172,7 @@ class CategoryRoutingTests(unittest.TestCase):
             "zizmor": "zizmor / suite result",
             "native-result-ledger": "native-result-ledger / suite result",
             "npm-launcher": "npm-launcher / suite result",
+            "wasi-hosts": "wasi-hosts / suite result",
         }.items():
             self.assertEqual(jobs[module]["name"], display_name)
 

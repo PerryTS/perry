@@ -1,0 +1,55 @@
+{
+    "packages": [
+        {
+            "name": "test:prod",
+            "path": "prod.wit"
+        },
+        {
+            "name": "test:cons",
+            "path": "cons"
+        }
+    ],
+    "nodes": [
+        {
+            "type": "instantiation",
+            "package": 0
+        },
+        {
+            "type": "alias",
+            "source": 0,
+            "export": "test:prod/defs"
+        },
+        {
+            "type": "alias",
+            "source": 0,
+            "export": "make"
+        },
+        {
+            "type": "instantiation",
+            "package": 1
+        },
+        {
+            "type": "alias",
+            "source": 3,
+            "export": "run"
+        }
+    ],
+    "arguments": [
+        {
+            "source": 1,
+            "target": 3,
+            "name": "test:prod/defs"
+        },
+        {
+            "source": 2,
+            "target": 3,
+            "name": "make"
+        }
+    ],
+    "exports": [
+        {
+            "node": 4,
+            "name": "run"
+        }
+    ]
+}
