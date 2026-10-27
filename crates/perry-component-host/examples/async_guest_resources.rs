@@ -71,6 +71,8 @@ fn main() -> Result<()> {
     let drops: Arc<Mutex<BTreeMap<String, usize>>> = Arc::default();
     let gates: Gates = Arc::default();
     let mut imports = Imports::new();
+    let submitted: Import = Arc::new(|_| Ok(None));
+    imports.insert("".into(), BTreeMap::from([("submitted".into(), submitted)]));
     let created = values.clone();
     let make: Import = Arc::new(move |args| {
         let id = args[0].as_u64().context("resource value")? as u32;

@@ -7,6 +7,8 @@ let lastOwner: any;
 let lastBorrow: any;
 let lastLocalBorrow: any;
 let tailExpired = false;
+let publications = 0;
+let cancelledBorrow: any;
 function check(ok: boolean, message: string): void {
   if (!ok) throw new Error(message);
 }
@@ -19,6 +21,24 @@ register({
     async exchange(id, value) {
       const result = await foreign.exchange(id, value);
       collect(); lastOwner = result; return result;
+    },
+    async "cancel-exchange"(id, value) {
+      const pending = foreign.exchange(id, value);
+      imports.submitted(id);
+      const result = await pending;
+      publications++;
+      collect(); return result;
+    },
+    published() { return publications; },
+    async "cancel-loan"(id, value) {
+      cancelledBorrow = value;
+      await imports.wait(id);
+      collect(); return foreign["[method]item.read"](value);
+    },
+    "cancelled-expired"() {
+      collect();
+      try { foreign["[method]item.read"](cancelledBorrow); return false; }
+      catch (_) { return true; }
     },
     async loan(id, value) {
       lastBorrow = value;
