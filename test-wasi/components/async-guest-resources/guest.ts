@@ -11,7 +11,6 @@ function check(ok: boolean, message: string): void {
   if (!ok) throw new Error(message);
 }
 register({
-  "": {
     async create(value) {
       lastOwner = foreign["[constructor]item"](value);
       collect(); return lastOwner;
@@ -23,11 +22,11 @@ register({
     },
     async loan(id, value) {
       lastBorrow = value;
-      await imports[""].wait(id);
+      await imports.wait(id);
       collect(); return foreign["[method]item.read"](value);
     },
     async loans(id, values) {
-      await imports[""].wait(id);
+      await imports.wait(id);
       collect();
       const output: number[] = [];
       for (let i = 0; i < values.length; i++) {
@@ -37,7 +36,7 @@ register({
     },
     async "loan-background"(id, value) {
       lastBorrow = value;
-      imports[""].wait(id).then(() => {
+      imports.wait(id).then(() => {
         collect();
         try { foreign["[method]item.read"](value); tailExpired = false; }
         catch (_) { tailExpired = true; }
@@ -63,15 +62,14 @@ register({
       collect();
       try { lastOwner.borrow(); return false; } catch (_) { return true; }
     }
-  },
   "test:async-guest-resources/local@1.0.0": {
     async make(id) {
-      await imports[""].wait(id);
+      await imports.wait(id);
       collect(); return cell.create({ id });
     },
     async read(id, value) {
       lastLocalBorrow = value;
-      await imports[""].wait(id);
+      await imports.wait(id);
       collect(); return (cell.value(value) as {id: number}).id;
     },
     expired() {
