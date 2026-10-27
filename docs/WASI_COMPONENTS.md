@@ -5,6 +5,11 @@ The complete bidirectional milestone in [WASI_ROADMAP.md](WASI_ROADMAP.md)
 is still in progress. A generated TypeScript guest module alone does not
 establish that Perry can emit a reusable component.
 
+The [combined landing receipt](validation/wasi-component-landing-20261027.json)
+qualifies the integrated Linux native and generated Wasm profiles against current
+main, including ordinary production archives, moving GC and cancellation. It
+records the Windows compile check and unresolved repository checks separately.
+
 ## Native host
 
 `perry-wit <wit-path> <output-directory> [world]` resolves the selected WIT

@@ -24,7 +24,7 @@ WASI versions here mean 0.1 (Preview 1), 0.2 (Preview 2), and 0.3
 | WASI 0.2 output | Command components on Linux/macOS/Windows; synchronous libraries, resources, deferred cleanup and HTTP guests qualified on Linux | Wider library/HTTP platform qualification and final combined packages |
 | WASI 0.2 component hosting | Optional native `perry/component` host with typed WIT values, resources, commands, Turnloop providers and HTTP client/server; current Turnloop integration qualified on Linux | Blocking P2 I/O cancellation, current provider qualification on macOS/Windows, released dependencies and final packages |
 | WASI 0.3 output | Experimental generated Promise exports/imports and cooperative cancellation qualified on Linux | Public async CLI, resource-bearing async adapters and guest future/stream values remain guarded |
-| WASI 0.3 hosting | Linux-qualified async Promise bindings, Turnloop 0.3.0 providers, commands and HTTP handlers; Rust persistent driver supports concurrent calls and generic future/stream reads, transfers and producer factories | Generic TypeScript wrappers and producer interfaces, per-invocation runtime frames, other platforms and final packages |
+| WASI 0.3 hosting | Linux-qualified async Promise bindings, Turnloop 0.3.0 providers, commands and HTTP handlers; Rust persistent driver supports concurrent calls and generic future/stream reads, transfers and producer factories | Broader ownership/platform qualification, released provider dependencies and final packages |
 
 The target here is **0.3.0**: it requires async lifting/lowering, futures and
 streams. Version 0.3.1 additionally requires maps and `implements`/`external-id`
@@ -55,6 +55,12 @@ historical results predate the Turnloop replacement and do not qualify the
 current provider selection on macOS or Windows. Newer Linux HTTP and partial
 0.3.0 qualification is recorded in [WASI_COMPONENTS.md](WASI_COMPONENTS.md); it
 does not establish complete P3 support or wider guest-output platform support.
+
+The [combined landing receipt](validation/wasi-component-landing-20261027.json)
+records current-main Linux native and generated Wasm execution, positive moving-GC
+witnesses, the Windows engine/provider compile check, and the exact lint and
+full-runtime failures. It also records which qualified inputs differ from the
+final landing source; historical receipts retain their original scope.
 
 
 WASI components run through a host such as Wasmtime. The current repair was
