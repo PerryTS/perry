@@ -4,6 +4,9 @@
 //! `cjs_wrap` output of three modules (`b.js` exports `Base`, `a.js` has
 //! `class Main extends Base` and `exports.newInstance = () => new Main()`,
 //! `m.js` calls `require("./a").newInstance().run()`), paths shortened to `/t1`.
+//! Their sources are under `fixtures/cjs_src/`; the wrapper regenerates them
+//! (`perry`'s `module_objects_tests::regenerate_wpfacts_cjs_fixtures`,
+//! ignored) with the `__perry_cjs_open()` arms spliced for a closed program.
 
 use super::*;
 use std::collections::BTreeSet;
@@ -99,6 +102,10 @@ fn hirs(mods: &[(&str, &str)]) -> Vec<(String, perry_hir::Module)> {
             for imp in &mut hir.imports {
                 if let Some(n) = imp.source.strip_prefix("./") {
                     imp.resolved_path = Some(format!("{dir}/{n}.js"));
+                } else if imp.source.starts_with(&format!("{dir}/")) {
+                    // A static edge's record-binding import names its target
+                    // by path (design CJS_LINK §2.2).
+                    imp.resolved_path = Some(imp.source.clone());
                 } else if imp.source == "perry:cjs" {
                     // The CommonJS support module every wrapped module
                     // imports first (`cjs_wrap::support`).

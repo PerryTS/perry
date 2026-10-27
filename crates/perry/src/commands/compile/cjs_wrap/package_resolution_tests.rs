@@ -101,7 +101,7 @@ fn lazy_require_of_compiled_package_uses_resolved_path_after_sources_are_removed
     let target = serde_json::to_string(&target.to_string_lossy()).unwrap();
     assert!(
         wrapped.contains(&format!("__perry_cjs_cache[{target}]"))
-            && wrapped.contains("required = __perry_cjs_reloader()("),
+            && wrapped.contains("if (__perry_cjs_rec_0 !== undefined) {"),
         "lazy compiled-package require must resolve through its compiled path after source removal:\n{wrapped}"
     );
     assert!(

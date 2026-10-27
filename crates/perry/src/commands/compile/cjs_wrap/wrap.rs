@@ -589,7 +589,8 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
             .function_bindings
             .iter()
             .any(|((lo, hi), name)| name == local && lo <= start && end <= hi);
-        if bound_here {
+        let destructured = require_sites.destructured_calls.contains(&(*start, *end));
+        if bound_here || destructured {
             builtin_arms_live.insert(spec.clone());
         } else {
             builtin_rewrites.push((*start, *end, local.clone()));
@@ -1510,25 +1511,14 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
     // loader, and one link
     // flag and one edge per (this module, target) pair (design CJS_LINK
     // §2.2). Nothing here allocates at startup; the edges are functions of
-    // the module, not closures of the factory. A reload goes through this
-    // module's own loader, so the new record's parent is this module and the
-    // edge keeps its literal path.
+    // the module, not closures of the factory, and the module scope holds no
+    // mutable binding for them (a module binding written from a function
+    // costs every per-unit solve). A reload (cold: after a cache deletion)
+    // is this module's own loader, `createRequire(filename)`, called with
+    // the literal path, so the new record's parent is this module and the
+    // facts keep the path.
     let mut cjs_link_decls = format!(
         r#"export var {record};
-// This module's own loader for the cold paths of `require` (a computed
-// specifier outside the graph, relative to this module) and for a static
-// edge whose target was deleted from the cache, created on first use:
-// `createRequire` costs ~117k instructions. Only a program that is not
-// closed can compute a specifier or reload.
-var __perry_cjs_reload_require;
-function __perry_cjs_reloader() {{
-    if (__perry_cjs_open()) {{
-        if (__perry_cjs_reload_require === undefined) __perry_cjs_reload_require = {create_require}({module_filename_literal});
-        return __perry_cjs_reload_require;
-    }} else {{
-        throw __perry_cjs_require_error('error', 'ERR_PERRY_CJS_CLOSED', 'a closed program has no CommonJS loader');
-    }}
-}}
 "#,
         record = perry_hir::CJS_RECORD_EXPORT,
     );
@@ -1578,13 +1568,18 @@ function __perry_cjs_reloader() {{
 function __perry_require_static_{i}() {{
     if (__perry_cjs_open()) {{
         // Not closed: the cache entry is the link (a deletion or replacement
-        // is visible) and a deleted entry re-runs the module. The flag is the
-        // record this edge linked: the same record is linked once (what Node's
-        // updateChildren scan finds), a new one (a reload, a replaced entry)
-        // again. After the first call, one compare.
+        // is visible) and a deleted entry re-runs the module. The flag says
+        // this edge linked the record it found (what Node's updateChildren
+        // scan finds): after the first call, one byte test. A reload through
+        // this edge links the new record; a reload through another requirer
+        // leaves this flag set, so this module's `children` keeps the record
+        // it linked where Node's scan would add the new one: the one
+        // inexactness, in a program that is not closed and reloads. (A record
+        // held in a module binding written here would be exact, and costs
+        // every per-unit solve of the program.)
         const cached = __perry_cjs_cache[{path}];
         if (cached !== undefined) {{
-            if (__perry_cjs_lk_{i} !== cached) {{ __perry_cjs_lk_{i} = cached; {link_cached} }}
+            if (__perry_cjs_lk_{i} === false) {{ __perry_cjs_lk_{i} = true; {link_cached} }}
             {warn_cached}return cached.exports;
         }}
         // Evaluated before (its record binding is set) and its entry is gone:
@@ -1596,14 +1591,14 @@ function __perry_require_static_{i}() {{
         if (__perry_cjs_rec_{i} !== undefined) {{
             __perry_cjs_set_pending(__perry_cjs_record);
             let required;
-            try {{ required = __perry_cjs_reloader()({path}); }} finally {{ __perry_cjs_set_pending(undefined); }}
+            try {{ required = {create_require}({module_filename_literal})({path}); }} finally {{ __perry_cjs_set_pending(undefined); }}
             const fresh = __perry_cjs_cache[{path}];
-            if (fresh !== undefined && __perry_cjs_lk_{i} !== fresh) {{ __perry_cjs_lk_{i} = fresh; __perry_cjs_link(__perry_cjs_record, fresh); }}
+            if (fresh !== undefined) {{ __perry_cjs_lk_{i} = true; __perry_cjs_link(__perry_cjs_record, fresh); }}
             return required;
         }}
         {edge_init}
-        if (__perry_cjs_lk_{i} !== record) {{
-            __perry_cjs_lk_{i} = record;
+        if (__perry_cjs_lk_{i} === false) {{
+            __perry_cjs_lk_{i} = true;
             if (record.parent === undefined) record.parent = __perry_cjs_record;
             __perry_cjs_record.children.push(record);
         }}
@@ -1671,6 +1666,19 @@ function __perry_require_static_{i}() {{
     const __perry_cjs_c = __perry_cjs_cache;
     __perry_cjs_c[{module_filename_literal}] = __cjs_module;
 {lazy_cache_decls}
+    // This module's own loader for the cold paths of `require` (a computed
+    // specifier outside the graph, relative to this module), created on
+    // first use: `createRequire` costs ~117k instructions. Only a program
+    // that is not closed can compute a specifier or reload.
+    let __perry_cjs_reload_require;
+    function __perry_cjs_reloader() {{
+        if (__perry_cjs_open()) {{
+            if (__perry_cjs_reload_require === undefined) __perry_cjs_reload_require = {create_require}({module_filename_literal});
+            return __perry_cjs_reload_require;
+        }} else {{
+            throw __perry_cjs_require_error('error', 'ERR_PERRY_CJS_CLOSED', 'a closed program has no CommonJS loader');
+        }}
+    }}
 {deferred_helper}    function require(specifier) {{
         if (typeof specifier !== 'string') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_TYPE', 'The "id" argument must be of type string.');
         if (specifier === '') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_VALUE', 'The argument "id" must be a non-empty string.');

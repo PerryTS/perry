@@ -304,3 +304,88 @@ fn a_computed_exports_store_keeps_declared_reads_sound() {
         "{dump}"
     );
 }
+
+/// Regenerates `perry-wpfacts`'s CommonJS fixtures (`tests/fixtures/cjs_t*`,
+/// the per-unit CommonJS tests of `tests/unit_cjs.rs`) from the sources under
+/// `tests/fixtures/cjs_src/t*`: the real wrapper output and support module,
+/// paths shortened to `/tN`, the `__perry_cjs_open()` arms spliced for a
+/// closed program as `cjs_link::resolve_open_sites` does (none of the sets
+/// can reach the loader). The entry of a set is its last file.
+/// `cargo test -p perry --bin perry -- regenerate_wpfacts_cjs_fixtures --ignored`
+#[test]
+#[ignore]
+fn regenerate_wpfacts_cjs_fixtures() {
+    let fixtures =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../perry-wpfacts/src/tests/fixtures");
+    let sets: [(&str, &[&str]); 5] = [
+        ("t1", &["b.js", "a.js", "m.js"]),
+        ("t2", &["r.js", "m.js"]),
+        ("t3", &["benchmark.js", "richards.js", "sa_Richards.js"]),
+        ("t5", &["b.js", "r.js", "m.js"]),
+        ("t6", &["benchmark.js", "som.js", "cd.js", "sa_CD.js"]),
+    ];
+    for (t, files) in sets {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().canonicalize().expect("canonical tempdir");
+        let root_text = root.to_string_lossy().into_owned();
+        let short = format!("/{t}");
+        let mut keys = Vec::new();
+        for f in files {
+            let src = std::fs::read_to_string(fixtures.join("cjs_src").join(t).join(f))
+                .expect("fixture source");
+            std::fs::write(root.join(f), src).expect("write source");
+            keys.push(root.join(f).to_string_lossy().into_owned());
+        }
+        let out = fixtures.join(format!("cjs_{t}"));
+        for (i, f) in files.iter().enumerate() {
+            let src = std::fs::read_to_string(root.join(f)).expect("source");
+            let entry = i + 1 == files.len();
+            let (wrapped, _) =
+                wrap_commonjs_with_body_offset(&src, &root.join(f), None, entry, None);
+            let text = resolve_closed(&wrapped).replace(&root_text, &short);
+            std::fs::write(out.join(f), text).expect("write fixture");
+        }
+        let support = resolve_closed(&support::source(&keys, true)).replace(&root_text, &short);
+        std::fs::write(out.join("perry_cjs.js"), support).expect("write support fixture");
+    }
+}
+
+/// Keep the arm of every `if (__perry_cjs_open()) { … } else { … }` a closed
+/// program takes, in text (the HIR pass does the same on the lowered module).
+fn resolve_closed(text: &str) -> String {
+    let marker = "if (__perry_cjs_open()) {";
+    let mut text = text.to_string();
+    while let Some(start) = text.find(marker) {
+        let open = start + marker.len() - 1;
+        let close = matching_brace(&text, open);
+        let after = &text[close + 1..];
+        let trimmed = after.trim_start();
+        let (end, replacement) = if let Some(rest) = trimmed.strip_prefix("else {") {
+            let else_open = text.len() - rest.len() - 1;
+            let else_close = matching_brace(&text, else_open);
+            (else_close + 1, text[else_open + 1..else_close].to_string())
+        } else {
+            (close + 1, String::new())
+        };
+        text.replace_range(start..end, &replacement);
+    }
+    text
+}
+
+fn matching_brace(text: &str, open: usize) -> usize {
+    let bytes = text.as_bytes();
+    let mut depth = 0usize;
+    for (i, &b) in bytes.iter().enumerate().skip(open) {
+        match b {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return i;
+                }
+            }
+            _ => {}
+        }
+    }
+    panic!("unbalanced braces after offset {open}");
+}

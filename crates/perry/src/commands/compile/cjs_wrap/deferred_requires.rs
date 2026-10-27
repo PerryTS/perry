@@ -46,6 +46,14 @@ pub(super) struct RequireSites {
     pub(super) capability_uses: u32,
     /// Function-scope bindings (byte range of the scope in `source`, name).
     pub(super) function_bindings: Vec<((usize, usize), String)>,
+    /// Literal require calls that initialise a destructuring pattern
+    /// (`const { x } = require('fs')`), as byte ranges in `source`. A
+    /// builtin's binding destructured inside a function lowers through the
+    /// native value path, whose class heritage is not relinkable
+    /// (`Object.setPrototypeOf(Sub, Other)` after `class Sub extends X`
+    /// forwards eight arguments; an ESM `const { EventEmitter } = ev` in a
+    /// function shows it on main), so these keep the `require` function.
+    pub(super) destructured_calls: Vec<(usize, usize)>,
 }
 
 fn analyze(
@@ -61,6 +69,7 @@ fn analyze(
             calls: Vec::new(),
             capability_uses: u32::MAX,
             function_bindings: Vec::new(),
+            destructured_calls: Vec::new(),
         };
     };
     let mut visitor = Requires::default();
@@ -114,6 +123,11 @@ fn analyze(
         calls,
         capability_uses: super::run_once_syntax::module_capability_uses(&module),
         function_bindings,
+        destructured_calls: visitor
+            .destructured_calls
+            .iter()
+            .map(|(lo, hi)| (lo.saturating_sub(1) as usize, hi.saturating_sub(1) as usize))
+            .collect(),
     }
 }
 
@@ -136,6 +150,9 @@ struct Requires {
     /// `require` inside a scope that binds its import's local name keeps the
     /// `require` function (the rewrite would read that local).
     bindings: Vec<((u32, u32), String)>,
+    /// Literal require calls (SWC span) that initialise a destructuring
+    /// pattern: they keep the `require` function (see `RequireSites`).
+    destructured_calls: Vec<(u32, u32)>,
 }
 
 impl Requires {
@@ -231,6 +248,15 @@ impl Visit for Requires {
         });
     }
 
+    fn visit_var_declarator(&mut self, d: &ast::VarDeclarator) {
+        if !matches!(d.name, ast::Pat::Ident(_)) {
+            if let Some(ast::Expr::Call(call)) = d.init.as_deref() {
+                self.destructured_calls
+                    .push((call.span.lo.0, call.span.hi.0));
+            }
+        }
+        d.visit_children_with(self);
+    }
     fn visit_binding_ident(&mut self, id: &ast::BindingIdent) {
         self.binds(id.id.sym.as_ref());
         id.visit_children_with(self);

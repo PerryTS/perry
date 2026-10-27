@@ -1,6 +1,21 @@
-import { cache as __perry_cjs_cache, main as __perry_cjs_main, extensions as __perry_cjs_extensions, setPending as __perry_cjs_set_pending, takePending as __perry_cjs_take_pending, builtin as __perry_cjs_builtin, link as __perry_cjs_link, requireComputed as __perry_cjs_require_computed, requireError as __perry_cjs_require_error } from 'perry:cjs';
-import { createRequire as __perry_cjs_create_require, isBuiltin as __perry_cjs_is_builtin } from 'node:module';
+import { cache as __perry_cjs_cache, main as __perry_cjs_main, extensions as __perry_cjs_extensions, setPending as __perry_cjs_set_pending, takePending as __perry_cjs_take_pending, link as __perry_cjs_link, requireComputed as __perry_cjs_require_computed, requireError as __perry_cjs_require_error } from 'perry:cjs';
+import { createRequire as __perry_cjs_create_require } from 'node:module';
 import _req_0 from './benchmark';
+import { __perry_cjs_record as __perry_cjs_rec_0 } from './benchmark';
+export var __perry_cjs_record;
+let __perry_cjs_lk_0 = false;
+function __perry_require_static_0() {
+    
+        const record = __perry_cjs_init(__perry_cjs_rec_0);
+        if (__perry_cjs_lk_0 === false) {
+            __perry_cjs_lk_0 = true;
+            if (record.parent === undefined) record.parent = __perry_cjs_record;
+            __perry_cjs_record.children.push(record);
+        }
+        return record.exports;
+    
+}
+
 
 
 const _cjs = (function() {
@@ -24,18 +39,15 @@ function __perry_cjs_factory() {
         filename: "/t3/richards.js",
         loaded: false,
         children: [],
-        parent: __perry_cjs_take_pending(),
+        parent: undefined,
         paths: ["/t3" + '/node_modules'],
         require: undefined
     };
-    // Node populates `module.parent` before the body evaluates, so link it
-    // here rather than at the tail's registry publication.
-    __perry_link_path_module_parent(__cjs_module);
-    // Publish the record before user code, just as at final publication.
-    // #10178: esbuild replaces module.exports before requiring its peer.
-    // Holding the initial empty object loses that replacement at re-entry;
-    // the runtime's existing record unwrap reads the current exports instead.
-    __perry_register_path_module_partial("/t3/richards.js", __cjs_module, __perry_cjs_factory);
+    // The module's record binding: what a static edge of a requiring module
+    // reads, from before the body, so a cycle sees the partial record.
+    __perry_cjs_record = __cjs_module;
+    
+    
     var module = __cjs_module;
     var exports = __cjs_module.exports;
     // The program's `require.cache` (the support module's object, whose keys
@@ -43,22 +55,28 @@ function __perry_cjs_factory() {
     const __perry_cjs_c = __perry_cjs_cache;
     __perry_cjs_c["/t3/richards.js"] = __cjs_module;
 
-    // This module's own loader for the cold paths (a reload after
-    // `delete require.cache[...]`, a computed specifier outside the graph),
-    // created on first use: `createRequire` costs ~117k instructions.
+    // This module's own loader for the cold paths of `require` (a computed
+    // specifier outside the graph, relative to this module), created on
+    // first use: `createRequire` costs ~117k instructions. Only a program
+    // that is not closed can compute a specifier or reload.
     let __perry_cjs_reload_require;
     function __perry_cjs_reloader() {
-        if (__perry_cjs_reload_require === undefined) __perry_cjs_reload_require = __perry_cjs_create_require("/t3/richards.js");
-        return __perry_cjs_reload_require;
+        
+            throw __perry_cjs_require_error('error', 'ERR_PERRY_CJS_CLOSED', 'a closed program has no CommonJS loader');
+        
     }
     function require(specifier) {
         if (typeof specifier !== 'string') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_TYPE', 'The "id" argument must be of type string.');
         if (specifier === '') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_VALUE', 'The argument "id" must be a non-empty string.');
-        if (specifier === './benchmark') { const __perry_cached = __perry_cjs_c["/t3/benchmark.js"]; if (__perry_cached !== undefined) { __perry_cjs_link(module, __perry_cached); return __perry_cached.exports; } if (!__perry_has_path_module("/t3/benchmark.js")) return _req_0; return __perry_cjs_reloader()("/t3/benchmark.js"); }
+        if (specifier === "./benchmark") return __perry_require_static_0();
         // A specifier no case above resolved: builtins, native addons, a
         // compiled module reached by a computed path, a `.json` file, a
         // package outside the graph (`perry:cjs`'s `requireComputed`).
-        return __perry_cjs_require_computed(specifier, "/t3", __perry_cjs_reloader);
+        // A closed program has no computed require and no reload (design
+        // CJS_LINK §2.5): no loader surface is linked for it.
+        
+            throw __perry_cjs_require_error('error', 'MODULE_NOT_FOUND', "Cannot find module '" + specifier + "'");
+        
     }
     // No `defineProperty(require, 'name', ...)`: a `function require(...)`
     // declaration already carries exactly
@@ -70,9 +88,9 @@ function __perry_cjs_factory() {
     const __perry_cjs_resolve = function resolve(specifier, options) {
         if (typeof specifier !== 'string') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_TYPE', 'The "request" argument must be of type string.');
         if (specifier === "./benchmark") return "/t3/benchmark.js";
-        if (__perry_cjs_is_builtin(specifier)) return specifier;
-        var __perry_nm_resolved = __perry_require_resolve_node_modules("/t3", specifier);
-        if (__perry_nm_resolved !== undefined) return __perry_nm_resolved;
+        // `require.resolve` is reachable only through `require` as a value,
+        // which a closed program does not have.
+        
         throw __perry_cjs_require_error('error', 'MODULE_NOT_FOUND', 'Cannot find module ' + specifier);
     };
     __perry_cjs_resolve.paths = function paths(specifier) {
@@ -95,7 +113,7 @@ function __perry_cjs_factory() {
 // The original license details are availble here:
 // http://web.archive.org/web/20050825101121/http://www.sunlabs.com/people/mario/java_benchmarking/index.html
 
-const { Benchmark } = require('./benchmark');
+const { Benchmark } = __perry_require_static_0();
 
 const NO_TASK = null;
 const NO_WORK = null;
@@ -528,7 +546,7 @@ class Richards extends Benchmark {
 exports.newInstance = () => new Richards();
 
 
-    __cjs_module.loaded = true; __perry_register_path_module("/t3/richards.js", __cjs_module);
+    __cjs_module.loaded = true; 
     return __cjs_module.exports;
 }
 return __perry_cjs_factory();
@@ -538,5 +556,4 @@ export default _cjs;
 
 
 export const newInstance = _cjs.newInstance;
-
 

@@ -113,19 +113,20 @@ fn registry_publication_is_only_for_a_program_that_is_not_closed() {
 }
 
 #[test]
-fn an_open_edge_links_each_record_once_by_identity() {
-    // CJL2: in a program that is not closed the link flag is the record the
-    // edge linked, so a cached record is linked once and a new one (a
-    // reload, a replaced entry) again. A module that cannot require by a
-    // computed path pushes without a scan; its reload is its own loader with
-    // the literal path (the new record's parent, the facts' path node).
+fn an_open_edge_links_each_record_once() {
+    // CJL2: in a program that is not closed the link flag says the edge
+    // linked the record it found, one byte test per call after the first.
+    // A module that cannot require by a computed path pushes without a scan;
+    // its reload is its own loader (`createRequire(filename)`) with the
+    // literal path (the new record's parent, the facts' path node), and it
+    // links the new record through the scan.
     let source = wrapped("const x = require('./x.cjs');\nmodule.exports = x.value;\n");
     assert!(
-        source.contains("if (__perry_cjs_lk_0 !== cached) { __perry_cjs_lk_0 = cached; if (cached.parent === undefined) cached.parent = __perry_cjs_record; __perry_cjs_record.children.push(cached); }"),
+        source.contains("if (__perry_cjs_lk_0 === false) { __perry_cjs_lk_0 = true; if (cached.parent === undefined) cached.parent = __perry_cjs_record; __perry_cjs_record.children.push(cached); }"),
         "{source}"
     );
     assert!(
-        source.contains("if (__perry_cjs_lk_0 !== record) {"),
+        source.contains("if (fresh !== undefined) { __perry_cjs_lk_0 = true; __perry_cjs_link(__perry_cjs_record, fresh); }"),
         "{source}"
     );
     assert!(
@@ -133,7 +134,7 @@ fn an_open_edge_links_each_record_once_by_identity() {
         "{source}"
     );
     assert!(
-        source.contains("required = __perry_cjs_reloader()("),
+        source.contains("required = __perry_cjs_create_require("),
         "{source}"
     );
     assert!(!source.contains("__perry_cjs_reload("), "{source}");
@@ -143,7 +144,7 @@ fn an_open_edge_links_each_record_once_by_identity() {
         "const x = require('./x.cjs');\nconst r = require;\nmodule.exports = [x.value, r];\n",
     );
     assert!(
-        source.contains("if (__perry_cjs_lk_0 !== cached) { __perry_cjs_lk_0 = cached; __perry_cjs_link(__perry_cjs_record, cached); }"),
+        source.contains("if (__perry_cjs_lk_0 === false) { __perry_cjs_lk_0 = true; __perry_cjs_link(__perry_cjs_record, cached); }"),
         "{source}"
     );
 }
@@ -197,6 +198,19 @@ fn a_literal_builtin_require_in_the_body_reads_its_binding() {
     );
     assert!(
         source.contains("        if (specifier === 'fs') { return fs; }\n"),
+        "{source}"
+    );
+    // A destructuring pattern keeps the call and the arm: the native value
+    // path it would lower through is not relinkable as a class parent.
+    let source = wrapped(
+        "const { EventEmitter } = require('node:events');\nclass Bus extends EventEmitter {}\nmodule.exports = Bus;\n",
+    );
+    assert!(
+        source.contains("const { EventEmitter } = require('node:events');"),
+        "{source}"
+    );
+    assert!(
+        source.contains("        if (specifier === 'node:events') { return _req_0; }\n"),
         "{source}"
     );
 }

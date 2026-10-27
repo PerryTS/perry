@@ -1,5 +1,7 @@
-import { cache as __perry_cjs_cache, main as __perry_cjs_main, extensions as __perry_cjs_extensions, setPending as __perry_cjs_set_pending, takePending as __perry_cjs_take_pending, builtin as __perry_cjs_builtin, link as __perry_cjs_link, requireComputed as __perry_cjs_require_computed, requireError as __perry_cjs_require_error } from 'perry:cjs';
-import { createRequire as __perry_cjs_create_require, isBuiltin as __perry_cjs_is_builtin } from 'node:module';
+import { cache as __perry_cjs_cache, main as __perry_cjs_main, extensions as __perry_cjs_extensions, setPending as __perry_cjs_set_pending, takePending as __perry_cjs_take_pending, link as __perry_cjs_link, requireComputed as __perry_cjs_require_computed, requireError as __perry_cjs_require_error } from 'perry:cjs';
+import { createRequire as __perry_cjs_create_require } from 'node:module';
+
+export var __perry_cjs_record;
 
 
 class DictEntry {
@@ -50,18 +52,15 @@ function __perry_cjs_factory() {
         filename: "/t6/som.js",
         loaded: false,
         children: [],
-        parent: __perry_cjs_take_pending(),
+        parent: undefined,
         paths: ["/t6" + '/node_modules'],
         require: undefined
     };
-    // Node populates `module.parent` before the body evaluates, so link it
-    // here rather than at the tail's registry publication.
-    __perry_link_path_module_parent(__cjs_module);
-    // Publish the record before user code, just as at final publication.
-    // #10178: esbuild replaces module.exports before requiring its peer.
-    // Holding the initial empty object loses that replacement at re-entry;
-    // the runtime's existing record unwrap reads the current exports instead.
-    __perry_register_path_module_partial("/t6/som.js", __cjs_module, __perry_cjs_factory);
+    // The module's record binding: what a static edge of a requiring module
+    // reads, from before the body, so a cycle sees the partial record.
+    __perry_cjs_record = __cjs_module;
+    
+    
     var module = __cjs_module;
     var exports = __cjs_module.exports;
     // The program's `require.cache` (the support module's object, whose keys
@@ -69,13 +68,15 @@ function __perry_cjs_factory() {
     const __perry_cjs_c = __perry_cjs_cache;
     __perry_cjs_c["/t6/som.js"] = __cjs_module;
 
-    // This module's own loader for the cold paths (a reload after
-    // `delete require.cache[...]`, a computed specifier outside the graph),
-    // created on first use: `createRequire` costs ~117k instructions.
+    // This module's own loader for the cold paths of `require` (a computed
+    // specifier outside the graph, relative to this module), created on
+    // first use: `createRequire` costs ~117k instructions. Only a program
+    // that is not closed can compute a specifier or reload.
     let __perry_cjs_reload_require;
     function __perry_cjs_reloader() {
-        if (__perry_cjs_reload_require === undefined) __perry_cjs_reload_require = __perry_cjs_create_require("/t6/som.js");
-        return __perry_cjs_reload_require;
+        
+            throw __perry_cjs_require_error('error', 'ERR_PERRY_CJS_CLOSED', 'a closed program has no CommonJS loader');
+        
     }
     function require(specifier) {
         if (typeof specifier !== 'string') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_TYPE', 'The "id" argument must be of type string.');
@@ -84,7 +85,11 @@ function __perry_cjs_factory() {
         // A specifier no case above resolved: builtins, native addons, a
         // compiled module reached by a computed path, a `.json` file, a
         // package outside the graph (`perry:cjs`'s `requireComputed`).
-        return __perry_cjs_require_computed(specifier, "/t6", __perry_cjs_reloader);
+        // A closed program has no computed require and no reload (design
+        // CJS_LINK §2.5): no loader surface is linked for it.
+        
+            throw __perry_cjs_require_error('error', 'MODULE_NOT_FOUND', "Cannot find module '" + specifier + "'");
+        
     }
     // No `defineProperty(require, 'name', ...)`: a `function require(...)`
     // declaration already carries exactly
@@ -96,9 +101,9 @@ function __perry_cjs_factory() {
     const __perry_cjs_resolve = function resolve(specifier, options) {
         if (typeof specifier !== 'string') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_TYPE', 'The "request" argument must be of type string.');
 
-        if (__perry_cjs_is_builtin(specifier)) return specifier;
-        var __perry_nm_resolved = __perry_require_resolve_node_modules("/t6", specifier);
-        if (__perry_nm_resolved !== undefined) return __perry_nm_resolved;
+        // `require.resolve` is reachable only through `require` as a value,
+        // which a closed program does not have.
+        
         throw __perry_cjs_require_error('error', 'MODULE_NOT_FOUND', 'Cannot find module ' + specifier);
     };
     __perry_cjs_resolve.paths = function paths(specifier) {
@@ -630,7 +635,7 @@ exports.Vector = Vector;
 exports.Random = Random;
 
 
-    __cjs_module.loaded = true; __perry_register_path_module("/t6/som.js", __cjs_module);
+    __cjs_module.loaded = true; 
     return __cjs_module.exports;
 }
 return __perry_cjs_factory();
@@ -646,5 +651,4 @@ export const IdentitySet = _cjs.IdentitySet;
 export const Dictionary = _cjs.Dictionary;
 export const IdentityDictionary = _cjs.IdentityDictionary;
 export const Vector = _cjs.Vector;
-
 

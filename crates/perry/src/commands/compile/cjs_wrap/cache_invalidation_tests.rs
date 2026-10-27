@@ -44,12 +44,9 @@ fn only_a_program_that_is_not_closed_reads_the_live_cache() {
     );
     assert!(open.contains("const cached = __perry_cjs_cache["), "{open}");
     assert!(open.contains("return cached.exports;"), "{open}");
-    // A fresh record is linked once, by the flag that is the record itself
+    // A fresh record is linked once, by the pair flag
     // (Node pushes a new Module without a scan).
-    assert!(
-        open.contains("if (__perry_cjs_lk_0 !== record) {"),
-        "{open}"
-    );
+    assert!(open.contains("if (__perry_cjs_lk_0 === false) {"), "{open}");
     assert!(
         open.contains("__perry_cjs_record.children.push(record);"),
         "{open}"
