@@ -56,3 +56,6 @@ changing whether keepalive is enabled. This is still a patched source snapshot.
 Historical receipts qualify their recorded source only; the combined landing
 requires fresh validation. The original registry/provenance hashes are retained
 for comparison, with the integration source hashes recorded separately.
+
+The IOCP unit-test module is extracted to `backend/iocp/tests.rs` to meet
+Perry’s 2,000-line source cap; its module path and visibility are unchanged.
