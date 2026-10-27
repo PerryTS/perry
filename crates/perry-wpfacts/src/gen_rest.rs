@@ -133,7 +133,8 @@ impl<'a> Gen<'a> {
 
     /// Store `v` into every element/entry of what `recv` holds.
     fn elem_store(&mut self, fx: &Fx, recv: NodeId, v: NodeId, what: &str) {
-        self.store(fx, recv, Key::Any, v, what.to_string(), None, false);
+        let ek = self.m.elem_key();
+        self.store(fx, recv, ek, v, what.to_string(), None, false);
     }
 
     /// Call `cb` with `args` (this = undefined); returns the result node.

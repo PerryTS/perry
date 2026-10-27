@@ -241,13 +241,13 @@ use contracts::atoms_of;
 use contracts::chain_unsettled;
 use contracts::class_statics;
 use contracts::closed_of;
-use contracts::fn_inst_contract;
 #[cfg(test)]
 pub(crate) use contracts::cut_described_again;
 use contracts::field_ta_contracts;
 use contracts::field_value_contracts;
 use contracts::fn_contract_name;
 use contracts::fn_contract_of;
+use contracts::fn_inst_contract;
 use contracts::foreign_parent;
 use contracts::forwards_of;
 use contracts::nested_layouts;
@@ -419,6 +419,11 @@ pub(crate) fn compute_in<'a>(
         }
     }
     g.m.dump_meta();
+    if g.m.explain && !g.m.bf_mints.is_empty() {
+        let mut v: Vec<(&str, u32)> = g.m.bf_mints.iter().map(|(k, n)| (*k, *n)).collect();
+        v.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+        eprintln!("perry: wpfacts explain: builtin-fn minted: {v:?}");
+    }
     let solve_ms = t1.elapsed().as_secs_f64() * 1000.0;
     // Decision 150: interpreted code is the ⊤ summary node, never a
     // program-wide kill. Every value it can receive (arguments and results
@@ -679,6 +684,7 @@ pub(crate) fn compute_in<'a>(
                     // class's own keys into the receiver, nothing else.
                     None => Some(units::FnContract {
                         method: false,
+                        this_class: None,
                         name: format!("{name}.constructor"),
                         params: Vec::new(),
                         reach: Vec::new(),
@@ -1263,13 +1269,12 @@ pub(crate) fn compute_in<'a>(
     // DECISIONS 210: the layouts of this unit's constructor functions other
     // units construct (`Gen::published_ctors`, published in `contract_check`).
     if cfg.unit && !g.m.aborted {
-        let mut tms: Vec<(model::FnIdx, model::TmplId)> = g
-            .m
-            .own_ctor_runs
-            .iter()
-            .filter_map(|&(f, _)| g.m.fn_inst.get(&f).map(|&tm| (f, tm)))
-            .filter(|(_, tm)| g.m.fn_inst_published.contains(tm))
-            .collect();
+        let mut tms: Vec<(model::FnIdx, model::TmplId)> =
+            g.m.own_ctor_runs
+                .iter()
+                .filter_map(|&(f, _)| g.m.fn_inst.get(&f).map(|&tm| (f, tm)))
+                .filter(|(_, tm)| g.m.fn_inst_published.contains(tm))
+                .collect();
         tms.sort_unstable();
         tms.dedup();
         for (f, tm) in tms {

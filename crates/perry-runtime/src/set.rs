@@ -61,13 +61,20 @@ pub(crate) fn set_foreach_unwind_to(sp: usize) {
     });
 }
 
+#[cfg(any(test, target_os = "wasi"))]
+pub(crate) fn set_foreach_restore_depth(depth: usize) {
+    SET_FOREACH_STACK.with(|stack| {
+        stack.borrow_mut().restore_depth(depth);
+    });
+}
+
 pub(crate) fn set_foreach_check_marks(sp: usize) {
     SET_FOREACH_STACK.with(|stack| {
         crate::exception::marks::check_marks(stack.borrow().marks(), sp, "set_foreach")
     });
 }
 
-#[cfg(test)]
+#[cfg(any(test, target_os = "wasi"))]
 pub(crate) fn set_foreach_depth() -> usize {
     SET_FOREACH_STACK.with(|stack| stack.borrow().len())
 }

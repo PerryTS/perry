@@ -642,20 +642,36 @@ fn main() {
     // landing-pad shim `perry_trap.ll`; WASI keeps the setjmp trampoline
     // (#9305: it must be compiled by a C compiler, rustc cannot express
     // `returns_twice`), which the wasm SjLj pass lowers to wasm EH.
-    println!("cargo:rerun-if-changed=src/ffi/perry_sjlj.c");
     println!("cargo:rerun-if-changed=src/ffi/perry_trap.ll");
     // WASI uses the standardized wasm EH proposal for SjLj, paired with
     // wasi-libc's libsetjmp and the generated-code lowering (#11378).
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("wasi") {
         println!("cargo:rerun-if-changed=src/ffi/perry_wasi_net.c");
+        println!("cargo:rerun-if-changed=src/ffi/perry_wasm_throw.c");
+        println!("cargo:rerun-if-changed=src/ffi/perry_wasm_trap.ll");
+        let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
+        let trap = std::fs::read_to_string("src/ffi/perry_wasm_trap.ll")
+            .unwrap()
+            .replace(
+                "CHECKPOINT_BYTES",
+                &std::mem::size_of::<perry_abi::WasmEhCheckpoint>().to_string(),
+            )
+            .replace(
+                "CHECKPOINT_ALIGN",
+                &std::mem::align_of::<perry_abi::WasmEhCheckpoint>().to_string(),
+            );
+        let source = out.join("perry_wasm_trap.ll");
+        std::fs::write(&source, trap).unwrap();
         cc::Build::new()
-            .file("src/ffi/perry_sjlj.c")
+            .file(source)
+            .file("src/ffi/perry_wasm_throw.c")
             .file("src/ffi/perry_wasi_net.c")
+            .flag("-mexception-handling")
             .flag("-mllvm")
-            .flag("-wasm-enable-sjlj")
+            .flag("-wasm-enable-eh")
             .flag("-mllvm")
             .flag("-wasm-use-legacy-eh=false")
-            .compile("perry_sjlj");
+            .compile("perry_wasm_eh");
     } else {
         build_trap_shim();
     }

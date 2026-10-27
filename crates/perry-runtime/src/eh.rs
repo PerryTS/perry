@@ -450,3 +450,12 @@ static _KEEP_PERSONALITY: unsafe extern "C" fn(
     *mut UnwindException,
     *mut UnwindContext,
 ) -> UnwindReasonCode = perry_eh_personality;
+
+/// Allocation-free tag-0 transport; the payload remains in rooted TLS.
+#[cfg(target_os = "wasi")]
+pub(crate) fn raise_wasm_exception() -> ! {
+    extern "C-unwind" {
+        fn perry_wasm_throw_header(object: *mut UnwindException) -> !;
+    }
+    EXC_OBJECT.with(|object| unsafe { perry_wasm_throw_header(object.get()) })
+}
