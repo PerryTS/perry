@@ -289,7 +289,7 @@ impl Model {
         let n = self.node_l("chainval");
         self.cv_nodes.insert((t, key), n);
         let pn = self.proto_node(t);
-        self.cons(pn, Cons::ChainUnion { key, dst: n });
+        self.cons(pn, Cons::ChainUnion { key, dst: n, of: t });
         n
     }
 
