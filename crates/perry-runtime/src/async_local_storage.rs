@@ -252,7 +252,7 @@ pub unsafe extern "C" fn js_async_local_storage_run(
     // observes the pre-`run` store (#788, Node restores via try/finally).
     js_async_context_als_run_enter(token, store.get_nanbox_f64());
     let cb = validate_callback(callback.get_nanbox_f64());
-    let result = call_with_forwarded_args(cb, args_array.get_raw_const_ptr::<ArrayHeader>() as i64);
+    let result = args_array.with_const_ptr(|args| call_with_forwarded_args(cb, args as i64));
     js_async_context_als_scope_leave();
 
     result
@@ -311,7 +311,7 @@ pub unsafe extern "C" fn js_async_local_storage_exit(
     js_async_context_als_exit_enter(token);
 
     let cb = validate_callback(callback.get_nanbox_f64());
-    let result = call_with_forwarded_args(cb, args_array.get_raw_const_ptr::<ArrayHeader>() as i64);
+    let result = args_array.with_const_ptr(|args| call_with_forwarded_args(cb, args as i64));
 
     js_async_context_als_scope_leave();
 
