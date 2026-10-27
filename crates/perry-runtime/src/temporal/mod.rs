@@ -213,7 +213,7 @@ pub fn is_temporal_cell_addr(addr: usize) -> bool {
     // 18 → `<TA>.slice()` mis-routed through Temporal dispatch and deref'd a
     // garbage cell). They are never `TemporalCell`s; reject them via the side
     // tables first, exactly as `crate::date::is_date_cell_addr` does.
-    if crate::typedarray::is_offheap_sidetable_alloc(addr) {
+    if crate::typedarray_hook_slots::is_offheap_sidetable_alloc(addr) {
         return false;
     }
     match unsafe { crate::value::addr_class::try_read_gc_header(addr) } {

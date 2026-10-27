@@ -556,22 +556,22 @@ pub(crate) fn run_native_steps(stream: f64) {
     };
     let scope = crate::gc::RuntimeHandleScope::new();
     let s = scope.root_nanbox_f64(stream);
-    let st = || s.get_nanbox_f64();
-    if flag(st(), NATIVE_RUNNING_KEY) {
+
+    if flag(s.get_nanbox_f64(), NATIVE_RUNNING_KEY) {
         return;
     }
-    set_flag(st(), NATIVE_RUNNING_KEY, true);
+    set_flag(s.get_nanbox_f64(), NATIVE_RUNNING_KEY, true);
     #[cfg(test)]
     let mut held_input: Option<(*const u8, usize)> = None;
     loop {
-        if stream_destroyed(st()) || flag(st(), NATIVE_PARKED_KEY) {
+        if stream_destroyed(s.get_nanbox_f64()) || flag(s.get_nanbox_f64(), NATIVE_PARKED_KEY) {
             break;
         }
-        let op = operation(number_slot(st(), NATIVE_OP_KEY));
+        let op = operation(number_slot(s.get_nanbox_f64(), NATIVE_OP_KEY));
         if op == REC_NONE {
             break;
         }
-        if flag(st(), NATIVE_DONE_KEY) {
+        if flag(s.get_nanbox_f64(), NATIVE_DONE_KEY) {
             // A consumed record whose completion was held: only the readable
             // side draining (`resume_parked`) completes it.
             break;
@@ -579,7 +579,7 @@ pub(crate) fn run_native_steps(stream: f64) {
         // The native loop is an allocating loop too. There is no borrowed
         // input or output here; the owner and its current record are traced.
         crate::gc::js_gc_loop_safepoint();
-        let Some((_, cell)) = crate::native_payload::stream_hooks_of(st()) else {
+        let Some((_, cell)) = crate::native_payload::stream_hooks_of(s.get_nanbox_f64()) else {
             break;
         };
         // SAFETY: the cell is the live stream's own (traced) payload cell.
@@ -588,9 +588,9 @@ pub(crate) fn run_native_steps(stream: f64) {
             // Released (destroy) or never attached: nothing to run.
             break;
         }
-        let consumed = number_slot(st(), NATIVE_CONSUMED_KEY) as usize;
-        let chunk =
-            get_hidden_value(st(), NATIVE_CHUNK_KEY).unwrap_or(f64::from_bits(TAG_UNDEFINED));
+        let consumed = number_slot(s.get_nanbox_f64(), NATIVE_CONSUMED_KEY) as usize;
+        let chunk = get_hidden_value(s.get_nanbox_f64(), NATIVE_CHUNK_KEY)
+            .unwrap_or(f64::from_bits(TAG_UNDEFINED));
         // Strings may need materialization, which precedes the no_gc borrow.
         let string = if op == REC_WRITE && JSValue::from_bits(chunk.to_bits()).is_any_string() {
             let mut bytes = Vec::new();
@@ -635,7 +635,7 @@ pub(crate) fn run_native_steps(stream: f64) {
                 } else {
                     StreamOp::FINAL
                 },
-                flush_kind: number_slot(st(), NATIVE_FLUSH_KIND_KEY) as i32,
+                flush_kind: number_slot(s.get_nanbox_f64(), NATIVE_FLUSH_KIND_KEY) as i32,
                 input: unsafe { base.add(start) },
                 len: total - start,
             };
@@ -646,7 +646,7 @@ pub(crate) fn run_native_steps(stream: f64) {
             (total, start, out)
         });
         super::set_internal_value(
-            st(),
+            s.get_nanbox_f64(),
             NATIVE_CONSUMED_KEY,
             (start + out.consumed.min(total - start)) as f64,
         );
@@ -666,48 +666,51 @@ pub(crate) fn run_native_steps(stream: f64) {
             crate::native_handle::native_handle_set_external_bytes(cell, out.external_bytes)
         });
         if let Some(after_step) = hooks.after_step {
-            unsafe { after_step(st()) };
-            if stream_destroyed(st()) {
+            unsafe { after_step(s.get_nanbox_f64()) };
+            if stream_destroyed(s.get_nanbox_f64()) {
                 break;
             }
         }
         let status = error_as_end(out.status);
         if status == StepStatus::ERROR {
             if let Some(buf) = &output {
-                let _ = push_chunk(st(), buf.get_nanbox_f64());
+                let _ = push_chunk(s.get_nanbox_f64(), buf.get_nanbox_f64());
             }
-            fail_record(st(), hooks, out.code);
+            fail_record(s.get_nanbox_f64(), hooks, out.code);
             break;
         }
         if let Some(buf) = &output {
-            let _ = push_chunk(st(), buf.get_nanbox_f64());
+            let _ = push_chunk(s.get_nanbox_f64(), buf.get_nanbox_f64());
             // `data` listeners ran: a write, an end or a destroy may have
             // happened. Re-read everything from the stream.
-            if stream_destroyed(st()) {
+            if stream_destroyed(s.get_nanbox_f64()) {
                 break;
             }
         }
         if status == StepStatus::MORE {
-            if readable_full(st()) && !exhaust_before_park() {
-                set_flag(st(), NATIVE_PARKED_KEY, true);
+            if readable_full(s.get_nanbox_f64()) && !exhaust_before_park() {
+                set_flag(s.get_nanbox_f64(), NATIVE_PARKED_KEY, true);
                 break;
             }
             continue;
         }
         if status == StepStatus::ENDED {
-            finish_final(st());
+            finish_final(s.get_nanbox_f64());
             continue;
         }
         // NeedInput: the record is done. Hold its completion while the
         // readable side is full (node's kCallback); complete it otherwise.
-        if op != REC_FINAL && readable_full(st()) && !stream_hidden_ended(st()) {
-            set_flag(st(), NATIVE_DONE_KEY, true);
-            set_flag(st(), NATIVE_PARKED_KEY, true);
+        if op != REC_FINAL
+            && readable_full(s.get_nanbox_f64())
+            && !stream_hidden_ended(s.get_nanbox_f64())
+        {
+            set_flag(s.get_nanbox_f64(), NATIVE_DONE_KEY, true);
+            set_flag(s.get_nanbox_f64(), NATIVE_PARKED_KEY, true);
             break;
         }
         if op == REC_FINAL {
             // A Final step that needs no more input is complete.
-            finish_final(st());
+            finish_final(s.get_nanbox_f64());
             continue;
         }
         #[cfg(test)]
@@ -715,21 +718,21 @@ pub(crate) fn run_native_steps(stream: f64) {
             // The sabotage holds one record's slice, not the next record's.
             held_input = None;
         }
-        complete_record(st());
+        complete_record(s.get_nanbox_f64());
         // onwrite may have installed the empty final/flush record while this
         // runner was active. A deferred family must hand that completion back
         // to the scheduler: writable finish may already be queued ahead of it.
         // Inline families keep their synchronous replacement-record behavior.
         if hooks.timing == StepTiming::DEFERRED
-            && number_slot(st(), NATIVE_OP_KEY) != REC_NONE
-            && !stream_destroyed(st())
-            && !flag(st(), NATIVE_PARKED_KEY)
+            && number_slot(s.get_nanbox_f64(), NATIVE_OP_KEY) != REC_NONE
+            && !stream_destroyed(s.get_nanbox_f64())
+            && !flag(s.get_nanbox_f64(), NATIVE_PARKED_KEY)
         {
-            schedule(st());
+            schedule(s.get_nanbox_f64());
             break;
         }
     }
-    set_flag(st(), NATIVE_RUNNING_KEY, false);
+    set_flag(s.get_nanbox_f64(), NATIVE_RUNNING_KEY, false);
 }
 
 #[inline]

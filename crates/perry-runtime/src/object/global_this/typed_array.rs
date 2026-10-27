@@ -236,8 +236,9 @@ pub(crate) extern "C" fn array_buffer_detached_getter_thunk(
 pub(crate) unsafe fn validate_array_buffer_species_constructor(addr: usize) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(addr as i64));
-    let receiver_value = || receiver.get_nanbox_f64();
-    let receiver_addr = || crate::value::js_nanbox_get_pointer(receiver_value()) as usize;
+    let receiver_value = &receiver;
+    let receiver_addr =
+        || crate::value::js_nanbox_get_pointer((receiver_value.get_nanbox_f64())) as usize;
 
     // SpeciesConstructor starts with ordinary Get(O, "constructor"). Buffer
     // own data/accessor properties live in side tables; absent own state falls
@@ -250,7 +251,11 @@ pub(crate) unsafe fn validate_array_buffer_species_constructor(addr: usize) {
             f64::from_bits(crate::value::TAG_UNDEFINED)
         } else {
             f64::from_bits(
-                super::super::invoke_accessor_getter(accessor.get, receiver_value()).bits(),
+                super::super::invoke_accessor_getter(
+                    accessor.get,
+                    (receiver_value.get_nanbox_f64()),
+                )
+                .bits(),
             )
         }
     } else if let Some(value) = crate::buffer::buffer_get_own_prop(receiver_addr(), "constructor") {
@@ -330,14 +335,16 @@ pub(crate) extern "C" fn array_buffer_is_view_thunk(
 
 #[derive(Clone, Copy)]
 enum TypedArrayAccessorReceiver {
-    Registered(*const crate::typedarray::TypedArrayHeader, u8),
+    Registered(*const crate::typedarray_hook_slots::TypedArrayHeader, u8),
     Uint8Buffer(usize),
 }
 
 impl TypedArrayAccessorReceiver {
     fn length(self) -> u32 {
         match self {
-            Self::Registered(ta, _) => crate::typedarray::js_typed_array_length(ta).max(0) as u32,
+            Self::Registered(ta, _) => {
+                crate::typedarray_hook_slots::js_typed_array_length(ta).max(0) as u32
+            }
             Self::Uint8Buffer(addr) => {
                 crate::buffer::js_buffer_length(addr as *const crate::buffer::BufferHeader).max(0)
                     as u32
@@ -348,7 +355,7 @@ impl TypedArrayAccessorReceiver {
     fn byte_length(self) -> usize {
         match self {
             Self::Registered(_, kind) => {
-                self.length() as usize * crate::typedarray::elem_size_for_kind(kind)
+                self.length() as usize * crate::typedarray_hook_slots::elem_size_for_kind(kind)
             }
             Self::Uint8Buffer(_) => self.length() as usize,
         }
@@ -391,7 +398,7 @@ fn typed_array_receiver(this: crate::closure::JsThis) -> Option<TypedArrayAccess
     } else {
         return None;
     };
-    if let Some(kind) = crate::typedarray::lookup_typed_array_kind(raw) {
+    if let Some(kind) = crate::typedarray_hook_slots::lookup_typed_array_kind(raw) {
         return Some(TypedArrayAccessorReceiver::Registered(
             raw as *const _,
             kind,
@@ -433,7 +440,7 @@ pub(crate) fn typed_array_constructor_this_kind(this: crate::closure::JsThis) ->
     }
     let name_value = crate::closure::closure_get_dynamic_prop(ptr, "name");
     let name = string_value_to_owned(f64::from_bits(name_value.to_bits()))?;
-    crate::typedarray::kind_for_name(&name)
+    crate::typedarray_hook_slots::kind_for_name(&name)
 }
 
 fn typed_array_buffer_value(receiver: TypedArrayAccessorReceiver) -> f64 {

@@ -328,6 +328,43 @@ pub(crate) fn auto_optimized_cross_features(
     {
         cross_features.push("perry-runtime/event-target".to_string());
     }
+    if ctx.uses_typedarray
+        || ctx.uses_get_builtin_module
+        || ctx.uses_thread_codec
+        || ctx.uses_fetch
+        || ctx.uses_global_webfetch
+        || ctx.uses_global_webcrypto
+        || ctx.uses_global_websocket
+        || needs_dyn_eval
+        || !ctx.native_addons.is_empty()
+        || ctx.native_module_imports.iter().any(|m| {
+            matches!(
+                m.as_str(),
+                "buffer"
+                    | "fs"
+                    | "fs/promises"
+                    | "crypto"
+                    | "v8"
+                    | "http"
+                    | "http2"
+                    | "https"
+                    | "net"
+                    | "tls"
+                    | "dgram"
+                    | "worker_threads"
+                    | "child_process"
+                    | "process"
+                    | "os"
+                    | "bun"
+                    | "bun:jsc"
+                    | "bun:ffi"
+                    | "sqlite"
+                    | "perry/thread"
+            )
+        })
+    {
+        cross_features.push("perry-runtime/typedarray".to_string());
+    }
     // Clone-producing APIs and worker completions share the thread codec.
     if ctx.uses_thread_codec
         || ctx.uses_worker_threads

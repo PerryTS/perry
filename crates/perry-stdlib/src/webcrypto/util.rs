@@ -519,7 +519,7 @@ pub(super) unsafe fn bytes_from_jsvalue(bits: u64) -> Vec<u8> {
         return Vec::new();
     }
     if is_registered_buffer(raw)
-        || perry_runtime::typedarray::lookup_typed_array_kind(raw).is_some()
+        || perry_runtime::typedarray_hook_slots::lookup_typed_array_kind(raw).is_some()
     {
         return buffer_payload_copy(raw);
     }

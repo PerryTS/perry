@@ -324,7 +324,7 @@ unsafe fn argon2_value_bytes(bits: u64) -> Option<Vec<u8>> {
     if addr < 0x1000 {
         return None;
     }
-    if perry_runtime::typedarray::lookup_typed_array_kind(addr).is_some() {
+    if perry_runtime::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some() {
         return perry_runtime::buffer::bytes::no_gc(|scope| {
             let value = f64::from_bits(JSValue::pointer(addr as *const u8).bits());
             perry_runtime::buffer::bytes::bytes(value, scope)

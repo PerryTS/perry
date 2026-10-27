@@ -50,42 +50,55 @@ pub(crate) fn init_readable_in_place(
     let scope = crate::gc::RuntimeHandleScope::new();
     let this = scope.root_nanbox_f64(this);
     let opts = scope.root_nanbox_f64(opts);
-    let t = || this.get_nanbox_f64();
-    let o = || opts.get_nanbox_f64();
+    let t = &this;
+    let o = &opts;
     let birth = provided.or_else(|| {
         if how == StreamInit::Subclass {
-            super::birth_memo::begin_existing(t(), o(), super::birth::Kind::Readable)
+            super::birth_memo::begin_existing(
+                (t.get_nanbox_f64()),
+                (o.get_nanbox_f64()),
+                super::birth::Kind::Readable,
+            )
         } else {
             None
         }
     });
-    if get_hidden_value(t(), crate::runtime_state_key!(b"_events")).is_none() {
+    if get_hidden_value((t.get_nanbox_f64()), crate::runtime_state_key!(b"_events")).is_none() {
         let events = scope.root_nanbox_f64(new_events_object());
         stream_birth_field!(
-            t(),
+            (t.get_nanbox_f64()),
             crate::runtime_state_key!(b"_events"),
             events.get_nanbox_f64()
         );
     }
-    install_stream_state_layout(t());
+    install_stream_state_layout((t.get_nanbox_f64()));
     init_lifecycle_state(&this, &opts);
     init_readable_state(&this, &opts, false);
     if let Some(read) = read_callback_from_options(&opts) {
         let read = scope.root_nanbox_f64(read);
         stream_birth_field!(
-            t(),
+            (t.get_nanbox_f64()),
             crate::runtime_state_key!(b"_read"),
             read.get_nanbox_f64()
         );
-        set_hidden_value(t(), hidden_read_key(), read.get_nanbox_f64());
+        set_hidden_value(
+            (t.get_nanbox_f64()),
+            hidden_read_key(),
+            read.get_nanbox_f64(),
+        );
     } else if how == StreamInit::Subclass {
-        if let Some(read) = subclass_hook(t(), crate::runtime_state_key!(b"_read")) {
+        if let Some(read) = subclass_hook((t.get_nanbox_f64()), crate::runtime_state_key!(b"_read"))
+        {
             let read = scope.root_nanbox_f64(read);
-            set_hidden_value(t(), hidden_read_key(), read.get_nanbox_f64());
+            set_hidden_value(
+                (t.get_nanbox_f64()),
+                hidden_read_key(),
+                read.get_nanbox_f64(),
+            );
         }
     } else if how == StreamInit::Direct {
         set_hidden_value(
-            t(),
+            (t.get_nanbox_f64()),
             hidden_default_read_error_key(),
             f64::from_bits(TAG_TRUE),
         );
@@ -93,7 +106,11 @@ pub(crate) fn init_readable_in_place(
     install_common_lifecycle_callbacks(&this, &opts);
     invoke_construct_callback(&this, &opts, birth);
     if provided.is_none() && how == StreamInit::Subclass {
-        super::birth_memo::finish_existing(t(), birth, super::birth::Kind::Readable);
+        super::birth_memo::finish_existing(
+            (t.get_nanbox_f64()),
+            birth,
+            super::birth::Kind::Readable,
+        );
     }
 }
 
@@ -273,59 +290,87 @@ pub(crate) fn init_writable_in_place(
     let scope = crate::gc::RuntimeHandleScope::new();
     let this = scope.root_nanbox_f64(this);
     let opts = scope.root_nanbox_f64(opts);
-    let t = || this.get_nanbox_f64();
-    let o = || opts.get_nanbox_f64();
+    let t = &this;
+    let o = &opts;
     let birth = provided.or_else(|| {
         if how == StreamInit::Subclass {
-            super::birth_memo::begin_existing(t(), o(), super::birth::Kind::Writable)
+            super::birth_memo::begin_existing(
+                (t.get_nanbox_f64()),
+                (o.get_nanbox_f64()),
+                super::birth::Kind::Writable,
+            )
         } else {
             None
         }
     });
-    if get_hidden_value(t(), crate::runtime_state_key!(b"_events")).is_none() {
+    if get_hidden_value((t.get_nanbox_f64()), crate::runtime_state_key!(b"_events")).is_none() {
         let events = scope.root_nanbox_f64(new_events_object());
         stream_birth_field!(
-            t(),
+            (t.get_nanbox_f64()),
             crate::runtime_state_key!(b"_events"),
             events.get_nanbox_f64()
         );
     }
-    install_stream_state_layout(t());
+    install_stream_state_layout((t.get_nanbox_f64()));
     init_lifecycle_state(&this, &opts);
     init_writable_state(&this, &opts, false);
     if let Some(write) = write_callback_from_options(&opts) {
         let write = scope.root_nanbox_f64(write);
         stream_birth_field!(
-            t(),
+            (t.get_nanbox_f64()),
             crate::runtime_state_key!(b"_write"),
             write.get_nanbox_f64()
         );
-        set_hidden_value(t(), hidden_write_key(), write.get_nanbox_f64());
+        set_hidden_value(
+            (t.get_nanbox_f64()),
+            hidden_write_key(),
+            write.get_nanbox_f64(),
+        );
     } else if how == StreamInit::Subclass {
-        if let Some(write) = subclass_hook(t(), crate::runtime_state_key!(b"_write")) {
+        if let Some(write) =
+            subclass_hook((t.get_nanbox_f64()), crate::runtime_state_key!(b"_write"))
+        {
             let write = scope.root_nanbox_f64(write);
-            set_hidden_value(t(), hidden_write_key(), write.get_nanbox_f64());
+            set_hidden_value(
+                (t.get_nanbox_f64()),
+                hidden_write_key(),
+                write.get_nanbox_f64(),
+            );
         }
     }
     if let Some(writev) = writev_callback_from_options(&opts) {
         let writev = scope.root_nanbox_f64(writev);
         stream_birth_field!(
-            t(),
+            (t.get_nanbox_f64()),
             crate::runtime_state_key!(b"_writev"),
             writev.get_nanbox_f64()
         );
-        set_hidden_value(t(), hidden_writev_key(), writev.get_nanbox_f64());
+        set_hidden_value(
+            (t.get_nanbox_f64()),
+            hidden_writev_key(),
+            writev.get_nanbox_f64(),
+        );
     } else if how == StreamInit::Subclass {
-        if let Some(writev) = subclass_hook(t(), crate::runtime_state_key!(b"_writev")) {
+        if let Some(writev) =
+            subclass_hook((t.get_nanbox_f64()), crate::runtime_state_key!(b"_writev"))
+        {
             let writev = scope.root_nanbox_f64(writev);
-            set_hidden_value(t(), hidden_writev_key(), writev.get_nanbox_f64());
+            set_hidden_value(
+                (t.get_nanbox_f64()),
+                hidden_writev_key(),
+                writev.get_nanbox_f64(),
+            );
         }
     }
     install_common_lifecycle_callbacks(&this, &opts);
     install_writable_lifecycle_callbacks(&this, &opts);
     invoke_construct_callback(&this, &opts, birth);
     if provided.is_none() && how == StreamInit::Subclass {
-        super::birth_memo::finish_existing(t(), birth, super::birth::Kind::Writable);
+        super::birth_memo::finish_existing(
+            (t.get_nanbox_f64()),
+            birth,
+            super::birth::Kind::Writable,
+        );
     }
 }
 
@@ -365,24 +410,28 @@ pub(crate) fn init_duplex_in_place(
     let scope = crate::gc::RuntimeHandleScope::new();
     let this = scope.root_nanbox_f64(this);
     let opts = scope.root_nanbox_f64(opts);
-    let t = || this.get_nanbox_f64();
-    let o = || opts.get_nanbox_f64();
+    let t = &this;
+    let o = &opts;
     let birth = provided.or_else(|| {
         if how == StreamInit::Subclass {
-            super::birth_memo::begin_existing(t(), o(), super::birth::Kind::Duplex)
+            super::birth_memo::begin_existing(
+                (t.get_nanbox_f64()),
+                (o.get_nanbox_f64()),
+                super::birth::Kind::Duplex,
+            )
         } else {
             None
         }
     });
-    if get_hidden_value(t(), crate::runtime_state_key!(b"_events")).is_none() {
+    if get_hidden_value((t.get_nanbox_f64()), crate::runtime_state_key!(b"_events")).is_none() {
         let events = scope.root_nanbox_f64(new_events_object());
         stream_birth_field!(
-            t(),
+            (t.get_nanbox_f64()),
             crate::runtime_state_key!(b"_events"),
             events.get_nanbox_f64()
         );
     }
-    install_stream_state_layout(t());
+    install_stream_state_layout((t.get_nanbox_f64()));
     init_lifecycle_state(&this, &opts);
     init_readable_state(&this, &opts, true);
     // `_readableState` assignment can invoke an inherited setter and expose
@@ -390,70 +439,105 @@ pub(crate) fn init_duplex_in_place(
     // descriptors the setter installed, even for a direct Duplex.
     init_writable_state(&this, &opts, true);
     init_duplex_state(&this, &opts);
-    let custom_sink = || set_hidden_value(t(), Slot::WritableCustomSink, f64::from_bits(TAG_TRUE));
+    let custom_sink = || {
+        set_hidden_value(
+            (t.get_nanbox_f64()),
+            Slot::WritableCustomSink,
+            f64::from_bits(TAG_TRUE),
+        )
+    };
     if let Some(read) = read_callback_from_options(&opts) {
         let read = scope.root_nanbox_f64(read);
         stream_birth_field!(
-            t(),
+            (t.get_nanbox_f64()),
             crate::runtime_state_key!(b"_read"),
             read.get_nanbox_f64()
         );
-        set_hidden_value(t(), hidden_read_key(), read.get_nanbox_f64());
+        set_hidden_value(
+            (t.get_nanbox_f64()),
+            hidden_read_key(),
+            read.get_nanbox_f64(),
+        );
     } else if how == StreamInit::Subclass {
-        if let Some(read) = subclass_hook(t(), crate::runtime_state_key!(b"_read")) {
+        if let Some(read) = subclass_hook((t.get_nanbox_f64()), crate::runtime_state_key!(b"_read"))
+        {
             let read = scope.root_nanbox_f64(read);
-            set_hidden_value(t(), hidden_read_key(), read.get_nanbox_f64());
+            set_hidden_value(
+                (t.get_nanbox_f64()),
+                hidden_read_key(),
+                read.get_nanbox_f64(),
+            );
         }
     }
     if let Some(write) = write_callback_from_options(&opts) {
         let write = scope.root_nanbox_f64(write);
         stream_birth_field!(
-            t(),
+            (t.get_nanbox_f64()),
             crate::runtime_state_key!(b"_write"),
             write.get_nanbox_f64()
         );
-        set_hidden_value(t(), hidden_write_key(), write.get_nanbox_f64());
+        set_hidden_value(
+            (t.get_nanbox_f64()),
+            hidden_write_key(),
+            write.get_nanbox_f64(),
+        );
         custom_sink();
     } else if how == StreamInit::Subclass {
-        if let Some(write) = subclass_hook(t(), crate::runtime_state_key!(b"_write")) {
+        if let Some(write) =
+            subclass_hook((t.get_nanbox_f64()), crate::runtime_state_key!(b"_write"))
+        {
             let write = scope.root_nanbox_f64(write);
-            set_hidden_value(t(), hidden_write_key(), write.get_nanbox_f64());
+            set_hidden_value(
+                (t.get_nanbox_f64()),
+                hidden_write_key(),
+                write.get_nanbox_f64(),
+            );
             custom_sink();
         }
     }
     if let Some(writev) = writev_callback_from_options(&opts) {
         let writev = scope.root_nanbox_f64(writev);
         stream_birth_field!(
-            t(),
+            (t.get_nanbox_f64()),
             crate::runtime_state_key!(b"_writev"),
             writev.get_nanbox_f64()
         );
-        set_hidden_value(t(), hidden_writev_key(), writev.get_nanbox_f64());
+        set_hidden_value(
+            (t.get_nanbox_f64()),
+            hidden_writev_key(),
+            writev.get_nanbox_f64(),
+        );
         custom_sink();
     } else if how == StreamInit::Subclass {
-        if let Some(writev) = subclass_hook(t(), crate::runtime_state_key!(b"_writev")) {
+        if let Some(writev) =
+            subclass_hook((t.get_nanbox_f64()), crate::runtime_state_key!(b"_writev"))
+        {
             let writev = scope.root_nanbox_f64(writev);
-            set_hidden_value(t(), hidden_writev_key(), writev.get_nanbox_f64());
+            set_hidden_value(
+                (t.get_nanbox_f64()),
+                hidden_writev_key(),
+                writev.get_nanbox_f64(),
+            );
             custom_sink();
         }
     }
     #[cfg(test)]
     if crate::node_stream::native_hooks::stream_sabotage("own_methods") {
         // The pre-G1 shape: every method an own property of the instance.
-        if let Some(obj) = object_ptr_from_value(t()) {
+        if let Some(obj) = object_ptr_from_value((t.get_nanbox_f64())) {
             let methods: Vec<(&'static str, StubFn)> = readable_methods()
                 .iter()
                 .chain(writable_methods().iter())
                 .copied()
                 .collect();
-            install_methods_on_existing_object(obj, t(), &methods, &["_write"]);
+            install_methods_on_existing_object(obj, (t.get_nanbox_f64()), &methods, &["_write"]);
         }
     }
     install_common_lifecycle_callbacks(&this, &opts);
     install_writable_lifecycle_callbacks(&this, &opts);
     invoke_construct_callback(&this, &opts, birth);
     if provided.is_none() && how == StreamInit::Subclass {
-        super::birth_memo::finish_existing(t(), birth, super::birth::Kind::Duplex);
+        super::birth_memo::finish_existing((t.get_nanbox_f64()), birth, super::birth::Kind::Duplex);
     }
 }
 
@@ -578,15 +662,18 @@ fn init_transform_kind(
             None
         }
     });
-    let t = || this.get_nanbox_f64();
-    let o = || opts.get_nanbox_f64();
-    init_duplex_in_place(t(), o(), how, birth);
-    if crate::node_stream::native_hooks::hooks_of(t()).is_some() {
-        crate::node_stream::native_hooks::init_runner_slots(t());
+    let t = &this;
+    let o = &opts;
+    init_duplex_in_place((t.get_nanbox_f64()), (o.get_nanbox_f64()), how, birth);
+    if crate::node_stream::native_hooks::hooks_of((t.get_nanbox_f64())).is_some() {
+        crate::node_stream::native_hooks::init_runner_slots((t.get_nanbox_f64()));
     }
     let subclass_transform = match how {
         StreamInit::Subclass => {
-            match subclass_hook(t(), crate::runtime_state_key!(b"_transform")) {
+            match subclass_hook(
+                (t.get_nanbox_f64()),
+                crate::runtime_state_key!(b"_transform"),
+            ) {
                 Some(v) => Some(scope.root_nanbox_f64(v)),
                 None => None,
             }
@@ -594,27 +681,29 @@ fn init_transform_kind(
         StreamInit::Direct => None,
     };
     let subclass_flush = match how {
-        StreamInit::Subclass => match subclass_hook(t(), crate::runtime_state_key!(b"_flush")) {
-            Some(v) => Some(scope.root_nanbox_f64(v)),
-            None => None,
-        },
+        StreamInit::Subclass => {
+            match subclass_hook((t.get_nanbox_f64()), crate::runtime_state_key!(b"_flush")) {
+                Some(v) => Some(scope.root_nanbox_f64(v)),
+                None => None,
+            }
+        }
         StreamInit::Direct => None,
     };
     if let Some(callback) = transform_callback_from_options(&opts) {
         let callback = scope.root_nanbox_f64(callback);
         stream_birth_field!(
-            t(),
+            (t.get_nanbox_f64()),
             crate::runtime_state_key!(b"_transform"),
             callback.get_nanbox_f64()
         );
         set_hidden_value(
-            t(),
+            (t.get_nanbox_f64()),
             hidden_transform_callback_key(),
             callback.get_nanbox_f64(),
         );
     } else if let Some(callback) = &subclass_transform {
         set_hidden_value(
-            t(),
+            (t.get_nanbox_f64()),
             hidden_transform_callback_key(),
             callback.get_nanbox_f64(),
         );
@@ -622,15 +711,23 @@ fn init_transform_kind(
     if let Some(flush) = transform_flush_from_options(&opts) {
         let flush = scope.root_nanbox_f64(flush);
         stream_birth_field!(
-            t(),
+            (t.get_nanbox_f64()),
             crate::runtime_state_key!(b"_flush"),
             flush.get_nanbox_f64()
         );
-        set_hidden_value(t(), hidden_transform_flush_key(), flush.get_nanbox_f64());
+        set_hidden_value(
+            (t.get_nanbox_f64()),
+            hidden_transform_flush_key(),
+            flush.get_nanbox_f64(),
+        );
     } else if let Some(flush) = &subclass_flush {
-        set_hidden_value(t(), hidden_transform_flush_key(), flush.get_nanbox_f64());
+        set_hidden_value(
+            (t.get_nanbox_f64()),
+            hidden_transform_flush_key(),
+            flush.get_nanbox_f64(),
+        );
     }
-    if crate::node_stream::native_hooks::hooks_of(t())
+    if crate::node_stream::native_hooks::hooks_of((t.get_nanbox_f64()))
         .is_some_and(|h| h.timing == crate::node_stream::native_hooks::StepTiming::DEFERRED)
     {
         // A binding's inherited final/flush bodies participate in the same
@@ -646,28 +743,28 @@ fn init_transform_kind(
                 hidden_writable_final_key(),
             ),
         ] {
-            if get_hidden_value(t(), slot).is_none() {
+            if get_hidden_value((t.get_nanbox_f64()), slot).is_none() {
                 let hook = scope.root_nanbox_f64(unsafe {
-                    name.read_object(object_ptr_from_value(t()).unwrap())
+                    name.read_object(object_ptr_from_value((t.get_nanbox_f64())).unwrap())
                 });
                 // `Transform.prototype._final` is node's, not the binding's.
                 if crate::node_stream::user_hook_value(hook.get_nanbox_f64()).is_some() {
-                    set_hidden_value(t(), slot, hook.get_nanbox_f64());
+                    set_hidden_value((t.get_nanbox_f64()), slot, hook.get_nanbox_f64());
                 }
             }
         }
     }
-    mark_transform_stream(t());
-    if passthrough && transform_hidden_callback(t()).is_none() {
+    mark_transform_stream((t.get_nanbox_f64()));
+    if passthrough && transform_hidden_callback((t.get_nanbox_f64())).is_none() {
         set_hidden_value(
-            t(),
+            (t.get_nanbox_f64()),
             hidden_transform_passthrough_key(),
             f64::from_bits(TAG_TRUE),
         );
     }
     let prefinish = js_closure_alloc(crate::fn_info!(transform_prefinish, 0), 0);
     add_stream_listener_for_event(
-        t(),
+        (t.get_nanbox_f64()),
         literal_string_value(b"prefinish"),
         box_pointer(prefinish.cast()),
     );

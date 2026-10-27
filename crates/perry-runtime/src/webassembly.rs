@@ -115,8 +115,8 @@ fn define_host_property(
 /// a recognised byte buffer.
 fn extract_bytes(jsval: f64) -> Option<Vec<u8>> {
     let addr = unbox_pointer(jsval) as usize;
-    if let Some(kind) = crate::typedarray::lookup_typed_array_kind(addr) {
-        if crate::typedarray::elem_size_for_kind(kind) != 1 {
+    if let Some(kind) = crate::typedarray_hook_slots::lookup_typed_array_kind(addr) {
+        if crate::typedarray_hook_slots::elem_size_for_kind(kind) != 1 {
             return None;
         }
     } else if !crate::buffer::is_registered_buffer(addr) {

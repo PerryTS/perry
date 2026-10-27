@@ -263,9 +263,9 @@ fn typed_array_iter_arr(arr: *const ArrayHeader) -> *const ArrayHeader {
         return arr;
     }
     let addr = arr as usize;
-    if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
-        return crate::typedarray::typed_array_to_array(
-            arr as *const crate::typedarray::TypedArrayHeader,
+    if crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some() {
+        return crate::typedarray_hook_slots::typed_array_to_array(
+            arr as *const crate::typedarray_hook_slots::TypedArrayHeader,
         ) as *const ArrayHeader;
     }
     if crate::buffer::is_registered_buffer(addr)

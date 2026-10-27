@@ -296,7 +296,7 @@ pub extern "C" fn js_object_freeze(obj_value: f64) -> f64 {
             // below would read a garbage `keys_array` off the TA header and
             // can fault depending on heap layout. The GC flags above are the
             // entire integrity state for them.
-            if crate::typedarray::lookup_typed_array_kind(obj as usize).is_some()
+            if crate::typedarray_hook_slots::lookup_typed_array_kind(obj as usize).is_some()
                 || crate::typedarray_props::typed_array_addr_from_value(obj_value).is_some()
             {
                 return obj_value;
@@ -423,7 +423,7 @@ pub extern "C" fn js_object_seal(obj_value: f64) -> f64 {
                 crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND,
             );
             // TypedArray receivers: GC flags only — see `js_object_freeze`.
-            if crate::typedarray::lookup_typed_array_kind(obj as usize).is_some()
+            if crate::typedarray_hook_slots::lookup_typed_array_kind(obj as usize).is_some()
                 || crate::typedarray_props::typed_array_addr_from_value(obj_value).is_some()
             {
                 return obj_value;

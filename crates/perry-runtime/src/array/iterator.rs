@@ -920,12 +920,12 @@ pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
     // stays out of `scripts/raw_handle_debt.py`'s ledger.
     let scope = crate::gc::RuntimeHandleScope::new();
     let value_h = scope.root_nanbox_f64(value);
-    let value = || value_h.get_nanbox_f64();
+    let value = &value_h;
     let raw_ptr = || js_nanbox_get_pointer(value_h.get_nanbox_f64()) as usize;
 
-    let jsv = JSValue::from_bits(value().to_bits());
+    let jsv = JSValue::from_bits((value.get_nanbox_f64()).to_bits());
     if jsv.is_null() || jsv.is_undefined() {
-        throw_not_iterable(value());
+        throw_not_iterable((value.get_nanbox_f64()));
     }
     if jsv.is_any_string() {
         // #9846: `[..."ab"]` is `GetIterator(str)` + drain per spec, and
@@ -934,9 +934,9 @@ pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
         // prototype object escapes to user code, after which the cut would
         // silently ignore a patched `next`. Decline then, and run the protocol.
         if crate::object::iterator_prototypes::string_iteration_not_pristine() {
-            return js_iterator_to_array(crate::symbol::js_get_iterator(value()));
+            return js_iterator_to_array(crate::symbol::js_get_iterator((value.get_nanbox_f64())));
         }
-        let str_ptr = crate::value::js_get_string_pointer_unified(value());
+        let str_ptr = crate::value::js_get_string_pointer_unified((value.get_nanbox_f64()));
         let str_bits = crate::value::STRING_TAG | (str_ptr as u64 & POINTER_MASK);
         return crate::string::js_string_to_char_array(str_bits as i64) as *mut ArrayHeader;
     }
@@ -945,16 +945,16 @@ pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
     // INT32-tagged ClassRef. Drive its (possibly inherited) `[Symbol.iterator]`;
     // with none it is not iterable, like node. Must run before the raw-pointer
     // reads below, which would misread the class id as a heap address.
-    if crate::object::class_ref_id(value()).is_some() {
-        if crate::symbol::class_ref_resolves_iterator(value()) {
-            let iter = crate::symbol::js_get_iterator(value());
+    if crate::object::class_ref_id((value.get_nanbox_f64())).is_some() {
+        if crate::symbol::class_ref_resolves_iterator((value.get_nanbox_f64())) {
+            let iter = crate::symbol::js_get_iterator((value.get_nanbox_f64()));
             return js_iterator_to_array(iter);
         }
-        throw_not_iterable(value());
+        throw_not_iterable((value.get_nanbox_f64()));
     }
 
     if raw_ptr() == 0 {
-        throw_not_iterable(value());
+        throw_not_iterable((value.get_nanbox_f64()));
     }
 
     // An Array Proxy is a small registry id, not an `ArrayHeader`. Route it
@@ -962,8 +962,8 @@ pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
     // `array_values_iter` stores the proxy value as a dedicated live backing,
     // so the default Array iterator performs `Get(length)` / `Get(index)`
     // through traps instead of dereferencing the id or unwrapping the target.
-    if crate::proxy_hooks::proxy_is_proxy(value()) != 0 {
-        return js_iterator_to_array(crate::symbol::js_get_iterator(value()));
+    if crate::proxy_hooks::proxy_is_proxy((value.get_nanbox_f64())) != 0 {
+        return js_iterator_to_array(crate::symbol::js_get_iterator((value.get_nanbox_f64())));
     }
 
     // #7533: the overwhelmingly common spread — an ordinary dense array — is a
@@ -979,8 +979,8 @@ pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
     // only because it never dereferences an unvalidated address itself —
     // `try_read_gc_header` rejects the handle band and the header-less
     // small-buffer slab without touching memory.
-    if crate::array::dense_spread_source(value()).is_some() {
-        return crate::array::dense_spread_copy(value());
+    if crate::array::dense_spread_source((value.get_nanbox_f64())).is_some() {
+        return crate::array::dense_spread_copy((value.get_nanbox_f64()));
     }
 
     // #7542: `Array.prototype[Symbol.iterator] = fn` must drive the spread, as
@@ -1008,14 +1008,15 @@ pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
     // not preempt the walk below for that case: `js_get_iterator`'s patched
     // branch reads the PROTOTYPE only, and would throw "not iterable" for an
     // array carrying its own method once the prototype slot has been deleted.
-    if crate::array::js_array_is_array(value()).to_bits() == crate::value::TAG_TRUE
+    if crate::array::js_array_is_array((value.get_nanbox_f64())).to_bits() == crate::value::TAG_TRUE
         && crate::array::array_iteration_facts() != 0
     {
-        let array =
-            crate::array::clean_arr_ptr(js_nanbox_get_pointer(value()) as *const ArrayHeader);
+        let array = crate::array::clean_arr_ptr(
+            js_nanbox_get_pointer((value.get_nanbox_f64())) as *const ArrayHeader
+        );
         if !array.is_null() && !unsafe { super::iterator_step::array_iteration_is_intrinsic(array) }
         {
-            return js_iterator_to_array(crate::symbol::js_get_iterator(value()));
+            return js_iterator_to_array(crate::symbol::js_get_iterator((value.get_nanbox_f64())));
         }
     }
 
@@ -1032,13 +1033,13 @@ pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
     // has, so decline on the escape signal and run the real protocol.
     if crate::set::is_registered_set(raw_ptr()) {
         if crate::object::iterator_prototypes::set_iteration_not_pristine() {
-            return js_iterator_to_array(crate::symbol::js_get_iterator(value()));
+            return js_iterator_to_array(crate::symbol::js_get_iterator((value.get_nanbox_f64())));
         }
         return crate::set::js_set_to_array(raw_ptr() as *const crate::set::SetHeader);
     }
     if crate::map::is_registered_map(raw_ptr()) {
         if crate::object::iterator_prototypes::map_iteration_not_pristine() {
-            return js_iterator_to_array(crate::symbol::js_get_iterator(value()));
+            return js_iterator_to_array(crate::symbol::js_get_iterator((value.get_nanbox_f64())));
         }
         return crate::map::js_map_entries(raw_ptr() as *const crate::map::MapHeader);
     }
@@ -1049,7 +1050,9 @@ pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
     // Map/Set value, so a subclass instance (a plain object with a backing
     // field) falls through to here. Skipped when the subclass overrides
     // `[Symbol.iterator]` so the override drives the spread.
-    match crate::object::map_set_subclass::subclass_backing_for_default_iteration(value()) {
+    match crate::object::map_set_subclass::subclass_backing_for_default_iteration(
+        (value.get_nanbox_f64()),
+    ) {
         Some(crate::object::map_set_subclass::CollectionBacking::Map(m)) => {
             return crate::map::js_map_entries(m as *const crate::map::MapHeader);
         }
@@ -1065,15 +1068,15 @@ pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
     // Matches the Map/Set-subclass branch above. Skipped when the subclass
     // declared its own `[Symbol.iterator]`, so the override drives the spread
     // via the generic symbol lookup below.
-    if crate::array::is_array_subclass_instance(value())
-        && !crate::array::array_subclass_has_iterator_override(value())
+    if crate::array::is_array_subclass_instance((value.get_nanbox_f64()))
+        && !crate::array::array_subclass_has_iterator_override((value.get_nanbox_f64()))
     {
-        let snap = crate::array::array_subclass_dense_snapshot(value());
+        let snap = crate::array::array_subclass_dense_snapshot((value.get_nanbox_f64()));
         return crate::value::js_nanbox_get_pointer(snap) as *mut ArrayHeader;
     }
-    if crate::typedarray::lookup_typed_array_kind(raw_ptr()).is_some() {
-        return crate::typedarray::typed_array_to_array(
-            raw_ptr() as *const crate::typedarray::TypedArrayHeader
+    if crate::typedarray_hook_slots::lookup_typed_array_kind(raw_ptr()).is_some() {
+        return crate::typedarray_hook_slots::typed_array_to_array(
+            raw_ptr() as *const crate::typedarray_hook_slots::TypedArrayHeader
         );
     }
     if raw_ptr() >= crate::gc::GC_HEADER_SIZE + 0x1000 {
@@ -1109,7 +1112,7 @@ pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
     // result. Short-circuit here to keep `Array.from(arr.values())` / `[...it]`
     // working.
     if is_builtin_iterator_class_id(raw_ptr()) {
-        return js_iterator_to_array(value());
+        return js_iterator_to_array((value.get_nanbox_f64()));
     }
     // Arguments objects spread like arrays (spec:
     // `arguments[Symbol.iterator] === Array.prototype.values`).
@@ -1130,7 +1133,10 @@ pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
             crate::value::JSValue::pointer(iter_wk as *const u8).bits(),
         ));
         let method = unsafe {
-            crate::symbol::js_object_get_symbol_property(value(), sym_h.get_nanbox_f64())
+            crate::symbol::js_object_get_symbol_property(
+                (value.get_nanbox_f64()),
+                sym_h.get_nanbox_f64(),
+            )
         };
         // The resolved method is a fresh closure value that must survive
         // `clone_closure_rebind_this` (an allocation) and the factory call.
@@ -1139,8 +1145,10 @@ pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
             if !is_callable_value(method_h.get_nanbox_f64()) {
                 throw_iterator_method_not_callable();
             }
-            let rebound =
-                crate::closure::clone_closure_rebind_this(method_h.get_nanbox_u64(), value());
+            let rebound = crate::closure::clone_closure_rebind_this(
+                method_h.get_nanbox_u64(),
+                (value.get_nanbox_f64()),
+            );
             let rebound_h = scope.root_nanbox_u64(rebound);
             if js_nanbox_get_pointer(rebound_h.get_nanbox_f64()) == 0 {
                 throw_iterator_method_not_callable();
@@ -1159,7 +1167,7 @@ pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
                 crate::closure::js_closure_call0(
                     js_nanbox_get_pointer(rebound_h.get_nanbox_f64())
                         as *const crate::closure::ClosureHeader,
-                    crate::closure::JsThis::from_f64(value()),
+                    crate::closure::JsThis::from_f64((value.get_nanbox_f64())),
                 )
             });
             let iter = match outcome {
@@ -1189,13 +1197,14 @@ pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
         }
     }
 
-    if crate::array::js_array_is_array(value()).to_bits() == crate::value::TAG_TRUE {
-        return js_iterator_to_array(crate::array::array_values_iter(value()));
+    if crate::array::js_array_is_array((value.get_nanbox_f64())).to_bits() == crate::value::TAG_TRUE
+    {
+        return js_iterator_to_array(crate::array::array_values_iter((value.get_nanbox_f64())));
     }
-    if has_named_next(value()) {
-        return js_iterator_to_array(value());
+    if has_named_next((value.get_nanbox_f64())) {
+        return js_iterator_to_array((value.get_nanbox_f64()));
     }
-    throw_not_iterable(value());
+    throw_not_iterable((value.get_nanbox_f64()));
 }
 
 // This helper runs the user-observable iterator protocol and can therefore

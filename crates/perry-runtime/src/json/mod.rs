@@ -1425,10 +1425,13 @@ mod tests {
         // bytes before the header, and SIGSEGV. It must serialize as the Node
         // index shape `{"0":v,…}` instead.
         unsafe {
-            let ta = crate::typedarray::typed_array_alloc(crate::typedarray::KIND_INT32, 3);
-            crate::typedarray::js_typed_array_set(ta, 0, 2.0);
-            crate::typedarray::js_typed_array_set(ta, 1, 4.0);
-            crate::typedarray::js_typed_array_set(ta, 2, 6.0);
+            let ta = crate::typedarray_hook_slots::typed_array_alloc(
+                crate::typedarray_hook_slots::KIND_INT32,
+                3,
+            );
+            crate::typedarray_hook_slots::js_typed_array_set(ta, 0, 2.0);
+            crate::typedarray_hook_slots::js_typed_array_set(ta, 1, 4.0);
+            crate::typedarray_hook_slots::js_typed_array_set(ta, 2, 6.0);
             let boxed = f64::from_bits(POINTER_TAG | (ta as u64 & POINTER_MASK));
             let output = js_json_stringify(boxed, TYPE_UNKNOWN);
             assert_eq!(str_from_header(output).unwrap(), r#"{"0":2,"1":4,"2":6}"#);
@@ -1437,7 +1440,10 @@ mod tests {
             stringify_typed_array_pretty(ta as *const u8, &mut pretty, "  ", 0);
             assert_eq!(pretty, "{\n  \"0\": 2,\n  \"1\": 4,\n  \"2\": 6\n}");
 
-            let empty = crate::typedarray::typed_array_alloc(crate::typedarray::KIND_FLOAT64, 0);
+            let empty = crate::typedarray_hook_slots::typed_array_alloc(
+                crate::typedarray_hook_slots::KIND_FLOAT64,
+                0,
+            );
             let empty_boxed = f64::from_bits(POINTER_TAG | (empty as u64 & POINTER_MASK));
             assert_eq!(
                 str_from_header(js_json_stringify(empty_boxed, TYPE_UNKNOWN)).unwrap(),

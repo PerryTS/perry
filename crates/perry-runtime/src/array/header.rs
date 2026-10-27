@@ -635,7 +635,7 @@ fn clean_arr_ptr_resolve(arr: *const ArrayHeader) -> *const ArrayHeader {
                 return cleaned;
             }
             if crate::buffer::buffer_family_type_owned(addr).is_some()
-                || crate::typedarray::lookup_typed_array_kind(addr).is_some()
+                || crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some()
             {
                 return cleaned;
             }
@@ -701,13 +701,13 @@ pub(crate) fn clean_arr_ptr_mut(arr: *mut ArrayHeader) -> *mut ArrayHeader {
 #[inline]
 pub(crate) fn typed_array_receiver(
     arr: *mut ArrayHeader,
-) -> Option<*mut crate::typedarray::TypedArrayHeader> {
+) -> Option<*mut crate::typedarray_hook_slots::TypedArrayHeader> {
     let addr = array_receiver_addr(arr);
     if addr == 0 {
         return None;
     }
-    crate::typedarray::lookup_typed_array_kind(addr)
-        .map(|_| addr as *mut crate::typedarray::TypedArrayHeader)
+    crate::typedarray_hook_slots::lookup_typed_array_kind(addr)
+        .map(|_| addr as *mut crate::typedarray_hook_slots::TypedArrayHeader)
 }
 
 /// #8096: resolve a receiver that is a registered `Buffer` / `Uint8Array`
@@ -744,7 +744,7 @@ pub(crate) fn typed_array_receiver(
 #[inline]
 pub(crate) fn buffer_receiver_as_uint8_typed_array(
     arr: *mut ArrayHeader,
-) -> Option<*mut crate::typedarray::TypedArrayHeader> {
+) -> Option<*mut crate::typedarray_hook_slots::TypedArrayHeader> {
     let addr = array_receiver_addr(arr);
     if addr == 0
         || !crate::buffer::is_registered_buffer(addr)
@@ -762,10 +762,12 @@ pub(crate) fn buffer_receiver_as_uint8_typed_array(
             .map(<[u8]>::to_vec)
             .unwrap_or_default()
     });
-    let ta =
-        crate::typedarray::typed_array_alloc(crate::typedarray::KIND_UINT8, bytes.len() as u32);
+    let ta = crate::typedarray_hook_slots::typed_array_alloc(
+        crate::typedarray_hook_slots::KIND_UINT8,
+        bytes.len() as u32,
+    );
     for (i, byte) in bytes.iter().enumerate() {
-        crate::typedarray::js_typed_array_set(ta, i as i32, f64::from(*byte));
+        crate::typedarray_hook_slots::js_typed_array_set(ta, i as i32, f64::from(*byte));
     }
     Some(ta)
 }
@@ -776,7 +778,7 @@ pub(crate) fn buffer_receiver_as_uint8_typed_array(
 /// `buffer::is_registered_buffer`) or a `clean_arr_ptr` round trip.
 #[inline]
 pub(crate) fn array_receiver_addr(arr: *mut ArrayHeader) -> usize {
-    crate::typedarray::strip_nanbox(arr as u64)
+    crate::typedarray_hook_slots::strip_nanbox(arr as u64)
 }
 
 /// #5135: detect a Proxy id arriving where an `ArrayHeader` pointer is
@@ -883,7 +885,8 @@ pub(crate) fn normalize_array_receiver(arr: *const ArrayHeader) -> *const ArrayH
         // else — generic array-like objects, typed arrays, buffers — resolves
         // its registry membership once here.
         if obj_type != crate::gc::GC_TYPE_ARRAY {
-            let is_typed_array = crate::typedarray::lookup_typed_array_kind(raw_addr).is_some();
+            let is_typed_array =
+                crate::typedarray_hook_slots::lookup_typed_array_kind(raw_addr).is_some();
             let is_buffer = crate::buffer::is_registered_buffer(raw_addr);
             if obj_type == crate::gc::GC_TYPE_OBJECT && !is_typed_array && !is_buffer {
                 // Generic array-like object receiver

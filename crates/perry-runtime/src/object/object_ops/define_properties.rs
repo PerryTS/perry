@@ -36,8 +36,10 @@ pub extern "C" fn js_object_define_properties(target: f64, properties: f64) -> f
         } else {
             super::super::js_object_coerce(value).to_bits()
         });
-        let current_properties = || f64::from_bits(properties.get_nanbox_u64());
-        let proxy = crate::proxy_hooks::proxy_is_proxy(current_properties()) != 0;
+        let current_properties = &properties;
+        let proxy = crate::proxy_hooks::proxy_is_proxy(
+            (f64::from_bits(current_properties.get_nanbox_u64())),
+        ) != 0;
         let names = if proxy {
             None
         } else {
@@ -48,7 +50,7 @@ pub extern "C" fn js_object_define_properties(target: f64, properties: f64) -> f
         };
         let proxy_names = proxy.then(|| {
             scope.root_raw_mut_ptr(extract_obj_ptr(crate::proxy_hooks::proxy_own_keys(
-                current_properties(),
+                (f64::from_bits(current_properties.get_nanbox_u64())),
             )) as *mut crate::array::ArrayHeader)
         });
         // Root the name array while enumerating symbols; both snapshots are
@@ -56,7 +58,9 @@ pub extern "C" fn js_object_define_properties(target: f64, properties: f64) -> f
         let symbols = if proxy {
             None
         } else {
-            let raw = crate::symbol::js_object_get_own_property_symbols(current_properties());
+            let raw = crate::symbol::js_object_get_own_property_symbols(
+                (f64::from_bits(current_properties.get_nanbox_u64())),
+            );
             (raw != 0).then(|| scope.root_raw_mut_ptr(raw as *mut crate::array::ArrayHeader))
         };
         let length_of = |array: &crate::gc::RuntimeHandle<'_>| {
@@ -106,14 +110,17 @@ pub extern "C" fn js_object_define_properties(target: f64, properties: f64) -> f
                 let bag = if let Some(value) = data {
                     key_scope.root_nanbox_f64(value)
                 } else {
-                    if js_object_property_is_enumerable(current_properties(), key.get_nanbox_f64())
-                        .to_bits()
+                    if js_object_property_is_enumerable(
+                        (f64::from_bits(current_properties.get_nanbox_u64())),
+                        key.get_nanbox_f64(),
+                    )
+                    .to_bits()
                         != crate::value::TAG_TRUE
                     {
                         continue;
                     }
                     key_scope.root_nanbox_f64(super::super::js_object_get_property_key(
-                        current_properties(),
+                        (f64::from_bits(current_properties.get_nanbox_u64())),
                         key.get_nanbox_f64(),
                     ))
                 };

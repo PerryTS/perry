@@ -257,8 +257,8 @@ pub(crate) fn received_inherited_property(receiver: f64, prototype: u64, key: f6
 
 pub(crate) fn received_native_brand(value: f64) -> Option<&'static str> {
     let addr = crate::value::addr_class::object_ref_addr(value);
-    if let Some(kind) = crate::typedarray::lookup_typed_array_kind(addr) {
-        return Some(crate::typedarray::name_for_kind(kind));
+    if let Some(kind) = crate::typedarray_hook_slots::lookup_typed_array_kind(addr) {
+        return Some(crate::typedarray_hook_slots::name_for_kind(kind));
     }
     match crate::buffer::buffer_brand(addr) {
         Some(crate::buffer::BufferBrand::NodeBuffer) => Some("Buffer"),
@@ -357,7 +357,7 @@ pub(crate) fn received_native_fallback(value: f64) -> Option<*mut StringHeader> 
         ReceivedNativePrototype::Intrinsic
     };
     let custom = shape == ReceivedNativePrototype::Complex;
-    let typed = crate::typedarray::lookup_typed_array_kind(
+    let typed = crate::typedarray_hook_slots::lookup_typed_array_kind(
         crate::value::addr_class::object_ref_addr(value.get_nanbox_f64()),
     )
     .is_some()
@@ -408,10 +408,10 @@ pub(crate) fn received_native_fallback(value: f64) -> Option<*mut StringHeader> 
     }
     if typed && !null_proto && brand != "Buffer" {
         let addr = crate::value::addr_class::object_ref_addr(value.get_nanbox_f64());
-        let length = if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
+        let length = if crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some() {
             unsafe {
-                crate::typedarray::element_length(
-                    addr as *const crate::typedarray::TypedArrayHeader,
+                crate::typedarray_hook_slots::element_length(
+                    addr as *const crate::typedarray_hook_slots::TypedArrayHeader,
                 )
             }
         } else {

@@ -249,7 +249,7 @@ pub fn is_buffer_like(value: f64) -> bool {
     if raw < 0x1000 {
         return false;
     }
-    if crate::typedarray::lookup_typed_array_kind(raw).is_some() {
+    if crate::typedarray_hook_slots::lookup_typed_array_kind(raw).is_some() {
         return true;
     }
     crate::buffer::is_registered_buffer(raw) && crate::buffer::is_data_view(raw)

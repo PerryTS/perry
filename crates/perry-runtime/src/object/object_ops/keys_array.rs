@@ -599,7 +599,7 @@ unsafe fn define_append_transition_eligible(
         || crate::object::reserved_slot_floor_for_class_id(class_id) != 0
         || crate::array::object_prototype_addr_matches(obj as usize)
         || crate::object::url_layout::is_url_object_shape(obj)
-        || crate::typedarray::lookup_typed_array_kind(obj as usize).is_some()
+        || crate::typedarray_hook_slots::lookup_typed_array_kind(obj as usize).is_some()
     {
         #[cfg(feature = "shape-mint-diag")]
         crate::object::shape_mint_census::note_define_outcome(

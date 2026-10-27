@@ -121,7 +121,7 @@ fn is_buffer_or_uint8array(value: f64) -> bool {
         return true;
     }
     let raw = (value.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
-    raw >= 0x1000 && crate::typedarray::lookup_typed_array_kind(raw).is_some()
+    raw >= 0x1000 && crate::typedarray_hook_slots::lookup_typed_array_kind(raw).is_some()
 }
 
 /// `Buffer.prototype.copy/compare/equals` reject a non-`Buffer`/`Uint8Array`

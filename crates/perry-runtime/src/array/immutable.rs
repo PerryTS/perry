@@ -38,7 +38,7 @@ pub extern "C" fn js_array_to_reversed(arr: *const ArrayHeader) -> *mut ArrayHea
     // `GC_TYPE_TYPED_ARRAY` one. Reached that way the helper answered an EMPTY
     // plain array, not the receiver's reversed elements.
     if let Some(ta) = typed_array_receiver(arr as *mut ArrayHeader) {
-        return crate::typedarray::js_typed_array_to_reversed(ta) as *mut ArrayHeader;
+        return crate::typedarray_hook_slots::js_typed_array_to_reversed(ta) as *mut ArrayHeader;
     }
     // #8096: the Buffer-backed `Uint8Array` shape — the SAME symptom from a
     // different receiver. `new Uint8Array([…])` is a registered BufferHeader,
@@ -47,7 +47,7 @@ pub extern "C" fn js_array_to_reversed(arr: *const ArrayHeader) -> *mut ArrayHea
     // `buffer_receiver_as_uint8_typed_array` for why this arm is sound only
     // for the immutable methods.
     if let Some(ta) = buffer_receiver_as_uint8_typed_array(arr as *mut ArrayHeader) {
-        return crate::typedarray::js_typed_array_to_reversed(ta) as *mut ArrayHeader;
+        return crate::typedarray_hook_slots::js_typed_array_to_reversed(ta) as *mut ArrayHeader;
     }
     let arr = clean_arr_ptr(arr);
     if arr.is_null() {
@@ -83,7 +83,8 @@ pub extern "C" fn js_array_to_sorted_default(arr: *const ArrayHeader) -> *mut Ar
     // ToString. Falling through to the plain-array body would be the string
     // order even if the slots were readable (#8096).
     if let Some(ta) = typed_array_receiver(arr as *mut ArrayHeader) {
-        return crate::typedarray::js_typed_array_to_sorted_default(ta) as *mut ArrayHeader;
+        return crate::typedarray_hook_slots::js_typed_array_to_sorted_default(ta)
+            as *mut ArrayHeader;
     }
     // #8096: the Buffer-backed `Uint8Array` shape — the SAME symptom from a
     // different receiver. `new Uint8Array([…])` is a registered BufferHeader,
@@ -92,7 +93,8 @@ pub extern "C" fn js_array_to_sorted_default(arr: *const ArrayHeader) -> *mut Ar
     // `buffer_receiver_as_uint8_typed_array` for why this arm is sound only
     // for the immutable methods.
     if let Some(ta) = buffer_receiver_as_uint8_typed_array(arr as *mut ArrayHeader) {
-        return crate::typedarray::js_typed_array_to_sorted_default(ta) as *mut ArrayHeader;
+        return crate::typedarray_hook_slots::js_typed_array_to_sorted_default(ta)
+            as *mut ArrayHeader;
     }
     let arr = clean_arr_ptr(arr);
     if arr.is_null() {
@@ -141,8 +143,9 @@ pub extern "C" fn js_array_to_sorted_with_comparator(
     // tracked non-`GC_TYPE_ARRAY` object and every typed array is a tracked
     // `GC_TYPE_TYPED_ARRAY` one.
     if let Some(ta) = typed_array_receiver(arr as *mut ArrayHeader) {
-        return crate::typedarray::js_typed_array_to_sorted_with_comparator(ta, comparator)
-            as *mut ArrayHeader;
+        return crate::typedarray_hook_slots::js_typed_array_to_sorted_with_comparator(
+            ta, comparator,
+        ) as *mut ArrayHeader;
     }
     // #8096: the Buffer-backed `Uint8Array` shape — the SAME symptom from a
     // different receiver. `new Uint8Array([…])` is a registered BufferHeader,
@@ -151,8 +154,9 @@ pub extern "C" fn js_array_to_sorted_with_comparator(
     // `buffer_receiver_as_uint8_typed_array` for why this arm is sound only
     // for the immutable methods.
     if let Some(ta) = buffer_receiver_as_uint8_typed_array(arr as *mut ArrayHeader) {
-        return crate::typedarray::js_typed_array_to_sorted_with_comparator(ta, comparator)
-            as *mut ArrayHeader;
+        return crate::typedarray_hook_slots::js_typed_array_to_sorted_with_comparator(
+            ta, comparator,
+        ) as *mut ArrayHeader;
     }
     let arr = clean_arr_ptr(arr);
     if arr.is_null() {
@@ -294,7 +298,8 @@ pub extern "C" fn js_array_with(
     // The typed twin also owns the per-kind coercion of `value` (a `300` into
     // a `Uint8Array` must read back `44`) and the typed RangeError text.
     if let Some(ta) = typed_array_receiver(arr as *mut ArrayHeader) {
-        return crate::typedarray::js_typed_array_with(ta, index, value) as *mut ArrayHeader;
+        return crate::typedarray_hook_slots::js_typed_array_with(ta, index, value)
+            as *mut ArrayHeader;
     }
     // #8096: the Buffer-backed `Uint8Array` shape — the SAME symptom from a
     // different receiver. `new Uint8Array([…])` is a registered BufferHeader,
@@ -303,7 +308,8 @@ pub extern "C" fn js_array_with(
     // `buffer_receiver_as_uint8_typed_array` for why this arm is sound only
     // for the immutable methods.
     if let Some(ta) = buffer_receiver_as_uint8_typed_array(arr as *mut ArrayHeader) {
-        return crate::typedarray::js_typed_array_with(ta, index, value) as *mut ArrayHeader;
+        return crate::typedarray_hook_slots::js_typed_array_with(ta, index, value)
+            as *mut ArrayHeader;
     }
     let arr = clean_arr_ptr(arr);
     if arr.is_null() {
@@ -359,8 +365,9 @@ pub extern "C" fn js_array_copy_within(
         } else {
             f64::from_bits(crate::value::TAG_UNDEFINED)
         };
-        return crate::typedarray::js_typed_array_copy_within(ta, target, start, end_value)
-            as *mut ArrayHeader;
+        return crate::typedarray_hook_slots::js_typed_array_copy_within(
+            ta, target, start, end_value,
+        ) as *mut ArrayHeader;
     }
     // #2879: the Buffer/`Uint8Array` shape lands here too — its elements are
     // single bytes in a `BufferHeader`, so the buffer dispatcher owns the copy

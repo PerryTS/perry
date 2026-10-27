@@ -498,7 +498,7 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
         }
     };
     let typed_array_instance_prototype = |addr: usize| -> Option<f64> {
-        let kind = crate::typedarray::lookup_typed_array_kind(addr)?;
+        let kind = crate::typedarray_hook_slots::lookup_typed_array_kind(addr)?;
         // A `Reflect.construct(TA, …, newTarget)` view with a custom
         // `[[Prototype]]` (spec `GetPrototypeFromConstructor`) resolves to the
         // recorded prototype rather than the default per-kind prototype. The
@@ -508,7 +508,9 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
                 return Some(f64::from_bits(proto_bits));
             }
         }
-        let proto = crate::object::builtin_prototype_value(crate::typedarray::name_for_kind(kind));
+        let proto = crate::object::builtin_prototype_value(
+            crate::typedarray_hook_slots::name_for_kind(kind),
+        );
         if proto.to_bits() != crate::value::TAG_UNDEFINED {
             Some(proto)
         } else {

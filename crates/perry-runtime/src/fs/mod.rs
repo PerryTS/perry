@@ -276,7 +276,7 @@ fn numeric_fd_value(value: f64) -> Option<i32> {
             {
                 return None;
             }
-            if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
+            if crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some() {
                 return None;
             }
             options_number_field(value, b"fd").map(|fd| fd as i32)

@@ -50,7 +50,7 @@ fn is_native_array_value(value: f64) -> bool {
     }
     // Off-GC-heap header-less typed arrays / buffers are not Arrays and must
     // not be header-probed (#5226).
-    if crate::typedarray::is_offheap_sidetable_alloc(ptr) {
+    if crate::typedarray_hook_slots::is_offheap_sidetable_alloc(ptr) {
         return false;
     }
     unsafe {

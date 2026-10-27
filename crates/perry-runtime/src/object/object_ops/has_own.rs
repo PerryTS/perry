@@ -462,7 +462,7 @@ unsafe fn has_own_of_non_ordinary_kind(
         .flatten()
     {
         return Some(crate::typedarray_props::typed_array_has_own_property(
-            addr as *const crate::typedarray::TypedArrayHeader,
+            addr as *const crate::typedarray_hook_slots::TypedArrayHeader,
             key_str,
         ));
     }
@@ -513,9 +513,9 @@ unsafe fn has_own_of_non_ordinary_kind(
                 .unwrap_or(false),
         );
     }
-    if buffer_like && crate::typedarray::lookup_typed_array_kind(ptr).is_some() {
+    if buffer_like && crate::typedarray_hook_slots::lookup_typed_array_kind(ptr).is_some() {
         return Some(crate::typedarray_props::typed_array_has_own_property(
-            ptr as *const crate::typedarray::TypedArrayHeader,
+            ptr as *const crate::typedarray_hook_slots::TypedArrayHeader,
             key_str,
         ));
     }
@@ -673,7 +673,7 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
 
         if let Some(addr) = crate::typedarray_props::typed_array_addr_from_value(obj_value) {
             let enumerable = crate::typedarray_props::typed_array_property_is_enumerable(
-                addr as *const crate::typedarray::TypedArrayHeader,
+                addr as *const crate::typedarray_hook_slots::TypedArrayHeader,
                 key_str,
             );
             return f64::from_bits(if enumerable { TAG_TRUE } else { TAG_FALSE });
@@ -723,9 +723,9 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
                     .unwrap_or(true);
                 return f64::from_bits(if enumerable { TAG_TRUE } else { TAG_FALSE });
             }
-            if crate::typedarray::lookup_typed_array_kind(ptr).is_some() {
+            if crate::typedarray_hook_slots::lookup_typed_array_kind(ptr).is_some() {
                 let enumerable = crate::typedarray_props::typed_array_property_is_enumerable(
-                    ptr as *const crate::typedarray::TypedArrayHeader,
+                    ptr as *const crate::typedarray_hook_slots::TypedArrayHeader,
                     key_str,
                 );
                 return f64::from_bits(if enumerable { TAG_TRUE } else { TAG_FALSE });

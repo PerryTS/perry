@@ -136,7 +136,7 @@ unsafe fn apply_to_json(value: f64) -> f64 {
         // as a GC_TYPE_ARRAY tag (see `stringify_value`'s matching guards).
         if gc_obj_type(ptr) == crate::gc::GC_TYPE_ARRAY
             && !crate::buffer::is_registered_buffer(ptr as usize)
-            && crate::typedarray::lookup_typed_array_kind(ptr as usize).is_none()
+            && crate::typedarray_hook_slots::lookup_typed_array_kind(ptr as usize).is_none()
         {
             if let Some(to_json_val) =
                 super::stringify::array_get_to_json(ptr as *const crate::ArrayHeader)
@@ -279,7 +279,7 @@ pub(super) unsafe fn dispatch_pointer_with_replacer(
     }
     // Issue #5111: TypedArray (no GcHeader on small ones) detection before
     // gc_obj_type, same rationale as the buffer check above.
-    if crate::typedarray::lookup_typed_array_kind(ptr as usize).is_some() {
+    if crate::typedarray_hook_slots::lookup_typed_array_kind(ptr as usize).is_some() {
         if indent.is_empty() {
             stringify_typed_array(ptr, buf);
         } else {
@@ -892,7 +892,7 @@ pub(crate) unsafe fn stringify_value_pretty(
             return;
         }
         // Issue #5111: TypedArray detection before gc_obj_type (see above).
-        if crate::typedarray::lookup_typed_array_kind(ptr as usize).is_some() {
+        if crate::typedarray_hook_slots::lookup_typed_array_kind(ptr as usize).is_some() {
             stringify_typed_array_pretty(ptr, buf, indent, depth);
             return;
         }

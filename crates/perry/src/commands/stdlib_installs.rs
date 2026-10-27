@@ -202,6 +202,7 @@ const RUNTIME_INSTALLS: &[(&str, &[&str])] = &[
     ("js_runtime_install_os", &["os"]),
     ("js_runtime_install_messaging", &["messaging"]),
     ("js_runtime_install_event_target", &["event-target"]),
+    ("js_runtime_install_typedarray", &["typedarray"]),
     ("js_runtime_install_global_reflect", &["global-reflect"]),
     ("js_runtime_install_global_atomics", &["global-atomics"]),
     ("js_runtime_install_global_url", &["global-url"]),

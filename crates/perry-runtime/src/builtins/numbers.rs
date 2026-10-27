@@ -609,7 +609,7 @@ pub extern "C" fn js_number_coerce(value: f64) -> f64 {
         // first, with `this` = the typed array and abrupt completions
         // propagating (test262 ctors/object-arg/throws-setting-obj-*). With
         // no patch, fall through to the generic path (join + ToNumber).
-        if crate::typedarray::lookup_typed_array_kind(id as usize).is_some() {
+        if crate::typedarray_hook_slots::lookup_typed_array_kind(id as usize).is_some() {
             if let Some(p) = unsafe {
                 crate::typedarray_props::typed_array_own_to_primitive_number(id as usize, value)
             } {

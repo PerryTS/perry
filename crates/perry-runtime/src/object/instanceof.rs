@@ -251,8 +251,8 @@ pub(crate) fn global_builtin_constructor_class_id(name: &str) -> u32 {
         // ids the compile-time `instanceof Float64Array` operator resolves.
         "Int8Array" | "Uint8Array" | "Uint8ClampedArray" | "Int16Array" | "Uint16Array"
         | "Int32Array" | "Uint32Array" | "Float16Array" | "Float32Array" | "Float64Array"
-        | "BigInt64Array" | "BigUint64Array" => crate::typedarray::kind_for_name(name)
-            .map(crate::typedarray::class_id_for_kind)
+        | "BigInt64Array" | "BigUint64Array" => crate::typedarray_hook_slots::kind_for_name(name)
+            .map(crate::typedarray_hook_slots::class_id_for_kind)
             .unwrap_or(0),
         _ => 0,
     }
@@ -579,7 +579,7 @@ fn rhs_is_object_value(value: f64) -> bool {
         return crate::buffer::buffer_family_type_owned(addr).is_some()
             || crate::set::is_registered_set(addr)
             || crate::map::is_registered_map(addr)
-            || crate::typedarray::lookup_typed_array_kind(addr).is_some()
+            || crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some()
             || addr >= crate::gc::GC_HEADER_SIZE;
     }
     false

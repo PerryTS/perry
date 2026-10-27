@@ -612,7 +612,7 @@ pub(crate) unsafe fn stringify_value(value: f64, type_hint: u32, buf: &mut Strin
         }
         // Issue #5111: TypedArray (no GcHeader on small ones) detection BEFORE
         // gc_obj_type, same rationale as the buffer check above.
-        if crate::typedarray::lookup_typed_array_kind(ptr as usize).is_some() {
+        if crate::typedarray_hook_slots::lookup_typed_array_kind(ptr as usize).is_some() {
             stringify_typed_array(ptr, buf);
             return;
         }
@@ -903,7 +903,7 @@ pub(crate) unsafe fn stringify_value_depth(
             return;
         }
         // Issue #5111: TypedArray detection BEFORE gc_obj_type (see above).
-        if crate::typedarray::lookup_typed_array_kind(ptr as usize).is_some() {
+        if crate::typedarray_hook_slots::lookup_typed_array_kind(ptr as usize).is_some() {
             stringify_typed_array(ptr, buf);
             return;
         }
@@ -1289,7 +1289,7 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
                 continue;
             }
             // Issue #5111: TypedArray element detection BEFORE gc_obj_type.
-            if crate::typedarray::lookup_typed_array_kind(elem_ptr as usize).is_some() {
+            if crate::typedarray_hook_slots::lookup_typed_array_kind(elem_ptr as usize).is_some() {
                 stringify_typed_array(elem_ptr, buf);
                 continue;
             }

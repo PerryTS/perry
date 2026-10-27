@@ -444,6 +444,59 @@ pub(super) fn detect_optional_feature_usage(
     // false-negative class for every gate at once (the rule is zero false
     // negatives; including more HIR can only over-include a feature).
     let hir_debug = module_hir_debug(hir_module);
+    ctx.uses_typedarray |= global_object::may_escape(hir_module)
+        || [
+            "TypedArray",
+            "Uint8Array",
+            "Uint8ClampedArray",
+            "Int8Array",
+            "Uint16Array",
+            "Int16Array",
+            "Uint32Array",
+            "Int32Array",
+            "Float16Array",
+            "Float32Array",
+            "Float64Array",
+            "BigInt64Array",
+            "BigUint64Array",
+            "ArrayBuffer",
+            "DataView",
+            "Buffer",
+            "TextEncoder",
+            "NativeMemory",
+            "ProcessStdin",
+        ]
+        .iter()
+        .any(|name| hir_debug.contains(name))
+        || hir_module.imports.iter().any(|import| {
+            !import.type_only
+                && matches!(
+                    import
+                        .source
+                        .strip_prefix("node:")
+                        .unwrap_or(&import.source),
+                    "buffer"
+                        | "fs"
+                        | "fs/promises"
+                        | "crypto"
+                        | "v8"
+                        | "http"
+                        | "http2"
+                        | "https"
+                        | "net"
+                        | "tls"
+                        | "dgram"
+                        | "worker_threads"
+                        | "child_process"
+                        | "process"
+                        | "os"
+                        | "bun"
+                        | "bun:jsc"
+                        | "bun:ffi"
+                        | "sqlite"
+                        | "perry/thread"
+                )
+        });
     ctx.uses_event_target |= global_object::may_escape(hir_module)
         || [
             "Event",

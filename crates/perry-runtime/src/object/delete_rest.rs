@@ -109,7 +109,7 @@ pub extern "C" fn js_object_delete_field(
             crate::typedarray_props::typed_array_addr_from_value(f64::from_bits(obj as u64))
         {
             return crate::typedarray_props::typed_array_delete_own_property(
-                addr as *mut crate::typedarray::TypedArrayHeader,
+                addr as *mut crate::typedarray_hook_slots::TypedArrayHeader,
                 key,
             );
         }

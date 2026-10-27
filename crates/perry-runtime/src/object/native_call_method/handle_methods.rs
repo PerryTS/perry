@@ -148,8 +148,8 @@ pub(super) unsafe fn dispatch_handle(
         // callback-bearing + immutable methods to the shared helper before the
         // GC_TYPE_ARRAY check below (which only matches plain arrays).
         // Issues #2797 / #2798 / #2799.
-        if crate::typedarray::lookup_typed_array_kind(raw_ptr).is_some() {
-            let ta = raw_ptr as *mut crate::typedarray::TypedArrayHeader;
+        if crate::typedarray_hook_slots::lookup_typed_array_kind(raw_ptr).is_some() {
+            let ta = raw_ptr as *mut crate::typedarray_hook_slots::TypedArrayHeader;
             if let Some(r) = dispatch_typed_array_method(ta, method_name, args_ptr, args_len) {
                 return Some(r);
             }

@@ -383,7 +383,7 @@ pub(crate) fn bytes_from_value(v: f64) -> Vec<u8> {
     unsafe {
         let addr = crate::value::addr_class::object_ref_addr(v);
         if crate::buffer::is_registered_buffer(addr)
-            || crate::typedarray::lookup_typed_array_kind(addr).is_some()
+            || crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some()
         {
             return crate::buffer::bytes::no_gc(|scope| {
                 crate::buffer::bytes::bytes(crate::value::js_nanbox_pointer(addr as i64), scope)
@@ -411,7 +411,7 @@ fn is_direct_write_data(value: f64) -> bool {
     // #10694: the brand probes read the cell's header, so only a POINTER
     // payload or an allocator-owned raw word is an address here.
     let addr = crate::value::addr_class::object_ref_addr(value);
-    crate::typedarray::lookup_typed_array_kind(addr).is_some()
+    crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some()
 }
 
 fn encoding_tag_from_options(options_value: f64) -> i32 {

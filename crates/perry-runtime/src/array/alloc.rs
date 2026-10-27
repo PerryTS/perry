@@ -574,7 +574,7 @@ pub extern "C" fn js_array_from_arraylike_holey_value(boxed: f64) -> *mut ArrayH
             let hdr = (raw_addr as *const u8).sub(crate::gc::GC_HEADER_SIZE)
                 as *const crate::gc::GcHeader;
             if (*hdr).obj_type == crate::gc::GC_TYPE_OBJECT
-                && crate::typedarray::lookup_typed_array_kind(raw_addr).is_none()
+                && crate::typedarray_hook_slots::lookup_typed_array_kind(raw_addr).is_none()
                 && !crate::buffer::is_registered_buffer(raw_addr)
             {
                 return js_array_from_arraylike_holey(

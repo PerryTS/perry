@@ -379,7 +379,7 @@ pub(super) fn proxy_array_mutator(
         Vec::new()
     };
     let arg_handles = scope.root_nanbox_f64_slice(&original_args);
-    let p = || proxy_handle.get_nanbox_f64();
+    let p = &proxy_handle;
     let arg = |i: usize| -> f64 {
         arg_handles
             .get(i)
@@ -390,75 +390,96 @@ pub(super) fn proxy_array_mutator(
         match method {
             // §23.1.3.21 Array.prototype.push
             "push" => {
-                let len = proxy_array_length(p());
+                let len = proxy_array_length((p.get_nanbox_f64()));
                 for i in 0..args_len {
-                    proxy_set_str_key(p(), (len + i as u64).to_string().as_bytes(), arg(i));
+                    proxy_set_str_key(
+                        (p.get_nanbox_f64()),
+                        (len + i as u64).to_string().as_bytes(),
+                        arg(i),
+                    );
                 }
                 let new_len = len + args_len as u64;
-                proxy_set_str_key(p(), b"length", new_len as f64);
+                proxy_set_str_key((p.get_nanbox_f64()), b"length", new_len as f64);
                 Some(new_len as f64)
             }
             // §23.1.3.19 Array.prototype.pop
             "pop" => {
-                let len = proxy_array_length(p());
+                let len = proxy_array_length((p.get_nanbox_f64()));
                 if len == 0 {
-                    proxy_set_str_key(p(), b"length", 0.0);
+                    proxy_set_str_key((p.get_nanbox_f64()), b"length", 0.0);
                     return Some(undefined);
                 }
                 let idx = (len - 1).to_string();
-                let value_handle = scope.root_nanbox_f64(proxy_get_str_key(p(), idx.as_bytes()));
-                proxy_delete_str_key_or_throw(p(), idx.as_bytes());
-                proxy_set_str_key(p(), b"length", (len - 1) as f64);
+                let value_handle =
+                    scope.root_nanbox_f64(proxy_get_str_key((p.get_nanbox_f64()), idx.as_bytes()));
+                proxy_delete_str_key_or_throw((p.get_nanbox_f64()), idx.as_bytes());
+                proxy_set_str_key((p.get_nanbox_f64()), b"length", (len - 1) as f64);
                 Some(value_handle.get_nanbox_f64())
             }
             // §23.1.3.24 Array.prototype.shift — HasProperty gates each move:
             // a hole in the source deletes the destination instead of
             // materializing an own `undefined`.
             "shift" => {
-                let len = proxy_array_length(p());
+                let len = proxy_array_length((p.get_nanbox_f64()));
                 if len == 0 {
-                    proxy_set_str_key(p(), b"length", 0.0);
+                    proxy_set_str_key((p.get_nanbox_f64()), b"length", 0.0);
                     return Some(undefined);
                 }
-                let first_handle = scope.root_nanbox_f64(proxy_get_str_key(p(), b"0"));
+                let first_handle =
+                    scope.root_nanbox_f64(proxy_get_str_key((p.get_nanbox_f64()), b"0"));
                 for k in 1..len {
                     let from = k.to_string();
                     let to = (k - 1).to_string();
-                    if proxy_has_str_key(p(), from.as_bytes()) {
-                        let v_handle =
-                            scope.root_nanbox_f64(proxy_get_str_key(p(), from.as_bytes()));
-                        proxy_set_str_key(p(), to.as_bytes(), v_handle.get_nanbox_f64());
+                    if proxy_has_str_key((p.get_nanbox_f64()), from.as_bytes()) {
+                        let v_handle = scope.root_nanbox_f64(proxy_get_str_key(
+                            (p.get_nanbox_f64()),
+                            from.as_bytes(),
+                        ));
+                        proxy_set_str_key(
+                            (p.get_nanbox_f64()),
+                            to.as_bytes(),
+                            v_handle.get_nanbox_f64(),
+                        );
                     } else {
-                        proxy_delete_str_key_or_throw(p(), to.as_bytes());
+                        proxy_delete_str_key_or_throw((p.get_nanbox_f64()), to.as_bytes());
                     }
                 }
-                proxy_delete_str_key_or_throw(p(), (len - 1).to_string().as_bytes());
-                proxy_set_str_key(p(), b"length", (len - 1) as f64);
+                proxy_delete_str_key_or_throw(
+                    (p.get_nanbox_f64()),
+                    (len - 1).to_string().as_bytes(),
+                );
+                proxy_set_str_key((p.get_nanbox_f64()), b"length", (len - 1) as f64);
                 Some(first_handle.get_nanbox_f64())
             }
             // §23.1.3.32 Array.prototype.unshift — same HasProperty gating on
             // the right-shift loop.
             "unshift" => {
-                let len = proxy_array_length(p());
+                let len = proxy_array_length((p.get_nanbox_f64()));
                 let count = args_len as u64;
                 if count > 0 {
                     for k in (0..len).rev() {
                         let from = k.to_string();
                         let to = (k + count).to_string();
-                        if proxy_has_str_key(p(), from.as_bytes()) {
-                            let v_handle =
-                                scope.root_nanbox_f64(proxy_get_str_key(p(), from.as_bytes()));
-                            proxy_set_str_key(p(), to.as_bytes(), v_handle.get_nanbox_f64());
+                        if proxy_has_str_key((p.get_nanbox_f64()), from.as_bytes()) {
+                            let v_handle = scope.root_nanbox_f64(proxy_get_str_key(
+                                (p.get_nanbox_f64()),
+                                from.as_bytes(),
+                            ));
+                            proxy_set_str_key(
+                                (p.get_nanbox_f64()),
+                                to.as_bytes(),
+                                v_handle.get_nanbox_f64(),
+                            );
                         } else {
-                            proxy_delete_str_key_or_throw(p(), to.as_bytes());
+                            proxy_delete_str_key_or_throw((p.get_nanbox_f64()), to.as_bytes());
                         }
                     }
                     for i in 0..args_len {
-                        proxy_set_str_key(p(), i.to_string().as_bytes(), arg(i));
+                        proxy_set_str_key((p.get_nanbox_f64()), i.to_string().as_bytes(), arg(i));
                     }
                 }
                 let new_len = len + count;
-                proxy_set_str_key(p(), b"length", new_len as f64);
+                proxy_set_str_key((p.get_nanbox_f64()), b"length", new_len as f64);
                 Some(new_len as f64)
             }
             // §23.1.3.26 Array.prototype.reverse — four-case swap with
@@ -466,45 +487,75 @@ pub(super) fn proxy_array_mutator(
             // instead of materializing an own `undefined`. Returns the
             // receiver.
             "reverse" => {
-                let len = proxy_array_length(p());
+                let len = proxy_array_length((p.get_nanbox_f64()));
                 for lower in 0..len / 2 {
                     let upper = len - lower - 1;
                     let lower_key = lower.to_string();
                     let upper_key = upper.to_string();
-                    let lower_handle = if proxy_has_str_key(p(), lower_key.as_bytes()) {
-                        Some(scope.root_nanbox_f64(proxy_get_str_key(p(), lower_key.as_bytes())))
-                    } else {
-                        None
-                    };
-                    let upper_handle = if proxy_has_str_key(p(), upper_key.as_bytes()) {
-                        Some(scope.root_nanbox_f64(proxy_get_str_key(p(), upper_key.as_bytes())))
-                    } else {
-                        None
-                    };
+                    let lower_handle =
+                        if proxy_has_str_key((p.get_nanbox_f64()), lower_key.as_bytes()) {
+                            Some(scope.root_nanbox_f64(proxy_get_str_key(
+                                (p.get_nanbox_f64()),
+                                lower_key.as_bytes(),
+                            )))
+                        } else {
+                            None
+                        };
+                    let upper_handle =
+                        if proxy_has_str_key((p.get_nanbox_f64()), upper_key.as_bytes()) {
+                            Some(scope.root_nanbox_f64(proxy_get_str_key(
+                                (p.get_nanbox_f64()),
+                                upper_key.as_bytes(),
+                            )))
+                        } else {
+                            None
+                        };
                     match (&lower_handle, &upper_handle) {
                         (Some(l), Some(u)) => {
-                            proxy_set_str_key(p(), lower_key.as_bytes(), u.get_nanbox_f64());
-                            proxy_set_str_key(p(), upper_key.as_bytes(), l.get_nanbox_f64());
+                            proxy_set_str_key(
+                                (p.get_nanbox_f64()),
+                                lower_key.as_bytes(),
+                                u.get_nanbox_f64(),
+                            );
+                            proxy_set_str_key(
+                                (p.get_nanbox_f64()),
+                                upper_key.as_bytes(),
+                                l.get_nanbox_f64(),
+                            );
                         }
                         (None, Some(u)) => {
-                            proxy_set_str_key(p(), lower_key.as_bytes(), u.get_nanbox_f64());
-                            proxy_delete_str_key_or_throw(p(), upper_key.as_bytes());
+                            proxy_set_str_key(
+                                (p.get_nanbox_f64()),
+                                lower_key.as_bytes(),
+                                u.get_nanbox_f64(),
+                            );
+                            proxy_delete_str_key_or_throw(
+                                (p.get_nanbox_f64()),
+                                upper_key.as_bytes(),
+                            );
                         }
                         (Some(l), None) => {
-                            proxy_delete_str_key_or_throw(p(), lower_key.as_bytes());
-                            proxy_set_str_key(p(), upper_key.as_bytes(), l.get_nanbox_f64());
+                            proxy_delete_str_key_or_throw(
+                                (p.get_nanbox_f64()),
+                                lower_key.as_bytes(),
+                            );
+                            proxy_set_str_key(
+                                (p.get_nanbox_f64()),
+                                upper_key.as_bytes(),
+                                l.get_nanbox_f64(),
+                            );
                         }
                         (None, None) => {}
                     }
                 }
-                Some(p())
+                Some((p.get_nanbox_f64()))
             }
             // §23.1.3.31 Array.prototype.splice — removed elements land in a
             // FRESH real array (holes preserved: absent sources leave the
             // pre-holed slot untouched); tail moves are HasProperty-gated and
             // a refused `deleteProperty` throws BEFORE the length write.
             "splice" => {
-                let len = proxy_array_length(p());
+                let len = proxy_array_length((p.get_nanbox_f64()));
                 let actual_start = if args_len >= 1 {
                     proxy_relative_index(arg(0), len)
                 } else {
@@ -523,13 +574,18 @@ pub(super) fn proxy_array_mutator(
                 if actual_delete_count > u32::MAX as u64 {
                     crate::array::array_length_range_error();
                 }
-                let removed =
-                    super::species::array_species_create(p(), actual_delete_count as usize);
+                let removed = super::species::array_species_create(
+                    (p.get_nanbox_f64()),
+                    actual_delete_count as usize,
+                );
                 let removed_handle = scope.root_nanbox_f64(removed);
                 for k in 0..actual_delete_count {
                     let from = (actual_start + k).to_string();
-                    if proxy_has_str_key(p(), from.as_bytes()) {
-                        let value = scope.root_nanbox_f64(proxy_get_str_key(p(), from.as_bytes()));
+                    if proxy_has_str_key((p.get_nanbox_f64()), from.as_bytes()) {
+                        let value = scope.root_nanbox_f64(proxy_get_str_key(
+                            (p.get_nanbox_f64()),
+                            from.as_bytes(),
+                        ));
                         super::species::species_result_set(
                             removed_handle.get_nanbox_f64(),
                             k as usize,
@@ -544,19 +600,28 @@ pub(super) fn proxy_array_mutator(
                     while k < len - actual_delete_count {
                         let from = (k + actual_delete_count).to_string();
                         let to = (k + item_count).to_string();
-                        if proxy_has_str_key(p(), from.as_bytes()) {
-                            let v_handle =
-                                scope.root_nanbox_f64(proxy_get_str_key(p(), from.as_bytes()));
-                            proxy_set_str_key(p(), to.as_bytes(), v_handle.get_nanbox_f64());
+                        if proxy_has_str_key((p.get_nanbox_f64()), from.as_bytes()) {
+                            let v_handle = scope.root_nanbox_f64(proxy_get_str_key(
+                                (p.get_nanbox_f64()),
+                                from.as_bytes(),
+                            ));
+                            proxy_set_str_key(
+                                (p.get_nanbox_f64()),
+                                to.as_bytes(),
+                                v_handle.get_nanbox_f64(),
+                            );
                         } else {
-                            proxy_delete_str_key_or_throw(p(), to.as_bytes());
+                            proxy_delete_str_key_or_throw((p.get_nanbox_f64()), to.as_bytes());
                         }
                         k += 1;
                     }
                     // …then delete the vacated trailing slots.
                     let mut k = len;
                     while k > len - actual_delete_count + item_count {
-                        proxy_delete_str_key_or_throw(p(), (k - 1).to_string().as_bytes());
+                        proxy_delete_str_key_or_throw(
+                            (p.get_nanbox_f64()),
+                            (k - 1).to_string().as_bytes(),
+                        );
                         k -= 1;
                     }
                 } else if item_count > actual_delete_count {
@@ -565,25 +630,31 @@ pub(super) fn proxy_array_mutator(
                     while k > actual_start {
                         let from = (k + actual_delete_count - 1).to_string();
                         let to = (k + item_count - 1).to_string();
-                        if proxy_has_str_key(p(), from.as_bytes()) {
-                            let v_handle =
-                                scope.root_nanbox_f64(proxy_get_str_key(p(), from.as_bytes()));
-                            proxy_set_str_key(p(), to.as_bytes(), v_handle.get_nanbox_f64());
+                        if proxy_has_str_key((p.get_nanbox_f64()), from.as_bytes()) {
+                            let v_handle = scope.root_nanbox_f64(proxy_get_str_key(
+                                (p.get_nanbox_f64()),
+                                from.as_bytes(),
+                            ));
+                            proxy_set_str_key(
+                                (p.get_nanbox_f64()),
+                                to.as_bytes(),
+                                v_handle.get_nanbox_f64(),
+                            );
                         } else {
-                            proxy_delete_str_key_or_throw(p(), to.as_bytes());
+                            proxy_delete_str_key_or_throw((p.get_nanbox_f64()), to.as_bytes());
                         }
                         k -= 1;
                     }
                 }
                 for j in 0..args_len.saturating_sub(2) {
                     proxy_set_str_key(
-                        p(),
+                        (p.get_nanbox_f64()),
                         (actual_start + j as u64).to_string().as_bytes(),
                         arg(2 + j),
                     );
                 }
                 proxy_set_str_key(
-                    p(),
+                    (p.get_nanbox_f64()),
                     b"length",
                     (len - actual_delete_count + item_count) as f64,
                 );

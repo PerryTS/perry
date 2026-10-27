@@ -194,13 +194,16 @@ pub unsafe extern "C" fn perry_component_frame_bytes(
 ) -> u32 {
     frame(pointer).guard(|frame| {
         let len = u32::try_from(len).unwrap_or_else(|_| fail("Component byte list is too long"));
-        let array = crate::typedarray::typed_array_alloc(crate::typedarray::KIND_UINT8, len);
+        let array = crate::typedarray_hook_slots::typed_array_alloc(
+            crate::typedarray_hook_slots::KIND_UINT8,
+            len,
+        );
         let slot = frame.add(crate::value::js_nanbox_pointer(array as i64));
         for (i, byte) in span(bytes, len as usize).iter().enumerate() {
             let array = JSValue::from_bits(frame.get(slot).to_bits())
-                .as_pointer::<crate::typedarray::TypedArrayHeader>()
+                .as_pointer::<crate::typedarray_hook_slots::TypedArrayHeader>()
                 as *mut _;
-            crate::typedarray::js_typed_array_set(array, i as i32, *byte as f64);
+            crate::typedarray_hook_slots::js_typed_array_set(array, i as i32, *byte as f64);
         }
         slot
     })

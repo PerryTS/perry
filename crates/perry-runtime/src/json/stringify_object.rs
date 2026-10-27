@@ -53,7 +53,7 @@ unsafe fn member_to_json(value: f64) -> Option<f64> {
     if crate::buffer::is_registered_buffer(ptr as usize) {
         return None;
     }
-    if crate::typedarray::lookup_typed_array_kind(ptr as usize).is_some() {
+    if crate::typedarray_hook_slots::lookup_typed_array_kind(ptr as usize).is_some() {
         return None;
     }
 

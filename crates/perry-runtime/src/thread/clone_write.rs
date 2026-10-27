@@ -479,7 +479,7 @@ impl Writer<'_> {
         if crate::buffer::is_registered_buffer(addr) || crate::buffer::is_uint8array_buffer(addr) {
             return self.buffer(addr);
         }
-        if let Some(kind) = crate::typedarray::lookup_typed_array_kind(addr) {
+        if let Some(kind) = crate::typedarray_hook_slots::lookup_typed_array_kind(addr) {
             return self.typed_array(addr, kind);
         }
         let Some(header) = crate::value::addr_class::try_read_gc_header(addr) else {
@@ -1214,11 +1214,11 @@ impl Writer<'_> {
         let kind = if crate::buffer::is_data_view(addr) {
             VIEW_KIND_DATA_VIEW
         } else {
-            crate::typedarray::KIND_UINT8
+            crate::typedarray_hook_slots::KIND_UINT8
         };
         let length = crate::buffer::store::raw_length(header as usize);
         if self.mode == CloneMode::Thread {
-            if kind == crate::typedarray::KIND_UINT8 {
+            if kind == crate::typedarray_hook_slots::KIND_UINT8 {
                 // Keep perry/thread's plain-bytes form: no backing copy.
                 if let Err(seen) = self.begin(Some(addr)) {
                     return seen;
@@ -1254,7 +1254,7 @@ impl Writer<'_> {
             return SerializedValue::Unsupported("detached ArrayBuffer");
         }
         if self.mode == CloneMode::Thread {
-            let bytes = length * crate::typedarray::elem_size_for_kind(kind) as u32;
+            let bytes = length * crate::typedarray_hook_slots::elem_size_for_kind(kind) as u32;
             return self.visible_bytes_view(addr, kind, bytes);
         }
         if let Err(seen) = self.begin(Some(addr)) {
@@ -1289,7 +1289,7 @@ impl Writer<'_> {
         let elem = if kind == VIEW_KIND_DATA_VIEW {
             1
         } else {
-            crate::typedarray::elem_size_for_kind(kind) as u32
+            crate::typedarray_hook_slots::elem_size_for_kind(kind) as u32
         };
         SerializedValue::View {
             kind,

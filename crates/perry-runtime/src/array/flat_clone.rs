@@ -682,9 +682,9 @@ pub extern "C" fn js_array_clone(src: *const ArrayHeader) -> *mut ArrayHeader {
         } else {
             0
         };
-        if crate::typedarray::lookup_typed_array_kind(raw_addr).is_some() {
-            return crate::typedarray::typed_array_to_array(
-                raw_addr as *const crate::typedarray::TypedArrayHeader,
+        if crate::typedarray_hook_slots::lookup_typed_array_kind(raw_addr).is_some() {
+            return crate::typedarray_hook_slots::typed_array_to_array(
+                raw_addr as *const crate::typedarray_hook_slots::TypedArrayHeader,
             );
         }
     }

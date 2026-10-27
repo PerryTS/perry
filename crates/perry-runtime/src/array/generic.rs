@@ -248,7 +248,7 @@ fn classify_pointer(recv: f64) -> Option<PtrKind> {
     // Typed arrays / buffers are `std::alloc`-backed (no GC header) — probe
     // their registries before any GC-header read.
     if crate::buffer::is_registered_buffer(raw)
-        || crate::typedarray::lookup_typed_array_kind(raw).is_some()
+        || crate::typedarray_hook_slots::lookup_typed_array_kind(raw).is_some()
     {
         return Some(PtrKind::IndexedNative);
     }

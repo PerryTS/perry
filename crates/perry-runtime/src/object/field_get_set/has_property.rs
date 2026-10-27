@@ -611,8 +611,8 @@ fn object_has_property_generic(obj: f64, key: f64) -> f64 {
         return nanbox_false;
     }
     if obj_addr >= 0x10000 {
-        if crate::typedarray::lookup_typed_array_kind(obj_addr as usize).is_some() {
-            let ta = obj_addr as *const crate::typedarray::TypedArrayHeader;
+        if crate::typedarray_hook_slots::lookup_typed_array_kind(obj_addr as usize).is_some() {
+            let ta = obj_addr as *const crate::typedarray_hook_slots::TypedArrayHeader;
             if key_val.is_any_string() {
                 let key_str =
                     crate::value::js_get_string_pointer_unified(key) as *const crate::StringHeader;
@@ -750,7 +750,7 @@ fn object_has_property_generic(obj: f64, key: f64) -> f64 {
                         as *const crate::StringHeader;
                     if unsafe {
                         crate::typedarray_props::typed_array_has_own_property(
-                            obj_addr as *const crate::typedarray::TypedArrayHeader,
+                            obj_addr as *const crate::typedarray_hook_slots::TypedArrayHeader,
                             key_str,
                         )
                     } {

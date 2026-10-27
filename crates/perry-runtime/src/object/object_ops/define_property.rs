@@ -365,24 +365,26 @@ pub(crate) unsafe fn apply_property_descriptor(
             .filter(|addr| crate::buffer::is_registered_buffer(*addr))
             .filter(|addr| !crate::buffer::is_uint8array_buffer(*addr));
         if buffer_addr.is_some() {
-            let current_obj = || f64::from_bits(obj_value_handle.get_nanbox_u64());
-            let current_addr = || crate::value::js_nanbox_get_pointer(current_obj()) as usize;
-
-            let current_key = || key_handle.get_nanbox_f64();
+            let current_addr = || {
+                crate::value::js_nanbox_get_pointer(
+                    (f64::from_bits(obj_value_handle.get_nanbox_u64())),
+                ) as usize
+            };
 
             // Symbol keys stay Symbols; string coercion would create an
             // unrelated `"Symbol(...)"` expando that symbol lookup cannot see.
-            if crate::symbol::js_is_symbol(current_key()) != 0 {
+            if crate::symbol::js_is_symbol((key_handle.get_nanbox_f64())) != 0 {
                 return super::define_symbol_property::define_symbol_property(
                     &scope,
-                    current_obj(),
-                    current_obj(),
-                    current_key(),
+                    (f64::from_bits(obj_value_handle.get_nanbox_u64())),
+                    (f64::from_bits(obj_value_handle.get_nanbox_u64())),
+                    (key_handle.get_nanbox_f64()),
                     descriptor,
                 );
             }
 
-            if let Some(name) = super::super::metadata_key_to_string(current_key()) {
+            if let Some(name) = super::super::metadata_key_to_string((key_handle.get_nanbox_f64()))
+            {
                 // Key coercion and descriptor getters may collect. Every side
                 // table access below therefore re-derives the buffer owner from
                 // the rooted receiver instead of retaining `buffer_addr`.
@@ -425,7 +427,7 @@ pub(crate) unsafe fn apply_property_descriptor(
                         if has_get && get_field.get_nanbox_u64() != crate::value::TAG_UNDEFINED {
                             crate::closure::clone_closure_rebind_this(
                                 get_field.get_nanbox_u64(),
-                                current_obj(),
+                                (f64::from_bits(obj_value_handle.get_nanbox_u64())),
                             )
                         } else if !has_get {
                             existing_get.get_nanbox_u64()
@@ -437,7 +439,7 @@ pub(crate) unsafe fn apply_property_descriptor(
                         if has_set && set_field.get_nanbox_u64() != crate::value::TAG_UNDEFINED {
                             crate::closure::clone_closure_rebind_this(
                                 set_field.get_nanbox_u64(),
-                                current_obj(),
+                                (f64::from_bits(obj_value_handle.get_nanbox_u64())),
                             )
                         } else if !has_set {
                             existing_set.get_nanbox_u64()
@@ -969,7 +971,7 @@ pub(crate) unsafe fn apply_property_descriptor(
             if let Some(ref key_name) = key_rust {
                 return crate::typedarray_props::typed_array_define_own_property(
                     obj_value,
-                    addr as *mut crate::typedarray::TypedArrayHeader,
+                    addr as *mut crate::typedarray_hook_slots::TypedArrayHeader,
                     key_str,
                     key_name,
                     descriptor,
@@ -1035,12 +1037,12 @@ pub(crate) unsafe fn apply_property_descriptor(
             std::str::from_utf8(name_bytes).ok().map(|s| s.to_string())
         };
         if !receiver_plain_object
-            && crate::typedarray::lookup_typed_array_kind(obj as usize).is_some()
+            && crate::typedarray_hook_slots::lookup_typed_array_kind(obj as usize).is_some()
         {
             if let Some(ref key_name) = key_rust {
                 return crate::typedarray_props::typed_array_define_own_property(
                     obj_value,
-                    obj as *mut crate::typedarray::TypedArrayHeader,
+                    obj as *mut crate::typedarray_hook_slots::TypedArrayHeader,
                     key_str,
                     key_name,
                     descriptor,

@@ -642,10 +642,11 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                     let bytes = std::slice::from_raw_parts(data, len);
                     std::str::from_utf8(bytes).unwrap_or("Symbol()").to_string()
                 }
-            } else if crate::typedarray::lookup_typed_array_kind(ptr as usize).is_some() {
+            } else if crate::typedarray_hook_slots::lookup_typed_array_kind(ptr as usize).is_some()
+            {
                 // Typed array — Int32Array(N) [ a, b, c ] etc.
-                let ta = ptr as *const crate::typedarray::TypedArrayHeader;
-                crate::typedarray::format_typed_array(ta)
+                let ta = ptr as *const crate::typedarray_hook_slots::TypedArrayHeader;
+                crate::typedarray_hook_slots::format_typed_array(ta)
             } else if crate::buffer::is_data_view(ptr as usize) {
                 let buf_ptr = ptr as *const crate::buffer::BufferHeader;
                 array_buffer::format_data_view_value(buf_ptr)
@@ -855,9 +856,11 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                 && (raw_bits >> 48) == 0
                 && crate::buffer::header_is_owned(raw_bits as usize)
             {
-                if crate::typedarray::lookup_typed_array_kind(raw_bits as usize).is_some() {
-                    let ta = raw_bits as *const crate::typedarray::TypedArrayHeader;
-                    return crate::typedarray::format_typed_array(ta);
+                if crate::typedarray_hook_slots::lookup_typed_array_kind(raw_bits as usize)
+                    .is_some()
+                {
+                    let ta = raw_bits as *const crate::typedarray_hook_slots::TypedArrayHeader;
+                    return crate::typedarray_hook_slots::format_typed_array(ta);
                 }
                 if crate::buffer::is_registered_buffer(raw_bits as usize) {
                     let buf_ptr = raw_bits as *const crate::buffer::BufferHeader;
@@ -1476,7 +1479,7 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                     ))
                     .is_some()
                     || crate::buffer::is_registered_buffer(ptr as usize)
-                    || crate::typedarray::lookup_typed_array_kind(ptr as usize).is_some()
+                    || crate::typedarray_hook_slots::lookup_typed_array_kind(ptr as usize).is_some()
                 {
                     // Symbol / RegExp / Buffer / TypedArray field values need
                     // type-specific rendering this JSON-ish formatter never

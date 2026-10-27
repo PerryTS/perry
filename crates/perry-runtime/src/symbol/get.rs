@@ -1136,7 +1136,9 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
             }
         }
     }
-    if raw_addr >= 0x1000 && crate::typedarray::lookup_typed_array_kind(raw_addr).is_some() {
+    if raw_addr >= 0x1000
+        && crate::typedarray_hook_slots::lookup_typed_array_kind(raw_addr).is_some()
+    {
         let iter_wk = well_known_symbol("iterator");
         if !iter_wk.is_null() {
             let iter_f64 =

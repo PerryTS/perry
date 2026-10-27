@@ -1386,3 +1386,6 @@ mod messaging_hook_slots;
 mod wasi_hook_slots;
 
 pub mod event_target_hook_slots;
+
+mod byte_cell_support;
+pub mod typedarray_hook_slots;

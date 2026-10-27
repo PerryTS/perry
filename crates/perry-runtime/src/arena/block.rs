@@ -705,7 +705,7 @@ impl Drop for Arena {
             // #11463: a typed-array cache hit must not survive reuse of this
             // block as another thread's nursery (e.g. a fresh Promise). This
             // only touches atomics, so it is safe during TLS destruction.
-            crate::typedarray::invalidate_caches_in_range(
+            crate::typedarray_hook_slots::invalidate_caches_in_range(
                 block.data as usize,
                 block.data as usize + block.size,
             );

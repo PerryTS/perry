@@ -428,7 +428,7 @@ pub(crate) unsafe fn own_property(obj_value: f64, key_value: f64) -> Option<OwnP
             }
             return OwnProperty::public(
                 crate::typedarray_props::typed_array_get_own_property_descriptor(
-                    addr as *const crate::typedarray::TypedArrayHeader,
+                    addr as *const crate::typedarray_hook_slots::TypedArrayHeader,
                     key_str,
                 ),
             );
@@ -1238,7 +1238,7 @@ fn js_object_get_own_property_names_shape(obj_value: f64) -> f64 {
         }
         if let Some(addr) = crate::typedarray_props::typed_array_addr_from_value(obj_value) {
             let result = crate::typedarray_props::typed_array_own_property_names(
-                addr as *const crate::typedarray::TypedArrayHeader,
+                addr as *const crate::typedarray_hook_slots::TypedArrayHeader,
                 false,
             );
             return f64::from_bits((result as u64) | 0x7FFD_0000_0000_0000);

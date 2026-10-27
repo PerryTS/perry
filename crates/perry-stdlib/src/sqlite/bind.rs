@@ -257,7 +257,7 @@ pub(crate) fn is_named_parameter_object(value: f64) -> bool {
     let raw = raw_addr_from_value(value);
     raw >= 0x1000
         && !is_registered_buffer(raw)
-        && perry_runtime::typedarray::lookup_typed_array_kind(raw).is_none()
+        && perry_runtime::typedarray_hook_slots::lookup_typed_array_kind(raw).is_none()
         && unsafe { perry_runtime::symbol::js_is_symbol(value) == 0 }
 }
 
@@ -664,8 +664,8 @@ mod tests {
 
     #[test]
     fn typed_arrays_are_not_named_parameter_objects() {
-        let typed_array = perry_runtime::typedarray::js_typed_array_new_empty(
-            perry_runtime::typedarray::KIND_UINT8 as i32,
+        let typed_array = perry_runtime::typedarray_hook_slots::js_typed_array_new_empty(
+            perry_runtime::typedarray_hook_slots::KIND_UINT8 as i32,
             1,
         );
         let value = perry_runtime::value::js_nanbox_pointer(typed_array as i64);

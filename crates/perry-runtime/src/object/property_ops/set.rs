@@ -188,7 +188,7 @@ pub(crate) fn raw_ptr_from_value(value: f64) -> Option<usize> {
 pub(crate) fn array_ptr_from_value(value: f64) -> Option<*mut crate::array::ArrayHeader> {
     let raw = raw_ptr_from_value(value)?;
     if crate::buffer::is_registered_buffer(raw)
-        || crate::typedarray::lookup_typed_array_kind(raw).is_some()
+        || crate::typedarray_hook_slots::lookup_typed_array_kind(raw).is_some()
         || !crate::object::is_valid_obj_ptr(raw as *const u8)
     {
         return None;
@@ -306,9 +306,9 @@ pub(crate) fn set_integer_indexed_exotic(target: f64, key: f64, value: f64) -> b
         crate::buffer::js_buffer_set(raw as *mut crate::buffer::BufferHeader, index, value as i32);
         return true;
     }
-    if crate::typedarray::lookup_typed_array_kind(raw).is_some() {
-        crate::typedarray::js_typed_array_set(
-            raw as *mut crate::typedarray::TypedArrayHeader,
+    if crate::typedarray_hook_slots::lookup_typed_array_kind(raw).is_some() {
+        crate::typedarray_hook_slots::js_typed_array_set(
+            raw as *mut crate::typedarray_hook_slots::TypedArrayHeader,
             index,
             value,
         );

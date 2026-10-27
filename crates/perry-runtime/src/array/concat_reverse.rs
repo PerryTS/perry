@@ -108,9 +108,9 @@ pub extern "C" fn js_array_concat(
     // Issue #578: typed-array source — materialize through the per-kind
     // accessor so `[...new Uint8Array([1,2,3])]` and `arr.concat(typedArr)`
     // see the byte values, not the byte buffer reinterpreted as f64.
-    if crate::typedarray::lookup_typed_array_kind(src as usize).is_some() {
-        let arr = crate::typedarray::typed_array_to_array(
-            src as *const crate::typedarray::TypedArrayHeader,
+    if crate::typedarray_hook_slots::lookup_typed_array_kind(src as usize).is_some() {
+        let arr = crate::typedarray_hook_slots::typed_array_to_array(
+            src as *const crate::typedarray_hook_slots::TypedArrayHeader,
         );
         return js_array_concat(dest, arr);
     }
@@ -300,7 +300,7 @@ pub extern "C" fn js_array_reverse(arr: *mut ArrayHeader) -> *mut ArrayHeader {
     // #3148/#2879: TypedArray receiver — reverse over element-typed storage.
     // Pre-clean for the reason `typed_array_receiver` documents.
     if let Some(ta) = typed_array_receiver(arr) {
-        return crate::typedarray::js_typed_array_reverse(ta) as *mut ArrayHeader;
+        return crate::typedarray_hook_slots::js_typed_array_reverse(ta) as *mut ArrayHeader;
     }
     let arr = clean_arr_ptr_mut(arr);
     if arr.is_null() {
@@ -580,7 +580,7 @@ pub extern "C" fn js_array_fill(arr: *mut ArrayHeader, value: f64) -> *mut Array
     // form reaches here — codegen sends 2-/3-arg fills to
     // `js_array_fill_range`, which passes the real range on.
     if let Some(ta) = typed_array_receiver(arr) {
-        return crate::typedarray::js_typed_array_fill(ta, value, 0, 0.0, 0, 0.0)
+        return crate::typedarray_hook_slots::js_typed_array_fill(ta, value, 0, 0.0, 0, 0.0)
             as *mut ArrayHeader;
     }
     let arr = clean_arr_ptr_mut(arr);
@@ -673,7 +673,7 @@ pub extern "C" fn js_array_fill_range(
     // #3148/#2879: TypedArray receiver — fill [start, end) over element-typed
     // storage. Pre-clean for the reason `typed_array_receiver` documents.
     if let Some(ta) = typed_array_receiver(arr) {
-        return crate::typedarray::js_typed_array_fill(ta, value, 1, start, 1, end)
+        return crate::typedarray_hook_slots::js_typed_array_fill(ta, value, 1, start, 1, end)
             as *mut ArrayHeader;
     }
     let arr = clean_arr_ptr_mut(arr);

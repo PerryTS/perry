@@ -99,7 +99,7 @@ impl Drop for GcSuppressGuard {
 /// ordering is Node's, NOT Perry's: Buffer is inserted at index 10, pushing the
 /// BigInt views to 11/12. Verified empirically against `v8.serialize`.
 fn v8_index_for_kind(kind: u8) -> u64 {
-    use crate::typedarray::*;
+    use crate::typedarray_hook_slots::*;
     match kind {
         KIND_INT8 => 0,
         KIND_UINT8 => 1,
@@ -120,7 +120,7 @@ fn v8_index_for_kind(kind: u8) -> u64 {
 /// Inverse of [`v8_index_for_kind`]; `None` for Buffer (10), DataView (9), or an
 /// unknown index — the caller builds those specially.
 fn kind_for_v8_index(idx: u64) -> Option<u8> {
-    use crate::typedarray::*;
+    use crate::typedarray_hook_slots::*;
     Some(match idx {
         0 => KIND_INT8,
         1 => KIND_UINT8,
@@ -257,7 +257,7 @@ impl Serializer {
             }
             return true;
         }
-        if let Some(kind) = crate::typedarray::lookup_typed_array_kind(raw) {
+        if let Some(kind) = crate::typedarray_hook_slots::lookup_typed_array_kind(raw) {
             if self.write_reference_or_register(raw) {
                 return true;
             }
@@ -1254,13 +1254,13 @@ fn int_to_value(v: i64) -> f64 {
 
 /// Build a NaN-boxed typed array of `kind` from raw little-endian bytes.
 fn make_typed_array(kind: u8, bytes: &[u8]) -> f64 {
-    let elem_size = crate::typedarray::elem_size_for_kind(kind);
+    let elem_size = crate::typedarray_hook_slots::elem_size_for_kind(kind);
     let length = if elem_size == 0 {
         0
     } else {
         bytes.len() / elem_size
     };
-    let ta = crate::typedarray::js_typed_array_new_empty(kind as i32, length as i32);
+    let ta = crate::typedarray_hook_slots::js_typed_array_new_empty(kind as i32, length as i32);
     if ta.is_null() {
         return cp_undefined();
     }

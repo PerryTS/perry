@@ -509,15 +509,15 @@ pub(crate) fn get_field_by_name_object_tail(
         // pre-fix, only Uint8Array worked (it's a registered buffer) so
         // multi-byte `.byteLength` returned undefined.
         if let Some(kind) = crate::gc::is_typed_array_type(gc_type)
-            .then(|| crate::typedarray::lookup_typed_array_kind(obj as usize))
+            .then(|| crate::typedarray_hook_slots::lookup_typed_array_kind(obj as usize))
             .flatten()
         {
             if !key.is_null() {
                 let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
                 let key_len = (*key).byte_len as usize;
                 let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
-                let ta = obj as *const crate::typedarray::TypedArrayHeader;
-                let elem_size = crate::typedarray::elem_size_for_kind(kind);
+                let ta = obj as *const crate::typedarray_hook_slots::TypedArrayHeader;
+                let elem_size = crate::typedarray_hook_slots::elem_size_for_kind(kind);
                 if let Some(value) =
                     crate::typedarray_props::typed_array_get_own_property_value(ta, key)
                 {
@@ -525,11 +525,11 @@ pub(crate) fn get_field_by_name_object_tail(
                 }
                 match key_bytes {
                     b"length" => {
-                        let len = crate::typedarray::js_typed_array_length(ta);
+                        let len = crate::typedarray_hook_slots::js_typed_array_length(ta);
                         return JSValue::number(len as f64);
                     }
                     b"byteLength" => {
-                        let len = crate::typedarray::js_typed_array_length(ta);
+                        let len = crate::typedarray_hook_slots::js_typed_array_length(ta);
                         return JSValue::number((len as usize * elem_size) as f64);
                     }
                     b"buffer" => {
@@ -553,7 +553,7 @@ pub(crate) fn get_field_by_name_object_tail(
                     // needed so a default-`SpeciesCreate`d result reports
                     // `result.constructor === TA`.
                     b"constructor" => {
-                        let name = crate::typedarray::name_for_kind(kind);
+                        let name = crate::typedarray_hook_slots::name_for_kind(kind);
                         let v = js_get_global_this_builtin_value(name.as_ptr(), name.len());
                         return JSValue::from_bits(v.to_bits());
                     }

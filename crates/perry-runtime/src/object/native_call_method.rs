@@ -1041,7 +1041,7 @@ unsafe fn gc_pointer_and_type_from_value(value: f64) -> Option<(*const u8, u8)> 
     if crate::buffer::is_registered_buffer(addr) {
         return Some((ptr, crate::gc::GC_TYPE_BUFFER));
     }
-    if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
+    if crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some() {
         return Some((ptr, crate::gc::GC_TYPE_TYPED_ARRAY));
     }
     if !is_valid_obj_ptr(ptr as *const u8) {

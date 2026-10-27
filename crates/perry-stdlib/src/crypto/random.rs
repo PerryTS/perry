@@ -573,13 +573,14 @@ pub extern "C" fn js_crypto_random_fill_sync(
     size_bits: f64,
 ) -> f64 {
     let raw = raw_addr_from_value(buf_bits);
-    let elem_size = if let Some(kind) = perry_runtime::typedarray::lookup_typed_array_kind(raw) {
-        perry_runtime::typedarray::elem_size_for_kind(kind).max(1)
-    } else if perry_runtime::buffer::is_registered_buffer(raw) {
-        1
-    } else {
-        throw_invalid_random_fill_buffer(buf_bits);
-    };
+    let elem_size =
+        if let Some(kind) = perry_runtime::typedarray_hook_slots::lookup_typed_array_kind(raw) {
+            perry_runtime::typedarray_hook_slots::elem_size_for_kind(kind).max(1)
+        } else if perry_runtime::buffer::is_registered_buffer(raw) {
+            1
+        } else {
+            throw_invalid_random_fill_buffer(buf_bits);
+        };
     let value = f64::from_bits(JSValue::pointer(raw as *const u8).bits());
     let byte_len = perry_runtime::buffer::bytes::no_gc(|scope| {
         perry_runtime::buffer::bytes::bytes(value, scope).map(<[u8]>::len)
@@ -919,7 +920,7 @@ mod tests {
         let owner = perry_runtime::native_arena::js_native_arena_alloc(96);
         let view = perry_runtime::native_arena::js_native_arena_view(
             owner as u64,
-            perry_runtime::typedarray::KIND_UINT8 as i32,
+            perry_runtime::typedarray_hook_slots::KIND_UINT8 as i32,
             8,
             64,
         );
@@ -955,7 +956,7 @@ mod tests {
         let owner = perry_runtime::native_arena::js_native_arena_alloc(16);
         let view = perry_runtime::native_arena::js_native_arena_view(
             owner as u64,
-            perry_runtime::typedarray::KIND_UINT8 as i32,
+            perry_runtime::typedarray_hook_slots::KIND_UINT8 as i32,
             0,
             16,
         );

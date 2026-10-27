@@ -308,20 +308,32 @@ pub(super) unsafe fn construct(
         | BuiltinConstructorIdentity::BigInt64Array
         | BuiltinConstructorIdentity::BigUint64Array => {
             let kind = match name {
-                BuiltinConstructorIdentity::Int8Array => crate::typedarray::KIND_INT8,
-                BuiltinConstructorIdentity::Uint8Array => crate::typedarray::KIND_UINT8,
+                BuiltinConstructorIdentity::Int8Array => crate::typedarray_hook_slots::KIND_INT8,
+                BuiltinConstructorIdentity::Uint8Array => crate::typedarray_hook_slots::KIND_UINT8,
                 BuiltinConstructorIdentity::Uint8ClampedArray => {
-                    crate::typedarray::KIND_UINT8_CLAMPED
+                    crate::typedarray_hook_slots::KIND_UINT8_CLAMPED
                 }
-                BuiltinConstructorIdentity::Int16Array => crate::typedarray::KIND_INT16,
-                BuiltinConstructorIdentity::Uint16Array => crate::typedarray::KIND_UINT16,
-                BuiltinConstructorIdentity::Int32Array => crate::typedarray::KIND_INT32,
-                BuiltinConstructorIdentity::Uint32Array => crate::typedarray::KIND_UINT32,
-                BuiltinConstructorIdentity::Float16Array => crate::typedarray::KIND_FLOAT16,
-                BuiltinConstructorIdentity::Float32Array => crate::typedarray::KIND_FLOAT32,
-                BuiltinConstructorIdentity::Float64Array => crate::typedarray::KIND_FLOAT64,
-                BuiltinConstructorIdentity::BigInt64Array => crate::typedarray::KIND_BIGINT64,
-                _ => crate::typedarray::KIND_BIGUINT64,
+                BuiltinConstructorIdentity::Int16Array => crate::typedarray_hook_slots::KIND_INT16,
+                BuiltinConstructorIdentity::Uint16Array => {
+                    crate::typedarray_hook_slots::KIND_UINT16
+                }
+                BuiltinConstructorIdentity::Int32Array => crate::typedarray_hook_slots::KIND_INT32,
+                BuiltinConstructorIdentity::Uint32Array => {
+                    crate::typedarray_hook_slots::KIND_UINT32
+                }
+                BuiltinConstructorIdentity::Float16Array => {
+                    crate::typedarray_hook_slots::KIND_FLOAT16
+                }
+                BuiltinConstructorIdentity::Float32Array => {
+                    crate::typedarray_hook_slots::KIND_FLOAT32
+                }
+                BuiltinConstructorIdentity::Float64Array => {
+                    crate::typedarray_hook_slots::KIND_FLOAT64
+                }
+                BuiltinConstructorIdentity::BigInt64Array => {
+                    crate::typedarray_hook_slots::KIND_BIGINT64
+                }
+                _ => crate::typedarray_hook_slots::KIND_BIGUINT64,
             } as i32;
             let arg0 = if args.is_empty() {
                 f64::from_bits(crate::value::JSValue::number(0.0).bits())
@@ -340,14 +352,14 @@ pub(super) unsafe fn construct(
             // back to `js_typed_array_new` inside `js_typed_array_view`.
             let ta = if args.len() >= 2 {
                 let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
-                crate::typedarray_view::js_typed_array_view(
+                crate::typedarray_hook_slots::js_typed_array_view(
                     kind,
                     arg0,
                     args[1],
                     args.get(2).copied().unwrap_or(undefined),
                 )
             } else {
-                crate::typedarray::js_typed_array_new(kind, arg0)
+                crate::typedarray_hook_slots::js_typed_array_new(kind, arg0)
             };
             return Some(crate::value::js_nanbox_pointer(ta as i64));
         }

@@ -1041,11 +1041,13 @@ fn make_instance_this(
     let obj_handle = scope.root_raw_mut_ptr(obj);
     set_internal_field_from_raw_handle(&obj_handle, KEY_KIND, string_value(kind));
     set_internal_field_from_raw_handle(&obj_handle, KEY_LOCALE, string_value(&locale));
-    let current_options = || options_handle.get_nanbox_f64();
+    let current_options = &options_handle;
 
     match kind {
         KIND_NUMBER => {
-            obj_handle.with_mut_ptr(|obj| configure_number_format(obj, &locale, current_options()));
+            obj_handle.with_mut_ptr(|obj| {
+                configure_number_format(obj, &locale, (current_options.get_nanbox_f64()))
+            });
             // The bound format function is the [[BoundFormat]] slot: ECMA-402
             // gives it an empty `name` ("") and length 1. It is installed as an
             // own `format` property so `nf.format(x)` dispatches without the
@@ -1106,7 +1108,7 @@ fn make_instance_this(
             // with no DateTimeFormat-relevant properties, i.e. behave as empty —
             // `object_ptr_from_value` already returns `None` for them, so option
             // reads simply see `undefined`.
-            if JSValue::from_bits(current_options().to_bits()).is_null() {
+            if JSValue::from_bits((current_options.get_nanbox_f64()).to_bits()).is_null() {
                 throw_type_error("Cannot convert undefined or null to object");
             }
             // GetOption reads run in the exact ECMA-402 CreateDateTimeFormat
@@ -1114,7 +1116,7 @@ fn make_instance_this(
             // localeMatcher / formatMatcher are validated but don't affect the
             // deterministic formatter, so their resolved value is discarded.
             let _ = enum_option(
-                current_options(),
+                (current_options.get_nanbox_f64()),
                 "localeMatcher",
                 &["lookup", "best fit"],
                 "best fit",
@@ -1122,31 +1124,35 @@ fn make_instance_this(
             // `calendar` must match the Unicode locale `type` nonterminal.
             // Unsupported well-formed values fall through ResolveLocale.
             let calendar_option =
-                get_locale_extension_option(current_options(), "calendar").map(|calendar| {
-                    canonicalize_calendar_id(&calendar).unwrap_or_else(|| {
-                        throw_range_error(&format!(
-                            "Value {calendar} out of range for Intl options property calendar"
-                        ))
-                    })
-                });
+                get_locale_extension_option((current_options.get_nanbox_f64()), "calendar").map(
+                    |calendar| {
+                        canonicalize_calendar_id(&calendar).unwrap_or_else(|| {
+                            throw_range_error(&format!(
+                                "Value {calendar} out of range for Intl options property calendar"
+                            ))
+                        })
+                    },
+                );
             // `numberingSystem` must be a well-formed `type` nonterminal. Read
             // it here (preserving the GetOption order options-order.js asserts),
             // then run ResolveLocale for `nu` — reconciling the option with the
             // locale's `-u-nu-` keyword so `resolvedOptions().locale` /
             // `.numberingSystem` reflect only the supported value actually used.
             let dtf_opt_ns =
-                get_locale_extension_option(current_options(), "numberingSystem").map(|ns| {
-                    if !is_well_formed_numbering_system(&ns) {
-                        throw_range_error(&format!(
-                            "Value {ns} out of range for Intl options property numberingSystem"
-                        ));
-                    }
-                    ns.to_ascii_lowercase()
-                });
+                get_locale_extension_option((current_options.get_nanbox_f64()), "numberingSystem")
+                    .map(|ns| {
+                        if !is_well_formed_numbering_system(&ns) {
+                            throw_range_error(&format!(
+                                "Value {ns} out of range for Intl options property numberingSystem"
+                            ));
+                        }
+                        ns.to_ascii_lowercase()
+                    });
             // hour12 (boolean) then hourCycle (enum) — both only surface in
             // `resolvedOptions` when the resolved pattern has an hour field.
-            let hour12 = get_bool_option(current_options(), "hour12");
-            let hour_cycle_option = get_option_string(current_options(), "hourCycle");
+            let hour12 = get_bool_option((current_options.get_nanbox_f64()), "hour12");
+            let hour_cycle_option =
+                get_option_string((current_options.get_nanbox_f64()), "hourCycle");
             if let Some(ref hc) = hour_cycle_option {
                 if !["h11", "h12", "h23", "h24"].contains(&hc.as_str()) {
                     throw_range_error(&format!(
@@ -1190,7 +1196,7 @@ fn make_instance_this(
             // for FormatOffsetTimeZoneIdentifier and validates/canonicalizes
             // named zones against the compiled IANA database when the
             // `intl-datetime` feature is present).
-            let time_zone = resolved_date_time_zone(current_options());
+            let time_zone = resolved_date_time_zone((current_options.get_nanbox_f64()));
             set_internal_field_from_raw_handle(
                 &obj_handle,
                 KEY_TIME_ZONE,
@@ -1216,7 +1222,7 @@ fn make_instance_this(
             let mut has_explicit_component = false;
             let has_weekday = dt_component_option_from_handle(
                 &obj_handle,
-                current_options(),
+                (current_options.get_nanbox_f64()),
                 "weekday",
                 &["narrow", "short", "long"],
                 KEY_WEEKDAY,
@@ -1226,14 +1232,14 @@ fn make_instance_this(
             // era counts toward the style-conflict check but NOT toward needDefaults.
             has_explicit_component |= dt_component_option_from_handle(
                 &obj_handle,
-                current_options(),
+                (current_options.get_nanbox_f64()),
                 "era",
                 &["narrow", "short", "long"],
                 KEY_ERA,
             );
             let has_year = dt_component_option_from_handle(
                 &obj_handle,
-                current_options(),
+                (current_options.get_nanbox_f64()),
                 "year",
                 &["2-digit", "numeric"],
                 KEY_YEAR,
@@ -1242,7 +1248,7 @@ fn make_instance_this(
             has_explicit_component |= has_year;
             let has_month = dt_component_option_from_handle(
                 &obj_handle,
-                current_options(),
+                (current_options.get_nanbox_f64()),
                 "month",
                 &["2-digit", "numeric", "narrow", "short", "long"],
                 KEY_MONTH,
@@ -1251,7 +1257,7 @@ fn make_instance_this(
             has_explicit_component |= has_month;
             let has_day = dt_component_option_from_handle(
                 &obj_handle,
-                current_options(),
+                (current_options.get_nanbox_f64()),
                 "day",
                 &["2-digit", "numeric"],
                 KEY_DAY,
@@ -1260,7 +1266,7 @@ fn make_instance_this(
             has_explicit_component |= has_day;
             let has_day_period = dt_component_option_from_handle(
                 &obj_handle,
-                current_options(),
+                (current_options.get_nanbox_f64()),
                 "dayPeriod",
                 &["narrow", "short", "long"],
                 KEY_DAY_PERIOD,
@@ -1269,7 +1275,7 @@ fn make_instance_this(
             has_explicit_component |= has_day_period;
             let has_hour = dt_component_option_from_handle(
                 &obj_handle,
-                current_options(),
+                (current_options.get_nanbox_f64()),
                 "hour",
                 &["2-digit", "numeric"],
                 KEY_HOUR,
@@ -1278,7 +1284,7 @@ fn make_instance_this(
             has_explicit_component |= has_hour;
             let has_minute = dt_component_option_from_handle(
                 &obj_handle,
-                current_options(),
+                (current_options.get_nanbox_f64()),
                 "minute",
                 &["2-digit", "numeric"],
                 KEY_MINUTE,
@@ -1287,7 +1293,7 @@ fn make_instance_this(
             has_explicit_component |= has_minute;
             let has_second = dt_component_option_from_handle(
                 &obj_handle,
-                current_options(),
+                (current_options.get_nanbox_f64()),
                 "second",
                 &["2-digit", "numeric"],
                 KEY_SECOND,
@@ -1296,9 +1302,12 @@ fn make_instance_this(
             has_explicit_component |= has_second;
             // fractionalSecondDigits is GetNumberOption(1, 3) — out of range or
             // non-numeric is a RangeError.
-            if let Some(n) =
-                get_number_option_coerced(current_options(), "fractionalSecondDigits", 1.0, 3.0)
-            {
+            if let Some(n) = get_number_option_coerced(
+                (current_options.get_nanbox_f64()),
+                "fractionalSecondDigits",
+                1.0,
+                3.0,
+            ) {
                 set_internal_field_from_raw_handle(&obj_handle, KEY_FRACTIONAL, n);
                 any_component = true;
                 has_explicit_component = true;
@@ -1306,7 +1315,7 @@ fn make_instance_this(
             // timeZoneName counts toward the style-conflict check but NOT toward needDefaults.
             has_explicit_component |= dt_component_option_from_handle(
                 &obj_handle,
-                current_options(),
+                (current_options.get_nanbox_f64()),
                 "timeZoneName",
                 &[
                     "short",
@@ -1319,14 +1328,14 @@ fn make_instance_this(
                 KEY_TIME_ZONE_NAME,
             );
             let _ = enum_option(
-                current_options(),
+                (current_options.get_nanbox_f64()),
                 "formatMatcher",
                 &["basic", "best fit"],
                 "best fit",
             );
             // dateStyle / timeStyle have no default (an absent style stays absent
             // in `resolvedOptions`); an out-of-range value is a RangeError.
-            let date_style = get_option_string(current_options(), "dateStyle");
+            let date_style = get_option_string((current_options.get_nanbox_f64()), "dateStyle");
             if let Some(ref ds) = date_style {
                 if !["full", "long", "medium", "short"].contains(&ds.as_str()) {
                     throw_range_error(&format!(
@@ -1334,7 +1343,7 @@ fn make_instance_this(
                     ));
                 }
             }
-            let time_style = get_option_string(current_options(), "timeStyle");
+            let time_style = get_option_string((current_options.get_nanbox_f64()), "timeStyle");
             if let Some(ref ts) = time_style {
                 if !["full", "long", "medium", "short"].contains(&ts.as_str()) {
                     throw_range_error(&format!(
@@ -1413,10 +1422,15 @@ fn make_instance_this(
             // TypeError) then GetOption in this exact order: usage, localeMatcher,
             // collation, numeric, caseFirst, sensitivity, ignorePunctuation
             // (constructor-options-throwing-getters / resolvedOptions order.js).
-            let _ = coerce_options_reject_null(current_options());
-            let usage = enum_option_strict(current_options(), "usage", &["sort", "search"], "sort");
+            let _ = coerce_options_reject_null((current_options.get_nanbox_f64()));
+            let usage = enum_option_strict(
+                (current_options.get_nanbox_f64()),
+                "usage",
+                &["sort", "search"],
+                "sort",
+            );
             let _ = enum_option_strict(
-                current_options(),
+                (current_options.get_nanbox_f64()),
                 "localeMatcher",
                 &["lookup", "best fit"],
                 "best fit",
@@ -1425,34 +1439,40 @@ fn make_instance_this(
             // /`search` values, are a RangeError (the latter are only valid as a
             // `usage` selector, never an explicit collation). A valid value wins
             // over any `-u-co-` keyword; absent ⇒ fall back to the extension.
-            let collation_opt =
-                get_option_string_coerced(current_options(), "collation").map(|v| {
-                    if !is_well_formed_numbering_system(&v) || v == "standard" || v == "search" {
-                        throw_range_error(&format!(
-                            "Value {v} out of range for Intl options property collation"
-                        ));
-                    }
-                    v
-                });
-            let numeric_opt = get_bool_option(current_options(), "numeric");
+            let collation_opt = get_option_string_coerced(
+                (current_options.get_nanbox_f64()),
+                "collation",
+            )
+            .map(|v| {
+                if !is_well_formed_numbering_system(&v) || v == "standard" || v == "search" {
+                    throw_range_error(&format!(
+                        "Value {v} out of range for Intl options property collation"
+                    ));
+                }
+                v
+            });
+            let numeric_opt = get_bool_option((current_options.get_nanbox_f64()), "numeric");
             let case_first_opt =
-                get_option_string_coerced(current_options(), "caseFirst").map(|v| {
-                    if ["upper", "lower", "false"].contains(&v.as_str()) {
-                        v
-                    } else {
-                        throw_range_error(&format!(
-                            "Value {v} out of range for Intl options property caseFirst"
-                        ))
-                    }
-                });
+                get_option_string_coerced((current_options.get_nanbox_f64()), "caseFirst").map(
+                    |v| {
+                        if ["upper", "lower", "false"].contains(&v.as_str()) {
+                            v
+                        } else {
+                            throw_range_error(&format!(
+                                "Value {v} out of range for Intl options property caseFirst"
+                            ))
+                        }
+                    },
+                );
             let sensitivity = enum_option_strict(
-                current_options(),
+                (current_options.get_nanbox_f64()),
                 "sensitivity",
                 &["base", "accent", "case", "variant"],
                 "variant",
             );
-            let ignore_punct = get_bool_option(current_options(), "ignorePunctuation")
-                .unwrap_or_else(|| locale == "th" || locale.starts_with("th-"));
+            let ignore_punct =
+                get_bool_option((current_options.get_nanbox_f64()), "ignorePunctuation")
+                    .unwrap_or_else(|| locale == "th" || locale.starts_with("th-"));
             let (resolved_locale, collation, numeric, case_first) =
                 resolve_collator_locale(&locale, collation_opt, numeric_opt, case_first_opt);
             set_internal_field_from_raw_handle(
@@ -1506,15 +1526,17 @@ fn make_instance_this(
         KIND_SEGMENTER => {
             // `? ToObject(options)` (null → TypeError), then GetOption in order:
             // localeMatcher, granularity (options-order.js / options-null.js).
-            let _ = coerce_options_reject_null(current_options());
+            let _ = coerce_options_reject_null((current_options.get_nanbox_f64()));
             let _ = enum_option_strict(
-                current_options(),
+                (current_options.get_nanbox_f64()),
                 "localeMatcher",
                 &["lookup", "best fit"],
                 "best fit",
             );
-            let granularity =
-                normalize_granularity(get_option_string_coerced(current_options(), "granularity"));
+            let granularity = normalize_granularity(get_option_string_coerced(
+                (current_options.get_nanbox_f64()),
+                "granularity",
+            ));
             set_internal_field_from_raw_handle(
                 &obj_handle,
                 KEY_GRANULARITY,
@@ -1537,21 +1559,21 @@ fn make_instance_this(
             // `? GetOptionsObject(options)` (any non-Object, non-undefined →
             // TypeError), then GetOption: localeMatcher, type, style
             // (options-getoptionsobject.js / options-order.js).
-            let _ = get_options_object(current_options());
+            let _ = get_options_object((current_options.get_nanbox_f64()));
             let _ = enum_option_strict(
-                current_options(),
+                (current_options.get_nanbox_f64()),
                 "localeMatcher",
                 &["lookup", "best fit"],
                 "best fit",
             );
             let list_type = enum_option_strict(
-                current_options(),
+                (current_options.get_nanbox_f64()),
                 "type",
                 &["conjunction", "disjunction", "unit"],
                 "conjunction",
             );
             let style = enum_option_strict(
-                current_options(),
+                (current_options.get_nanbox_f64()),
                 "style",
                 &["long", "short", "narrow"],
                 "long",
@@ -1581,15 +1603,18 @@ fn make_instance_this(
             // `? ToObject(options)` (null → TypeError), then GetOption in order:
             // localeMatcher, numberingSystem, style, numeric (options-order.js).
             options_handle.set_nanbox_f64(to_object_for_options(coerce_options_reject_null(
-                current_options(),
+                (current_options.get_nanbox_f64()),
             )));
             let _ = enum_option_strict(
-                current_options(),
+                (current_options.get_nanbox_f64()),
                 "localeMatcher",
                 &["lookup", "best fit"],
                 "best fit",
             );
-            let opt_ns = match get_option_string_coerced(current_options(), "numberingSystem") {
+            let opt_ns = match get_option_string_coerced(
+                (current_options.get_nanbox_f64()),
+                "numberingSystem",
+            ) {
                 Some(ns) => {
                     let lower = ns.to_ascii_lowercase();
                     if !is_well_formed_numbering_system(&lower) {
@@ -1613,13 +1638,17 @@ fn make_instance_this(
                 string_value(&numbering),
             );
             let style = enum_option_strict(
-                current_options(),
+                (current_options.get_nanbox_f64()),
                 "style",
                 &["long", "short", "narrow"],
                 "long",
             );
-            let numeric =
-                enum_option_strict(current_options(), "numeric", &["always", "auto"], "always");
+            let numeric = enum_option_strict(
+                (current_options.get_nanbox_f64()),
+                "numeric",
+                &["always", "auto"],
+                "always",
+            );
             set_internal_field_from_raw_handle(&obj_handle, KEY_RTF_STYLE, string_value(&style));
             set_internal_field_from_raw_handle(&obj_handle, KEY_NUMERIC, string_value(&numeric));
             install_bound_instance_function_from_handle(
@@ -1647,12 +1676,11 @@ fn make_instance_this(
             });
             obj_handle.set_raw_mut_ptr(obj);
         }
-        KIND_DURATION_FORMAT => {
-            obj_handle.with_mut_ptr(|obj| duration_format::configure(obj, current_options()))
-        }
-        KIND_DISPLAY_NAMES => {
-            obj_handle.with_mut_ptr(|obj| display_names::configure(obj, current_options()))
-        }
+        KIND_DURATION_FORMAT => obj_handle.with_mut_ptr(|obj| {
+            duration_format::configure(obj, (current_options.get_nanbox_f64()))
+        }),
+        KIND_DISPLAY_NAMES => obj_handle
+            .with_mut_ptr(|obj| display_names::configure(obj, (current_options.get_nanbox_f64()))),
         _ => {}
     }
 

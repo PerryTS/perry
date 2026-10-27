@@ -703,7 +703,7 @@ pub(super) unsafe fn plain_object_member(
     }
     let addr = (bits & POINTER_MASK) as usize;
     if crate::buffer::is_registered_buffer(addr)
-        || crate::typedarray::lookup_typed_array_kind(addr).is_some()
+        || crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some()
     {
         return None;
     }

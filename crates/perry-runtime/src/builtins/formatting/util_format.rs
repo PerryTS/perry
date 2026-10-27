@@ -152,7 +152,7 @@ unsafe fn util_format_s_inspects(val: f64) -> bool {
     if crate::value::addr_class::is_handle_band(addr)
         || crate::symbol::is_registered_symbol(addr)
         || crate::buffer::is_registered_buffer(addr)
-        || crate::typedarray::lookup_typed_array_kind(addr).is_some()
+        || crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some()
     {
         return false;
     }

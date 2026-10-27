@@ -238,7 +238,7 @@ unsafe fn to_primitive_default_for_add(value: f64) -> f64 {
     // This matches the guards `js_jsvalue_to_string` itself runs before its
     // ordinary-object dispatch.
     if crate::buffer::is_registered_buffer(ptr)
-        || crate::typedarray::lookup_typed_array_kind(ptr).is_some()
+        || crate::typedarray_hook_slots::lookup_typed_array_kind(ptr).is_some()
     {
         let s = crate::value::js_jsvalue_to_string(value);
         return crate::value::js_nanbox_string(s as i64);

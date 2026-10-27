@@ -166,7 +166,7 @@ pub extern "C" fn js_object_keys_value(value: f64) -> *mut ArrayHeader {
     if let Some(addr) = crate::typedarray_props::typed_array_addr_from_value(value) {
         return unsafe {
             crate::typedarray_props::typed_array_own_property_names(
-                addr as *const crate::typedarray::TypedArrayHeader,
+                addr as *const crate::typedarray_hook_slots::TypedArrayHeader,
                 true,
             )
         };
@@ -246,10 +246,10 @@ pub extern "C" fn js_object_keys_value(value: f64) -> *mut ArrayHeader {
             }
             return out;
         }
-        if crate::typedarray::lookup_typed_array_kind(ptr).is_some() {
+        if crate::typedarray_hook_slots::lookup_typed_array_kind(ptr).is_some() {
             return unsafe {
                 crate::typedarray_props::typed_array_own_property_names(
-                    ptr as *const crate::typedarray::TypedArrayHeader,
+                    ptr as *const crate::typedarray_hook_slots::TypedArrayHeader,
                     true,
                 )
             };
@@ -879,7 +879,7 @@ pub extern "C" fn js_object_values_value(value: f64) -> *mut ArrayHeader {
     if let Some(addr) = crate::typedarray_props::typed_array_addr_from_value(value) {
         return unsafe {
             crate::typedarray_props::typed_array_own_enumerable_values(
-                addr as *const crate::typedarray::TypedArrayHeader,
+                addr as *const crate::typedarray_hook_slots::TypedArrayHeader,
             )
         };
     }
@@ -892,10 +892,10 @@ pub extern "C" fn js_object_values_value(value: f64) -> *mut ArrayHeader {
         if crate::value::addr_class::is_handle_band(ptr) {
             return handle_own_entries(value, HandleEnum::Values);
         }
-        if crate::typedarray::lookup_typed_array_kind(ptr).is_some() {
+        if crate::typedarray_hook_slots::lookup_typed_array_kind(ptr).is_some() {
             return unsafe {
                 crate::typedarray_props::typed_array_own_enumerable_values(
-                    ptr as *const crate::typedarray::TypedArrayHeader,
+                    ptr as *const crate::typedarray_hook_slots::TypedArrayHeader,
                 )
             };
         }
@@ -997,7 +997,7 @@ pub extern "C" fn js_object_entries_value(value: f64) -> *mut ArrayHeader {
     if let Some(addr) = crate::typedarray_props::typed_array_addr_from_value(value) {
         return unsafe {
             crate::typedarray_props::typed_array_own_enumerable_entries(
-                addr as *const crate::typedarray::TypedArrayHeader,
+                addr as *const crate::typedarray_hook_slots::TypedArrayHeader,
             )
         };
     }
@@ -1008,10 +1008,10 @@ pub extern "C" fn js_object_entries_value(value: f64) -> *mut ArrayHeader {
         if crate::value::addr_class::is_handle_band(ptr) {
             return handle_own_entries(value, HandleEnum::Entries);
         }
-        if crate::typedarray::lookup_typed_array_kind(ptr).is_some() {
+        if crate::typedarray_hook_slots::lookup_typed_array_kind(ptr).is_some() {
             return unsafe {
                 crate::typedarray_props::typed_array_own_enumerable_entries(
-                    ptr as *const crate::typedarray::TypedArrayHeader,
+                    ptr as *const crate::typedarray_hook_slots::TypedArrayHeader,
                 )
             };
         }
@@ -1256,15 +1256,15 @@ fn js_object_keys_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
     {
         return unsafe {
             crate::typedarray_props::typed_array_own_property_names(
-                addr as *const crate::typedarray::TypedArrayHeader,
+                addr as *const crate::typedarray_hook_slots::TypedArrayHeader,
                 true,
             )
         };
     }
-    if crate::typedarray::lookup_typed_array_kind(stripped as usize).is_some() {
+    if crate::typedarray_hook_slots::lookup_typed_array_kind(stripped as usize).is_some() {
         return unsafe {
             crate::typedarray_props::typed_array_own_property_names(
-                stripped as *const crate::typedarray::TypedArrayHeader,
+                stripped as *const crate::typedarray_hook_slots::TypedArrayHeader,
                 true,
             )
         };
@@ -1730,14 +1730,14 @@ fn js_object_values_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
     {
         return unsafe {
             crate::typedarray_props::typed_array_own_enumerable_values(
-                addr as *const crate::typedarray::TypedArrayHeader,
+                addr as *const crate::typedarray_hook_slots::TypedArrayHeader,
             )
         };
     }
-    if crate::typedarray::lookup_typed_array_kind(stripped as usize).is_some() {
+    if crate::typedarray_hook_slots::lookup_typed_array_kind(stripped as usize).is_some() {
         return unsafe {
             crate::typedarray_props::typed_array_own_enumerable_values(
-                stripped as *const crate::typedarray::TypedArrayHeader,
+                stripped as *const crate::typedarray_hook_slots::TypedArrayHeader,
             )
         };
     }

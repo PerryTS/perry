@@ -860,8 +860,8 @@ pub(super) unsafe fn dispatch_primitive(
         // #10694: a raw word must be allocator-owned before the brand read.
         if top16 == 0 && raw_bits >= 0x10000 && crate::buffer::header_is_owned(raw_bits as usize) {
             let addr = raw_bits as usize;
-            if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
-                let ta = addr as *mut crate::typedarray::TypedArrayHeader;
+            if crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some() {
+                let ta = addr as *mut crate::typedarray_hook_slots::TypedArrayHeader;
                 if let Some(r) = dispatch_typed_array_method(ta, method_name, args_ptr, args_len) {
                     return Some(r);
                 }

@@ -557,8 +557,10 @@ mod tests {
             let set = crate::set::js_set_alloc(8) as usize;
             assert!(!is_layout_word(word_at(set)), "set capacity");
 
-            let ta =
-                crate::typedarray::typed_array_alloc(crate::typedarray::KIND_INT8, 32) as usize;
+            let ta = crate::typedarray_hook_slots::typed_array_alloc(
+                crate::typedarray_hook_slots::KIND_INT8,
+                32,
+            ) as usize;
             assert!(!is_layout_word(word_at(ta)), "typed array capacity");
 
             // A Promise's +4 is struct padding: `arena_alloc_gc` hands back
@@ -684,7 +686,10 @@ mod tests {
         let _lock = crate::gc::global_side_table_test_lock();
         assert_eq!(
             expect_throw(|| {
-                crate::typedarray::typed_array_alloc(crate::typedarray::KIND_INT8, SHAPE_ID_BASE);
+                crate::typedarray_hook_slots::typed_array_alloc(
+                    crate::typedarray_hook_slots::KIND_INT8,
+                    SHAPE_ID_BASE,
+                );
             }),
             "Array buffer allocation failed"
         );
@@ -703,7 +708,7 @@ mod tests {
             expect_throw(|| {
                 crate::native_arena::js_native_arena_view(
                     owner as u64,
-                    crate::typedarray::KIND_INT8 as i32,
+                    crate::typedarray_hook_slots::KIND_INT8 as i32,
                     0,
                     SHAPE_ID_BASE as i64,
                 );

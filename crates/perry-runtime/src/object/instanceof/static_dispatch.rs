@@ -34,9 +34,10 @@ pub(super) fn heap_builtin_name(class_id: u32) -> Option<&'static str> {
         crate::error::CLASS_ID_EVAL_ERROR => "EvalError",
         crate::error::CLASS_ID_URI_ERROR => "URIError",
         crate::error::CLASS_ID_AGGREGATE_ERROR => "AggregateError",
-        crate::typedarray::CLASS_ID_INT8_ARRAY..=crate::typedarray::CLASS_ID_FLOAT16_ARRAY => {
-            crate::typedarray::name_for_kind(
-                (class_id - crate::typedarray::CLASS_ID_INT8_ARRAY) as u8,
+        crate::typedarray_hook_slots::CLASS_ID_INT8_ARRAY
+            ..=crate::typedarray_hook_slots::CLASS_ID_FLOAT16_ARRAY => {
+            crate::typedarray_hook_slots::name_for_kind(
+                (class_id - crate::typedarray_hook_slots::CLASS_ID_INT8_ARRAY) as u8,
             )
         }
         _ => return None,
@@ -485,7 +486,7 @@ fn native_instanceof(
             brand == Some(super::super::view_brand::ViewBrand::NodeBuffer)
         } else {
             brand.and_then(super::super::view_brand::ViewBrand::typed_array_kind)
-                == Some(crate::typedarray::KIND_UINT8)
+                == Some(crate::typedarray_hook_slots::KIND_UINT8)
         };
         return if matches { true_val } else { false_val };
     }
@@ -750,7 +751,7 @@ fn native_instanceof(
             if crate::buffer::buffer_family_type_owned(addr).is_some()
                 || crate::set::is_registered_set(addr)
                 || crate::map::is_registered_map(addr)
-                || crate::typedarray::lookup_typed_array_kind(addr).is_some()
+                || crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some()
             {
                 return true_val;
             }
@@ -778,12 +779,13 @@ fn native_instanceof(
 
     // Both per-kind constructor values and legacy byte-view ids use the
     // shared classifier, so Node Buffer retains its Uint8Array superclass.
-    if (crate::typedarray::CLASS_ID_INT8_ARRAY..=crate::typedarray::CLASS_ID_FLOAT16_ARRAY)
+    if (crate::typedarray_hook_slots::CLASS_ID_INT8_ARRAY
+        ..=crate::typedarray_hook_slots::CLASS_ID_FLOAT16_ARRAY)
         .contains(&class_id)
     {
         let matches = super::super::view_brand::view_brand(value)
             .and_then(super::super::view_brand::ViewBrand::typed_array_kind)
-            .is_some_and(|kind| crate::typedarray::class_id_for_kind(kind) == class_id);
+            .is_some_and(|kind| crate::typedarray_hook_slots::class_id_for_kind(kind) == class_id);
         return if matches { true_val } else { false_val };
     }
 

@@ -71,7 +71,7 @@ fn write_file_chunk_bytes(value: f64, encoding_tag: i32) -> Result<ReadLease, f6
     }
     let addr = crate::value::addr_class::object_ref_addr(value);
     if crate::buffer::is_registered_buffer(addr)
-        || crate::typedarray::lookup_typed_array_kind(addr).is_some()
+        || crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some()
     {
         return ReadLease::new(crate::value::js_nanbox_pointer(addr as i64))
             .map_err(|_| write_file_data_type_error(value));

@@ -251,9 +251,9 @@ pub(crate) fn js_jsvalue_to_string_impl(
             // garbage. Covers `String(ta)`, `` `${ta}` ``, and the `+` add
             // fallback. (`Symbol.toPrimitive` overrides were already consulted
             // above via `js_to_primitive`.)
-            if crate::typedarray::lookup_typed_array_kind(ptr as usize).is_some() {
-                return crate::typedarray::js_typed_array_join(
-                    ptr as *const crate::typedarray::TypedArrayHeader,
+            if crate::typedarray_hook_slots::lookup_typed_array_kind(ptr as usize).is_some() {
+                return crate::typedarray_hook_slots::js_typed_array_join(
+                    ptr as *const crate::typedarray_hook_slots::TypedArrayHeader,
                     std::ptr::null(),
                 );
             }

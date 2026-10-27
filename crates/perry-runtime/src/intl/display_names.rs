@@ -92,23 +92,23 @@ pub(super) fn configure(obj: *mut ObjectHeader, options_arg: f64) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj_handle = scope.root_raw_mut_ptr(obj);
     let options_handle = scope.root_nanbox_f64(get_options_object(options_arg));
-    let current_options = || options_handle.get_nanbox_f64();
+    let current_options = &options_handle;
 
     // localeMatcher, then style, then type (required), then fallback, then
     // languageDisplay — the order the resolvedOptions / option-* tests rely on.
     let _matcher = dn_enum_option(
-        current_options(),
+        (current_options.get_nanbox_f64()),
         "localeMatcher",
         &["lookup", "best fit"],
         "best fit",
     );
     let style = dn_enum_option(
-        current_options(),
+        (current_options.get_nanbox_f64()),
         "style",
         &["narrow", "short", "long"],
         "long",
     );
-    let type_ = match dn_get_option_string(current_options(), "type") {
+    let type_ = match dn_get_option_string((current_options.get_nanbox_f64()), "type") {
         Some(v) => {
             if ![
                 "language",
@@ -128,11 +128,16 @@ pub(super) fn configure(obj: *mut ObjectHeader, options_arg: f64) {
         }
         None => throw_type_error("Intl.DisplayNames: options.type is required"),
     };
-    let fallback = dn_enum_option(current_options(), "fallback", &["code", "none"], "code");
+    let fallback = dn_enum_option(
+        (current_options.get_nanbox_f64()),
+        "fallback",
+        &["code", "none"],
+        "code",
+    );
     // languageDisplay is read + validated unconditionally, but only applies to —
     // and is reported by resolvedOptions for — `type: "language"`.
     let language_display = dn_enum_option(
-        current_options(),
+        (current_options.get_nanbox_f64()),
         "languageDisplay",
         &["dialect", "standard"],
         "dialect",

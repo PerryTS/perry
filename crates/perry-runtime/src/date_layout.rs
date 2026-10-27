@@ -72,7 +72,7 @@ pub fn is_date_cell_addr(addr: usize) -> bool {
     // pass its magnitude check and the `addr - GC_HEADER_SIZE` back-read below
     // faults when the block sits at the start of a freshly mapped region.
     // Reject them via the side tables first — they are never `DateCell`s.
-    if crate::typedarray::is_offheap_sidetable_alloc(addr) {
+    if crate::typedarray_hook_slots::is_offheap_sidetable_alloc(addr) {
         return false;
     }
     unsafe {

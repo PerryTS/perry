@@ -147,6 +147,7 @@ pub extern "C" fn js_runtime_install_compiled() {
     crate::wasi_hook_slots::install();
     js_runtime_install_messaging();
     js_runtime_install_event_target();
+    js_runtime_install_typedarray();
     #[cfg(feature = "dyn-eval")]
     js_runtime_install_dyn_eval();
     #[cfg(feature = "bun-cli-utils")]
@@ -523,4 +524,9 @@ pub extern "C" fn js_runtime_install_messaging() {
 #[no_mangle]
 pub extern "C" fn js_runtime_install_event_target() {
     crate::event_target_hook_slots::install();
+}
+
+#[no_mangle]
+pub extern "C" fn js_runtime_install_typedarray() {
+    crate::typedarray_hook_slots::install();
 }

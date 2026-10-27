@@ -802,7 +802,7 @@ pub(crate) fn classify_value_typeof(value: f64) -> ValueTypeofTag {
         // #10694: a raw word must be allocator-owned before the brand read.
         if top16 == 0 && bits >= 0x10000 && crate::buffer::header_is_owned(bits as usize) {
             let addr = bits as usize;
-            if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
+            if crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some() {
                 return ValueTypeofTag::Object;
             }
         }

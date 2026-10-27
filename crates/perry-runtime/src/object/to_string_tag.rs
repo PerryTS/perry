@@ -125,8 +125,8 @@ pub(crate) fn typed_array_to_string_tag_name(value: f64) -> Option<&'static str>
     if raw_addr < 0x1000 {
         return None;
     }
-    if let Some(kind) = crate::typedarray::lookup_typed_array_kind(raw_addr) {
-        return Some(crate::typedarray::name_for_kind(kind));
+    if let Some(kind) = crate::typedarray_hook_slots::lookup_typed_array_kind(raw_addr) {
+        return Some(crate::typedarray_hook_slots::name_for_kind(kind));
     }
     // Buffer-backed `Uint8Array` (and Node `Buffer`) — registered as a buffer
     // but still a TypedArray. Exclude the non-TypedArray buffer flavours.
@@ -268,11 +268,11 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
             Some("RegExp")
         } else if crate::symbol::is_registered_symbol(raw_addr) {
             Some("Symbol")
-        } else if let Some(kind) = crate::typedarray::lookup_typed_array_kind(raw_addr) {
+        } else if let Some(kind) = crate::typedarray_hook_slots::lookup_typed_array_kind(raw_addr) {
             // Typed arrays are raw-i64 pointers with no brand arm; without this
             // they fall through to the `is_number()` fallback below (a small
             // raw-pointer bit pattern reads as a finite f64) → `[object Number]`.
-            Some(crate::typedarray::name_for_kind(kind))
+            Some(crate::typedarray_hook_slots::name_for_kind(kind))
         } else {
             None
         };
