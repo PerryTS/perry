@@ -66,7 +66,7 @@ fn forward_bits(evacuation: &RealmEvacuation, bits: u64) -> Option<u64> {
 pub(crate) fn evacuate_realm_image() -> RealmEvacuation {
     let _no_collection = GcSuppressScope::new();
     let mut cells = Vec::new();
-    crate::value::addr_class::realm::for_each_cell(|header| unsafe {
+    crate::value::addr_class::realm::for_each_cell(&mut |header| unsafe {
         let size = (*header).size as usize;
         let payload = size - GC_HEADER_SIZE;
         let user = crate::arena::arena_alloc_gc(payload, 8, (*header).obj_type);

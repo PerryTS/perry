@@ -37,6 +37,15 @@ crate::perry_thread_local! {
         RefCell::new(crate::fast_hash::new_ptr_hash_set());
 }
 
+/// Every image path visits a cell's slots through this one out-of-line,
+/// non-generic instance of the layout visitor. The paths are cold (bounded by
+/// the image) and sit inside hot collector functions; a generic visitor
+/// inlined at each of them grew `.text` by about 20 KB.
+#[inline(never)]
+unsafe fn visit_cell_slots(header: *mut GcHeader, visit: &mut dyn FnMut(GcMutableSlot)) {
+    visit_gc_rewrite_slots(header, |slot| visit(slot));
+}
+
 /// Is `child_addr` a cell some collector owns, so that an image slot holding
 /// it must be a root: an arena cell of any generation, or a tracked malloc
 /// cell? Image cells, image strings and other immortal cells are not.
@@ -82,7 +91,7 @@ pub(super) fn remember_image_cell(parent_addr: usize) -> bool {
 /// own root scanner; remembering and the old→young gate skip it the same way.
 unsafe fn cell_holds_collectable_child(header: *mut GcHeader) -> bool {
     let mut holds = false;
-    visit_gc_rewrite_slots(header, |slot| {
+    visit_cell_slots(header, &mut |slot| {
         if !holds && slot.is_parent_owned() {
             let child = decode_heap_addr(slot.read());
             holds = child != 0 && image_child_is_collectable(child);
@@ -95,6 +104,8 @@ unsafe fn cell_holds_collectable_child(header: *mut GcHeader) -> bool {
 /// arms it, the barrier records nothing, so every cell that already holds a
 /// collectable child is remembered by one walk of the image. Returns the
 /// number of cells it added.
+#[cold]
+#[inline(never)]
 pub(super) fn reconstruct_image_remembered_set() -> usize {
     #[cfg(test)]
     if sabotage::knocked(sabotage::RECONSTRUCT) {
@@ -180,6 +191,8 @@ fn root_cells(minor_only: bool) -> Vec<*mut GcHeader> {
 /// stray mark that the minor's sweep never clears); a full marks every child
 /// and observes native handles, as tracing any object does. Returns the
 /// number of newly marked children.
+#[cold]
+#[inline(never)]
 pub(super) fn mark_image_roots(valid_ptrs: &ValidPointerSet, minor_only: bool) -> usize {
     #[cfg(test)]
     if sabotage::knocked(sabotage::ROOTS) {
@@ -188,7 +201,7 @@ pub(super) fn mark_image_roots(valid_ptrs: &ValidPointerSet, minor_only: bool) -
     let mut marked = 0usize;
     for header in root_cells(minor_only) {
         unsafe {
-            visit_gc_rewrite_slots(header, |slot| {
+            visit_cell_slots(header, &mut |slot| {
                 let bits = slot.read();
                 let newly = if minor_only {
                     try_mark_young_value_as_seed(bits, valid_ptrs)
@@ -209,6 +222,8 @@ pub(super) fn mark_image_roots(valid_ptrs: &ValidPointerSet, minor_only: bool) -
 /// The copying minor's root pass over the remembered image cells: each young
 /// child is copied and the slot rewritten; nothing is re-remembered (the cell
 /// stays in this set). Returns the number of slots that changed.
+#[cold]
+#[inline(never)]
 pub(super) unsafe fn visit_image_roots_copying(collector: &mut CopyingNurseryCollector) -> usize {
     #[cfg(test)]
     if sabotage::knocked(sabotage::COPY) {
@@ -217,7 +232,7 @@ pub(super) unsafe fn visit_image_roots_copying(collector: &mut CopyingNurseryCol
     let mut rewritten = 0usize;
     for header in image_remembered_headers() {
         let mut changed = false;
-        visit_gc_rewrite_slots(header, |slot| {
+        visit_cell_slots(header, &mut |slot| {
             let before = slot.read();
             collector.visit_image_root_slot(slot, header);
             changed |= slot.read() != before;
@@ -234,9 +249,11 @@ pub(super) unsafe fn visit_image_roots_copying(collector: &mut CopyingNurseryCol
 }
 
 /// The copying minor's pinned-young preflight over the same slots.
+#[cold]
+#[inline(never)]
 pub(super) unsafe fn preflight_image_roots(checker: &mut CopyingNurseryPreflight) {
     for header in image_remembered_headers() {
-        visit_gc_rewrite_slots(header, |slot| checker.check_bits(slot.read()));
+        visit_cell_slots(header, &mut |slot| checker.check_bits(slot.read()));
     }
 }
 
@@ -245,6 +262,8 @@ pub(super) unsafe fn preflight_image_roots(checker: &mut CopyingNurseryPreflight
 /// compaction): rewrite every image cell's forwarded slots. Every cell, as a
 /// full trace visits them: the visit also rewrites the shape record's keys
 /// word an image object may be the only carrier of.
+#[cold]
+#[inline(never)]
 pub(super) fn rewrite_image_roots(valid_ptrs: &ValidPointerSet) {
     #[cfg(test)]
     if sabotage::knocked(sabotage::REWRITE) {
@@ -257,20 +276,22 @@ pub(super) fn rewrite_image_roots(valid_ptrs: &ValidPointerSet) {
 
 /// Every image cell, remembered or not, for the verifiers: a verifier must
 /// not trust the set it checks.
-pub(super) fn for_each_image_cell(visit: impl FnMut(*mut GcHeader)) {
+pub(super) fn for_each_image_cell(mut visit: impl FnMut(*mut GcHeader)) {
     if agent_uses_image() {
-        crate::value::addr_class::realm::for_each_cell(visit);
+        crate::value::addr_class::realm::for_each_cell(&mut visit);
     }
 }
 
 /// The sabotage gate (`PERRY_GC_VERIFY_EVACUATION`'s old→young check): every
 /// image cell holding a collectable child must be remembered, whatever the
 /// child's generation. A store that bypassed the barrier leaves its cell out.
+#[cold]
+#[inline(never)]
 pub(super) fn verify_image_cells_remembered(stats: &mut OldYoungEdgeVerifyStats) {
     for_each_image_cell(|header| unsafe {
         stats.checked_old_objects = stats.checked_old_objects.saturating_add(1);
         let remembered = image_cell_remembered(header);
-        visit_gc_rewrite_slots(header, |slot| {
+        visit_cell_slots(header, &mut |slot| {
             if !slot.is_parent_owned() {
                 return;
             }

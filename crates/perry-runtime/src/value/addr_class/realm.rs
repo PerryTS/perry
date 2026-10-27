@@ -136,7 +136,8 @@ pub(crate) unsafe fn header(addr: usize) -> Option<std::ptr::NonNull<GcHeader>> 
 /// header word is stepped over. Cells are laid out by codegen (and by the
 /// runtime's test fixture), so a malformed header is a producer bug: the walk
 /// stops there rather than guess.
-pub(crate) fn for_each_cell(mut visit: impl FnMut(*mut GcHeader)) {
+#[inline(never)]
+pub(crate) fn for_each_cell(visit: &mut dyn FnMut(*mut GcHeader)) {
     let (start, end) = bounds();
     let mut at = (start + 7) & !7;
     while at + GC_HEADER_SIZE <= end {

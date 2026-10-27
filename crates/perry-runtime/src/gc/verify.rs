@@ -1375,6 +1375,8 @@ pub(super) fn verify_array_pointer_slots_enumerated_report(phase: &str) {
 /// marked (the image root pass made it a root). Only parent-owned slots, as
 /// the old→young gate checks: the shape record's keys word the layout also
 /// yields is a shared runtime root with its own scanner.
+#[cold]
+#[inline(never)]
 unsafe fn verify_image_cell_child_marks(stats: &mut MarkInvariantVerifyStats, header: *mut GcHeader) {
     stats.checked_marked_objects = stats.checked_marked_objects.saturating_add(1);
     visit_gc_rewrite_slots(header, |slot| {

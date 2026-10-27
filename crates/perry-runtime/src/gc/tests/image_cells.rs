@@ -269,7 +269,7 @@ fn image_cells_are_classified_by_range_not_by_header_bits() {
     assert!(crate::value::addr_class::realm::is_image_object(object_user()));
     assert!(crate::value::addr_class::realm::is_image_object(closure_user()));
     let mut walked = Vec::new();
-    crate::value::addr_class::realm::for_each_cell(|h| walked.push(h as usize));
+    crate::value::addr_class::realm::for_each_cell(&mut |h| walked.push(h as usize));
     let closure_header = closure_user() - GC_HEADER_SIZE;
     let at = walked
         .iter()
