@@ -7011,6 +7011,10 @@ pub(crate) fn lower_for(
         return Ok(());
     }
 
+    if super::indexed_owner_loop::lower(ctx, init, condition, update, body)? {
+        return Ok(());
+    }
+
     if super::versioned_indexed_loop::lower(ctx, init, condition, update, body)? {
         return Ok(());
     }
