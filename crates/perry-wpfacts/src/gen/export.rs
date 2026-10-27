@@ -260,6 +260,30 @@ impl<'a> Gen<'a> {
                 }
             }
         }
+        if let Some(p) = published {
+            let owners: Vec<_> = self
+                .m
+                .toks
+                .iter()
+                .enumerate()
+                .filter_map(|(t, tok)| {
+                    let TokKind::Obj(tm, _) = tok else {
+                        return None;
+                    };
+                    p.broken
+                        .contains(&format!("owner:{}", self.m.tmpls[*tm as usize].display))
+                        .then_some(t as u32)
+                })
+                .collect();
+            for t in owners {
+                let r = self
+                    .m
+                    .reason("native owner contract revoked by another unit");
+                let n = self.m.node(|| "revoked native owner".into());
+                self.m.add_tok(n, t);
+                self.m.sink_node(n, r);
+            }
+        }
         // Census (DECISIONS 126): the typed-array fields a reader escapes or
         // marks hard: `nested_fields` sinks them.
         if let Some(p) = published {
@@ -1479,6 +1503,18 @@ impl<'a> Gen<'a> {
         // A runtime-owned object: the contract names it (`ValueContract::shared`).
         if self.m.named_shared(t).is_some() {
             return true;
+        }
+        if let Some(tm) = self.m.tmpl_of(t).filter(|tm| {
+            self.m.ta_elem.contains_key(tm)
+                && (self.m.ta_birth_input.contains_key(tm) || self.m.ta_min_len.contains_key(tm))
+        }) {
+            let d = &self.m.tmpls[tm as usize].display;
+            if !self
+                .unit_in
+                .is_some_and(|u| u.broken(&format!("owner:{d}")))
+            {
+                return true;
+            }
         }
         match self.m.toks[t as usize] {
             // DECISIONS 137: a marker with values beside it (DECISIONS 74)

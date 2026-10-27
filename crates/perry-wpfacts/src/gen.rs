@@ -307,6 +307,7 @@ mod import_values;
 
 #[path = "gen/class_values.rs"]
 mod class_values;
+mod indexed_owner;
 
 impl<'a> Gen<'a> {
     pub fn new(modules: Vec<(&'a str, &'a Module)>, relations: bool, explain: bool) -> Self {

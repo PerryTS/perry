@@ -1180,6 +1180,9 @@ pub struct Model {
     /// Typed-array owner templates born by `TypedArrayNew` with a known
     /// element kind (`perry_hir::TYPED_ARRAY_KIND_*`).
     pub ta_elem: FxHashMap<TmplId, u8>,
+    pub ta_min_len: FxHashMap<TmplId, u32>,
+    pub ta_exact_len: FxHashMap<TmplId, u32>,
+    pub ta_birth_input: FxHashMap<TmplId, NodeId>,
     pub resolvers: FxHashMap<NodeId, Tok>,
     /// The function standing for another unit's accessors on the shared
     /// objects (`builtins::other_unit_accessor`).

@@ -298,7 +298,8 @@ mod number_exactness_tests;
 mod opts;
 mod program_facts_view;
 pub use program_facts_view::{
-    ElisionFacts, FactsBody, FactsClass, FactsField, FactsRecv, ProgramFactsView,
+    ElisionFacts, FactsBody, FactsClass, FactsField, FactsIndexedOwner, FactsNumericExpr,
+    FactsNumericFunction, FactsRecv, ProgramFactsView,
 };
 #[cfg(test)]
 mod ordinary_param_guard_tests;

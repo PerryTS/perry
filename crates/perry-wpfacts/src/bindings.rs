@@ -79,6 +79,93 @@ pub struct BindingFacts {
     /// It holds exactly one class object and nothing else: that class's id
     /// (a call of one of its constant statics is a static call, FVA 3.4).
     pub class_object: Option<u32>,
+    /// Allocation-derived owner kind and minimum extent; no escaped/hard token.
+    pub indexed_owner: Option<IndexedOwner>,
+}
+
+/// Storage proof over all values a binding can hold. Allocation identities
+/// are analysis tokens, never runtime validity state.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct IndexedOwner {
+    pub kind: u8,
+    pub min_len: u32,
+    pub exact_len: Option<u32>,
+    pub allocations: Vec<String>,
+}
+
+pub(crate) fn sealed_owner(m: &Model, t: u32) -> Option<(u32, u8)> {
+    let TokKind::Obj(tm, _) = m.toks[t as usize] else {
+        return None;
+    };
+    if m.hard.contains_key(&t) || m.escaped.contains_key(&t) {
+        return None;
+    }
+    if let Some(n) = m.ta_birth_input.get(&tm) {
+        let src = &m.nodes[*n as usize];
+        if src.prim != crate::model::prim::NUM || !src.pts.is_empty() {
+            return None;
+        }
+    } else if !m.ta_min_len.contains_key(&tm) {
+        return None;
+    }
+    // A named property could shadow metadata or change the prototype. Numeric
+    // element writes are the storage's contents, not a competing metadata key.
+    if m.field_keys.get(&t).is_some_and(|ks| {
+        ks.iter().any(|a| {
+            let key = &m.atoms[*a as usize];
+            key != crate::model::NUM_KEY
+                && key != crate::model::ELEM
+                && !crate::solve::numeric_key(key)
+                && m.fields.get(&(t, *a)).is_some_and(|n| {
+                    let v = &m.nodes[*n as usize];
+                    v.prim != 0 || !v.pts.is_empty()
+                })
+        })
+    }) {
+        return None;
+    }
+    Some((tm, *m.ta_elem.get(&tm)?))
+}
+
+fn indexed_owner(g: &Gen, n: u32) -> Option<IndexedOwner> {
+    let m = &g.m;
+    let node = &m.nodes[n as usize];
+    if node.prim != 0 {
+        return None;
+    }
+    let mut out: Option<IndexedOwner> = None;
+    for t in node.pts.to_sorted() {
+        if t != TOP && m.beside_values(t) {
+            continue;
+        }
+        let (tm, kind) = sealed_owner(m, t)?;
+        let len = *m.ta_min_len.get(&tm).unwrap_or(&0);
+        let exact_len = m.ta_exact_len.get(&tm).copied();
+        let d = m.tmpls[tm as usize].display.clone();
+        match &mut out {
+            Some(o) if o.kind == kind => {
+                o.min_len = o.min_len.min(len);
+                if o.exact_len != exact_len {
+                    o.exact_len = None;
+                }
+                o.allocations.push(d);
+            }
+            Some(_) => return None,
+            None => {
+                out = Some(IndexedOwner {
+                    kind,
+                    min_len: len,
+                    exact_len,
+                    allocations: vec![d],
+                })
+            }
+        }
+    }
+    if let Some(o) = &mut out {
+        o.allocations.sort();
+        o.allocations.dedup();
+    }
+    out
 }
 
 /// Per module: `(local id, facts)` and `(HIR function id, facts of this)`,
@@ -87,6 +174,9 @@ pub struct BindingFacts {
 pub struct ModuleBindings {
     pub locals: Vec<(u32, BindingFacts)>,
     pub this_of: Vec<(u32, BindingFacts)>,
+    /// Numeric leaf functions: evaluating the expression on numeric arguments
+    /// has no calls, allocation, mutation or user coercion.
+    pub numeric_functions: Vec<(u32, Vec<u32>, perry_hir::Expr)>,
 }
 
 fn facts_of(g: &Gen, n: u32) -> BindingFacts {
@@ -128,6 +218,7 @@ fn facts_of(g: &Gen, n: u32) -> BindingFacts {
     }
     out.class_ids.sort_unstable();
     out.class_ids.dedup();
+    out.indexed_owner = indexed_owner(g, n);
     out.bodies = bodies_of(m, n);
     out.class_object = class_object_of(m, n);
     out
@@ -175,6 +266,39 @@ pub(crate) fn collect(g: &Gen) -> Vec<ModuleBindings> {
         }
         let b = facts_of(g, f.this);
         out[f.module as usize].this_of.push((f.func_id, b));
+    }
+    for (mi, (_, m)) in g.modules.iter().enumerate() {
+        fn pure(e: &perry_hir::Expr, params: &[u32]) -> bool {
+            use perry_hir::{BinaryOp, Expr, UnaryOp};
+            match e {
+                Expr::Integer(_) => true,
+                Expr::Number(n) => n.is_finite(),
+                Expr::LocalGet(id) => params.contains(id),
+                Expr::Binary { op, left, right } if !matches!(op, BinaryOp::Pow) => {
+                    pure(left, params) && pure(right, params)
+                }
+                Expr::Unary {
+                    op: UnaryOp::Pos | UnaryOp::Neg | UnaryOp::BitNot,
+                    operand,
+                }
+                | Expr::MathSqrt(operand) => pure(operand, params),
+                _ => false,
+            }
+        }
+        for f in &m.functions {
+            if f.is_async
+                || f.is_generator
+                || f.params.iter().any(|p| p.is_rest || p.default.is_some())
+            {
+                continue;
+            }
+            let params: Vec<_> = f.params.iter().map(|p| p.id).collect();
+            if let [perry_hir::Stmt::Return(Some(e))] = f.body.as_slice() {
+                if pure(e, &params) {
+                    out[mi].numeric_functions.push((f.id, params, e.clone()));
+                }
+            }
+        }
     }
     for mb in &mut out {
         mb.this_of.sort_by_key(|(id, _)| *id);
