@@ -500,7 +500,7 @@ impl<B: Backend> ExecutorHandle<B> {
     /// Connect an already-bound native TCP transport without replacing its
     /// socket, local endpoint or pre-handshake options. Dropping the future
     /// before polling drops the transport; dropping a pending attempt closes
-    /// it through the driver. See [`Driver::tcp_connect_bound`].
+    /// it through the driver. See [`Driver::tcp_connect_bound_with_options`].
     pub fn connect_bound(
         &self,
         transport: B::Detached,
@@ -1341,7 +1341,7 @@ impl<B: Backend> Future for Connect<B> {
             None => {
                 let key = shared.reserve(cx)?;
                 let result = match this.transport.take() {
-                    Some(transport) => shared.driver.borrow_mut().tcp_connect_bound(
+                    Some(transport) => shared.driver.borrow_mut().tcp_connect_bound_with_options(
                         transport,
                         this.address,
                         &this.opts,
