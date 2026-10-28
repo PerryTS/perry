@@ -232,3 +232,27 @@ fn inference_before_unloadable_publication_does_not_skip_image_copy() {
     );
     assert_eq!(name_for_code(0x4a09_0000).as_deref(), Some("alpha"));
 }
+#[test]
+fn publication_reports_success_and_copies_the_exact_bytes() {
+    let image = image(0x4a09_0000);
+    let info = &image.records[0].info;
+    let mut bytes = b"published-name".to_vec();
+    assert!(crate::builtins::register_function_name(info, &bytes));
+    bytes.fill(b'x');
+    assert_eq!(registered(info).as_deref(), Some("published-name"));
+    assert!(crate::builtins::register_function_name(
+        info,
+        b"replacement"
+    ));
+    assert_eq!(registered(info).as_deref(), Some("replacement"));
+}
+#[test]
+fn invalid_or_empty_publication_cannot_prove_a_reflected_name() {
+    let image = image(0x4a0a_0000);
+    let info = &image.records[0].info;
+    assert!(!crate::builtins::register_function_name(info, b""));
+    // Publication succeeds without proving UTF-8; the read falls back to the
+    // borrowed image name, so callers must not treat success as a name proof.
+    assert!(crate::builtins::register_function_name(info, &[0xff]));
+    assert_eq!(registered(info).as_deref(), Some("alpha"));
+}

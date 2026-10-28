@@ -1007,3 +1007,6 @@ mod symbol_keyed_element_reads {
         );
     }
 }
+
+#[path = "number_result_tests.rs"]
+mod number_result_tests;

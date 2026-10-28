@@ -178,9 +178,9 @@ impl<'a> Record<'a> {
             .and_then(super::fn_metadata::decode_registered_bytes)
             .map(read)
     }
-    pub(super) fn write_name(self, bytes: &[u8], infer: bool) {
+    pub(super) fn write_name(self, bytes: &[u8], infer: bool) -> bool {
         if bytes.is_empty() || (infer && self.with_name(|_| ()).is_some()) {
-            return;
+            return false;
         }
         let state =
             state(self.owner).unwrap_or_else(|| install_state(self.owner, OwnerState::new(None)));
@@ -201,6 +201,9 @@ impl<'a> Record<'a> {
             {
                 *slot = Some(Arc::from(bytes));
             }
+            true
+        } else {
+            false
         }
     }
     pub(super) fn source(self) -> Option<String> {

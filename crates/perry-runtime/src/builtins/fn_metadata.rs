@@ -5,9 +5,46 @@ use super::fn_metadata_owner::Record;
 #[cfg(test)]
 use crate::codegen_abi::LayoutWord;
 
+/// Prove ASCII with covering loads that stay wholly inside the slice.
+/// Overlap only repeats bytes in the OR; it cannot change their high bits.
+#[inline(always)]
+fn registered_bytes_are_ascii(bytes: &[u8]) -> bool {
+    let len = bytes.len();
+    let ptr = bytes.as_ptr();
+    const WORD: usize = std::mem::size_of::<usize>();
+    const HIGH_BITS: usize = usize::MAX / 255 * 128;
+    // SAFETY: each width is admitted by len before either covering load.
+    // The loop and final suffix also end at or before len. No alignment is
+    // required, and OR makes endianness and overlap irrelevant to the proof.
+    unsafe {
+        if len >= WORD {
+            let end = len - WORD;
+            let mut bits = ptr.cast::<usize>().read_unaligned();
+            let mut offset = WORD;
+            while offset < end {
+                bits |= ptr.add(offset).cast::<usize>().read_unaligned();
+                offset += WORD;
+            }
+            bits |= ptr.add(end).cast::<usize>().read_unaligned();
+            bits & HIGH_BITS == 0
+        } else if len >= std::mem::size_of::<u32>() {
+            let bits = ptr.cast::<u32>().read_unaligned()
+                | ptr.add(len - 4).cast::<u32>().read_unaligned();
+            bits & 0x8080_8080 == 0
+        } else if len >= std::mem::size_of::<u16>() {
+            let bits = ptr.cast::<u16>().read_unaligned()
+                | ptr.add(len - 2).cast::<u16>().read_unaligned();
+            bits & 0x8080 == 0
+        } else {
+            len == 0 || *ptr < 0x80
+        }
+    }
+}
+
 #[inline]
 pub(super) fn decode_registered_bytes(bytes: &[u8]) -> Option<&str> {
-    if bytes.is_ascii() {
+    if registered_bytes_are_ascii(bytes) {
+        // SAFETY: every byte is below 0x80, including embedded NULs.
         Some(unsafe { std::str::from_utf8_unchecked(bytes) })
     } else {
         std::str::from_utf8(bytes).ok()
@@ -32,6 +69,9 @@ pub(super) fn info_name_bytes(info: &crate::closure::JsFunctionInfo) -> Option<&
         ))
     }
 }
+#[cfg(test)]
+#[path = "fn_metadata_utf8_tests.rs"]
+mod utf8_read_tests;
 fn with_registered_name<R>(
     info: &crate::closure::JsFunctionInfo,
     read: impl FnOnce(&str) -> R,
@@ -47,12 +87,13 @@ fn with_registered_name<R>(
 pub(crate) fn registered_name_string(info: &crate::closure::JsFunctionInfo) -> Option<String> {
     with_registered_name(info, str::to_owned)
 }
-/// Copy a name into its canonical descriptor entry. Input need only outlive
-/// this call. No code-pointer token or address routing is accepted.
-pub(crate) fn register_function_name(info: &crate::closure::JsFunctionInfo, bytes: &[u8]) {
-    if let Some(record) = Record::for_info(info) {
-        record.write_name(bytes, false);
-    }
+/// Copy a name into its canonical descriptor entry and report whether
+/// publication succeeded, so an immediate consumer need not read it back. This
+/// says nothing about UTF-8; reads keep their validation and image-name
+/// precedence. Input need only outlive this call. No code-pointer token or
+/// address routing is accepted.
+pub(crate) fn register_function_name(info: &crate::closure::JsFunctionInfo, bytes: &[u8]) -> bool {
+    Record::for_info(info).is_some_and(|record| record.write_name(bytes, false))
 }
 pub(crate) fn register_function_name_if_absent(info: &crate::closure::JsFunctionInfo, name: &str) {
     if let Some(record) = Record::for_info(info) {

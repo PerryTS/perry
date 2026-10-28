@@ -290,14 +290,10 @@ pub(crate) fn class_method_declaration_value_bytes(
     if f.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    if entry != 0
+    let registered = entry != 0
         && !name.is_empty()
         && !crate::builtins::function_has_registered_name(unsafe { &*info })
-    {
-        unsafe {
-            crate::builtins::register_function_name(&*info, name);
-        }
-    }
+        && crate::builtins::register_function_name(unsafe { &*info }, name);
     // A compiled method whose body already names it (its image name, or the
     // name registered for its entry) answers `name` as the intrinsic of its
     // base Function shape: the same value and attributes (non-writable,
@@ -305,9 +301,15 @@ pub(crate) fn class_method_declaration_value_bytes(
     // and no property bag. The closure then stays on its body's base shape,
     // which every shape-proved function path (bind, call, `.name`) admits.
     // A computed or differing name is defined as an own property.
+    // When this operation just published a legacy entry's name, the
+    // canonical bytes are already known. An image name still takes precedence,
+    // and a refused publication or invalid UTF-8 must use the ordinary read.
     let intrinsic_name = entry != 0
         && !computed_name
-        && unsafe { crate::builtins::function_name_matches_closure(f, name) };
+        && ((registered
+            && unsafe { (*info).flags & crate::codegen_abi::FN_HAS_NAME == 0 }
+            && std::str::from_utf8(name).is_ok())
+            || unsafe { crate::builtins::function_name_matches_closure(f, name) });
     let facts = u64::from(params) | (u64::from(synthetic) << 32) | (u64::from(rest) << 33);
     unsafe {
         crate::closure::closure_install_boxed_captures(

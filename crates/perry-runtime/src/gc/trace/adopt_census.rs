@@ -5,7 +5,7 @@
 //!
 //! A promoted-cohort full (`gc::promoted_cohort`) runs at the same precise
 //! safepoint as the nursery minor whose promotion made it due. That minor's
-//! untraced in-place promotion has just parsed every header of every block it
+//! in-place promotion has just parsed every header of every block it
 //! promoted (`arena::promote::stamp_and_index_block`), and the full's census
 //! would parse them all again before the mutator has run a single instruction.
 //! On `records_array_20m:parse` those blocks are two of the three JSON trees
@@ -26,9 +26,10 @@
 //! * **Nothing writes those headers in between.** Recording is armed only for
 //!   the nursery minor of one safepoint; the record can be adopted only by the
 //!   cohort full started at that same safepoint, before any mutator code runs,
-//!   and it is discarded when the safepoint returns. What the rest of the minor
-//!   does to promoted headers is clear `GC_FLAG_MARKED`, which can only turn a
-//!   recorded pre-marked fact into a conservative one.
+//!   and it is discarded when the safepoint returns. The rest of the minor
+//!   clears trace marks. At adoption, traced records refresh header flag facts
+//!   at their recorded starts, so stale marks do not disable block reclamation.
+//!   Pinned and other exceptional-header obligations are re-read, not assumed.
 //! * **Same block.** A record is adopted only for a block whose data address,
 //!   bump offset and size are the ones the census snapshotted, and only for an
 //!   old-generation block.
@@ -41,6 +42,9 @@ use std::cell::{Cell, RefCell};
 
 /// One promoted block's census record.
 pub(crate) struct AdoptableBlock {
+    // Existing promotion mode is provenance of this census. Traced records
+    // are adoptable, but must not enter the untraced-only controller probe.
+    liveness: crate::arena::PromotionLiveness,
     extent: usize,
     size: usize,
     words: usize,
@@ -55,6 +59,44 @@ pub(crate) struct AdoptableBlock {
     flag_obligation: bool,
     premarked: bool,
     non_walkable: bool,
+}
+
+impl AdoptableBlock {
+    /// The traced minor clears its mark list after recording. Re-read only
+    /// header-dependent facts at the recorded starts before adoption, rather
+    /// than carrying the old marks into the full sweep as exceptional objects.
+    /// Pinned, forwarded, non-arena and raw-array obligations remain actual
+    /// header facts; a completed trace is not permission to assume them away.
+    ///
+    /// # Safety
+    /// The recorded starts still name readable headers of this same block.
+    unsafe fn refresh_traced_header_facts(&mut self, data: usize) {
+        if !matches!(self.liveness, crate::arena::PromotionLiveness::Marked) || !self.premarked {
+            return;
+        }
+        let mut obligation = false;
+        let mut premarked = false;
+        'chunks: for (chunk_index, chunk) in self.chunks.iter().enumerate() {
+            for (in_chunk, &word) in chunk.iter().enumerate() {
+                let mut starts = word;
+                while starts != 0 {
+                    let bit = starts.trailing_zeros() as usize;
+                    starts &= starts - 1;
+                    let word_index = chunk_index * CENSUS_BITMAP_CHUNK_WORDS + in_chunk;
+                    let offset = (word_index * 64 + bit) << CENSUS_START_ALIGN_SHIFT;
+                    let header = (data + offset) as *const GcHeader;
+                    let facts = block_skip::census_header_flag_facts(header);
+                    obligation |= facts.0;
+                    premarked |= facts.1;
+                    if obligation && premarked {
+                        break 'chunks;
+                    }
+                }
+            }
+        }
+        self.flag_obligation = obligation;
+        self.premarked = premarked;
+    }
 }
 
 enum State {
@@ -123,15 +165,23 @@ pub(crate) fn discard() {
     }
 }
 
-/// `(data, extent, bytes)` of every block the minor at this safepoint recorded
-/// and a full has not started adopting yet. Read before `begin_adopting`: the
-/// census removes a record as it adopts it.
+/// `(data, extent, bytes)` for the existing untraced-only survival probe.
+/// Traced census facts may be adopted, but must never enable new controller
+/// feedback. Read before `begin_adopting` consumes the census records.
 pub(crate) fn ready_blocks() -> Vec<(usize, usize, u64)> {
     STATE.with(|s| match &*s.borrow() {
-        State::Ready(map) => map
-            .iter()
-            .map(|(&data, block)| (data, block.extent, block.bytes))
-            .collect(),
+        State::Ready(map)
+            if map.values().all(|block| {
+                matches!(
+                    block.liveness,
+                    crate::arena::PromotionLiveness::AssumeAllLive
+                )
+            }) =>
+        {
+            map.iter()
+                .map(|(&data, block)| (data, block.extent, block.bytes))
+                .collect()
+        }
         _ => Vec::new(),
     })
 }
@@ -156,7 +206,12 @@ pub(crate) struct AdoptableBlockBuilder {
 }
 
 impl AdoptableBlockBuilder {
-    pub(crate) fn begin(data: usize, offset: usize, size: usize) -> Self {
+    pub(crate) fn begin(
+        data: usize,
+        offset: usize,
+        size: usize,
+        liveness: crate::arena::PromotionLiveness,
+    ) -> Self {
         if offset == 0 || offset > CENSUS_BITMAP_MAX_EXTENT || !recording() {
             return Self { data, block: None };
         }
@@ -170,6 +225,7 @@ impl AdoptableBlockBuilder {
         Self {
             data,
             block: Some(AdoptableBlock {
+                liveness,
                 extent: offset,
                 size,
                 words,
@@ -259,7 +315,7 @@ impl ValidPointerSetBuilder {
         if !self.census_armed || self.set.classifier_mode {
             return false;
         }
-        let Some(block) = take(data) else {
+        let Some(mut block) = take(data) else {
             return false;
         };
         if block.extent != offset
@@ -268,6 +324,9 @@ impl ValidPointerSetBuilder {
         {
             return false;
         }
+        // Extent/generation checks above establish that the recorded starts
+        // still describe this block. No mutator ran; only trace marks changed.
+        block.refresh_traced_header_facts(data);
         ADOPTED_BLOCKS.with(|c| c.set(c.get().saturating_add(1)));
         if block.objects == 0 {
             // The census opens no block for one without a walkable object.
@@ -281,6 +340,7 @@ impl ValidPointerSetBuilder {
             block.first_start,
             block.last_start,
             block.non_walkable,
+            matches!(block.liveness, crate::arena::PromotionLiveness::Marked),
         );
         self.census_block_idx = block_idx;
         self.set.begin_arena_block_with_chunks(
@@ -320,12 +380,12 @@ unsafe fn verify_adopted_block(
     offset: usize,
     size: usize,
     adopted: &ValidPointerSet,
-    recorded: (Vec<Vec<u64>>, usize, u64, usize, usize, bool),
+    recorded: (Vec<Vec<u64>>, usize, u64, usize, usize, bool, bool),
 ) {
     let mut scratch = ValidPointerSetBuilder::new();
     scratch.walk_census_block(block_idx, data, offset, size);
     scratch.set.block_census.flush_block();
-    let (chunks, objects, bytes, first, last, non_walkable) = recorded;
+    let (chunks, objects, bytes, first, last, non_walkable, traced) = recorded;
     let walked_block = scratch
         .set
         .arena_blocks
@@ -352,6 +412,16 @@ unsafe fn verify_adopted_block(
         "adopted non-walkable fact"
     );
     let adopted_facts = adopted.block_census.current_facts_for_tests();
+    if traced {
+        assert_eq!(
+            adopted_facts.obligation, walked.obligation,
+            "traced census must retain exact current sweep obligations"
+        );
+        assert_eq!(
+            adopted_facts.premarked, walked.premarked,
+            "cleared trace marks must not disable whole-block reclamation"
+        );
+    }
     assert!(
         adopted_facts.obligation || !walked.obligation,
         "an adopted record may only be more conservative than the walk (obligation)"
@@ -390,3 +460,7 @@ pub(crate) mod sabotage {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "adopt_census_flag_tests.rs"]
+mod flag_refresh_tests;
