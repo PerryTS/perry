@@ -3,6 +3,10 @@ use perry_hir::analysis::{infer_expr_type, HirTypeEnv};
 use perry_hir::ir::ImportSpecifier;
 use perry_hir::types::Type;
 use perry_hir::{Expr, Function, Module, Stmt};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 
 #[derive(Default)]
 pub(super) struct Capabilities {
@@ -12,7 +16,7 @@ pub(super) struct Capabilities {
     pub json_members: bool,
 }
 
-pub(super) fn scan(module: &Module) -> Capabilities {
+pub(super) fn scan(module: &Module, native_modules: &BTreeMap<PathBuf, Module>) -> Capabilities {
     let open_names: Vec<&str> = module
         .imports
         .iter()
@@ -31,6 +35,7 @@ pub(super) fn scan(module: &Module) -> Capabilities {
         .flatten()
         .collect();
     let mut types = HirTypeEnv::from_module(module);
+    refine_array_index_types(module, &mut types);
     // `as const` can leave a declaration typed Any even though its immutable
     // initializer carries a closed literal shape. Reuse the existing binding
     // analysis, and only recover that shape when every read is a member read:
@@ -91,8 +96,8 @@ pub(super) fn scan(module: &Module) -> Capabilities {
             // Numeric and literal keys do not hide a new API name. Literal
             // readableWebStream is already selected by the ordinary detector.
             Expr::IndexGet { object, index } => {
-                caps.opaque_members |=
-                    opaque_key(index, &types) && api_receiver(object, &types, module);
+                caps.opaque_members |= opaque_key(index, &types)
+                    && api_receiver(object, &types, module, native_modules);
             }
             Expr::ReflectGet {
                 target: object,
@@ -104,16 +109,16 @@ pub(super) fn scan(module: &Module) -> Capabilities {
                 key,
             } => {
                 caps.opaque_members |=
-                    opaque_key(key, &types) && api_receiver(object, &types, module);
+                    opaque_key(key, &types) && api_receiver(object, &types, module, native_modules);
             }
             Expr::ObjectGetOwnPropertyDescriptor(object, key) => {
                 caps.opaque_members |=
-                    opaque_key(key, &types) && api_receiver(object, &types, module);
+                    opaque_key(key, &types) && api_receiver(object, &types, module, native_modules);
             }
             Expr::ObjectGetOwnPropertyDescriptors(object)
             | Expr::ObjectValues(object)
             | Expr::ObjectEntries(object) => {
-                caps.opaque_members |= api_receiver(object, &types, module)
+                caps.opaque_members |= api_receiver(object, &types, module, native_modules)
             }
             Expr::ExternFuncRef { name, .. } if open_names.contains(&name.as_str()) => {
                 caps.file_handles = true
@@ -149,6 +154,52 @@ pub(super) fn scan(module: &Module) -> Capabilities {
         }
     });
     caps
+}
+
+// Native array iteration passes a numeric index even when an inline callback
+// parameter was left Any. Recover only that call-shape fact. A reassigned
+// parameter or rest parameter remains conservative. Restrict this to arrows:
+// an ordinary function can call itself with a different index value.
+fn refine_array_index_types(module: &Module, types: &mut HirTypeEnv) {
+    for_each_expr(module, &mut |expr| {
+        let (callback, position) = match expr {
+            Expr::ArrayForEach { callback, .. }
+            | Expr::ArrayMap { callback, .. }
+            | Expr::ArrayFilter { callback, .. }
+            | Expr::ArrayFind { callback, .. }
+            | Expr::ArrayFindIndex { callback, .. }
+            | Expr::ArrayFindLast { callback, .. }
+            | Expr::ArrayFindLastIndex { callback, .. }
+            | Expr::ArraySome { callback, .. }
+            | Expr::ArrayEvery { callback, .. }
+            | Expr::ArrayFlatMap { callback, .. } => (callback.as_ref(), 1),
+            Expr::ArrayReduce { callback, .. } | Expr::ArrayReduceRight { callback, .. } => {
+                (callback.as_ref(), 2)
+            }
+            _ => return,
+        };
+        let Expr::Closure {
+            params,
+            is_arrow,
+            ..
+        } = callback
+        else {
+            return;
+        };
+        let Some(index) = params.get(position) else {
+            return;
+        };
+        if index.is_rest || !is_arrow {
+            return;
+        }
+        let mut assigned = false;
+        for_each_expr(module, &mut |expr| {
+            assigned |= matches!(expr, Expr::LocalSet(id, _) if *id == index.id);
+        });
+        if !assigned {
+            types.insert_local(index.id, Type::Number);
+        }
+    });
 }
 
 fn opaque_key(key: &Expr, types: &HirTypeEnv) -> bool {
@@ -247,7 +298,30 @@ fn api_value_type(ty: &Type) -> bool {
     }
 }
 
-fn api_receiver(object: &Expr, types: &HirTypeEnv, module: &Module) -> bool {
+fn api_receiver(
+    object: &Expr,
+    types: &HirTypeEnv,
+    module: &Module,
+    native_modules: &BTreeMap<PathBuf, Module>,
+) -> bool {
+    // Imported enums still look like external functions here. Their resolved
+    // producer already carries the enum declaration used by fix_imported_enums
+    // later in the pipeline; its members are scalar data, not native APIs.
+    if let Expr::ExternFuncRef { name, .. } = object {
+        if module.imports.iter().any(|import| {
+            let Some(producer) = import.resolved_path.as_deref()
+                .and_then(|path| native_modules.get(Path::new(path))) else { return false; };
+            import.specifiers.iter().any(|specifier| {
+                matches!(specifier, ImportSpecifier::Named { imported, local }
+                    if local == name && producer.enums.iter()
+                        .any(|value| value.is_exported && value.name == *imported
+                            && value.members.iter().all(|member| matches!(member.value,
+                                perry_hir::EnumValue::Number(_) | perry_hir::EnumValue::String(_)))))
+            })
+        }) {
+            return false;
+        }
+    }
     let ty = infer_expr_type(object, types);
     if let Type::Named(name) = &ty {
         // Lowering also represents closed object literals as classes. Reuse
@@ -498,6 +572,10 @@ mod tests {
             "function f(k: string) { const marks = { true: '[x]', false: '[ ]' } as const; return marks[k]; }",
             "function f(k: string) { const names = ['a', 'b']; return names[k]; }",
             "console.log(Object.values({ high: 0, low: 1 }));",
+            "function f(a: unknown[], b: unknown[]) { return a.reduce((acc, v, i) => b[i], null); }",
+            "function f(a: unknown[], b: unknown[]) { return a.reduceRight((acc, v, i) => b[i], null); }",
+            "function f(a: unknown[], b: unknown[]) { return a.map((v, i) => b[i]); }",
+            "function f(a: unknown[], b: unknown[]) { a.forEach((v, i) => console.log(b[i])); }",
         ] {
             let mut ctx = context();
             let source = format!("console.log(new Date(0).getTime(), process.argv.length); {lookup}");
@@ -544,6 +622,39 @@ mod tests {
             let mut ctx = context();
             detect(&mut ctx, source, "escaped.ts");
             assert!(ctx.native_module_imports.contains("stream/web"), "{source}");
+        }
+    }
+
+    #[test]
+    fn reassigned_callback_index_can_still_name_an_api() {
+        let mut ctx = context();
+        detect(
+            &mut ctx,
+            r#"import {open} from "fs/promises"; async function f(a: unknown[], k: string) { const fh = await open("x", "r"); a.reduce((acc, v, i) => { i = k; return fh[i](); }, null); }"#,
+            "callback.ts",
+        );
+        assert!(ctx.native_module_imports.contains("stream/web"));
+    }
+
+    #[test]
+    fn resolved_imported_enum_values_do_not_select_temporal() {
+        for (producer, expected) in [
+            ("export enum Priority { High = 'high', Low = 'low' }", false),
+            ("export function Priority() {}", true),
+        ] {
+            let mut ctx = context();
+            let ast = perry_parser::parse_typescript(producer, "types.ts").expect("parse producer");
+            let module =
+                perry_hir::lower_module(&ast, "types.ts", "types.ts").expect("lower producer");
+            ctx.native_modules
+                .insert(std::path::PathBuf::from("/tmp/types.ts"), module);
+            let source = "import {Priority as P} from './types'; console.log(new Date(0).getTime(), Object.values(P));";
+            let ast = perry_parser::parse_typescript(source, "entry.ts").expect("parse consumer");
+            let mut module =
+                perry_hir::lower_module(&ast, "entry.ts", "entry.ts").expect("lower consumer");
+            module.imports[0].resolved_path = Some("/tmp/types.ts".into());
+            super::super::detect_optional_feature_usage(&mut ctx, &module);
+            assert_eq!(ctx.uses_temporal, expected, "{producer}");
         }
     }
 
