@@ -85,8 +85,8 @@ pub unsafe extern "C" fn js_object_get_own_property_symbols(obj_f64: f64) -> i64
     let data_len = entries.len();
     // Defensive fallback: any accessor key that somehow has no placeholder
     // (the accessor table's only writer installs one, so this loop should
-    // find nothing) is appended and sorted by the symbol's monotonic
-    // creation id — the best remaining approximation of creation order.
+    // find nothing) is appended and sorted by the symbol's recovered
+    // creation order — the best remaining approximation of creation order.
     for sym_key in accessors::owner_symbol_accessor_keys(obj_key) {
         if !entries.iter().any(|(existing, _)| *existing == sym_key) {
             entries.push((sym_key, 0));
@@ -100,7 +100,7 @@ pub unsafe extern "C" fn js_object_get_own_property_symbols(obj_f64: f64) -> i64
         if ptr.is_null() {
             u64::MAX
         } else {
-            (*ptr).id
+            creation_order((*ptr).id)
         }
     });
     let mut arr = crate::array::js_array_alloc(entries.len() as u32);
