@@ -62,6 +62,7 @@ NEGATIVES = {
     "without_async_hooks": ["async_hooks"],
     "without_bigint_querystring": ["bigint"],
     "fs_promises_without_streams": ["bundled_web_streams"],
+    "fs_read_loop_without_streams": ["bundled_web_streams"],
 }
 
 
