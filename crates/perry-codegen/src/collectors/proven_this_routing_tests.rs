@@ -1834,10 +1834,23 @@ fn class_dispatch_compares_the_authoritative_packed_word() {
         "only kind-plain ShapeIds may reach direct class dispatch\n{:?}",
         read.1
     );
-    assert!(read
+    assert!(!read.1.iter().any(|l| l.contains("select i1")));
+    let merge = blocks(&caller)
+        .into_iter()
+        .find(|(label, _)| label.starts_with("method_probe.merge"))
+        .unwrap();
+    assert!(merge
         .1
         .iter()
-        .any(|l| l.contains("select i1") && l.ends_with("i64 0")));
+        .any(|l| l.contains("phi i1") && l.matches("[ 0,").count() == 2));
+    assert!(merge.1.iter().any(|l| l.contains("br i1")
+        && l.contains("label %pconst.admitted")
+        && l.contains("label %pconst.selected")));
+    let dispatch = blocks(&caller)
+        .into_iter()
+        .find(|(label, _)| label.starts_with("pconst.admitted"))
+        .unwrap();
+    assert!(dispatch.1.iter().any(|l| l.contains("switch i32")));
 }
 
 #[test]

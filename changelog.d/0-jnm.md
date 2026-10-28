@@ -1,0 +1,1 @@
+- Keep compiled class-method admission separate from the packed receiver identity, preserving receiver, shape, descriptor and prototype checks while branching directly into class selection.

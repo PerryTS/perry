@@ -238,13 +238,13 @@ fn method_inline_probe_enabled() -> bool {
     })
 }
 
-/// Inline form of the runtime probe `js_method_direct_shape_class`: resolve
-/// the live receiver's `(class_id, ShapeId)` for a multi-arm compare chain,
-/// or `(0, 0)` wherever the probe would decline — a non-pointer, an address
+/// Resolve the live receiver identity and admission predicate for packed
+/// class selection, or the runtime probe's sanitized scalar field pair.
+/// Admission declines on a non-pointer, an address
 /// outside the heap band, a non-`GC_TYPE_OBJECT` / forwarded /
 /// descriptor-bearing / packed-numeric-proof header, a zero class id
-/// or a zero ShapeId. The packed result is zero whenever either header
-/// field is zero, preserving the legacy probe's complete admission contract.
+/// or a zero ShapeId. Packed consumers must branch on the predicate before
+/// selecting a body; the legacy word wrapper still returns zero on decline.
 ///
 /// The header word and the packed `class_id | ShapeId << 32` load are the
 /// ones [`emit_inline_direct_method_shape_guard`] already uses for the
@@ -317,7 +317,7 @@ fn emit_direct_method_probe(ctx: &mut FnCtx<'_>, recv_box: &str, packed: bool) -
             let plain_shape = blk.icmp_eq(I32, &shape_kind, "0");
             let both = blk.and(I1, &cid_nonzero, &shape_nonzero);
             let both = blk.and(I1, &both, &plain_shape);
-            (blk.select(I1, &both, I64, &word, "0"), String::new())
+            (word, both)
         } else {
             // Preserve the existing scalar emission for callers needing both fields.
             let cid = blk.load(I32, &obj_ptr);
@@ -345,19 +345,28 @@ fn emit_direct_method_probe(ctx: &mut FnCtx<'_>, recv_box: &str, packed: bool) -
         if packed { I64 } else { I32 },
         &[("0", &check_end), ("0", &deref_end), (&first, &read_end)],
     );
-    let second = if packed {
-        String::new()
-    } else {
-        blk.phi(
-            I32,
-            &[("0", &check_end), ("0", &deref_end), (&second, &read_end)],
-        )
-    };
+    let second = blk.phi(
+        if packed { I1 } else { I32 },
+        &[("0", &check_end), ("0", &deref_end), (&second, &read_end)],
+    );
     (first, second)
 }
 
 pub(crate) fn emit_inline_direct_method_word_probe(ctx: &mut FnCtx<'_>, recv_box: &str) -> String {
-    emit_direct_method_probe(ctx, recv_box, true).0
+    let (word, admitted) = emit_direct_method_probe(ctx, recv_box, true);
+    ctx.block().select(I1, &admitted, I64, &word, "0")
+}
+
+/// Keep the packed identity and its admission predicate separate until the
+/// caller branches into class selection. Selecting a zero word first forces
+/// the backend to materialize conditional moves for each field predicate,
+/// only to immediately switch on that word's class id. No receiver checks
+/// are omitted: a false predicate selects the ordinary dynamic lookup.
+pub(crate) fn emit_direct_method_selection_probe(
+    ctx: &mut FnCtx<'_>,
+    recv_box: &str,
+) -> (String, String) {
+    emit_direct_method_probe(ctx, recv_box, true)
 }
 
 pub(crate) fn emit_inline_direct_method_shape_probe(
