@@ -44,7 +44,6 @@ pub use self::search_params::{
 };
 // #1668: crate-internal detector so `Object.fromEntries`/spread can recognise
 // a URLSearchParams (a plain class_id-0 ObjectHeader) and pull its entries.
-pub(crate) use self::search_params::try_read_as_search_params;
 pub(crate) use self::url_class::is_url_object_shape;
 pub use self::url_class::{
     js_url_can_parse, js_url_can_parse_with_base, js_url_get_hash, js_url_get_host,
@@ -289,7 +288,7 @@ mod tests {
 
 pub(crate) use crate::value::boxed_text::{
     create_string_f64, get_string_content, object_from_f64, object_prop_f64, object_prop_string,
-    short_string_content, string_from_header,
+    string_from_header,
 };
 
 pub(crate) use crate::url_hooks::{

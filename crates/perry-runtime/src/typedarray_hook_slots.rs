@@ -4,12 +4,10 @@ pub(crate) use crate::byte_cell_support::shared_access::copy_lane as copy_shared
 #[cfg(test)]
 pub(crate) use crate::byte_cell_support::test_typed_array_registry_probe_count;
 pub(crate) use crate::byte_cell_support::{
-    arena_payload_has_gc_type, classify_element_read_receiver, data_ptr, data_ptr_mut,
-    element_kind, element_length, invalidate_caches_in_range, is_arena_backed_addr, jsvalue_to_f64,
-    jsvalue_to_uint8, owning_u32_addr, strict_typed_array_from_raw, strip_nanbox,
-    throw_range_error, throw_type_error, to_uint32_bits, to_uint8_clamp, type_for_kind,
-    typed_array_for_byte_helper, typed_array_has_shared_backing, validate_arena_payload_gc_type,
-    ElementReadReceiver,
+    arena_payload_has_gc_type, classify_element_read_receiver, data_ptr_mut, element_kind,
+    element_length, invalidate_caches_in_range, jsvalue_to_f64, jsvalue_to_uint8, owning_u32_addr,
+    strip_nanbox, throw_range_error, throw_type_error, type_for_kind,
+    typed_array_has_shared_backing, ElementReadReceiver,
 };
 pub use crate::byte_cell_support::{
     class_id_for_kind, clean_ta_ptr, elem_size_for_kind, is_offheap_sidetable_alloc, kind_for_name,
@@ -18,7 +16,6 @@ pub use crate::byte_cell_support::{
 };
 use crate::closure::ClosureHeader;
 use crate::feature_hooks::Hook;
-use crate::string::StringHeader;
 pub use crate::typedarray::TypedArrayHeader;
 pub use crate::typedarray::{
     CLASS_ID_BIGINT64_ARRAY, CLASS_ID_BIGUINT64_ARRAY, CLASS_ID_FLOAT16_ARRAY,
@@ -41,13 +38,17 @@ pub(crate) fn format_typed_array(ta: *const TypedArrayHeader) -> String {
         .get()
         .map_or_else(|| String::new(), |run| run(ta))
 }
+#[cfg(test)]
 static JS_NATIVE_MEMORY_COPY: Hook<extern "C" fn(u64, u64) -> ()> = Hook::empty();
+#[cfg(test)]
 pub(crate) extern "C" fn js_native_memory_copy(dst_raw: u64, src_raw: u64) -> () {
     JS_NATIVE_MEMORY_COPY
         .get()
         .map_or_else(|| (), |run| run(dst_raw, src_raw))
 }
+#[cfg(test)]
 static JS_NATIVE_MEMORY_FILL_U32: Hook<extern "C" fn(u64, f64) -> ()> = Hook::empty();
+#[cfg(test)]
 pub(crate) extern "C" fn js_native_memory_fill_u32(view_raw: u64, value: f64) -> () {
     JS_NATIVE_MEMORY_FILL_U32
         .get()
@@ -443,14 +444,18 @@ pub(crate) extern "C" fn js_typed_array_with(
         .get()
         .map_or_else(|| std::ptr::null_mut(), |run| run(ta, index, value))
 }
+#[cfg(test)]
 static JS_UINT8ARRAY_GET: Hook<extern "C" fn(*const TypedArrayHeader, i32) -> i32> = Hook::empty();
+#[cfg(test)]
 pub(crate) extern "C" fn js_uint8array_get(target: *const TypedArrayHeader, index: i32) -> i32 {
     JS_UINT8ARRAY_GET
         .get()
         .map_or_else(|| 0, |run| run(target, index))
 }
+#[cfg(test)]
 static JS_UINT8ARRAY_SET: Hook<extern "C" fn(*mut TypedArrayHeader, i32, i32) -> ()> =
     Hook::empty();
+#[cfg(test)]
 pub(crate) extern "C" fn js_uint8array_set(
     target: *mut TypedArrayHeader,
     index: i32,
@@ -460,13 +465,7 @@ pub(crate) extern "C" fn js_uint8array_set(
         .get()
         .map_or_else(|| (), |run| run(target, index, value))
 }
-static LOAD_AT: Hook<unsafe fn(*const TypedArrayHeader, usize) -> f64> = Hook::empty();
-pub(crate) unsafe fn load_at(ta: *const TypedArrayHeader, idx: usize) -> f64 {
-    LOAD_AT.get().map_or_else(
-        || f64::from_bits(crate::value::TAG_UNDEFINED),
-        |run| unsafe { run(ta, idx) },
-    )
-}
+
 static PROTOTYPE_CONSTRUCTOR_PATCH: Hook<unsafe fn(u8, usize) -> Option<f64>> = Hook::empty();
 pub(crate) unsafe fn prototype_constructor_patch(kind: u8, owner: usize) -> Option<f64> {
     PROTOTYPE_CONSTRUCTOR_PATCH
@@ -517,12 +516,7 @@ pub(crate) unsafe fn typed_array_from_source_raw_values(val: f64) -> Vec<f64> {
         .get()
         .map_or_else(|| Vec::new(), |run| unsafe { run(val) })
 }
-static TYPED_ARRAY_LENGTH_OR_THROW: Hook<fn(f64) -> u32> = Hook::empty();
-pub(crate) fn typed_array_length_or_throw(val: f64) -> u32 {
-    TYPED_ARRAY_LENGTH_OR_THROW
-        .get()
-        .map_or_else(|| 0, |run| run(val))
-}
+
 static TYPED_ARRAY_TO_ARRAY: Hook<fn(*const TypedArrayHeader) -> *mut crate::array::ArrayHeader> =
     Hook::empty();
 pub(crate) fn typed_array_to_array(ta: *const TypedArrayHeader) -> *mut crate::array::ArrayHeader {
@@ -535,15 +529,15 @@ pub(crate) mod species {
 }
 pub(crate) mod bigint {
     pub(crate) use super::{coerce_for_kind, to_bigint_for_store};
-    pub(crate) use crate::byte_cell_support::{
-        bigint_slot_bits, is_bigint_kind, throw_bigint_number_mix,
-    };
+    pub(crate) use crate::byte_cell_support::{is_bigint_kind, throw_bigint_number_mix};
 }
 pub(crate) fn install() {
     crate::perry_install_once!({
         COERCE_FOR_KIND.set(crate::typedarray::bigint::coerce_for_kind);
         FORMAT_TYPED_ARRAY.set(crate::typedarray::format_typed_array);
+        #[cfg(test)]
         JS_NATIVE_MEMORY_COPY.set(crate::typedarray::js_native_memory_copy);
+        #[cfg(test)]
         JS_NATIVE_MEMORY_FILL_U32.set(crate::typedarray::js_native_memory_fill_u32);
         JS_TYPED_ARRAY_AT.set(crate::typedarray::js_typed_array_at);
         JS_TYPED_ARRAY_COPY_WITHIN.set(crate::typedarray::js_typed_array_copy_within);
@@ -583,9 +577,10 @@ pub(crate) fn install() {
             .set(crate::typedarray::js_typed_array_to_sorted_with_comparator);
         JS_TYPED_ARRAY_VIEW.set(crate::typedarray_view::js_typed_array_view);
         JS_TYPED_ARRAY_WITH.set(crate::typedarray::js_typed_array_with);
+        #[cfg(test)]
         JS_UINT8ARRAY_GET.set(crate::typedarray::js_uint8array_get);
+        #[cfg(test)]
         JS_UINT8ARRAY_SET.set(crate::typedarray::js_uint8array_set);
-        LOAD_AT.set(crate::typedarray::load_at);
         PROTOTYPE_CONSTRUCTOR_PATCH.set(crate::typedarray::species::prototype_constructor_patch);
         STORE_COERCED.set(crate::typedarray::species::store_coerced);
         TO_BIGINT_FOR_STORE.set(crate::typedarray::bigint::to_bigint_for_store);
@@ -594,7 +589,6 @@ pub(crate) fn install() {
         TYPED_ARRAY_FAST_INDEX_SET.set(crate::typedarray::typed_array_fast_index_set);
         TYPED_ARRAY_FROM_SOURCE_RAW_VALUES
             .set(crate::typedarray::typed_array_from_source_raw_values);
-        TYPED_ARRAY_LENGTH_OR_THROW.set(crate::typedarray::typed_array_length_or_throw);
         TYPED_ARRAY_TO_ARRAY.set(crate::typedarray::typed_array_to_array);
     });
 }

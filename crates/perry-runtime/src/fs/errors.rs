@@ -128,6 +128,7 @@ pub(crate) unsafe fn fs_callback_write_parent_error(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::io_error::fs_error_description;
 
     /// #10451: an fs error message carries libuv's description of the errno,
     /// as Node's does, not Rust's "No such file or directory (os error 2)".
@@ -188,6 +189,5 @@ mod tests {
 }
 
 pub(crate) use crate::io_error::{
-    attach_fs_error_props, build_fs_error_value, build_fs_error_value_no_path,
-    build_fs_error_value_with_dest, fs_error_description, io_error_code, io_error_errno,
+    build_fs_error_value, build_fs_error_value_no_path, build_fs_error_value_with_dest,
 };

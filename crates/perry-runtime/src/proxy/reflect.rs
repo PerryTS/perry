@@ -1,9 +1,6 @@
 use super::{
-    closure_from, coerce_trap_bool, entry, extract_pointer, handler_trap, is_callable_function,
-    js_proxy_delete, js_proxy_get, js_proxy_has, lookup, nanbox_bool, reflect_non_object_typeerror,
-    reflect_ordinary_delete_property_key, reflect_ordinary_set_with_receiver,
-    reflect_value_is_object, revoked_return, target_get_property_key, throw_type_error, TAG_NULL,
-    TAG_TRUE, TAG_UNDEFINED,
+    closure_from, entry, handler_trap, is_callable_function, lookup, reflect_value_is_object,
+    revoked_return, throw_type_error, TAG_NULL, TAG_UNDEFINED,
 };
 
 fn proxy_entry(proxy_boxed: f64) -> Option<(f64, f64, bool)> {
@@ -156,6 +153,5 @@ pub use crate::object::property_ops::reflect::{
 };
 
 pub(crate) use crate::object::property_ops::reflect::{
-    descriptor_bool_field, descriptor_field, descriptor_field_present, descriptor_key,
-    js_reflect_get_impl, js_reflect_get_with_explicit_receiver,
+    descriptor_bool_field, js_reflect_get_with_explicit_receiver,
 };
