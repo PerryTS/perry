@@ -18,7 +18,7 @@ use super::*;
 ///
 /// Inline byte comparison — no allocation, no heap materialization of
 /// the SSO operand. Safe on the hot path.
-#[inline]
+#[inline(always)]
 pub(crate) unsafe fn js_string_key_matches(
     stored: crate::JSValue,
     incoming: *const StringHeader,
@@ -51,7 +51,7 @@ pub(crate) unsafe fn js_string_key_matches(
 /// without the round-trip through a heap `StringHeader` for the
 /// incoming side. Returns `true` iff the stored value is some kind of
 /// string and its bytes equal `incoming_bytes`.
-#[inline]
+#[inline(always)]
 pub(crate) unsafe fn js_string_key_matches_bytes(
     stored: crate::JSValue,
     incoming_bytes: &[u8],
@@ -85,7 +85,7 @@ pub(crate) unsafe fn js_string_key_matches_bytes(
 /// order. Borrow that word instead of unpacking it a byte at a time into a
 /// second scratch buffer. Both callers have checked the exact byte length;
 /// equality reads only that prefix, including embedded NUL and UTF-8 bytes.
-#[inline]
+#[inline(always)]
 fn short_key_matches_bytes(stored: crate::JSValue, incoming: &[u8]) -> bool {
     let word = stored.bits().to_le_bytes();
     key_bytes_equal(
@@ -102,7 +102,7 @@ fn short_key_matches_bytes(stored: crate::JSValue, incoming: &[u8]) -> bool {
 /// Used by paths like `Object.keys` and `Object.assign` that need to
 /// materialize the key string into a usable form regardless of which
 /// representation it currently has.
-#[inline]
+#[inline(always)]
 pub(crate) unsafe fn js_string_key_bytes(
     stored: crate::JSValue,
     stored_buf: &mut [u8; crate::value::SHORT_STRING_MAX_LEN],

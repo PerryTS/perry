@@ -4,7 +4,7 @@
 //! happens to begin near a page boundary. Compare machine words within the
 //! payload instead, so moving unrelated image data does not change that path.
 
-#[inline]
+#[inline(always)]
 pub(crate) fn key_bytes_equal(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
