@@ -6,6 +6,7 @@ At final link, a Rust dylib reexports that exact rlib and its dependency graph;
 the stdlib imports its symbols instead of including a second runtime archive.
 """
 import os
+import json
 from pathlib import Path
 import re
 import subprocess
@@ -38,6 +39,14 @@ def build_runtime(arguments, archive, library, darwin, real_cc):
     # Cargo's artifact layout can put every dependency in a separate directory.
     # Resolve by the original crate metadata, never by a guessed archive glob.
     directories = dict.fromkeys(str(Path(a).parent) for a in arguments if a.endswith(".rlib"))
+    # Derive crates do not occur in the final native linker arguments, but the
+    # full runtime metadata can reference them. Let rustc match their recorded
+    # crate identities in Cargo's adjacent artifact directories.
+    artifact_root = next((p for p in Path(archive).parents if p.name == "build"), None)
+    if artifact_root is not None:
+        for directory in artifact_root.glob("*/*/out"):
+            if any(directory.glob("*.so")) or any(directory.glob("*.dylib")) or any(directory.glob("*.dll")):
+                directories[str(directory)] = None
     for directory in directories:
         command.extend(["-L", "dependency=" + directory])
     for index, argument in enumerate(arguments):
@@ -53,7 +62,10 @@ def build_runtime(arguments, archive, library, darwin, real_cc):
         ])
     else:
         command.extend(["-C", "link-arg=-Wl,-soname," + library.name])
-    subprocess.run(command, check=True)
+    (library.parent / "runtime-provider-command.json").write_text(json.dumps(command, indent=2) + "\n")
+    result = subprocess.run(command)
+    if result.returncode:
+        raise SystemExit(result.returncode)
 
 
 def main():
