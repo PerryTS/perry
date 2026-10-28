@@ -840,44 +840,39 @@ mod descriptor_name_tests {
     #[test]
     fn name_range_is_read_after_the_optional_source_range() {
         for source_tail in [0usize, 8, 16] {
-            let mut image = Image {
-                info: crate::closure::JsFunctionInfo::of(
-                    body as crate::codegen_abi::JsBody0<crate::closure::ClosureHeader>,
-                ),
-                tail: [0; 6],
-                name: *b"named",
-            };
-            image.info.flags |= crate::codegen_abi::FN_HAS_NAME;
-            if source_tail != 0 {
-                image.info.flags |= crate::codegen_abi::FN_HAS_SOURCE;
-                if source_tail == 16 {
-                    image.info.flags |= crate::codegen_abi::FN_SOURCE_BLOCKS;
+            for (name_len, expected) in [(0, ""), (5, "named")] {
+                let mut image = Image {
+                    info: crate::closure::JsFunctionInfo::of(
+                        body as crate::codegen_abi::JsBody0<crate::closure::ClosureHeader>,
+                    ),
+                    tail: [0; 6],
+                    name: *b"named",
+                };
+                image.info.flags |= crate::codegen_abi::FN_HAS_NAME;
+                if source_tail != 0 {
+                    image.info.flags |= crate::codegen_abi::FN_HAS_SOURCE;
+                    if source_tail == 16 {
+                        image.info.flags |= crate::codegen_abi::FN_SOURCE_BLOCKS;
+                    }
+                    image.info.versioned_code = body as *const u8;
                 }
-                image.info.versioned_code = body as *const u8;
+                let slot = source_tail / 4;
+                image.tail[slot] =
+                    (image.name.as_ptr() as isize - &image.info as *const _ as isize) as i32;
+                image.tail[slot + 1] = name_len;
+                let closure = crate::closure::ClosureHeader {
+                    capture_count: 0,
+                    shape_id: LayoutWord(crate::codegen_abi::FUNCTION_LAYOUT_WORD),
+                    info: std::ptr::addr_of!(image.info),
+                    props: std::ptr::null_mut(),
+                };
+                assert_eq!(
+                    unsafe { function_name_for_closure(&closure) }.as_deref(),
+                    Some(expected)
+                );
+                assert!(unsafe { function_name_matches_closure(&closure, expected.as_bytes()) });
+                assert!(!unsafe { function_name_matches_closure(&closure, b"other") });
             }
-            let slot = source_tail / 4;
-            image.tail[slot] =
-                (image.name.as_ptr() as isize - &image.info as *const _ as isize) as i32;
-            image.tail[slot + 1] = 5;
-            let closure = crate::closure::ClosureHeader {
-                capture_count: 0,
-                shape_id: LayoutWord(crate::codegen_abi::FUNCTION_LAYOUT_WORD),
-                info: std::ptr::addr_of!(image.info),
-                props: std::ptr::null_mut(),
-            };
-            assert_eq!(
-                unsafe { function_name_for_closure(&closure) }.as_deref(),
-                Some("named")
-            );
-            assert!(unsafe { function_name_matches_closure(&closure, b"named") });
-            assert!(!unsafe { function_name_matches_closure(&closure, b"other") });
-            // An image may deliberately name an anonymous function with "".
-            image.tail[slot + 1] = 0;
-            assert_eq!(
-                unsafe { function_name_for_closure(&closure) }.as_deref(),
-                Some("")
-            );
-            assert!(unsafe { function_name_matches_closure(&closure, b"") });
         }
     }
 }
@@ -918,6 +913,7 @@ mod tests {
         info.code = key as *const u8; // metadata key only, never called
         let closure = crate::closure::ClosureHeader {
             capture_count: 0,
+            shape_id: LayoutWord(crate::codegen_abi::FUNCTION_LAYOUT_WORD),
             info: &info,
             props: std::ptr::null_mut(),
         };
