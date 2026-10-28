@@ -37,19 +37,19 @@
         },
         "prototype": "Function.prototype",
         "length": 0,
-        "body": "crate::async_hooks::context_snapshots::js_async_local_storage_static_snapshot_method",
+        "body": "crate::async_hook_slots::js_async_local_storage_static_snapshot_method",
         "function_info": {
-          "params": 1,
-          "rest_fixed": 0,
+          "declared": 0,
           "flags": 1,
           "length": 0,
-          "declared": 0,
+          "native_method": false,
+          "params": 1,
           "plain_params": 0,
-          "source_symbol": "source:perry_runtime::async_hooks::context_snapshots::js_async_local_storage_static_snapshot_method",
-          "native_method": false
+          "rest_fixed": 0,
+          "source_symbol": "source:perry_runtime::async_hook_slots::js_async_local_storage_static_snapshot_method"
         },
         "captures": [],
-        "info_symbol": "perry_realm_info_a71d94cfa6de7d1e8d52",
+        "info_symbol": "perry_realm_info_ab99d9b694d35f26692d",
         "births": [
           "Function.prototype"
         ]
