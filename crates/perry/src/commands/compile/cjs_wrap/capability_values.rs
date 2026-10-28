@@ -1,4 +1,4 @@
-//! Own-property provenance for the original-source CommonJS refusal census.
+//! Own-property provenance for the CommonJS refusal census and feature selection.
 //!
 //! A descriptor exposes existing own values/accessors; it does not manufacture
 //! a loader capability. Follow local calls, returns and literal object fields
@@ -14,6 +14,7 @@ enum Origin {
     Unknown,
     Undefined,
     Primitive,
+    Numeric,
     Global,
     Intrinsic(String),
     Namespace(String),
@@ -50,6 +51,7 @@ struct Proof<'a> {
     receivers: BTreeMap<u32, Value>,
     shapes: BTreeMap<usize, Shape>,
     descriptors: BTreeMap<usize, Value>,
+    property_receivers: BTreeMap<usize, Value>,
     escaped_functions: BTreeSet<u32>,
     namespace_writes: BTreeMap<String, Value>,
     escaped_namespaces: BTreeSet<String>,
@@ -109,6 +111,7 @@ impl<'a> Proof<'a> {
             receivers: BTreeMap::new(),
             shapes: BTreeMap::new(),
             descriptors: BTreeMap::new(),
+            property_receivers: BTreeMap::new(),
             escaped_functions: BTreeSet::new(),
             namespace_writes: BTreeMap::new(),
             escaped_namespaces: BTreeSet::new(),
@@ -314,7 +317,7 @@ impl<'a> Proof<'a> {
                 Origin::OwnAccessor => {
                     out.insert(Origin::Member);
                 }
-                Origin::Undefined | Origin::Primitive => {} // not callable
+                Origin::Undefined | Origin::Primitive | Origin::Numeric => {} // not callable
                 _ => {
                     for arg in args {
                         self.escape(arg);
@@ -332,12 +335,8 @@ impl<'a> Proof<'a> {
         let site = e as *const Expr as usize;
         match e {
             Expr::Undefined | Expr::Null => one(Origin::Undefined),
-            Expr::Bool(_)
-            | Expr::String(_)
-            | Expr::WtfString(_)
-            | Expr::Integer(_)
-            | Expr::Number(_)
-            | Expr::BigInt(_) => one(Origin::Primitive),
+            Expr::Bool(_) | Expr::String(_) | Expr::WtfString(_) => one(Origin::Primitive),
+            Expr::Integer(_) | Expr::Number(_) | Expr::BigInt(_) => one(Origin::Numeric),
             Expr::LocalGet(id) => self.locals.get(id).cloned().unwrap_or_default(),
             Expr::LocalSet(id, value) => {
                 let v = self.expr(value, function);
@@ -357,6 +356,27 @@ impl<'a> Proof<'a> {
             {
                 one(Origin::Namespace(name.clone()))
             }
+            // Runtime-backed submodules can retain an external namespace
+            // binding at this phase. The import shape identifies its value.
+            Expr::ExternFuncRef { name, .. } => self
+                .module
+                .imports
+                .iter()
+                .find_map(|import| {
+                    (perry_hir::is_node_builtin_module(&import.source)
+                        && !super::run_once_syntax::native_capability(&import.source)
+                        && import.specifiers.iter().any(|specifier| {
+                            matches!(specifier,
+                        perry_hir::ir::ImportSpecifier::Default { local }
+                        | perry_hir::ir::ImportSpecifier::Namespace { local } if local == name)
+                        }))
+                    .then(|| {
+                        one(Origin::Namespace(
+                            import.source.trim_start_matches("node:").to_owned(),
+                        ))
+                    })
+                })
+                .unwrap_or_else(|| one(Origin::Unknown)),
             Expr::FuncRef(id) => one(Origin::Function(*id)),
             Expr::Closure {
                 func_id,
@@ -414,8 +434,9 @@ impl<'a> Proof<'a> {
                 }
                 self.read(&o, Some(property), false)
             }
-            Expr::IndexGet { object, index } => {
+            Expr::IndexGet { object, index, .. } => {
                 let o = self.expr(object, function);
+                self.changed |= join(self.property_receivers.entry(site).or_default(), o.clone());
                 self.expr(index, function);
                 self.escape(
                     &o.iter()
@@ -527,6 +548,7 @@ impl<'a> Proof<'a> {
             }
             Expr::ObjectGetOwnPropertyDescriptor(object, k) => {
                 let o = self.expr(object, function);
+                self.changed |= join(self.property_receivers.entry(site).or_default(), o.clone());
                 self.expr(k, function);
                 self.changed |= join(self.descriptors.entry(site).or_default(), o.clone());
                 let value = self.read(&o, key(k), true);
@@ -719,6 +741,7 @@ impl<'a> Proof<'a> {
                                     v,
                                     Origin::Undefined
                                         | Origin::Primitive
+                                        | Origin::Numeric
                                         | Origin::Member
                                         | Origin::Function(_)
                                 )
@@ -737,7 +760,7 @@ impl<'a> Proof<'a> {
                                         Origin::Unknown | Origin::Global | Origin::Intrinsic(_) => {
                                             false
                                         }
-                                        Origin::Object(_) => {
+                                        Origin::Object(_) | Origin::Namespace(_) => {
                                             self.safe_receiver(&one(o.clone()), seen)
                                         }
                                         _ => true,
@@ -748,7 +771,7 @@ impl<'a> Proof<'a> {
                 _ => false,
             })
     }
-    fn solve(mut self) -> Option<usize> {
+    fn propagate(&mut self) {
         for f in &self.module.functions {
             if f.is_exported || self.exported_names.contains(&f.name) {
                 self.escape(&one(Origin::Function(f.id)));
@@ -775,6 +798,9 @@ impl<'a> Proof<'a> {
                 break;
             }
         }
+    }
+    fn solve(mut self) -> Option<usize> {
+        self.propagate();
         self.descriptors
             .values()
             .all(|v| self.safe_receiver(v, &mut BTreeSet::new()))
@@ -787,6 +813,49 @@ fn key(e: &Expr) -> Option<&str> {
     } else {
         None
     }
+}
+
+/// Receiver and key provenance for the current HIR only; no fact survives a transform.
+/// A namespace or its fresh own-property copy is not a native API instance;
+/// numeric property spellings cannot name native instance APIs.
+/// Unknown call results (including FileHandles), escapes and mutations retain
+/// the ordinary feature detector's conservative result.
+pub(crate) struct PropertyOrigins<'a>(Proof<'a>);
+impl PropertyOrigins<'_> {
+    pub(crate) fn is_non_api_access(&self, expr: &Expr) -> bool {
+        // Hoisted var declarations can lose the numeric type of a loop
+        // cursor. Every reaching value still proves its property spelling:
+        // numbers and undefined cannot name a native instance API. Unknown
+        // assignments or escaped function parameters prevent this proof.
+        if let Expr::IndexGet { index, .. } = expr {
+            if let Expr::LocalGet(id) = index.as_ref() {
+                if self.0.locals.get(id).is_some_and(|value| {
+                    !value.is_empty()
+                        && value
+                            .iter()
+                            .all(|origin| matches!(origin, Origin::Numeric | Origin::Undefined))
+                }) {
+                    return true;
+                }
+            }
+        }
+        self.0
+            .property_receivers
+            .get(&(expr as *const Expr as usize))
+            .is_some_and(|value| self.0.safe_receiver(value, &mut BTreeSet::new()))
+    }
+}
+pub(crate) fn property_origins(module: &Module) -> Option<PropertyOrigins<'_>> {
+    let syntax = module.class_family_syntax.as_ref()?;
+    // Revisit successful descriptor proofs after transforms, rather than
+    // solving arbitrary large dynamic programs just to reduce over-selection.
+    // This is an analysis work filter, not evidence that a receiver is safe.
+    if syntax.descriptor_capability_uses == 0 || syntax.module_capability_uses != 0 {
+        return None;
+    }
+    let mut proof = Proof::new(module);
+    proof.propagate();
+    Some(PropertyOrigins(proof))
 }
 
 pub(crate) fn refine(module: &mut Module) {
@@ -902,5 +971,48 @@ mod tests {
             .strip_prefix("node:")
             .unwrap_or(&i.source)
             == "module"));
+    }
+    fn selected_streams(source: &str) -> bool {
+        let mut module = lowered(source);
+        refine(&mut module);
+        let closed = module
+            .class_family_syntax
+            .as_ref()
+            .unwrap()
+            .module_capability_uses
+            == 0;
+        super::super::super::cjs_link::resolve_open_sites(&mut module, closed).unwrap();
+        let mut ctx = crate::commands::compile::CompilationContext::new("/p".into());
+        ctx.native_modules.insert("/p/main.cjs".into(), module);
+        crate::commands::compile::collect_modules::feature_detect::detect_program_optional_feature_usage(&mut ctx);
+        ctx.native_module_imports.contains("stream/web")
+    }
+    #[test]
+    fn namespace_copy_reads_do_not_select_streams() {
+        let source = include_str!("../../../../tests/fixtures/cjs_closed_support/02-wc.cjs");
+        assert!(!selected_streams(source));
+        let renamed = source
+            .replace("__createBinding", "copyOwn")
+            .replace("__importStar", "namespaceCopy")
+            .replace("__setModuleDefault", "setDefault");
+        assert!(!selected_streams(&renamed));
+    }
+    #[test]
+    fn copied_namespaces_keep_real_file_handle_and_escape_paths() {
+        let sample = include_str!("../../../../tests/fixtures/cjs_closed_support/02-wc.cjs");
+        let helpers = sample
+            .split("Object.defineProperty(exports,")
+            .next()
+            .unwrap();
+        for body in [
+            "const ns = __importStar(require('fs/promises')); async function read(key) { const fh = await ns.open('x', 'r'); return fh[key](); } read(process.argv[2]);",
+            "const ns = __importStar(require('fs')); unknown(ns); const key = process.argv[2]; ns[key]();",
+            "const ns = __importStar(require('fs')); console.log(Object.values(ns));",
+            "const ns = __importStar(require('fs')); const keys = Object.getOwnPropertyNames(ns); mutate(keys); keys[process.argv[2]]();",
+            "const ns = __importStar(require('fs/promises')); async function read(key) { const keys = Object.getOwnPropertyNames(ns); keys.push(await ns.open('x', 'r')); return keys[key](); } read(process.argv[2]);",
+            "const ns = __importStar(require('fs/promises')); async function read(key) { const fh = __importStar(await ns.open('x', 'r')); return fh[key](); } read(process.argv[2]);",
+        ] {
+            assert!(selected_streams(&format!("{helpers}\n{body}")), "{body}");
+        }
     }
 }

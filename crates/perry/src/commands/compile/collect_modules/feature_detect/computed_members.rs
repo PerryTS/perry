@@ -35,6 +35,25 @@ pub(super) fn scan(module: &Module, native_modules: &BTreeMap<PathBuf, Module>) 
         })
         .flatten()
         .collect();
+    let file_namespaces: Vec<&str> = module
+        .imports
+        .iter()
+        .filter(|import| {
+            !import.type_only
+                && !import.runtime_erased
+                && matches!(
+                    import.source.trim_start_matches("node:"),
+                    "fs" | "fs/promises"
+                )
+        })
+        .flat_map(|import| &import.specifiers)
+        .filter_map(|specifier| match specifier {
+            ImportSpecifier::Default { local } | ImportSpecifier::Namespace { local } => {
+                Some(local.as_str())
+            }
+            _ => None,
+        })
+        .collect();
     let mut types = HirTypeEnv::from_module(module);
     refine_array_index_types(module, &mut types);
     refine_enum_image_types(module, &mut types);
@@ -57,6 +76,7 @@ pub(super) fn scan(module: &Module, native_modules: &BTreeMap<PathBuf, Module>) 
             }
         }
     }
+    let origins = crate::commands::compile::cjs_wrap::capability_values::property_origins(module);
     let mut caps = Capabilities::default();
     for_each_expr(module, &mut |expr| {
         if let Expr::IndexGet { index, .. }
@@ -65,6 +85,15 @@ pub(super) fn scan(module: &Module, native_modules: &BTreeMap<PathBuf, Module>) 
         | Expr::ObjectGetOwnPropertyDescriptor(_, index) = expr
         {
             caps.json_members |= matches!(index.as_ref(), Expr::String(name) if name == "json");
+        }
+        // Namespace-copy reads and proved numeric keys do not name a
+        // FileHandle/Date/process API. Calls producing native instances and
+        // subsequent unknown accesses retain the conservative result.
+        if origins
+            .as_ref()
+            .is_some_and(|proof| proof.is_non_api_access(expr))
+        {
+            return;
         }
         match expr {
             Expr::PropertyGet { property, .. } if matches!(property.as_str(), "TOML" | "JSONL") => {
@@ -129,7 +158,10 @@ pub(super) fn scan(module: &Module, native_modules: &BTreeMap<PathBuf, Module>) 
                 caps.opaque_members |= api_receiver(object, &types, module, native_modules);
                 caps.date_members |= date_receiver(object, &types, module, native_modules);
             }
-            Expr::ExternFuncRef { name, .. } if open_names.contains(&name.as_str()) => {
+            Expr::ExternFuncRef { name, .. }
+                if open_names.contains(&name.as_str())
+                    || file_namespaces.contains(&name.as_str()) =>
+            {
                 caps.file_handles = true
             }
             Expr::NativeMethodCall { module, method, .. }
@@ -544,17 +576,14 @@ pub(super) fn for_each_expr(module: &Module, visit: &mut impl FnMut(&Expr)) {
         // a value. Keep the member itself (notably fs/promises.open), and
         // recurse into arguments: fs.readFileSync(helper(fs), "utf8") escapes.
         if let Expr::Call { callee, .. } | Expr::CallSpread { callee, .. } = expr {
-            if matches!(callee.as_ref(), Expr::PropertyGet { object, .. } if is_fs_namespace(object))
-            {
-                perry_hir::walker::walk_expr_children(expr, &mut |child| {
-                    if std::ptr::eq(child, callee.as_ref()) {
-                        visit(child);
-                    } else {
-                        expr_visit(child, visit);
-                    }
-                });
-                return;
-            }
+            perry_hir::walker::walk_expr_children(expr, &mut |child| {
+                if std::ptr::eq(child, callee.as_ref()) {
+                    callee_visit(child, visit);
+                } else {
+                    expr_visit(child, visit);
+                }
+            });
+            return;
         }
         if let Expr::NativeMethodCall {
             object: Some(object),
@@ -570,6 +599,22 @@ pub(super) fn for_each_expr(module: &Module, visit: &mut impl FnMut(&Expr)) {
             }
         }
         perry_hir::walker::walk_expr_children(expr, &mut |child| expr_visit(child, visit));
+    }
+    fn callee_visit(expr: &Expr, visit: &mut impl FnMut(&Expr)) {
+        match expr {
+            Expr::Sequence(values) => {
+                visit(expr);
+                if let Some((last, prefixes)) = values.split_last() {
+                    // Prefix effects still execute and may publish a namespace.
+                    for prefix in prefixes {
+                        expr_visit(prefix, visit);
+                    }
+                    callee_visit(last, visit);
+                }
+            }
+            Expr::PropertyGet { object, .. } if is_fs_namespace(object) => visit(expr),
+            _ => expr_visit(expr, visit),
+        }
     }
     fn stmts(body: &[Stmt], visit: &mut impl FnMut(&Expr)) {
         for stmt in body {
@@ -1012,6 +1057,32 @@ mod tests {
                 super::scan(&module, &Default::default()).opaque_members,
                 "{source}"
             );
+        }
+    }
+    #[test]
+    fn sequence_callees_do_not_escape_static_fs_receivers() {
+        for source in [
+            r#"import * as fs from 'fs'; function f(path, object, key: string) { (0, fs.readFileSync)(path, 'utf8'); return object[key]; }"#,
+            r#"import * as fs from 'fs'; function f(args, object, key: string) { (0, (1, fs.readFileSync))(...args); return object[key]; }"#,
+        ] {
+            let mut ctx = context();
+            detect(&mut ctx, source, "sequence.ts");
+            assert!(
+                !ctx.native_module_imports.contains("stream/web"),
+                "{source}"
+            );
+        }
+    }
+    #[test]
+    fn sequence_callee_prefixes_and_arguments_keep_capabilities() {
+        for source in [
+            r#"import * as fs from 'fs'; function f(path, object, key: string) { (unknown(fs), fs.readFileSync)(path, 'utf8'); return object[key]; }"#,
+            r#"import * as fs from 'fs'; function f(object, key: string) { (0, fs.readFileSync)(unknown(fs), 'utf8'); return object[key]; }"#,
+            r#"import * as fs from 'fs/promises'; async function f(key: string) { const fh = await (0, fs.open)('x', 'r'); return fh[key](); }"#,
+        ] {
+            let mut ctx = context();
+            detect(&mut ctx, source, "sequence-escape.ts");
+            assert!(ctx.native_module_imports.contains("stream/web"), "{source}");
         }
     }
 }
