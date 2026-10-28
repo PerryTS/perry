@@ -21,7 +21,7 @@ export function prepareRequireRuntime(root) {
   }
   const packages = [
     'perry-runtime', 'perry-stdlib', 'perry-runtime-static', 'perry-stdlib-static',
-    'perry-ext-events', 'perry-ext-http', 'perry-ext-net',
+    'perry-ext-http', 'perry-ext-net',
     'perry-ext-typescript', 'perry-ext-ws', 'perry-ext-zlib',
   ];
   const args = ['build', '--locked', '--profile', profile,
@@ -62,7 +62,8 @@ export function prepareRequireRuntime(root) {
   const runtime = prepared ? path.resolve(process.env.PERRY_RUNTIME_DIR) : path.join(target, profileDir);
   // Refuse a misleading successful Cargo invocation (e.g. a cross-target
   // override) rather than falling back to an unrelated installed archive.
-  for (const name of ['runtime', 'stdlib', 'ext_events', 'ext_http', 'ext_net',
+  // node:events is bundled into stdlib; it has no standalone archive.
+  for (const name of ['runtime', 'stdlib', 'ext_http', 'ext_net',
     'ext_typescript', 'ext_ws', 'ext_zlib']) {
     const filename = process.platform === 'win32' ? 'perry_' + name + '.lib' :
       'libperry_' + name + '.a';

@@ -1,3 +1,3 @@
-- Repair release validation setup: build the events runtime archive, recognize glibc matrix fields independently, support the vendored coverage installer, and install Rust components before concurrent tests.
+- Repair release validation setup: drop the obsolete standalone events archive prerequisite, recognize glibc matrix fields independently, support the vendored coverage installer, and install Rust components before concurrent tests.
 - Update vulnerable cryptography and zstd dependencies and adapt elliptic-curve key generation, encoding, and signatures.
 - Refresh the WASI runtime ABI and reviewed ownership inventories, restrict macOS memory reporting to macOS, retain the GC stack-map analysis entry, and expose runtime test names on abort.
