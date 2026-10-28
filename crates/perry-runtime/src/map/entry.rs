@@ -28,12 +28,24 @@ unsafe fn find_entry(map: *const MapHeader, key: f64) -> i32 {
     if let Some(index) = identical_entry(map, key) {
         return index;
     }
-    find_entry_fallback(map, key)
+    find_entry_after_identity_miss(map, key)
 }
 
-#[inline(never)]
-unsafe fn find_entry_fallback(map: *const MapHeader, key: f64) -> i32 {
-    find_key_index(map, normalize_zero(key))
+/// The bit-identity pass of [`identical_entry`] already missed, so the small
+/// extent is not scanned a second time: a plain non-zero number is then absent,
+/// and every other key (content-equal strings, zero, NaN, the hole) goes
+/// straight to the general comparison. Past the small extent the indexed
+/// lookup owns the decision.
+#[inline(always)]
+unsafe fn find_entry_after_identity_miss(map: *const MapHeader, key: f64) -> i32 {
+    let key = normalize_zero(key);
+    if (*map).used <= SIDE_TABLE_THRESHOLD {
+        if is_plain_nonzero_number_bits(key.to_bits()) {
+            return -1;
+        }
+        return find_key_index_cold(map, key);
+    }
+    find_key_index(map, key)
 }
 
 #[inline(always)]
@@ -80,6 +92,20 @@ pub(super) fn get_receiver_fallback(map: *const MapHeader, key: f64) -> f64 {
     map_get_resolved(map, key)
 }
 
+/// Grow a full map with the pending key/value rooted across the grow.
+#[inline(never)]
+unsafe fn grow_rooted(map: *mut MapHeader, key: f64, value: f64) -> (f64, f64, bool) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let key_handle = scope.root_nanbox_f64(key);
+    let value_handle = scope.root_nanbox_f64(value);
+    let grew = ensure_capacity(map);
+    (
+        key_handle.get_nanbox_f64(),
+        value_handle.get_nanbox_f64(),
+        grew,
+    )
+}
+
 /// The key is normalized and absent; caller has resolved/rooted the receiver.
 #[inline(never)]
 unsafe fn append_resolved(map: *mut MapHeader, key: f64, value: f64) {
@@ -89,12 +115,12 @@ unsafe fn append_resolved(map: *mut MapHeader, key: f64, value: f64) {
     // only in these native-stack params (a freshly-built, not-yet-inserted
     // object is reachable via nothing else), which an evacuating minor does
     // not scan, so root them across the grow and re-derive after. gh #6206.
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let key_handle = scope.root_nanbox_f64(key);
-    let value_handle = scope.root_nanbox_f64(value);
-    let grew = ensure_capacity(map);
-    let key = key_handle.get_nanbox_f64();
-    let value = value_handle.get_nanbox_f64();
+    // Only a full map grows (and may move): the common append roots nothing.
+    let (key, value, grew) = if (*map).used < (*map).capacity {
+        (key, value, false)
+    } else {
+        grow_rooted(map, key, value)
+    };
     let size = (*map).size;
     let used = (*map).used;
     let entries = entries_ptr_mut(map);
