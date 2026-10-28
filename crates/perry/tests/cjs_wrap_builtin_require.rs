@@ -290,10 +290,55 @@ console.log(typeof promises.readFile);
 /// which merely checking the final loader call sites would miss.
 #[test]
 fn cjs_wrap_closed_samples_select_their_esm_installers() {
-    fn installs(source: &str, extension: &str) -> std::collections::BTreeSet<String> {
+    fn installs(name: &str, source: &str, extension: &str) -> std::collections::BTreeSet<String> {
         let dir = tempfile::tempdir().unwrap();
         let input = dir.path().join(format!("main.{extension}"));
         std::fs::write(&input, source).unwrap();
+        if name == "03-todo" {
+            let libraries = if extension == "cjs" {
+                [
+                    (
+                        "store",
+                        include_str!("fixtures/cjs_closed_support/todo-cjs/store.js"),
+                    ),
+                    (
+                        "format",
+                        include_str!("fixtures/cjs_closed_support/todo-cjs/format.js"),
+                    ),
+                    (
+                        "types",
+                        include_str!("fixtures/cjs_closed_support/todo-cjs/types.js"),
+                    ),
+                ]
+            } else {
+                [
+                    (
+                        "store",
+                        include_str!("fixtures/cjs_closed_support/todo-esm/store.js"),
+                    ),
+                    (
+                        "format",
+                        include_str!("fixtures/cjs_closed_support/todo-esm/format.js"),
+                    ),
+                    (
+                        "types",
+                        include_str!("fixtures/cjs_closed_support/todo-esm/types.js"),
+                    ),
+                ]
+            };
+            std::fs::create_dir(dir.path().join("lib")).unwrap();
+            for (module, source) in libraries {
+                std::fs::write(dir.path().join(format!("lib/{module}.js")), source).unwrap();
+            }
+        }
+        if name == "05-csv-stats" {
+            let stats = if extension == "cjs" {
+                include_str!("fixtures/cjs_closed_support/stats.cjs")
+            } else {
+                include_str!("fixtures/cjs_closed_support/stats.mjs")
+            };
+            std::fs::write(dir.path().join("stats.js"), stats).unwrap();
+        }
         let result = Command::new(perry_bin())
             .current_dir(dir.path())
             .arg("compile")
@@ -325,6 +370,7 @@ fn cjs_wrap_closed_samples_select_their_esm_installers() {
             .map(str::to_owned)
             .collect()
     }
+    let mut differences = Vec::new();
     for (name, cjs, esm) in [
         (
             "02-wc",
@@ -347,8 +393,13 @@ fn cjs_wrap_closed_samples_select_their_esm_installers() {
             include_str!("fixtures/cjs_closed_support/05-csv-stats.mjs"),
         ),
     ] {
-        assert_eq!(installs(cjs, "cjs"), installs(esm, "mjs"), "{name}");
+        let cjs = installs(name, cjs, "cjs");
+        let esm = installs(name, esm, "mjs");
+        if cjs != esm {
+            differences.push(format!("{name}: CJS {cjs:?}; ESM {esm:?}"));
+        }
     }
+    assert!(differences.is_empty(), "{}", differences.join("\n"));
 }
 
 #[test]
