@@ -657,6 +657,10 @@ const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
         "Test-only fixture/child-process control; absent from compiler production paths.",
     ),
     (
+        "PERRY_TEST_DESERIALIZER_FEATURES_CHILD",
+        "Test-only child-process isolation marker; never read by the compiler's production path.",
+    ),
+    (
         "PERRY_TEST_BUN_CONDITIONS_CHILD",
         "Test-only fixture/child-process control; absent from compiler production paths.",
     ),
