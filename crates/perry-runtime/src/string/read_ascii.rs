@@ -109,6 +109,8 @@ mod tests {
             check(&[byte]);
             check(&[byte; 128]);
             check(&[byte; 129]);
+            check(&[byte; 256]);
+            check(&[byte; 257]);
         }
     }
 }
