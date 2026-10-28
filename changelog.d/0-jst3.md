@@ -1,0 +1,1 @@
+Improve numeric string loops by proving primitive ASCII storage and pristine string methods once before entering a call-free region, while retaining Unicode and override behavior. Avoid redundant JSON duplicate-key scans for matched unique shape prefixes and use exact signed 32-bit number formatting when applicable.
