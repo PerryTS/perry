@@ -24,6 +24,7 @@ fn fresh(id: u32) -> Stmt {
 
 fn call(fid: u32, args: Vec<Expr>) -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(fid)),
         args,
         type_args: vec![],
@@ -33,6 +34,8 @@ fn call(fid: u32, args: Vec<Expr>) -> Expr {
 
 fn get(recv: u32, index: Expr) -> Expr {
     Expr::IndexGet {
+        byte_offset: 0,
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(recv)),
         index: Box::new(index),
     }
@@ -40,6 +43,7 @@ fn get(recv: u32, index: Expr) -> Expr {
 
 fn prop(recv: u32, name: &str) -> Expr {
     Expr::PropertyGet {
+        byte_end: 0,
         byte_offset: 0,
         object: Box::new(Expr::LocalGet(recv)),
         property: name.to_string(),

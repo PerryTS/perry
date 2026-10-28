@@ -175,7 +175,7 @@ pub fn rewrite_imul_calls_in_expr(e: &mut Expr, imul_ids: &HashSet<FuncId>) {
             }
         }
         Expr::LocalSet(_, val) => rewrite_imul_calls_in_expr(val, imul_ids),
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             rewrite_imul_calls_in_expr(object, imul_ids);
             rewrite_imul_calls_in_expr(index, imul_ids);
         }

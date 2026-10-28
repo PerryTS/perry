@@ -79,6 +79,7 @@ pub(crate) fn try_lower_flat_const_index_get(
         Expr::IndexGet {
             object: outer_obj,
             index: outer_idx,
+            ..
         } => {
             if let Expr::LocalGet(id) = outer_obj.as_ref() {
                 if let Some(info) = ctx.flat_const_arrays.get(id).cloned() {
@@ -750,7 +751,7 @@ fn lower_checked_typed_array_i32_load(
 }
 
 fn packed_i32_loop_index_get_fact(ctx: &FnCtx<'_>, e: &Expr) -> Option<super::PackedF64LoopFact> {
-    let Expr::IndexGet { object, index } = e else {
+    let Expr::IndexGet { object, index, .. } = e else {
         return None;
     };
     let (Expr::LocalGet(arr_id), Expr::LocalGet(idx_id)) = (object.as_ref(), index.as_ref()) else {
@@ -767,7 +768,7 @@ fn packed_i32_loop_index_get_fact(ctx: &FnCtx<'_>, e: &Expr) -> Option<super::Pa
 }
 
 fn packed_u32_loop_index_get_fact(ctx: &FnCtx<'_>, e: &Expr) -> Option<super::PackedF64LoopFact> {
-    let Expr::IndexGet { object, index } = e else {
+    let Expr::IndexGet { object, index, .. } = e else {
         return None;
     };
     let (Expr::LocalGet(arr_id), Expr::LocalGet(idx_id)) = (object.as_ref(), index.as_ref()) else {
@@ -849,7 +850,8 @@ fn region_i32_chain_magnitude_bits(ctx: &FnCtx<'_>, e: &Expr) -> Option<u32> {
                     .all(|arg| can_lower_expr_as_i32_in_current_region(ctx, arg)))
             .then_some(I32_CHAIN_LEAF_BITS)
         }
-        Expr::IndexGet { object, index } => (ta_int_elem_load_is_i32_provable(ctx, object, index)
+        Expr::IndexGet { object, index, .. } => {
+            (ta_int_elem_load_is_i32_provable(ctx, object, index)
             || super::masked_window::masked_window_i32_load_is_provable(ctx, object, index)
             // The checked-kind fast path lowers `index` through `fptosi`
             // (ToInt32), so a fractional index like `S[3.9]` would read
@@ -859,7 +861,8 @@ fn region_i32_chain_magnitude_bits(ctx: &FnCtx<'_>, e: &Expr) -> Option<u32> {
             // read paths use in `index_get.rs`).
             || (checked_typed_array_i32_kind(ctx, object).is_some()
                 && super::index_get::numeric_index_has_integer_array_index_proof(ctx, index)))
-        .then_some(I32_CHAIN_LEAF_BITS),
+            .then_some(I32_CHAIN_LEAF_BITS)
+        }
         _ => None,
     }
 }
@@ -1106,7 +1109,7 @@ fn try_lower_expr_native_i32_structural(ctx: &mut FnCtx<'_>, e: &Expr) -> Result
             let lowered = super::arrays_finds::lower_buffer_index_get_i32(ctx, buffer, index)?;
             Some(i32_from_indexed_get_lowered(ctx, lowered))
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             if ta_int_elem_load_is_i32_provable(ctx, object, index) {
                 super::lower_typed_array_load(ctx, object, index)?
                     .map(|lowered| i32_from_indexed_get_lowered(ctx, lowered))
@@ -1151,7 +1154,7 @@ fn i32_from_indexed_get_lowered(ctx: &mut FnCtx<'_>, lowered: LoweredValue) -> S
 }
 
 fn lower_packed_i32_loop_index_get(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<Option<LoweredValue>> {
-    let Expr::IndexGet { object, index } = e else {
+    let Expr::IndexGet { object, index, .. } = e else {
         return Ok(None);
     };
     let (Expr::LocalGet(arr_id), Expr::LocalGet(idx_id)) = (object.as_ref(), index.as_ref()) else {
@@ -1214,7 +1217,7 @@ pub(crate) fn lower_packed_u32_loop_index_get(
     ctx: &mut FnCtx<'_>,
     e: &Expr,
 ) -> Result<Option<LoweredValue>> {
-    let Expr::IndexGet { object, index } = e else {
+    let Expr::IndexGet { object, index, .. } = e else {
         return Ok(None);
     };
     let (Expr::LocalGet(arr_id), Expr::LocalGet(idx_id)) = (object.as_ref(), index.as_ref()) else {
@@ -1599,7 +1602,7 @@ fn lower_expr_native_u32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> 
     if let Some(lowered) = lower_packed_u32_loop_index_get(ctx, e)? {
         return Ok(lowered);
     }
-    if let Expr::IndexGet { object, index } = e {
+    if let Expr::IndexGet { object, index, .. } = e {
         if let Some(lowered) = super::try_lower_proven_view_checked_u32_load(ctx, object, index)? {
             return Ok(lowered);
         }

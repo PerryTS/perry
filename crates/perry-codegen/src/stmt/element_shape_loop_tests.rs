@@ -251,7 +251,10 @@ fn object_element_type(fields: &[(&str, Type)], optional: bool) -> Type {
 /// `keep[<index>].v`
 fn elem_field(array_id: u32, index: Expr) -> Expr {
     Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(array_id)),
             index: Box::new(index),
         }),
@@ -362,6 +365,7 @@ fn emit_with_aliases(m: &Module, aliases: &[(&str, Type)]) -> String {
 /// `<receiver>.length`
 fn length_of(receiver_id: u32) -> Expr {
     Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(receiver_id)),
         property: "length".to_string(),
         byte_offset: 0,
@@ -612,6 +616,7 @@ fn exact_local_array_construction_skips_the_runtime_shape_scan() {
         Stmt::Expr(Expr::ArrayPush {
             array_id: ARRAY_ID,
             value: Box::new(Expr::New {
+                byte_end: 0,
                 class_name: "Node".to_string(),
                 args: Vec::new(),
                 type_args: Vec::new(),
@@ -1387,6 +1392,8 @@ fn binding_stmt(mutable: bool) -> Stmt {
         ty: Type::Named("Node".to_string()),
         mutable,
         init: Some(Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(ARRAY_ID)),
             index: Box::new(Expr::LocalGet(COUNTER_ID)),
         }),
@@ -1408,6 +1415,7 @@ fn binding_accumulate(value: Expr) -> Stmt {
 /// `r.<prop>`
 fn binding_field(prop: &str) -> Expr {
     Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(BINDING_ID)),
         property: prop.to_string(),
         byte_offset: 0,
@@ -1551,6 +1559,8 @@ fn element_binding_declines_a_second_array() {
                 ty: Type::Named("Node".to_string()),
                 mutable: false,
                 init: Some(Expr::IndexGet {
+                    byte_offset: 0,
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(OTHER_ID)),
                     index: Box::new(Expr::LocalGet(COUNTER_ID)),
                 }),
@@ -1620,6 +1630,8 @@ fn an_element_binding_indexed_by_a_non_counter_declines() {
                 ty: Type::Named("Node".to_string()),
                 mutable: false,
                 init: Some(Expr::IndexGet {
+                    byte_offset: 0,
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(ARRAY_ID)),
                     index: Box::new(Expr::Integer(0)),
                 }),
@@ -1681,6 +1693,7 @@ fn element_binding_form_through_a_parameter_gets_the_clone() {
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(F_COUNTER_ID)),
                     right: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         object: Box::new(Expr::LocalGet(PS_ID)),
                         property: "length".to_string(),
                         byte_offset: 0,
@@ -1698,6 +1711,8 @@ fn element_binding_form_through_a_parameter_gets_the_clone() {
                         ty: Type::Named("Node".to_string()),
                         mutable: false,
                         init: Some(Expr::IndexGet {
+                            byte_offset: 0,
+                            byte_end: 0,
                             object: Box::new(Expr::LocalGet(PS_ID)),
                             index: Box::new(Expr::LocalGet(F_COUNTER_ID)),
                         }),
@@ -1708,6 +1723,7 @@ fn element_binding_form_through_a_parameter_gets_the_clone() {
                             op: BinaryOp::Add,
                             left: Box::new(Expr::LocalGet(F_SUM_ID)),
                             right: Box::new(Expr::PropertyGet {
+                                byte_end: 0,
                                 object: Box::new(Expr::LocalGet(F_BINDING_ID)),
                                 property: "v".to_string(),
                                 byte_offset: 0,

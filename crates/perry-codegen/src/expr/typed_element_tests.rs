@@ -106,6 +106,7 @@ fn function(id: u32, name: &str, params: Vec<Param>, body: Vec<Stmt>) -> Functio
 
 fn get(object: u32, property: &str) -> Expr {
     Expr::PropertyGet {
+        byte_end: 0,
         byte_offset: 0,
         object: Box::new(Expr::LocalGet(object)),
         property: property.to_string(),
@@ -114,6 +115,8 @@ fn get(object: u32, property: &str) -> Expr {
 
 fn element(object: u32, property: &str, index: u32) -> Expr {
     Expr::IndexGet {
+        byte_offset: 0,
+        byte_end: 0,
         object: Box::new(get(object, property)),
         index: Box::new(Expr::LocalGet(index)),
     }
@@ -287,6 +290,7 @@ fn arena_module(call_between: bool) -> Module {
     make.push(store(1, "left", 4, Expr::LocalGet(2)));
     if call_between {
         make.push(Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::FuncRef(21)),
             args: Vec::new(),
             type_args: Vec::new(),

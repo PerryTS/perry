@@ -177,6 +177,7 @@ fn a_length_read_of_the_accumulator_does_not_demote() {
         vec![
             self_append(Expr::String("tok".to_string())),
             Stmt::Return(Some(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(ACC)),
                 property: "length".to_string(),
                 byte_offset: 0,

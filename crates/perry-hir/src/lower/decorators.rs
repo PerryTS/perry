@@ -116,6 +116,7 @@ fn member_decorator_target(class: &Class, is_static: bool) -> Expr {
         Expr::ClassRef(class.name.clone())
     } else {
         Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::ClassRef(class.name.clone())),
             property: "prototype".to_string(),
             byte_offset: 0,
@@ -204,6 +205,7 @@ fn append_method_decorator_init(
     let descriptor = Expr::Object(vec![(
         "value".to_string(),
         Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::ExternFuncRef {
                 name: "js_class_prototype_method_value".to_string(),
                 param_types: Vec::new(),
@@ -279,6 +281,7 @@ fn append_decorator_invocations_inner(
                 }),
                 mutable: false,
                 init: Some(Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(base),
                     args: dec.args.clone(),
                     type_args: Vec::new(),
@@ -293,6 +296,7 @@ fn append_decorator_invocations_inner(
 
     for (callee, dec_name) in callees.into_iter().rev() {
         let call = Expr::Call {
+            byte_end: 0,
             callee: Box::new(callee),
             args: invocation_args.clone(),
             type_args: Vec::new(),
@@ -386,6 +390,7 @@ fn append_reflect_metadata_decorator(
 /// first-class function value as a bare built-in identifier.
 fn builtin_metadata_constructor(name: &str) -> Expr {
     Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::GlobalGet(0)),
         property: name.to_string(),
         byte_offset: 0,

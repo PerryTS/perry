@@ -1527,7 +1527,13 @@ pub(super) fn merge_unit(
         t.id = pf.templates.len() as crate::model::TmplId;
         pf.templates.push(t);
     }
+    pf.diagnostics.extend(
+        u.diagnostics
+            .into_iter()
+            .map(|(_, lines)| (path.to_owned(), lines)),
+    );
     pf.sites.extend(u.sites.into_iter().map(|s| SiteFacts {
+        diagnostic_unit: s.diagnostic_unit.as_ref().map(|_| path.to_owned()),
         module: mi as u32,
         ..s
     }));

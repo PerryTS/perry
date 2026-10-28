@@ -325,6 +325,8 @@ fn a_reassigned_scoped_array_keeps_only_a_guarded_read_claim() {
     if let Expr::Closure { body, .. } = &mut read {
         *body = vec![
             Stmt::Expr(Expr::IndexGet {
+                byte_offset: 0,
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(1)),
                 index: Box::new(Expr::Integer(0)),
             }),

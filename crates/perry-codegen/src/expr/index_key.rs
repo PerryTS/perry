@@ -155,6 +155,8 @@ mod tests {
         let mut module = Module::new("intkey.ts");
         let mut body = prelude;
         body.push(Stmt::Return(Some(Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(1)),
             index: Box::new(index),
         })));
@@ -255,7 +257,9 @@ mod tests {
     #[test]
     fn char_code_alias_admits_integer_but_preserves_nan() {
         let code = Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::String("abc".into())),
                 property: "charCodeAt".into(),
                 byte_offset: 0,
@@ -289,7 +293,9 @@ mod tests {
         // the redeclaration lowers through LocalSet, which drops the
         // lowering-order alias, so only the whole-body fact admits it.
         let code = Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::String("abc".into())),
                 property: "charCodeAt".into(),
                 byte_offset: 0,
@@ -319,7 +325,9 @@ mod tests {
     #[test]
     fn reassigned_char_code_is_a_negative_control_for_provenance() {
         let code = Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::String("abc".into())),
                 property: "charCodeAt".into(),
                 byte_offset: 0,
@@ -367,7 +375,9 @@ mod tests {
             ),
         );
         let code = Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::String("abc".into())),
                 property: "charCodeAt".into(),
                 byte_offset: 0,
@@ -387,6 +397,8 @@ mod tests {
                     init: Some(code),
                 },
                 Stmt::Expr(Expr::IndexGet {
+                    byte_offset: 0,
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(1)),
                     index: Box::new(Expr::LocalGet(4)),
                 }),
@@ -404,7 +416,9 @@ mod tests {
     #[test]
     fn parameter_redeclaration_cannot_supply_a_char_code_proof() {
         let code = Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::String("abc".into())),
                 property: "charCodeAt".into(),
                 byte_offset: 0,

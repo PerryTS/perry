@@ -222,6 +222,7 @@ fn try_consumer_fuse_pattern(
     new_args.push(Expr::LocalGet(outer_id));
     let _ = out_param_ids.get(&callee_id)?; // sanity check producer was sized
     let new_call = Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(callee_id)),
         args: new_args,
         type_args,
@@ -389,7 +390,7 @@ fn match_consume_loop(
 /// Match `child[j]` (IndexGet { object: LocalGet(child), index: LocalGet(j) }).
 fn is_index_get_of(e: &Expr, child_id: LocalId, j_id: LocalId) -> bool {
     match e {
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             matches!(object.as_ref(), Expr::LocalGet(id) if *id == child_id)
                 && matches!(index.as_ref(), Expr::LocalGet(id) if *id == j_id)
         }
@@ -439,6 +440,7 @@ fn try_rewrite_single_stmt(
                 let call_stmt = Stmt::Expr(Expr::LocalSet(
                     *id,
                     Box::new(Expr::Call {
+                        byte_end: 0,
                         callee: callee.clone(),
                         args: new_args,
                         type_args: type_args.clone(),

@@ -82,6 +82,7 @@ fn class(method: Function) -> Class {
 
 fn call(local: u32, arity: usize) -> Stmt {
     Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::LocalGet(local)),
         args: (0..arity)
             .map(|value| Expr::Integer(value as i64))
@@ -218,6 +219,7 @@ fn more_than_four_call_arities_declines_the_parameter() {
 fn nested_closure_calls_are_not_assigned_the_outer_methods_ssa_target() {
     let nested_param = Param {
         default: Some(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::LocalGet(CALLBACK_PARAM)),
             args: vec![Expr::Integer(1), Expr::Integer(2), Expr::Integer(3)],
             type_args: Vec::new(),

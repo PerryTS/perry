@@ -98,6 +98,7 @@ fn erased_direct_bitnot_takes_the_inline_number_guard() {
 #[test]
 fn potentially_bigint_binary_result_retains_bitnot_dispatch() {
     let unknown_value = |id| Expr::PropertyGet {
+        byte_end: 0,
         byte_offset: 0,
         object: Box::new(Expr::LocalGet(id)),
         property: "value".to_string(),
@@ -157,6 +158,7 @@ fn int32_locals_fn_ir(ret: Expr) -> String {
     };
     let mut module = Module::new("bitnot_chain");
     module.init.push(Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(1)),
         args: vec![Expr::Integer(1), Expr::Integer(2)],
         type_args: Vec::new(),

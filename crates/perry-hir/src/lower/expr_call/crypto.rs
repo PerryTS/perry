@@ -118,7 +118,9 @@ pub(super) fn lower_crypto_passthrough(method: &str, args: Vec<Expr>) -> Option<
         }
         "randomUUID" if args.is_empty() => Some(Expr::CryptoRandomUUID),
         "randomUUID" => Some(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::NativeModuleRef("crypto".to_string())),
                 property: "randomUUID".to_string(),
@@ -141,7 +143,9 @@ pub(super) fn lower_crypto_passthrough(method: &str, args: Vec<Expr>) -> Option<
                 // resolves the callback, instead of the inline-bytes
                 // Expr::CryptoRandomBytes that targets only the sync form.
                 return Some(Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: 0,
                         object: Box::new(Expr::NativeModuleRef("crypto".to_string())),
                         property: "randomBytes".to_string(),
@@ -208,7 +212,9 @@ pub(super) fn lower_crypto_passthrough(method: &str, args: Vec<Expr>) -> Option<
         | "secureHeapUsed"
         | "createCipheriv"
         | "createDecipheriv" => Some(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::NativeModuleRef("crypto".to_string())),
                 property: method.to_string(),
@@ -230,13 +236,19 @@ pub(super) fn lower_crypto_passthrough(method: &str, args: Vec<Expr>) -> Option<
             let data = iter.next().unwrap();
             let enc = iter.next().unwrap_or_else(|| Expr::String("hex".into()));
             Some(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 0,
                     object: Box::new(Expr::Call {
+                        byte_end: 0,
                         callee: Box::new(Expr::PropertyGet {
+                            byte_end: 0,
                             byte_offset: 0,
                             object: Box::new(Expr::Call {
+                                byte_end: 0,
                                 callee: Box::new(Expr::PropertyGet {
+                                    byte_end: 0,
                                     byte_offset: 0,
                                     object: Box::new(Expr::NativeModuleRef("crypto".to_string())),
                                     property: "createHash".to_string(),

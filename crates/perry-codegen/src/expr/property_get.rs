@@ -114,7 +114,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     } = expr
     {
         if property == "length" {
-            if let Expr::IndexGet { object, index } = object.as_ref() {
+            if let Expr::IndexGet { object, index, .. } = object.as_ref() {
                 if let (Expr::LocalGet(id), Some(index)) =
                     (object.as_ref(), crate::collectors::const_index(index))
                 {
@@ -721,6 +721,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             object,
             property,
             byte_offset,
+            byte_end,
+            ..
         } => {
             if property == "prototype"
                 && matches!(object.as_ref(), Expr::FuncRef(_) | Expr::Closure { .. })
@@ -1211,6 +1213,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // for namespaces with no overlapping conflicts.
                     if let Some(exports) = cjs_interop_exports_receiver(ctx, name, property) {
                         let member = Expr::PropertyGet {
+                            byte_end: *byte_end,
                             byte_offset: *byte_offset,
                             object: Box::new(exports),
                             property: property.clone(),
@@ -1722,6 +1725,7 @@ pub(crate) fn cjs_interop_exports_receiver(
         return None;
     }
     Some(Expr::PropertyGet {
+        byte_end: 0,
         byte_offset: 0,
         object: Box::new(Expr::ExternFuncRef {
             name: namespace.to_string(),

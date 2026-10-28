@@ -139,6 +139,7 @@ pub(crate) fn throw_eval_syntax_error_public(msg: &str) -> Expr {
 
 fn throw_eval_syntax_error_expr(msg: &str) -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::ExternFuncRef {
             name: "js_throw_eval_syntax_error".to_string(),
             param_types: vec![Type::String],

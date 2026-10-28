@@ -196,6 +196,7 @@ fn module_with_tail(tail: Param) -> Module {
             params: vec![fixed(A_ID, "a"), fixed(B_ID, "b"), tail],
             return_type: Type::Any,
             body: vec![Stmt::Return(Some(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(TAIL_ID)),
                 property: "length".to_string(),
                 byte_offset: 0,
@@ -230,6 +231,7 @@ fn module_with_tail(tail: Param) -> Module {
             ty: Type::Named("T".to_string()),
             mutable: false,
             init: Some(Expr::New {
+                byte_end: 0,
                 class_name: "T".to_string(),
                 args: Vec::new(),
                 type_args: Vec::new(),
@@ -238,7 +240,9 @@ fn module_with_tail(tail: Param) -> Module {
             }),
         },
         Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(RECV_ID)),
                 property: "m".to_string(),
                 byte_offset: 0,
@@ -326,6 +330,8 @@ fn pushes_of(ir: &str, literal: &str) -> usize {
 fn a_class_method_reading_arguments_is_handed_every_passed_argument() {
     let mut module = module_with_tail(synthetic_arguments_param());
     module.classes[0].methods[0].body = vec![Stmt::Return(Some(Expr::IndexGet {
+        byte_offset: 0,
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(TAIL_ID)),
         index: Box::new(Expr::Integer(0)),
     }))];

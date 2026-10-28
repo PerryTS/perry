@@ -383,6 +383,7 @@ fn closed_literal_constructor_emits_a_separate_final_shape() {
     );
     let mut m = Module::new("cf_closed_literal");
     m.init.push(Stmt::Expr(Expr::New {
+        byte_end: 0,
         class_name: class.name.clone(),
         args: vec![closure(1, false)],
         type_args: Vec::new(),
@@ -530,6 +531,7 @@ fn general_class_records_follow_registration_and_finalize_the_completed_result()
         key_expr: None,
         ty: Type::Any,
         init: Some(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::FuncRef(90)),
             args: Vec::new(),
             type_args: Vec::new(),
@@ -555,6 +557,7 @@ fn general_class_records_follow_registration_and_finalize_the_completed_result()
     m.functions.push(effect);
     m.classes.push(class);
     m.init.push(Stmt::Expr(Expr::New {
+        byte_end: 0,
         class_name: "User".into(),
         args: Vec::new(),
         type_args: Vec::new(),
@@ -652,6 +655,7 @@ fn class_replacement_returns_never_produce_a_final_record() {
     )])));
     m.classes.push(class);
     m.init.push(Stmt::Expr(Expr::New {
+        byte_end: 0,
         class_name: "Replacement".into(),
         args: Vec::new(),
         type_args: Vec::new(),
@@ -688,6 +692,7 @@ fn default_derived_class_finalizes_inherited_and_own_closure_fields() {
     let mut m = Module::new("cf_user_inherit");
     m.classes.extend([base, child]);
     m.init.push(Stmt::Expr(Expr::New {
+        byte_end: 0,
         class_name: "Child".into(),
         args: Vec::new(),
         type_args: Vec::new(),
@@ -755,6 +760,7 @@ fn completed_class_mints_unbox_the_registered_keys_word() {
         let mut module = Module::new("rootcls_completed_keys");
         module.classes.push(class);
         module.init.push(Stmt::Expr(Expr::New {
+            byte_end: 0,
             class_name: "RootedKeys".into(),
             args: Vec::new(),
             type_args: Vec::new(),
@@ -866,7 +872,9 @@ fn completed_builder_publishes_the_spill_layout_and_declared_callee() {
     assert_eq!(capability.final_shape.as_ref(), Some(shape));
     assert_eq!(capability.methods[0].field_index, 35);
     module.init.push(Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(1)),
             property: "f".into(),
             byte_offset: 0,

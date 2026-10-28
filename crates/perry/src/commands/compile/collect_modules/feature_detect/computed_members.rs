@@ -97,7 +97,7 @@ pub(super) fn scan(module: &Module, native_modules: &BTreeMap<PathBuf, Module>) 
             Expr::PropertyGet { property, .. } if property == "Bun" => caps.bun_files = true,
             // Numeric and literal keys do not hide a new API name. Literal
             // readableWebStream is already selected by the ordinary detector.
-            Expr::IndexGet { object, index } => {
+            Expr::IndexGet { object, index, .. } => {
                 caps.opaque_members |= opaque_key(index, &types)
                     && api_receiver(object, &types, module, native_modules);
                 caps.date_members |= opaque_key(index, &types)

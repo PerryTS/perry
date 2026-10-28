@@ -24,6 +24,7 @@ const SEG: u32 = 9;
 
 fn pget(obj: Expr, prop: &str) -> Expr {
     Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(obj),
         property: prop.to_string(),
         byte_offset: 0,
@@ -32,6 +33,7 @@ fn pget(obj: Expr, prop: &str) -> Expr {
 
 fn call(callee: Expr, args: Vec<Expr>) -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(callee),
         args,
         type_args: vec![],

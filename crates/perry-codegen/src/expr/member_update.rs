@@ -273,6 +273,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let key_idx = ctx.strings.intern(property);
             let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
             let field_read = Expr::PropertyGet {
+                byte_end: 0,
                 object: object.clone(),
                 property: property.clone(),
                 byte_offset: 0,
@@ -405,6 +406,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // is the element's own non-BigInt proof, so a typed-array `ta[i]++`
             // keeps the IR it had.
             let element_read = Expr::IndexGet {
+                byte_offset: 0,
+                byte_end: 0,
                 object: object.clone(),
                 index: index.clone(),
             };
@@ -441,6 +444,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         let Expr::IndexGet {
                             object: read_object,
                             index: read_index,
+                            ..
                         } = &element_read
                         else {
                             unreachable!()

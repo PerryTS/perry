@@ -357,7 +357,7 @@ impl JsEmitter {
             }
 
             // --- Index access ---
-            Expr::IndexGet { object, index } => {
+            Expr::IndexGet { object, index , .. } => {
                 self.emit_expr(object);
                 self.output.push('[');
                 self.emit_expr(index);

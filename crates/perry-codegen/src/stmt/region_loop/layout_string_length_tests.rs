@@ -13,6 +13,7 @@ fn bin(left: Expr, right: Expr) -> Expr {
 
 fn get(object: Expr, property: &str) -> Expr {
     Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(object),
         property: property.into(),
         byte_offset: 0,
@@ -115,6 +116,7 @@ fn sum_lengths_ir_with(tree: Expr) -> String {
 #[test]
 fn nested_string_length_inputs_retain_live_property_reads() {
     let call = Expr::Call {
+        byte_end: 0,
         callee: Box::new(get(Expr::LocalGet(3), "m")),
         args: vec![],
         type_args: vec![],

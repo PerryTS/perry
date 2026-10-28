@@ -8,6 +8,7 @@ use perry_hir::{Expr, Function, Module, Stmt};
 
 fn value_call() -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(1)),
         args: Vec::new(),
         type_args: Vec::new(),

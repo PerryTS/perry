@@ -191,6 +191,7 @@ fn function_ir<'a>(ir: &'a str, marker: &str) -> Option<&'a str> {
 /// `function fib(n: number): number { if (n <= 1) return n; return fib(n-1) + fib(n-2); }`
 fn fib_fn() -> Function {
     let call = |k: i64| Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(1)),
         args: vec![Expr::Binary {
             op: BinaryOp::Sub,
@@ -240,6 +241,7 @@ fn grow_fn() -> Function {
             }),
             then_expr: Box::new(Expr::LocalGet(11)),
             else_expr: Box::new(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::FuncRef(1)),
                 args: vec![
                     Expr::Binary {
@@ -357,6 +359,7 @@ fn fractional_literal_body_stays_on_the_double_path() {
             }),
             then_expr: Box::new(Expr::Number(0.5)),
             else_expr: Box::new(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::FuncRef(1)),
                 args: vec![Expr::Binary {
                     op: BinaryOp::Sub,

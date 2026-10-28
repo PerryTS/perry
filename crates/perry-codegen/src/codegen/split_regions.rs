@@ -1059,6 +1059,7 @@ fn try_extract(
 
     // The call and the unpacking of live-outs.
     let call = Expr::Call {
+        byte_end: 0,
         callee: Box::new(callee),
         args: live_in.iter().map(|id| Expr::LocalGet(*id)).collect(),
         type_args: Vec::new(),
@@ -1131,6 +1132,8 @@ fn try_extract(
             });
             for (k, id) in outs.iter().enumerate() {
                 let get = Expr::IndexGet {
+                    byte_offset: 0,
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(tmp)),
                     index: Box::new(Expr::Number(k as f64)),
                 };

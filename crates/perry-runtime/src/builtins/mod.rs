@@ -152,7 +152,7 @@ pub(crate) use console::{
 pub(crate) use fn_metadata::with_bundle_function_names;
 pub(crate) use fn_metadata::{
     function_has_registered_name, function_name_for_closure, function_name_image,
-    function_name_matches_closure,
+    function_name_matches_closure, register_function_name_bytes,
 };
 
 pub use fn_metadata::{

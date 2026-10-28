@@ -255,6 +255,7 @@ pub(super) fn chunk_giant_literal(
             mut args,
             type_args,
             byte_offset,
+            ..
         } = call
         else {
             unreachable!()
@@ -281,6 +282,7 @@ pub(super) fn chunk_giant_literal(
         args.remove(at);
         args.insert(0, Expr::LiteralChunkObject);
         calls.push(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::FuncRef(fid)),
             args,
             type_args,

@@ -1238,3 +1238,59 @@ fn buffers_on_drop_only_sabotage_turns_the_witness_red() {
         "red for the wrong reason: {stdout}{stderr}"
     );
 }
+
+#[test]
+fn brotli_sync_dispatch_preserves_dictionary_and_requested_quality() {
+    let _agent = super::OwnAgent::enter();
+    let roots = TransientRootScope::enter();
+    let dictionary = roots.root_nanbox(value_bytes(b"Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua."));
+    let input_bytes = b"Lorem ipsum dolor sit amet, consectetur adipiscing elit. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.";
+    let input = roots.root_nanbox(value_bytes(input_bytes));
+    let options = roots.root_nanbox(f64::from_bits(perry_ffi::alloc_object().bits()));
+    np::own(options.get(), "dictionary", dictionary.get());
+    let call = |name: &str, data: f64, options: f64| unsafe {
+        crate::js_ext_zlib_native_dispatch(name.as_ptr(), name.len(), [data, options].as_ptr(), 2)
+    };
+    let output_bytes = |value: f64| {
+        bytes::no_gc(|scope| {
+            bytes::borrow(JsValue::from_bits(value.to_bits()), scope)
+                .unwrap()
+                .to_vec()
+        })
+    };
+    // Captured independently from Node 26.12.1 at quality 11.
+    let node_wire = roots.root_nanbox(value_bytes(&[
+        0x1b, 0xb3, 0x00, 0xf8, 0x25, 0x00, 0xea, 0x98, 0xc0, 0x4a, 0x91, 0x4d, 0x0c, 0xeb, 0x01,
+    ]));
+    assert_eq!(
+        output_bytes(call("brotliDecompressSync", node_wire.get(), options.get())),
+        input_bytes
+    );
+
+    let normal = roots.root_nanbox(call("brotliCompressSync", input.get(), undefined()));
+    let params = roots.root_nanbox(f64::from_bits(perry_ffi::alloc_object().bits()));
+    let quality_options = roots.root_nanbox(f64::from_bits(perry_ffi::alloc_object().bits()));
+    np::own(quality_options.get(), "params", params.get());
+    np::own(params.get(), "1", 11.0);
+    assert_eq!(
+        output_bytes(normal.get()),
+        output_bytes(call(
+            "brotliCompressSync",
+            input.get(),
+            quality_options.get()
+        ))
+    );
+    np::own(params.get(), "1", 9.0);
+    assert_ne!(
+        output_bytes(normal.get()),
+        output_bytes(call(
+            "brotliCompressSync",
+            input.get(),
+            quality_options.get()
+        ))
+    );
+    assert_eq!(
+        output_bytes(call("brotliDecompressSync", normal.get(), undefined())),
+        input_bytes
+    );
+}

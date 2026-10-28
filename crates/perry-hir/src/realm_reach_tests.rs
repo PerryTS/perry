@@ -220,6 +220,8 @@ fn lowered_global_values_and_static_member_receivers_are_distinct() {
         (crate::Expr::GlobalThisExpr, true),
         (
             crate::Expr::IndexGet {
+                byte_offset: 0,
+                byte_end: 0,
                 object: Box::new(crate::Expr::GlobalThisExpr),
                 index: Box::new(crate::Expr::String("Map".into())),
             },
@@ -227,6 +229,8 @@ fn lowered_global_values_and_static_member_receivers_are_distinct() {
         ),
         (
             crate::Expr::IndexGet {
+                byte_offset: 0,
+                byte_end: 0,
                 object: Box::new(crate::Expr::GlobalThisExpr),
                 index: Box::new(crate::Expr::GlobalThisExpr),
             },

@@ -100,6 +100,7 @@ fn uses_environment_for_local_and_function_return_types() {
     assert_eq!(infer_expr_type(&Expr::LocalGet(7), &env), Type::String);
 
     let call = Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(3)),
         args: vec![],
         type_args: vec![],
@@ -170,6 +171,7 @@ fn can_use_external_function_return_facts() {
         returns: HashMap::from([("readName".to_string(), Type::String)]),
     };
     let call = Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::ExternFuncRef {
             name: "readName".to_string(),
             param_types: vec![],
@@ -183,6 +185,7 @@ fn can_use_external_function_return_facts() {
     assert_eq!(infer_expr_type(&call, &facts), Type::String);
 
     let any_fact_does_not_override_embedded_return = Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::ExternFuncRef {
             name: "maybeCount".to_string(),
             param_types: vec![],
@@ -227,6 +230,7 @@ fn infers_object_and_array_shapes_conservatively() {
     let env = empty_env();
     let object = Expr::Object(vec![("answer".to_string(), Expr::Number(42.0))]);
     let get = Expr::PropertyGet {
+        byte_end: 0,
         byte_offset: 0,
         object: Box::new(object),
         property: "answer".to_string(),
@@ -787,6 +791,7 @@ fn infers_named_class_and_interface_property_facts() {
     assert_eq!(
         infer_expr_type(
             &Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(1)),
                 property: "label".to_string(),
@@ -798,7 +803,9 @@ fn infers_named_class_and_interface_property_facts() {
     assert_eq!(
         infer_expr_type(
             &Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 0,
                     object: Box::new(Expr::LocalGet(1)),
                     property: "score".to_string(),
@@ -835,6 +842,7 @@ fn infers_named_class_and_interface_property_facts() {
     assert_eq!(
         infer_expr_type(
             &Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(2)),
                 property: "items".to_string(),
@@ -846,7 +854,9 @@ fn infers_named_class_and_interface_property_facts() {
     assert_eq!(
         infer_expr_type(
             &Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 0,
                     object: Box::new(Expr::LocalGet(2)),
                     property: "done".to_string(),
@@ -868,6 +878,7 @@ fn infers_common_constructed_runtime_values() {
     assert_eq!(
         infer_expr_type(
             &Expr::New {
+                byte_end: 0,
                 class_name: "Widget".to_string(),
                 args: vec![],
                 type_args: vec![],
@@ -881,6 +892,7 @@ fn infers_common_constructed_runtime_values() {
     assert_eq!(
         infer_expr_type(
             &Expr::New {
+                byte_end: 0,
                 class_name: "Array".to_string(),
                 args: vec![Expr::Integer(4)],
                 type_args: vec![],
@@ -945,6 +957,7 @@ fn infers_common_constructed_runtime_values() {
     assert_eq!(
         infer_expr_type(
             &Expr::NewDynamic {
+                byte_end: 0,
                 callee: Box::new(Expr::LocalGet(404)),
                 args: Vec::new(),
                 byte_offset: 0,
@@ -956,6 +969,7 @@ fn infers_common_constructed_runtime_values() {
     assert_eq!(
         infer_expr_type(
             &Expr::NewDynamicSpread {
+                byte_end: 0,
                 callee: Box::new(Expr::LocalGet(404)),
                 args: vec![CallArg::Spread(Expr::Array(vec![], None))],
                 byte_offset: 0,
@@ -1715,6 +1729,7 @@ fn nullish_coalescing_keeps_an_unknown_left_operand_unknown() {
             }),
             then_expr: Box::new(Expr::Undefined),
             else_expr: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(5)),
                 property: "masks".to_string(),
                 byte_offset: 0,
@@ -1845,6 +1860,7 @@ fn resolves_this_and_super_in_class_context() {
 
     let mut env = HirTypeEnv::from_module(&module);
     let this_label = Expr::PropertyGet {
+        byte_end: 0,
         byte_offset: 0,
         object: Box::new(Expr::This),
         property: "label".to_string(),

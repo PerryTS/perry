@@ -221,6 +221,7 @@ fn fs_native_call_roots_first_path_across_second() {
 fn js_runtime_extern_call_roots_first_argument() {
     assert_first_operand_rooted(
         Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::ExternFuncRef {
                 name: "js_probe_sweep".to_string(),
                 param_types: Vec::new(),
@@ -239,7 +240,9 @@ fn js_runtime_extern_call_roots_first_argument() {
 fn crypto_timing_safe_equal_roots_first_buffer() {
     assert_first_operand_rooted(
         Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::NativeModuleRef("crypto".to_string())),
                 property: "timingSafeEqual".to_string(),
                 byte_offset: 0,

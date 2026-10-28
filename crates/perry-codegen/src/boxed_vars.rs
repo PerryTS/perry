@@ -587,7 +587,7 @@ fn collect_nested_closure_boxed_vars_in_expr(expr: &perry_hir::Expr, out: &mut H
             collect_nested_closure_boxed_vars_in_expr(then_expr, out);
             collect_nested_closure_boxed_vars_in_expr(else_expr, out);
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             collect_nested_closure_boxed_vars_in_expr(object, out);
             collect_nested_closure_boxed_vars_in_expr(index, out);
         }
@@ -1009,7 +1009,7 @@ fn collect_closure_refs_and_writes_in_expr(
             collect_closure_refs_and_writes_in_expr(then_expr, refs, writes);
             collect_closure_refs_and_writes_in_expr(else_expr, refs, writes);
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             collect_closure_refs_and_writes_in_expr(object, refs, writes);
             collect_closure_refs_and_writes_in_expr(index, refs, writes);
         }
@@ -1262,7 +1262,7 @@ fn collect_outer_writes_in_expr(expr: &perry_hir::Expr, out: &mut HashSet<u32>) 
             collect_outer_writes_in_expr(then_expr, out);
             collect_outer_writes_in_expr(else_expr, out);
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             collect_outer_writes_in_expr(object, out);
             collect_outer_writes_in_expr(index, out);
         }
@@ -1473,7 +1473,7 @@ fn collect_write_ids_in_expr(expr: &perry_hir::Expr, out: &mut HashSet<u32>) {
             collect_write_ids_in_expr(then_expr, out);
             collect_write_ids_in_expr(else_expr, out);
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             collect_write_ids_in_expr(object, out);
             collect_write_ids_in_expr(index, out);
         }
@@ -1808,7 +1808,7 @@ fn collect_closure_let_types_in_expr(
             collect_closure_let_types_in_expr(then_expr, out);
             collect_closure_let_types_in_expr(else_expr, out);
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             collect_closure_let_types_in_expr(object, out);
             collect_closure_let_types_in_expr(index, out);
         }

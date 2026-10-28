@@ -244,6 +244,7 @@ fn probe_module() -> Module {
                 ty: Type::Named("Boxed".to_string()),
                 mutable: false,
                 init: Some(Expr::New {
+                    byte_end: 0,
                     class_name: "Boxed".to_string(),
                     args: vec![Expr::Number(1.0)],
                     type_args: Vec::new(),
@@ -268,6 +269,7 @@ fn probe_module() -> Module {
         was_unrolled: false,
     }];
     m.init = vec![Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(1)),
         args: vec![Expr::Number(2.0)],
         type_args: Vec::new(),

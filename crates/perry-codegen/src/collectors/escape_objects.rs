@@ -616,7 +616,7 @@ pub fn check_object_literal_escapes_in_expr(
                 check_object_literal_escapes_in_expr(a, candidates, escaped);
             }
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index , .. } => {
             check_object_literal_escapes_in_expr(object, candidates, escaped);
             check_object_literal_escapes_in_expr(index, candidates, escaped);
         }

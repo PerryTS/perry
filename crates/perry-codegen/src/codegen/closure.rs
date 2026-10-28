@@ -594,7 +594,9 @@ pub(super) fn compile_closure(
     // so its ABI and register footprint stay identical to the ordinary
     // trusted clone.
     let llvm_params = crate::expr::private_resume_frame::abi_params(
-        params, private_resume_frame, private_async_resume_frame,
+        params,
+        private_resume_frame,
+        private_async_resume_frame,
     );
 
     let ic_base = llmod.ic_counter;
@@ -721,7 +723,11 @@ pub(super) fn compile_closure(
         );
         for p in params {
             let arg_name = crate::expr::private_resume_frame::parameter_value(
-                blk, params, p.id, private_resume_frame, private_async_resume_frame,
+                blk,
+                params,
+                p.id,
+                private_resume_frame,
+                private_async_resume_frame,
             );
             // A closure region's Number parameter: an int32 box becomes the
             // equal plain double once, here (`split_regions`).

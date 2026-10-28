@@ -1121,7 +1121,7 @@ impl<'a> Build<'a> {
                 self.sink_vals(&o, Reason::ErrorMessage, "property-update");
                 vec![]
             }
-            Expr::IndexGet { object, index } => {
+            Expr::IndexGet { object, index, .. } => {
                 self.expr(cx, object);
                 let k = self.expr(cx, index);
                 self.sink_vals(&k, Reason::ToPropertyKey, "index");
@@ -1253,7 +1253,7 @@ impl<'a> Build<'a> {
                         let o = self.expr(cx, object);
                         self.sink_vals(&o, Reason::ErrorMessage, "delete");
                     }
-                    Expr::IndexGet { object, index } => {
+                    Expr::IndexGet { object, index, .. } => {
                         let o = self.expr(cx, object);
                         self.sink_vals(&o, Reason::ErrorMessage, "delete");
                         let k = self.expr(cx, index);
