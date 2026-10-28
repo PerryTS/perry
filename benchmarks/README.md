@@ -510,7 +510,7 @@ them.
   is not measured.
 - **Compile time / binary size.** Perry compiles slower than Go (Go
   is famously fast at compile-time). Hello world is ~34 KB (no
-  runtime linked); small programs that use the runtime are ~7.5 MB
+  runtime linked); small programs that use the runtime are ~5.5 MB
   stripped on macOS arm64, tracked per program by
   `scripts/runtime_size_budget.py`.
 
