@@ -3,7 +3,8 @@
 
 Every fixture in cases/ is compiled with `--target wasip1`, must import nothing
 but `wasi_snapshot_preview1` (a case built with `PERRY_WASM_NET=1` may also
-import `perry_net`, and must), and runs under the host in this directory with a
+import `perry_net`, and must; one built with `PERRY_WASM_DISCARD=1` may also
+import `perry_host.discard_pages`, and must), and runs under the host in this directory with a
 client (or a signal schedule) driving it from outside. A case passes when the
 program's stdout and exit status match and the host's observations (poll
 counts, descriptor numbers) satisfy the case's check.
@@ -20,6 +21,7 @@ import http.client
 import json
 import os
 import queue
+import re
 import socket
 import subprocess
 import sys
@@ -43,8 +45,9 @@ class Run:
 
     def __init__(self, host: Path, wasm: Path, listen: int, signals: list[str], stats: Path,
                  listen_at: int | None = None, announce: bool = True,
-                 dns: list[str] = (), peer_port: int = 0, peer: socket.socket | None = None):
-        command = [str(host), "--stats", str(stats)]
+                 dns: list[str] = (), peer_port: int = 0, peer: socket.socket | None = None,
+                 host_args: list[str] = ()):
+        command = [str(host), "--stats", str(stats), *host_args]
         for _ in range(listen):
             command += ["--listen", f"{listen_at}=127.0.0.1:0" if listen_at else "127.0.0.1:0"]
         if not announce:
@@ -170,6 +173,12 @@ class Case:
     peer: str = ""
     # The fixture to compile when it is not the case's own name.
     source: str = ""
+    # Built with PERRY_WASM_DISCARD=1: the module imports perry_host.discard_pages.
+    discard: bool = False
+    # Extra options for the host (`--no-discard` answers 0 to discard_pages).
+    host_args: list[str] = field(default_factory=list)
+    # Checks the guest's stderr.
+    log: Callable[[str], None] | None = None
 
 
 CASES: dict[str, Case] = {}
@@ -373,23 +382,66 @@ def net_both_ways(run: Run) -> None:
 add("net_both_ways_default", source="net_both_ways", peer="closed", stdout="error ENOTSUP\n", stats=attempts(0))
 
 
-def compile_case(perry: Path, source: Path, wasm: Path, log: Path, net: bool) -> str | None:
+# perry_host.discard_pages (PERRY_WASM_DISCARD=1). The first fixture shrinks a
+# resizable ArrayBuffer by 1 MiB six times, one host call each; it runs three
+# ways: the host discards, the host answers 0 (the runtime must stop asking after
+# that one call), and a build without the import (the host sees no call and the
+# module imports no perry_host).
+RESIZE_ROUNDS = 6
+
+
+def discarded(s: dict) -> None:
+    check(s["discard_calls"] >= RESIZE_ROUNDS and s["discard_bytes"] >= RESIZE_ROUNDS * 900_000,
+          f"discard calls {s['discard_calls']}, bytes {s['discard_bytes']}")
+
+
+add("discard_resizable", discard=True, stdout="intact 1048576\n", stats=discarded)
+add("discard_declined", source="discard_resizable", discard=True, host_args=["--no-discard"],
+    stdout="intact 1048576\n",
+    stats=lambda s: check(s["discard_calls"] == 1 and s["discard_bytes"] == 0,
+                          f"after a 0 the runtime asked again: calls {s['discard_calls']}, bytes {s['discard_bytes']}"))
+add("discard_default", source="discard_resizable", stdout="intact 1048576\n",
+    stats=lambda s: check(s["discard_calls"] == 0, f"discard calls {s['discard_calls']}"))
+# Freed blocks come back from the keep list or from malloc; what was written
+# into them reads back unchanged, zero-initialised storage allocated after a
+# collection reads as zero, and some blocks were given to the host. The GC log
+# (PERRY_GC_LOG) carries the allocator's counters: at least one held-back block
+# must have been handed out to a zeroed allocation, or the zero check proved
+# nothing.
+def zeroed_reuse(log: str) -> None:
+    counts = [int(m) for m in re.findall(r"zeroed_reused=(\d+)", log)]
+    check(counts and max(counts) >= 1, f"no held-back block was reused for zeroed storage: {counts}")
+
+
+add("discard_reuse", discard=True, stdout="intact\n", host_args=["--env", "PERRY_GC_LOG=1"],
+    stats=lambda s: check(s["discard_calls"] >= 1 and s["discard_bytes"] >= 1 << 20,
+                          f"discard calls {s['discard_calls']}, bytes {s['discard_bytes']}"),
+    log=zeroed_reuse)
+
+
+def compile_case(perry: Path, source: Path, wasm: Path, log: Path, net: bool,
+                 discard: bool = False) -> str | None:
     env = dict(os.environ, PERRY_NO_AUTO_OPTIMIZE="1", PERRY_NO_CACHE="1")
     env.pop("PERRY_WASM_NET", None)
+    env.pop("PERRY_WASM_DISCARD", None)
     if net:
         env["PERRY_WASM_NET"] = "1"
+    if discard:
+        env["PERRY_WASM_DISCARD"] = "1"
     done = subprocess.run(
         [str(perry), "compile", str(source), "--target", "wasip1", "-o", str(wasm)],
         env=env, capture_output=True, timeout=600)
     log.write_bytes(done.stdout + done.stderr)
     if done.returncode or not wasm.is_file():
         return "compile failed:\n" + done.stderr.decode(errors="replace")[-3000:]
-    ok, report = wasi_run.check_imports(wasm, allow_perry_net=net)
+    ok, report = wasi_run.check_imports(wasm, allow_perry_net=net, allow_perry_host=discard)
     if not ok:
         return "imports check failed:\n" + report[-3000:]
     imported = {module for module, *_ in wasi_imports_check.module_imports(wasm.read_bytes())}
     if net != (wasi_imports_check.PERRY_NET in imported):
         return f"PERRY_WASM_NET={'1' if net else 'unset'} but the module imports {sorted(imported)}"
+    if discard != (wasi_imports_check.PERRY_HOST in imported):
+        return f"PERRY_WASM_DISCARD={'1' if discard else 'unset'} but the module imports {sorted(imported)}"
     return None
 
 
@@ -407,7 +459,7 @@ def run_case(c: Case, host: Path, wasm: Path, out: Path) -> str | None:
             peer.close()  # the port stays unbound: connecting to it is refused
             peer = None
     run = Run(host, wasm, c.listen, c.signals, stats_path, c.listen_at, c.announce,
-              c.dns, peer_port, peer)
+              c.dns, peer_port, peer, c.host_args)
     try:
         if c.drive:
             c.drive(run)
@@ -423,6 +475,8 @@ def run_case(c: Case, host: Path, wasm: Path, out: Path) -> str | None:
         stats = json.loads(stats_path.read_text())
         if c.stats:
             c.stats(stats)
+        if c.log:
+            c.log("".join(run.stderr))
         return None
     except AssertionError as exc:
         return f"{exc}\nstdout: {''.join(run.stdout)!r}\nstderr: {''.join(run.stderr)[-2000:]}"
@@ -457,7 +511,7 @@ def main() -> int:
         wasm = args.output / f"{c.name}.wasm"
         try:
             problem = compile_case(args.perry, HERE / "cases" / f"{c.source or c.name}.ts", wasm,
-                                   args.output / f"{c.name}.compile.log", c.net)
+                                   args.output / f"{c.name}.compile.log", c.net, c.discard)
             if problem is None:
                 problem = run_case(c, args.host, wasm, args.output)
         except Exception:  # a harness error is a failure, never a skip

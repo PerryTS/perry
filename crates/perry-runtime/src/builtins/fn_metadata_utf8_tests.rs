@@ -1,4 +1,4 @@
-use super::registered_utf8;
+use super::decode_registered_bytes;
 
 #[test]
 fn metadata_decoding_matches_checked_utf8_at_offsets_and_word_boundaries() {
@@ -10,7 +10,7 @@ fn metadata_decoding_matches_checked_utf8_at_offsets_and_word_boundaries() {
             let mut storage = vec![b'a'; offset + len + 16];
             let range = offset..offset + len;
             assert_eq!(
-                registered_utf8(&storage[range.clone()]),
+                decode_registered_bytes(&storage[range.clone()]),
                 std::str::from_utf8(&storage[range.clone()]).ok()
             );
             for position in 0..len {
@@ -18,7 +18,7 @@ fn metadata_decoding_matches_checked_utf8_at_offsets_and_word_boundaries() {
                     storage[offset + position] = byte;
                     let bytes = &storage[range.clone()];
                     assert_eq!(
-                        registered_utf8(bytes),
+                        decode_registered_bytes(bytes),
                         std::str::from_utf8(bytes).ok(),
                         "offset={offset} len={len} position={position} byte={byte}"
                     );
@@ -37,6 +37,6 @@ fn metadata_decoding_matches_checked_utf8_at_offsets_and_word_boundaries() {
         &[0xff],
         b"ASCII\0name",
     ] {
-        assert_eq!(registered_utf8(bytes), std::str::from_utf8(bytes).ok());
+        assert_eq!(decode_registered_bytes(bytes), std::str::from_utf8(bytes).ok());
     }
 }

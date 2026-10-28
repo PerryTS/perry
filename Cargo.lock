@@ -777,8 +777,6 @@ dependencies = [
 [[package]]
 name = "brotli"
 version = "9.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8b851b75c23ca7873623d612fe49bd1989aeb03d08fb9432187eb253d3d4c6b"
 dependencies = [
  "alloc-no-stdlib 3.0.0",
  "alloc-stdlib 0.3.0",
@@ -5159,9 +5157,9 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "perex"
-version = "0.1.14"
+version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "51a7ee1a53a0fbe25a8b9f5be8ba3fbee87aa6ecca0fda04c99d24d8b9b386da"
+checksum = "eb3fdad6070dfcc66cccb2c080bf78d607915b5dd61554a6bb37c984fbd54068"
 
 [[package]]
 name = "perry"

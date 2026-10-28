@@ -34,12 +34,14 @@ pub(super) fn select(
     implementors: &[(u32, String)],
     cased: &[bool],
 ) -> String {
-    let word = crate::lower_call::method_override::emit_inline_direct_method_word_probe(ctx, recv);
-    select_with_word(ctx, recv, property, implementors, cased, &word)
+    let (word, admitted) =
+        crate::lower_call::method_override::emit_direct_method_selection_probe(ctx, recv);
+    select_with_word(ctx, recv, property, implementors, cased, &word, &admitted)
 }
 
 /// Select from an already loaded receiver header word (`class_id | ShapeId
-/// << 32`; zero for a non-object). `recv` is read only by contract builds.
+/// << 32`) and its admission predicate. An unadmitted word cannot select a
+/// body. `recv` is read only by contract builds.
 pub(super) fn select_with_word(
     ctx: &mut FnCtx<'_>,
     recv: &str,
@@ -47,19 +49,18 @@ pub(super) fn select_with_word(
     implementors: &[(u32, String)],
     cased: &[bool],
     word: &str,
+    admitted: &str,
 ) -> String {
     let cid = ctx.block().trunc(I64, word, I32);
-    // A shadowed receiver selects nothing.
     let receiver_ok = crate::proto_constants::emit_receiver_unshadowed(ctx, word);
-    let cid = if receiver_ok == "true" {
-        cid
-    } else {
-        ctx.block()
-            .select(crate::types::I1, &receiver_ok, I32, &cid, "0")
-    };
+    let admitted = ctx.block().and(crate::types::I1, admitted, &receiver_ok);
     let done = ctx.new_block("pconst.selected");
     let done_l = ctx.block_label(done);
     let start_l = ctx.block().label.clone();
+    let dispatch = ctx.new_block("pconst.admitted");
+    let dispatch_l = ctx.block_label(dispatch);
+    ctx.block().cond_br(&admitted, &dispatch_l, &done_l);
+    ctx.current_block = dispatch;
     let mut seen = std::collections::HashSet::new();
     let cases: Vec<(usize, usize)> = implementors
         .iter()
@@ -75,7 +76,7 @@ pub(super) fn select_with_word(
     switch.push_str(" ]");
     ctx.block().emit_raw(switch);
     ctx.block().mark_terminated();
-    let mut answers = vec![("0".to_string(), start_l)];
+    let mut answers = vec![("0".to_string(), start_l), ("0".to_string(), dispatch_l)];
     for (i, idx) in cases {
         ctx.current_block = idx;
         let (class_id, function) = implementors[i].clone();

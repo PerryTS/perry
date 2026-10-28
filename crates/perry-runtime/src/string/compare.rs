@@ -4,7 +4,9 @@ use super::*;
 use crate::string::wtf8::{self, Wtf8Str};
 
 mod byte_eq;
+mod key_equal;
 mod keys;
+pub(crate) use key_equal::key_bytes_equal;
 #[cfg(test)]
 pub(crate) use keys::test_key_byte_reads;
 pub(crate) use keys::{js_string_key_bytes, js_string_key_matches, js_string_key_matches_bytes};
@@ -148,7 +150,6 @@ pub extern "C" fn js_string_compare(a: *const StringHeader, b: *const StringHead
 }
 
 /// Compare two strings for equality
-#[inline(always)]
 #[no_mangle]
 pub extern "C" fn js_string_equals(a: *const StringHeader, b: *const StringHeader) -> i32 {
     // Pointer identity fast path

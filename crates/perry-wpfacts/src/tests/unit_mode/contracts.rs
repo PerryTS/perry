@@ -308,7 +308,9 @@ pub(super) fn a_broken_namespace_field_function_resolves_only_the_units_that_see
     // writes none, a stand-in class's prototype defines its contract's
     // methods) -> the pin below.
     assert!(pf.round_work[1] < w("a.ts") + w("m.ts") + w("b.ts") + w("c.ts"));
-    assert_eq!(pf.round_work, [754, 879, 993, 563, 487], "{:?}", pf.units);
+    // DEC221: unknown construction sinks its fresh result, without the
+    // extra template-wide escape: the same five rounds do less work.
+    assert_eq!(pf.round_work, [754, 879, 986, 543, 467], "{:?}", pf.units);
 }
 
 #[test]

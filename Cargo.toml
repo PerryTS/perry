@@ -95,6 +95,7 @@ members = [
 # `exclude` entry could remove them. Keeping them out of `crates/` also keeps
 # them out of the `crates/perry-ui*` globs used by the GC/lint census gates.
 exclude = [
+    "third_party/brotli",
     "third_party/windows-winui",
     "third_party/wac-graph",
     "third_party/turnloop",
@@ -439,13 +440,9 @@ regex = "1.12"
 aho-corasick = "1.1"
 memchr = "2"
 # The single regular-expression engine, through crates/perry-perex.
-# 0.1.14 adds exact bounded start-anchored literal execution (format 16):
-# immutable program instructions are compared with the original subject,
-# without a DFA cache, matcher scratch, or generated per-pattern native code.
-# Resolved once on 2026-10-18 with CARGO_RESOLVER_INCOMPATIBLE_PUBLISH_AGE=allow
-# before this release clears the 7-day publish-age window. Cargo.lock pins the
-# verified registry artifact; the global window is unchanged.
-perex = "0.1.14"
+# 0.1.15 borrows validated program sections and chains repeated-atom VM phases.
+# It retains format 16, complete captures and exact work charging.
+perex = "0.1.15"
 # The per-agent event-loop driver. alpha.10 adds owned TCP connect, live socket
 # controls and cancellation-safe shutdown used by the synchronous WASI adapter.
 # Release source: e31526b5399d00e94b1452ffe8a8e0e76e4824ad (turnloop PR #115).
@@ -671,6 +668,8 @@ codegen-units = 1
 # Required provider APIs are not all present in published alpha.10. Keep the
 # exact sources qualified with the component engine; see vendor provenance.
 [patch.crates-io]
+# Locked Brotli9 H10 custom-prefix repair; provenance and patch record below.
+brotli = { path = "third_party/brotli" }
 turnloop = { path = "third_party/turnloop/turnloop" }
 turnloop-http = { path = "third_party/turnloop/turnloop-http" }
 

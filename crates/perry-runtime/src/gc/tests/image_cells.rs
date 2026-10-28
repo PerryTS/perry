@@ -829,7 +829,7 @@ fn knockout_missing_image_birth_facts_fails_the_store_audit() {
         (*object_header())._reserved |= OBJ_FLAG_PLAIN_ORDINARY;
         assert!(
             result.is_err(),
-            "the test store audit must reject the missing birth mark"
+            "the explicit test audit must reject the invalid birth mark in every build"
         );
     }
 }
