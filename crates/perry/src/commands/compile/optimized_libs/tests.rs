@@ -863,6 +863,26 @@ fn the_instrumented_variant_names_its_archives_with_an_instr_suffix() {
 
 #[test]
 fn deserializers_install_regex_without_a_regex_literal() {
+    // Module-collection tests leave the process-global deferred-eval sink
+    // populated. An empty CompilationContext models a fresh compilation;
+    // use an isolated process so that assertion also holds in parallel runs.
+    const CHILD: &str = "PERRY_TEST_REGEX_DESERIALIZER_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let module = module_path!().split_once("::").unwrap().1;
+        let name = format!("{module}::deserializers_install_regex_without_a_regex_literal");
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", &name, "--test-threads=1", "--nocapture"])
+            .env(CHILD, "1")
+            .output()
+            .expect("run isolated regex deserializer feature test");
+        assert!(
+            child.status.success() && String::from_utf8_lossy(&child.stdout).contains("1 passed;"),
+            "isolated deserializer test failed or did not run\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&child.stdout),
+            String::from_utf8_lossy(&child.stderr)
+        );
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let features = BTreeSet::new();
     let plain = CompilationContext::new(dir.path().to_path_buf());
