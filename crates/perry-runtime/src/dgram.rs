@@ -10,7 +10,6 @@
 //! touching the network.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
 
 use crate::array::ArrayHeader;
 use crate::closure::{

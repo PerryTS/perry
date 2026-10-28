@@ -708,4 +708,4 @@ pub extern "C" fn js_url_get_search_params(url: *mut ObjectHeader) -> f64 {
     crate::object::js_object_get_field_f64(url, URL_SEARCH_PARAMS)
 }
 
-pub(crate) use crate::object::url_layout::{is_gc_object_header, is_url_object_shape};
+pub(crate) use crate::object::url_layout::is_url_object_shape;

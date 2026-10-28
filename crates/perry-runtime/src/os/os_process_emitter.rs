@@ -66,14 +66,6 @@ pub(crate) fn process_emitter_root_scanner(visitor: &mut crate::gc::RuntimeRootV
     });
 }
 
-/// Register the process-emitter root scanner (called once during runtime init).
-pub(crate) fn register_process_emitter_root_scanner() {
-    crate::gc::gc_register_mutable_root_scanner_named(
-        "process_emitter",
-        process_emitter_root_scanner,
-    );
-}
-
 fn process_namespace_value() -> f64 {
     crate::object::js_create_native_module_namespace(b"process".as_ptr(), "process".len())
 }

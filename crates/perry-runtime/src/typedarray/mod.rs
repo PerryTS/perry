@@ -26,7 +26,6 @@ mod iterate;
 #[cfg(test)]
 mod resolved_read_tests;
 pub(crate) use crate::byte_cell_support::shared_access;
-pub(crate) use shared_access::copy_lane as copy_shared_lane;
 mod slice_ops;
 #[cfg(test)]
 mod thread_exit_tests;

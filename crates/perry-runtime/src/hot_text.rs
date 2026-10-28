@@ -3,6 +3,7 @@
 #[cfg(target_os = "linux")]
 const HP: usize = 2 * 1024 * 1024;
 
+#[cfg(target_os = "linux")]
 extern "C" {
     fn js_back_hot_text(start: *const u8, limit: *const u8);
 }
