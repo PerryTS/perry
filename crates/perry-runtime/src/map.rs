@@ -1572,16 +1572,13 @@ unsafe fn find_key_index_cold(map: *const MapHeader, key: f64) -> i32 {
             // FNV-1a collisions are rare but possible; validate each
             // candidate by content.
             if let Some(skey) = StrKey::decode(key_bits) {
-                for cand_idx in slot.candidates(skey.content_hash()) {
-                    if cand_idx >= used {
-                        continue;
-                    }
-                    let cand_bits = ptr::read(entries.add((cand_idx as usize) * 2)).to_bits();
-                    if skey.matches(key_bits, cand_bits) {
-                        return cand_idx as i32;
-                    }
-                }
-                return -1;
+                return slot
+                    .find(skey.content_hash(), |i| {
+                        i < used
+                            && skey
+                                .matches(key_bits, ptr::read(entries.add(i as usize * 2)).to_bits())
+                    })
+                    .map_or(-1, |i| i as i32);
             }
             // A pointer-tagged string-like key (a symbol among them) keeps
             // the generic comparison and its symbol guard.
@@ -1643,9 +1640,18 @@ unsafe fn find_key_index_cold(map: *const MapHeader, key: f64) -> i32 {
 /// already SameValueZero-normalized, as every stored key is.
 #[inline(always)]
 unsafe fn find_identical_key(entries: *const f64, used: u32, key_bits: u64) -> Option<i32> {
-    (0..used)
-        .find(|&i| ptr::read(entries.add((i as usize) * 2)).to_bits() == key_bits)
-        .map(|i| i as i32)
+    // The caller admits the existing small-map extent. A fixed bound lets
+    // LLVM unroll the identity checks without a loop backedge per candidate.
+    debug_assert!(used <= SIDE_TABLE_THRESHOLD);
+    for i in 0..SIDE_TABLE_THRESHOLD {
+        if i >= used {
+            break;
+        }
+        if ptr::read(entries.add((i as usize) * 2)).to_bits() == key_bits {
+            return Some(i as i32);
+        }
+    }
+    None
 }
 
 unsafe fn find_string_key_index(map: *const MapHeader, key: *const StringHeader) -> i32 {
@@ -1668,16 +1674,12 @@ unsafe fn find_string_key_index(map: *const MapHeader, key: *const StringHeader)
             return -1;
         }
         if let Some(slot) = (*map).store.as_ref().map(|store| &store.strings) {
-            for cand_idx in slot.candidates(skey.content_hash()) {
-                if cand_idx >= used {
-                    continue;
-                }
-                let cand_bits = ptr::read(entries.add((cand_idx as usize) * 2)).to_bits();
-                if skey.matches(key_bits, cand_bits) {
-                    return cand_idx as i32;
-                }
-            }
-            return -1;
+            return slot
+                .find(skey.content_hash(), |i| {
+                    i < used
+                        && skey.matches(key_bits, ptr::read(entries.add(i as usize * 2)).to_bits())
+                })
+                .map_or(-1, |i| i as i32);
         }
     }
 

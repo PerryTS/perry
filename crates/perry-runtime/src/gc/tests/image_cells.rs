@@ -830,7 +830,7 @@ fn knockout_missing_image_birth_facts_fails_the_store_audit() {
         assert_eq!(
             result.is_err(),
             cfg!(any(debug_assertions, feature = "shape-fact-audit")),
-            "the store audit rejects missing birth facts when enabled"
+            "the invalid birth mark must follow the configured store audit mode"
         );
     }
 }

@@ -88,6 +88,13 @@ fn existing_hash(value: f64) -> Option<u32> {
     hash_value(value, false)
 }
 
+/// Preserve the legacy raw-pointer key representation (top word zero):
+/// it may name a movable object and needs the ordinary identity hash.
+#[inline]
+fn is_plain_numeric_key(bits: u64) -> bool {
+    bits >> 48 != 0 && crate::map::is_plain_nonzero_number_bits(bits)
+}
+
 fn hash_value(value: f64, insert: bool) -> Option<u32> {
     #[cfg(test)]
     TEST_HASH_CALLS.with(|count| count.set(count.get() + 1));
@@ -209,6 +216,30 @@ impl SetIndex {
     }
 
     unsafe fn find(&self, set: *const SetHeader, value: f64, hash: u32) -> Option<usize> {
+        self.find_by(set, hash, |candidate| {
+            candidate.to_bits() != SET_HOLE_VALUE_BITS && jsvalue_eq(candidate, value)
+        })
+    }
+
+    /// The caller admits a normalized plain Number. This specialization
+    /// contains only bits equality, even in an index containing mixed keys.
+    #[inline(always)]
+    unsafe fn find_number_bits(
+        &self,
+        set: *const SetHeader,
+        bits: u64,
+        hash: u32,
+    ) -> Option<usize> {
+        self.find_by(set, hash, |candidate| candidate.to_bits() == bits)
+    }
+
+    #[inline(always)]
+    unsafe fn find_by(
+        &self,
+        set: *const SetHeader,
+        hash: u32,
+        equals: impl Fn(f64) -> bool,
+    ) -> Option<usize> {
         let mask = self.buckets.len() - 1;
         let mut pos = hash as usize & mask;
         loop {
@@ -218,7 +249,7 @@ impl SetIndex {
             }
             if bucket.index < (*set).used && bucket.hash == hash {
                 let candidate = *(*set).elements.add(bucket.index as usize);
-                if candidate.to_bits() != SET_HOLE_VALUE_BITS && jsvalue_eq(candidate, value) {
+                if equals(candidate) {
                     return Some(pos);
                 }
             }
@@ -234,6 +265,32 @@ unsafe fn index_ptr(set: *const SetHeader) -> *mut SetIndex {
     } else {
         (*meta).native_state as *mut SetIndex
     }
+}
+
+/// Direct indexed probe for an actual nonzero Number. The canonical index
+/// already proves bucket occupancy; its entry offsets read GC-rewritten values.
+/// No generic hash/equality frame or JSValue conversion is needed on this path.
+// Keep the indexed loop out of the generic callers' frames: otherwise its
+// registers force a callee-save prologue even for string/object probes.
+#[inline(never)]
+pub(super) unsafe fn lookup_plain_number(set: *const SetHeader, bits: u64) -> i32 {
+    debug_assert!(is_plain_numeric_key(bits));
+    let Some(index) = index_ptr(set).as_ref() else {
+        // Shrinking during an active walk can drop the index while holes
+        // keep used above the small-scan extent. Bits equality is still a
+        // complete answer for this admitted Number, without a generic exit.
+        return (0..(*set).used)
+            .find(|&i| (*(*set).elements.add(i as usize)).to_bits() == bits)
+            .map_or(-1, |i| i as i32);
+    };
+    #[cfg(test)]
+    TEST_HASH_CALLS.with(|count| count.set(count.get() + 1));
+    let mut hasher = crate::fast_hash::PtrHasher.build_hasher();
+    bits.hash(&mut hasher);
+    let hash = hasher.finish() as u32;
+    index
+        .find_number_bits(set, bits, hash)
+        .map_or(-1, |pos| index.buckets[pos].index as i32)
 }
 
 pub(super) unsafe fn lookup_value(set: *const SetHeader, value: f64) -> Option<i32> {
@@ -351,6 +408,111 @@ pub(crate) unsafe fn test_snapshot(set: *const SetHeader) -> (usize, usize, usiz
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Force every domain into one probe chain. Numeric admission must still
+    /// distinguish non-numbers, honor tombstones, and agree with SameValueZero.
+    #[test]
+    fn numeric_candidates_in_mixed_collision_chain() {
+        let set = js_set_alloc(32);
+        let text = crate::string::js_string_from_bytes(b"7".as_ptr(), 1);
+        let values = [
+            7.0,
+            -3.5,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            0.0,
+            f64::NAN,
+            f64::from_bits(crate::value::TAG_TRUE),
+            f64::from_bits(crate::value::TAG_NULL),
+            f64::from_bits(crate::value::TAG_UNDEFINED),
+            boxed_heap_string_value(text),
+        ];
+        for value in values {
+            js_set_add(set, value);
+        }
+        unsafe {
+            let mut index = SetIndex::new(values.len());
+            for i in 0..values.len() {
+                index.insert_hash(7, i as u32);
+            }
+            for value in values.into_iter().chain([99.0, -0.0, 1.5]) {
+                let value = normalize_zero(value);
+                let expected = values.iter().position(|&v| jsvalue_eq(v, value));
+                if is_plain_numeric_key(value.to_bits()) {
+                    assert_eq!(
+                        index
+                            .find_number_bits(set, value.to_bits(), 7)
+                            .map(|p| index.buckets[p].index as usize),
+                        expected,
+                    );
+                }
+                assert_eq!(
+                    index
+                        .find(set, value, 7)
+                        .map(|p| index.buckets[p].index as usize),
+                    expected,
+                );
+            }
+            let pos = index.find(set, 7.0, 7).unwrap();
+            index.buckets[pos].index = DELETED;
+            index.live -= 1;
+            assert!(index.find_number_bits(set, 7.0f64.to_bits(), 7).is_none());
+            assert!(index
+                .find_number_bits(set, (-3.5f64).to_bits(), 7)
+                .is_some());
+            // Fast admission must use the SAME hash as the previous numeric
+            // path; otherwise existing mixed indexes could silently miss.
+            for value in [7.0f64, -3.5, f64::INFINITY, f64::NEG_INFINITY] {
+                let mut hasher = crate::fast_hash::PtrHasher.build_hasher();
+                value.to_bits().hash(&mut hasher);
+                assert_eq!(existing_hash(value), Some(hasher.finish() as u32));
+            }
+            finalize_set_side_allocation_for_gc(set);
+        }
+    }
+
+    #[test]
+    fn numeric_probe_after_shrink_during_a_live_walk() {
+        let set = js_set_alloc(16);
+        for i in 1..=12 {
+            js_set_add(set, i as f64);
+        }
+        set_foreach_enter(set);
+        for i in 1..=4 {
+            assert_eq!(js_set_delete(set, i as f64), 1);
+        }
+        unsafe {
+            assert_eq!((*set).size, 8);
+            assert!((*set).used > SMALL_SET_SCAN_MAX);
+            assert!(
+                index_ptr(set).is_null(),
+                "shrink must exercise the indexless path"
+            );
+            for i in 1..=12 {
+                assert_eq!(js_set_has(set, i as f64), i32::from(i > 4));
+            }
+            assert_eq!(js_set_has(set, 99.0), 0);
+            assert!(set_foreach_leave(set));
+            compact_if_holey_set(set);
+            assert_eq!((*set).used, 8);
+            assert_eq!(js_set_has(set, 5.0), 1);
+            finalize_set_side_allocation_for_gc(set);
+        }
+    }
+
+    #[test]
+    fn raw_object_keys_keep_the_relocation_stable_hash() {
+        unsafe {
+            let object = crate::object::js_object_alloc(0, 0) as usize;
+            let id = key_identity(object, true).unwrap();
+            let mut expected = crate::fast_hash::PtrHasher.build_hasher();
+            (0u64, id).hash(&mut expected);
+            assert_eq!(
+                existing_hash(f64::from_bits(object as u64)),
+                Some(expected.finish() as u32)
+            );
+        }
+    }
 
     #[test]
     fn small_mixed_sets_are_lazy_and_rebuild_after_shrink() {
