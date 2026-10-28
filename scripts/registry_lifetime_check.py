@@ -158,7 +158,9 @@ ACCESSOR_RETURN = re.compile(
 # The objtables lane moves per-object facts onto their owners and deletes 23
 # owner-keyed tables, 21 of them with a removal path (218 -> 195 enumerated,
 # 143 -> 122 removing). The floors keep the four-entry margin below them.
-MIN_REGISTRIES = 191
+# Function metadata ownership removes four maps (194 -> 190). Preserve
+# the existing three-entry parser-liveness margin.
+MIN_REGISTRIES = 187
 # Phase A removes 21 maps previously counted as shrinking (167 -> 146).
 MIN_REMOVING = 118
 

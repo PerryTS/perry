@@ -109,8 +109,9 @@ mod console;
 // #9188: the function-name / function-source sidecar registries, split out
 // of `formatting` when the copying and borrowing entry points were separated.
 mod fn_metadata;
+mod fn_metadata_owner;
 mod retained_source;
-pub(crate) use fn_metadata::function_registries_census;
+pub(crate) use fn_metadata_owner::function_registries_census;
 mod formatting;
 pub(crate) use formatting::install_json_format;
 mod globals;
@@ -149,20 +150,18 @@ pub(crate) use console::{
     try_console_instance_method_dispatch, CONSOLE_INSTANCE_CLASS_ID,
 };
 
-pub(crate) use fn_metadata::with_bundle_function_names;
 pub(crate) use fn_metadata::{
     function_has_registered_name, function_name_for_closure, function_name_image,
-    function_name_matches_closure,
+    function_name_matches_closure, registered_name_for_closure,
 };
+pub(crate) use fn_metadata_owner::{with_bundle_function_names, BundleFunctionNames};
 
-pub use fn_metadata::{
-    function_is_non_strict_ordinary_for_ptr, function_name_for_ptr, function_name_registry_entries,
-    function_name_registry_len, function_source_for_func_ptr, function_source_for_info_or_native,
-    function_source_for_ptr, js_register_function_name, js_register_function_name_static,
-    js_register_function_names_static, js_register_function_source,
-    js_register_function_source_static, js_register_function_sources_static,
+pub(crate) use fn_metadata::{
+    function_is_non_strict_ordinary_for_info, register_function_name,
     register_function_name_if_absent,
 };
+pub use fn_metadata::{function_source_for_func_ptr, function_source_for_info_or_native};
+pub use fn_metadata_owner::js_register_function_metadata;
 
 pub use formatting::{
     js_array_print, js_boxed_bigint_new, js_boxed_boolean_new, js_boxed_number_new,
@@ -220,3 +219,9 @@ pub(crate) use globals::clone_with_transfers;
 
 mod number_locale;
 pub use number_locale::js_number_to_locale_string;
+
+#[cfg(test)]
+pub(crate) use fn_metadata_owner::{test_bundle_names, test_publish_bundle_name};
+
+#[cfg(test)]
+pub(crate) use fn_metadata::registered_name_string as test_registered_name;

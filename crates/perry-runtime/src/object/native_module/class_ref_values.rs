@@ -290,15 +290,12 @@ pub(crate) fn class_method_declaration_value_bytes(
     if f.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    let entry_code = unsafe { (*f).code() } as usize;
-    if entry != 0 && !name.is_empty() && !crate::builtins::function_has_registered_name(entry_code)
+    if entry != 0
+        && !name.is_empty()
+        && !crate::builtins::function_has_registered_name(unsafe { &*info })
     {
         unsafe {
-            crate::builtins::js_register_function_name(
-                entry_code as *const u8,
-                name.as_ptr(),
-                name.len() as u32,
-            );
+            crate::builtins::register_function_name(&*info, name);
         }
     }
     // A compiled method whose body already names it (its image name, or the
@@ -484,11 +481,14 @@ mod method_birth_tests {
         0.0
     }
 
-    static INFO: crate::closure::JsFunctionInfo = {
-        let mut info = crate::closure::JsFunctionInfo::of_native_args(entry, 1);
-        info.flags |= crate::codegen_abi::FN_COMPILED_BODY;
-        info
-    };
+    static OWNER: crate::codegen_abi::FunctionMetadataOwner =
+        crate::codegen_abi::FunctionMetadataOwner::native();
+    static INFO: crate::codegen_abi::NativeFunctionInfo =
+        crate::codegen_abi::NativeFunctionInfo::new(
+            crate::closure::JsFunctionInfo::of_native_args(entry, 1)
+                .with_flags(crate::codegen_abi::FN_COMPILED_BODY),
+            &OWNER,
+        );
 
     #[test]
     fn compiled_literal_method_preserves_bind_birth_shape() {
@@ -502,7 +502,7 @@ mod method_birth_tests {
                     1,
                     false,
                     false,
-                    &INFO as *const _ as usize,
+                    &INFO.info as *const _ as usize,
                     computed,
                 )
             };

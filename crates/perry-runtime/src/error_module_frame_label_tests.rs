@@ -22,11 +22,7 @@ fn a_module_body_frame_renders_its_own_location() {
     const MODULE_START: usize = 0x0000_7d00_0000_0000;
     const MODULE_LABEL: &[u8] = b"Object.<anonymous> (/app/node_modules/plugin/index.js)";
     unsafe {
-        crate::builtins::js_register_function_name_static(
-            MODULE_START as *const u8,
-            MODULE_LABEL.as_ptr(),
-            MODULE_LABEL.len() as u32,
-        );
+        crate::builtins::test_publish_bundle_name(MODULE_START as *const u8 as usize, MODULE_LABEL);
     }
 
     let mut blob = [0u8; MAX_CAPTURED_FRAMES * PC_CHARS];

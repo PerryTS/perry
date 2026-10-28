@@ -86,40 +86,8 @@ pub fn declare_phase1(module: &mut LlModule) {
     // NaN-boxed count value) -> category (0=zero 1=one 2=two 3=few 4=many
     // 5=other).
     module.declare_function("perry_i18n_plural_category", I32, &[I32, DOUBLE]);
-    // Function-name registry — populated by module init once per top-level
-    // named function so `console.log(named)` prints `[Function: named]`
-    // instead of `[Function (anonymous)]`. See #1202.
-    //
-    // #9188: the `_static` spelling hands the registry the `@.str.N` constant
-    // itself instead of a slice to copy, which is sound only because those
-    // globals live for the life of the image — a promise the plain
-    // `js_register_function_name` does NOT make of its callers, which is why
-    // the two are separate symbols rather than one with a tightened contract.
-    // BOTH spellings are declared, because "life of the image" and "life of
-    // the process" are the same lifetime for an executable and NOT for a
-    // plugin. Perry compiles TypeScript to a dylib plugin as well as an
-    // executable, `codegen/entry.rs` emits the `perry_plugin_abi_version` /
-    // `plugin_activate` shim for it, and `perry_plugin_unload`
-    // (`perry-runtime/src/plugin.rs`) ends in `dlclose` — which unmaps that
-    // image's rodata while the registries still borrow into it. The registries
-    // have no unregister path, so those entries would outlive their bytes and
-    // the next `fn.name` / `fn.toString()` / stack frame that resolved one
-    // would read unmapped memory. `emit_string_pool` therefore picks the
-    // spelling from the output kind: `_static` for an executable, the copying
-    // one for `dylib` / `staticlib`.
-    module.declare_function("js_register_function_name_static", VOID, &[PTR, PTR, I32]);
-    module.declare_function("js_register_function_name", VOID, &[PTR, PTR, I32]);
-    module.declare_function("js_register_function_names_static", VOID, &[PTR, I32]);
-    // #4101: register a user function's original source text (keyed by the
-    // same wrapper/closure address as the name) so `fn.toString()` and
-    // `Function.prototype.toString.call(fn)` reconstruct the source.
-    module.declare_function(
-        "js_register_function_source_static",
-        VOID,
-        &[PTR, PTR, I32, I32],
-    );
-    module.declare_function("js_register_function_source", VOID, &[PTR, PTR, I32, I32]);
-    module.declare_function("js_register_function_sources_static", VOID, &[PTR, I32]);
+    // Canonical function metadata owner; ordinals live in JsFunctionInfo.
+    module.declare_function("js_register_function_metadata", VOID, &[PTR, I32]);
 
     // Console.
     module.declare_function("js_console_log_dynamic", VOID, &[DOUBLE]);
