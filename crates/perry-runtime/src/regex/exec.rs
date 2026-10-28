@@ -56,10 +56,10 @@ pub extern "C" fn js_regexp_exec_projected(
     // above and only inspect its current data in execute_rooted afterwards.
     let input = perex_api::finish(perex_dispatch::to_string(&argument));
     let input = scope.root_string_ptr(input);
-    let found = perex_api::finish(perex_api::execute_rooted(
+    let found = perex_api::finish(perex_api::execute_capture_rooted(
         &receiver,
         &input,
-        perex_api::ExecOutput::Capture(capture as usize),
+        capture as usize,
         &mut perex::Budget::new(perex_api::WORK),
         &perex_memory::MemoryBudget::new(perex_api::SCRATCH_BYTES),
         &mut perex_runtime::poll,
