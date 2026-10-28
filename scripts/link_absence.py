@@ -37,6 +37,7 @@ NEGATIVES = {
     "named_fs_promises_value": ["node_stream"],
     "named_fs_constants": ["node_stream"],
     "named_util_types": [],
+    "named_events_constructor": [],
     "without_json": ["global_json", "json_tape"],
     "bun_file_without_json": ["global_json", "json_tape"],
     "without_turnloop_net": ["turnloop_net"],

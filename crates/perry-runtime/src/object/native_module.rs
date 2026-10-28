@@ -29,6 +29,7 @@ pub(crate) use static_exports::selected_value as selected_native_export_value;
 pub(crate) use static_exports::{
     call_minted as call_minted_native_export,
     js_native_export_6576656e7473_4576656e74456d6974746572 as event_emitter_export_value,
+    js_native_export_6576656e7473_4576656e74456d69747465724173796e635265736f75726365 as event_emitter_async_resource_export_value,
     stream_export_value,
 };
 pub(crate) mod constants;
