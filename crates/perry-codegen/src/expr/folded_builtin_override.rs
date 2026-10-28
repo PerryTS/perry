@@ -775,6 +775,14 @@ fn folded_array_entry(
     if folded_family(expr) != Some(crate::builtin_proto::BuiltinProto::Array) {
         return None;
     }
+    // A certified sort selects its operation after the method-identity
+    // guard. The shared checked entry would erase the HIR certificate and
+    // always call comparator sorting, just as it would erase an inline some.
+    if let Expr::ArraySort { comparator, .. } = expr {
+        if perry_hir::analysis::pure_numeric_order(comparator).is_some() {
+            return None;
+        }
+    }
     if let Expr::ArraySome { callback, .. } = expr {
         if super::logical_collections::captureless_some_callback(ctx, callback).is_some() {
             return None;

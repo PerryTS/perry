@@ -11,7 +11,6 @@ use crate::expr::{lower_expr, lower_expr_value, materialize_js_value, FnCtx};
 use crate::native_value::{LoweredValue, MaterializationReason};
 use crate::types::DOUBLE;
 
-mod indexed_owner_loop;
 pub(crate) mod binding_cell;
 #[cfg(test)]
 mod binding_cell_tests;
@@ -36,6 +35,7 @@ mod element_shape_loop;
 mod element_shape_loop_tests;
 mod element_shape_native;
 mod if_stmt;
+mod indexed_owner_loop;
 mod let_buffer_views;
 mod let_object_facts;
 mod let_scalar_new;
@@ -529,6 +529,7 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
             if ctx.shared_super_scope_active {
                 ctx.block().call_void("js_derived_super_scope_pop", &[]);
             }
+            crate::expr::private_resume_frame::write_out_kind(ctx)?;
             ctx.block().ret(DOUBLE, &final_v);
             Ok(())
         }

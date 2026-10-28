@@ -1057,3 +1057,5 @@ pub(crate) fn ensure_generator_intrinsics() {
 #[cfg(test)]
 #[path = "generator_shape_tests.rs"]
 mod generator_shape_tests;
+
+crate::realm_decl!("generator.realm.json#*");

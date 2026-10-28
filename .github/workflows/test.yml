@@ -5295,8 +5295,22 @@ jobs:
       run: |
         compiler=target/perry-dev/perry
         python scripts/wasi_run.py "$compiler" --flavour p1 --suite smoke --output target/wasi-validation/p1-smoke --keep-intermediates
-        python scripts/wasi_run.py "$compiler" --flavour p1 --suite acceptance --output target/wasi-validation/p1-acceptance --keep-intermediates
+        python scripts/wasi_run.py "$compiler" --flavour p1 --suite acceptance --output target/wasi-validation/p1-acceptance --keep-intermediates | tee target/wasi-validation/p1-acceptance.log
+        # A suite that ran nothing must not pass: both stdin cases must be among them.
+        grep -q '^ok stdin ' target/wasi-validation/p1-acceptance.log
+        grep -q '^ok stdin_busy_loop ' target/wasi-validation/p1-acceptance.log
         python scripts/wasi_run.py "$compiler" --flavour p1 --suite gap --output target/wasi-validation/p1-gap --keep-intermediates
+    - name: wasip1 programs under the reference preview 1 host
+      shell: bash
+      run: |
+        manifest=test-wasi/p1-host/Cargo.toml
+        cargo build --locked --manifest-path "$manifest"
+        cargo test --locked --manifest-path "$manifest" 2>&1 | tee target/wasi-validation/p1-host-unit.log
+        ran=$(awk '/^test result: ok\./ { n += $4 } END { print n + 0 }' target/wasi-validation/p1-host-unit.log)
+        test "$ran" -ge 8 || { echo "the host crate ran $ran tests, expected at least 8"; exit 1; }
+        python test-wasi/p1-host/suite.py target/perry-dev/perry \
+          --host test-wasi/p1-host/target/debug/perry-p1-host \
+          --output target/wasi-validation/p1-host --min-cases 12
     - name: Typed components, resources, moving GC and cross-language composition
       run: ./scripts/component_check.sh
     - name: Retain WASI and component execution evidence
@@ -5420,6 +5434,8 @@ jobs:
         uses: ./.github/actions/perry/taiki-e/install-action
         with:
           tool: cargo-llvm-cov
+          # The vendored action has no generated binary download manifests.
+          fallback: cargo-install
       - name: Run coverage
         run: |
           mapfile -t excluded < <(python3 scripts/workspace_architecture.py \

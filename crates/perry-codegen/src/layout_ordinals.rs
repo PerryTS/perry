@@ -151,9 +151,11 @@ impl ProgramLayoutOrdinals {
         )
     }
 
+    /// The `PerryLayoutImageV1` initializer; `@perry_static_seeds` is the
+    /// static seed unit's table (`stubs::static_shape_seed_ll_with_plan`).
     pub fn image_initializer(&self) -> String {
         format!(
-            "{{ i32 {}, i32 {}, i32 {}, i32 {} }}",
+            "{{ i32 {}, i32 {}, i32 {}, i32 {}, ptr @perry_static_seeds }}",
             perry_abi::LAYOUT_WORD_ABI_VERSION,
             self.static_rows(),
             self.family_first,

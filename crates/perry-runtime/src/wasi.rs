@@ -1109,3 +1109,5 @@ mod tests {
         assert!(WASI_IMPORT_NAMES.contains(&"sock_shutdown"));
     }
 }
+
+crate::realm_decl!("wasi.realm.json#*");

@@ -98,6 +98,7 @@ exclude = [
     "third_party/windows-winui",
     "third_party/wac-graph",
     "third_party/turnloop",
+    "test-wasi/p1-host",
 ]
 
 # Build only the host-independent product set by default: the compiler and
@@ -560,7 +561,7 @@ tar = "0.4"
 sha1 = "0.11"
 # zstd for transparent decompression of the npm-shipped `*.a.zst` archives.
 # Statically vendored (no system libzstd dependency on the user's machine).
-zstd = "0.13"
+zstd = "0.14.3"
 
 # Internal crates
 perry-parser = { path = "crates/perry-parser" }

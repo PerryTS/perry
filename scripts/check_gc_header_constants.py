@@ -72,6 +72,7 @@ REPO = Path(__file__).resolve().parent.parent
 # The authoritative side: where each runtime constant is DEFINED.
 # ---------------------------------------------------------------------------
 RUNTIME_SOURCES = [
+    "crates/perry-abi/src/lib.rs",
     "crates/perry-runtime/src/gc/types.rs",
     "crates/perry-runtime/src/gc/layout.rs",
     "crates/perry-runtime/src/string/mod.rs",

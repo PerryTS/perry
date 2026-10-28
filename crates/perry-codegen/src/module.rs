@@ -817,9 +817,10 @@ impl LlModule {
 
     /// Fold the entire same-named weak data definition, including its section
     /// bytes. Mach-O already coalesces weak symbols at subsection boundaries;
-    /// Wasm uses its separate image inventory. ELF and COFF need a COMDAT.
+    /// ELF, COFF and Wasm need a COMDAT: resolving weak symbol references
+    /// alone leaves duplicate bytes in a mixed live section.
     pub(crate) fn add_coalesced_global(&mut self, name: &str, mut line: String) {
-        if !self.target_triple.contains("apple") && !self.target_triple.contains("wasm") {
+        if !self.target_triple.contains("apple") {
             self.comdat_globals.insert(format!("@{name}"));
             line.push_str(&format!(", comdat(${name})"));
         }
@@ -830,6 +831,16 @@ impl LlModule {
         if let Some((name, rhs)) = line.split_once(" = ") {
             if self.comdat_globals.contains(name) && !rhs.starts_with("external ") {
                 ir.push_str(&format!("${} = comdat any\n", &name[1..]));
+                // Wasm section bounds do not keep otherwise-unreferenced
+                // COMDAT atoms. Iteration is a real use; this directive marks
+                // the resolved symbol live without adding linear-memory data.
+                if self.target_triple.contains("wasm")
+                    && rhs
+                        .split_once(", section \"")
+                        .is_some_and(|(_, attrs)| attrs.starts_with("perry_atoms\""))
+                {
+                    ir.push_str(&format!("module asm \".no_dead_strip {}\"\n", &name[1..]));
+                }
                 // COFF section bounds do not retain unreferenced COMDATs.
                 // Atom iteration is a real use: retain one resolved symbol
                 // with a linker directive, without adding runtime data.

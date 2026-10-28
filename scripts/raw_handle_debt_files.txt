@@ -143,7 +143,6 @@
 3 crates/perry-runtime/src/promise/rejection.rs
 2 crates/perry-runtime/src/promise/then.rs
 8 crates/perry-runtime/src/proxy.rs
-6 crates/perry-runtime/src/proxy/put_value.rs
 11 crates/perry-runtime/src/regex/match_all.rs
 3 crates/perry-runtime/src/regex/replace_fn.rs
 41 crates/perry-runtime/src/set.rs

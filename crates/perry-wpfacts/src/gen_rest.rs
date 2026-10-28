@@ -456,16 +456,10 @@ impl<'a> Gen<'a> {
             | Expr::BufferIsEncoding(..)
             | Expr::BufferByteLength { .. }
             | Expr::BufferToString { .. }
-            | Expr::BufferLength(..)
             | Expr::BufferCopy { .. }
             | Expr::BufferWrite { .. }
             | Expr::BufferFill { .. }
             | Expr::BufferEquals { .. }
-            | Expr::BufferIndexGet { .. }
-            | Expr::BufferIndexSet { .. }
-            | Expr::Uint8ArrayLength(..)
-            | Expr::Uint8ArrayGet { .. }
-            | Expr::Uint8ArraySet { .. }
             | Expr::PodLayoutSizeOf { .. }
             | Expr::PodLayoutAlignOf { .. }
             | Expr::PodLayoutOffsetOf { .. }
@@ -963,13 +957,14 @@ impl<'a> Gen<'a> {
                 // read, a buffer/view argument is shared (B1, flow only).
                 let ks = kids(e);
                 let (t, n) = self.bobj(mi, "TypedArray");
-                if let Expr::TypedArrayNew { kind, .. } = e {
-                    if let TokKind::Obj(tm, _) = self.m.toks[t as usize] {
-                        self.m.ta_elem.insert(tm, *kind);
-                    }
-                }
+                let owner = self.begin_indexed_owner(mi, t, e);
                 for k in ks {
                     let v = self.expr(fx, k);
+                    if owner {
+                        if let TokKind::Obj(tm, _) = self.m.toks[t as usize] {
+                            self.m.ta_birth_input.insert(tm, v);
+                        }
+                    }
                     let r = self.m.reason("typed-array source");
                     self.m.cons(
                         v,
@@ -1918,7 +1913,13 @@ impl<'a> Gen<'a> {
             | Expr::PropertyGet { .. }
             | Expr::PropertySet { .. }
             | Expr::PropertyUpdate { .. }
+            | Expr::BufferLength(..)
+            | Expr::Uint8ArrayLength(..)
+            | Expr::BufferIndexGet { .. }
+            | Expr::Uint8ArrayGet { .. }
             | Expr::IndexGet { .. }
+            | Expr::BufferIndexSet { .. }
+            | Expr::Uint8ArraySet { .. }
             | Expr::IndexSet { .. }
             | Expr::IndexUpdate { .. }
             | Expr::Object(..)

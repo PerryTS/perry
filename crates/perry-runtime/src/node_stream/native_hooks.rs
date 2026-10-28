@@ -907,3 +907,5 @@ pub(crate) fn test_inflight_chunk(stream: f64) -> f64 {
 #[cfg(test)]
 #[path = "native_hooks_tests.rs"]
 pub(crate) mod tests;
+
+crate::realm_decl!("native_hooks.realm.json#*");

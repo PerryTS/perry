@@ -10,7 +10,7 @@ import test from 'node:test';
 
 const helper = new URL('./test-require-runtime.mjs', import.meta.url).href;
 const root = fileURLToPath(new URL('../', import.meta.url));
-const names = ['runtime', 'stdlib', 'ext_events', 'ext_http', 'ext_net',
+const names = ['runtime', 'stdlib', 'ext_http', 'ext_net',
   'ext_typescript', 'ext_ws', 'ext_zlib'];
 const filename = name => process.platform === 'win32' ? `perry_${name}.lib` : `libperry_${name}.a`;
 
@@ -88,6 +88,12 @@ function assertCoherentBuild(calls) {
   assert(alias, 'the coherent build alias must exist');
   const args = [...alias[1].matchAll(/"([^"\n]*)"/g)].map(match => match[1]);
   assert.equal(args[0], 'build');
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '-p') {
+      assert(fs.existsSync(path.join(root, 'crates', args[i + 1], 'Cargo.toml')),
+        `build alias names a missing package: ${args[i + 1]}`);
+    }
+  }
   for (const name of ['perry', 'perry-runtime-static', 'perry-stdlib-static',
     'perry-ext-http', 'perry-ext-net', 'perry-ext-typescript', 'perry-ext-ws', 'perry-ext-zlib']) {
     assert(args.some((arg, i) => arg === '-p' && args[i + 1] === name), name);

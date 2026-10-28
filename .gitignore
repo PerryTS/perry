@@ -61,6 +61,7 @@ ir-corpus/
 !test-features/
 !test-parity/
 !test-coverage/
+!test-wasi/
 # But ignore compiled test binaries (no extension) inside them
 test-files/test_*
 test-files/test-*

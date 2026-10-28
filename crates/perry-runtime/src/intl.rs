@@ -1992,3 +1992,5 @@ fn install_intl_namespace_members(ns_obj: *mut ObjectHeader) {
         &[],
     );
 }
+
+crate::realm_decl!("intl.realm.json#*");

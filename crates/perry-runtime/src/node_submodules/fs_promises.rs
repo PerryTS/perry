@@ -1143,3 +1143,5 @@ thunk!(
 #[cfg(test)]
 #[path = "fs_promises_gc_tests.rs"]
 mod gc_tests;
+
+crate::realm_decl!("fs_promises.realm.json#*");

@@ -2,6 +2,8 @@
 crates/perry-runtime/src/box/tests.rs | let inner_header = (scope as usize + 8) as *mut crate::gc::GcHeader; | Negative control: forge a header-shaped word entirely inside an allocated scope's payload, then verify that the exact-start bitmap rejects it as a capture cell.
 # Canonical image classifier: bounds precede every header read.
 crates/perry-runtime/src/value/addr_class/image.rs | as *const GcHeader | Canonical image admission: linker section bounds prove the complete header and StringHeader readable before this cast.
+crates/perry-runtime/src/value/addr_class/realm.rs | as *const GcHeader | Canonical realm-cell admission (WRT): the perry_realm section bounds prove the complete header readable before this cast, as for image strings.
+crates/perry-runtime/src/value/addr_class/realm.rs | as *mut GcHeader | Canonical realm-cell admission and the cell walk (WRT) return or visit a header only inside the perry_realm section bounds, after the well-formed-header check.
 crates/perry-runtime/src/value/addr_class/image.rs | as *mut GcHeader | Canonical image admission returns a raw address only after validating section bounds, immutable marker and complete payload; callers must not write image headers.
 
 #

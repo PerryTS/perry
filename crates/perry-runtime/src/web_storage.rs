@@ -530,3 +530,5 @@ fn throw_quota_exceeded() -> f64 {
     let err = crate::error::js_error_new_with_name_message(b"QuotaExceededError", msg);
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
+
+crate::realm_decl!("web_storage.realm.json#*");

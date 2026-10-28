@@ -1252,6 +1252,20 @@ pub(super) fn describe_toks(
                 vc.shared.push(s);
             }
         }
+        if let Some((tm, kind)) = crate::bindings::sealed_owner(&g.m, t) {
+            let d = g.m.tmpls[tm as usize].display.clone();
+            if !g.unit_in.is_some_and(|u| u.broken(&format!("owner:{d}"))) {
+                vc.indexed_owners.push(crate::bindings::IndexedOwner {
+                    kind,
+                    min_len: *g.m.ta_min_len.get(&tm).unwrap_or(&0),
+                    exact_len: g.m.ta_exact_len.get(&tm).copied(),
+                    allocations: vec![d],
+                });
+                vc.indexed_owners.sort();
+                vc.indexed_owners.dedup();
+                continue;
+            }
+        }
         let (tm, class) = match g.m.toks[t as usize] {
             model::TokKind::Top | model::TokKind::BuiltinFn => {
                 vc.unknown = true;
@@ -1669,6 +1683,20 @@ pub(super) fn arg_contract_of(
                     vc.unknown = true;
                     continue;
                 };
+                if let Some((tm, kind)) = crate::bindings::sealed_owner(&g.m, t) {
+                    let d = g.m.tmpls[tm as usize].display.clone();
+                    if !g.unit_in.is_some_and(|u| u.broken(&format!("owner:{d}"))) {
+                        vc.indexed_owners.push(crate::bindings::IndexedOwner {
+                            kind,
+                            min_len: *g.m.ta_min_len.get(&tm).unwrap_or(&0),
+                            exact_len: g.m.ta_exact_len.get(&tm).copied(),
+                            allocations: vec![d],
+                        });
+                        vc.indexed_owners.sort();
+                        vc.indexed_owners.dedup();
+                        continue;
+                    }
+                }
                 // DECISIONS 149e: an array leaves by its element cell
                 // (`Gen::contract_check`), named as a value contract names it (94).
                 if g.m.is_cell_arr(t) {
