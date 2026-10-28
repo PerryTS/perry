@@ -5,3 +5,5 @@ Bind the existing private-frame slot barrier to the uniform live IR census and i
 Share the native enqueue body between both admission routes to avoid duplicating barrier and context scaffolding.
 
 Use one scanned Task publisher for observed and unobserved awaits. Preserve producer notifications and reload the rooted result across a reentrant host wake.
+
+Use the validated zero body mask to prove an empty immutable shape body list without reading its cold extension; nonempty lists retain exact identity checks.
