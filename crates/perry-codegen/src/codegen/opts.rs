@@ -956,7 +956,9 @@ impl ImportedCtor {
 /// Cross-module import context, bundled into a single struct to avoid
 /// adding five more individual parameters to every compile_* function.
 /// Built once in `compile_module` from `CompileOptions`.
-pub(crate) struct CrossModuleCtx {
+pub(crate) struct CrossModuleCtx<'a> {
+    pub numeric_order_functions: &'a [perry_hir::Function],
+    pub numeric_order_closures: &'a [(u32, perry_hir::Expr)],
     /// Closure regions of the splitter (`split_regions`): one body each,
     /// typed by the parameter types its only caller proved.
     pub region_closures: std::collections::HashSet<u32>,

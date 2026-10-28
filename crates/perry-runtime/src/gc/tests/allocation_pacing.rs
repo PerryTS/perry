@@ -506,3 +506,80 @@ fn malloc_heap_growth_can_request_full_without_old_arena_growth() {
     gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct))
         .emit_after_current();
 }
+
+#[test]
+fn completed_native_input_preserves_its_result_while_draining_owed_collection() {
+    for (input, expected) in [
+        (b"valid".as_slice(), "valid"),
+        (b"a\xf0\x9f\x99".as_slice(), "a\u{fffd}"),
+    ] {
+        let _isolation = GcTestIsolationGuard::new();
+        let _placement = policy::ByteStorePolicyTestGuard::new(usize::MAX);
+        let _moving = policy::force_moving_gc_pacing();
+        let thresholds = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        finish_full(0, 4 * MIB);
+        policy::GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.set(usize::MAX / 4));
+        let frame = js_shadow_frame_push(2);
+        js_shadow_slot_set(0, ptr_bits(young_leaf()));
+        let keep = crate::buffer::js_buffer_alloc(MIB as i32, 37);
+        js_shadow_slot_set(1, crate::value::JSValue::pointer(keep.cast()).bits());
+        for _ in 0..BURST_BUFFERS {
+            crate::buffer::js_buffer_alloc((4 * MIB) as i32, 13);
+        }
+        if input == b"valid" {
+            assert!(!policy::GC_SAFEPOINT_PENDING.with(std::cell::Cell::get));
+        } else {
+            thresholds.make_arena_trigger_due();
+            let mut step = JsGcStepResult::default();
+            assert_eq!(
+                js_gc_step_work_units(1, &mut step),
+                JS_GC_STEP_STATUS_ACTIVE
+            );
+            assert_eq!(step.collection_kind, GcCollectionKind::Minor.ffi_code());
+        }
+        let scope = RuntimeHandleScope::new();
+        let mut reader = input;
+        let result = crate::string::read_utf8(&mut reader, input.len() as u64).unwrap();
+        let result = scope.root_string_ptr(result);
+        assert!(
+            !policy::gc_budgeted_cycle_active(),
+            "the completed input must drain the minor blocking its owed bulk reclaim"
+        );
+        assert!(
+            policy::GC_SAFEPOINT_PENDING.with(std::cell::Cell::get),
+            "completed bulk debt must arm the caller's existing precise loop poll"
+        );
+        assert!(gc_safepoint_moving_minor());
+        unsafe {
+            result.with_string_bytes(|bytes| assert_eq!(bytes, expected.as_bytes()));
+        }
+        let keep = crate::value::JSValue::from_bits(js_shadow_slot_get(1))
+            .as_pointer::<crate::buffer::BufferHeader>();
+        assert_eq!(crate::buffer::js_buffer_get(keep, 0), 37);
+        js_shadow_frame_pop(frame);
+    }
+}
+
+#[test]
+fn native_input_bulk_debt_does_not_arm_a_disabled_loop_poll() {
+    let _isolation = GcTestIsolationGuard::new();
+    let _placement = policy::ByteStorePolicyTestGuard::new(usize::MAX);
+    let _off = policy::force_alloc_point_minor_pacing();
+    let _thresholds = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    finish_full(0, 4 * MIB);
+    policy::GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.set(usize::MAX / 4));
+    for _ in 0..BURST_BUFFERS {
+        crate::buffer::js_buffer_alloc((4 * MIB) as i32, 13);
+    }
+    assert!(!policy::GC_SAFEPOINT_PENDING.with(std::cell::Cell::get));
+    let scope = RuntimeHandleScope::new();
+    let mut input = b"off".as_slice();
+    let result = crate::string::read_utf8(&mut input, 3).unwrap();
+    let result = scope.root_string_ptr(result);
+    assert!(policy::GC_OLD_RECLAIM_PENDING.with(|pending| pending.get()));
+    assert!(!policy::GC_SAFEPOINT_PENDING.with(std::cell::Cell::get));
+    js_gc_collect();
+    unsafe {
+        result.with_string_bytes(|bytes| assert_eq!(bytes, b"off"));
+    }
+}

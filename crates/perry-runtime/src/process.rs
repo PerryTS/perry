@@ -35,7 +35,7 @@ pub use credentials::{
     js_process_getuid, js_process_initgroups, js_process_setegid, js_process_seteuid,
     js_process_setgid, js_process_setgroups, js_process_setuid,
 };
-pub use ipc::*;
+pub(crate) use ipc::*;
 
 // ── env_misc re-exports (preserve `crate::process::*` paths) ────────────────
 pub use env_misc::{

@@ -824,13 +824,13 @@ fn knockout_missing_image_birth_facts_fails_the_store_audit() {
             object
         ));
         let result = std::panic::catch_unwind(|| {
-            crate::object::shapes::store_kind::check_store_facts(object);
+            crate::object::shapes::store_kind::audit_store_facts_for_test(object);
         });
         (*object_header())._reserved |= OBJ_FLAG_PLAIN_ORDINARY;
         assert_eq!(
             result.is_err(),
             cfg!(any(debug_assertions, feature = "shape-fact-audit")),
-            "the store audit must reject the missing birth mark exactly when enabled"
+            "the invalid birth mark must follow the configured store audit mode"
         );
     }
 }

@@ -8,8 +8,7 @@ use super::*;
 fn proven(pf: &ProgramFacts, key: &str) -> bool {
     let v: Vec<_> = pf.sites.iter().filter(|s| s.key == key).collect();
     !v.is_empty()
-        && v
-            .iter()
+        && v.iter()
             .all(|s| matches!(s.verdict, Verdict::T0Mono | Verdict::T0Set))
 }
 
@@ -66,7 +65,10 @@ fn barrel(n: usize) -> ProgramFacts {
             )
         })
         .collect();
-    mods.push(("f".into(), "export function f() { return { A: 1 }; }".into()));
+    mods.push((
+        "f".into(),
+        "export function f() { return { A: 1 }; }".into(),
+    ));
     let ts: String = mods
         .iter()
         .map(|(m, _)| format!("export * from './{m}';\n"))

@@ -223,6 +223,7 @@ unsafe extern "C" fn received_echo(_: *const RawClosureHeader, this: JsThis, chu
     p::undefined()
 }
 
+#[cfg(target_os = "linux")]
 unsafe extern "C" fn churn_readable(_: *const RawClosureHeader, this: JsThis) -> f64 {
     let scope = TransientRootScope::enter();
     let owner = scope.root_nanbox(this.as_f64());

@@ -6178,6 +6178,7 @@ dependencies = [
  "futures-lite",
  "futures-util",
  "http",
+ "libc",
  "perry-component-io",
  "rand 0.10.3",
  "rustix 1.1.5",

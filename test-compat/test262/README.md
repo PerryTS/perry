@@ -6,8 +6,8 @@ buckets the diff by category.
 
 Companion to the Node-core radar (`../node-core/`, #800): that one pulls
 Node's own `test/parallel` corpus to probe the `node:*` **APIs**; this one
-pulls TC39's Test262 to probe the **language**. Both are coverage radars,
-not gates — they point at the biggest gaps, they don't block merges.
+pulls TC39's Test262 to probe the **language**. The node-core radar
+does not block merges; this subset is ratcheted nightly (see below).
 
 ## What runs
 
@@ -206,12 +206,32 @@ scripts/test262_subset.py --root vendor/test262 --dir language/expressions
 scripts/test262_subset.py --root vendor/test262 --max 500             # cap for a quick read
 ```
 
-## What a CI job would do
+## Full corpus and the nightly CI ratchet
 
-1. Shallow-clones `tc39/test262` at `pinned-sha.txt`.
-2. Builds Perry, runs `scripts/test262_subset.py`.
-3. Uploads `report.json` as an artifact.
-4. **Advisory** (non-required) — signal, not gating. Threshold-based
-   gating can be added once the baseline is stable across a few runs.
+`--full-corpus` measures the figure other engines publish: every case under
+`test/` (including `intl402`, `staging` and `annexB`), with no feature
+allow-list, judged by Perry alone. A positive case passes when it exits 0 (and,
+for `async` cases, prints `Test262:AsyncTestComplete`); a negative case passes
+when Perry rejects it at compile time or it throws. Cases that cannot run as a
+plain script here (`module` / `CanBlock*` flags, `$262` host APIs,
+runtime-string `eval`) are `skip` and count as failed. The error type of a
+negative case is not checked.
+
+The full-tier `test262` job runs it in 16 shards at `pinned-sha.txt`.
+`test262-aggregate` merges the shard reports with `scripts/test262_ratchet.py`,
+writes the pass rate over the whole corpus to the run summary, and compares it
+with `baseline.json`:
+
+- a failing test missing from `known_failures` is a regression;
+- a `known_failures` entry that now passes is stale: delete it in the fix;
+- `pass` below `min_pass` fails, which also catches a lost shard or a case
+  that moved from pass to skip.
+
+To re-baseline (a new pinned SHA or Node version, or a batch of fixes), download
+the shard artifacts and run:
+
+```bash
+scripts/test262_ratchet.py --update test262-shard-*/test262-shard.json
+```
 
 Part of #793. Companion job to #800 (Node's own test corpus).

@@ -1,7 +1,7 @@
 //! Installer-filled async lifecycle operations for ordinary runtime paths.
 use crate::closure::ClosureHeader;
 use crate::feature_hooks::Hook;
-use crate::{ObjectHeader, StringHeader};
+use crate::ObjectHeader;
 #[derive(Clone, Copy)]
 pub struct AsyncResourceIds {
     pub async_id: u64,
@@ -230,7 +230,6 @@ pub extern "C" fn js_async_hooks_execution_async_resource() -> f64 {
 
 static JS_ASYNC_HOOKS_OWNED_PROVIDER_DESTROY: Hook<extern "C" fn(f64)> = Hook::empty();
 #[no_mangle]
-#[inline]
 pub extern "C" fn js_async_hooks_owned_provider_destroy(resource: f64) {
     JS_ASYNC_HOOKS_OWNED_PROVIDER_DESTROY
         .get()
@@ -239,7 +238,6 @@ pub extern "C" fn js_async_hooks_owned_provider_destroy(resource: f64) {
 
 static JS_ASYNC_HOOKS_OWNED_PROVIDER_EMIT_INIT: Hook<extern "C" fn(f64)> = Hook::empty();
 #[no_mangle]
-#[inline]
 pub extern "C" fn js_async_hooks_owned_provider_emit_init(resource: f64) {
     JS_ASYNC_HOOKS_OWNED_PROVIDER_EMIT_INIT
         .get()
@@ -249,7 +247,6 @@ pub extern "C" fn js_async_hooks_owned_provider_emit_init(resource: f64) {
 static JS_ASYNC_HOOKS_OWNED_PROVIDER_NEW: Hook<unsafe extern "C" fn(*const u8, usize, u64) -> f64> =
     Hook::empty();
 #[no_mangle]
-#[inline]
 pub unsafe extern "C" fn js_async_hooks_owned_provider_new(
     type_ptr: *const u8,
     type_len: usize,
@@ -263,7 +260,6 @@ pub unsafe extern "C" fn js_async_hooks_owned_provider_new(
 
 static JS_ASYNC_HOOKS_PROVIDER_DEFER_DESTROY: Hook<extern "C" fn(u64, u32)> = Hook::empty();
 #[no_mangle]
-#[inline]
 pub extern "C" fn js_async_hooks_provider_defer_destroy(async_id: u64, check_turns: u32) {
     JS_ASYNC_HOOKS_PROVIDER_DEFER_DESTROY
         .get()
@@ -272,7 +268,6 @@ pub extern "C" fn js_async_hooks_provider_defer_destroy(async_id: u64, check_tur
 
 static JS_ASYNC_HOOKS_PROVIDER_DESTROY: Hook<extern "C" fn(u64)> = Hook::empty();
 #[no_mangle]
-#[inline]
 pub extern "C" fn js_async_hooks_provider_destroy(async_id: u64) {
     JS_ASYNC_HOOKS_PROVIDER_DESTROY
         .get()
@@ -282,7 +277,6 @@ pub extern "C" fn js_async_hooks_provider_destroy(async_id: u64) {
 static JS_ASYNC_HOOKS_PROVIDER_INIT: Hook<unsafe extern "C" fn(*const u8, usize) -> u64> =
     Hook::empty();
 #[no_mangle]
-#[inline]
 pub unsafe extern "C" fn js_async_hooks_provider_init(type_ptr: *const u8, type_len: usize) -> u64 {
     JS_ASYNC_HOOKS_PROVIDER_INIT
         .get()
@@ -293,7 +287,6 @@ static JS_ASYNC_HOOKS_PROVIDER_INIT_WITH_TRIGGER: Hook<
     unsafe extern "C" fn(*const u8, usize, u64) -> u64,
 > = Hook::empty();
 #[no_mangle]
-#[inline]
 pub unsafe extern "C" fn js_async_hooks_provider_init_with_trigger(
     type_ptr: *const u8,
     type_len: usize,
@@ -306,7 +299,6 @@ pub unsafe extern "C" fn js_async_hooks_provider_init_with_trigger(
 
 static JS_ASYNC_HOOKS_PROVIDER_LEAVE: Hook<extern "C" fn(u64)> = Hook::empty();
 #[no_mangle]
-#[inline]
 pub extern "C" fn js_async_hooks_provider_leave(async_id: u64) {
     JS_ASYNC_HOOKS_PROVIDER_LEAVE
         .get()
@@ -321,7 +313,6 @@ static JS_ASYNC_HOOKS_PROVIDER_RUN_CATCHING: Hook<
     ) -> f64,
 > = Hook::empty();
 #[no_mangle]
-#[inline]
 pub unsafe extern "C" fn js_async_hooks_provider_run_catching(
     async_id: u64,
     callback: unsafe extern "C" fn(*mut std::ffi::c_void) -> f64,
@@ -342,7 +333,6 @@ static JS_ASYNC_HOOKS_PROVIDER_RUN_CATCHING_DEFERRED_DESTROY: Hook<
     ) -> f64,
 > = Hook::empty();
 #[no_mangle]
-#[inline]
 pub unsafe extern "C" fn js_async_hooks_provider_run_catching_deferred_destroy(
     async_id: u64,
     check_turns: u32,
@@ -366,7 +356,6 @@ static JS_ASYNC_HOOKS_PROVIDER_RUN_CATCHING_DEFERRED_DESTROY_ON_ERROR: Hook<
     ) -> f64,
 > = Hook::empty();
 #[no_mangle]
-#[inline]
 pub unsafe extern "C" fn js_async_hooks_provider_run_catching_deferred_destroy_on_error(
     async_id: u64,
     check_turns: u32,
@@ -391,7 +380,6 @@ static JS_ASYNC_HOOKS_PROVIDER_RUN_CATCHING_WITH_THIS: Hook<
     ) -> f64,
 > = Hook::empty();
 #[no_mangle]
-#[inline]
 pub unsafe extern "C" fn js_async_hooks_provider_run_catching_with_this(
     async_id: u64,
     this_value: f64,
@@ -477,7 +465,6 @@ pub extern "C" fn js_async_resource_new(type_value: f64, options: f64) -> f64 {
 
 static JS_ASYNC_RESOURCE_RUNTIME_ASYNC_ID: Hook<extern "C" fn(i64) -> u64> = Hook::empty();
 #[no_mangle]
-#[inline]
 pub extern "C" fn js_async_resource_runtime_async_id(handle: i64) -> u64 {
     JS_ASYNC_RESOURCE_RUNTIME_ASYNC_ID
         .get()
@@ -852,7 +839,3 @@ pub(crate) mod resource_state {
         SCAN_TOKEN.set(crate::async_hooks::resource_state::scan_token);
     }
 }
-
-// Inline runtime tests retain their backend-only helpers.
-#[cfg(test)]
-pub(crate) use crate::async_hooks::*;

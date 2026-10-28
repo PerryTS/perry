@@ -46,3 +46,6 @@ wasmtime = { version = "=48.0.7", default-features = false, features = ["craneli
 
 [target.'cfg(windows)'.dev-dependencies]
 windows-sys = { version = "0.61", features = ["Win32_System_SystemServices"] }
+
+[target.'cfg(unix)'.dev-dependencies]
+libc.workspace = true
