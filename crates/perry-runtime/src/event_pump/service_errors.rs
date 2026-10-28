@@ -196,8 +196,26 @@ pub fn map_error(err: Error, syscall: &'static str) -> NodeError {
     }
 }
 
+/// What `perry_net.sock_error` reports for a connect whose name did not
+/// resolve (docs/WASI_P1_OUTPUT.md). It is no WASI errno, so it gets its own
+/// arm in [`from_os`]; a name that resolved but could not be reached keeps the
+/// real errno the host reported.
+#[cfg(all(target_os = "wasi", target_env = "p1"))]
+const PERRY_NET_ENOTFOUND: i32 = 2000;
+
 /// Map an errno without depending on a particular I/O driver.
 pub fn from_os(os: i32, syscall: &'static str) -> NodeError {
+    #[cfg(all(target_os = "wasi", target_env = "p1"))]
+    {
+        if os == PERRY_NET_ENOTFOUND {
+            // libuv's UV_EAI_NONAME, with the syscall Node reports for a lookup.
+            return NodeError {
+                code: "ENOTFOUND",
+                errno: -3008,
+                syscall: "getaddrinfo",
+            };
+        }
+    }
     let code = os_table()
         .iter()
         .find_map(|(value, name)| (*value == os).then_some(*name))

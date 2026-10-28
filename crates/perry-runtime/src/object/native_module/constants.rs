@@ -776,7 +776,6 @@ pub(crate) unsafe fn get_native_module_constant(
         },
         "crypto" => match property {
             "constants" => Some(create_sub_namespace("crypto.constants")),
-            "Certificate" => Some(create_sub_namespace("crypto.Certificate")),
             "webcrypto" => Some(webcrypto_namespace()),
             // #1366: `crypto.subtle` is the WebCrypto SubtleCrypto
             // instance. Resolve to a sub-namespace so `typeof

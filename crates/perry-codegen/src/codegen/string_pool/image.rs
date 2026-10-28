@@ -251,20 +251,22 @@ mod tests {
                     .count(),
                 1
             );
+            // Every target's IR ownership is checked above. Emission needs
+            // its optional backend to be linked into this test executable.
             #[cfg(feature = "llvm-inprocess")]
-            if !target.starts_with("wasm32") || cfg!(feature = "target-wasi") {
-                // The text contracts above apply to every target; actual
-                // WebAssembly codegen requires its optional LLVM backend.
-                for (index, ir) in units.iter().enumerate() {
-                    crate::inprocess::compile_ll_to_object_inprocess(
-                        ir,
-                        target,
-                        &["-O2".into()],
-                        &format!("literal-linkage-{index}"),
-                        false,
-                    )
-                    .expect("literal bytes must not change ownership or COMDAT declarations");
-                }
+            for (index, ir) in units
+                .iter()
+                .enumerate()
+                .filter(|_| !target.starts_with("wasm32") || cfg!(feature = "target-wasi"))
+            {
+                crate::inprocess::compile_ll_to_object_inprocess(
+                    ir,
+                    target,
+                    &["-O2".into()],
+                    &format!("literal-linkage-{index}"),
+                    false,
+                )
+                .expect("literal bytes must not change ownership or COMDAT declarations");
             }
         }
     }

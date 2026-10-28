@@ -666,6 +666,21 @@ pub(super) fn compile_function(
     } else {
         public_llvm_name.clone()
     };
+    // A separate raw return ABI is admitted only for a closed pure body.
+    // The full IEEE body remains below, including its public entry guards.
+    let integer_contract = if spec_entry.is_some_and(|plan| {
+        plan.reps
+            .iter()
+            .all(|r| matches!(r, crate::collectors::SpecParamRep::Boxed))
+    }) && super::checked_integer::eligible(f, &llmod.target_triple)
+    {
+        super::integer_contract::prove(f)
+    } else {
+        None
+    };
+    if let Some(contract) = integer_contract {
+        super::checked_integer::emit(llmod, f, &llvm_name, contract);
+    }
     // This-as-a-parameter: a body that reads its dynamic `this` binds it at
     // entry into a rooted `this` slot. The ordinary public body becomes a
     // receiver-taking body (`perry_fn_*$this`, leading `i64 %js_this`) behind
@@ -1756,6 +1771,10 @@ pub(super) fn compile_function(
                 );
             }
         }
+    }
+
+    if let Some(contract) = integer_contract {
+        super::checked_integer::dispatch(&mut ctx, f, &llvm_name, contract)?;
     }
 
     // #10812: throw a catchable RangeError before the native stack runs out.

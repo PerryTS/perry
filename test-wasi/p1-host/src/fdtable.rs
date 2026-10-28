@@ -1,6 +1,7 @@
 //! The host-owned descriptor table: one table for every descriptor the guest
 //! can name, with the lowest free number reused after a close.
 
+use crate::perry_net::Pending;
 use std::os::fd::{AsRawFd, OwnedFd};
 
 /// Preview 1 `rights` bits the reference host grants or checks.
@@ -24,20 +25,32 @@ pub enum Fd {
     Listener(OwnedFd),
     Stream(OwnedFd),
     Signal(OwnedFd),
+    /// The read end of a `perry_net.resolve` answer.
+    Resolve(OwnedFd),
+    /// A `perry_net.tcp_connect` socket that is still resolving or connecting.
+    /// It becomes a `Stream` once connected, or a `Failed` with the errno
+    /// `perry_net.sock_error` reports.
+    Pending(Pending),
+    Failed(u16),
 }
 
 impl Fd {
     pub fn os(&self) -> i32 {
         match self {
             Fd::Stdio(fd) => *fd,
-            Fd::Listener(fd) | Fd::Stream(fd) | Fd::Signal(fd) => fd.as_raw_fd(),
+            Fd::Listener(fd) | Fd::Stream(fd) | Fd::Signal(fd) | Fd::Resolve(fd) => fd.as_raw_fd(),
+            Fd::Pending(pending) => pending.os(),
+            // Nothing is left to poll or read.
+            Fd::Failed(_) => -1,
         }
     }
 
     pub fn filetype(&self) -> u8 {
         match self {
-            Fd::Listener(_) | Fd::Stream(_) => FILETYPE_SOCKET_STREAM,
-            Fd::Stdio(_) | Fd::Signal(_) => FILETYPE_CHARACTER_DEVICE,
+            Fd::Listener(_) | Fd::Stream(_) | Fd::Pending(_) | Fd::Failed(_) => {
+                FILETYPE_SOCKET_STREAM
+            }
+            Fd::Stdio(_) | Fd::Signal(_) | Fd::Resolve(_) => FILETYPE_CHARACTER_DEVICE,
         }
     }
 
@@ -50,10 +63,10 @@ impl Fd {
             Fd::Stdio(0) => FD_READ | POLL_FD_READWRITE,
             Fd::Stdio(_) => FD_WRITE | POLL_FD_READWRITE,
             Fd::Listener(_) => FD_FDSTAT_SET_FLAGS | SOCK_ACCEPT | POLL_FD_READWRITE,
-            Fd::Stream(_) => {
+            Fd::Stream(_) | Fd::Pending(_) | Fd::Failed(_) => {
                 FD_READ | FD_WRITE | SOCK_SHUTDOWN | POLL_FD_READWRITE | FD_FDSTAT_SET_FLAGS
             }
-            Fd::Signal(_) => FD_READ | POLL_FD_READWRITE | FD_FDSTAT_SET_FLAGS,
+            Fd::Signal(_) | Fd::Resolve(_) => FD_READ | POLL_FD_READWRITE | FD_FDSTAT_SET_FLAGS,
         }
     }
 }
@@ -100,6 +113,10 @@ impl Table {
 
     pub fn get(&self, fd: u32) -> Option<&Fd> {
         self.slots.get(fd as usize)?.as_ref()
+    }
+
+    pub fn get_mut(&mut self, fd: u32) -> Option<&mut Fd> {
+        self.slots.get_mut(fd as usize)?.as_mut()
     }
 
     pub fn remove(&mut self, fd: u32) -> Option<Fd> {

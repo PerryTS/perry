@@ -547,11 +547,12 @@ mod tests {
         );
         assert!(!ll.contains("llvm.global_ctors"), "{ll}");
         assert!(!ll.contains("seed_plain_by_names"), "{ll}");
-        // The relocation text is checked above even in the native build.
-        // Compiling it additionally needs the optional WebAssembly backend.
-        #[cfg(feature = "target-wasi")]
-        compile_ll_to_object(&ll, Some("wasm32-wasip2"))
-            .expect("ILP32 image seed relocations compile");
+        // Keep all ILP32 relocation/section assertions active without WASI.
+        // Native emission requires the optional WebAssembly backend.
+        if cfg!(feature = "target-wasi") {
+            compile_ll_to_object(&ll, Some("wasm32-wasip2"))
+                .expect("ILP32 image seed relocations compile");
+        }
     }
 
     #[test]

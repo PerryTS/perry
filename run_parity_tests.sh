@@ -57,6 +57,25 @@ if [[ -z "$PYTHON_CMD" ]]; then
     echo "Python 3 is required by the parity output normalizer" >&2
     exit 1
 fi
+# The comparison must not be able to degenerate into a silent green. Both
+# normalizer call sites below run `printf … | "$PYTHON_CMD" … parity_normalize.py`
+# inside `$( )`; if that process cannot start, its stdout is empty on BOTH
+# sides, the two sides compare equal, and every test in the suite reports PASS.
+# A missing or broken normalizer is therefore a fatal harness error, checked
+# once here, before any test runs. This is the same hazard class CLAUDE.md calls
+# "the gate runs but its subject never did": assert the subject was live, rather
+# than that nothing threw.
+PARITY_NORMALIZE="$SCRIPT_DIR/scripts/parity_normalize.py"
+if [[ ! -f "$PARITY_NORMALIZE" ]]; then
+    echo "FATAL: $PARITY_NORMALIZE is missing — every comparison would compare" >&2
+    echo "       empty output against empty output and report the whole suite green." >&2
+    exit 1
+fi
+if [[ "$(printf 'true\n' | "$PYTHON_CMD" -B "$PARITY_NORMALIZE" output 2>/dev/null)" != "1" ]]; then
+    echo "FATAL: $PARITY_NORMALIZE cannot normalize output — refusing to run a" >&2
+    echo "       suite whose comparisons would silently pass." >&2
+    exit 1
+fi
 PERRY_RUN_TIMEOUT="${PERRY_RUN_TIMEOUT:-10}"
 if [[ ! "$PERRY_RUN_TIMEOUT" =~ ^[1-9][0-9]*$ ]]; then
     echo "Invalid PERRY_RUN_TIMEOUT '$PERRY_RUN_TIMEOUT' (want a positive integer)" >&2
@@ -149,6 +168,17 @@ TEST_FILTERS=()
 # top-level test-files/*.ts corpus. The granular `node-suite` selector runs
 # curated Node-compatibility cases under test-parity/node-suite/<module>/...
 # without requiring test_parity_* names.
+#
+# Both selectors are glob-driven, so no file can be dark: everything under
+# test-files/ or test-parity/node-suite/ is picked up by one of them.
+#
+# The `parity` and `smoke` selectors were removed. Both filtered
+# `test-files/test_parity_*.ts` — a SUBSET of what `all` already runs — and
+# nothing in CI, `scripts/`, the Makefile or the documented workflows invoked
+# them. They survived as a second spelling of the same sweep, and the name
+# implied a corpus boundary that does not exist: the `test_parity_` PREFIX still
+# marks a gate category for `scripts/parity_threshold_gate.py` and
+# `scripts/parity_matrix_trend.py`, but it selects no tests here.
 TEST_SUITE="all"
 MODULE_FILTER=""
 # Optional round-robin sharding (N/M, 1-based). Splits the post-filter test
@@ -209,10 +239,20 @@ if [[ -n "$SHARD_SPEC" ]]; then
 fi
 
 case "$TEST_SUITE" in
-    all|parity|smoke|node-suite) ;;
+    all|node-suite) ;;
+    parity|smoke)
+        # Retired selectors fail hard instead of falling back to `all`: a caller
+        # that still passes them asked for a corpus that no longer has its own
+        # run, and silently sweeping everything would look like the narrow run
+        # it asked for. This is the only rejection point — the per-suite file
+        # selection below never sees these values.
+        echo -e "\033[0;31mThe '$TEST_SUITE' suite was removed; use --suite all or --suite node-suite\033[0m" >&2
+        echo "(test-files/test_parity_*.ts are part of --suite all)" >&2
+        exit 1
+        ;;
     *)
         echo -e "\033[0;31mUnknown suite: $TEST_SUITE\033[0m"
-        echo "Known suites: all, parity, smoke, node-suite"
+        echo "Known suites: all, node-suite"
         exit 1
         ;;
 esac
@@ -492,170 +532,20 @@ can_retry_node_globals_as_commonjs() {
 
 # Function to normalize output for comparison
 normalize_output() {
-    local input="$1"
-
-    # Issue #796 — first pass (Buffer-line decode) used to be a bash
-    # while-read loop with `decoded+="$line"\n` per iteration. That's
-    # O(n²) on input size: 5.7M lines × 2.85M-char-average tail ≈ 16T
-    # bytes of string concatenation, which burned ~3 hours on CI before
-    # the runner was killed. Replaced with a single Python 3 pass —
-    # linear time, decodes `<Buffer XX XX ...>` to its UTF-8 bytes in
-    # one walk. Python 3 is preinstalled on the hosted CI runners.
-    #
-    # The decode is bytes-faithful: invalid UTF-8 sequences become U+FFFD
-    # via `errors="replace"`, matching the pre-fix `xxd -r -p` behavior
-    # for arbitrary binary content.
-    local decoded
-    decoded=$(printf '%s' "$input" | "$PYTHON_CMD" -c '
-import sys
-skip_unsettled_context = 0
-for raw in sys.stdin:
-    line = raw.rstrip("\n").rstrip("\r")
-    if skip_unsettled_context:
-        skip_unsettled_context -= 1
-        continue
-    if line.startswith("Warning: Detected unsettled top-level await at "):
-        print("Warning: Detected unsettled top-level await")
-        skip_unsettled_context = 2
-        continue
-    if line.startswith("<Buffer ") and line.endswith(">"):
-        hex_part = line[len("<Buffer "):-1].replace(" ", "")
-        try:
-            sys.stdout.write(bytes.fromhex(hex_part).decode("utf-8", errors="replace"))
-            sys.stdout.write("\n")
-        except ValueError:
-            # Not a valid hex sequence — pass through unchanged so the
-            # diff still pinpoints the divergence.
-            print(line)
-    else:
-        print(line)
-')
-
-    echo "$decoded" | \
-        # Normalize line endings
-        tr -d '\r' | \
-        # Strip the seeded GC schedule's diagnostics. A test carrying
-        # `parity-env: … PERRY_GC_SCHEDULE_SEED=…` gets a startup banner and an
-        # exit summary on stderr, which this harness merges into the compared
-        # stream; Node prints no such thing, so every one of those tests would
-        # diff as an output mismatch. Instrument noise, not program output.
-        # A crash under the instrument is still caught: abnormal exits are
-        # detected from the exit status, before either comparison runs.
-        sed -E '/^\[gc-schedule\]/d' | \
-        # #10868 step 2.5 stage 1 appends an `[object-dictionary]` counter row to
-        # that SAME exit summary (`gc/schedule.rs` prints it beside the
-        # `[gc-schedule]` lines, so it appears under exactly the same
-        # `parity-env: PERRY_GC_SCHEDULE_SEED=…` fixtures). It is a different
-        # prefix, so the rule above does not cover it and every such fixture
-        # diffed as an output mismatch — `test_gap_dynamic_import_alias_binding`
-        # was the first to show it. Same reasoning, same treatment: instrument
-        # noise, not program output.
-        sed -E '/^\[object-dictionary\]/d' | \
-        # `parity-env: … PERRY_GC_PROTECT_OLD_SWEEP=1` prints a one-time
-        # `[gc-sweep-quarantine] on:` banner on stderr when the first old/malloc
-        # sweep retires a dead object, so whether it appears depends on whether
-        # the run reached such a sweep, not on program output. Only the banner
-        # is stripped: at =1 a touch of retired memory faults, and that report plus
-        # the signal exit are still caught by the exit-status checks.
-        sed -E '/^\[gc-sweep-quarantine\] on: /d' | \
-        # Strip Node v22+ MODULE_TYPELESS_PACKAGE_JSON warnings (4 lines
-        # printed to stderr when running .ts files without "type":
-        # "module" in package.json — pure environmental noise that
-        # appeared after the Node v25 upgrade and has nothing to do
-        # with Perry's output).
-        sed -E '/^\(node:[0-9]+\) \[MODULE_TYPELESS_PACKAGE_JSON\]/d' | \
-        sed -E '/^\(node:[0-9]+\)( \[[^]]+\])? DeprecationWarning:/d' | \
-        sed -E '/^\(node:[0-9]+\) ExperimentalWarning: Type Stripping is an experimental feature/d' | \
-        sed -E '/^\(node:[0-9]+\) ExperimentalWarning: glob is an experimental feature/d' | \
-        sed -E '/^\(node:[0-9]+\) ExperimentalWarning: WASI is an experimental feature/d' | \
-        sed -E '/^\(node:[0-9]+\) Warning: tracePromise was called with the function .* returned a non-thenable\.$/d' | \
-        sed -E '/^Debugger listening on ws:\/\/[^[:space:]]+$/d' | \
-        sed -E '/^For help, see: https:\/\/nodejs\.org\/en\/docs\/inspector$/d' | \
-        sed -E 's/^\(node:[0-9]+\) (Timeout(Overflow|Negative|NaN)Warning:)/(node:<pid>) \1/' | \
-        sed -E '/^Timeout duration was set to [0-9]+\.$/d' | \
-        sed -E '/^\(Use `node --trace-deprecation/d' | \
-        sed -E '/^Reparsing as ES module because module syntax was detected/d' | \
-        sed -E '/^To eliminate this warning, add "type": "module"/d' | \
-        sed -E '/^\(Use `node --trace-warnings/d' | \
-        # Trim trailing whitespace on each line
-        sed 's/[[:space:]]*$//' | \
-        # Normalize boolean output: true->1, false->0 (whole line only)
-        sed -E 's/^true$/1/' | \
-        sed -E 's/^false$/0/' | \
-        # Normalize floating point precision (keep 10 decimal places)
-        sed -E 's/([0-9]+\.[0-9]{10})[0-9]+/\1/g' | \
-        # Normalize console.time/timeLog/timeEnd output: the elapsed value
-        # will always differ between Node.js (JIT) and Perry (native LLVM).
-        # Covers ms, s, and μs (microseconds — emitted on fast macOS-14 ARM
-        # runners when timer duration is < 1 ms, e.g. timerA/timerB in
-        # test_gap_console_methods which have no work between start and end).
-        # The optional [[:space:]]* handles Node.js v18's "N.NNN ms" format
-        # (space before unit); v22 produces "N.NNNms" without.
-        # The first pass also covers console.timeLog(label, ...data), where
-        # Node prints extra payload after the duration.
-        sed -E 's/^([^:]*): [0-9]+(\.[0-9]+)?[[:space:]]*(μs|ms|s)( .*)$/\1: <timer>\4/g' | \
-        sed -E 's/^([^:]*): [0-9]+(\.[0-9]+)?[[:space:]]*(μs|ms|s)$/\1: <timer>/g' | \
-        # Normalize node:test's measured durations in the default reporter.
-        sed -E 's/^([[:space:]]*[✔✖﹣] .*) \([0-9]+(\.[0-9]+)?ms\)( .*)$/\1 (<duration>)\3/g' | \
-        sed -E 's/^([[:space:]]*[✔✖﹣] .*) \([0-9]+(\.[0-9]+)?ms\)$/\1 (<duration>)/g' | \
-        sed -E 's/^ℹ duration_ms [0-9]+(\.[0-9]+)?$/ℹ duration_ms <duration>/g' | \
-        # Normalize console warning delivery: Node emits process warnings on
-        # stderr after the script body, while Perry writes the equivalent
-        # warning eagerly at the call site.
-        sed -E '/^(\(node:[0-9]+\) )?Warning: (Count for .* does not exist|No such label .* for console\.(timeLog|timeEnd)\(\)|Label .* already exists for console\.time\(\))/d' | \
-        # Normalize Node-style process warning prefixes. The warning text is
-        # semantically relevant, but the pid is not stable across runs.
-        sed -E 's/^\(node:[0-9]+\) /\(node:<pid>\) /g' | \
-        # Normalize console.trace output: strip stack frame lines so only
-        # the "Trace: <message>" header survives for comparison.
-        # Node.js emits "    at <symbol> (<location>)" JS stack frames;
-        # Perry emits "    N: <symbol>" native frame headers, indented
-        # "             at <file:line>" continuation lines, and
-        # "        (… N more identical frames)" dedup-collapse lines.
-        # All three shapes have leading whitespace; the distinguishing
-        # suffixes are "at ", a digit+colon, or a literal "(…".
-        sed -E '/^[[:space:]]+at /d' | \
-        sed -E '/^[[:space:]]+[0-9]+: /d' | \
-        sed -E '/^[[:space:]]+[(].*more identical frames[)]/d' | \
-        # Remove trailing empty lines
-        sed -e :a -e '/^\n*$/{$d;N;ba' -e '}'
+    # One definition of "Perry printed what Node printed", shared with
+    # scripts/node_suite_run.py — which used to carry a second implementation
+    # and could therefore reach a different verdict on the same capture.
+    # scripts/parity_normalize.py owns the rule set; the two runners select a
+    # named profile from it. `-B` keeps Python from writing bytecode into a
+    # checkout that the caller may be running read-only.
+    printf '%s' "$1" | "$PYTHON_CMD" -B "$SCRIPT_DIR/scripts/parity_normalize.py" output
 }
 
 normalize_failure_output() {
-    printf '%s' "$1" | "$PYTHON_CMD" -c '
-import re
-import sys
-
-lines = sys.stdin.read().splitlines()
-# The default node:test reporter repeats every failed result with source
-# locations and stacks after the aggregate summary. Those details are already
-# intentionally outside parity scope (paths/stacks are runtime-specific), so
-# compare the deterministic summary prefix for both runtimes.
-if "✖ failing tests:" in lines:
-    lines = lines[:lines.index("✖ failing tests:")]
-    while lines and not lines[-1]:
-        lines.pop()
-error = re.compile(r"^[A-Za-z]*Error(?: \[[^]]+\])?:")
-index = next((i for i, line in enumerate(lines) if error.match(line)), None)
-if index is None:
-    print("\n".join(lines), end="")
-    raise SystemExit
-
-marker = None
-for i in range(index - 1, -1, -1):
-    if lines[i].startswith("node:") or re.match(r"^file://.*:\d+(?::\d+)?$", lines[i]):
-        marker = i
-        break
-
-prefix = lines[:marker if marker is not None else index]
-while prefix and not prefix[-1]:
-    prefix.pop()
-
-signature = lines[index]
-signature = re.sub(r"^TypeError: [A-Za-z_$][\w$]* is not iterable$", "TypeError: is not iterable", signature)
-signature = re.sub(r"Received function(?: [A-Za-z_$][\w$]*)?$", "Received function", signature).rstrip()
-print("\n".join([*prefix, signature]), end="")
-'
+    # Same module, failure profile: keep the deterministic head and the error
+    # signature, drop the stack, whose paths and line numbers are
+    # runtime-specific by construction.
+    printf '%s' "$1" | "$PYTHON_CMD" -B "$SCRIPT_DIR/scripts/parity_normalize.py" failure
 }
 
 echo "========================================"
@@ -1311,11 +1201,6 @@ case "$TEST_SUITE" in
         done < <(find "$TEST_DIR" -maxdepth 1 -type f \
             \( -name '*.ts' -o -name '*.cts' -o -name '*.mts' -o -name 'test_*.cjs' \) | sort)
         ;;
-    parity|smoke)
-        while IFS= read -r test_file; do
-            TEST_FILES+=("$test_file")
-        done < <(find "$TEST_DIR" -maxdepth 1 -type f -name 'test_parity_*.ts' | sort)
-        ;;
     node-suite)
         node_suite_search_root="$NODE_SUITE_DIR"
         if [[ -n "$MODULE_FILTER" ]]; then
@@ -1329,7 +1214,7 @@ case "$TEST_SUITE" in
         ;;
     *)
         echo -e "${RED}Unknown suite: $TEST_SUITE${NC}"
-        echo "Known suites: all, parity, smoke, node-suite"
+        echo "Known suites: all, node-suite"
         exit 1
         ;;
 esac

@@ -2,7 +2,8 @@
 """Qualify wasm32-wasip1 programs under the reference host (Unix only).
 
 Every fixture in cases/ is compiled with `--target wasip1`, must import nothing
-but `wasi_snapshot_preview1`, and runs under the host in this directory with a
+but `wasi_snapshot_preview1` (a case built with `PERRY_WASM_NET=1` may also
+import `perry_net`, and must), and runs under the host in this directory with a
 client (or a signal schedule) driving it from outside. A case passes when the
 program's stdout and exit status match and the host's observations (poll
 counts, descriptor numbers) satisfy the case's check.
@@ -23,6 +24,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -30,6 +32,7 @@ from typing import Callable
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent.parent / "scripts"))
+import wasi_imports_check  # noqa: E402
 import wasi_run  # noqa: E402
 
 TIMEOUT = 120
@@ -39,7 +42,8 @@ class Run:
     """The host process: guest stdout as lines, the addresses it listens on."""
 
     def __init__(self, host: Path, wasm: Path, listen: int, signals: list[str], stats: Path,
-                 listen_at: int | None = None, announce: bool = True):
+                 listen_at: int | None = None, announce: bool = True,
+                 dns: list[str] = (), peer_port: int = 0, peer: socket.socket | None = None):
         command = [str(host), "--stats", str(stats)]
         for _ in range(listen):
             command += ["--listen", f"{listen_at}=127.0.0.1:0" if listen_at else "127.0.0.1:0"]
@@ -47,6 +51,12 @@ class Run:
             command.append("--no-announce")
         for signal in signals:
             command += ["--signal", signal]
+        for rule in dns:
+            command += ["--dns", rule]
+        # The program dials this port; it is the listening peer, or a closed port.
+        self.peer = peer
+        if peer_port:
+            command += ["--env", f"PEER_PORT={peer_port}"]
         self.process = subprocess.Popen(
             command + [str(wasm)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         # The host announces every listener before the guest starts.
@@ -98,6 +108,25 @@ class Run:
                 thread.join(timeout=5)
         return status
 
+    def serve_once(self, reply: bytes = b"") -> bytes:
+        """Accept the program's one outbound connection, answer it, and return
+        what it sent up to its end of stream."""
+        self.peer.settimeout(TIMEOUT)
+        conn, _ = self.peer.accept()
+        conn.settimeout(TIMEOUT)
+        try:
+            if reply:
+                # Wait for the request first, so the reply answers something.
+                got = conn.recv(4096)
+                conn.sendall(reply)
+            else:
+                got = b""
+            while chunk := conn.recv(4096):
+                got += chunk
+            return got
+        finally:
+            conn.close()
+
     def abort(self) -> None:
         if self.process.poll() is None:
             self.process.kill()
@@ -133,6 +162,14 @@ class Case:
     stdout: Callable[[Run], str] | str = ""
     status: int = 0
     stats: Callable[[dict], None] | None = None
+    # Built with PERRY_WASM_NET=1: the module imports perry_net.
+    net: bool = False
+    dns: list[str] = field(default_factory=list)
+    # The program dials PEER_PORT: "listen" is a peer the case serves, "closed"
+    # a port nothing listens on.
+    peer: str = ""
+    # The fixture to compile when it is not the case's own name.
+    source: str = ""
 
 
 CASES: dict[str, Case] = {}
@@ -251,22 +288,126 @@ def mixed(run: Run) -> None:
     hang_up(sock)
 
 
-def compile_case(perry: Path, source: Path, wasm: Path, log: Path) -> str | None:
+def attempts(n: int) -> Callable[[dict], None]:
+    return lambda s: check(s["connect_attempts"] == n, f"{s['connect_attempts']} connect attempts, expected {n}")
+
+
+@case("net_dns_delayed", net=True, listen=1, peer="listen", dns=["slow.test=127.0.0.1,delay=400"],
+      stdout="listening\ndialing\nconnected ticks ok\nclosed\nclient closed\n",
+      stats=attempts(1))
+def net_dns_delayed(run: Run) -> None:
+    # A name whose lookup takes 400 ms: the loop keeps ticking meanwhile (the
+    # program counts its 25 ms timer) and an existing client is still served.
+    run.expect("listening")
+    a = run.connect()
+    run.expect("dialing")
+    began = time.monotonic()
+    echo_once(a, b"during the lookup")
+    assert time.monotonic() - began < 0.3, "the echo waited for the lookup"
+    assert run.serve_once() == b"bye"
+    run.expect("closed")
+    hang_up(a)
+
+
+@case("net_connect_roundtrip", net=True, peer="listen", dns=["echo.test=127.0.0.1,delay=300"],
+      stdout="got pong\nclosed\n",
+      stats=lambda s: (attempts(1)(s),
+                       # The program has no timers: during the 300 ms lookup it sleeps in
+                       # poll_oneoff instead of asking after the pending connection again and again.
+                       check(s["polls"] >= 1 and s["sock_errors"] <= 10,
+                             f"{s['polls']} polls, {s['sock_errors']} sock_error calls during a delayed lookup")))
+def net_connect_roundtrip(run: Run) -> None:
+    assert run.serve_once(b"pong") == b"ping"
+
+
+@case("net_destroy_resolving", net=True, peer="listen", dns=["slow.test=127.0.0.1,delay=300"],
+      stdout="first closed\nliteral connected\ngot pong after the lookup's deadline\nliteral closed\n",
+      stats=lambda s: (attempts(1)(s),
+                       check(len(s["connects"]) == 2 and s["connects"][0] == s["connects"][1],
+                             f"the freed descriptor was not reused: {s['connects']}")))
+def net_destroy_resolving(run: Run) -> None:
+    # Only the literal reaches the network: the destroyed lookup never connects,
+    # not even when its delay runs out while the replacement is in use.
+    assert run.serve_once(b"pong") == b"ping"
+
+
+add("net_notfound", net=True, dns=["gone.test=notfound,delay=200"],
+    stdout="ENOTFOUND getaddrinfo after delay\n", stats=attempts(0))
+
+
+add("net_refused", net=True, peer="closed", dns=["refuse.test=127.0.0.1,delay=100"],
+    stdout="refuse.test ECONNREFUSED connect\n127.0.0.1 ECONNREFUSED connect\n", stats=attempts(2))
+
+
+add("net_dns_lookup", net=True, dns=["lookup.test=127.0.0.5,delay=300"],
+    stdout="null 127.0.0.5 4 after delay\nENOTFOUND\n")
+
+
+# 70 addresses: more than the 64 records the runtime's first buffer holds.
+add("net_dns_many", net=True, dns=["many.test=" + "+".join(f"10.0.0.{n}" for n in range(1, 71))],
+    stdout="null 70 10.0.0.1 10.0.0.70\n")
+
+
+# listen() after an outbound connect: the connection is not mistaken for the
+# listener (no announce, so the runtime scans for stream sockets).
+@case("net_before_listen", net=True, peer="listen", listen=1, listen_at=12, announce=False,
+      stdout="connected\nlistening\ngot pong\nclosed\n",
+      stats=lambda s: (attempts(1)(s),
+                       check(len(s["accepts"]) == 1 and s["connects"] == [3],
+                             f"accepts {s['accepts']}, connects {s['connects']}")))
+def net_before_listen(run: Run) -> None:
+    run.expect("listening")
+    sock = run.connect()
+    echo_once(sock, b"gap")
+    hang_up(sock)
+    assert run.serve_once(b"pong") == b"ping"
+
+
+# One fixture, built both ways: the default build imports only preview 1 and
+# outbound is not supported; PERRY_WASM_NET=1 adds perry_net and it connects.
+@case("net_both_ways", net=True, peer="listen", stdout="connected\n", stats=attempts(1))
+def net_both_ways(run: Run) -> None:
+    run.serve_once()
+
+
+add("net_both_ways_default", source="net_both_ways", peer="closed", stdout="error ENOTSUP\n", stats=attempts(0))
+
+
+def compile_case(perry: Path, source: Path, wasm: Path, log: Path, net: bool) -> str | None:
     env = dict(os.environ, PERRY_NO_AUTO_OPTIMIZE="1", PERRY_NO_CACHE="1")
+    env.pop("PERRY_WASM_NET", None)
+    if net:
+        env["PERRY_WASM_NET"] = "1"
     done = subprocess.run(
         [str(perry), "compile", str(source), "--target", "wasip1", "-o", str(wasm)],
         env=env, capture_output=True, timeout=600)
     log.write_bytes(done.stdout + done.stderr)
     if done.returncode or not wasm.is_file():
         return "compile failed:\n" + done.stderr.decode(errors="replace")[-3000:]
-    ok, report = wasi_run.check_imports(wasm)
-    return None if ok else "imports check failed:\n" + report[-3000:]
+    ok, report = wasi_run.check_imports(wasm, allow_perry_net=net)
+    if not ok:
+        return "imports check failed:\n" + report[-3000:]
+    imported = {module for module, *_ in wasi_imports_check.module_imports(wasm.read_bytes())}
+    if net != (wasi_imports_check.PERRY_NET in imported):
+        return f"PERRY_WASM_NET={'1' if net else 'unset'} but the module imports {sorted(imported)}"
+    return None
 
 
 def run_case(c: Case, host: Path, wasm: Path, out: Path) -> str | None:
     stats_path = out / f"{c.name}.stats.json"
     stats_path.unlink(missing_ok=True)
-    run = Run(host, wasm, c.listen, c.signals, stats_path, c.listen_at, c.announce)
+    peer, peer_port = None, 0
+    if c.peer:
+        peer = socket.socket()
+        peer.bind(("127.0.0.1", 0))
+        peer_port = peer.getsockname()[1]
+        if c.peer == "listen":
+            peer.listen(4)
+        else:
+            peer.close()  # the port stays unbound: connecting to it is refused
+            peer = None
+    run = Run(host, wasm, c.listen, c.signals, stats_path, c.listen_at, c.announce,
+              c.dns, peer_port, peer)
     try:
         if c.drive:
             c.drive(run)
@@ -287,6 +428,8 @@ def run_case(c: Case, host: Path, wasm: Path, out: Path) -> str | None:
         return f"{exc}\nstdout: {''.join(run.stdout)!r}\nstderr: {''.join(run.stderr)[-2000:]}"
     finally:
         run.abort()
+        if peer is not None:
+            peer.close()
 
 
 def main() -> int:
@@ -303,9 +446,9 @@ def main() -> int:
     listed = {line.split("#", 1)[0].strip() for line in (HERE / "cases.txt").read_text().splitlines()}
     listed.discard("")
     fixtures = {p.stem for p in (HERE / "cases").glob("*.ts")}
-    if not (listed == fixtures == set(CASES)):
+    if not (listed == fixtures == {c.source or c.name for c in CASES.values()}):
         print(f"case list, fixtures and scenarios disagree: cases.txt={sorted(listed)} "
-              f"cases/={sorted(fixtures)} suite.py={sorted(CASES)}")
+              f"cases/={sorted(fixtures)} suite.py={sorted({c.source or c.name for c in CASES.values()})}")
         return 1
 
     selected = [c for name, c in sorted(CASES.items()) if not args.filter or any(f in name for f in args.filter)]
@@ -313,8 +456,8 @@ def main() -> int:
     for c in selected:
         wasm = args.output / f"{c.name}.wasm"
         try:
-            problem = compile_case(args.perry, HERE / "cases" / f"{c.name}.ts", wasm,
-                                   args.output / f"{c.name}.compile.log")
+            problem = compile_case(args.perry, HERE / "cases" / f"{c.source or c.name}.ts", wasm,
+                                   args.output / f"{c.name}.compile.log", c.net)
             if problem is None:
                 problem = run_case(c, args.host, wasm, args.output)
         except Exception:  # a harness error is a failure, never a skip

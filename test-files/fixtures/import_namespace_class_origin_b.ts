@@ -3,4 +3,4 @@ export class Service {
   static label() { return "b"; }
   static *[Symbol.iterator]() { yield "b"; }
 }
-export * as B from "./test_import_namespace_class_origin_b.ts";
+export * as B from "./import_namespace_class_origin_b.ts";
