@@ -154,7 +154,10 @@ fn emit_public_typed_closure_trampoline(
     let arg_names: Vec<String> = params.iter().map(|p| format!("%arg{}", p.id)).collect();
     let llvm_params = crate::expr::body_call::js_body_params(arg_names.iter().cloned());
     let capture_header = crate::target_layout::closure_header_size_bytes(&llmod.target_triple);
+    let preinline =
+        raw_captures && super::closure_captures::fits_preinline_budget(llmod, &typed_name);
     let wf = llmod.define_function(&public_name, DOUBLE, llvm_params);
+    wf.pre_statepoint_inline = preinline;
     let _ = wf.create_block("entry");
 
     let (entry_values, guards) = {
