@@ -167,7 +167,7 @@ fn young_scavenge_cap_probe(old_reclaimable: impl FnOnce() -> usize) -> YoungSca
         cap.min(super::tenuring::object_census_seed_point_bytes())
     };
     YoungScavengeCapProbe {
-        due: from_space_in_use >= cap || leaf_memory_due_at_cap(cap),
+        due: from_space_in_use >= cap || leaf_memory_due_at_cap(cap, from_space_in_use),
         reading: Some(super::trigger_watermark::YoungArmReading {
             from_space_in_use,
             limit,
@@ -5378,8 +5378,9 @@ pub(crate) fn byte_store_test_external_live_bytes() -> usize {
     external_side_live_bytes()
 }
 
-fn leaf_memory_due_at_cap(cap: usize) -> bool {
+fn leaf_memory_due_at_cap(cap: usize, small_bytes: usize) -> bool {
     let window = super::tenuring::eden_allocation_window_bytes(
         cap, crate::arena::copying_active_survivor_in_use_bytes());
-    crate::arena::young_large_in_use_bytes() >= window
+    let leaf_bytes = crate::arena::young_large_in_use_bytes();
+    leaf_bytes > 0 && small_bytes.saturating_add(leaf_bytes) >= window
 }
