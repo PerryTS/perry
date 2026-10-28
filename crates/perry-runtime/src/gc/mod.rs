@@ -169,8 +169,14 @@ use pin::{note_preflight_skipped, note_preflight_walked, young_pin_latch_armed};
 pub(crate) mod prefetch;
 
 mod copying;
+mod leaf_escape;
 mod leaf_service;
 pub(crate) use leaf_service::repair_promoted_leaf_edges;
+/// A store of `child_addr` into the old/malloc parent `parent_addr` that the
+/// page-granular remembering skipped: record young-leaf escape only.
+pub(crate) fn probe_leaf_escape_store(parent_addr: usize, child_addr: usize) {
+    leaf_escape::probe_store(parent_addr, child_addr);
+}
 mod copying_first_cycle;
 mod copying_object_scan;
 mod copying_parent_facts;

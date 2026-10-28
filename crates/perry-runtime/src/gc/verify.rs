@@ -278,6 +278,9 @@ pub(super) unsafe fn remember_mutable_old_to_young_slot(
     if child_addr == 0 || !crate::gc::barrier::remembered_child_needs_tracking(child_addr) {
         return false;
     }
+    // Every rebuild (arming reconstruct, promotion repair) holds an old or
+    // malloc parent here, so a young leaf in the slot has escaped.
+    super::leaf_escape::probe_old_parent_child(child_addr);
     sticky.remember_slot(
         parent_header,
         slot,

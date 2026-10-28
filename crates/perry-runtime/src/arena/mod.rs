@@ -18,7 +18,8 @@ pub(crate) fn young_in_use_bytes() -> usize {
 }
 mod young_large;
 pub(crate) use young_large::{young_large_in_use_bytes, moving_from_space_in_use_bytes,
-    is_large_storage, finish_copied_young_large, finish_swept_young_large, copying_capacity_bytes};
+    is_large_storage, exact_young_leaf_header, young_leaf_headers, for_each_young_small_header,
+    finish_copied_young_large, finish_swept_young_large, copying_capacity_bytes};
 mod region;
 pub(crate) use construction::ConstructionBatch;
 #[cfg(test)]
@@ -125,7 +126,7 @@ pub use allocators::{
     arena_alloc_longlived, arena_alloc_old, js_arena_alloc,
 };
 pub(crate) use allocators::{
-    arena_alloc_gc_collecting_holder, arena_alloc_gc_no_collect, arena_alloc_gc_old_born_tenured,
+    arena_alloc_gc_collecting_holder, arena_alloc_gc_no_collect, arena_alloc_gc_old_born_tenured, arena_alloc_gc_owned_payload,
     arena_alloc_gc_old_excluding_pages, arena_alloc_gc_promoted, arena_alloc_gc_survivor,
 };
 

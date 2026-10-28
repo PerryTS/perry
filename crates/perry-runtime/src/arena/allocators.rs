@@ -670,3 +670,17 @@ fn arena_alloc_gc_slow(size: usize, align: usize, obj_type: u8, total: usize) ->
 pub extern "C" fn js_arena_alloc(size: u32) -> *mut u8 {
     arena_alloc(size as usize, 8)
 }
+
+/// An engine-owned payload that lives as long as its single owner (a compiled
+/// regex program is owned by exactly one RegExp). A payload large enough to be
+/// a dedicated young leaf is born old, as every large pointer-free cell was
+/// before young leaves existed, so it never adds young-leaf pressure or a
+/// leaf collection; a small one stays an ordinary young cell.
+pub(crate) fn arena_alloc_gc_owned_payload(size: usize, align: usize, obj_type: u8) -> *mut u8 {
+    let total = gc_padded_total_size(size, align);
+    if crate::gc::is_large_object_total_size_for_type(total, obj_type) {
+        arena_alloc_gc_old_born_tenured(size, align, obj_type)
+    } else {
+        arena_alloc_gc(size, align, obj_type)
+    }
+}

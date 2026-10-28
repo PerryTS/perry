@@ -989,6 +989,7 @@ pub(super) fn write_barrier_decoded_parent(
     // which is the whole cost of the barrier on the second and third push into
     // the same bucket, or on every push into a large array whose tail sits on
     // one page.
+    super::leaf_escape::probe_store(parent_addr, child_addr);
     if !external_slot && inline_slot_store_on_cached_dirty_page(parent_addr, slot_addr) {
         bump_write_barrier_trace_counter(BarrierTraceCounter::DirtyPageCacheHits);
         return;
@@ -1086,6 +1087,8 @@ pub(super) fn replay_old_parent_slot_range(parent_addr: usize, slots: *mut u64, 
     for i in 0..count {
         let slot_addr = slots as usize + i * std::mem::size_of::<u64>();
         let page = crate::arena::generation_page_for_addr(slot_addr);
+        // The page skip below is a coverage shortcut; leaf escape is per value.
+        super::leaf_escape::probe_store_bits(parent_addr, unsafe { *(slot_addr as *const u64) });
         if page == dirtied_page {
             continue;
         }

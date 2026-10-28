@@ -93,6 +93,71 @@ pub(crate) fn moving_from_space_in_use_bytes() -> usize {
     super::from_space::copying_from_space_in_use_bytes()
 }
 
+/// The one exact test that `addr` is the user address of a live dedicated
+/// young leaf: a young-large extent holds exactly one cell whose header sits
+/// at the extent base, so the address must be `base + GC_HEADER_SIZE`. An
+/// interior address of a leaf (payload bytes that merely look like a pointer)
+/// is rejected, so no payload byte is ever mistaken for a header.
+#[inline]
+pub(crate) fn exact_young_leaf_header(addr: usize) -> Option<*mut crate::gc::GcHeader> {
+    let (space, base, _, large) = classify_heap_storage_in_range(addr)?;
+    (large
+        && matches!(space, HeapSpace::NurseryEden)
+        && base.checked_add(crate::gc::GC_HEADER_SIZE) == Some(addr))
+    .then_some(base as *mut crate::gc::GcHeader)
+}
+
+/// Headers of every young dedicated leaf owner, in block order.
+pub(crate) fn young_leaf_headers() -> Vec<*mut crate::gc::GcHeader> {
+    ARENA.with(|arena| unsafe {
+        (&*arena.get())
+            .blocks
+            .iter()
+            .filter(|b| !b.data.is_null() && b.extent_kind == Kind::LargeObject && b.offset != 0)
+            .map(|b| b.data.cast::<crate::gc::GcHeader>())
+            .collect()
+    })
+}
+
+/// Visit the header of every cell in Eden and both survivor halves, never a
+/// dedicated leaf extent. Reads block bounds and headers only; the callback
+/// runs with no arena borrow held. Parses blocks as the promotion stamp walk
+/// does: hop by the header size, stop at an implausible size.
+pub(crate) fn for_each_young_small_header(mut visit: impl FnMut(*mut crate::gc::GcHeader)) -> usize {
+    super::sync_inline_arena_state();
+    let mut extents: Vec<(usize, usize, usize)> = Vec::new();
+    let mut collect = |blocks: &[ArenaBlock]| {
+        for b in blocks {
+            if !b.data.is_null() && b.offset != 0 && b.extent_kind != Kind::LargeObject {
+                extents.push((b.data as usize, b.offset, b.size));
+            }
+        }
+    };
+    ARENA.with(|arena| collect(unsafe { &(&*arena.get()).blocks }));
+    for idx in [0usize, 1usize] {
+        super::with_survivor_arena(idx, |arena| collect(&arena.blocks));
+    }
+    let mut headers = 0usize;
+    for (data, used, size) in extents {
+        let mut offset = 0usize;
+        while offset < used {
+            let aligned = (offset + 7) & !7;
+            if aligned >= used {
+                break;
+            }
+            let header = (data + aligned) as *mut crate::gc::GcHeader;
+            let total = unsafe { (*header).size } as usize;
+            if total < crate::gc::GC_HEADER_SIZE || total > size - aligned {
+                break;
+            }
+            visit(header);
+            headers += 1;
+            offset = aligned + total;
+        }
+    }
+    headers
+}
+
 pub(crate) fn is_large_storage(addr: usize) -> bool {
     classify_heap_storage_in_range(addr).is_some_and(|(_, _, _, large)| large)
 }
@@ -156,7 +221,10 @@ fn finish(snapshots: Option<&[ArenaBlockSnapshot]>, live: Option<&[bool]>) -> Ar
             );
             let (base, size, used) = (block.data as usize, block.size, block.offset);
             if alive {
-                (*header).gc_flags |= crate::gc::GC_FLAG_TENURED;
+                // The escape bit shares HAS_SURVIVED (0x40); it never outlives
+                // the young generation of its leaf.
+                (*header).gc_flags = ((*header).gc_flags | crate::gc::GC_FLAG_TENURED)
+                    & !crate::gc::GC_FLAG_HAS_SURVIVED;
                 super::page_meta::retag_block_space(
                     base,
                     size,
