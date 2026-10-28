@@ -613,6 +613,28 @@ jobs:
           shared-key: gc-native-roots
       - name: Build compiler and static runtime (perry-dev profile)
         run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            # The vendored OpenSSL's Configure needs Locale::Maketext::Simple,
+            # which Git Bash's msys perl lacks, and Git's perl comes first on
+            # this shell's PATH (pwsh inherits it). Take the first perl on
+            # PATH, then Strawberry's, that loads the module.
+            OPENSSL_SRC_PERL=
+            while IFS= read -r perl_exe; do
+              perl_exe=${perl_exe%$'\r'}
+              [ -n "$perl_exe" ] || continue
+              if "$(cygpath -u "$perl_exe")" -MLocale::Maketext::Simple -e1 2>/dev/null; then
+                OPENSSL_SRC_PERL=$perl_exe
+                break
+              fi
+            done < <(where.exe perl 2>/dev/null; echo 'C:\Strawberry\perl\bin\perl.exe')
+            if [ -z "$OPENSSL_SRC_PERL" ]; then
+              echo "::error::no Windows perl with Locale::Maketext::Simple for the vendored OpenSSL Configure"
+              exit 1
+            fi
+            export OPENSSL_SRC_PERL
+            echo "OPENSSL_SRC_PERL=$OPENSSL_SRC_PERL"
+          fi
           export RUSTFLAGS="-C force-unwind-tables=yes"
           cargo build-perry --profile perry-dev
           scripts/gc_call_effects/sidecars.sh target/perry-dev
