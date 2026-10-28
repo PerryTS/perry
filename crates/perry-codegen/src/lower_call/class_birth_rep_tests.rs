@@ -231,8 +231,11 @@ fn compact_birth_has_no_call_and_initializes_any_and_numeric_capacity_slots() {
         let broken = ir.replace(&defaults, "; removed capacity initialization");
         assert_ne!(broken, ir, "negative control must alter a real birth store");
         assert!(std::panic::catch_unwind(|| check_compact_birth(&broken, &defaults)).is_err());
-        let broken = ir.replace("select i1 ", "missing idle select ");
-        assert_ne!(broken, ir, "negative control must revoke the idle guard");
+        let broken = ir.replace(", i64 16\n", ", i64 24\n");
+        assert_ne!(
+            broken, ir,
+            "negative control must revoke the canonical bump-bound proof"
+        );
         assert!(std::panic::catch_unwind(|| check_compact_birth(&broken, &defaults)).is_err());
     }
 }
