@@ -107,7 +107,9 @@ fn number_n() -> Expr {
 
 fn method(object: Expr, property: &str, args: Vec<Expr>) -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(object),
             property: property.to_string(),
             byte_offset: 0,

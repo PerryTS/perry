@@ -410,6 +410,7 @@ pub(crate) fn lower_known_holder_read(
     };
     let holder_expr = perry_hir::Expr::LocalGet(holder);
     let holder_read = perry_hir::Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(holder_expr.clone()),
         property: property.to_string(),
         byte_offset: *byte_offset,

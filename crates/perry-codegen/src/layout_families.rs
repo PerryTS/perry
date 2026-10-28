@@ -1743,6 +1743,7 @@ mod tests {
         let mut hir = HirModule::new("generator_results");
         let get = |property: &str| {
             Stmt::Expr(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(1)),
                 property: property.to_string(),

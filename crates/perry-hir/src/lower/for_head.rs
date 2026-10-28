@@ -241,6 +241,8 @@ pub(crate) fn guard_for_in_body(
         then_expr: Box::new(Expr::Bool(true)),
         else_expr: Box::new(Expr::In {
             property: Box::new(Expr::IndexGet {
+                byte_offset: 0,
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(keys_id)),
                 index: Box::new(Expr::LocalGet(idx_id)),
             }),
@@ -563,6 +565,7 @@ pub(crate) fn map_set_delete_safe_for_of(
     };
     let extern_call = |name: &str, args: Vec<Expr>| -> Expr {
         Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::ExternFuncRef {
                 name: name.to_string(),
                 param_types: Vec::new(),

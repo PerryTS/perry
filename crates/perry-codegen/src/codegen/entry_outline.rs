@@ -1249,6 +1249,7 @@ fn chunk_statements(
             was_unrolled: false,
         });
         new_body.push(perry_hir::Stmt::Expr(perry_hir::Expr::Call {
+            byte_end: 0,
             callee: Box::new(perry_hir::Expr::FuncRef(fn_id)),
             args: Vec::new(),
             type_args: Vec::new(),
@@ -1731,6 +1732,7 @@ mod tests {
 
     fn call_no_args(callee: Expr) -> Expr {
         Expr::Call {
+            byte_end: 0,
             callee: Box::new(callee),
             args: vec![],
             type_args: vec![],

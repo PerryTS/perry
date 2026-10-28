@@ -96,6 +96,7 @@ fn i_inc() -> Expr {
 fn module_ir(condition: Expr, update: Expr, body: Vec<Stmt>) -> String {
     let mut module = Module::new("number_local_loop");
     module.init.push(Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(1)),
         args: vec![Expr::Integer(1), Expr::Integer(8)],
         type_args: Vec::new(),

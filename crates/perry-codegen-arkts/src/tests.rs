@@ -112,7 +112,9 @@ pub(crate) fn state_call(initial: Expr) -> Expr {
 
 pub(crate) fn state_method_call(state_id: u32, method: &str, args: Vec<Expr>) -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(Expr::LocalGet(state_id)),
             property: method.to_string(),

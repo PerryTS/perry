@@ -4,6 +4,7 @@ use super::*;
 impl Model {
     /// Bind `call` to callee token `t`. `this_tok` overrides the call's this.
     pub fn call_tok(&mut self, call: CallId, t: Tok, this_tok: Option<Tok>) {
+        self.diagnostic_callee(call, t);
         // A bare marker is another unit's value (DECISIONS 119): its call
         // is its contract's escape, and the call itself is one of an
         // unknown function (the reader cannot follow what it is given).
@@ -136,6 +137,7 @@ impl Model {
     /// escape, the result is ⊤; with `sink_this` (no receiver token given),
     /// the call's own `this` escapes too.
     pub(super) fn unknown_callee_args(&mut self, call: CallId, t: Tok, sink_this: bool) {
+        self.diagnostic_callee(call, t);
         if t == TOP {
             self.top_calls += 1;
         }
@@ -173,6 +175,7 @@ impl Model {
     /// Arguments and result of `call` into function token `t`: once per
     /// (call, function); only `this` differs between receivers.
     pub(crate) fn bind_args(&mut self, call: CallId, t: Tok) {
+        self.diagnostic_callee(call, t);
         let TokKind::Func(f, _) = self.toks[t as usize] else {
             return;
         };
@@ -268,6 +271,7 @@ impl Model {
     /// Calling a bound function: its target with the bound this; bound +
     /// call args land in any parameter (positions shift).
     pub(super) fn call_bound(&mut self, call: CallId, t: Tok) {
+        self.diagnostic_callee(call, t);
         let TokKind::Bound(b) = self.toks[t as usize] else {
             return;
         };
@@ -452,6 +456,7 @@ impl Model {
     }
 
     pub fn construct(&mut self, call: CallId, t: Tok) {
+        self.diagnostic_callee(call, t);
         if !self.sum.ready {
             self.sum
                 .deferred

@@ -1296,7 +1296,9 @@ pub(super) fn try_module_static_methods(
                             let a = iter.next().unwrap();
                             let b = iter.next().unwrap();
                             return Ok(Ok(Expr::Call {
+                                byte_end: 0,
                                 callee: Box::new(Expr::PropertyGet {
+                                    byte_end: 0,
                                     byte_offset: 0,
                                     object: Box::new(a),
                                     property: "compare".to_string(),

@@ -92,6 +92,7 @@ fn unknown_method(m: &mut Model, call: CallId, why: &str) {
 /// receiver (a builtin namespace's, a builtin function's), which gives that
 /// object to no one.
 fn unknown_method_proto(m: &mut Model, call: CallId, why: &str, proto: Option<usize>, own: bool) {
+    m.diagnostic_builtin(call, |_| format!("opaque-summary:{why}"));
     let c = m.calls[call as usize].clone();
     let r = m.reason(why);
     for (i, &a) in c.args.iter().enumerate() {
@@ -1029,6 +1030,17 @@ pub fn tok_store(m: &mut Model, t: Tok, _key: Key, src: NodeId) {
 // ------------------------------------------------------------- methods
 
 pub fn prim_method(m: &mut Model, prim: u16, key: Key, call: CallId) {
+    if let Key::Named(a) = key {
+        if matches!(
+            members::prim_member(prim, &m.atoms[a as usize]),
+            Some(Mem::Fn)
+        ) {
+            m.diagnostic_builtin(call, |m| {
+                format!("primitive({prim}).{}", m.atoms[a as usize])
+            });
+        }
+    }
+
     if prim & (prim::NULL | prim::UNDEF) == prim {
         return;
     }
@@ -1189,6 +1201,18 @@ fn own_method_inner(m: &mut Model, t: Tok, key: Key, call: CallId) {
 /// Builtin methods found on the prototype chain (`Object.prototype` and
 /// native parent prototypes), run with `this` = `origin`.
 pub fn proto_method(m: &mut Model, p: Tok, origin: Tok, key: Key, call: CallId) {
+    if matches!(m.toks[p as usize], TokKind::ObjectProto) {
+        if let Key::Named(a) = key {
+            if matches!(
+                members::member(Family::Object, &m.atoms[a as usize]),
+                Some(Mem::Fn)
+            ) {
+                m.diagnostic_builtin(call, |m| {
+                    format!("Object.prototype.{}", m.atoms[a as usize])
+                });
+            }
+        }
+    }
     let prev = m.cur_this.replace(origin);
     proto_method_inner(m, p, origin, key, call);
     m.cur_this = prev;
@@ -1329,6 +1353,14 @@ fn runtime_global_fn(n: &str) -> bool {
 }
 
 fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
+    if let Some(name) = name {
+        if matches!(members::ns_member(ns, name), Some(Some(Mem::Fn)))
+            || ns == BuiltinNs::Other && runtime_global_fn(name)
+        {
+            m.diagnostic_builtin(call, |_| format!("{ns:?}.{name}"));
+        }
+    }
+
     let Some(name) = name else {
         return;
     };
@@ -1696,6 +1728,7 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
 }
 
 pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
+    m.diagnostic_builtin(call, |_| format!("{ns:?}"));
     match ns {
         BuiltinNs::Require => {
             // `require('module')` is the node:module namespace, which hands
@@ -1824,6 +1857,7 @@ fn error_tok(m: &mut Model, call: CallId) -> Tok {
 }
 
 pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
+    m.diagnostic_builtin(call, |_| format!("new {ns:?}"));
     match ns {
         BuiltinNs::Map | BuiltinNs::Set => {
             let c = site_tmpl(m, call, "Collection");
@@ -1904,6 +1938,7 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
 
 /// `new Name(...)` where `Name` is not a program class: a builtin by name.
 pub fn construct_named(m: &mut Model, name: &str, call: CallId) {
+    m.diagnostic_builtin(call, |_| format!("new {name}"));
     if let Some(ns) = ns_by_name(name) {
         return new_builtin_ns(m, ns, call);
     }

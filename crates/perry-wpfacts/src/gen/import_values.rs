@@ -262,6 +262,9 @@ impl<'a> Gen<'a> {
                 self.ns_whole(n);
             }
         }
+        if let Some(d) = &mut self.diagnostic {
+            d.namespace_receivers.insert(n);
+        }
         Some(n)
     }
 

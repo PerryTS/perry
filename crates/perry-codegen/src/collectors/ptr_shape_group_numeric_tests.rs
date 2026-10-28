@@ -130,6 +130,7 @@ fn class_q() -> Class {
 
 fn new_of(class_name: &str, args: Vec<Expr>) -> Expr {
     Expr::New {
+        byte_end: 0,
         class_name: class_name.to_string(),
         args,
         type_args: Vec::new(),
@@ -183,6 +184,7 @@ fn counted_loop(idx: u32, bound: Expr, body: Vec<Stmt>) -> Stmt {
 
 fn arr_len(arr: u32) -> Expr {
     Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(arr)),
         property: "length".to_string(),
         byte_offset: 0,
@@ -197,6 +199,8 @@ fn let_elem(id: u32, arr: u32, idx: u32, class_name: &str) -> Stmt {
         ty: Type::Named(class_name.to_string()),
         mutable: false,
         init: Some(Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(arr)),
             index: Box::new(Expr::LocalGet(idx)),
         }),
@@ -205,6 +209,7 @@ fn let_elem(id: u32, arr: u32, idx: u32, class_name: &str) -> Stmt {
 
 fn read_field(id: u32, property: &str) -> Stmt {
     Stmt::Expr(Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(id)),
         property: property.to_string(),
         byte_offset: 0,
@@ -298,7 +303,10 @@ fn promote_with_element_fields_and_numeric_params(
 
 fn read_direct_field(array_id: u32, index_id: u32, property: &str) -> Stmt {
     Stmt::Expr(Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(array_id)),
             index: Box::new(Expr::LocalGet(index_id)),
         }),
@@ -588,7 +596,9 @@ fn method_site_string_arg_drops_the_field() {
     let classes = classes_of(&cs);
     let call_set_x = |recv: u32, arg: Expr| {
         Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(recv)),
                 property: "setX".to_string(),
                 byte_offset: 0,
@@ -855,6 +865,8 @@ fn bigint_typed_view_addition_is_not_numeric_by_construction() {
                 init: Some(Expr::Binary {
                     op: BinaryOp::Add,
                     left: Box::new(Expr::IndexGet {
+                        byte_offset: 0,
+                        byte_end: 0,
                         object: Box::new(Expr::LocalGet(view_id)),
                         index: Box::new(Expr::Integer(0)),
                     }),

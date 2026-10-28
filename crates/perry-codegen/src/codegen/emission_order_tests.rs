@@ -383,7 +383,9 @@ fn dispatch_tower_module() -> Module {
         }],
         return_type: Type::Void,
         body: vec![Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(701)),
                 property: "m".to_string(),
                 byte_offset: 0,
@@ -623,6 +625,7 @@ fn retained_source_ranges_preserve_registrations_and_ownership() {
             module.closure_source_text.insert(
                 id,
                 perry_hir::FunctionSourceMetadata {
+                    source_span: None,
                     text: source.into(),
                     is_non_strict_ordinary: flag,
                 },
@@ -854,6 +857,7 @@ fn retained_source_raw_cutoff_is_the_functions_own_length() {
         module.closure_source_text.insert(
             id,
             perry_hir::FunctionSourceMetadata {
+                source_span: None,
                 text: source.into(),
                 is_non_strict_ordinary: false,
             },
@@ -910,6 +914,7 @@ fn header_mode_replaces_bodies_with_a_di_header() {
     module.closure_source_text.insert(
         100,
         perry_hir::FunctionSourceMetadata {
+            source_span: None,
             text: "function foo(a, b) {\n  return 'DISTINCTIVE_BODY_10574';\n}".into(),
             is_non_strict_ordinary: true,
         },
@@ -920,6 +925,7 @@ fn header_mode_replaces_bodies_with_a_di_header() {
     module.closure_source_text.insert(
         200,
         perry_hir::FunctionSourceMetadata {
+            source_span: None,
             text: "m() { return 'METHOD_BODY_10574'; }".into(),
             is_non_strict_ordinary: false,
         },

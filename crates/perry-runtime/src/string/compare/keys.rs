@@ -102,7 +102,7 @@ fn short_key_matches_bytes(stored: crate::JSValue, incoming: &[u8]) -> bool {
 /// Used by paths like `Object.keys` and `Object.assign` that need to
 /// materialize the key string into a usable form regardless of which
 /// representation it currently has.
-#[inline]
+#[inline(always)]
 pub(crate) unsafe fn js_string_key_bytes(
     stored: crate::JSValue,
     stored_buf: &mut [u8; crate::value::SHORT_STRING_MAX_LEN],

@@ -98,6 +98,7 @@ fn anon_shape(id: u32, name: &str, ctor_id: u32, param_base: u32) -> Class {
 
 fn this_a() -> Expr {
     Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::This),
         property: "a".to_string(),
         byte_offset: 0,
@@ -146,6 +147,7 @@ fn literal_module(closure: Expr) -> Module {
         ty: Type::Any,
         mutable: false,
         init: Some(Expr::New {
+            byte_end: 0,
             class_name: SHAPE.to_string(),
             args: vec![Expr::Number(1.0), closure],
             type_args: Vec::new(),
@@ -271,6 +273,7 @@ fn home_classes_name_only_unambiguous_dynamic_this_methods() {
     hir.classes.push(anon_shape(2, OTHER_SHAPE, 91, 70));
     let new_shape = |class: &str, closure: Expr| {
         Stmt::Expr(Expr::New {
+            byte_end: 0,
             class_name: class.to_string(),
             args: vec![Expr::Number(2.0), closure],
             type_args: Vec::new(),

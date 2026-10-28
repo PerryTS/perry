@@ -1423,7 +1423,9 @@ pub(super) fn try_array_only_methods(
                             // Preserve one variadic call, including the
                             // Proxy method/length reads and final length Set.
                             return Ok(Ok(Expr::Call {
+                                byte_end: 0,
                                 callee: Box::new(Expr::PropertyGet {
+                                    byte_end: 0,
                                     object: Box::new(array_expr),
                                     property: "push".to_string(),
                                     byte_offset: call.span.lo.0,

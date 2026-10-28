@@ -16,6 +16,8 @@ extern "C" {
     fn js_zlib_stream_option(opts: f64, which: i32) -> usize;
     fn js_zlib_decode_completion_options(opts: f64) -> i32;
     fn js_zlib_brotli_max_output_length(opts: f64) -> usize;
+    fn js_zlib_brotli_dictionary(opts: f64) -> f64;
+    fn js_zlib_brotli_quality(opts: f64) -> i32;
     fn js_zlib_gzip_codec_options(opts: f64) -> f64;
     fn js_zlib_gzip_base_options(opts: f64) -> f64;
     fn js_zlib_gzip_transform_options(opts: f64, phase: i32) -> f64;
@@ -32,6 +34,7 @@ extern "C" {
     pub(crate) fn js_zlib_validate_callback(callback: f64) -> i64;
 }
 mod allocation;
+mod brotli_codec;
 mod deflate_context;
 mod driver;
 mod inflate_context;
@@ -213,6 +216,7 @@ pub(crate) fn value_bytes(bytes: &[u8]) -> f64 {
     f64::from_bits(bytes::from_slice(bytes::Brand::Buffer, bytes).bits())
 }
 
+#[cfg(test)]
 fn brotli_compress_bytes(data: &[u8]) -> Vec<u8> {
     let mut out = Vec::new();
     let mut r = brotli::CompressorReader::new(data, 4096, 11, 22);
@@ -227,49 +231,28 @@ fn brotli_decompress_bytes(data: &[u8]) -> std::io::Result<Vec<u8>> {
     Ok(out)
 }
 
-enum BrotliDecodeError {
-    Decode,
-    OutputLimit,
-}
-
-fn brotli_decompress_limited(data: &[u8], limit: usize) -> Result<Vec<u8>, BrotliDecodeError> {
-    let mut decoder = brotli::Decompressor::new(data, 4096);
-    let mut output = Vec::new();
-    let mut scratch = [0; 4096];
-    loop {
-        let remaining = limit.saturating_sub(output.len());
-        // One bounded lookahead byte distinguishes exact-limit EOF from overflow.
-        let available = remaining.saturating_add(1).min(scratch.len());
-        let count = decoder
-            .read(&mut scratch[..available])
-            .map_err(|_| BrotliDecodeError::Decode)?;
-        if count > remaining {
-            return Err(BrotliDecodeError::OutputLimit);
-        }
-        if count == 0 {
-            return Ok(output);
-        }
-        output.extend_from_slice(&scratch[..count]);
-    }
-}
-
-fn throw_brotli_decode_error() -> ! {
-    perry_ffi::throw_with_code(
-        "Decompression failed",
-        "ERR__ERROR_FORMAT_PADDING_2",
-        ErrorKind::Error,
-    )
-}
-
-/// `zlib.brotliCompressSync(data)` -> Buffer.
+/// `zlib.brotliCompressSync(data, options?)` -> Buffer.
 ///
 /// # Safety
-/// `data_bits` must be the raw NaN-box bit pattern of the data argument.
+/// Arguments must be raw NaN-boxed JS values.
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_brotli_compress_sync(data_bits: i64) -> f64 {
-    js_zlib_validate_buffer_arg(data_bits);
-    match read_input_from_bits(data_bits) {
-        Some(d) => value_bytes(&brotli_compress_bytes(&d)),
+pub unsafe extern "C" fn js_zlib_brotli_compress_sync(data_bits: i64, options: f64) -> f64 {
+    let roots = TransientRootScope::enter();
+    let data = roots.root_nanbox(f64::from_bits(data_bits as u64));
+    let options = roots.root_nanbox(options);
+    js_zlib_validate_buffer_arg(data.get().to_bits() as i64);
+    // Copy before params getters can mutate/detach the dictionary view.
+    let dictionary = copy_dictionary(js_zlib_brotli_dictionary(options.get()));
+    let quality = js_zlib_brotli_quality(options.get());
+    match read_input_from_bits(data.get().to_bits() as i64) {
+        Some(data) => match brotli_codec::compress(&data, dictionary.as_deref(), quality) {
+            Ok(out) => value_bytes(&out),
+            Err(error) => perry_ffi::throw_with_code(
+                &error.to_string(),
+                "ERR_BROTLI_COMPRESSION_FAILED",
+                ErrorKind::Error,
+            ),
+        },
         None => f64::from_bits(UNDEFINED),
     }
 }
@@ -277,24 +260,27 @@ pub unsafe extern "C" fn js_zlib_brotli_compress_sync(data_bits: i64) -> f64 {
 /// `zlib.brotliDecompressSync(data, options?)` -> Buffer.
 ///
 /// # Safety
-/// `data_bits` and `options` must be raw NaN-boxed JS values.
+/// Arguments must be raw NaN-boxed JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_zlib_brotli_decompress_sync(data_bits: i64, options: f64) -> f64 {
     let roots = TransientRootScope::enter();
     let data = roots.root_nanbox(f64::from_bits(data_bits as u64));
     let options = roots.root_nanbox(options);
+    let dictionary = copy_dictionary(js_zlib_brotli_dictionary(options.get()));
     let limit = js_zlib_brotli_max_output_length(options.get());
     js_zlib_validate_buffer_arg(data.get().to_bits() as i64);
     match read_input_from_bits(data.get().to_bits() as i64)
-        .map(|d| brotli_decompress_limited(&d, limit))
+        .map(|d| brotli_codec::decompress(&d, dictionary, limit))
     {
         Some(Ok(out)) => value_bytes(&out),
-        Some(Err(BrotliDecodeError::OutputLimit)) => perry_ffi::throw_with_code(
+        Some(Err(brotli_codec::DecodeError::OutputLimit)) => perry_ffi::throw_with_code(
             &format!("Cannot create a Buffer larger than {limit} bytes"),
             "ERR_BUFFER_TOO_LARGE",
             ErrorKind::RangeError,
         ),
-        Some(Err(BrotliDecodeError::Decode)) => throw_brotli_decode_error(),
+        Some(Err(brotli_codec::DecodeError::Decode(code))) => {
+            perry_ffi::throw_with_code("Decompression failed", &code, ErrorKind::Error)
+        }
         _ => f64::from_bits(UNDEFINED),
     }
 }

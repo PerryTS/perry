@@ -93,6 +93,7 @@ impl NamespaceGuard {
 /// as the intrinsic again and would bind the call straight back to it.
 fn live_namespace(ns: &str) -> Expr {
     Expr::PropertyGet {
+        byte_end: 0,
         byte_offset: 0,
         object: Box::new(Expr::GlobalThisExpr),
         property: ns.to_string(),
@@ -177,6 +178,7 @@ pub(super) fn dynamic_member_call(
     args: Vec<Expr>,
 ) -> Expr {
     let callee = Box::new(Expr::PropertyGet {
+        byte_end: 0,
         byte_offset: call.span.lo.0,
         object: Box::new(object),
         property: method,
@@ -195,12 +197,15 @@ pub(super) fn dynamic_member_call(
             })
             .collect();
         return Expr::CallSpread {
+            byte_offset: 0,
+            byte_end: 0,
             callee,
             args,
             type_args: Vec::new(),
         };
     }
     Expr::Call {
+        byte_end: 0,
         callee,
         args,
         type_args: Vec::new(),

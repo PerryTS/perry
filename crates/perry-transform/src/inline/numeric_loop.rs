@@ -105,6 +105,7 @@ mod tests {
 
     fn call(id: FuncId) -> Stmt {
         Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::FuncRef(id)),
             args: Vec::new(),
             type_args: Vec::new(),
@@ -117,6 +118,7 @@ mod tests {
             op: BinaryOp::Mul,
             left: Box::new(if field {
                 Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(1)),
                     property: "a".into(),
                     byte_offset: 0,

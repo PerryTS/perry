@@ -1326,6 +1326,7 @@ mod define_get_accessor_tests {
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::New {
+                    byte_end: 0,
                     class_name: EMPTY_SHAPE.to_string(),
                     args: Vec::new(),
                     type_args: Vec::new(),
@@ -1337,6 +1338,7 @@ mod define_get_accessor_tests {
                 Box::new(Expr::LocalGet(1)),
                 Box::new(Expr::String("a".to_string())),
                 Box::new(Expr::New {
+                    byte_end: 0,
                     class_name: DESC_SHAPE.to_string(),
                     args: desc_args,
                     type_args: Vec::new(),

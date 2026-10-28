@@ -24,6 +24,7 @@ use perry_hir::{Expr, Module, Stmt};
 fn new_headers_call() -> Module {
     let mut module = Module::new("new_builtin_shadow.ts");
     module.init = vec![Stmt::Expr(Expr::New {
+        byte_end: 0,
         class_name: "Headers".to_string(),
         args: Vec::new(),
         type_args: Vec::new(),

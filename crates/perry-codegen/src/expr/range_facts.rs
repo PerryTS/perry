@@ -355,7 +355,9 @@ fn int_range_expr_inner(
                 UpdateOp::Decrement => checked_range_sub(old, IntRange::exact(1)),
             }
         }
-        Expr::IndexGet { object, index } => int_typed_array_load_range(ctx, object, index, seen),
+        Expr::IndexGet { object, index, .. } => {
+            int_typed_array_load_range(ctx, object, index, seen)
+        }
         Expr::Binary { op, left, right } => {
             // Result-shape rules that need no range on one (or either)
             // operand. `e & K` with a non-negative i32 constant `K` is

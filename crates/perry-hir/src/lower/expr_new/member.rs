@@ -71,6 +71,7 @@ pub(crate) fn lower_new_member_native(
                     && !(obj_name == "globalThis" && global_name_has_user_binding(ctx, class_name))
                 {
                     return Ok(Some(Expr::New {
+                        byte_end: 0,
                         class_name: class_name.to_string(),
                         args: lower_optional_args(ctx, new_expr.args.as_deref())?,
                         type_args: Vec::new(),
@@ -98,6 +99,7 @@ pub(crate) fn lower_new_member_native(
                     });
             if is_string_decoder_module && prop_ident.sym.as_ref() == "StringDecoder" {
                 return Ok(Some(Expr::New {
+                    byte_end: 0,
                     class_name: "StringDecoder".to_string(),
                     args: lower_optional_args(ctx, new_expr.args.as_deref())?,
                     type_args: Vec::new(),
@@ -112,6 +114,7 @@ pub(crate) fn lower_new_member_native(
             {
                 ctx.uses_fetch = true;
                 return Ok(Some(Expr::New {
+                    byte_end: 0,
                     class_name: prop_ident.sym.to_string(),
                     args: lower_optional_args(ctx, new_expr.args.as_deref())?,
                     type_args: Vec::new(),
@@ -250,7 +253,9 @@ pub(crate) fn lower_new_member_native(
             {
                 let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
                 return Ok(Some(Expr::NewDynamic {
+                    byte_end: 0,
                     callee: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: 0,
                         object: Box::new(Expr::NativeModuleRef("http".to_string())),
                         property: prop_ident.sym.to_string(),
@@ -378,6 +383,7 @@ pub(crate) fn lower_new_member_native(
                     .transpose()?
                     .unwrap_or_default();
                 exprs.push(Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::ExternFuncRef {
                         name: "js_vm_module_constructor_error".to_string(),
                         param_types: Vec::new(),
@@ -491,6 +497,7 @@ pub(crate) fn lower_new_member_native(
                 )
             {
                 return Ok(Some(Expr::New {
+                    byte_end: 0,
                     class_name: prop_ident.sym.to_string(),
                     args: lower_optional_args(ctx, new_expr.args.as_deref())?,
                     type_args: Vec::new(),
@@ -502,6 +509,7 @@ pub(crate) fn lower_new_member_native(
                 let class_name = prop_ident.sym.as_ref();
                 if module_name == "bun:sqlite" && class_name == "Database" {
                     return Ok(Some(Expr::New {
+                        byte_end: 0,
                         class_name: "BunSqliteDatabase".to_string(),
                         args: lower_optional_args(ctx, new_expr.args.as_deref())?,
                         type_args: Vec::new(),
@@ -527,6 +535,7 @@ pub(crate) fn lower_new_member_native(
                         .transpose()?
                         .unwrap_or_default();
                     return Ok(Some(Expr::New {
+                        byte_end: 0,
                         class_name: class_name.to_string(),
                         args,
                         type_args: Vec::new(),

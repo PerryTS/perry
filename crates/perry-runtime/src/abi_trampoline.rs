@@ -19,8 +19,9 @@
 //! as naked functions that carry their own frame pointer and unwind
 //! description, because the unwinder has to step through them while the
 //! callee runs (#9446; see the comment above the trampolines). Other targets
-//! fall back to a fixed-arity dispatch good to 16 args (no Perry target other
-//! than the two asm ones exercises high-arity dynamic ctor dispatch today).
+//! fall back to a fixed-arity dispatch good to 16 args, or to 64 on wasm, where
+//! an exact-arity indirect call is correct for any count (no other Perry
+//! target exercises high-arity dynamic ctor dispatch today).
 
 /// Call `func_ptr` (a `extern "C" double(double, …)` with `args.len()` f64
 /// params) passing every element of `args` as an f64 argument. Returns the f64
@@ -324,11 +325,17 @@ unsafe extern "C" fn call_all_f64_x86_64(
 
 /// Portable fallback for non-asm targets (incl. Windows x64, whose ABI differs
 /// from the SysV asm above): fixed-arity dispatch up to 16 f64 args. No current
-/// Perry host other than SysV aarch64/x86-64 exercises high-arity dynamic ctor
-/// dispatch, so this bound is sufficient there. Arities > 16 FAIL CLOSED: a
-/// fixed 16-arg `transmute` would mis-call the fn pointer with the wrong
-/// signature (reading register/stack garbage for the missing params), the exact
-/// silent-miscompile class that motivated #5437 — so we panic instead.
+/// Perry host other than SysV aarch64/x86-64 and wasm exercises high-arity
+/// dynamic ctor dispatch, so this bound is sufficient there. On wasm a
+/// `call_indirect` of an all-`f64` signature with exactly N params is a correct
+/// call for any N (there is no register/stack split to reproduce), so
+/// `wasm_exact_arity!` extends the dispatch to 64 args (`this` plus 63 params:
+/// a Fastify HTTP service reaches arity 18 at startup; each added arity costs
+/// code in every module, about +14 KB at 64 and +930 KB at the 513 the vtable
+/// dispatch admits). Arities past the bound FAIL CLOSED: a fixed-arity
+/// `transmute` to a shorter signature would mis-call the fn pointer with the
+/// wrong signature (reading register/stack garbage for the missing params), the
+/// exact silent-miscompile class that motivated #5437 — so we panic instead.
 #[cfg(not(any(
     target_arch = "aarch64",
     all(target_arch = "x86_64", not(target_os = "windows"))
@@ -353,6 +360,28 @@ unsafe fn call_all_f64_fallback(func_ptr: usize, args: &[f64]) -> f64 {
             $sub
         };
     }
+    // wasm only: `arm!` for every arity past the explicit arms, by walking the
+    // index list one element at a time (`$done` are the indices below `$next`,
+    // so `$next` completes an arity of `$done.len() + 1`). The list is the
+    // single place that sets the cap; when it runs out the call fails closed.
+    #[cfg(target_family = "wasm")]
+    macro_rules! wasm_exact_arity {
+        ($len:expr; [$($done:tt)*]) => {
+            panic!(
+                "abi_trampoline: unsupported arity {} on this target \
+                 (no asm trampoline; wasm fallback caps at {} f64 args)",
+                $len,
+                [$(stringify!($done)),*].len()
+            )
+        };
+        ($len:expr; [$($done:tt)*] $next:tt $($rest:tt)*) => {
+            if $len == [$(stringify!($done),)* stringify!($next)].len() {
+                arm!($($done,)* $next)
+            } else {
+                wasm_exact_arity!($len; [$($done)* $next] $($rest)*)
+            }
+        };
+    }
     // args already includes `this` as element 0.
     match args.len() {
         0 => 0.0,
@@ -372,10 +401,20 @@ unsafe fn call_all_f64_fallback(func_ptr: usize, args: &[f64]) -> f64 {
         14 => arm!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13),
         15 => arm!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14),
         16 => arm!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15),
+        // wasm: exact-arity calls for 17..=64 (the index list below is the cap).
+        #[cfg(target_family = "wasm")]
+        n => wasm_exact_arity!(
+            n;
+            [0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15]
+            16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31
+            32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47
+            48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63
+        ),
         // FAIL CLOSED: do NOT transmute a >16-arg call to a 16-arg signature —
         // the extra params would read register/stack garbage (#5437). This
         // target has no asm trampoline; high-arity dynamic dispatch is
         // unsupported here.
+        #[cfg(not(target_family = "wasm"))]
         n => panic!(
             "abi_trampoline: unsupported arity {n} on this target \
              (no asm trampoline; portable fallback caps at 16 f64 args)"

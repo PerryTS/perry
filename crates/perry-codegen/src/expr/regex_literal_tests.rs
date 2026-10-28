@@ -42,6 +42,7 @@ fn param(id: u32, name: &str) -> Param {
 
 fn call(callee: Expr, args: Vec<Expr>) -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(callee),
         args,
         type_args: Vec::new(),
@@ -51,6 +52,7 @@ fn call(callee: Expr, args: Vec<Expr>) -> Expr {
 
 fn property(object: Expr, property: &str) -> Expr {
     Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(object),
         property: property.to_string(),
         byte_offset: 0,

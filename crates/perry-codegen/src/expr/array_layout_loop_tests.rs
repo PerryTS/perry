@@ -32,6 +32,8 @@ fn param(id: u32, name: &str, ty: Type) -> Param {
 
 fn at(arr: u32) -> Expr {
     Expr::IndexGet {
+        byte_offset: 0,
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(arr)),
         index: Box::new(Expr::LocalGet(I)),
     }
@@ -142,6 +144,8 @@ fn number_array() -> Type {
 /// The probe function's text, split into (label, lines) blocks.
 fn masked(arr: u32) -> Expr {
     Expr::IndexGet {
+        byte_offset: 0,
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(arr)),
         index: Box::new(Expr::Binary {
             op: BinaryOp::BitAnd,
@@ -240,6 +244,7 @@ fn user_call_between_element_operations_has_one_loop_body() {
     body.insert(
         1,
         Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::LocalGet(F)),
             args: vec![Expr::LocalGet(A)],
             type_args: vec![],
@@ -308,6 +313,7 @@ fn a_string_store_does_not_borrow_a_numeric_store_proof() {
 fn value_numeric_and_property_consumers_share_checked_element_reads() {
     let call = |arg| {
         Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::LocalGet(F)),
             args: vec![arg],
             type_args: vec![],

@@ -53,6 +53,8 @@ fn alias_store() -> Stmt {
         value: Box::new(Expr::Binary {
             op: BinaryOp::Add,
             left: Box::new(Expr::IndexGet {
+                byte_offset: 0,
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(BASE_TEMP)),
                 index: Box::new(Expr::LocalGet(KEY_TEMP)),
             }),
@@ -70,6 +72,8 @@ fn expanded_store() -> Stmt {
         value: Box::new(Expr::Binary {
             op: BinaryOp::Add,
             left: Box::new(Expr::IndexGet {
+                byte_offset: 0,
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(ARRAY)),
                 index: Box::new(Expr::LocalGet(COUNTER)),
             }),
@@ -162,6 +166,8 @@ fn declines_an_initialiser_outside_the_stable_grammar() {
     let mut body = canonical_body();
     if let Stmt::Let { init, .. } = &mut body[1] {
         *init = Some(Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(ARRAY)),
             index: Box::new(Expr::LocalGet(COUNTER)),
         });
@@ -237,6 +243,8 @@ fn the_logical_assignment_shape_folds_but_stays_unversionable() {
         Stmt::Expr(Expr::Logical {
             op: perry_hir::LogicalOp::Or,
             left: Box::new(Expr::IndexGet {
+                byte_offset: 0,
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(BASE_TEMP)),
                 index: Box::new(Expr::LocalGet(KEY_TEMP)),
             }),

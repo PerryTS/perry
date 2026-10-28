@@ -60,7 +60,7 @@ fn match_length_read(expr: &Expr, counter_id: u32) -> Option<(u32, i64, i64)> {
     if property != "length" {
         return None;
     }
-    let Expr::IndexGet { object, index } = object.as_ref() else {
+    let Expr::IndexGet { object, index, .. } = object.as_ref() else {
         return None;
     };
     let Expr::LocalGet(array_id) = object.as_ref() else {

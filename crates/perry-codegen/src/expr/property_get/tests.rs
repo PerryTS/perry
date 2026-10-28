@@ -111,6 +111,7 @@ fn module_with_nullish_read() -> Module {
             init: Some(Expr::Undefined),
         },
         Stmt::Expr(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(1)),
             property: "foo".to_string(),
             // BytePos 8 → source index 7 ('o' on line 2) → line 2.
@@ -130,6 +131,7 @@ fn emit(debug: bool, source: Option<&str>) -> String {
 fn imported_variable_read_preserves_class_tags_and_calls_the_live_getter_once() {
     let mut module = Module::new("imported_class_9366.ts");
     module.init.push(Stmt::Expr(Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::ExternFuncRef {
             name: "Renamed".to_string(),
             param_types: vec![],
@@ -195,6 +197,7 @@ fn emit_guarded_length_read() -> String {
             init: None,
         },
         Stmt::Return(Some(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(11)),
             property: "length".to_string(),
             byte_offset: 0,
@@ -315,6 +318,7 @@ fn typed_array_length_uses_property_semantics_after_define_property() {
             Box::new(Expr::Object(vec![])),
         )),
         Stmt::Return(Some(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(20)),
             property: "length".to_string(),
             byte_offset: 0,
@@ -340,6 +344,7 @@ fn typed_array_length_keeps_native_load_without_shape_barrier() {
             init: Some(Expr::Uint8ArrayNew(Some(Box::new(Expr::Number(3.0))))),
         },
         Stmt::Return(Some(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(21)),
             property: "length".to_string(),
             byte_offset: 0,
@@ -359,6 +364,7 @@ fn typed_array_length_keeps_native_load_without_shape_barrier() {
 fn fs_parent_promises_property_installs_before_resolution() {
     let mut module = Module::new("fs_parent_promises_property.ts");
     module.init = vec![Stmt::Return(Some(Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::NativeModuleRef("fs".to_string())),
         property: "promises".to_string(),
         byte_offset: 0,
@@ -595,6 +601,7 @@ mod nested_namespace_members {
     fn module_reading(member: &str) -> Module {
         let mut m = Module::new("nsmain.ts");
         m.init = vec![Stmt::Expr(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::ExternFuncRef {
                 name: "B".to_string(),
                 param_types: Vec::new(),
@@ -677,6 +684,7 @@ fn module_reading(property: &str) -> Module {
             init: Some(Expr::Undefined),
         },
         Stmt::Expr(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(1)),
             property: property.to_string(),
             byte_offset: 0,

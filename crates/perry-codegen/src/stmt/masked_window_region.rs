@@ -120,7 +120,7 @@ pub(super) struct MaskedWindowRegion {
 /// region scan off plain arithmetic runs.
 fn stmt_has_masked_read(stmt: &Stmt) -> bool {
     fn expr_has(expr: &Expr) -> bool {
-        if let Expr::IndexGet { object, index } = expr {
+        if let Expr::IndexGet { object, index, .. } = expr {
             if matches!(object.as_ref(), Expr::LocalGet(_))
                 && crate::collectors::static_index_window(index).is_some()
             {
@@ -139,7 +139,7 @@ fn stmt_has_masked_read(stmt: &Stmt) -> bool {
 /// Count masked static-window reads on `eligible` arrays inside `expr`.
 fn count_masked_reads(expr: &Expr, eligible: &std::collections::HashSet<u32>) -> usize {
     let mut count = 0;
-    if let Expr::IndexGet { object, index } = expr {
+    if let Expr::IndexGet { object, index, .. } = expr {
         if let Expr::LocalGet(id) = object.as_ref() {
             if eligible.contains(id) && crate::collectors::static_index_window(index).is_some() {
                 count += 1;
@@ -182,7 +182,7 @@ fn expr_is_number_under(
                     Some(perry_hir::types::Type::Number | perry_hir::types::Type::Int32)
                 )
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             matches!(object.as_ref(), Expr::LocalGet(id) if eligible.contains(id))
                 && crate::collectors::static_index_window(index).is_some()
         }
@@ -357,7 +357,7 @@ fn region_store_operand_collect(
         return false;
     }
     match expr {
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             let Expr::LocalGet(arr_id) = object.as_ref() else {
                 return false;
             };

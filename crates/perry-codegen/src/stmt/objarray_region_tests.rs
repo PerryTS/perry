@@ -23,6 +23,7 @@ fn fixture(mask: i64) -> Module {
         init: Some(Expr::Array(
             (0..8)
                 .map(|i| Expr::New {
+                    byte_end: 0,
                     class_name: "Counter".into(),
                     args: vec![Expr::Integer(i), Expr::Integer(3)],
                     type_args: Vec::new(),
@@ -34,6 +35,7 @@ fn fixture(mask: i64) -> Module {
         )),
     };
     let get = |property: &str| Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(10)),
         property: property.into(),
         byte_offset: 0,
@@ -48,6 +50,8 @@ fn fixture(mask: i64) -> Module {
             ty: Type::Named("Counter".into()),
             mutable: false,
             init: Some(Expr::IndexGet {
+                byte_offset: 0,
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(1)),
                 index: Box::new(binary(
                     BinaryOp::BitAnd,
@@ -173,6 +177,7 @@ fn declared_numeric_row_hint_still_requires_its_live_shape() {
     *init = Some(Expr::Array(
         (0..8)
             .map(|_| Expr::New {
+                byte_end: 0,
                 class_name: "BoxedRow".into(),
                 args: vec![Expr::String("2".into()), Expr::String("3".into())],
                 type_args: Vec::new(),

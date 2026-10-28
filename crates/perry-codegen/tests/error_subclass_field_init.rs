@@ -166,6 +166,7 @@ fn ir_for(classes: Vec<Class>, body: Vec<Stmt>) -> String {
 
 fn new_expr(name: &str) -> Expr {
     Expr::New {
+        byte_end: 0,
         class_name: name.to_string(),
         args: vec![Expr::String("m".to_string())],
         type_args: Vec::new(),

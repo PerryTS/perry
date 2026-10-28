@@ -381,7 +381,7 @@ pub fn collect_pointer_typed_locals(
                 expr_value_type(last, local_types, local_value_types, non_pointer_locals)
             }),
             Expr::Array(_, _) => Some(pointer_analysis_array_type()),
-            Expr::IndexGet { object, index }
+            Expr::IndexGet { object, index, .. }
             | Expr::Uint8ArrayGet {
                 array: object,
                 index,
@@ -1431,6 +1431,7 @@ mod tests {
             params: vec![callback_param],
             return_type: Type::Any,
             body: vec![Stmt::Return(Some(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::FuncRef(1)),
                 args: vec![Expr::LocalGet(2)],
                 type_args: Vec::new(),
@@ -1549,6 +1550,7 @@ mod tests {
                     }),
                     then_expr: Box::new(Expr::Undefined),
                     else_expr: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         object: Box::new(Expr::LocalGet(5)),
                         property: "masks".to_string(),
                         byte_offset: 0,
@@ -1794,6 +1796,8 @@ mod tests {
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::IndexGet {
+                    byte_offset: 0,
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(1)),
                     index: Box::new(Expr::Integer(0)),
                 }),
@@ -1813,6 +1817,8 @@ mod tests {
     #[test]
     fn a_boxed_class_evaluation_owner_binding_keeps_its_shadow_slot() {
         let owner_read = || Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(1)),
             index: Box::new(Expr::Integer(0)),
         };

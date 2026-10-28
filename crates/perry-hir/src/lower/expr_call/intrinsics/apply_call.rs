@@ -129,6 +129,7 @@ pub(crate) fn try_native_module_method_apply_call(
                     "js_http_server_construct_with_this"
                 };
                 return Ok(Some(Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::ExternFuncRef {
                         name: extern_name.to_string(),
                         param_types: Vec::new(),

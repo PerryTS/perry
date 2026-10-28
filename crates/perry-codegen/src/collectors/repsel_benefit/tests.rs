@@ -55,6 +55,8 @@ fn cmp(l: Expr, r: Expr) -> Expr {
 
 fn index(object: Expr, idx: Expr) -> Expr {
     Expr::IndexGet {
+        byte_offset: 0,
+        byte_end: 0,
         object: Box::new(object),
         index: Box::new(idx),
     }
@@ -62,6 +64,7 @@ fn index(object: Expr, idx: Expr) -> Expr {
 
 fn call(args: Vec<Expr>) -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(0)),
         args,
         type_args: vec![],
@@ -520,6 +523,7 @@ fn self_referencing_new_argument_is_still_a_cost() {
             body: vec![set(
                 1,
                 Expr::New {
+                    byte_end: 0,
                     class_name: "C".into(),
                     args: vec![get(1)],
                     type_args: vec![],
@@ -585,6 +589,7 @@ fn unmodelled_forms_are_neutral() {
 
 fn this_get(field: &str) -> Expr {
     Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::This),
         property: field.to_string(),
         byte_offset: 0,
@@ -666,6 +671,7 @@ fn tower_route_ignores_non_this_receivers() {
     let m = method(vec![
         Stmt::Expr(this_get("a")),
         Stmt::Expr(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(get(9)),
             property: "a".to_string(),
             byte_offset: 0,
@@ -710,7 +716,9 @@ fn tower_route_counts_writes() {
 fn tower_route_counts_nested_proven_receiver_clone() {
     let fields = declared(&["a"]);
     let nested = Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::This),
             property: "helper".to_string(),
             byte_offset: 0,

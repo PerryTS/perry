@@ -135,6 +135,7 @@ fn module_with_new(class: Class) -> Module {
             params: Vec::new(),
             return_type: Type::Named(class_name.clone()),
             body: vec![Stmt::Return(Some(Expr::New {
+                byte_end: 0,
                 class_name,
                 args: Vec::new(),
                 type_args: Vec::new(),
