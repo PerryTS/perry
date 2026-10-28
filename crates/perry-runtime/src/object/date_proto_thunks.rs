@@ -44,32 +44,62 @@ macro_rules! date_getter_thunk {
     };
 }
 
-date_getter_thunk!(date_get_time, crate::date::js_date_get_time);
-date_getter_thunk!(date_get_full_year, crate::date::js_date_get_full_year);
-date_getter_thunk!(date_get_month, crate::date::js_date_get_month);
-date_getter_thunk!(date_get_date, crate::date::js_date_get_date);
-date_getter_thunk!(date_get_hours, crate::date::js_date_get_hours);
-date_getter_thunk!(date_get_minutes, crate::date::js_date_get_minutes);
-date_getter_thunk!(date_get_seconds, crate::date::js_date_get_seconds);
-date_getter_thunk!(date_get_milliseconds, crate::date::js_date_get_milliseconds);
-date_getter_thunk!(date_get_day, crate::date::js_date_get_day);
+date_getter_thunk!(date_get_time, crate::date_hook_slots::js_date_get_time);
+date_getter_thunk!(
+    date_get_full_year,
+    crate::date_hook_slots::js_date_get_full_year
+);
+date_getter_thunk!(date_get_month, crate::date_hook_slots::js_date_get_month);
+date_getter_thunk!(date_get_date, crate::date_hook_slots::js_date_get_date);
+date_getter_thunk!(date_get_hours, crate::date_hook_slots::js_date_get_hours);
+date_getter_thunk!(
+    date_get_minutes,
+    crate::date_hook_slots::js_date_get_minutes
+);
+date_getter_thunk!(
+    date_get_seconds,
+    crate::date_hook_slots::js_date_get_seconds
+);
+date_getter_thunk!(
+    date_get_milliseconds,
+    crate::date_hook_slots::js_date_get_milliseconds
+);
+date_getter_thunk!(date_get_day, crate::date_hook_slots::js_date_get_day);
 date_getter_thunk!(
     date_get_utc_full_year,
-    crate::date::js_date_get_utc_full_year
+    crate::date_hook_slots::js_date_get_utc_full_year
 );
-date_getter_thunk!(date_get_utc_month, crate::date::js_date_get_utc_month);
-date_getter_thunk!(date_get_utc_date, crate::date::js_date_get_utc_date);
-date_getter_thunk!(date_get_utc_hours, crate::date::js_date_get_utc_hours);
-date_getter_thunk!(date_get_utc_minutes, crate::date::js_date_get_utc_minutes);
-date_getter_thunk!(date_get_utc_seconds, crate::date::js_date_get_utc_seconds);
+date_getter_thunk!(
+    date_get_utc_month,
+    crate::date_hook_slots::js_date_get_utc_month
+);
+date_getter_thunk!(
+    date_get_utc_date,
+    crate::date_hook_slots::js_date_get_utc_date
+);
+date_getter_thunk!(
+    date_get_utc_hours,
+    crate::date_hook_slots::js_date_get_utc_hours
+);
+date_getter_thunk!(
+    date_get_utc_minutes,
+    crate::date_hook_slots::js_date_get_utc_minutes
+);
+date_getter_thunk!(
+    date_get_utc_seconds,
+    crate::date_hook_slots::js_date_get_utc_seconds
+);
 date_getter_thunk!(
     date_get_utc_milliseconds,
-    crate::date::js_date_get_utc_milliseconds
+    crate::date_hook_slots::js_date_get_utc_milliseconds
 );
-date_getter_thunk!(date_get_utc_day, crate::date::js_date_get_utc_day);
+date_getter_thunk!(
+    date_get_utc_day,
+    crate::date_hook_slots::js_date_get_utc_day
+);
 date_getter_thunk!(
     date_get_timezone_offset,
-    crate::date::js_date_get_timezone_offset
+    crate::date_hook_slots::js_date_get_timezone_offset
 );
 
 /// `Date.prototype.toISOString` reflective thunk. The instance fast path
@@ -86,7 +116,7 @@ extern "C" fn date_to_iso_string(
     if !crate::date::is_date_value(this) {
         super::object_ops::throw_object_type_error(b"this is not a Date object.");
     }
-    let s = crate::date::js_date_to_iso_string_or_throw(this);
+    let s = crate::date_hook_slots::js_date_to_iso_string_or_throw(this);
     crate::value::js_nanbox_string(s as i64)
 }
 
@@ -101,7 +131,7 @@ extern "C" fn date_to_utc_string(
     if !crate::date::is_date_value(this) {
         super::object_ops::throw_object_type_error(b"this is not a Date object.");
     }
-    let s = crate::date::js_date_to_utc_string(this);
+    let s = crate::date_hook_slots::js_date_to_utc_string(this);
     crate::value::js_nanbox_string(s as i64)
 }
 
@@ -111,7 +141,7 @@ extern "C" fn date_to_temporal_instant(
     this: crate::closure::JsThis,
 ) -> f64 {
     let timestamp = require_date_timestamp(this);
-    crate::temporal::instant::from_epoch_milliseconds_static(&[timestamp])
+    crate::temporal_hook_slots::from_epoch_milliseconds(&[timestamp])
 }
 
 #[cfg(not(feature = "temporal"))]
@@ -395,7 +425,7 @@ extern "C" fn date_now_static(
     _closure: *const crate::closure::ClosureHeader,
     _this: crate::closure::JsThis,
 ) -> f64 {
-    crate::date::js_date_now()
+    crate::clock::wall_millis()
 }
 
 /// `Date.parse(string)` — ToString the argument, then parse to a ms timestamp.
@@ -405,7 +435,7 @@ extern "C" fn date_parse_static(
     arg: f64,
 ) -> f64 {
     let s = crate::value::js_jsvalue_to_string(arg);
-    crate::date::js_date_parse(s as *const crate::string::StringHeader)
+    crate::date_hook_slots::js_date_parse(s as *const crate::string::StringHeader)
 }
 
 /// `Date.UTC(year, month?, day?, …)` — variadic; forwards to `js_date_utc`.
@@ -415,7 +445,7 @@ extern "C" fn date_utc_static(
     rest: f64,
 ) -> f64 {
     let vals = super::global_this::global_this_rest_array_values(rest);
-    crate::date::js_date_utc(vals.as_ptr(), vals.len() as i32)
+    crate::date_hook_slots::js_date_utc(vals.as_ptr(), vals.len() as i32)
 }
 
 /// Install `now` / `parse` / `UTC` as own data properties on the `Date`
@@ -445,7 +475,7 @@ extern "C" fn date_get_year(
     _closure: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,
 ) -> f64 {
-    let fy = crate::date::js_date_get_full_year(require_date_timestamp(this));
+    let fy = crate::date_hook_slots::js_date_get_full_year(require_date_timestamp(this));
     if fy.is_nan() {
         fy
     } else {
@@ -608,7 +638,7 @@ fn require_date_this(this: crate::closure::JsThis) -> f64 {
     }
 }
 
-/// `field`/`is_utc` selectors mirror `crate::date::js_date_apply_setter`:
+/// `field`/`is_utc` selectors mirror `crate::date_hook_slots::js_date_apply_setter`:
 /// 0=FullYear 1=Month 2=Date 3=Hours 4=Minutes 5=Seconds 6=Milliseconds
 /// 7=Time, plus 8=setYear (annexB; local-only). `is_utc != 0` picks the UTC
 /// rebuild.
@@ -621,7 +651,7 @@ macro_rules! date_setter_thunk {
         ) -> f64 {
             let this = require_date_this(this);
             let args = super::global_this::global_this_rest_array_values(rest);
-            crate::date::js_date_apply_setter(
+            crate::date_hook_slots::js_date_apply_setter(
                 this,
                 $is_utc,
                 $field,
@@ -683,7 +713,7 @@ fn date_to_locale_opts_impl(
         return format(this, rest, ctx);
     }
     let this = require_date_this(this);
-    let s = crate::date::js_date_to_locale_string(this);
+    let s = crate::date_hook_slots::js_date_to_locale_string(this);
     crate::value::js_nanbox_string(s as i64)
 }
 
@@ -707,7 +737,7 @@ fn date_to_locale_opts_intl(
     let epoch_ms = crate::date::date_cell_timestamp(this);
     if epoch_ms.is_nan() {
         // Invalid Date → "Invalid Date" for all three methods.
-        let s = crate::date::js_date_to_locale_string(this);
+        let s = crate::date_hook_slots::js_date_to_locale_string(this);
         return crate::value::js_nanbox_string(s as i64);
     }
     let args = super::global_this::global_this_rest_array_values(rest);
@@ -885,7 +915,7 @@ mod to_primitive_fast_path_tests {
     fn installed_date_builtins_take_the_direct_paths() {
         let _global = crate::gc::global_side_table_test_lock();
         unsafe {
-            let date = crate::date::alloc_date_cell(1234.0);
+            let date = crate::date_hook_slots::alloc_date_cell(1234.0);
             let sym = crate::symbol::well_known_symbol("toPrimitive");
             let sym_value = f64::from_bits(
                 crate::value::POINTER_TAG | (sym as u64 & crate::value::POINTER_MASK),
@@ -917,3 +947,5 @@ mod to_primitive_fast_path_tests {
         }
     }
 }
+
+crate::realm_decl!("date_proto_thunks.realm.json#*");

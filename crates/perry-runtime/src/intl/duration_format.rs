@@ -124,9 +124,9 @@ fn get_duration_unit_options(
 ) -> (String, String) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let options_handle = scope.root_nanbox_f64(options);
-    let current_options = || options_handle.get_nanbox_f64();
+    let current_options = &options_handle;
     // 1. style = GetOption(options, unit, string, allowed, undefined)
-    let mut style = match df_get_option_string(current_options(), unit) {
+    let mut style = match df_get_option_string((current_options.get_nanbox_f64()), unit) {
         Some(v) => {
             if !allowed.contains(&v.as_str()) {
                 throw_range_error(&format!(
@@ -166,7 +166,7 @@ fn get_duration_unit_options(
     }
     // 6. display = GetOption(options, unitDisplay, string, «auto,always», displayDefault)
     let display = df_enum_option(
-        current_options(),
+        (current_options.get_nanbox_f64()),
         &display_key_field(unit),
         &["auto", "always"],
         display_default,
@@ -218,17 +218,17 @@ pub(super) fn configure(obj: *mut ObjectHeader, options: f64) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj_handle = scope.root_raw_mut_ptr(obj);
     let options_handle = scope.root_nanbox_f64(options);
-    let current_options = || options_handle.get_nanbox_f64();
+    let current_options = &options_handle;
     // GetOptionsObject: `undefined` → empty options; any other non-object
     // (notably `null` and primitives) is a TypeError. Object-like values —
     // including arrays, functions, and Proxies (all pointer-tagged) — are
     // accepted, so a property-bag Proxy still has its traps observed. Symbols
     // are also pointer-tagged, so `is_pointer()` alone would wrongly admit them;
     // exclude registered symbols explicitly.
-    let opts_jv = JSValue::from_bits(current_options().to_bits());
+    let opts_jv = JSValue::from_bits((current_options.get_nanbox_f64()).to_bits());
     let is_symbol = opts_jv.is_pointer()
         && crate::symbol::is_registered_symbol(
-            (current_options().to_bits() & crate::value::POINTER_MASK) as usize,
+            ((current_options.get_nanbox_f64()).to_bits() & crate::value::POINTER_MASK) as usize,
         );
     if !opts_jv.is_undefined() && (!opts_jv.is_pointer() || is_symbol) {
         throw_type_error("Intl.DurationFormat: options must be an object");
@@ -237,13 +237,13 @@ pub(super) fn configure(obj: *mut ObjectHeader, options: f64) {
     // Order (constructor-options-order): localeMatcher, numberingSystem, style,
     // then each unit + unitDisplay, then fractionalDigits.
     let _matcher = df_enum_option(
-        current_options(),
+        (current_options.get_nanbox_f64()),
         "localeMatcher",
         &["lookup", "best fit"],
         "best fit",
     );
 
-    let opt_ns = match df_get_option_string(current_options(), "numberingSystem") {
+    let opt_ns = match df_get_option_string((current_options.get_nanbox_f64()), "numberingSystem") {
         Some(ns) => {
             if !valid_numbering_system(&ns) {
                 throw_range_error(&format!(
@@ -264,7 +264,7 @@ pub(super) fn configure(obj: *mut ObjectHeader, options: f64) {
     set_internal_field_from_raw_handle(&obj_handle, KEY_DF_NUMBERING, string_value(&numbering));
 
     let base_style = df_enum_option(
-        current_options(),
+        (current_options.get_nanbox_f64()),
         "style",
         &["long", "short", "narrow", "digital"],
         "short",
@@ -274,7 +274,7 @@ pub(super) fn configure(obj: *mut ObjectHeader, options: f64) {
     let mut prev_style: Option<String> = None;
     for (unit, allowed, digital_base) in UNITS.iter().copied() {
         let (style, display) = get_duration_unit_options(
-            current_options(),
+            (current_options.get_nanbox_f64()),
             unit,
             allowed,
             &base_style,
@@ -291,7 +291,7 @@ pub(super) fn configure(obj: *mut ObjectHeader, options: f64) {
     }
 
     // fractionalDigits: integer in [0, 9], else RangeError. Read last.
-    if let Some(n) = get_option_number(current_options(), "fractionalDigits") {
+    if let Some(n) = get_option_number((current_options.get_nanbox_f64()), "fractionalDigits") {
         if !n.is_finite() || n.fract() != 0.0 || !(0.0..=9.0).contains(&n) {
             throw_range_error(
                 "Value out of range for Intl.DurationFormat options property fractionalDigits",
@@ -912,3 +912,5 @@ pub(super) extern "C" fn constructor_thunk(
         super::rest_arg(rest, 1),
     )
 }
+
+crate::realm_decl!("duration_format.realm.json#*");

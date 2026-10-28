@@ -651,14 +651,14 @@ jobs:
           # a Mac. Anyone enabling this knob hits that; pin both here.
           exe=""
           if [ "$RUNNER_OS" = "macOS" ]; then
-            brew list llvm >/dev/null 2>&1 || brew install llvm
-            llvm_bin="$(brew --prefix llvm)/bin"
+            # Reuse setup-llvm22's checked >=22.1.5 pair, including on macOS.
+            llvm_bin="$LLVM_SYS_221_PREFIX/bin"
           elif [ "$RUNNER_OS" = "Windows" ]; then
             # windows-latest ships clang (the NSIS LLVM build) but NOT `opt`;
             # the matched pair comes from the official clang+llvm release
             # archive — one directory, so opt and clang cannot skew.
             exe=".exe"
-            llvm_ver=22.1.3
+            llvm_ver=22.1.8
             # Git Bash exposes RUNNER_TEMP as a native `D:\...` path. Convert
             # it before any Unix tool sees it: the runner's bsdtar still treats
             # `D:` as a remote host even when passed GNU tar's --force-local.

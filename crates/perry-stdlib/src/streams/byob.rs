@@ -113,10 +113,10 @@ unsafe fn view_info(view_bits: u64) -> Option<ViewInfo> {
         return None;
     }
     let (kind, elem_size) =
-        if let Some(kind) = perry_runtime::typedarray::lookup_typed_array_kind(addr) {
+        if let Some(kind) = perry_runtime::typedarray_hook_slots::lookup_typed_array_kind(addr) {
             (
                 kind,
-                perry_runtime::typedarray::elem_size_for_kind(kind).max(1),
+                perry_runtime::typedarray_hook_slots::elem_size_for_kind(kind).max(1),
             )
         } else if perry_runtime::buffer::is_registered_buffer(addr)
             && !perry_runtime::buffer::is_any_array_buffer(addr)
@@ -162,7 +162,7 @@ unsafe fn alloc_view_of_kind(kind: u8, elem_size: usize, bytes: &[u8]) -> u64 {
         return alloc_uint8array_from_bytes(bytes);
     }
     let elems = bytes.len() / elem_size.max(1);
-    let ta = perry_runtime::typedarray::typed_array_alloc(kind, elems as u32);
+    let ta = perry_runtime::typedarray_hook_slots::typed_array_alloc(kind, elems as u32);
     if ta.is_null() {
         return TAG_UNDEFINED;
     }

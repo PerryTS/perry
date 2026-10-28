@@ -238,6 +238,30 @@ pub fn logical_entry_stmts(hir: &HirModule) -> Vec<&perry_hir::Stmt> {
     logical_stmts_of(&hir.init, &chunk_map(hir))
 }
 
+/// The module-scope view used by whole-program analyses. Expand only chunks
+/// called directly by init, using the same recognition as codegen. Factory
+/// chunks belong to their factory scope and remain ordinary functions here.
+/// Remove expanded bodies so each statement has exactly one analysis owner.
+pub fn logical_entry_module(hir: &HirModule) -> std::borrow::Cow<'_, HirModule> {
+    let chunks = chunk_map(hir);
+    let expanded: HashSet<_> = hir
+        .init
+        .iter()
+        .filter_map(|stmt| as_chunk_call(stmt, &chunks))
+        .map(|f| f.id)
+        .collect();
+    if expanded.is_empty() {
+        return std::borrow::Cow::Borrowed(hir);
+    }
+    let mut logical = hir.clone();
+    logical.init = logical_stmts_of(&hir.init, &chunks)
+        .into_iter()
+        .cloned()
+        .collect();
+    logical.functions.retain(|f| !expanded.contains(&f.id));
+    std::borrow::Cow::Owned(logical)
+}
+
 /// Literal name `cjs_wrap::wrap_commonjs_for_target` gives the CJS module
 /// factory closure it generates (`crates/perry/src/commands/compile/cjs_wrap/
 /// wrap.rs`: `function __perry_cjs_factory() { ... }`).

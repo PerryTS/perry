@@ -25,7 +25,7 @@ pub(crate) fn fixture_shape_seed_plain(
         return shapes::handle_by_identity(ShapeId(id)).map_or(0, |w| w.0);
     }
     let mut request = request(requested);
-    super::js_layout_seed_plain(&mut request, packed, packed_len, count, live, rep)
+    super::seed_plain_by_names(&mut request, packed, packed_len, count, live, rep)
 }
 
 pub(crate) fn fixture_shape_seed_plain_constfn(
@@ -52,7 +52,7 @@ pub(crate) fn fixture_shape_seed_plain_constfn(
         return shapes::handle_by_identity(ShapeId(id)).map_or(0, |w| w.0);
     }
     let mut request = request(requested);
-    super::js_layout_seed_plain_constfn(
+    super::seed_plain_constfn_by_names(
         &mut request,
         packed,
         packed_len,

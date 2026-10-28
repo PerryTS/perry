@@ -29,12 +29,7 @@ fn error_value(message: &str) -> f64 {
     let error = crate::error::js_error_new_with_message(message);
     f64::from_bits(JSValue::pointer(error as *const u8).bits())
 }
-
-fn syntax_error_value(message: &str) -> f64 {
-    let message = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let error = crate::error::js_syntaxerror_new(message);
-    f64::from_bits(JSValue::pointer(error as *const u8).bits())
-}
+use crate::builtin_value_support::syntax_error_value;
 
 fn throw_type_error(message: &str) -> ! {
     let message = js_string_from_bytes(message.as_ptr(), message.len() as u32);
@@ -172,7 +167,7 @@ pub(crate) fn toml_parse_result_impl(source: &str) -> Result<f64, f64> {
         }
     };
     let source = js_string_from_bytes(json.as_ptr(), json.len() as u32);
-    match unsafe { crate::json::js_json_parse_result(source) } {
+    match unsafe { crate::json_hooks::parse_result(source) } {
         Ok(value) => Ok(f64::from_bits(value.bits())),
         Err(error) => Err(error),
     }
@@ -593,7 +588,7 @@ extern "C" fn xxhash64_closure(
 ) -> f64 {
     let bytes = payload_bytes(input).unwrap_or_default();
     let hash = xxhash_rust::xxh64::xxh64(&bytes, super::hash_seed(seed));
-    let bigint = crate::bigint::js_bigint_from_u64(hash);
+    let bigint = crate::bigint_hooks::js_bigint_from_u64(hash);
     crate::value::js_nanbox_bigint(bigint as i64)
 }
 
@@ -726,7 +721,7 @@ fn jsonl_parse_chunk(input: f64, start: f64, end: f64) -> f64 {
         scope.root_nanbox_f64(f64::from_bits(JSValue::pointer(values as *const u8).bits()));
     for (index, (start, end)) in spans.into_iter().enumerate() {
         let source = js_string_from_bytes(bytes[start..end].as_ptr(), (end - start) as u32);
-        let value = match unsafe { crate::json::js_json_parse_result(source) } {
+        let value = match unsafe { crate::json_hooks::parse_result(source) } {
             Ok(value) => f64::from_bits(value.bits()),
             Err(error) => crate::exception::js_throw(error),
         };

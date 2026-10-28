@@ -196,7 +196,7 @@ pub(crate) fn closure_get_dynamic_prop_keyed(
         if unsafe { crate::object::bound_native_callable_module_and_method(value) }.is_some_and(
             |(module, method)| module == "perf_hooks" && method == "PerformanceObserver",
         ) {
-            return crate::perf_hooks::perf_supported_entry_types_value();
+            return crate::perf_hook_slots::perf_supported_entry_types_value();
         }
     }
 

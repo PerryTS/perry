@@ -28,7 +28,9 @@ pub(super) fn materialize(cache_dir: &Path, specifier: &str) -> Result<PathBuf> 
         .collect::<String>();
     let path = cache_dir
         .join("synthetic-modules")
-        .join(format!("native-esm-{filename}.mjs"));
+        // This compiler-owned bridge is TypeScript source even when its generated
+        // directory sits under node_modules; it must never enter runtime JS.
+        .join(format!("native-esm-{filename}.ts"));
     let source = source(module);
     if std::fs::read_to_string(&path).ok().as_deref() != Some(source.as_str()) {
         std::fs::create_dir_all(path.parent().unwrap())

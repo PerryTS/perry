@@ -635,7 +635,7 @@ fn clean_arr_ptr_resolve(arr: *const ArrayHeader) -> *const ArrayHeader {
                 return cleaned;
             }
             if crate::buffer::buffer_family_type_owned(addr).is_some()
-                || crate::typedarray::lookup_typed_array_kind(addr).is_some()
+                || crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some()
             {
                 return cleaned;
             }
@@ -701,13 +701,13 @@ pub(crate) fn clean_arr_ptr_mut(arr: *mut ArrayHeader) -> *mut ArrayHeader {
 #[inline]
 pub(crate) fn typed_array_receiver(
     arr: *mut ArrayHeader,
-) -> Option<*mut crate::typedarray::TypedArrayHeader> {
+) -> Option<*mut crate::typedarray_hook_slots::TypedArrayHeader> {
     let addr = array_receiver_addr(arr);
     if addr == 0 {
         return None;
     }
-    crate::typedarray::lookup_typed_array_kind(addr)
-        .map(|_| addr as *mut crate::typedarray::TypedArrayHeader)
+    crate::typedarray_hook_slots::lookup_typed_array_kind(addr)
+        .map(|_| addr as *mut crate::typedarray_hook_slots::TypedArrayHeader)
 }
 
 /// #8096: resolve a receiver that is a registered `Buffer` / `Uint8Array`
@@ -744,7 +744,7 @@ pub(crate) fn typed_array_receiver(
 #[inline]
 pub(crate) fn buffer_receiver_as_uint8_typed_array(
     arr: *mut ArrayHeader,
-) -> Option<*mut crate::typedarray::TypedArrayHeader> {
+) -> Option<*mut crate::typedarray_hook_slots::TypedArrayHeader> {
     let addr = array_receiver_addr(arr);
     if addr == 0
         || !crate::buffer::is_registered_buffer(addr)
@@ -762,10 +762,12 @@ pub(crate) fn buffer_receiver_as_uint8_typed_array(
             .map(<[u8]>::to_vec)
             .unwrap_or_default()
     });
-    let ta =
-        crate::typedarray::typed_array_alloc(crate::typedarray::KIND_UINT8, bytes.len() as u32);
+    let ta = crate::typedarray_hook_slots::typed_array_alloc(
+        crate::typedarray_hook_slots::KIND_UINT8,
+        bytes.len() as u32,
+    );
     for (i, byte) in bytes.iter().enumerate() {
-        crate::typedarray::js_typed_array_set(ta, i as i32, f64::from(*byte));
+        crate::typedarray_hook_slots::js_typed_array_set(ta, i as i32, f64::from(*byte));
     }
     Some(ta)
 }
@@ -776,7 +778,7 @@ pub(crate) fn buffer_receiver_as_uint8_typed_array(
 /// `buffer::is_registered_buffer`) or a `clean_arr_ptr` round trip.
 #[inline]
 pub(crate) fn array_receiver_addr(arr: *mut ArrayHeader) -> usize {
-    crate::typedarray::strip_nanbox(arr as u64)
+    crate::typedarray_hook_slots::strip_nanbox(arr as u64)
 }
 
 /// #5135: detect a Proxy id arriving where an `ArrayHeader` pointer is
@@ -883,7 +885,8 @@ pub(crate) fn normalize_array_receiver(arr: *const ArrayHeader) -> *const ArrayH
         // else — generic array-like objects, typed arrays, buffers — resolves
         // its registry membership once here.
         if obj_type != crate::gc::GC_TYPE_ARRAY {
-            let is_typed_array = crate::typedarray::lookup_typed_array_kind(raw_addr).is_some();
+            let is_typed_array =
+                crate::typedarray_hook_slots::lookup_typed_array_kind(raw_addr).is_some();
             let is_buffer = crate::buffer::is_registered_buffer(raw_addr);
             if obj_type == crate::gc::GC_TYPE_OBJECT && !is_typed_array && !is_buffer {
                 // Generic array-like object receiver
@@ -1093,46 +1096,6 @@ pub(crate) unsafe fn note_array_hole_fill_slot(arr: *mut ArrayHeader, index: usi
     crate::gc::layout_note_slot(arr as usize, index, crate::value::TAG_HOLE);
     let slot = array_elements_ptr(arr).add(index) as usize;
     crate::gc::runtime_write_barrier_slot(arr as usize, slot, crate::value::TAG_HOLE);
-}
-
-/// Repsel 4a.2 (#6904): follow the growth/GC forwarding chain of a
-/// POINTER-tagged array head and return the re-boxed LIVE head; every other
-/// input (non-pointer tags, handle-band ids, non-arrays, already-live heads)
-/// is returned unchanged.
-///
-/// Consumed by the inline guard tiers' COLD arms: a caller-held stale head
-/// (canonically: a Phase 2 specialized-ABI callee grew an array the CALLER
-/// allocated — the callee's growth write-backs update the callee's own param
-/// slot, so the caller's binding keeps the pre-growth stub forever) fails
-/// every structural guard by design, which pinned such receivers to the
-/// boxed fallback on EVERY access. The cold arm calls this once, stores the
-/// repaired head back into the receiver's local slot, and every later
-/// iteration re-loads the live head and takes the inline tier. Semantics are
-/// unchanged — forwarding is transparent, this only re-points the binding at
-/// the same JS object's live storage.
-#[no_mangle]
-pub extern "C" fn js_array_refresh_local_head(value: f64) -> f64 {
-    let bits = value.to_bits();
-    if bits & crate::value::TAG_MASK != crate::value::POINTER_TAG {
-        return value;
-    }
-    let raw = (bits & crate::value::POINTER_MASK) as usize;
-    // Handle-band ids and implausible addresses pass through untouched.
-    if !crate::value::addr_class::is_plausible_heap_addr(raw) {
-        return value;
-    }
-    // Cold arms only (loop-clone preheader, guarded read repair): see
-    // `traversal_feedback::note_compiled_materialization`.
-    let materializes_lazy =
-        unsafe { crate::json::traversal_feedback::lazy_array_unmaterialized(raw) };
-    let cleaned = clean_arr_ptr(raw as *const ArrayHeader);
-    if cleaned.is_null() || cleaned as usize == raw {
-        return value;
-    }
-    if materializes_lazy {
-        crate::json::traversal_feedback::note_compiled_materialization();
-    }
-    f64::from_bits(crate::value::POINTER_TAG | (cleaned as u64 & crate::value::POINTER_MASK))
 }
 
 /// Repsel 4a.2 (#6904): a raw-f64(-or-holes) array that just gap-filled a
@@ -1932,7 +1895,8 @@ static KEEP_JS_ARRAY_IS_NUMERIC_F64_LAYOUT: extern "C" fn(*const ArrayHeader) ->
     js_array_is_numeric_f64_layout;
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
-static KEEP_JS_ARRAY_REFRESH_LOCAL_HEAD: extern "C" fn(f64) -> f64 = js_array_refresh_local_head;
+static KEEP_JS_ARRAY_REFRESH_LOCAL_HEAD: extern "C" fn(f64) -> f64 =
+    crate::array::js_array_refresh_local_head;
 
 /// The payload byte size of an array allocation with `slots` physical slots
 /// (capacity plus any named-property reserve).

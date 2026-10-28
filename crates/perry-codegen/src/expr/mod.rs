@@ -369,6 +369,8 @@ pub(crate) struct FnCtx<'a> {
     /// Object model step 5 (case 2c): the program's key colouring
     /// (`layout_families`, `expr/layout_read.rs`).
     pub program_layouts: std::sync::Arc<crate::layout_families::ProgramLayouts>,
+    /// Compile-time code selection, never a receiver lifetime proof.
+    pub receiver_families: std::sync::Arc<std::collections::BTreeMap<u32, u32>>,
     /// `this` slots whose value is the `this` of a HIR function: (slot,
     /// function id). A `this` read is answered only while the top of
     /// `this_stack` is one of these slots (an inlined constructor pushes its
@@ -841,6 +843,8 @@ pub(crate) struct FnCtx<'a> {
     pub trusted_box_captures: bool,
     /// Only the transformed synchronous resume body owns direct mutable state captures.
     pub fixed_generator_state: bool,
+    /// The owner stays rooted; only capture addressing adds the frame offset.
+    pub private_resume_frame: bool,
     /// Stack context supplied only to a compiler-private versioned-loop
     /// callback clone. Its cold arms record the exact resume index and poison
     /// the caller's private counter before executing observable fallback code.
@@ -3247,6 +3251,8 @@ pub(crate) mod class_env;
 pub(crate) mod class_field_push;
 pub(crate) mod class_first_evaluation;
 mod closure;
+#[cfg(test)]
+mod sort_numeric_codegen_tests;
 pub(crate) use closure::{plain_async_step_release_ids, push_capture_word};
 mod compare;
 pub(crate) use compare::ordinary_object_allocation;
@@ -3315,6 +3321,7 @@ pub(crate) mod class_field_inline_guard;
 pub(crate) mod element_shape_guard;
 pub(crate) mod element_shape_reads;
 mod generator_control_slots;
+pub(crate) mod private_resume_frame;
 pub(crate) mod ic_fast_split;
 mod js_runtime;
 mod literals_vars;

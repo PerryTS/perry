@@ -299,11 +299,41 @@ pub fn map_cons(
             reason,
         },
         Hard { kind, reason } => Hard { kind, reason },
+        DeleteKey { key, reason } => DeleteKey { key, reason },
         AddsKeys => AddsKeys,
-        DefineAccessor { key, reason } => DefineAccessor { key, reason },
+        DefineKey { key, data, reason } => DefineKey { key, data, reason },
+        DefineAll {
+            o,
+            descs,
+            value,
+            site,
+            reason,
+        } => DefineAll {
+            o: n(o),
+            descs: n(descs),
+            value: n(value),
+            site,
+            reason,
+        },
+        DefineDesc {
+            o,
+            key,
+            site,
+            reason,
+        } => DefineDesc {
+            o: n(o),
+            key,
+            site,
+            reason,
+        },
         Implicit { reason, proto } => Implicit { reason, proto },
         CreateProto { reason } => CreateProto { reason },
-        ChainUnion { key, dst } => ChainUnion { key, dst: n(dst) },
+        ChainUnion { key, dst, of } => ChainUnion {
+            key,
+            dst: n(dst),
+            of,
+        },
+        ProtoGiven { protos } => ProtoGiven { protos: n(protos) },
         ProtoClosure { dst } => ProtoClosure { dst: n(dst) },
         ProtoMethods { origin, key, call } => ProtoMethods {
             origin,
@@ -311,6 +341,10 @@ pub fn map_cons(
             call: k(call),
         },
         AnyAccessors { origin, act } => AnyAccessors {
+            origin,
+            act: act_map(act, &mut n, &mut k),
+        },
+        PlainKey { origin, act } => PlainKey {
             origin,
             act: act_map(act, &mut n, &mut k),
         },
@@ -350,6 +384,7 @@ pub fn map_cons(
         AccessorInstall { key, f, setter } => AccessorInstall { key, f, setter },
         ProtoFrom { src } => ProtoFrom { src: n(src) },
         ProtoOf { dst } => ProtoOf { dst: n(dst) },
+        ProtoValues { dst } => ProtoValues { dst: n(dst) },
         IterNext { dst } => IterNext { dst: n(dst) },
         NewTargetHard { reason } => NewTargetHard { reason },
         IdxLoad { idx, dst } => IdxLoad {
@@ -357,6 +392,15 @@ pub fn map_cons(
             dst: n(dst),
         },
         IdxKey { obj, dst } => IdxKey { obj, dst: n(dst) },
+        IdxMCall { idx, call } => IdxMCall {
+            idx: n(idx),
+            call: k(call),
+        },
+        IdxKeyCall { obj, prim, call } => IdxKeyCall {
+            obj,
+            prim,
+            call: k(call),
+        },
         ForInBody { obj, call } => ForInBody {
             obj: n(obj),
             call: k(call),
@@ -479,11 +523,15 @@ fn gen_kind(c: &Cons) -> bool {
             | OverrideThis { .. }
             | TopIfAny { .. }
             | Hard { .. }
-            | DefineAccessor { .. }
+            | DeleteKey { .. }
+            | DefineKey { .. }
+            | DefineAll { .. }
             | AddsKeys
             | Implicit { .. }
             | IdxLoad { .. }
             | IdxKey { .. }
+            | IdxMCall { .. }
+            | IdxKeyCall { .. }
             | ForInBody { .. }
             | DefineKeyed { .. }
             | StoreKeyed { .. }
@@ -515,7 +563,8 @@ fn read_dst(c: &Cons) -> Option<NodeId> {
         | Arith { dst, .. }
         | ArrayLenArg { dst }
         | IterNext { dst }
-        | ProtoOf { dst } => Some(dst),
+        | ProtoOf { dst }
+        | ProtoValues { dst } => Some(dst),
         _ => None,
     }
 }
@@ -543,6 +592,8 @@ impl Model {
             | Cons::New { call }
             | Cons::NewNamed { call, .. }
             | Cons::MCall { call, .. }
+            | Cons::IdxMCall { call, .. }
+            | Cons::IdxKeyCall { call, .. }
             | Cons::ProtoMethods { call, .. }
             | Cons::SuperCtor { call, .. }
             | Cons::SuperCtorParent { call, .. }
@@ -554,6 +605,10 @@ impl Model {
                 ..
             }
             | Cons::AnyAccessors {
+                act: ChainAct::Call(call),
+                ..
+            }
+            | Cons::PlainKey {
                 act: ChainAct::Call(call),
                 ..
             }
@@ -1001,6 +1056,18 @@ impl Model {
             .is_some_and(|&w| self.nodes[n as usize].pts.contains_tok(w))
     }
 
+    /// The nodes `this` of function value `ft` reaches its body through:
+    /// the shared node, and its instance's when the body is summarized.
+    pub(crate) fn this_nodes(&mut self, ft: Tok) -> Vec<NodeId> {
+        let f = self.tok_fn(ft);
+        let mut dsts = vec![self.funcs[f as usize].this];
+        if self.has_this_term(f) {
+            let inst = self.instance((2, 0, ft));
+            dsts.push(self.sum.insts[inst as usize].this);
+        }
+        dsts
+    }
+
     pub(crate) fn escape_this(&mut self, ft: Tok, reason: u32) {
         if !self.sum.ready {
             self.sum.deferred.push(Deferred::EscapeThis(ft, reason));
@@ -1008,11 +1075,7 @@ impl Model {
         }
         let f = self.tok_fn(ft);
         let why = |m: &Self| format!("this of escaped function: {}", m.reasons[reason as usize]);
-        let mut dsts = vec![self.funcs[f as usize].this];
-        if self.has_this_term(f) {
-            let inst = self.instance((2, 0, ft));
-            dsts.push(self.sum.insts[inst as usize].this);
-        }
+        let dsts = self.this_nodes(ft);
         let insts = self.published_this.get(&f).cloned().unwrap_or_default();
         // DECISIONS 116: a method of sealed classes only, published through
         // its contract, runs on the instances this unit gave out (and the
@@ -1132,10 +1195,11 @@ impl Model {
     /// exactly `t`'s: a literal not escaped and not HARD, with no key added
     /// after birth or stored under a computed key, no computed member, no
     /// `__proto__`, whose chain gets no enumerable key from the program
-    /// (nothing writes `Object.prototype`); a body defining a property under
-    /// its key also needs each key to be one generation named
-    /// (`for_in_define_keys`). `late`: the keys stored into each template
-    /// (`settle_for_in`; the check before it only knows the cheap facts).
+    /// (nothing writes `Object.prototype`, `object_proto_written`); a body
+    /// defining a property under its key also needs each key to be one
+    /// generation named (`for_in_define_keys`). `late`: the keys stored into
+    /// each template (`settle_for_in`; the check before it only knows the
+    /// cheap facts).
     fn for_in_keys(
         &self,
         f: FnIdx,
@@ -1160,10 +1224,7 @@ impl Model {
             || self.hard.contains_key(&t)
             || self.adds_keys.get(&tm).is_some_and(|&n| n > 0)
             || self.any_writers.contains_key(&tm)
-            || self
-                .native_writes
-                .keys()
-                .any(|&(w, _)| w == TOP || matches!(self.toks[w as usize], TokKind::ObjectProto))
+            || self.object_proto_written()
         {
             return None;
         }
@@ -1197,6 +1258,21 @@ impl Model {
             return None;
         }
         Some(keys)
+    }
+
+    /// May `Object.prototype`, the chain of every literal, hold a key the
+    /// program wrote (`native_writes` on it: a store, an accessor, E5/E6/E7,
+    /// a reach into unmodeled code, another unit's write)? A for-in over a
+    /// literal visits such a key when it is enumerable. A write into ⊤ is
+    /// no such write: ⊤ holds no builtin prototype (`escape`: a runtime
+    /// object reaches unknown code as itself, and what may write it is
+    /// noted on it), and a literal whose keys are exactly its own is not
+    /// escaped, so not in ⊤ either. The write into ⊤ stays a fact about
+    /// ⊤'s members, which lookups through ⊤ already read as anything.
+    fn object_proto_written(&self) -> bool {
+        self.native_writes
+            .keys()
+            .any(|&(w, _)| matches!(self.toks[w as usize], TokKind::ObjectProto))
     }
 
     /// Once the worklist is empty: a literal a for-in body ran per key over
@@ -1423,7 +1499,39 @@ impl Model {
         }
         let cret = self.calls[c].ret;
         if !self.rel_into(call, inst + 1, &terms) {
-            self.edge(r, cret);
+            // A summary consisting only of an unwritten parameter copied
+            // to its return passes this call's value back. Its shared
+            // instance still observes every argument, but the caller must
+            // not receive other calls' values (e.g. an identity helper
+            // returning two distinct function arguments).
+            let s = &self.sum.of[&f];
+            let copy = match s.edges.as_slice() {
+                [(from, to)]
+                    if *to == s.ret
+                        && is_slot(*from)
+                        && is_slot(*to)
+                        && s.seeds.is_empty()
+                        && s.cons.is_empty()
+                        && s.calls.is_empty()
+                        && s.births.is_empty()
+                        && s.closures.is_empty()
+                        && self.calls[c].spread.is_empty() =>
+                {
+                    s.params
+                        .iter()
+                        .position(|p| p == from)
+                        .filter(|&i| s.rel[i] && caps[i].is_none())
+                }
+                _ => None,
+            };
+            if let Some(i) = copy {
+                match self.calls[c].args.get(i).copied() {
+                    Some(a) => self.edge(a, cret),
+                    None => self.add_prim(cret, prim::UNDEF),
+                }
+            } else {
+                self.edge(r, cret);
+            }
         }
     }
 
@@ -1685,7 +1793,15 @@ impl Model {
             if contract {
                 // Design §11.2: the result is checked after the solve.
                 self.contract_rets.push((f, r));
-            } else {
+            }
+            // Beyond its publication (an export or a published literal's
+            // field, DECISIONS 210, or known closed callers, DECISIONS 19),
+            // unknown code calls it and retains its result.
+            if !contract
+                || (self.pub_reason != Some(reason)
+                    && self.field_fn_reason != Some(reason)
+                    && closed.is_none())
+            {
                 self.sink_node(r, reason);
             }
         }

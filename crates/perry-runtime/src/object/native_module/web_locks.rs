@@ -125,7 +125,7 @@ fn web_locks_type_error_value(message: &str, code: &'static str) -> f64 {
 fn web_locks_dom_not_supported_value(message: &str) -> f64 {
     let msg = web_locks_string_value(message);
     let name = web_locks_string_value("NotSupportedError");
-    let err = crate::event_target::js_dom_exception_new(msg, name);
+    let err = crate::event_target_hook_slots::js_dom_exception_new(msg, name);
     crate::value::js_nanbox_pointer(err as i64)
 }
 
@@ -204,7 +204,9 @@ fn web_locks_signal_rejection(options: f64) -> Result<Option<f64>, f64> {
     if crate::value::js_is_truthy(aborted) != 0 {
         let reason = web_locks_get_field(signal, "reason");
         if web_locks_is_undefined(reason) {
-            Ok(Some(crate::event_target::abort_dom_exception_value()))
+            Ok(Some(
+                crate::event_target_hook_slots::abort_dom_exception_value(),
+            ))
         } else {
             Ok(Some(reason))
         }
@@ -469,7 +471,7 @@ fn web_locks_steal_locked(
 fn web_locks_steal_reason() -> f64 {
     let msg = web_locks_string_value("The lock request was stolen");
     let name = web_locks_string_value("AbortError");
-    let err = crate::event_target::js_dom_exception_new(msg, name);
+    let err = crate::event_target_hook_slots::js_dom_exception_new(msg, name);
     crate::value::js_nanbox_pointer(err as i64)
 }
 
@@ -675,3 +677,5 @@ extern "C" fn worker_threads_locks_query(
 pub extern "C" fn js_worker_threads_locks_query() -> f64 {
     worker_threads_locks_query(std::ptr::null(), crate::closure::JsThis::UNDEFINED)
 }
+
+crate::realm_decl!("web_locks.realm.json#*");

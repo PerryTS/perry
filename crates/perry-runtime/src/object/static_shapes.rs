@@ -10,14 +10,16 @@
 //!
 //! * A class shape (`proto_id = CLASS | class_id`) is seeded by the per-class
 //!   mint at class registration, which precedes every instance of the class.
-//! * A literal shape (`proto_id = 0`) is seeded by generated code before any
-//!   user module's init runs, from its key NAMES; the names go through the
-//!   ordinary canonical keys trie, so the seeded record's keys ARE the node
-//!   every later birth of that key list reaches. The driver links one seed
-//!   function per program (the literal ids generated guards embed); its
-//!   constructor hands it to [`js_shape_register_static_seed`], and each
-//!   agent runs it through [`js_shape_run_static_seed`] — `main` right after
-//!   `js_gc_init`, every other agent as it starts (`agent::enter_worker_agent`).
+//! * A literal shape (`proto_id = 0`) is seeded before any user module's
+//!   init runs, from the program's seed table (`PerryLayoutImageV1::seeds`,
+//!   WRT step 2): the driver emits each literal id's keys as atoms and its
+//!   canonical key list as a cell of the realm image, and each agent links
+//!   that list into its canonical keys trie and publishes the record
+//!   ([`js_shape_run_static_seed`] — `main` right after `js_gc_init`, every
+//!   other agent as it starts, `agent::enter_worker_agent`). A seed whose
+//!   keys the driver could not image is minted from its key NAMES through
+//!   the same trie. Either way the seeded record's keys ARE the node every
+//!   later birth of that key list reaches.
 //!
 //! Agents: a static id means the same facts in every agent, and each agent's
 //! slab gets its own record under it when that agent runs the seed. The
@@ -580,38 +582,145 @@ pub(crate) fn note_static_request(path: &str, requested: u32, got: u32) {
     }
 }
 
-/// The program's seed function, registered by the generated seed unit's
-/// constructor. One function pointer for the process (every agent runs the
-/// same seeds); `0` = the program has no literal shape to seed.
-static STATIC_SEED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-
-/// Register the program's seed function (called from a `global_ctors` entry
-/// of the generated seed unit, before `main`; it only stores the pointer,
-/// since no agent's heap exists yet).
-#[no_mangle]
-pub extern "C" fn js_shape_register_static_seed(seed: extern "C" fn()) {
-    STATIC_SEED.store(seed as usize, std::sync::atomic::Ordering::Release);
-}
-
-/// Run the program's seed function in THIS agent, if one is registered:
-/// `main` calls it right after `js_gc_init`, a worker before its module body,
-/// so every static literal id is minted before any user code can mint those
-/// facts under a counter id.
+/// Publish the program's static literal seeds in THIS agent: `main` calls
+/// this right after `js_gc_init`, a worker before its module body, so every
+/// static literal id is published before any user code can mint those facts
+/// under a counter id. The seeds are data (`PerryLayoutImageV1::seeds`): a
+/// seed whose canonical key list is an image cell is linked into the agent's
+/// trie and published without allocating; one whose keys the driver could
+/// not image is minted from its names.
 #[no_mangle]
 pub extern "C" fn js_shape_run_static_seed() {
-    // Canonical image atoms must precede key-list construction by the legacy
-    // hash-band seeds. Descriptors still follow those seeds and share their ids.
+    // Canonical image atoms must precede the seeds: an image list is linked
+    // under its atoms, and a by-names mint stores the atoms the pools find.
+    // Descriptors still follow the seeds and share their ids.
     super::layout_desc::seed_static_atoms();
-    let seed = STATIC_SEED.load(std::sync::atomic::Ordering::Acquire);
-    if seed != 0 {
-        // SAFETY: only `js_shape_register_static_seed` stores a non-zero
-        // value, and it stores an `extern "C" fn()`.
-        let seed: extern "C" fn() = unsafe { std::mem::transmute::<usize, extern "C" fn()>(seed) };
-        seed();
-    }
+    install_image_seeds();
     // Object model step 0: atoms and compiler-owned layouts, after the
     // hash-band seeds (a by-facts hit keeps their ids).
     super::layout_desc::register_static_layouts();
+}
+
+fn install_image_seeds() {
+    let table = super::class_image::layout_image().seeds;
+    if table.is_null() {
+        return;
+    }
+    // SAFETY: the entry's layout image names the program's seed table.
+    let seeds = unsafe { (*table).seeds() };
+    #[cfg(all(feature = "wasm-image-selftest", target_family = "wasm"))]
+    let before = SEED_BY_NAMES_MINTS.with(|count| count.get());
+    for seed in seeds {
+        install_image_seed(seed);
+    }
+    #[cfg(all(feature = "wasm-image-selftest", target_family = "wasm"))]
+    {
+        let by_names = SEED_BY_NAMES_MINTS.with(|count| count.get() - before);
+        let unimageable = seeds
+            .iter()
+            .filter(|seed| seed.keys.is_null() || seed.list.is_null())
+            .count();
+        assert_eq!(
+            by_names as usize, unimageable,
+            "an imageable seed fell back to a by-names mint"
+        );
+        eprintln!(
+            "wasm static seeds: {} seeds, {} image, {by_names} by-names mints",
+            seeds.len(),
+            seeds.len() - unimageable
+        );
+    }
+}
+
+#[cfg(all(feature = "wasm-image-selftest", target_family = "wasm"))]
+crate::perry_thread_local! {
+    static SEED_BY_NAMES_MINTS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// One seed: link its image key list and publish the record, or, without an
+/// image list (the driver imaged no list, or the cell does not hold the
+/// atoms' strings), mint by names.
+pub(crate) fn install_image_seed(seed: &crate::codegen_abi::PerryStaticSeedV1) {
+    let count = seed.key_count;
+    if count == 0 || seed.packed.is_null() || seed.packed_len == 0 {
+        return;
+    }
+    let path = if seed.constfn_count == 0 {
+        "seed"
+    } else {
+        "seed-constfn"
+    };
+    if let Some(word) = unsafe { shapes::published_static_request(seed.request, count) } {
+        census_layout_request(path, seed.request, word);
+        return;
+    }
+    let linked = if seed.keys.is_null() || seed.list.is_null() {
+        None
+    } else {
+        // Linking allocates nothing from the heap, as layout registration.
+        let _no_gc = crate::gc::GcSuppressScope::new();
+        // SAFETY: `keys` is `count` compiler-owned key records of this
+        // program and `list` the user address of its image cell.
+        unsafe {
+            let keys = std::slice::from_raw_parts(
+                seed.keys as *const super::layout_desc::PerryLayoutKey,
+                count as usize,
+            );
+            super::canonical_keys::link_image_list(
+                &super::canonical_keys::SharedLayout::shape_cache_entry(),
+                keys,
+                seed.list as *mut ArrayHeader,
+            )
+        }
+    };
+    let Some(keys) = linked else {
+        if seed.constfn_count == 0 {
+            seed_plain_by_names(
+                seed.request,
+                seed.packed,
+                seed.packed_len,
+                count,
+                seed.live,
+                seed.rep,
+            );
+        } else {
+            seed_plain_constfn_by_names(
+                seed.request,
+                seed.packed,
+                seed.packed_len,
+                count,
+                seed.live,
+                seed.rep,
+                seed.constfn,
+                seed.constfn_count,
+            );
+        }
+        return;
+    };
+    let keys = keys.view();
+    if seed.constfn_count == 0 {
+        publish_layout_facts(
+            path,
+            keys.arr(),
+            count,
+            seed.live,
+            shapes::PROTO_ID_DEFAULT,
+            seed.rep,
+            &[],
+            seed.request,
+        );
+    } else {
+        js_object_final_layout_for_class_keys_static_constfn(
+            keys.arr() as usize as u64,
+            count,
+            seed.live,
+            0,
+            seed.request,
+            seed.rep,
+            seed.constfn,
+            seed.constfn_count,
+        );
+    }
 }
 
 /// The canonical keys node for `names`, built exactly as a class keys array
@@ -658,11 +767,6 @@ static KEEP_JS_OBJECT_FINAL_SHAPE_ID_FOR_CLASS_KEYS_STATIC_CONSTFN: extern "C" f
     *const ConstFnStaticEntry,
     u32,
 ) -> u32 = js_object_final_shape_id_for_class_keys_static_constfn;
-
-#[cfg(feature = "keepalive-anchors")]
-#[used(compiler)]
-static KEEP_JS_SHAPE_REGISTER_STATIC_SEED: extern "C" fn(extern "C" fn()) =
-    js_shape_register_static_seed;
 
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
@@ -800,8 +904,9 @@ pub extern "C" fn js_object_layout_for_class_keys_static(
         request,
     )
 }
-#[no_mangle]
-pub extern "C" fn js_layout_seed_plain(
+/// Mint a literal seed from its key NAMES (`packed`, NUL-terminated): the
+/// path of a seed without an image list, and of the test fixtures.
+pub(crate) fn seed_plain_by_names(
     request: *mut crate::codegen_abi::PerryStaticLayoutRequestV1,
     packed: *const u8,
     packed_len: u32,
@@ -815,6 +920,8 @@ pub extern "C" fn js_layout_seed_plain(
     if let Some(word) = unsafe { shapes::published_static_request(request, count) } {
         return census_layout_request("seed", request, word);
     }
+    #[cfg(all(feature = "wasm-image-selftest", target_family = "wasm"))]
+    SEED_BY_NAMES_MINTS.with(|count| count.set(count.get() + 1));
     let names = crate::object::packed_key_names(unsafe {
         std::slice::from_raw_parts(packed, packed_len as usize)
     });
@@ -833,8 +940,9 @@ pub extern "C" fn js_layout_seed_plain(
         request,
     )
 }
-#[no_mangle]
-pub extern "C" fn js_layout_seed_plain_constfn(
+/// [`seed_plain_by_names`] for a completed ConstFn content.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn seed_plain_constfn_by_names(
     request: *mut crate::codegen_abi::PerryStaticLayoutRequestV1,
     packed: *const u8,
     packed_len: u32,
@@ -850,6 +958,8 @@ pub extern "C" fn js_layout_seed_plain_constfn(
     if let Some(word) = unsafe { shapes::published_static_request(request, count) } {
         return census_layout_request("seed-constfn", request, word);
     }
+    #[cfg(all(feature = "wasm-image-selftest", target_family = "wasm"))]
+    SEED_BY_NAMES_MINTS.with(|count| count.set(count.get() + 1));
     let names = crate::object::packed_key_names(unsafe {
         std::slice::from_raw_parts(packed, packed_len as usize)
     });
@@ -1005,30 +1115,6 @@ static KEEP_JS_OBJECT_LAYOUT_FOR_CLASS_KEYS_STATIC: extern "C" fn(
     *mut crate::codegen_abi::PerryStaticLayoutRequestV1,
     u64,
 ) -> u32 = js_object_layout_for_class_keys_static;
-
-#[cfg(feature = "keepalive-anchors")]
-#[used(compiler)]
-static KEEP_JS_LAYOUT_SEED_PLAIN: extern "C" fn(
-    *mut crate::codegen_abi::PerryStaticLayoutRequestV1,
-    *const u8,
-    u32,
-    u32,
-    u32,
-    u64,
-) -> u32 = js_layout_seed_plain;
-
-#[cfg(feature = "keepalive-anchors")]
-#[used(compiler)]
-static KEEP_JS_LAYOUT_SEED_PLAIN_CONSTFN: extern "C" fn(
-    *mut crate::codegen_abi::PerryStaticLayoutRequestV1,
-    *const u8,
-    u32,
-    u32,
-    u32,
-    u64,
-    *const ConstFnStaticEntry,
-    u32,
-) -> u32 = js_layout_seed_plain_constfn;
 
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]

@@ -25,6 +25,9 @@ cargo run --release -- file.ts --trace llvm                 # IR in .perry-trace
 - `perry-runtime` tests share process-global state. Run them single-threaded; a fixture-precondition failure under parallel threads is interference, not a regression.
 - `crates/*/tests/*.rs` suites run on a PR only when the diff names them. Put acceptance coverage in unit tests.
 - Files are capped at 2000 lines (`scripts/check_file_size.sh`).
+- Turnloop is the only event loop. No Tokio dependencies, including optional,
+  transitive, target-specific, dev or build dependencies. Run
+  `python3 scripts/tokio_inventory.py --offline` before changing dependencies.
 
 ## TypeScript Parity Status
 
@@ -40,7 +43,7 @@ These compile and pass locally, then break somewhere else:
 
 - **NaN-boxing:** use `f64::from_bits(u64)`, never `u64 as f64`. Do not box an already-boxed value. Tags are in `crates/perry-abi/src/lib.rs`.
 - **Build cache:** a new `PERRY_*` env var read in a compiler-linked crate must go in `COMPILE_ENV_VARS` (or `COMPILE_ENV_EXCLUSIONS` with a reason) in `crates/perry/src/commands/compile/compile_env.rs`, or cached objects serve the old setting.
-- **Threads:** a JSValue created on a tokio worker is invalid on the main thread. Use `spawn_for_promise_deferred()` and convert on the main thread.
+- **Threads:** a JSValue created on a worker thread is invalid on the main thread. Use `spawn_for_promise_deferred()` and convert on the main thread.
 - **Handles:** dispatch has two registries, `HANDLE_METHOD_DISPATCH` and `HANDLE_PROPERTY_DISPATCH`. Register both.
 - **GC roots in codegen:** a GC-managed value's root store must dominate every later site that can collect. Violations surface cycles later as `TypeError: value is not a function`. See `docs/src/internals/gc-rooting-invariant.md`.
 - **GC roots in the runtime:** a cache holding a raw heap pointer is a root. Register it with `gc_register_mutable_root_scanner` (`crates/perry-runtime/src/gc/roots.rs`) in the same commit. A perfectly reproducible GC bug usually means an unrooted table.

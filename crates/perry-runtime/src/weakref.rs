@@ -54,12 +54,13 @@ const FINREG_RECORD_TOKEN_FIELD: usize = 1;
 const FINREG_RECORD_HELD_FIELD: usize = 2;
 const FINREG_RECORD_PENDING_FIELD: usize = 3;
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct PendingFinalizationJob {
     registry: f64,
     record: f64,
     callback: f64,
     held: f64,
+    domain: Option<crate::async_context::JobDomainToken>,
 }
 
 thread_local! {
@@ -706,18 +707,21 @@ pub(crate) fn pending_finalization_jobs_count() -> usize {
     PENDING_FINALIZATION_JOBS.with(|jobs| jobs.borrow().len())
 }
 
+pub(crate) fn eligible_finalization_jobs_pending() -> bool {
+    PENDING_FINALIZATION_JOBS.with(|jobs| {
+        jobs.borrow()
+            .iter()
+            .any(|job| crate::async_context::job_domain::eligible(&job.domain))
+    })
+}
+
 /// Microtask-pump drain: convert jobs recorded by AUTOMATIC collection cycles
 /// into nextTick callback invocations. Returns the number of jobs delivered so
 /// the pump can count them as work. The jobs vec is `mem::take`n by the
 /// delivery, so a manual `gc()` that already delivered leaves nothing here
 /// (no double-delivery), and re-entrant pump drains are safe.
 pub(crate) fn drain_pending_finalization_jobs() -> i32 {
-    let pending = pending_finalization_jobs_count();
-    if pending == 0 {
-        return 0;
-    }
-    queue_pending_finalization_callbacks_after_gc();
-    pending as i32
+    queue_pending_finalization_callbacks_after_gc() as i32
 }
 
 pub(crate) fn scan_pending_finalization_jobs_roots_mut(
@@ -1215,6 +1219,8 @@ unsafe fn process_finreg_record_after_mark(
     }
 
     if enqueue_callbacks && (pending_bits == TAG_TRUE || collected) {
+        let mut domain = crate::async_context::job_domain::current();
+        crate::async_context::job_domain::prepare_enqueue(&mut domain);
         let held = f64::from_bits(object_field_bits(record, FINREG_RECORD_HELD_FIELD));
         let record_value = f64::from_bits(JSValue::pointer(record as *const u8).bits());
         PENDING_FINALIZATION_JOBS.with(|jobs| {
@@ -1223,14 +1229,23 @@ unsafe fn process_finreg_record_after_mark(
                 record: record_value,
                 callback,
                 held,
+                domain,
             });
         });
         write_object_field_bits_raw(record, FINREG_RECORD_PENDING_FIELD, TAG_FALSE);
     }
 }
 
-pub(crate) fn queue_pending_finalization_callbacks_after_gc() {
-    let jobs = PENDING_FINALIZATION_JOBS.with(|jobs| std::mem::take(&mut *jobs.borrow_mut()));
+pub(crate) fn queue_pending_finalization_callbacks_after_gc() -> usize {
+    discard_cancelled_finalization_jobs();
+    let jobs: Vec<_> = PENDING_FINALIZATION_JOBS.with(|jobs| {
+        jobs.borrow_mut()
+            .extract_if(.., |job| {
+                crate::async_context::job_domain::eligible(&job.domain)
+            })
+            .collect()
+    });
+    let count = jobs.len();
     let scope = crate::gc::RuntimeHandleScope::new();
     // The pending-jobs scanner no longer owns this snapshot. Queueing a tick
     // allocates and can invoke an async_hooks init callback, so root EVERY job
@@ -1255,6 +1270,36 @@ pub(crate) fn queue_pending_finalization_callbacks_after_gc() {
                 crate::builtins::js_queue_next_tick_args(callback_ptr as i64, &held_arg, 1);
             }
         }
+        remove_finalization_record_from_registry(
+            registry.get_nanbox_f64(),
+            record.get_nanbox_f64(),
+        );
+    }
+    count
+}
+
+pub(crate) fn discard_cancelled_finalization_jobs() {
+    let jobs: Vec<_> = PENDING_FINALIZATION_JOBS.with(|jobs| {
+        jobs.borrow_mut()
+            .extract_if(.., |job| {
+                crate::async_context::job_domain::cancelled(&job.domain)
+            })
+            .collect()
+    });
+    let scope = crate::gc::RuntimeHandleScope::new();
+    // Removing a private record allocates. Root the entire extracted batch
+    // before the first removal, then release held values without callbacks.
+    let rooted: Vec<_> = jobs
+        .iter()
+        .map(|job| {
+            (
+                scope.root_nanbox_f64(job.registry),
+                scope.root_nanbox_f64(job.record),
+            )
+        })
+        .collect();
+    drop(jobs);
+    for (registry, record) in rooted {
         remove_finalization_record_from_registry(
             registry.get_nanbox_f64(),
             record.get_nanbox_f64(),

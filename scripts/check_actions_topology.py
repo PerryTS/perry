@@ -172,8 +172,8 @@ def main() -> int:
         errors.append('release-packages.yml/build-cross: expected matrix with exactly eight include rows')
     if 'uses' in cross or not {'preflight', 'await-tests'}.issubset(set(cross.get('needs') or [])):
         errors.append('release-packages.yml/build-cross: malformed job or missing release test dependencies')
-    if len(owners) != 38:
-        errors.append(f'catalog owns {len(owners)} distinct source workflows; expected 38')
+    if len(owners) != 39:
+        errors.append(f'catalog owns {len(owners)} distinct source workflows; expected 39')
 
     if errors:
         print('Actions topology FAILED:', file=sys.stderr)

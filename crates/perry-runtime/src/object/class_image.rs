@@ -748,6 +748,9 @@ pub(crate) const fn runtime_layout_image() -> crate::codegen_abi::PerryLayoutIma
     {
         crate::codegen_abi::PerryLayoutImageV1 {
             static_rows: 4096,
+            // Unit fixtures occupy the program rows after the native prefix.
+            // Their checked records still decide actual family membership.
+            family_count: 4096 - crate::codegen_abi::PerryLayoutImageV1::RUNTIME.family_first,
             ..crate::codegen_abi::PerryLayoutImageV1::RUNTIME
         }
     }

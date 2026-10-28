@@ -101,6 +101,8 @@ pub(crate) struct FnInfoFacts {
     pub constructor_layout: Option<ConstructorLayout>,
     /// Compiler-private synchronous continuation: mutable captures are its state slots.
     pub fixed_generator_state: bool,
+    /// Internal owner+offset entry; never an observable JS callable.
+    pub private_resume_frame: bool,
     /// The one generic entry for this body's fixed-signature operation.
     pub call_entry: Option<String>,
     pub call_entry_offset_words: u8,

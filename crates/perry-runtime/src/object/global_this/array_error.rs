@@ -281,7 +281,7 @@ pub(crate) extern "C" fn date_prototype_to_string_thunk(
     if !crate::date::is_date_value(this_value) {
         super::super::object_ops::throw_object_type_error(b"this is not a Date object.");
     }
-    let string = crate::date::js_date_to_string(this_value);
+    let string = crate::date_hook_slots::js_date_to_string(this_value);
     crate::value::js_nanbox_string(string as i64)
 }
 
@@ -447,7 +447,7 @@ unsafe fn function_apply_args(args_array: f64) -> Vec<f64> {
     // IsArray follows a Proxy's target, but the Proxy value is not an
     // ArrayHeader. CreateListFromArrayLike must observe its length/index get
     // traps (and revoked-proxy errors) through ordinary property access.
-    if crate::proxy::js_proxy_is_proxy(args_array) == 1 {
+    if crate::proxy_hooks::proxy_is_proxy(args_array) == 1 {
         return generic_array_like_to_vec(args_array);
     }
 
@@ -595,7 +595,7 @@ pub(crate) unsafe fn function_apply_proxy(target: f64, receiver: f64, args_array
     // The proxy bridge roots the values and builds a fresh Array, including
     // for nullish (empty) argument lists.
     let args = function_apply_args(args_array);
-    crate::proxy::call_proxy_value_with_this(
+    crate::proxy_hooks::call_proxy_value_with_this(
         target.get_nanbox_f64(),
         receiver.get_nanbox_f64(),
         &args,
@@ -659,8 +659,8 @@ pub(crate) extern "C" fn function_prototype_to_string_thunk(
         // A Proxy whose target is callable is itself callable; its source is
         // never introspectable, so the spec mandates the NativeFunction form.
         let this_val = f64::from_bits(this_bits);
-        if crate::proxy::js_proxy_is_proxy(this_val) == 1
-            && crate::proxy::proxy_wraps_callable(this_val)
+        if crate::proxy_hooks::proxy_is_proxy(this_val) == 1
+            && crate::proxy_hooks::proxy_wraps_callable(this_val)
         {
             let s = "function () { [native code] }";
             let str_ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
@@ -1213,3 +1213,5 @@ mod native_args_tests;
 
 #[cfg(test)]
 mod variadic_args_tests;
+
+crate::realm_decl!("array_error.realm.json#*");

@@ -562,10 +562,72 @@ pub(crate) fn regexp(receiver: &RuntimeHandle<'_>) -> *mut RegExpHeader {
 /// The search is [`search_builtin`]'s, over the current addresses of the two
 /// roots, unless `reuse` holds bindings of both. Materialising an exec result
 /// reads through the roots again afterwards, under the only other JS trap.
+#[inline]
 pub(crate) fn execute_rooted(
     receiver: &RuntimeHandle<'_>,
     input: &RuntimeHandle<'_>,
     output: ExecOutput,
+    budget: &mut Budget,
+    memory: &MemoryBudget,
+    poll: &mut impl FnMut() -> Result<(), EngineError>,
+    reuse: Option<&Reuse<'_, '_>>,
+) -> Result<Option<ExecMatch>, EngineError> {
+    execute_rooted_output(
+        receiver, input, output, FullOutput, budget, memory, poll, reuse,
+    )
+}
+
+/// A full result has no projected-capture payload in its calling convention.
+/// The two result operations share the matcher, but only the projected
+/// consumer carries and checks a numbered capture.
+trait OutputProjection {
+    fn capture_index(&self) -> Option<usize>;
+}
+
+struct FullOutput;
+
+impl OutputProjection for FullOutput {
+    #[inline]
+    fn capture_index(&self) -> Option<usize> {
+        None
+    }
+}
+
+struct CaptureOutput(usize);
+
+impl OutputProjection for CaptureOutput {
+    #[inline]
+    fn capture_index(&self) -> Option<usize> {
+        Some(self.0)
+    }
+}
+
+pub(crate) fn execute_capture_rooted(
+    receiver: &RuntimeHandle<'_>,
+    input: &RuntimeHandle<'_>,
+    capture: usize,
+    budget: &mut Budget,
+    memory: &MemoryBudget,
+    poll: &mut impl FnMut() -> Result<(), EngineError>,
+    reuse: Option<&Reuse<'_, '_>>,
+) -> Result<Option<ExecMatch>, EngineError> {
+    execute_rooted_output(
+        receiver,
+        input,
+        ExecOutput::Object,
+        CaptureOutput(capture),
+        budget,
+        memory,
+        poll,
+        reuse,
+    )
+}
+
+fn execute_rooted_output<P: OutputProjection>(
+    receiver: &RuntimeHandle<'_>,
+    input: &RuntimeHandle<'_>,
+    output: ExecOutput,
+    projection: P,
     budget: &mut Budget,
     memory: &MemoryBudget,
     poll: &mut impl FnMut() -> Result<(), EngineError>,
@@ -654,43 +716,57 @@ pub(crate) fn execute_rooted(
     let Some((full, position)) = found else {
         return Ok(None);
     };
-    let (array, groups) = match output {
-        ExecOutput::Object => {
-            let found = Match { full, captures };
-            let scope = RuntimeHandleScope::new();
-            let fresh;
-            let (bound_subject, bound_program) = match reused {
-                Some((_, program, subject)) => (subject, program),
-                None => {
-                    // The search read the string in place; materialisation
-                    // allocates, so it reads through rooted owners. The
-                    // position stays valid: these bind the same, unchanged
-                    // string, and nothing has run since the search.
-                    let owner = unsafe { GcProgram::from_regexp(&scope, regexp(receiver)) }
-                        .map_err(|e| {
-                            EngineError::Subject(perex::binding::SubjectError::Resource(e))
-                        })?;
-                    fresh = (bind_heap_subject(*input)?, bind_program(owner, budget)?);
-                    (&fresh.0, &fresh.1)
-                }
-            };
-            // Captures and all native owners remain ABOVE the JS trap. A
-            // thrown allocation/property operation returns here before they
-            // are dropped.
-            caught(|| {
-                super::perex_results::materialize(
-                    input,
-                    bound_subject,
-                    bound_program,
-                    &found,
-                    position,
-                    has_indices,
-                    budget,
-                    poll,
-                )
-            })??
+    let projected = projection
+        .capture_index()
+        .filter(|index| captures.as_ref().is_some_and(|slots| *index < slots.len()));
+    let (array, groups) = if let Some(index) = projected {
+        let fresh = bind_heap_subject(*input)?;
+        let found = Match { full, captures };
+        let array = caught(|| {
+            super::perex_results::materialize_capture(&fresh, &found, position, index, budget, poll)
+        })??;
+        (array, std::ptr::null_mut())
+    } else {
+        // An absent numbered property can invoke an inherited getter with
+        // the result as its receiver, exposing every capture and metadata.
+        match output {
+            ExecOutput::Object => {
+                let found = Match { full, captures };
+                let scope = RuntimeHandleScope::new();
+                let fresh;
+                let (bound_subject, bound_program) = match reused {
+                    Some((_, program, subject)) => (subject, program),
+                    None => {
+                        // The search read the string in place; materialisation
+                        // allocates, so it reads through rooted owners. The
+                        // position stays valid: these bind the same, unchanged
+                        // string, and nothing has run since the search.
+                        let owner = unsafe { GcProgram::from_regexp(&scope, regexp(receiver)) }
+                            .map_err(|e| {
+                                EngineError::Subject(perex::binding::SubjectError::Resource(e))
+                            })?;
+                        fresh = (bind_heap_subject(*input)?, bind_program(owner, budget)?);
+                        (&fresh.0, &fresh.1)
+                    }
+                };
+                // Captures and all native owners remain ABOVE the JS trap. A
+                // thrown allocation/property operation returns here before they
+                // are dropped.
+                caught(|| {
+                    super::perex_results::materialize(
+                        input,
+                        bound_subject,
+                        bound_program,
+                        &found,
+                        position,
+                        has_indices,
+                        budget,
+                        poll,
+                    )
+                })??
+            }
+            ExecOutput::Test => (std::ptr::null_mut(), std::ptr::null_mut()),
         }
-        ExecOutput::Test => (std::ptr::null_mut(), std::ptr::null_mut()),
     };
     Ok(Some(ExecMatch {
         full,

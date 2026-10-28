@@ -1,8 +1,9 @@
 //! The maintained C backend owns the canonical ABI. This module connects its
 //! typed C functions to Perry's rooted frame API; it never invents Wasm layouts.
+mod asynchronous;
 mod values;
 
-use anyhow::Result;
+use anyhow::{ensure, Result};
 use heck::ToSnakeCase;
 use std::{
     collections::{BTreeMap, HashMap},
@@ -17,6 +18,25 @@ use wit_parser::{
 type Names = BTreeMap<TypeId, String>;
 
 pub fn canonical_guest(path: &Path, selected: Option<&str>) -> Result<BTreeMap<String, Vec<u8>>> {
+    generate_guest(path, selected, false)
+}
+
+/// Experimental async generation, including the Linux-qualified resource
+/// ownership/cancellation profile. Public --guest-c async output and guest
+/// future/stream values remain guarded pending their complete qualification.
+#[doc(hidden)]
+pub fn experimental_async_guest(
+    path: &Path,
+    selected: Option<&str>,
+) -> Result<BTreeMap<String, Vec<u8>>> {
+    generate_guest(path, selected, true)
+}
+
+fn generate_guest(
+    path: &Path,
+    selected: Option<&str>,
+    experimental: bool,
+) -> Result<BTreeMap<String, Vec<u8>>> {
     let mut resolve = Resolve::default();
     let (package, _) = resolve.push_path(path)?;
     let id = resolve.select_world(&[package], selected)?;
@@ -24,10 +44,45 @@ pub fn canonical_guest(path: &Path, selected: Option<&str>) -> Result<BTreeMap<S
     // so its resource factories and the generated callbacks share TypeIds.
     resolve.generate_nominal_type_ids(id);
     let world = crate::resolve::convert(&resolve, id)?;
+    ensure!(
+        world
+            .types
+            .values()
+            .all(|d| !matches!(d.ty, crate::Type::Future(_) | crate::Type::Stream(_))),
+        "future/stream guest values require the P3 rooted-frame adapter"
+    );
+    ensure!(
+        experimental
+            || world
+                .imports
+                .iter()
+                .chain(&world.exports)
+                .flat_map(|i| &i.functions)
+                .all(|f| !f.async_),
+        "async guest functions require the P3 rooted-frame adapter"
+    );
+    let anchor = if experimental {
+        Some(asynchronous::add_wake_anchor(&mut resolve, id)?)
+    } else {
+        None
+    };
+    generate_resolved(resolve, id, world, anchor)
+}
+
+fn generate_resolved(
+    mut resolve: Resolve,
+    id: WorldId,
+    world: crate::World,
+    anchor: Option<String>,
+) -> Result<BTreeMap<String, Vec<u8>>> {
     let mut files = Files::default();
     wit_bindgen_c::Opts {
         no_sig_flattening: true,
-        autodrop_borrows: wit_bindgen_c::Enabled::Yes,
+        autodrop_borrows: if anchor.is_some() {
+            wit_bindgen_c::Enabled::No
+        } else {
+            wit_bindgen_c::Enabled::Yes
+        },
         ..Default::default()
     }
     .build()
@@ -46,6 +101,7 @@ pub fn canonical_guest(path: &Path, selected: Option<&str>) -> Result<BTreeMap<S
         resource_operations: BTreeMap::new(),
         source: format!("#include \"{snake}.h\"\n#include \"perry_component_frame.h\"\n"),
         imports: Vec::new(),
+        anchor,
     };
     generator.generate()?;
     output.insert("perry_adapter.c".into(), generator.source.into_bytes());
@@ -60,6 +116,7 @@ pub fn canonical_guest(path: &Path, selected: Option<&str>) -> Result<BTreeMap<S
 struct Resource {
     id: u32,
     own_name: String,
+    borrow_name: String,
     name: String,
     local: bool,
 }
@@ -74,6 +131,7 @@ struct Generator<'a> {
     resource_operations: BTreeMap<u32, Resource>,
     source: String,
     imports: Vec<(usize, usize)>,
+    anchor: Option<String>,
 }
 
 impl Generator<'_> {
@@ -107,6 +165,7 @@ impl Generator<'_> {
                     id: u32::try_from(id.index() * 2 + usize::from(!import))
                         .expect("resource type index"),
                     own_name: format!("{namespace}_own_{encoded}_t"),
+                    borrow_name: format!("{namespace}_borrow_{encoded}_t"),
                     name: name.clone(),
                     local: !import,
                 };
@@ -120,7 +179,13 @@ impl Generator<'_> {
 
     fn generate(&mut self) -> Result<()> {
         self.source
-            .push_str("static void perry_initialize(void *f);\n");
+            .push_str("static void *perry_initialize(void);\n");
+        if let Some(anchor) = &self.anchor {
+            self.source.push_str(&asynchronous::scheduler(
+                &self.resolve.worlds[self.id].name.to_snake_case(),
+                anchor,
+            ));
+        }
         let world = &self.resolve.worlds[self.id];
         // Match WorldGenerator's visitation order, including the separate
         // namespaces when an interface is both imported and exported.
@@ -156,6 +221,9 @@ impl Generator<'_> {
             self.define(live, None, import);
             for item in items.values() {
                 if let WorldItem::Function(function) = item {
+                    if !import && self.anchor.as_deref() == Some(&function.name) {
+                        continue;
+                    }
                     self.function(None, function, import)?;
                 }
             }
@@ -192,18 +260,27 @@ impl Generator<'_> {
                 .join(",")
         )?;
         self.source.push_str("static const perry_guest_ops perry_ops = {2, sizeof(perry_guest_ops), perry_contract, sizeof(perry_contract), perry_import, perry_resource};\n");
-        self.source.push_str(r#"
+        self.source.push_str(
+            r#"
 extern void perry_module_init(void);
 static unsigned perry_initialized;
-static void perry_initialize(void *f) {
-    if (perry_initialized == 2) return;
-    if (perry_initialized != 0) { perry_bad(f, "Component initialization failed or reentered"); return; }
+static void perry_module_start(void *data) { (void)data; perry_module_init(); }
+static void *perry_initialize(void) {
+    if (perry_initialized == 2) return perry_component_frame_new();
+    if (perry_initialized != 0) {
+        void *f = perry_component_frame_new();
+        perry_bad(f, "Component initialization failed or reentered");
+        return f;
+    }
     perry_initialized = 1;
-    if (!js_component_set_guest_ops(&perry_ops)) perry_bad(f, "Component adapter ABI mismatch");
-    perry_component_frame_initialize(f, (const void *)perry_module_init);
+    if (!js_component_set_guest_ops(&perry_ops)) __builtin_trap();
+    void *f = perry_component_frame_bootstrap((const void *)perry_module_start, NULL);
+    if (f == NULL) __builtin_trap();
     perry_initialized = perry_component_frame_failed(f) ? 3 : 2;
+    return f;
 }
-"#);
+"#,
+        );
         Ok(())
     }
 
@@ -223,6 +300,10 @@ static void perry_initialize(void *f) {
             let stem = resource.name.strip_suffix("_t").unwrap();
             let own = &resource.own_name;
             writeln!(self.source, "case {}:\nif (operation == 1) {{ {stem}_drop_own(({own}){{ (int32_t)value }}); return 0; }}", id)?;
+            if !resource.local && self.anchor.is_some() {
+                let borrow = &resource.borrow_name;
+                writeln!(self.source, "if (operation == 2) {{ {stem}_drop_borrow(({borrow}){{ (int32_t)value }}); return 0; }}")?;
+            }
             if resource.local {
                 writeln!(self.source, "if (operation == 0) return (uint32_t){stem}_new(({} *)(uintptr_t)value).__handle;", resource.name)?;
             }
@@ -266,6 +347,13 @@ static void perry_initialize(void *f) {
             function,
             &HashMap::new(),
         );
+        if !import && self.anchor.is_some() {
+            return self.experimental_export(function, i, f, &cname);
+        }
+        if import && function.kind.is_async() {
+            self.imports.push((i, f));
+            return self.experimental_import(function, i, f, &cname);
+        }
         let indirect = function
             .result
             .is_some_and(|ty| wit_bindgen_c::is_arg_by_pointer(self.resolve, &ty));
@@ -354,7 +442,7 @@ static void perry_initialize(void *f) {
             if params.is_empty() {
                 params.push("void".into());
             }
-            writeln!(emitter.source, "{ret} {cname}({}) {{\nvoid *f = perry_component_frame_new();\nperry_allocations arena = {{0}};\nperry_initialize(f);", params.join(", "))?;
+            writeln!(emitter.source, "{ret} {cname}({}) {{\nvoid *f = perry_initialize();\nperry_allocations arena = {{0}};", params.join(", "))?;
             let args = emitter.slot(&format!(
                 "perry_component_frame_array(f, {})",
                 function.params.len()

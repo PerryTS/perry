@@ -36,8 +36,10 @@ pub extern "C" fn js_object_define_properties(target: f64, properties: f64) -> f
         } else {
             super::super::js_object_coerce(value).to_bits()
         });
-        let current_properties = || f64::from_bits(properties.get_nanbox_u64());
-        let proxy = crate::proxy::js_proxy_is_proxy(current_properties()) != 0;
+        let current_properties = &properties;
+        let proxy = crate::proxy_hooks::proxy_is_proxy(
+            (f64::from_bits(current_properties.get_nanbox_u64())),
+        ) != 0;
         let names = if proxy {
             None
         } else {
@@ -47,8 +49,8 @@ pub extern "C" fn js_object_define_properties(target: f64, properties: f64) -> f
             ))
         };
         let proxy_names = proxy.then(|| {
-            scope.root_raw_mut_ptr(extract_obj_ptr(crate::proxy::js_proxy_own_keys(
-                current_properties(),
+            scope.root_raw_mut_ptr(extract_obj_ptr(crate::proxy_hooks::proxy_own_keys(
+                (f64::from_bits(current_properties.get_nanbox_u64())),
             )) as *mut crate::array::ArrayHeader)
         });
         // Root the name array while enumerating symbols; both snapshots are
@@ -56,7 +58,9 @@ pub extern "C" fn js_object_define_properties(target: f64, properties: f64) -> f
         let symbols = if proxy {
             None
         } else {
-            let raw = crate::symbol::js_object_get_own_property_symbols(current_properties());
+            let raw = crate::symbol::js_object_get_own_property_symbols(
+                (f64::from_bits(current_properties.get_nanbox_u64())),
+            );
             (raw != 0).then(|| scope.root_raw_mut_ptr(raw as *mut crate::array::ArrayHeader))
         };
         let length_of = |array: &crate::gc::RuntimeHandle<'_>| {
@@ -106,14 +110,17 @@ pub extern "C" fn js_object_define_properties(target: f64, properties: f64) -> f
                 let bag = if let Some(value) = data {
                     key_scope.root_nanbox_f64(value)
                 } else {
-                    if js_object_property_is_enumerable(current_properties(), key.get_nanbox_f64())
-                        .to_bits()
+                    if js_object_property_is_enumerable(
+                        (f64::from_bits(current_properties.get_nanbox_u64())),
+                        key.get_nanbox_f64(),
+                    )
+                    .to_bits()
                         != crate::value::TAG_TRUE
                     {
                         continue;
                     }
                     key_scope.root_nanbox_f64(super::super::js_object_get_property_key(
-                        current_properties(),
+                        (f64::from_bits(current_properties.get_nanbox_u64())),
                         key.get_nanbox_f64(),
                     ))
                 };
@@ -182,7 +189,7 @@ pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 
     // this, `Object.setPrototypeOf(proxyOfNonExtensibleProxy, x)` silently
     // succeeded instead of throwing (test262
     // Proxy/setPrototypeOf/trap-is-{missing,undefined}-target-is-proxy).
-    if crate::proxy::js_proxy_is_proxy(obj_value) != 0 {
+    if crate::proxy_hooks::proxy_is_proxy(obj_value) != 0 {
         let ok = crate::proxy::js_reflect_set_prototype_of(obj_value, proto);
         if crate::value::js_is_truthy(ok) == 0 {
             throw_object_type_error(b"#<Object> is not extensible");
@@ -209,7 +216,7 @@ pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 
     let proto_is_null = proto_bits == TAG_NULL;
     let proto_is_symbol = unsafe { crate::symbol::js_is_symbol(proto) != 0 };
     let proto_ok = proto_is_null
-        || crate::proxy::js_proxy_is_proxy(proto) != 0
+        || crate::proxy_hooks::proxy_is_proxy(proto) != 0
         || (!proto_is_symbol
             && (unsafe { value_is_object_like(proto) }
                 || super::super::class_ref_id(proto).is_some()));
@@ -260,7 +267,7 @@ pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 
             // bookkeeping (test262 has/call-in-prototype-index.js,
             // set/call-parameters-prototype-index.js observe a `getPrototypeOf`
             // trap the test handler never installs).
-            if crate::proxy::js_proxy_is_proxy(val) != 0 {
+            if crate::proxy_hooks::proxy_is_proxy(val) != 0 {
                 return TAG_NULL_U64;
             }
             let next = js_object_get_prototype_of(val);

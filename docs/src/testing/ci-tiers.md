@@ -2,8 +2,12 @@
 
 Perry's CI is one workflow — `.github/workflows/test.yml` — with **three tiers**.
 The tier a run belongs to, and the exact set of jobs it executes, is decided by
-one script, `scripts/ci_plan.py`, in the workflow's first job (`plan`). Every other
-job is `needs: plan` and gated on `fromJSON(needs.plan.outputs.plan).jobs.<name>`.
+one script, `scripts/ci_plan.py`, in the workflow's first job (`plan`). Planned
+jobs use `needs: plan` and `fromJSON(needs.plan.outputs.plan).jobs.<name>`.
+The `tokio-ban` preflight runs independently on every PR and core CI run.
+It checks repository Cargo manifests, lockfiles and Rust source without a Rust
+toolchain. The gate requires its result to be `success`; a missing, skipped,
+failed or cancelled preflight cannot pass `pr-gate` or a release gate.
 
 ```
 python3 scripts/ci_plan.py --table       # the job x tier matrix below
@@ -75,7 +79,8 @@ These fixtures skip their Windows bodies on other hosts; use the full tier
 Within the **pr** tier the changed-file list narrows the plan further:
 
 - **docs-only** (only `docs/`, `*.md`, `benchmarks/`, `npm/`, `packaging/`,
-  `.claude/`, … — see `NON_CORE_GLOBS` in `ci_plan.py`) → only `lint` runs.
+  `.claude/`, … — see `NON_CORE_GLOBS` in `ci_plan.py`) → `lint` and the
+  mandatory `tokio-ban` preflight run.
 - **core** (anything that can change the compiler, the runtime, or a test outcome)
   → the whole PR tier.
 - **deps** (a lockfile, manifest, `deny.toml`, `package.json`, `.claude/`, `skills/`,

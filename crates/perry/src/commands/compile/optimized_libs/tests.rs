@@ -860,3 +860,45 @@ fn the_instrumented_variant_names_its_archives_with_an_instr_suffix() {
     // A name that is not an archive is left alone.
     assert_eq!(name("perry", true), "perry");
 }
+
+#[test]
+fn deserializers_install_regex_without_a_regex_literal() {
+    // Other lowering tests share dynamic-code reach. A child keeps this
+    // plain-program negative check independent without draining their state.
+    const CHILD: &str = "PERRY_TEST_DESERIALIZER_FEATURES_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let module = module_path!().split_once("::").unwrap().1;
+        let name = format!("{module}::deserializers_install_regex_without_a_regex_literal");
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", &name, "--test-threads=1", "--nocapture"])
+            .env(CHILD, "1")
+            .output()
+            .expect("run isolated deserializer feature test");
+        assert!(
+            child.status.success() && String::from_utf8_lossy(&child.stdout).contains("1 passed;"),
+            "isolated feature test failed or did not run\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&child.stdout),
+            String::from_utf8_lossy(&child.stderr)
+        );
+        return;
+    }
+    assert!(!perry_hir::has_deferred_dynamic_code_sites());
+    let dir = tempfile::tempdir().unwrap();
+    let features = BTreeSet::new();
+    let plain = CompilationContext::new(dir.path().to_path_buf());
+    assert!(!auto_optimized_cross_features(&plain, &features, &[])
+        .iter()
+        .any(|f| f == "perry-runtime/regex-engine"));
+    for module in ["v8", "worker_threads"] {
+        let mut ctx = CompilationContext::new(dir.path().to_path_buf());
+        ctx.native_module_imports.insert(module.to_string());
+        assert!(auto_optimized_cross_features(&ctx, &features, &[])
+            .iter()
+            .any(|f| f == "perry-runtime/regex-engine"));
+    }
+    let mut ipc = CompilationContext::new(dir.path().to_path_buf());
+    ipc.uses_proc_ipc = true;
+    assert!(auto_optimized_cross_features(&ipc, &features, &[])
+        .iter()
+        .any(|f| f == "perry-runtime/regex-engine"));
+}

@@ -539,6 +539,11 @@ pub struct CompileOptions {
     /// `require(absolutePath)` can lazily trigger the module's init. Only
     /// populated for the entry module; empty otherwise.
     pub nextjs_path_init_modules: Vec<(String, String)>,
+    /// The same pairs for the on-demand CommonJS modules of a program that is
+    /// not closed (design CJS_LINK §2.2): registered by one generated
+    /// function the runtime runs at its first path lookup
+    /// (`js_register_path_inits_lazily`), not one by one at startup.
+    pub lazy_path_init_modules: Vec<(String, String)>,
 
     /// Issue #753: sanitized prefixes of modules whose init must NOT
     /// run as part of the entry module's eager init chain. Reachable
@@ -965,6 +970,8 @@ pub(crate) struct CrossModuleCtx {
     /// Case 2c: the program's families and colouring
     /// (`CompileOptions::program_layouts`).
     pub program_layouts: std::sync::Arc<crate::layout_families::ProgramLayouts>,
+    /// Per-module compile-time receiver candidates, not emitted target state.
+    pub receiver_families: std::sync::Arc<std::collections::BTreeMap<u32, u32>>,
     pub program_has_worker: bool,
     pub program_has_thread_agents: bool,
     /// The class and method tables inverted (`class_hierarchy`). Set once
@@ -1442,6 +1449,8 @@ pub(crate) struct CrossModuleCtx {
     /// entry's executable or dylib initializer emits one
     /// `js_register_path_init` per entry.
     pub nextjs_path_init_modules: Vec<(String, String)>,
+    /// See [`CompileOptions::lazy_path_init_modules`].
+    pub lazy_path_init_modules: Vec<(String, String)>,
     /// Issue #753: sanitized prefixes of modules reached only through
     /// dynamic `import()` edges. Their `<prefix>__init` is excluded
     /// from the entry-main eager init call sequence and fires lazily

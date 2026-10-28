@@ -76,7 +76,7 @@ pub extern "C" fn js_component_resource_create(ty: f64, payload: f64, destructor
     let map = scope.root_nanbox_f64(undefined());
     let record = scope.root_nanbox_f64(undefined());
     let mut rep = 0;
-    let mut frame = Frame::new();
+    let mut frame = Frame::allocate_guest_frame();
     let result = crate::exception::catch_js_throw(|| {
         let ty = type_id(ty);
         registry.set_nanbox_f64(super::super::registry());

@@ -321,7 +321,10 @@ fn a_typed_annotation_does_not_hoist_a_possible_length_getter() {
     let body = crate::testing::root_slots::function_slice(&output, "perry_fn_getter_bound__probe");
     let cond = body
         .lines()
-        .find(|l| l.starts_with("for.cond.") && l.ends_with(':'))
+        .find(|l| {
+            (l.starts_with("for.cond.") || l.starts_with("for.indexed_owner_slow.cond."))
+                && l.ends_with(':')
+        })
         .expect("loop condition");
     let before = &body[..body.find(cond).unwrap()];
     assert!(

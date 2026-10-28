@@ -63,12 +63,7 @@ pub(crate) unsafe fn test_json_parse_direct(text_ptr: *const StringHeader) -> JS
     parse_root_restore(text_root);
     result
 }
-
-fn syntax_error_value(message: &str) -> f64 {
-    let msg_ptr = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_syntaxerror_new(msg_ptr);
-    f64::from_bits(JSValue::pointer(err as *const u8).bits())
-}
+use crate::builtin_value_support::syntax_error_value;
 
 fn range_error_value(message: &str) -> f64 {
     let msg_ptr = js_string_from_bytes(message.as_ptr(), message.len() as u32);

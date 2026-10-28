@@ -423,7 +423,7 @@ pub(crate) extern "C" fn global_this_bigint_thunk(
     _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
-    let ptr = crate::bigint::js_bigint_from_f64(value);
+    let ptr = crate::bigint_hooks::js_bigint_from_f64(value);
     crate::value::js_nanbox_bigint(ptr as i64)
 }
 
@@ -707,7 +707,7 @@ pub(crate) extern "C" fn proxy_revocable_thunk(
     target: f64,
     handler: f64,
 ) -> f64 {
-    crate::proxy::js_proxy_revocable(target, handler)
+    crate::proxy_hooks::proxy_revocable(target, handler)
 }
 
 #[cfg(test)]
@@ -794,3 +794,5 @@ mod tests {
         assert_eq!(crate::builtins::js_number_coerce(result), 5.0);
     }
 }
+
+crate::realm_decl!("builtin_thunks.realm.json#*");

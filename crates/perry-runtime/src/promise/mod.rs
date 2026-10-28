@@ -14,17 +14,22 @@ use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
 
 use crate::async_context::{
-    capture_context, enter_context, restore_context, scan_snapshot_roots_mut, AsyncContextSnapshot,
+    capture_context, restore_context, scan_snapshot_roots_mut, AsyncContextSnapshot,
 };
 
 pub mod assimilate;
 pub mod async_step;
 pub mod checked_dispatch;
 pub mod combinators;
+mod job_queue;
+pub(crate) use job_queue::discard_cancelled_guest_jobs;
+pub(crate) use job_queue::eligible_guest_jobs_pending;
+use job_queue::EnqueuePromiseJob;
 #[cfg(test)]
 mod cross_thread_pin_tests;
 pub mod microtasks;
 pub mod native_async;
+pub(crate) mod operation_owner;
 mod owned_state;
 pub mod reactions;
 pub mod rejection;
@@ -730,15 +735,15 @@ pub(crate) fn enqueue_queue_microtask(callback: i64) {
     let resource_value = resource_handle
         .with_mut_ptr::<u8, _>(|resource| crate::value::js_nanbox_pointer(resource as i64));
     let (ids, callback) = callback_handle.across_const::<crate::closure::ClosureHeader, _>(|| {
-        crate::async_hooks::init_scheduled_resource("Microtask", resource_value, None)
+        crate::async_hook_slots::init_scheduled_resource("Microtask", resource_value, None)
     });
     // The queue entry owns the job's state; keep it reachable until queued.
-    if let Some(state) = crate::async_hooks::resource_state::get(ids.async_id) {
+    if let Some(state) = crate::async_hook_slots::resource_state::get(ids.async_id) {
         scope.root_raw_mut_ptr(state);
     }
     crate::async_context::refresh_snapshot_from_roots(&mut context, &context_roots);
     TASK_QUEUE.with(|q| {
-        q.borrow_mut().push_back(Task::Microtask {
+        q.borrow_mut().enqueue_promise_job(Task::Microtask {
             callback: callback as ClosurePtr,
             context,
             async_id: ids.async_id,
@@ -810,8 +815,8 @@ pub(crate) fn clear_promise_context_for_gc(promise: *mut Promise) {
     clear_promise_context(promise);
 }
 
-pub(crate) fn enter_microtask_context(snapshot: &AsyncContextSnapshot) {
-    let previous = enter_context(snapshot);
+pub(crate) fn enter_microtask_context(snapshot: AsyncContextSnapshot) {
+    let previous = crate::async_context::enter_owned_context(snapshot);
     MICROTASK_PREV_CONTEXTS.with(|stack| stack.borrow_mut().push(previous));
 }
 
@@ -898,10 +903,10 @@ pub(crate) fn unwind_async_box_execution_refs(depth: usize) {
 /// microtask drain runs.
 #[no_mangle]
 pub extern "C" fn js_microtasks_pending() -> i32 {
-    if crate::node_submodules::diagnostics_channel_has_pending_publishes() {
+    if crate::thread_hook_slots::diagnostics_channel_has_pending_publishes() {
         return 1;
     }
-    if crate::thread::js_thread_has_pending() != 0 {
+    if crate::thread_hook_slots::js_thread_has_pending() != 0 {
         return 1;
     }
     if crate::builtins::queued_microtasks_pending() {

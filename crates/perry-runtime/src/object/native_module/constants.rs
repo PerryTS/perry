@@ -433,8 +433,8 @@ pub(crate) unsafe fn get_native_module_constant(
         // node:perf_hooks — `performance.timeOrigin` (ms since epoch at start)
         // and `performance.nodeTiming`.
         "perf_hooks" => match property {
-            "timeOrigin" => Some(crate::perf_hooks::time_origin_ms()),
-            "nodeTiming" => Some(crate::perf_hooks::js_perf_node_timing()),
+            "timeOrigin" => Some(crate::perf_clock::time_origin_ms()),
+            "nodeTiming" => Some(crate::perf_hook_slots::js_perf_node_timing()),
             // `constants` used to share the `perf_hooks` tag, which made
             // `Object.keys(constants)` enumerate the MODULE's export list
             // instead of the GC constants. It is its own namespace in Node.
@@ -494,7 +494,9 @@ pub(crate) unsafe fn get_native_module_constant(
         "dns/promises" => dns_error_alias(property).map(&str_val),
         "async_hooks" => match property {
             "default" if !is_cjs_default_object => cjs_default_export_value("async_hooks"),
-            "asyncWrapProviders" => Some(crate::async_hooks::js_async_hooks_async_wrap_providers()),
+            "asyncWrapProviders" => {
+                Some(crate::async_hook_slots::js_async_hooks_async_wrap_providers())
+            }
             _ => None,
         },
         "querystring" => match property {
@@ -694,7 +696,7 @@ pub(crate) unsafe fn get_native_module_constant(
             }
             _ => None,
         },
-        "test" => crate::node_test::property(property),
+        "test" => crate::node_test_hook_slots::property(property),
         "wasi" => match property {
             "default" if !is_cjs_default_object => cjs_default_export_value("wasi"),
             _ => None,
@@ -917,7 +919,7 @@ pub(crate) unsafe fn get_native_module_constant(
         // .createHistogram. Every stat accessor (`count`/`min`/`max`/`mean`/
         // `stddev`/`exceeds`, their BigInt twins, and the `percentiles` Map)
         // reads per-instance HDR state keyed off the receiver.
-        "perf_histogram" => crate::perf_histogram::histogram_property(namespace_obj, property),
+        "perf_histogram" => crate::perf_hook_slots::histogram_property(namespace_obj, property),
         _ => None,
     }
 }

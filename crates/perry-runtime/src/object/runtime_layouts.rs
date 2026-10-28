@@ -11,11 +11,23 @@ macro_rules! runtime_atom {
         #[allow(non_snake_case)]
         pub(crate) mod $name {
             pub(crate) const HASH: u64 = super::atom_hash($bytes.as_bytes());
+            unsafe extern "C" {
+                #[link_name = concat!("perry_image_literal_0_", $symbol)]
+                pub(super) safe static IMAGE: crate::gc::GcHeader;
+            }
         }
-        unsafe extern "C" {
-            #[link_name = concat!("perry_atom_", $symbol)]
-            pub(crate) safe static $name: StaticAtom;
-        }
+        // A const-readable view of the existing atom's facts. Its string
+        // names the original record; no second atom/image symbol is defined.
+        pub(crate) static $name: StaticAtom = StaticAtom {
+            hash: $name::HASH,
+            string: std::ptr::addr_of!($name::IMAGE)
+                .cast::<u8>()
+                .wrapping_add(crate::gc::GC_HEADER_SIZE)
+                .cast(),
+            kind: crate::codegen_abi::ATOM_KIND_STRING,
+            _pad: [0; 3],
+            index: 0,
+        };
     };
     ($name:ident, $bytes:literal, $symbol:literal) => {
         #[allow(non_snake_case)]
@@ -149,6 +161,7 @@ macro_rules! runtime_layout {
         #[export_name = concat!("perry_runtime_layout_", stringify!($name))]
         /// Declared layout of a checked runtime record.
         pub static mut $name: PerryLayoutDesc = PerryLayoutDesc {
+        image_keys: crate::object::image_keys::image_key_list!($name::KEYS),
             shape_id: 0, _layout_pad: 0,
             family: $family, variant: $variant, kind: $kind, integrity: 0,
             slot_count: $name::SLOT_COUNT as u32,
@@ -616,6 +629,7 @@ static READABLE_STATE_INDEX: [u32; 16] = [
     link_section = "perry_layouts"
 )]
 pub(crate) static mut READABLE_STATE: PerryLayoutDesc = PerryLayoutDesc {
+    image_keys: crate::object::image_keys::image_key_list!(READABLE_STATE_KEYS),
     shape_id: 0,
     _layout_pad: 0,
     family: 0x52540001,
@@ -706,6 +720,7 @@ static WRITABLE_STATE_INDEX: [u32; 16] = [
     link_section = "perry_layouts"
 )]
 pub(crate) static mut WRITABLE_STATE: PerryLayoutDesc = PerryLayoutDesc {
+    image_keys: crate::object::image_keys::image_key_list!(WRITABLE_STATE_KEYS),
     shape_id: 0,
     _layout_pad: 0,
     family: 0x52540002,
@@ -749,6 +764,7 @@ static URL_SEARCH_PARAMS_INDEX: [u32; 4] = [0, 1, u32::MAX, u32::MAX];
     link_section = "perry_layouts"
 )]
 pub(crate) static mut URL_SEARCH_PARAMS: PerryLayoutDesc = PerryLayoutDesc {
+    image_keys: crate::object::image_keys::image_key_list!(URL_SEARCH_PARAMS_KEYS),
     shape_id: 0,
     _layout_pad: 0,
     family: 0x52540003,
@@ -885,6 +901,7 @@ static URL_COMPONENTS_INDEX: [u32; 32] = [
     link_section = "perry_layouts"
 )]
 pub(crate) static mut URL_COMPONENTS: PerryLayoutDesc = PerryLayoutDesc {
+    image_keys: crate::object::image_keys::image_key_list!(URL_COMPONENTS_KEYS),
     shape_id: 0,
     _layout_pad: 0,
     family: 0x52540004,
@@ -928,6 +945,7 @@ static ITERATOR_RESULT_INDEX: [u32; 4] = [u32::MAX, 1, 0, u32::MAX];
     link_section = "perry_layouts"
 )]
 pub(crate) static mut ITERATOR_RESULT: PerryLayoutDesc = PerryLayoutDesc {
+    image_keys: crate::object::image_keys::image_key_list!(ITERATOR_RESULT_KEYS),
     shape_id: 0,
     _layout_pad: 0,
     family: 0x52540005,
@@ -971,6 +989,7 @@ static ITERATOR_RESULT_DONE_FIRST_INDEX: [u32; 4] = [u32::MAX, 0, 1, u32::MAX];
     link_section = "perry_layouts"
 )]
 pub(crate) static mut ITERATOR_RESULT_DONE_FIRST: PerryLayoutDesc = PerryLayoutDesc {
+    image_keys: crate::object::image_keys::image_key_list!(ITERATOR_RESULT_DONE_FIRST_KEYS),
     shape_id: 0,
     _layout_pad: 0,
     family: 0x52540006,
@@ -1001,6 +1020,7 @@ static TIMEOUT_INDEX: [u32; 2] = [u32::MAX, u32::MAX];
     link_section = "perry_layouts"
 )]
 pub(crate) static mut TIMEOUT: PerryLayoutDesc = PerryLayoutDesc {
+    image_keys: crate::object::image_keys::image_key_list!(TIMEOUT_KEYS),
     shape_id: 0,
     _layout_pad: 0,
     family: 0x52540007,
@@ -1031,6 +1051,7 @@ static IMMEDIATE_INDEX: [u32; 2] = [u32::MAX, u32::MAX];
     link_section = "perry_layouts"
 )]
 pub(crate) static mut IMMEDIATE: PerryLayoutDesc = PerryLayoutDesc {
+    image_keys: crate::object::image_keys::image_key_list!(IMMEDIATE_KEYS),
     shape_id: 0,
     _layout_pad: 0,
     family: 0x52540008,
@@ -1116,6 +1137,7 @@ static REGEX_EXEC_NAMED_INDEX: [u32; 8] = [u32::MAX, u32::MAX, u32::MAX, 1, 2, 0
     link_section = "perry_layouts"
 )]
 pub(crate) static mut REGEX_EXEC_NAMED: PerryLayoutDesc = PerryLayoutDesc {
+    image_keys: crate::object::image_keys::image_key_list!(REGEX_EXEC_NAMED_KEYS),
     shape_id: 0,
     _layout_pad: 0,
     family: 0x52540009,
@@ -1194,6 +1216,7 @@ static REGEX_EXEC_INDICES_NAMED_INDEX: [u32; 16] = [
     link_section = "perry_layouts"
 )]
 pub(crate) static mut REGEX_EXEC_INDICES_NAMED: PerryLayoutDesc = PerryLayoutDesc {
+    image_keys: crate::object::image_keys::image_key_list!(REGEX_EXEC_INDICES_NAMED_KEYS),
     shape_id: 0,
     _layout_pad: 0,
     family: 0x5254000A,
@@ -1237,6 +1260,7 @@ static REGEX_INDICES_GROUPS_NAMED_INDEX: [u32; 4] = [u32::MAX, 0, 1, u32::MAX];
     link_section = "perry_layouts"
 )]
 pub(crate) static mut REGEX_INDICES_GROUPS_NAMED: PerryLayoutDesc = PerryLayoutDesc {
+    image_keys: crate::object::image_keys::image_key_list!(REGEX_INDICES_GROUPS_NAMED_KEYS),
     shape_id: 0,
     _layout_pad: 0,
     family: 0x5254000B,
@@ -1272,6 +1296,7 @@ static ARRAY_NAMED_INDEX: [u32; 2] = [u32::MAX, 0];
     link_section = "perry_layouts"
 )]
 pub(crate) static mut ARRAY_NAMED: PerryLayoutDesc = PerryLayoutDesc {
+    image_keys: crate::object::image_keys::image_key_list!(ARRAY_NAMED_KEYS),
     shape_id: 0,
     _layout_pad: 0,
     family: 0x5254000D,
@@ -1481,6 +1506,7 @@ static SQLITE_COLUMN_INDEX: [u32; 16] = [
     link_section = "perry_layouts"
 )]
 pub static mut SQLITE_COLUMN_METADATA: PerryLayoutDesc = PerryLayoutDesc {
+    image_keys: crate::object::image_keys::image_key_list!(SQLITE_COLUMN_KEYS),
     shape_id: 0,
     _layout_pad: 0,
     family: 0x53514c01,
@@ -1894,6 +1920,10 @@ const fn runtime_layout_word(name: &str) -> u32 {
     #[cfg(test)]
     if same(name, "PREFIX_MOVED") {
         return 0x80000083;
+    }
+    #[cfg(test)]
+    if same(name, "LITERAL_OPTIONAL") {
+        return 0x8000008a;
     }
     panic!("runtime descriptor absent from native catalog");
 }

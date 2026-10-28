@@ -22,8 +22,8 @@ RUN apk add --no-cache \
       llvm22 llvm22-dev llvm22-static llvm22-libs \
       libffi-dev zlib-dev zstd-dev xz-dev \
       zlib-static zstd-static libxml2-static ncurses-static \
-  && /usr/lib/llvm22/bin/llvm-config --version | grep -q '^22\.' \
-     || { echo "alpine llvm is not 22.x ($(/usr/lib/llvm22/bin/llvm-config --version 2>&1))" >&2; exit 1; }
+  && /usr/lib/llvm22/bin/llvm-config --version | awk -F. '$1 == 22 && ($2 > 1 || ($2 == 1 && $3+0 >= 5)) { ok=1 } END { exit !ok }' \
+     || { echo "alpine LLVM must be 22.x >= 22.1.5 (LLVM #194184) ($(/usr/lib/llvm22/bin/llvm-config --version 2>&1))" >&2; exit 1; }
 
 # Keep target libraries out of the glibc host's normal /usr/lib search path.
 # Only target-specific rustflags expose this directory to rustc, preventing a
@@ -146,7 +146,7 @@ RUN set -eu; \
     ln -s "$host_libclang" "$LIBCLANG_PATH/libclang.so"; \
     ln -s "$host_clang_include" "$LIBCLANG_PATH/include"; \
     ldd "$host_libclang" | grep -q 'libc\.so\.6'; \
-    "$LLVM_SYS_221_PREFIX/bin/llvm-config" --version | grep -q '^22\.'; \
+    "$LLVM_SYS_221_PREFIX/bin/llvm-config" --version | awk -F. '$1 == 22 && ($2 > 1 || ($2 == 1 && $3+0 >= 5)) { ok=1 } END { exit !ok }'; \
     test -s "$LLVM_SYS_221_PREFIX/lib/libLLVMCore.a"; \
     test -s /opt/perry-musl/lib/libstdc++.a; \
     test -x /usr/bin/musl-gcc; \

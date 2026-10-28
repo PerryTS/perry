@@ -24,12 +24,12 @@ pub(super) fn can_skip_callback_phases() -> bool {
     // after this check is handled by the next pump, just as one arriving after
     // the ordinary drain. Conservatively use the full path for active workers.
     !(super::super::native_async::completion_work_pending()
-        || crate::thread::js_thread_has_pending() != 0
+        || crate::thread_hook_slots::js_thread_has_pending() != 0
         || crate::bun_ffi::callback::threadsafe_callback_work_pending()
-        || crate::async_hooks::gc_destroy_work_pending()
-        || crate::node_submodules::diagnostics_channel_has_pending_publishes()
+        || crate::async_hook_slots::gc_destroy_work_pending()
+        || crate::thread_hook_slots::diagnostics_channel_has_pending_publishes()
         || crate::node_submodules::diagnostics::uncaught_work_pending()
-        || crate::os::process_stdin_needs_pump()
+        || crate::os_hook_slots::process_stdin_needs_pump()
         || crate::timer::timer_phase_work_pending())
 }
 
@@ -151,15 +151,15 @@ mod tests {
     fn gc_destroy_jobs_are_not_skipped() {
         isolated(|| {
             let resource = crate::object::js_object_alloc(0, 0);
-            let ids = crate::async_hooks::init_resource(
+            let ids = crate::async_hook_slots::init_resource(
                 "destroy-job",
                 crate::value::js_nanbox_pointer(resource as i64),
                 true,
             );
-            crate::async_hooks::enqueue_gc_destroy(ids.async_id);
+            crate::async_hook_slots::enqueue_gc_destroy(ids.async_id);
             assert!(!can_skip_callback_phases());
             assert!(js_promise_run_microtasks_event_loop() > 0);
-            assert!(!crate::async_hooks::gc_destroy_work_pending());
+            assert!(!crate::async_hook_slots::gc_destroy_work_pending());
         });
     }
 
@@ -209,7 +209,7 @@ mod tests {
 
             let callback = crate::closure::js_closure_alloc(crate::fn_info!(callback, 1), 0);
             crate::os::test_set_stdin_data_listener(Some(callback as i64));
-            crate::os::stdin_push_bytes(b"input");
+            crate::os_hook_slots::stdin_push_bytes(b"input");
             assert!(!crate::timer::timer_phase_work_pending());
             assert!(!can_skip_callback_phases());
             // turnloop P3: buffered stdin is dispatched at the same
@@ -222,7 +222,7 @@ mod tests {
             crate::timer::js_event_loop_poll_callbacks();
             crate::timer::js_event_loop_check_phase();
             assert_eq!(CALLED.load(Ordering::Relaxed), 1);
-            assert!(!crate::os::process_stdin_needs_pump());
+            assert!(!crate::os_hook_slots::process_stdin_needs_pump());
             crate::os::test_set_stdin_data_listener(None);
         });
     }

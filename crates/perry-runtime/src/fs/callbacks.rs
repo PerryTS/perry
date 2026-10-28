@@ -11,15 +11,20 @@ pub extern "C" fn js_fs_read_file_callback(path_value: f64, encoding: f64, callb
 
     let cb_ptr = callback_from_options_arg(encoding, callback);
     let encoding_is_callback = !extract_closure_ptr(encoding).is_null();
-    let want_buffer = encoding_is_callback || read_file_encoding(encoding).is_none();
+    let text_encoding = if encoding_is_callback {
+        None
+    } else {
+        read_file_encoding(encoding)
+    };
     // One read decides both arms. The old pre-flight `stat` probe only saw a
     // missing path, so a directory reached the reader, whose failure became
     // `(null, undefined)` for a Buffer and a synchronous throw for a string
     // (#10452); Node reports `EISDIR ... read` through the callback.
-    let args = match unsafe { read_file_value_result(path_value, encoding, !want_buffer) } {
-        Ok(data_val) => [f64::from_bits(TAG_NULL), data_val],
-        Err(err_val) => [err_val, f64::from_bits(TAG_UNDEFINED)],
-    };
+    let args =
+        match unsafe { read_file_value_result(path_value, encoding, text_encoding.as_deref()) } {
+            Ok(data_val) => [f64::from_bits(TAG_NULL), data_val],
+            Err(err_val) => [err_val, f64::from_bits(TAG_UNDEFINED)],
+        };
     if !cb_ptr.is_null() {
         defer_fs_callback_chain(cb_ptr, &args, 4);
     }

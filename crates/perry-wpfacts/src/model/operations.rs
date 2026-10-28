@@ -226,6 +226,7 @@ impl Model {
             ctor_fn: None,
             rooted: false,
             deep: false,
+            key_value: None,
         });
         id
     }
@@ -241,6 +242,7 @@ impl Model {
             ctor_fn: None,
             rooted: false,
             deep: false,
+            key_value: None,
         });
         id
     }
@@ -1368,6 +1370,7 @@ impl Model {
             proto_members: Vec::new(),
             parent_value: None,
             parent_links: Vec::new(),
+            null_proto: false,
         });
         tm
     }
@@ -1402,6 +1405,7 @@ impl Model {
             proto_members: Vec::new(),
             parent_value: None,
             parent_links: Vec::new(),
+            null_proto: false,
         });
         let t = self.tok(TokKind::Obj(tm, NO_CTX));
         // What the argument reaches has its own marker (fields of fields

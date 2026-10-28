@@ -38,7 +38,7 @@ fn write_file_signal_from_options(options_value: f64) -> Result<Option<*mut Obje
         if signal_js.is_undefined() {
             return Ok(None);
         }
-        match crate::url::abort::abort_signal_ptr_from_value(signal_f64) {
+        match crate::event_target_hook_slots::abort_signal_ptr_from_value(signal_f64) {
             Some(signal) => Ok(Some(signal)),
             None => Err(write_file_signal_type_error(signal_f64)),
         }
@@ -49,8 +49,8 @@ fn check_write_file_aborted(signal: Option<*mut ObjectHeader>) -> Result<(), f64
     let Some(signal) = signal else {
         return Ok(());
     };
-    if crate::url::js_abort_signal_is_aborted(signal) != 0 {
-        Err(crate::url::js_abort_error_value())
+    if crate::event_target_hook_slots::js_abort_signal_is_aborted(signal) != 0 {
+        Err(crate::event_target_hook_slots::js_abort_error_value())
     } else {
         Ok(())
     }
@@ -71,7 +71,7 @@ fn write_file_chunk_bytes(value: f64, encoding_tag: i32) -> Result<ReadLease, f6
     }
     let addr = crate::value::addr_class::object_ref_addr(value);
     if crate::buffer::is_registered_buffer(addr)
-        || crate::typedarray::lookup_typed_array_kind(addr).is_some()
+        || crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some()
     {
         return ReadLease::new(crate::value::js_nanbox_pointer(addr as i64))
             .map_err(|_| write_file_data_type_error(value));

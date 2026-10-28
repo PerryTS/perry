@@ -299,7 +299,7 @@ unsafe fn try_data_lookup_key(
         {
             return None;
         }
-        if key == b"toJSON" && crate::perf_hooks::is_perf_entry_object(object) {
+        if key == b"toJSON" && crate::perf_hook_slots::is_perf_entry_object(object) {
             return None;
         }
         let meta = (*object).meta;

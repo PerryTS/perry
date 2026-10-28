@@ -1,0 +1,1 @@
+Fixed a crash in the shape store: recomputing a record's handle carriers followed a retired owned handle to the shared empty record and wrote it, a segfault in a synchronous full collection followed by a budgeted full after an object grew past its slots. Retired handles are now skipped; regression test gc::tests::retired_handle_carrier.

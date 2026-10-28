@@ -323,6 +323,7 @@ fn thread_exit_releases_the_threads_vm_script_entry() {
 fn thread_exit_releases_the_threads_message_ports() {
     let (ports, alive) = std::thread::spawn(|| {
         use perry_runtime::messaging as m;
+        perry_runtime::feature_hooks::js_runtime_install_messaging();
         let scope = RuntimeHandleScope::new();
         let channel = scope.root_nanbox_f64(m::same_thread_message_channel_new_for_test());
         let port = |name: &str| {

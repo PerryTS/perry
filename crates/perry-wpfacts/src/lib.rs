@@ -85,6 +85,9 @@ pub struct FactsConfig {
     /// Per-unit inputs/outputs digests in the dump (`# uio` / `# uout`):
     /// what an edit changes, unit by unit (design §13.3).
     pub unit_io: bool,
+    /// The per-unit driver prints a census line per dependency level and
+    /// per round (`PERRY_FACTS_REPORT=1`): what each holds, and the RSS.
+    pub report: bool,
 }
 
 /// Module path → `export … from` source → the module path it resolves to.
@@ -156,6 +159,8 @@ pub struct ProgramFacts {
     pub tok_names: Vec<String>,
     /// Receiver facts per binding, per module (slice 2: codegen elision).
     pub bindings: Vec<ModuleBindings>,
+    /// No solved native-prototype/global write in any contributing unit.
+    pub indexed_metadata_unwritten: bool,
     /// Per-unit mode: each unit's path and statistics.
     pub units: Vec<(String, Stats)>,
     /// `FactsConfig::unit_io`: the `# uio` / `# uout` dump lines.
@@ -214,6 +219,9 @@ pub struct ProgramFacts {
     /// what its calls pass; `top`: a call no contract describes (a stub
     /// method, a method reached under no name).
     pub(crate) method_args_out: Vec<(String, units::ArgContract)>,
+    /// DECISIONS 210: per constructor function of another unit this unit
+    /// constructs (contract name), what its `new`s pass.
+    pub(crate) ctor_runs_out: Vec<(String, units::ArgContract)>,
     /// The displays in `layouts_out` that are other units' layouts (a
     /// stand-in's contract, forwarded): never over the owner's entry.
     pub(crate) layouts_fwd: Vec<String>,
@@ -244,6 +252,7 @@ use contracts::field_ta_contracts;
 use contracts::field_value_contracts;
 use contracts::fn_contract_name;
 use contracts::fn_contract_of;
+use contracts::fn_inst_contract;
 use contracts::foreign_parent;
 use contracts::forwards_of;
 use contracts::nested_layouts;
@@ -273,6 +282,7 @@ pub(crate) fn compute_in<'a>(
     g.m.rel(|| format!("interp {}", interp.replace(' ', "\\s")));
     if cfg.profile {
         g.m.profile = Some(Default::default());
+        g.m.prof = Some(Default::default());
     }
     // The bounds are in force from the first constraint: generation already
     // solves online (`Model::cons` and `Model::edge` apply each rule to what
@@ -304,6 +314,7 @@ pub(crate) fn compute_in<'a>(
         g.closed_params();
         g.published_receivers();
         g.published_args();
+        g.published_ctors();
         g.hold_binding_writes();
         g.unit_boundary(published);
         // The other units' writes of the shared objects (`model::SharedWrite`).
@@ -329,9 +340,12 @@ pub(crate) fn compute_in<'a>(
         // summary node.
         let r = g.m.reason("thrown where interpreted code can catch it");
         let thrown = g.m.thrown;
+        g.m.thrown_reason = Some(r);
         g.m.sink_node(thrown, r);
     }
+    g.m.prof_mark(crate::model::NO_NODE, "generation");
     g.m.summarize_and_replay();
+    g.m.prof_mark(crate::model::NO_NODE, "summaries");
     if cfg.profile || cfg.explain {
         eprintln!("perry: wpfacts {}", g.m.sum.stats);
     }
@@ -351,7 +365,9 @@ pub(crate) fn compute_in<'a>(
     let checks_ms = t1.elapsed().as_secs_f64() * 1000.0 - first_solve_ms;
     g.m.settle_keyed_uses();
     g.settle_parent_layouts();
+    g.m.prof_mark(crate::model::NO_NODE, "after solve");
     if cfg.profile {
+        g.m.prof_report();
         eprintln!(
             "perry: wpfacts post-solve: first solve {first_solve_ms:.0} ms, {checks} contract checks with their solves {checks_ms:.0} ms, settle {:.0} ms",
             t1.elapsed().as_secs_f64() * 1000.0 - first_solve_ms - checks_ms
@@ -414,6 +430,11 @@ pub(crate) fn compute_in<'a>(
         }
     }
     g.m.dump_meta();
+    if g.m.explain && !g.m.bf_mints.is_empty() {
+        let mut v: Vec<(&str, u32)> = g.m.bf_mints.iter().map(|(k, n)| (*k, *n)).collect();
+        v.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+        eprintln!("perry: wpfacts explain: builtin-fn minted: {v:?}");
+    }
     let solve_ms = t1.elapsed().as_secs_f64() * 1000.0;
     // Decision 150: interpreted code is the ⊤ summary node, never a
     // program-wide kill. Every value it can receive (arguments and results
@@ -674,6 +695,7 @@ pub(crate) fn compute_in<'a>(
                     // class's own keys into the receiver, nothing else.
                     None => Some(units::FnContract {
                         method: false,
+                        this_class: None,
                         name: format!("{name}.constructor"),
                         params: Vec::new(),
                         reach: Vec::new(),
@@ -755,6 +777,7 @@ pub(crate) fn compute_in<'a>(
                             Some(_) => g.m.nodes[en as usize].prim,
                             None => 0,
                         },
+                        fn_inst: false,
                     },
                 ))
             })
@@ -896,10 +919,13 @@ pub(crate) fn compute_in<'a>(
         })
         .collect();
     // What it writes into each cell (design §17.16 (b)): what the cell node
-    // holds, the other units' writes it read included (a forwarded stand-in
-    // is its owner's contract, a join adds nothing): the cells grow
-    // monotonically to the fixpoint. Undescribed (`Gen::cell_bad`) or over
-    // the bound, unknown.
+    // holds but the other units' writes it read (`Gen::cell_seeds`): those
+    // are their writers' writes, in the cell already, and the cells grow
+    // monotonically to the fixpoint (DECISIONS 197). Written back they
+    // would make every reader a writer of the whole cell (opencode: 2871
+    // readers of `cjs:*` each publishing its 1929 writes, and each next
+    // reader taking one stand-in per such write). Undescribed
+    // (`Gen::cell_bad`) or over the bound, unknown.
     let mut cells_out: Vec<(String, units::ValueContract)> = g
         .cells
         .iter()
@@ -915,13 +941,16 @@ pub(crate) fn compute_in<'a>(
             }
             // DECISIONS 162: an own parameter's marker in it is the callers'
             // argument, which their units store there themselves.
+            let read = g.cell_seeds.get(n).map(|&s| &g.m.nodes[s as usize]);
             let toks: Vec<model::Tok> = node
                 .pts
                 .to_sorted()
                 .into_iter()
-                .filter(|t| !g.cell_flow_toks.contains(t))
+                .filter(|t| {
+                    !g.cell_flow_toks.contains(t) && !read.is_some_and(|r| r.pts.contains_tok(*t))
+                })
                 .collect();
-            let prim = node.prim;
+            let prim = node.prim & !read.map_or(0, |r| r.prim);
             if toks.is_empty() && prim == 0 {
                 return None;
             }
@@ -939,17 +968,10 @@ pub(crate) fn compute_in<'a>(
         .collect();
     // Its globals as unmodeled code may write them (the global object
     // reached ⊤, a computed key was written, a key named after the
-    // boundary): every unit's global cells read ⊤.
-    let gt =
-        g.m.tok_index
-            .get(&model::TokKind::Builtin(model::BuiltinNs::GlobalThis))
-            .copied();
-    if g.m.global_cells
-        && (g.m.aborted
-            || g.m.global_in_top
-            || g.m.global_late
-            || gt.is_some_and(|t| g.m.native_writes.contains_key(&(t, None))))
-    {
+    // boundary): every unit's global cells read ⊤. Its own code's, as a
+    // cell write is (`Model::global_written_own`): a replayed write of
+    // another unit's is that unit's `global:*` write.
+    if g.m.global_cells && (g.m.aborted || g.m.global_written_own) {
         let vc = units::ValueContract {
             unknown: true,
             prim: model::prim::ALL,
@@ -1141,10 +1163,14 @@ pub(crate) fn compute_in<'a>(
     // argument of another unit.
     let method_runs_out: Vec<String> = match g.view {
         Some(_) if cfg.unit && !g.m.aborted => {
+            // DECISIONS 210: every stand-in it calls, not only a method's:
+            // a published function no unit runs is called by its owner's
+            // code alone (`Gen::published_args`); a construction is no call
+            // (`ctor_runs_out`).
             let mut v: Vec<String> = g
                 .stand_in_fc
                 .iter()
-                .filter(|(&t, fc)| fc.method && g.m.called.contains(&g.m.tok_fn(t)))
+                .filter(|(&t, _)| g.m.called.contains(&g.m.tok_fn(t)))
                 .map(|(_, fc)| fc.name.clone())
                 .chain(
                     g.m.stub_methods
@@ -1217,6 +1243,60 @@ pub(crate) fn compute_in<'a>(
         }
         _ => Vec::new(),
     };
+    // DECISIONS 210: the constructor functions of other units this unit
+    // constructs (contract names) and what its `new`s pass, as a published
+    // method's calls publish theirs (DECISIONS 148).
+    let ctor_runs_out: Vec<(String, units::ArgContract)> = match g.view {
+        Some(_) if cfg.unit && !g.m.aborted => {
+            let mut by: Vec<(String, Vec<model::Tok>)> = Vec::new();
+            for (&t, fc) in &g.stand_in_fc {
+                if !g.m.constructed.contains(&g.m.tok_fn(t)) {
+                    continue;
+                }
+                match by.iter_mut().find(|(n, _)| *n == fc.name) {
+                    Some((_, v)) => v.push(t),
+                    None => by.push((fc.name.clone(), vec![t])),
+                }
+            }
+            by.sort();
+            by.into_iter()
+                .map(|(nm, mut toks)| {
+                    toks.sort_unstable();
+                    let ac = arg_contract_of(
+                        &g,
+                        &templates,
+                        toks,
+                        &contracts_out,
+                        &mut layouts_out,
+                        &open_tm,
+                    );
+                    (nm, ac)
+                })
+                .collect()
+        }
+        _ => Vec::new(),
+    };
+    // DECISIONS 210: the layouts of this unit's constructor functions other
+    // units construct (`Gen::published_ctors`, published in `contract_check`).
+    if cfg.unit && !g.m.aborted {
+        let mut tms: Vec<(model::FnIdx, model::TmplId)> =
+            g.m.own_ctor_runs
+                .iter()
+                .filter_map(|&(f, _)| g.m.fn_inst.get(&f).map(|&tm| (f, tm)))
+                .filter(|(_, tm)| g.m.fn_inst_published.contains(tm))
+                .collect();
+        tms.sort_unstable();
+        tms.dedup();
+        for (f, tm) in tms {
+            let Some(c) = fn_inst_contract(&g, &templates, f, tm, &mut layouts_out, &open_tm)
+            else {
+                continue;
+            };
+            if !layouts_out.iter().any(|x| x.display == c.display) {
+                layouts_out.push(c);
+            }
+        }
+    }
     // A contract class a contract result or value names is published
     // whole (methods, statics): its readers call them on what they get.
     for l in layouts_out.iter_mut() {
@@ -1277,6 +1357,31 @@ pub(crate) fn compute_in<'a>(
         })
         .map(|c| c.display.clone())
         .collect();
+    // DECISIONS 210: a construction of a function whose layout its owner
+    // has not published yet read that layout (gone): this unit solves
+    // again when the owner publishes it (`units::run`, DECISIONS 103).
+    if cfg.unit {
+        let mut pending: Vec<String> = g
+            .stand_in_fc
+            .iter()
+            .filter(|(&t, _)| {
+                let f = g.m.tok_fn(t);
+                g.m.constructed.contains(&f) && matches!(g.m.foreign_ctor.get(&f), Some(None))
+            })
+            .map(|(_, fc)| format!("new {}", fc.name))
+            .collect();
+        pending.sort();
+        pending.dedup();
+        for d in pending {
+            if !g.layouts_read.iter().any(|(x, _)| *x == d) {
+                let seen = g.unit_in.map_or_else(
+                    || units::digest(&None::<&units::ClassContract>),
+                    |u| u.layout_seen(&d),
+                );
+                g.layouts_read.push((d, seen));
+            }
+        }
+    }
     let shared_reads = if cfg.unit {
         g.m.shared_reads()
     } else {
@@ -1311,6 +1416,7 @@ pub(crate) fn compute_in<'a>(
         relations: g.m.relations.take(),
         tok_names,
         bindings,
+        indexed_metadata_unwritten: !g.m.aborted && g.m.native_writes.is_empty(),
         units: Vec::new(),
         unit_io: Vec::new(),
         rounds: 0,
@@ -1334,6 +1440,7 @@ pub(crate) fn compute_in<'a>(
         this_args_out,
         method_runs_out,
         method_args_out,
+        ctor_runs_out,
         layouts_fwd,
         writes_out,
         shared_out,
@@ -1358,6 +1465,13 @@ pub fn compute_units(modules: &[(String, &Module)], cfg: &FactsConfig) -> Progra
 }
 
 impl ProgramFacts {
+    /// Conservative program-wide metadata effect contract. Handing a shared
+    /// object to another analyzed unit is not itself a mutation; every actual
+    /// mutation or exposure to unmodeled code withholds this proof.
+    pub fn indexed_metadata_pristine(&self) -> bool {
+        !self.stats.aborted && self.interp_guard.is_none() && self.indexed_metadata_unwritten
+    }
+
     fn module_index(&self, path: &str) -> Option<usize> {
         self.module_paths
             .binary_search_by(|p| p.as_str().cmp(path))

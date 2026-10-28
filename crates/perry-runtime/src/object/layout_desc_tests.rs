@@ -312,10 +312,144 @@ fn static_layout_runtime_prototype_families_keep_their_reserved_serials() {
     ] {
         unsafe {
             assert_eq!((*(*desc).proto).serial, serial);
+            // A runtime layout's shape is installed by its first birth.
+            assert_eq!(layout_word_for_birth(desc), Some(layout_id(desc)));
             assert_eq!(
                 shapes::shape_proto_id(LayoutWord(layout_id(desc))),
                 Some(serial)
             );
         }
     }
+}
+
+/// Startup draws a runtime layout's id but installs no shape for it: the
+/// first birth in the agent does, under that id.
+#[test]
+fn runtime_layout_is_installed_by_its_first_birth() {
+    std::thread::spawn(|| unsafe {
+        crate::test_support::bootstrap_test_thread();
+        let installs = || super::layout_desc::registration_installs();
+        let desc = std::ptr::addr_of!(runtime_layouts::ITERATOR_RESULT);
+        let word = LayoutWord(layout_id(desc));
+        assert_eq!(installs(), 0, "startup installed a runtime layout");
+        assert!(super::shapes::shape_record_for_word(word).is_none());
+        assert_ne!((*desc).shape_id, 0, "startup draws the id");
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let obj = scope.root_raw_mut_ptr(perry_alloc_layout(desc));
+        assert_eq!(installs(), 1);
+        assert!(super::shapes::shape_record_for_word(word).is_some());
+        obj.with_const_ptr(|o: *const ObjectHeader| assert_eq!((*o).parent_class_id, word.0));
+        let _again = scope.root_raw_mut_ptr(perry_alloc_layout(desc));
+        assert_eq!(installs(), 1, "a later birth reuses the installed shape");
+    })
+    .join()
+    .unwrap();
+}
+
+/// Every agent draws a runtime layout id in section order before user code,
+/// and installs the shape under it at its own first birth: two agents
+/// publish one identity under one word. URL_COMPONENTS names a prototype
+/// family, so its id comes from the identity allocator, not the section index.
+#[test]
+fn two_agents_install_a_runtime_layout_under_one_id() {
+    let desc = std::ptr::addr_of!(runtime_layouts::URL_COMPONENTS) as usize;
+    let agent = move || {
+        std::thread::spawn(move || unsafe {
+            crate::test_support::bootstrap_test_thread();
+            let desc = desc as *const PerryLayoutDesc;
+            let drawn = (*desc).shape_id;
+            let word = layout_word_for_birth(desc).expect("a runtime layout installs");
+            let record = super::shapes::shape_record_for_word(LayoutWord(word)).expect("installed");
+            (drawn, word, record.identity().0)
+        })
+        .join()
+        .unwrap()
+    };
+    let (first, second) = (agent(), agent());
+    assert_ne!(first.0, 0, "startup draws the id");
+    assert_eq!(first, second);
+    assert_eq!(
+        first.0, first.2,
+        "the shape is installed under the drawn id"
+    );
+}
+
+#[test]
+fn descriptor_image_lists_are_byte_identical_to_heap_births() {
+    crate::test_support::bootstrap_test_thread();
+    let _no_gc = crate::gc::GcSuppressScope::new();
+    let mut checked = 0;
+    let mut mapped_count = 0;
+    let mut attribute_count = 0;
+    let mut symbol_count = 0;
+    for desc in super::layout_desc::image_layouts() {
+        unsafe {
+            let d = &*desc;
+            if !(d.layout_id & crate::codegen_abi::LAYOUT_TAG != 0
+                && LayoutWord(d.layout_id).row().0 < crate::codegen_abi::NATIVE_LAYOUT_ROWS)
+                || d.key_count == 0
+            {
+                continue;
+            }
+            assert!(
+                !d.image_keys.is_null(),
+                "runtime descriptor {:#x}",
+                d.family
+            );
+            let keys = std::slice::from_raw_parts(d.keys, d.key_count as usize);
+            let mapped = keys.iter().enumerate().any(|(i, k)| k.slot as usize != i);
+            let attributed = mapped || keys.iter().any(|k| k.attrs != 0);
+            assert!(super::image_keys::prepare(keys, d.image_keys));
+            let heap = super::key_attrs::alloc_canonical_key_list(d.key_count, true, attributed);
+            let heap_values = crate::array::array_elements_ptr(heap);
+            let heap_attrs = super::key_attrs::keys_attrs(heap);
+            for (i, key) in keys.iter().enumerate() {
+                // GC_STORE_AUDIT(INIT): unpublished comparison list, under suppression.
+                *heap_values.add(i) = layout_key_word(key, &[], &mut 0);
+                if !heap_attrs.is_null() {
+                    super::key_attrs::attrs_write(heap_attrs, i as u32, key.attrs, &*key.atom);
+                    if mapped {
+                        super::key_attrs::attrs_write_slot(heap_attrs, i as u32, key.slot);
+                    }
+                }
+                if (*key.atom).kind != crate::codegen_abi::ATOM_KIND_STRING {
+                    symbol_count += 1;
+                }
+            }
+            (*heap).length = d.key_count;
+            let image = d.image_keys;
+            let heap_header = crate::gc::header_from_trusted_user_ptr(heap.cast());
+            let image_header = crate::gc::header_from_trusted_user_ptr(image.cast());
+            assert_eq!((*heap_header)._reserved, (*image_header)._reserved);
+            assert_eq!((*heap_header).size, (*image_header).size);
+            assert_eq!((*heap).length, (*image).length);
+            assert_eq!((*heap).capacity, (*image).capacity);
+            assert_eq!((*heap).named, (*image).named);
+            assert_eq!((*heap).ek_prefix, (*image).ek_prefix);
+            assert_eq!((*heap).ek_kind, (*image).ek_kind);
+            let image_values = crate::array::array_elements_ptr(image);
+            for i in 0..d.key_count as usize {
+                assert_eq!(*heap_values.add(i), *image_values.add(i));
+                assert_eq!(
+                    super::key_attrs::key_word(heap, i as u32),
+                    super::key_attrs::key_word(image, i as u32)
+                );
+            }
+            if attributed {
+                attribute_count += 1;
+            }
+            if mapped {
+                mapped_count += 1;
+            }
+            checked += 1;
+        }
+    }
+    assert!(
+        checked > 50,
+        "the runtime catalog must actually be exercised: {checked}"
+    );
+    assert!(
+        attribute_count > 0 && mapped_count > 0 && symbol_count > 0,
+        "nontrivial trailers, permutations and symbols must be live"
+    );
 }

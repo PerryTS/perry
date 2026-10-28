@@ -1,0 +1,8 @@
+{
+    "packages": [
+        { "name": "test:producer", "path": "producer.wat" }
+    ],
+    "nodes": [
+        { "type": "instantiation", "package": 0 }
+    ]
+}

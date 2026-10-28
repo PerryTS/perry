@@ -54,6 +54,7 @@ mod tests {
         link_section = "perry_layouts"
     )]
     static mut LAYOUT: PerryLayoutDesc = PerryLayoutDesc {
+        image_keys: std::ptr::null_mut(),
         shape_id: 0,
         _layout_pad: 0,
         family: 0x41574201,
@@ -128,6 +129,7 @@ mod evaluation_layout_tests {
         link_section = "perry_layouts"
     )]
     static mut LAYOUT: PerryLayoutDesc = PerryLayoutDesc {
+        image_keys: std::ptr::null_mut(),
         shape_id: 0,
         _layout_pad: 0,
         family: 0x41574202,
@@ -259,6 +261,11 @@ mod evaluation_layout_tests {
                 Some((*desc).layout_id)
             );
             assert!(is_family_object(obj));
+            assert_eq!(
+                crate::object::layout_desc::family_own_key(obj, b"not_in_family"),
+                Some(None),
+                "the evaluation receiver consumes its checked family proof"
+            );
             assert_eq!(
                 shapes::evaluation_copy_birth_edges(copy, (*desc).layout_id),
                 Some((proto_bits, class_bits))

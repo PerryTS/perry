@@ -387,7 +387,7 @@ pub(crate) fn append_concat_arg(result: *mut ArrayHeader, value: f64) -> *mut Ar
     // `@@isConcatSpreadable === true` still opts in below, which is the one way
     // the spec does spread one.
     if spreadable != Some(true)
-        && (crate::typedarray::lookup_typed_array_kind(raw_addr).is_some()
+        && (crate::typedarray_hook_slots::lookup_typed_array_kind(raw_addr).is_some()
             || crate::buffer::is_registered_buffer(raw_addr))
     {
         return js_array_push_f64(result, value);
@@ -425,7 +425,7 @@ fn read_concat_spreadable(value: f64) -> Option<bool> {
     // excluded: their `get` trap can materialize the property without any
     // install having happened.
     if !crate::symbol::concat_spreadable_symbol_ever_set()
-        && crate::proxy::js_proxy_is_proxy(value) == 0
+        && crate::proxy_hooks::proxy_is_proxy(value) == 0
     {
         return None;
     }
@@ -658,7 +658,7 @@ fn classify_iter_source(items: f64) -> IterSourceKind {
     if raw != 0 {
         if crate::set::is_registered_set(raw)
             || crate::map::is_registered_map(raw)
-            || crate::typedarray::lookup_typed_array_kind(raw).is_some()
+            || crate::typedarray_hook_slots::lookup_typed_array_kind(raw).is_some()
             || crate::buffer::is_registered_buffer(raw)
         {
             return IterSourceKind::Snapshot;
@@ -1048,7 +1048,7 @@ unsafe fn dense_concat_array_source(src: *const ArrayHeader) -> Option<(*const A
     // helper validates what it is handed, so filter the handle band with the
     // canonical predicate first rather than open-coding a floor here.
     if crate::value::addr_class::is_plausible_heap_addr(raw_before_clean)
-        && (crate::typedarray::lookup_typed_array_kind(raw_before_clean).is_some()
+        && (crate::typedarray_hook_slots::lookup_typed_array_kind(raw_before_clean).is_some()
             || crate::buffer::is_registered_buffer(raw_before_clean))
     {
         return None;
@@ -1067,7 +1067,7 @@ unsafe fn dense_concat_array_source(src: *const ArrayHeader) -> Option<(*const A
     }
     if crate::set::is_registered_set(raw)
         || crate::map::is_registered_map(raw)
-        || crate::typedarray::lookup_typed_array_kind(raw).is_some()
+        || crate::typedarray_hook_slots::lookup_typed_array_kind(raw).is_some()
         || crate::buffer::is_registered_buffer(raw)
     {
         return None;
@@ -1220,7 +1220,7 @@ unsafe fn try_append_spread_array_dense(
     }
     if crate::set::is_registered_set(raw)
         || crate::map::is_registered_map(raw)
-        || crate::typedarray::lookup_typed_array_kind(raw).is_some()
+        || crate::typedarray_hook_slots::lookup_typed_array_kind(raw).is_some()
         || crate::buffer::is_registered_buffer(raw)
     {
         return None;
@@ -1315,7 +1315,7 @@ unsafe fn append_concat_proxy(result: *mut ArrayHeader, proxy: f64) -> *mut Arra
             let present =
                 crate::object::js_object_has_property(proxy.get_nanbox_f64(), key.get_nanbox_f64());
             let value = if crate::value::js_is_truthy(present) != 0 {
-                crate::proxy::js_proxy_get(proxy.get_nanbox_f64(), key.get_nanbox_f64())
+                crate::proxy_hooks::proxy_get(proxy.get_nanbox_f64(), key.get_nanbox_f64())
             } else {
                 f64::from_bits(crate::value::TAG_HOLE)
             };
@@ -1338,7 +1338,7 @@ unsafe fn real_array_source(src: *const ArrayHeader, len: u32) -> Option<*const 
     if (*hdr).obj_type != crate::gc::GC_TYPE_ARRAY
         || crate::set::is_registered_set(raw)
         || crate::map::is_registered_map(raw)
-        || crate::typedarray::lookup_typed_array_kind(raw).is_some()
+        || crate::typedarray_hook_slots::lookup_typed_array_kind(raw).is_some()
         || crate::buffer::is_registered_buffer(raw)
         || (*src).length != len
     {

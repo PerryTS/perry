@@ -9,7 +9,7 @@ use crate::object::{
     js_object_alloc, js_object_get_field_by_name_f64, js_object_set_field_by_name,
 };
 use crate::string::{js_string_from_bytes, StringHeader};
-use crate::url::create_string_f64;
+use crate::value::boxed_text::create_string_f64;
 use crate::value::JSValue;
 
 const DEFAULT_FRAME_COUNT: i32 = 10;

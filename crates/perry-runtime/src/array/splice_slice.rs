@@ -330,9 +330,9 @@ pub extern "C" fn js_array_slice(
         return js_array_alloc(0);
     }
     // #3148: TypedArray slice — return a same-kind TypedArray.
-    if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
-        return crate::typedarray::js_typed_array_slice(
-            arr as *const crate::typedarray::TypedArrayHeader,
+    if crate::typedarray_hook_slots::lookup_typed_array_kind(arr as usize).is_some() {
+        return crate::typedarray_hook_slots::js_typed_array_slice(
+            arr as *const crate::typedarray_hook_slots::TypedArrayHeader,
             start,
             end,
         ) as *mut ArrayHeader;

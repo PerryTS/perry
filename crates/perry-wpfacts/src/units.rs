@@ -66,6 +66,13 @@ pub(crate) struct ClassContract {
     /// a unit holding its stand-in forwards it as an open class's (the next
     /// unit holds its stand-in too, its constructions publish there).
     pub forwards: bool,
+    /// DECISIONS 210: the layout of a constructor function's instances
+    /// (`new <f>`, `TmplKind::FnInst`): `ctor_fn` is the function's own
+    /// contract. A reader's `new` of the function constructs this layout
+    /// (`Model::foreign_ctor`) and publishes what it passes
+    /// (`ProgramFacts::ctor_runs_out`); the owner constructs it with the
+    /// union of every unit's arguments (`Gen::published_ctors`).
+    pub fn_inst: bool,
     /// The prototype methods with a function contract (key, contract), and
     /// the constructor's (DECISIONS 57): their receiver is a contract
     /// parameter, so another unit's subclass instance can run them.
@@ -220,6 +227,13 @@ pub(crate) struct FnContract {
     /// holds it): a unit calling it publishes what it passes
     /// (`ProgramFacts::method_runs_out`), however it got the function.
     pub method: bool,
+    /// DECISIONS 212: the published class (its display) whose instances a
+    /// method runs on, when there is one: a unit holding the method as a
+    /// value (returned, read from a field, an array element or the
+    /// prototype) admits those as receivers and publishes them, as for a
+    /// method call on the class's stand-in (DECISIONS 107). `None` with
+    /// `method`: it admits no receiver (each one is a census report).
+    pub this_class: Option<String>,
     /// Per parameter: what the callee does to the argument itself
     /// (`model::MARK_*`), and to what the argument reaches (its fields,
     /// transitively). Two sets: reading `p.n` and converting it is no
@@ -316,6 +330,7 @@ pub(crate) struct ValueContract {
     /// hold, by name as `arrays`: their elements are cell `arr:<name>`; a
     /// reader's stand-in is a container of its own kind.
     pub boxes: Vec<String>,
+    pub indexed_owners: Vec<crate::bindings::IndexedOwner>,
 }
 
 /// Keeps the prefix `a` and `b` share.
@@ -370,6 +385,9 @@ impl FnContract {
     /// (`None`) absorbs them; the receiver is unused only if both say so.
     pub(crate) fn join(&mut self, o: &FnContract) {
         self.method |= o.method;
+        if self.this_class != o.this_class {
+            self.this_class = None;
+        }
         for (v, w) in [(&mut self.params, &o.params), (&mut self.reach, &o.reach)] {
             if v.len() < w.len() {
                 v.resize(w.len(), 0);
@@ -691,6 +709,8 @@ impl ValueContract {
         union_into(&mut self.builtins, &o.builtins);
         union_into(&mut self.arrays, &o.arrays);
         union_into(&mut self.boxes, &o.boxes);
+        union_into(&mut self.indexed_owners, &o.indexed_owners);
+        self.indexed_owners.sort();
         self.builtins.sort();
         self.arrays.sort();
         self.boxes.sort();
@@ -765,6 +785,11 @@ pub(crate) struct Published {
     /// what the running units' calls pass, joined
     /// (`ProgramFacts::method_args_out`).
     pub(crate) method_args: FxHashMap<String, ArgContract>,
+    /// DECISIONS 210: per contract function some unit constructs (`new` of
+    /// its stand-in; contract name), what the constructing units pass,
+    /// joined (`ProgramFacts::ctor_runs_out`): its owner constructs it with
+    /// their union on its own `new <f>` layout and publishes that layout.
+    pub(crate) ctor_runs: FxHashMap<String, ArgContract>,
     /// The argument contracts of closed functions (decision 13), by
     /// (module path, name): the union over every unit's calls.
     pub(crate) args: FxHashMap<(String, String), ArgContract>,

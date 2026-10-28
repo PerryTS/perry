@@ -7,9 +7,12 @@ use crate::model::*;
 use crate::pts::FxHashMap;
 use perry_hir::{Class, Export, Function, Global, Import, ImportSpecifier, Module, Stmt};
 
+mod define_keys;
 mod export;
+pub(crate) use export::UNDESCRIBED;
 mod for_in;
 mod glue;
+mod native_result;
 mod primitives;
 mod shared_closures;
 mod view;
@@ -137,6 +140,8 @@ pub struct Gen<'a> {
     /// DECISIONS 126: the stand-ins of other units' typed-array fields
     /// (report, token), one per class and key.
     pub stand_in_tas: Vec<(String, Tok)>,
+    /// Stable source-allocation ordinals, independent of imported stand-ins.
+    pub indexed_allocation_sites: FxHashMap<(u32, usize), u32>,
     /// Design §17.16 (b): the cells this unit names (key, node), the cells
     /// whose values no contract describes (sunk, published unknown), and
     /// the cells it reads.
@@ -148,6 +153,10 @@ pub struct Gen<'a> {
     pub cell_flows: std::collections::BTreeSet<(FnIdx, u32, String)>,
     pub cell_flow_toks: crate::pts::FxHashSet<Tok>,
     pub cells_read: Vec<String>,
+    /// The node each read cell's other-unit writes are seeded into, by the
+    /// cell's node (`seed_cell_now`): what the unit read there, which its
+    /// own write leaves to their writers.
+    pub cell_seeds: FxHashMap<NodeId, NodeId>,
     /// DECISIONS 171: the cells seeded once their node is consumed.
     pub cells_deferred: Vec<(String, NodeId)>,
     /// The other units' layouts it looked up by display (DECISIONS 103).
@@ -268,15 +277,14 @@ pub struct Gen<'a> {
     /// The constant first argument of the call `call_expr` is lowering,
     /// taken by `call_with` (`Model::call_lit`).
     pub(crate) call_lit_arg: Option<Atom>,
-    /// `(module, local)` of a `let require = <closure>` binding, the
-    /// wrapper's synthetic require (`Gen::require_helper_body`).
-    pub(crate) require_helpers: FxHashMap<(u32, u32), &'a [Stmt]>,
-    pub(crate) require_helpers_indexed: std::collections::HashSet<u32>,
     /// FVA 4.3b: (module, `__keys` local) -> the `__forin_obj` local whose
     /// `ForInKeys` it holds.
     pub(crate) for_in_keys_of: FxHashMap<(u32, u32), u32>,
     /// The for-in bodies being walked: (module, loop variable, key parameter).
     pub(crate) for_in_key: Vec<(u32, u32, NodeId)>,
+    /// Constant bindings' initializers: (module, global, id) -> init
+    /// (`Gen::note_define_keys`, `Gen::const_key`).
+    pub(crate) const_inits: FxHashMap<(u32, bool, u32), define_keys::ConstInit>,
     /// Per module: locals written or captured anywhere (`Gen::for_in_of`).
     pub(crate) unstable: FxHashMap<u32, crate::pts::FxHashSet<u32>>,
 }
@@ -302,6 +310,7 @@ mod import_values;
 
 #[path = "gen/class_values.rs"]
 mod class_values;
+mod indexed_owner;
 
 impl<'a> Gen<'a> {
     pub fn new(modules: Vec<(&'a str, &'a Module)>, relations: bool, explain: bool) -> Self {
@@ -384,11 +393,13 @@ impl<'a> Gen<'a> {
             describing: Default::default(),
             ta_reported: Default::default(),
             stand_in_tas: Vec::new(),
+            indexed_allocation_sites: FxHashMap::default(),
             cells: Vec::new(),
             cell_bad: Default::default(),
             cell_flows: Default::default(),
             cell_flow_toks: Default::default(),
             cells_read: Vec::new(),
+            cell_seeds: FxHashMap::default(),
             cells_deferred: Vec::new(),
             layouts_read: Vec::new(),
             fns_read: Vec::new(),
@@ -442,10 +453,9 @@ impl<'a> Gen<'a> {
             cell_locals: Default::default(),
             lit_births: FxHashMap::default(),
             call_lit_arg: None,
-            require_helpers: FxHashMap::default(),
-            require_helpers_indexed: std::collections::HashSet::new(),
             for_in_keys_of: FxHashMap::default(),
             for_in_key: Vec::new(),
+            const_inits: FxHashMap::default(),
             unstable: FxHashMap::default(),
         }
     }
@@ -456,6 +466,8 @@ impl<'a> Gen<'a> {
     /// is walked, so cross-references resolve in one pass.
     pub fn register_all(&mut self) {
         self.index_emitted_closures();
+        self.note_const_inits();
+        self.note_indexed_allocation_sites();
         let modules = self.modules.clone();
         for (mi, (path, module)) in modules.iter().enumerate() {
             let mi = mi as u32;
@@ -485,6 +497,8 @@ impl<'a> Gen<'a> {
         }
         // Keys a for-in body may define, before any lookup is generated.
         self.note_for_in_define_keys();
+        // Keys a definition names by a constant, before any lookup too.
+        self.note_define_keys();
         // Class parents and native parents (second pass: names resolve).
         for mi in 0..modules.len() {
             for c in self.classes_of(mi) {
@@ -645,6 +659,35 @@ impl<'a> Gen<'a> {
             })
             .map(|(d, _)| d.clone())
             .collect();
+        // Explain: why this unit reports each contract it consumed.
+        if self.m.explain && !self.m.aborted {
+            let mut why: Vec<String> = Vec::new();
+            for (d, (_, tm, toks)) in &self.stand_ins {
+                if !out.contains(d) {
+                    continue;
+                }
+                let mut rs: Vec<String> = Vec::new();
+                if self.m.foreign_written.contains(tm) {
+                    rs.push("written".into());
+                }
+                if self.m.adds_keys.get(tm).is_some_and(|&k| k > 0) {
+                    rs.push("adds keys".into());
+                }
+                for &t in toks {
+                    if let Some(&r) = self.m.escaped.get(&t) {
+                        rs.push(format!("escaped: {}", self.m.reasons[r as usize]));
+                    }
+                    if let Some(&(_, r)) = self.m.hard.get(&t) {
+                        rs.push(format!("hard: {}", self.m.reasons[r as usize]));
+                    }
+                }
+                why.push(format!("{d}: {}", rs.join("; ")));
+            }
+            why.sort();
+            for w in why {
+                eprintln!("perry: wpfacts explain: unit reports {w}");
+            }
+        }
         for ((name, _), &(_, t)) in &self.stand_in_fns {
             // An aborted unit is unknown code holding everything it names
             // (ALI cause 4). It reports what no contract grants unknown code:
@@ -658,22 +701,34 @@ impl<'a> Gen<'a> {
                 true => !self.receiver_unused(t),
                 false => self.m.is_escaped(t) && !self.open_fn(t),
             };
-            if escaped || self.m.hard.contains_key(&t) {
+            // DECISIONS 210: used as an object beyond the contract.
+            if escaped || self.m.hard.contains_key(&t) || self.m.fn_touched.contains(&t) {
                 out.push(format!("fn:{name}"));
             }
         }
         // A value stored under a named key of it is one the owner does not
         // see (an element store is the typed array's own data).
         for (rep, t) in &self.stand_in_tas {
-            let written = self.m.field_keys.get(t).is_some_and(|ks| {
-                ks.iter().any(|&a| {
-                    self.m.fields.get(&(*t, a)).is_some_and(|&n| {
-                        !self.m.nodes[n as usize].pts.is_empty()
-                            || self.m.nodes[n as usize].prim != 0
-                    })
-                })
-            });
+            let written = self
+                .m
+                .tmpl_of(*t)
+                .is_none_or(|tm| crate::bindings::owner_metadata_written(&self.m, tm));
             if self.m.aborted || written || self.m.is_escaped(*t) || self.m.hard.contains_key(t) {
+                if self.m.explain {
+                    let esc = self
+                        .m
+                        .escaped
+                        .get(t)
+                        .map(|&r| self.m.reasons[r as usize].clone());
+                    let hard = self
+                        .m
+                        .hard
+                        .get(t)
+                        .map(|&(_, r)| self.m.reasons[r as usize].clone());
+                    eprintln!(
+                        "perry: wpfacts explain: unit reports {rep}: written {written} escaped {esc:?} hard {hard:?}"
+                    );
+                }
                 out.push(rep.clone());
             }
         }
@@ -993,14 +1048,26 @@ impl<'a> Gen<'a> {
                 accessor_keys.push(a);
             }
         }
+        let named: Vec<Option<(Atom, bool)>> = c
+            .computed_members
+            .iter()
+            .map(|cm| self.named_computed(mi, cm))
+            .collect();
+        for &(a, _) in named.iter().flatten() {
+            push_unique(&mut accessor_keys, a);
+        }
         let proto_members = {
             let mut v = accessor_keys.clone();
             for meth in &c.methods {
                 let a = self.m.atom(&meth.name);
                 push_unique(&mut v, a);
             }
-            let a = self.m.atom("constructor");
-            push_unique(&mut v, a);
+            // A literal has no own `constructor`: it reads
+            // `Object.prototype`'s, which a store into ⊤ may replace.
+            if !c.is_literal_shape() {
+                let a = self.m.atom("constructor");
+                push_unique(&mut v, a);
+            }
             v
         };
         if !c.is_literal_shape() {
@@ -1021,11 +1088,12 @@ impl<'a> Gen<'a> {
             ctor: None,
             native_parent: c.native_extends.clone(),
             accessor_keys: accessor_keys.clone(),
-            has_computed_members: !c.computed_members.is_empty(),
+            has_computed_members: named.iter().any(|n| n.is_none()),
             field_init: None,
             proto_members,
             parent_value: None,
             parent_links: Vec::new(),
+            null_proto: c.declared_keys_null_proto(),
         });
         self.mods[mi as usize].classes.insert(c.name.clone(), tm);
         for a in &c.aliases {
@@ -1094,7 +1162,7 @@ impl<'a> Gen<'a> {
             let this = self.m.funcs[f as usize].this;
             self.m.this_class.insert(this, tm);
             let a = self.m.atom(name);
-            self.m.accessor_atoms.insert(a);
+            self.m.add_accessor_atom(a);
             let ft = self.m.funcs[f as usize].token;
             self.m.accessors.entry((proto, a)).or_default().0.push(ft);
             push_unique(self.m.accessor_keys.entry(proto).or_default(), a);
@@ -1105,12 +1173,12 @@ impl<'a> Gen<'a> {
             let this = self.m.funcs[f as usize].this;
             self.m.this_class.insert(this, tm);
             let a = self.m.atom(name);
-            self.m.accessor_atoms.insert(a);
+            self.m.add_accessor_atom(a);
             let ft = self.m.funcs[f as usize].token;
             self.m.accessors.entry((proto, a)).or_default().1.push(ft);
             push_unique(self.m.accessor_keys.entry(proto).or_default(), a);
         }
-        for cm in &c.computed_members {
+        for (cm, named) in c.computed_members.iter().zip(named) {
             let f = self.register_fn(
                 mi,
                 cm.function.id,
@@ -1119,6 +1187,17 @@ impl<'a> Gen<'a> {
                 false,
                 false,
             );
+            if let Some((a, setter)) = named {
+                // Under a constant key: that key's accessor.
+                let this = self.m.funcs[f as usize].this;
+                self.m.this_class.insert(this, tm);
+                self.m.add_accessor_atom(a);
+                let ft = self.m.funcs[f as usize].token;
+                let e = self.m.accessors.entry((proto, a)).or_default();
+                if setter { &mut e.1 } else { &mut e.0 }.push(ft);
+                push_unique(self.m.accessor_keys.entry(proto).or_default(), a);
+                continue;
+            }
             let holder = if cm.is_static { cobj } else { proto };
             let any = self.m.field_any(holder);
             let t = self.m.funcs[f as usize].token;
@@ -1479,6 +1558,7 @@ impl<'a> Gen<'a> {
             proto_members: vec![],
             parent_value: None,
             parent_links: Vec::new(),
+            null_proto: false,
         });
         tm
     }
@@ -1514,6 +1594,7 @@ impl<'a> Gen<'a> {
             proto_members: vec![],
             parent_value: None,
             parent_links: Vec::new(),
+            null_proto: false,
         });
         tm
     }
@@ -1541,14 +1622,14 @@ impl ModInfo {
 }
 
 pub fn short_path(p: &str) -> String {
-    // node_modules/<pkg>/... keeps the package; otherwise the file name.
-    if let Some(i) = p.rfind("node_modules/") {
-        return p[i + "node_modules/".len()..].to_string();
-    }
-    match p.rfind('/') {
-        Some(i) => p[i + 1..].to_string(),
-        None => p.to_string(),
-    }
+    // The module's path: a display names a function, class or array across
+    // units (one name, one contract, DECISIONS 106), so it names its module.
+    // A shortened one did not: two versions of a package (jose@6.0.11 and
+    // jose@6.2.9: `jose/dist/webapi/jwks/local.js`), or files of one name in
+    // two directories (`instructions.ts`), published one function contract
+    // name twice, and its readers saw one owner's contract and the other's
+    // at the end of every round (opencode: 13 units solved in every round).
+    p.to_string()
 }
 
 pub(crate) fn push_unique(v: &mut Vec<Atom>, a: Atom) {

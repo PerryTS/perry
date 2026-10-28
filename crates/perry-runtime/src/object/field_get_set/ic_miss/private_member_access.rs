@@ -24,6 +24,13 @@ pub(crate) fn private_member_access_hints_unwind_to(sp: usize) {
     });
 }
 
+#[cfg(any(test, target_os = "wasi"))]
+pub(crate) fn private_member_access_hints_restore_depth(depth: usize) {
+    PRIVATE_MEMBER_ACCESS_HINTS.with(|hints| {
+        hints.borrow_mut().restore_depth(depth);
+    });
+}
+
 pub(crate) fn private_member_access_hints_check_marks(sp: usize) {
     PRIVATE_MEMBER_ACCESS_HINTS.with(|hints| {
         crate::exception::marks::check_marks(
@@ -34,7 +41,7 @@ pub(crate) fn private_member_access_hints_check_marks(sp: usize) {
     });
 }
 
-#[cfg(test)]
+#[cfg(any(test, target_os = "wasi"))]
 pub(crate) fn private_member_access_hints_depth() -> usize {
     PRIVATE_MEMBER_ACCESS_HINTS.with(|hints| hints.borrow().len())
 }
@@ -392,7 +399,7 @@ pub extern "C" fn js_private_brand_check(
         ));
     }
     if is_static != 0
-        && (crate::proxy::js_proxy_is_proxy(obj) != 0
+        && (crate::proxy_hooks::proxy_is_proxy(obj) != 0
             || !private_static_receiver_is_constructor(obj))
     {
         return false_value;

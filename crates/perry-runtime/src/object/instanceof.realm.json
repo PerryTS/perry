@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "groups": {
+    "objects": [
+      {
+        "name": "Function.prototype[\"@@hasInstance\"]",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "[Symbol.hasInstance]"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::instanceof::function_prototype_has_instance_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::instanceof::function_prototype_has_instance_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_4d4c9a296e0f6366d4e4",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ]
+  }
+}

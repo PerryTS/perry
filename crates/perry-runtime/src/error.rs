@@ -928,7 +928,7 @@ pub extern "C" fn js_error_is_error(value: f64) -> f64 {
             return f64::from_bits(crate::value::TAG_FALSE);
         }
         if ptr_is_native_error(ptr as usize)
-            || crate::event_target::is_dom_exception_object(ptr.cast())
+            || crate::event_target_hook_slots::is_dom_exception_object(ptr.cast())
         {
             return f64::from_bits(crate::value::TAG_TRUE);
         }

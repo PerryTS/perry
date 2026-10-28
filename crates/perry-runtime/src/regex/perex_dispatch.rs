@@ -70,7 +70,7 @@ pub(crate) fn call_one(
 ) -> Result<f64, EngineError> {
     let scope = RuntimeHandleScope::new();
     api::caught(|| {
-        if crate::proxy::js_proxy_is_proxy(method.get_nanbox_f64()) == 1 {
+        if crate::proxy_hooks::proxy_is_proxy(method.get_nanbox_f64()) == 1 {
             // The generic value-call bridge drops this for proxies. Supply
             // the actual receiver and an exact one-element GC argument array.
             let args = scope.root_raw_mut_ptr(crate::array::js_array_alloc(1));
@@ -81,7 +81,11 @@ pub(crate) fn call_one(
             let args = args.with_mut_ptr::<crate::array::ArrayHeader, _>(|args| {
                 js_nanbox_pointer(args as i64)
             });
-            crate::proxy::js_proxy_apply(method.get_nanbox_f64(), receiver.get_nanbox_f64(), args)
+            crate::proxy_hooks::proxy_apply(
+                method.get_nanbox_f64(),
+                receiver.get_nanbox_f64(),
+                args,
+            )
         } else {
             let args = [argument.get_nanbox_f64()];
             unsafe {
@@ -166,7 +170,7 @@ fn execute_override(
     receiver: &RuntimeHandle<'_>,
     input: &RuntimeHandle<'_>,
 ) -> Result<Option<Option<ExecResult>>, EngineError> {
-    let callable = crate::proxy::proxy_wraps_callable(method.get_nanbox_f64());
+    let callable = crate::proxy_hooks::proxy_wraps_callable(method.get_nanbox_f64());
     let builtin =
         crate::object::regex_proto_thunks::is_builtin_regexp_exec(method.get_nanbox_f64());
     if callable && !builtin {
@@ -187,14 +191,23 @@ fn execute_override(
     Ok(None)
 }
 
+/// ToString is the identity for a string primitive. Heap strings need no
+/// allocation; an immediate may materialize, so callers keep their other
+/// managed inputs rooted. Mark the returned storage shared just as the
+/// ordinary conversion does, without registering a redundant argument root.
+#[inline]
+pub(crate) fn primitive_string(value: f64) -> Option<*mut StringHeader> {
+    let value_kind = crate::value::JSValue::from_bits(value.to_bits());
+    if !value_kind.is_string() && !value_kind.is_short_string() {
+        return None;
+    }
+    let string = crate::value::js_get_string_pointer_unified(value) as *mut StringHeader;
+    crate::string::js_string_addref(string);
+    Some(string)
+}
+
 pub(crate) fn to_string(value: &RuntimeHandle<'_>) -> Result<*mut StringHeader, EngineError> {
-    // A string is its own ToString: no conversion runs, so no trap is armed.
-    // An immediate is copied to the heap, which allocates but never throws.
-    let v = crate::value::JSValue::from_bits(value.get_nanbox_u64());
-    if v.is_string() || v.is_short_string() {
-        let string = crate::value::js_get_string_pointer_unified(value.get_nanbox_f64())
-            as *mut StringHeader;
-        crate::string::js_string_addref(string);
+    if let Some(string) = primitive_string(value.get_nanbox_f64()) {
         return Ok(string);
     }
     let scope = RuntimeHandleScope::new();

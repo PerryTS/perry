@@ -1,0 +1,4 @@
+failed to add argument edge from source node 0 to target node 1 referenced in argument 0 for test case `not-instantiation`
+
+Caused by:
+    the specified node is not an instantiation

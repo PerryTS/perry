@@ -1,0 +1,1 @@
+Reduce async task context copying and generator iteration bookkeeping. Task dispatch moves owned context snapshots while preserving AsyncLocalStorage restoration and guest task identity. Linux runtime handle scopes use direct TLS addressing, and default generator resumes write their pointer-free sent value directly into the canonical frame.

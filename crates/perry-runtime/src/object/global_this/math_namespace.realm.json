@@ -1,0 +1,512 @@
+{
+  "version": 1,
+  "groups": {
+    "objects": [
+      {
+        "name": "Math",
+        "kind": "namespace",
+        "properties": [
+          {
+            "key": "E",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "number_bits",
+              "value": "4005bf0a8b145769"
+            }
+          },
+          {
+            "key": "LN10",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "number_bits",
+              "value": "40026bb1bbb55516"
+            }
+          },
+          {
+            "key": "LN2",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "number_bits",
+              "value": "3fe62e42fefa39ef"
+            }
+          },
+          {
+            "key": "LOG10E",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "number_bits",
+              "value": "3fdbcb7b1526e50e"
+            }
+          },
+          {
+            "key": "LOG2E",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff71547652b82fe"
+            }
+          },
+          {
+            "key": "PI",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "number_bits",
+              "value": "400921fb54442d18"
+            }
+          },
+          {
+            "key": "SQRT1_2",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "number_bits",
+              "value": "3fe6a09e667f3bcd"
+            }
+          },
+          {
+            "key": "SQRT2",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff6a09e667f3bcd"
+            }
+          },
+          {
+            "key": "abs",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Math.abs"
+            }
+          },
+          {
+            "key": "acos",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Math.acos"
+            }
+          },
+          {
+            "key": "acosh",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Math.acosh"
+            }
+          },
+          {
+            "key": "asin",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Math.asin"
+            }
+          },
+          {
+            "key": "asinh",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Math.asinh"
+            }
+          },
+          {
+            "key": "atan",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Math.atan"
+            }
+          },
+          {
+            "key": "atan2",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Math.atan2"
+            }
+          },
+          {
+            "key": "atanh",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Math.atanh"
+            }
+          },
+          {
+            "key": "cbrt",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Math.cbrt"
+            }
+          },
+          {
+            "key": "ceil",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Math.ceil"
+            }
+          },
+          {
+            "key": "clz32",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Math.clz32"
+            }
+          },
+          {
+            "key": "cos",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Math.cos"
+            }
+          },
+          {
+            "key": "cosh",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Math.cosh"
+            }
+          },
+          {
+            "key": "exp",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Math.exp"
+            }
+          },
+          {
+            "key": "expm1",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Math.expm1"
+            }
+          },
+          {
+            "key": "f16round",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Math.f16round"
+            }
+          },
+          {
+            "key": "floor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Math.floor"
+            }
+          },
+          {
+            "key": "fround",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Math.fround"
+            }
+          },
+          {
+            "key": "hypot",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Math.hypot"
+            }
+          },
+          {
+            "key": "imul",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Math.imul"
+            }
+          },
+          {
+            "key": "log",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Math.log"
+            }
+          },
+          {
+            "key": "log10",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Math.log10"
+            }
+          },
+          {
+            "key": "log1p",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Math.log1p"
+            }
+          },
+          {
+            "key": "log2",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Math.log2"
+            }
+          },
+          {
+            "key": "max",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Math.max"
+            }
+          },
+          {
+            "key": "min",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Math.min"
+            }
+          },
+          {
+            "key": "pow",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Math.pow"
+            }
+          },
+          {
+            "key": "random",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Math.random"
+            }
+          },
+          {
+            "key": "round",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Math.round"
+            }
+          },
+          {
+            "key": "sign",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Math.sign"
+            }
+          },
+          {
+            "key": "sin",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Math.sin"
+            }
+          },
+          {
+            "key": "sinh",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Math.sinh"
+            }
+          },
+          {
+            "key": "sqrt",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Math.sqrt"
+            }
+          },
+          {
+            "key": "tan",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Math.tan"
+            }
+          },
+          {
+            "key": "tanh",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Math.tanh"
+            }
+          },
+          {
+            "key": "trunc",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Math.trunc"
+            }
+          },
+          {
+            "key": "@@toStringTag",
+            "symbol": true,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "Math"
+            }
+          }
+        ],
+        "own_key_order": [
+          "abs",
+          "acos",
+          "acosh",
+          "asin",
+          "asinh",
+          "atan",
+          "atanh",
+          "atan2",
+          "ceil",
+          "cbrt",
+          "expm1",
+          "clz32",
+          "cos",
+          "cosh",
+          "exp",
+          "floor",
+          "fround",
+          "hypot",
+          "imul",
+          "log",
+          "log1p",
+          "log2",
+          "log10",
+          "max",
+          "min",
+          "pow",
+          "random",
+          "round",
+          "sign",
+          "sin",
+          "sinh",
+          "sqrt",
+          "tan",
+          "tanh",
+          "trunc",
+          "E",
+          "LN10",
+          "LN2",
+          "LOG10E",
+          "LOG2E",
+          "PI",
+          "SQRT1_2",
+          "SQRT2",
+          "f16round"
+        ],
+        "own_symbol_order": [
+          "@@toStringTag"
+        ],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2176,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "Math.abs",
+          "Math.acos",
+          "Math.acosh",
+          "Math.asin",
+          "Math.asinh",
+          "Math.atan",
+          "Math.atan2",
+          "Math.atanh",
+          "Math.cbrt",
+          "Math.ceil",
+          "Math.clz32",
+          "Math.cos",
+          "Math.cosh",
+          "Math.exp",
+          "Math.expm1",
+          "Math.f16round",
+          "Math.floor",
+          "Math.fround",
+          "Math.hypot",
+          "Math.imul",
+          "Math.log",
+          "Math.log10",
+          "Math.log1p",
+          "Math.log2",
+          "Math.max",
+          "Math.min",
+          "Math.pow",
+          "Math.random",
+          "Math.round",
+          "Math.sign",
+          "Math.sin",
+          "Math.sinh",
+          "Math.sqrt",
+          "Math.tan",
+          "Math.tanh",
+          "Math.trunc",
+          "Object.prototype"
+        ]
+      }
+    ]
+  }
+}

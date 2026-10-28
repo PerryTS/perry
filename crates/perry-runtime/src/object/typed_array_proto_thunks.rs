@@ -30,7 +30,7 @@
 use super::*;
 
 enum TypedArrayProtoReceiver {
-    TypedArray(*mut crate::typedarray::TypedArrayHeader),
+    TypedArray(*mut crate::typedarray_hook_slots::TypedArrayHeader),
     Uint8Buffer(usize),
 }
 
@@ -228,9 +228,9 @@ unsafe fn ta_receiver_or_throw(
     if addr == 0 {
         throw_not_typed_array(method)
     }
-    if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
+    if crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some() {
         return TypedArrayProtoReceiver::TypedArray(
-            addr as *mut crate::typedarray::TypedArrayHeader,
+            addr as *mut crate::typedarray_hook_slots::TypedArrayHeader,
         );
     }
     if is_typed_array_buffer(addr) {
@@ -551,7 +551,7 @@ unsafe fn uint8_join(addr: usize, separator_value: f64) -> f64 {
 unsafe fn uint8_with(addr: usize, args: &[f64]) -> f64 {
     let len = uint8_len(addr);
     let Some(index) = uint8_at_index(args, len) else {
-        crate::typedarray::throw_range_error(b"Invalid typed array index");
+        crate::typedarray_hook_slots::throw_range_error(b"Invalid typed array index");
     };
     let value = to_uint8(arg_or_undefined(args, 1));
     let out = crate::buffer::js_uint8array_alloc(len as i32);
@@ -1309,3 +1309,5 @@ pub(super) fn install_uint8array_base64_hex_proto_methods(proto_obj: *mut Object
         ipm(proto_obj, name, info, spec_length);
     }
 }
+
+crate::realm_decl!("typed_array_proto_thunks.realm.json#*");

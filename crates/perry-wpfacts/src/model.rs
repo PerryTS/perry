@@ -17,8 +17,23 @@ pub type SiteId = u32;
 
 /// The atom of the element key (`Model::elem_key`).
 pub const ELEM: &str = "#elem";
+/// The key an element store (`push`, `set.add`) writes on a value that may
+/// be a builtin prototype: an index, or no property at all (a collection's
+/// entries). A write under it is a write of every key that may be ToString
+/// of a Number (`builtins::native_written`, `solve::numeric_key`).
+pub const NUM_KEY: &str = "#num";
 /// The atom of the iteration key (`Model::iter_key`).
 pub const ITER_ELEM: &str = "#iter";
+
+/// `Model::idx_done` rules of DECISIONS 217 (`IdxKey` uses 0-18): a
+/// prototype read as a value, a number key's chain (read, call), a
+/// computed call's full lookup, and (plus the primitive bit) a call under
+/// ToPropertyKey of `true`/`null`/`undefined`.
+pub const IDX_PROTO_VALUE: u8 = 32;
+pub const IDX_PLAIN_LOAD: u8 = 33;
+pub const IDX_PLAIN_CALL: u8 = 34;
+pub const IDX_CALL_ANY: u8 = 36;
+pub const IDX_CALL_NAMED: u8 = 64;
 
 /// Token 0 is ⊤: a value produced or touched by code the analysis does not
 /// model. Its presence in a node means "any escaped object or anything else".
@@ -86,6 +101,11 @@ pub enum BuiltinNs {
     /// constant specifier ([`Model::call_lit`]): a compiled module's path
     /// gives that module's exports; anything else is the unknown loader.
     Require,
+    /// A method of `Object.prototype` read as a value under a key that may
+    /// name any of them (`o[k]` on an object whose chain ends there): one of
+    /// `hasOwnProperty`, `valueOf`, `__defineGetter__` ... A call runs each
+    /// one's effect on its receiver (`proto_method`); none is a constructor.
+    ObjectProtoMethod,
     Other,
 }
 
@@ -179,6 +199,9 @@ impl SharedReads {
                     }
             }
             SharedWrite::Unmodeled(s) => self.objects.contains_key(s) || !self.keys.is_empty(),
+            // Every chain reaches Object.prototype.
+            SharedWrite::Hard(Shared::ObjectProto, _) => true,
+            SharedWrite::Hard(s, _) => self.objects.contains_key(s),
         }
     }
 }
@@ -200,6 +223,10 @@ pub enum SharedWrite {
     /// unit that includes the other units' code. It is ⊤ there, so every
     /// unit's store into ⊤ may be a store into it (`units::shared_closure`).
     Handed(Shared),
+    /// A HARD mark (`Model::mark_hard`: `defineProperty`, `delete`,
+    /// `setPrototypeOf` ...) on the object: on `Object.prototype` every
+    /// chain through it is HARD, as the whole program derives it.
+    Hard(Shared, Hard),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -282,6 +309,11 @@ pub struct Template {
     /// Classes whose constructor chain `super()` ran on this class's
     /// instances during the solve (the parent value's class tokens).
     pub parent_links: Vec<TmplId>,
+    /// A declared-keys record born with a null prototype
+    /// (`Class::declared_keys_null_proto`: `require.cache`): its prototype
+    /// stand-in has no members and no prototype, so a lookup through it ends
+    /// there and never reaches `Object.prototype`.
+    pub null_proto: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -390,6 +422,8 @@ pub enum NativeMiss {
     /// A program-owned global (`builtins::global_user_key`) read into the
     /// first node; the second is the global's field.
     Global(NodeId, NodeId),
+    /// A method call on a primitive receiver of these kinds.
+    PrimCall(u16, CallId),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -632,21 +666,55 @@ pub enum Cons {
     },
     /// Every object token reaches a HARD operation.
     Hard { kind: Hard, reason: u32 },
-    /// `Object.defineProperty(o, key, {get/set})` with a constant key and an
-    /// accessor descriptor (FVA 4.3a): on a token whose layout does not hold
-    /// `key` as data the key becomes an accessor key (the getter and setter
-    /// are installed by `Accessor`) and the layout gains it; on any other
-    /// token (a key it holds as data, a class instance, ⊤) it is E5 HARD.
-    DefineAccessor { key: Atom, reason: u32 },
+    /// `delete o.key`: E7 HARD on every object token; on ⊤ (which may be a
+    /// builtin prototype) a write of `key` only.
+    DeleteKey { key: Atom, reason: u32 },
+    /// `Object.defineProperty(o, key, desc)` with a constant key (FVA 4.3a).
+    /// An accessor descriptor (`data` false) on a literal layout that does
+    /// not hold `key` as data: the key becomes an accessor key (the getter
+    /// and setter are installed by `Accessor`) and the layout gains it. On a
+    /// prototype that has no method `key`, either descriptor: `key` is a key
+    /// of the prototype that is no plain data slot (an accessor, or a value
+    /// whose attributes are the descriptor's), as a class getter is; the
+    /// value is stored by the caller. Any other token (a key it holds as
+    /// data, a class instance, ⊤, a data descriptor on a literal): E5 HARD.
+    DefineKey { key: Atom, data: bool, reason: u32 },
+    /// `Object.defineProperties(o, map)`: the node holds the maps. A literal
+    /// with exactly its birth keys defines each of them by the descriptor
+    /// under it (`DefineDesc`); any other map defines its own values
+    /// (`descs`) under a computed key: E5 HARD on `o`, the descriptors'
+    /// values (`value`, a load of `descs`) stored under any key at `site`.
+    DefineAll {
+        o: NodeId,
+        descs: NodeId,
+        value: NodeId,
+        site: SiteId,
+        reason: u32,
+    },
+    /// Internal: the node holds the descriptors `defineProperties` defines
+    /// `key` of `o` by. An accessor descriptor literal is a `DefineKey`
+    /// accessor; any other descriptor is a data definition (its `value`
+    /// stored under `key` at `site`); either installs its get/set.
+    DefineDesc {
+        o: NodeId,
+        key: Atom,
+        site: SiteId,
+        reason: u32,
+    },
     /// Every token gains keys after birth (computed store …).
     AddsKeys,
     /// Builtin protocol touch: what `proto` reads on every token.
     Implicit { reason: u32, proto: Protocol },
     /// The node holds `Object.create` prototype arguments (E10).
     CreateProto { reason: u32 },
-    /// The node is `ProtoNode(t)`: dst ⊇ the values of `key` on each
-    /// prototype (and further up), shared by every receiver of `t`.
-    ChainUnion { key: Key, dst: NodeId },
+    /// The node is `ProtoNode(of)`: dst ⊇ the values of `key` on each
+    /// prototype (and further up), shared by every receiver of `of`.
+    ChainUnion { key: Key, dst: NodeId, of: Tok },
+    /// The node holds a value given as the prototype of an object (its
+    /// `ProtoNode` is `protos`): a builtin prototype there may be any of
+    /// them (`ObjectProto` collapses them), whose members the chain cannot
+    /// name: the chain also holds an unknown prototype.
+    ProtoGiven { protos: NodeId },
     /// The node is `ProtoNode(t)`: dst ⊇ every prototype, transitively.
     ProtoClosure { dst: NodeId },
     /// The node is the prototype closure of receiver `origin`: builtin
@@ -689,8 +757,18 @@ pub enum Cons {
     AccessorInstall { key: Atom, f: Tok, setter: bool },
     /// The node holds objects whose prototype set includes `src`'s values.
     ProtoFrom { src: NodeId },
-    /// dst ⊇ prototypes of the node's objects (`Object.getPrototypeOf`).
+    /// dst ⊇ prototypes of the node's objects (`Object.getPrototypeOf`), as
+    /// values (`Model::proto_value`).
     ProtoOf { dst: NodeId },
+    /// The node is `ProtoNode(t)`: dst ⊇ its prototypes as the runtime has
+    /// them (DECISIONS 217): a literal's class prototype is its layout, no
+    /// object; that layout's own prototypes stand in its place.
+    ProtoValues { dst: NodeId },
+    /// The node is the prototype closure of receiver `origin`, read or
+    /// called under a key that names no intrinsic member and not
+    /// `__proto__` (a number; DECISIONS 217): every program prototype's
+    /// fields under any key, what a store into ⊤ wrote on an intrinsic one.
+    PlainKey { origin: Tok, act: ChainAct },
     /// dst ⊇ the `next` method of each iterator in the node.
     IterNext { dst: NodeId },
     /// The node holds `Reflect.construct` new-targets (E11).
@@ -700,8 +778,18 @@ pub enum Cons {
     /// members) runs only if `idx` can hold a non-number key (`IdxKey`).
     IdxLoad { idx: NodeId, dst: NodeId },
     /// The node is the key of `o[k]` for object token `obj`: a string,
-    /// symbol or object key runs the full lookup.
+    /// symbol or object key runs the full lookup. It is never taken to be
+    /// `"__proto__"` (DECISIONS 217: no program reaches a prototype through
+    /// an unknown string key; only the named forms read it).
     IdxKey { obj: Tok, dst: NodeId },
+    /// The node is the receiver of `o[idx](...)` with a computed key: its
+    /// objects' own and program members under a number key; the full
+    /// method lookup only if `idx` can hold another key (`IdxKeyCall`).
+    IdxMCall { idx: NodeId, call: CallId },
+    /// The node is the key of `o[k](...)` for receiver token `obj`: a
+    /// string, symbol or object key calls `Key::Any`'s methods.
+    /// `obj` ⊤ with `prim`: the receiver's primitives of those kinds.
+    IdxKeyCall { obj: Tok, prim: u16, call: CallId },
     /// The node is the value of a for-in body (FVA 4.3b, `gen/for_in.rs`):
     /// each body token runs per value of `obj` (`ForInKeys`), its runs bound
     /// through the template call `call` (one argument: the key).
@@ -712,8 +800,8 @@ pub enum Cons {
     /// runs it once through `call`, with every key.
     ForInKeys { ft: Tok, call: CallId },
     /// The node is the key of `defineProperty(o, k, desc)` in a for-in body:
-    /// a run's one key defines it as a constant key does (`DefineAccessor`
-    /// for an accessor descriptor, else E5 HARD); any other key is E5 HARD.
+    /// a run's one key defines it as a constant key does (`DefineKey`);
+    /// any other key is E5 HARD.
     DefineKeyed {
         o: NodeId,
         reason: u32,
@@ -822,11 +910,15 @@ impl Cons {
             Cons::OverrideThis { .. } => "overridethis",
             Cons::TopIfAny { .. } => "topifany",
             Cons::Hard { .. } => "hard",
+            Cons::DeleteKey { .. } => "deletekey",
             Cons::AddsKeys => "addskeys",
-            Cons::DefineAccessor { .. } => "defineaccessor",
+            Cons::DefineKey { .. } => "definekey",
+            Cons::DefineAll { .. } => "defineall",
+            Cons::DefineDesc { .. } => "definedesc",
             Cons::Implicit { .. } => "implicit",
             Cons::CreateProto { .. } => "createproto",
             Cons::ChainUnion { .. } => "chainunion",
+            Cons::ProtoGiven { .. } => "protogiven",
             Cons::ProtoClosure { .. } => "protoclosure",
             Cons::ProtoMethods { .. } => "protomethods",
             Cons::AnyAccessors { .. } => "anyaccessors",
@@ -840,12 +932,16 @@ impl Cons {
             Cons::AccessorInstall { .. } => "accinstall",
             Cons::ProtoFrom { .. } => "protofrom",
             Cons::ProtoOf { .. } => "protoof",
+            Cons::ProtoValues { .. } => "protovalues",
+            Cons::PlainKey { .. } => "plainkey",
             Cons::IterNext { .. } => "iternext",
             Cons::NewTargetHard { .. } => "newtargethard",
             Cons::Arith { .. } => "arith",
             Cons::ArrayLenArg { .. } => "arraylenarg",
             Cons::IdxLoad { .. } => "idxload",
             Cons::IdxKey { .. } => "idxkey",
+            Cons::IdxMCall { .. } => "idxmcall",
+            Cons::IdxKeyCall { .. } => "idxkeycall",
             Cons::ForInBody { .. } => "forinbody",
             Cons::ForInKeys { .. } => "forinkeys",
             Cons::DefineKeyed { .. } => "definekeyed",
@@ -953,12 +1049,37 @@ pub struct StoreSite {
     /// DECISIONS 149d: rooted, and the object is a load (not `this`): it
     /// holds a reach marker of the receiver.
     pub deep: bool,
+    /// The evaluated key of an indexed source store. Its solved scalar kind
+    /// distinguishes element effects from arbitrary named-property writes.
+    pub key_value: Option<NodeId>,
 }
 
 #[derive(Default, Clone, Debug)]
 pub struct FieldWriters {
     pub ctor: Vec<SiteId>,
     pub post: Vec<SiteId>,
+}
+
+/// Where the solve work went (PERRY_FACTS_PROFILE only): by the popped node
+/// it was spent for (or the phase outside the worklist), by rule kind
+/// (inclusive of what the rule triggers), by propagation step, and a growth
+/// line every `WorkProfile::STEP` work.
+#[derive(Default)]
+pub struct WorkProfile {
+    /// The work since `at.1` is charged to node `at.0` (`NO_NODE`: phase `at.2`).
+    pub at: (NodeId, u64, &'static str),
+    pub node: FxHashMap<NodeId, u64>,
+    pub phase: FxHashMap<&'static str, u64>,
+    /// Rule kind: (applications, work, attach replays, attach replay work).
+    pub kind: FxHashMap<&'static str, (u64, u64, u64, u64)>,
+    /// Pop charge (delta x constraints), fast copy deliveries, copy visits and
+    /// checks, `copy_to` extra.
+    pub step: [u64; 4],
+    pub next_curve: u64,
+}
+
+impl WorkProfile {
+    pub const STEP: u64 = 5_000_000;
 }
 
 #[derive(Default)]
@@ -987,7 +1108,18 @@ pub struct Model {
     pub bound: Vec<(NodeId, NodeId, Vec<NodeId>)>,
     pub fields: FxHashMap<(Tok, Atom), NodeId>,
     pub field_any: FxHashMap<Tok, NodeId>,
+    /// An array's values under a key no store named (`Model::named_any`):
+    /// what its named non-index keys read. Its elements are not among them.
+    /// A module namespace's values every name reads (DECISIONS 215).
+    pub named_any: FxHashMap<Tok, NodeId>,
+    /// DECISIONS 215: a module namespace -> the namespaces of its `export *`
+    /// sources (`TOP`: one outside the program), and the names the module
+    /// exports itself (those shadow every `export *`).
+    pub star_from: FxHashMap<Tok, Vec<Tok>>,
+    pub ns_own: crate::pts::FxHashSet<(Tok, Atom)>,
     pub all_fields: FxHashMap<Tok, NodeId>,
+    /// `Model::num_fields`: the fields a number key may name.
+    pub num_fields: FxHashMap<Tok, NodeId>,
     pub proto_node: FxHashMap<Tok, NodeId>,
     pub field_keys: FxHashMap<Tok, Vec<Atom>>,
     /// accessors[(proto-or-object tok, key)] = (getter fns, setter fns)
@@ -1015,8 +1147,12 @@ pub struct Model {
     // dedup of bindings / chain walks
     pub bind_done: crate::pts::FxHashSet<(CallId, Tok, Tok)>,
     pub chain_done: crate::pts::FxHashSet<(NodeId, Tok, Key, ChainAct)>,
+    /// (value node, `ProtoNode`) pairs a `ProtoGiven` watches.
+    pub given_proto: crate::pts::FxHashSet<(NodeId, NodeId)>,
     pub implicit_done: crate::pts::FxHashSet<(Tok, Protocol)>,
     pub construct_done: crate::pts::FxHashSet<(CallId, Tok)>,
+    /// (key or prototype node, object, dst or call, rule): `IdxLoad` /
+    /// `IdxKey` use 0-18; the `IDX_*` rules of DECISIONS 217 the rest.
     pub idx_done: crate::pts::FxHashSet<(NodeId, Tok, NodeId, u8)>,
     pub callthis_done: crate::pts::FxHashSet<(NodeId, CallId, Tok)>,
     /// `CallThis` split (see `Model::bind_via`): `ThisTo` per (method node,
@@ -1075,6 +1211,9 @@ pub struct Model {
     /// Keys some accessor may be defined under (known at generation): only
     /// lookups of these keys walk the chain per receiver.
     pub accessor_atoms: crate::pts::FxHashSet<Atom>,
+    /// One of `accessor_atoms` is a numeric string: a read under a number
+    /// key walks accessors (`Model::plain_key`, DECISIONS 217).
+    pub numeric_accessor: bool,
 
     /// The relations dump, if requested: one line per primitive relation.
     pub relations: Option<Vec<String>>,
@@ -1092,6 +1231,9 @@ pub struct Model {
     /// Typed-array owner templates born by `TypedArrayNew` with a known
     /// element kind (`perry_hir::TYPED_ARRAY_KIND_*`).
     pub ta_elem: FxHashMap<TmplId, u8>,
+    pub ta_min_len: FxHashMap<TmplId, u32>,
+    pub ta_exact_len: FxHashMap<TmplId, u32>,
+    pub ta_birth_input: FxHashMap<TmplId, NodeId>,
     pub resolvers: FxHashMap<NodeId, Tok>,
     /// The function standing for another unit's accessors on the shared
     /// objects (`builtins::other_unit_accessor`).
@@ -1193,6 +1335,21 @@ pub struct Model {
     /// The keys such a body may define, accessor keys from generation on
     /// (`Gen::note_for_in_define_keys`).
     pub for_in_define_keys: crate::pts::FxHashSet<Atom>,
+    /// `defineProperties` maps defined key by key: (map, o, descs, value,
+    /// site, reason) of the `DefineAll`, checked again once the worklist is
+    /// empty (`settle_define`).
+    pub define_runs: Vec<(Tok, NodeId, NodeId, NodeId, SiteId, u32)>,
+    /// (descs, map) defined under any key; descs whose E5 and store under
+    /// any key are attached.
+    pub define_any: crate::pts::FxHashSet<(NodeId, Tok)>,
+    pub define_any_on: crate::pts::FxHashSet<NodeId>,
+    /// Accessor descriptors a `DefineDesc` defined by: (descriptor, o, key,
+    /// site, reason), checked again once the worklist is empty.
+    pub desc_runs: Vec<(Tok, NodeId, Atom, SiteId, u32)>,
+    /// (o, key, descriptor) defined as data.
+    pub desc_data: crate::pts::FxHashSet<(NodeId, Atom, Tok)>,
+    /// (o, key, data) whose `DefineKey` is attached.
+    pub define_on: crate::pts::FxHashSet<(NodeId, Atom, bool)>,
     /// The node a `Cons::Store` runs on, while it runs.
     pub store_at: Option<NodeId>,
     /// A call's constant first argument (a string), for callees whose
@@ -1226,12 +1383,20 @@ pub struct Model {
     /// dynamic code may hand it out (`Function('return this')()`). Until
     /// then a store into ⊤ cannot write a global.
     pub global_in_top: bool,
+    /// Explain: builtin function values minted, by the arm that minted them.
+    pub bf_mints: FxHashMap<&'static str, u32>,
     /// Per unit (design §17.16 (b)): the global object's program-owned
     /// fields are cells (`global:<key>`), made at the unit boundary. A field
     /// first named later holds ⊤ and sets `global_late`: the unit then
     /// publishes `global:*` unknown, as for a global unmodeled code writes.
     pub global_cells: bool,
     pub global_late: bool,
+    /// This unit's own code (not a replayed write of another unit's,
+    /// `shared_replay`) put the globals in reach of unmodeled code: the
+    /// global object reached ⊤, a computed key of it was written, a global
+    /// was named after the boundary. Its `global:*` write says so; a
+    /// replayed one is its writer's, published there already.
+    pub global_written_own: bool,
     /// DECISIONS 94: arrays published through an element cell
     /// (`arr:<name>`, `Gen::arr_leaves`) and other units' arrays this unit
     /// holds, each with the seed of cell `arr:<name>#named`: a named field
@@ -1267,6 +1432,8 @@ pub struct Model {
     /// With the profile: propagation work by source-node label
     /// (delta × successors, delta × constraints).
     pub label_work: FxHashMap<&'static str, (u64, u64, u64)>,
+    /// With the profile: where the solve work went (`WorkProfile`).
+    pub prof: Option<Box<WorkProfile>>,
     pub fn_inst: FxHashMap<FnIdx, TmplId>,
     /// Per-unit contracts (design §11.2): the methods of a published class
     /// run on its receiver token (`Model::publish_class`), one per published
@@ -1419,6 +1586,12 @@ pub struct Model {
     /// The reason of a publication to another unit (`unit_boundary`): a
     /// published method's receiver is its contract's then (DECISIONS 85).
     pub pub_reason: Option<u32>,
+    /// The reason thrown values reach interpreted code (`compute_in`), and
+    /// what the seed of cell `thrown` holds: the values the other units
+    /// threw (DECISIONS 174), as their contracts name them. Another unit's
+    /// value thrown there escaped in its thrower's solve (`escape`).
+    pub thrown_reason: Option<u32>,
+    pub thrown_in: crate::pts::FxHashSet<Tok>,
     /// The function contracts the census broke (`fn:<name>`): published as
     /// escapes, not contracts.
     pub broken_fns: crate::pts::FxHashSet<String>,
@@ -1442,6 +1615,38 @@ pub struct Model {
     /// DECISIONS 165: the functions a call bound (`bind_args`), in any
     /// context.
     pub called: crate::pts::FxHashSet<FnIdx>,
+    /// DECISIONS 210: the stand-ins of other units' contract functions, each
+    /// with the node holding the stand-in instance of its owner's `new <f>`
+    /// layout and that layout's template, `None` until the owner publishes
+    /// it. A `new` of one constructs that layout (`construct`), never a
+    /// template of this unit; the construction is published (`constructed`,
+    /// `ProgramFacts::ctor_runs_out`).
+    pub foreign_ctor: FxHashMap<FnIdx, Option<(NodeId, TmplId)>>,
+    pub constructed: crate::pts::FxHashSet<FnIdx>,
+    /// DECISIONS 210: this unit's constructions of its own contract
+    /// functions for the units that construct them (`Gen::published_ctors`):
+    /// function and result node. The instance's layout is published to them
+    /// (`Gen::contract_check`, `fn_inst_published`).
+    pub own_ctor_runs: Vec<(FnIdx, NodeId)>,
+    pub fn_inst_published: crate::pts::FxHashSet<TmplId>,
+    /// DECISIONS 210: stand-ins of other units' functions this unit used as
+    /// objects beyond their contract (a store into one, its `prototype`
+    /// read while its owner published no layout): census reports.
+    pub fn_touched: crate::pts::FxHashSet<Tok>,
+    /// DECISIONS 210: this unit's contract functions published to other
+    /// units (`Model::escape_props`): every own property but `prototype`
+    /// left with the function (unknown code reads and writes them); the
+    /// reason it left.
+    pub props_escaped: FxHashMap<Tok, u32>,
+    /// DECISIONS 210/211: the functions unknown code constructs
+    /// (`Model::construct_unknown`), once each.
+    pub unknown_new: crate::pts::FxHashSet<FnIdx>,
+    /// DECISIONS 210: the `new` calls of other units' functions: no call
+    /// of the function (`called`; their arguments go by `ctor_runs_out`).
+    pub ctor_calls: crate::pts::FxHashSet<CallId>,
+    /// The reason a published literal's field function escapes
+    /// (`Gen::note_field_fns`): a contract publication, as `pub_reason`.
+    pub field_fn_reason: Option<u32>,
     /// DECISIONS 165: the stand-in methods of other units' classes with no
     /// function contract (`Gen::stub_fn`): named as the method.
     pub stub_methods: crate::pts::FxHashSet<FnIdx>,

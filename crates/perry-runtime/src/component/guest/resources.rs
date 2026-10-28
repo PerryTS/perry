@@ -22,6 +22,7 @@ const REP: u32 = 3;
 const STATE: u32 = 4;
 const LIFETIME: u32 = 5;
 const PARENT: u32 = 6;
+const BORROW_COUNT: u32 = 7;
 const OWNED: f64 = 1.0;
 const BORROWED: f64 = 0.0;
 const TRANSFERRED: f64 = 2.0;
@@ -76,7 +77,7 @@ fn wrap(ty: u32, handle: u32, rep: u32, owned: bool, lifetime: f64, parent: f64)
     let parent = scope.root_nanbox_f64(parent);
     let registry = scope.root_nanbox_f64(super::registry());
     let fields = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
-        crate::array::js_array_alloc_with_length(7) as i64,
+        crate::array::js_array_alloc_with_length(8) as i64,
     ));
     for (index, value) in [
         (OWNER, registry.get_nanbox_f64()),
@@ -86,6 +87,7 @@ fn wrap(ty: u32, handle: u32, rep: u32, owned: bool, lifetime: f64, parent: f64)
         (STATE, if owned { OWNED } else { BORROWED }),
         (LIFETIME, lifetime.get_nanbox_f64()),
         (PARENT, parent.get_nanbox_f64()),
+        (BORROW_COUNT, 0.0),
     ] {
         set(fields.get_nanbox_f64(), index, value);
     }
@@ -162,6 +164,7 @@ extern "C" fn dispose(
     if get(fields, STATE) != OWNED {
         fail("A borrowed guest resource cannot be disposed");
     }
+    unborrowed(fields);
     cleanup::unregister(resource.get_nanbox_f64());
     release(data(resource.get_nanbox_f64()))
 }
@@ -172,7 +175,7 @@ extern "C" fn dispose(
 fn release(fields: f64) -> f64 {
     let scope = RuntimeHandleScope::new();
     let fields = scope.root_nanbox_f64(fields);
-    let mut frame = Frame::new();
+    let mut frame = Frame::allocate_guest_frame();
     let result = crate::exception::catch_js_throw(|| {
         if get(fields.get_nanbox_f64(), STATE) != OWNED {
             return undefined();
@@ -180,6 +183,7 @@ fn release(fields: f64) -> f64 {
         if get(fields.get_nanbox_f64(), OWNER).to_bits() != super::maybe_registry().to_bits() {
             return undefined();
         }
+        unborrowed(fields.get_nanbox_f64());
         let ty = get(fields.get_nanbox_f64(), TYPE) as u32;
         let handle = get(fields.get_nanbox_f64(), HANDLE) as u32;
         // Canonical resource.drop consumes the handle even if its destructor
@@ -206,6 +210,11 @@ fn lower(frame: &mut Frame, slot: u32, ty: u32, owned: bool, local: bool) -> u32
         fail("Guest resource type mismatch");
     }
     let identity = owner(resource).to_bits();
+    let handle = if local && !owned {
+        get(fields, REP) as u32
+    } else {
+        get(fields, HANDLE) as u32
+    };
     if frame
         .transfers
         .iter()
@@ -217,6 +226,7 @@ fn lower(frame: &mut Frame, slot: u32, ty: u32, owned: bool, local: bool) -> u32
         if get(fields, STATE) != OWNED {
             fail("Expected an owned guest resource");
         }
+        unborrowed(fields);
         if frame
             .borrows
             .iter()
@@ -225,17 +235,29 @@ fn lower(frame: &mut Frame, slot: u32, ty: u32, owned: bool, local: bool) -> u32
             fail("Guest resource is borrowed during transfer");
         }
         frame.transfers.push(slot);
-    } else {
+    } else if !frame
+        .borrows
+        .iter()
+        .chain(frame.committed_borrows.iter().map(|(slot, _)| slot))
+        .any(|slot| owner(frame.get(*slot)).to_bits() == identity)
+    {
+        // Stage a second slot for native-only retirement. Frame::add roots the
+        // state before growing its managed array; no JS bits above survive it.
+        let fields = data(owner(frame.get(slot)));
+        let state = frame.add(fields);
         frame.borrows.push(slot);
+        frame.borrow_states.push(state);
     }
-    if local && !owned {
-        get(fields, REP) as u32
-    } else {
-        get(fields, HANDLE) as u32
+    handle
+}
+
+fn unborrowed(fields: f64) {
+    if get(fields, BORROW_COUNT) != 0.0 {
+        fail("Guest resource has outstanding canonical borrows");
     }
 }
 
-fn commit(frame: &mut Frame) {
+pub(super) fn commit(frame: &mut Frame) {
     // Revalidate all owners before mutation. A property getter used by later
     // argument lowering could have disposed an earlier staged owner.
     for slot in &frame.transfers {
@@ -243,15 +265,39 @@ fn commit(frame: &mut Frame) {
         if get(fields, STATE) != OWNED {
             fail("Guest resource transfer is no longer valid");
         }
+        unborrowed(fields);
     }
     for slot in &frame.borrows {
         live(frame.get(*slot));
     }
+    for state in &frame.borrow_states {
+        if get(frame.get(*state), BORROW_COUNT) >= u32::MAX as f64 {
+            fail("Too many canonical resource borrowers");
+        }
+    }
+    frame.committed_borrows.reserve(frame.borrows.len());
     for slot in &frame.transfers {
         set(data(frame.get(*slot)), STATE, TRANSFERRED);
     }
     frame.transfers.clear();
+    for (slot, state) in frame.borrows.iter().zip(&frame.borrow_states) {
+        let fields = frame.get(*state);
+        set(fields, BORROW_COUNT, get(fields, BORROW_COUNT) + 1.0);
+        frame.committed_borrows.push((*slot, *state));
+    }
     frame.borrows.clear();
+    frame.borrow_states.clear();
+}
+
+/// Called only while the frame's traced owner is alive. Slots are private and
+/// validated at commit; release needs neither the current registry nor JS.
+pub(super) fn release_borrows(frame: &mut Frame) {
+    for (_, state) in std::mem::take(&mut frame.committed_borrows) {
+        let fields = frame.get(state);
+        let count = get(fields, BORROW_COUNT);
+        debug_assert!(count > 0.0);
+        set(fields, BORROW_COUNT, count - 1.0);
+    }
 }
 
 #[no_mangle]
@@ -263,6 +309,9 @@ pub unsafe extern "C" fn perry_component_frame_resource_lift(
     owned: i32,
 ) -> u32 {
     super::frame::frame(pointer).guard(|frame| {
+        if owned == 0 {
+            frame.retain_incoming_borrow(ty, handle);
+        }
         let lifetime = if owned != 0 {
             undefined()
         } else {

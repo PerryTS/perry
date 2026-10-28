@@ -190,7 +190,7 @@ pub fn retire_agent(id: AgentId) {
     #[cfg(not(target_arch = "wasm32"))]
     crate::event_pump::shutdown_agent_loop();
     crate::timer::purge_agent_timers(id);
-    crate::thread::purge_agent_thread_results(id);
+    crate::thread_hook_slots::purge_agent_thread_results(id);
     // Copied out so a hook may itself take locks without holding this one.
     let hooks: Vec<RetireHook> = RETIRE_HOOKS
         .lock()

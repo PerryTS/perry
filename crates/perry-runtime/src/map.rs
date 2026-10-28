@@ -57,13 +57,20 @@ pub(crate) fn map_foreach_unwind_to(sp: usize) {
     });
 }
 
+#[cfg(any(test, target_os = "wasi"))]
+pub(crate) fn map_foreach_restore_depth(depth: usize) {
+    MAP_FOREACH_STACK.with(|stack| {
+        stack.borrow_mut().restore_depth(depth);
+    });
+}
+
 pub(crate) fn map_foreach_check_marks(sp: usize) {
     MAP_FOREACH_STACK.with(|stack| {
         crate::exception::marks::check_marks(stack.borrow().marks(), sp, "map_foreach")
     });
 }
 
-#[cfg(test)]
+#[cfg(any(test, target_os = "wasi"))]
 pub(crate) fn map_foreach_depth() -> usize {
     MAP_FOREACH_STACK.with(|stack| stack.borrow().len())
 }
@@ -1178,7 +1185,7 @@ fn jsvalue_eq(a: f64, b: f64) -> bool {
             // A bigint never equals a non-bigint key.
             return false;
         }
-        return crate::bigint::js_bigint_eq(a_big, b_big) != 0;
+        return crate::bigint_hooks::js_bigint_eq(a_big, b_big) != 0;
     }
 
     if is_string_like(a_bits) && is_string_like(b_bits) {

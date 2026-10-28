@@ -15,33 +15,65 @@ pub(crate) fn register_static_layouts() {
             if (*desc).layout_id == 0 {
                 continue;
             }
+            // WRT step 2: a runtime layout or a module namespace draws its id
+            // and installs its shape at its first birth
+            // ([`layout_word_for_birth`], [`register_namespace_layout`]);
+            // startup installs the program's own layouts only. The id cell is
+            // process-wide, so every agent still sees one id per layout.
+            if (*desc).variant == crate::codegen_abi::LAYOUT_VARIANT_NAMESPACE
+                || is_runtime_layout_word((*desc).layout_id)
+            {
+                continue;
+            }
             let Some(id) = layout_id_of_index(index as u32) else {
                 break;
             };
-            let got = if (*desc).variant == crate::codegen_abi::LAYOUT_VARIANT_NAMESPACE {
-                reserve_namespace_layout(desc)
-            } else {
-                register_one(desc, id)
-            };
-            let _ = got;
+            let _ = register_one(desc, id);
         }
     }
 }
 
-/// A module namespace layout's id, drawn at startup in section order (so
-/// every agent draws the same one) without building its key list or shape:
-/// [`register_namespace_layout`] installs them at the namespace's birth. Most
-/// compiled namespaces are never built.
-pub(super) unsafe fn reserve_namespace_layout(desc: *const PerryLayoutDesc) -> u32 {
-    super::super::static_shapes::resolve_layout_fields(
-        std::ptr::addr_of!((*desc).shape_id).cast_mut(),
-        LayoutWord((*desc).layout_id),
-        super::super::shapes::PROTO_ID_NULL,
-    )
-    .identity
-    .0
+/// Is `word` a layout of the runtime's own image (the ABI's native rows)?
+/// Generated code never names such a descriptor, so every object carrying
+/// one is born by a runtime funnel ([`layout_word_for_birth`]), which draws
+/// its id and installs its shape at the first birth.
+#[inline]
+pub(super) fn is_runtime_layout_word(word: u32) -> bool {
+    word & crate::codegen_abi::LAYOUT_TAG != 0
+        && LayoutWord(word).row().0 < crate::codegen_abi::NATIVE_LAYOUT_ROWS
 }
 
+/// The registered word of `desc` for a birth in this agent. A runtime
+/// layout's shape is installed by its first birth here; every other
+/// registered layout was installed at startup.
+#[inline]
+pub(crate) unsafe fn layout_word_for_birth(desc: *const PerryLayoutDesc) -> Option<u32> {
+    let id = registered_layout_id(load_layout_id(desc))?;
+    if is_runtime_layout_word(id)
+        && super::super::shapes::shape_record_for_word(LayoutWord(id)).is_none()
+    {
+        install_runtime_layout(desc)?;
+    }
+    Some(id)
+}
+
+#[cold]
+#[inline(never)]
+unsafe fn install_runtime_layout(desc: *const PerryLayoutDesc) -> Option<()> {
+    let requested = layout_id_of_index(descriptor_index(desc)?)?;
+    let id = register_bound(desc, requested, &[], None);
+    (id != 0 && super::super::shapes::shape_record_for_word(LayoutWord(id)).is_some()).then_some(())
+}
+
+#[cfg(any(test, debug_assertions))]
+crate::perry_thread_local! {
+    /// Runtime layouts whose shape this agent installed (debug and test
+    /// builds only): startup installs none.
+    pub(crate) static RUNTIME_LAYOUT_INSTALLS: std::cell::Cell<u32> =
+        const { std::cell::Cell::new(0) };
+}
+
+/// What [`register_bound`] does with a descriptor that passed validation.
 /// The installed layout of module namespace descriptor `desc`, installing
 /// its key list and shape under the id startup reserved on the first birth
 /// in this agent; `None` when this runtime cannot represent it.
@@ -85,7 +117,7 @@ pub(super) unsafe fn binding_symbol_keys(d: &PerryLayoutDesc) -> usize {
 /// The key word of key `key` of a descriptor: a string's, a symbol atom's
 /// symbol, or for the `j`-th module-local symbol key, `bound[j]` (`j` counts
 /// those keys before it, `next` the running count).
-pub(super) unsafe fn layout_key_word(key: &PerryLayoutKey, bound: &[u64], next: &mut usize) -> u64 {
+pub(crate) unsafe fn layout_key_word(key: &PerryLayoutKey, bound: &[u64], next: &mut usize) -> u64 {
     if (*key.atom).kind == crate::codegen_abi::ATOM_KIND_BINDING_SYMBOL {
         let word = bound[*next];
         *next += 1;
@@ -207,7 +239,7 @@ pub(super) unsafe fn register_bound(
         }
     }
     // Case 2c: a class family's instances have the class's prototype, and
-    // its id is its record's (`layout_index_of_word`).
+    // its id is its descriptor record's.
     let class_family = d.class_id != 0;
     let proto_id = match d.proto.addr() {
         3 => super::super::shapes::PROTO_ID_DEFAULT,
@@ -237,6 +269,10 @@ pub(super) unsafe fn register_bound(
             Err(_) => (*desc).layout_id,
         };
     }
+    #[cfg(any(test, debug_assertions))]
+    if is_runtime_layout_word(d.layout_id) {
+        RUNTIME_LAYOUT_INSTALLS.with(|n| n.set(n.get() + 1));
+    }
     let key_count = keys.len() as u32;
     let slot_count = d.slot_count;
     let rep = d.rep;
@@ -246,6 +282,15 @@ pub(super) unsafe fn register_bound(
     let _no_gc = crate::gc::GcSuppressScope::new();
     let list = if key_count == 0 {
         std::ptr::null_mut()
+    } else if super::super::image_keys::prepare(keys, d.image_keys) {
+        super::super::canonical_keys::static_seed::link_image_list(
+            &super::super::canonical_keys::SharedLayout::shape_cache_entry(),
+            keys,
+            d.image_keys,
+        )
+        .expect("descriptor image list agrees with its keys and attributes")
+        .view()
+        .arr()
     } else if let Some(canonical) = (!function)
         .then(|| {
             super::super::canonical_keys::from_static_layout(
@@ -354,7 +399,7 @@ pub(super) unsafe fn register_bound(
         super::super::shapes::install_declared_layout(
             ShapeId(id),
             LayoutWord((*desc).layout_id),
-            if (*desc).class_id != 0 {
+            if (*desc).class_id != 0 || literal_birth::contains(desc) {
                 descriptor_index(desc).map_or(0, |i| i + 1)
             } else {
                 0

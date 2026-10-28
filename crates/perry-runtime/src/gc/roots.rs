@@ -70,8 +70,8 @@ pub(crate) use shadow_layout::{ShadowEntry, SLOT_ACTIVE, SLOT_PTR_MASK};
 #[allow(unused_imports)]
 pub use shadow_layout::{
     ShadowStackState, SHADOW_ENTRY_META_OFFSET, SHADOW_ENTRY_SIZE, SHADOW_SLOT_ACTIVE_BIT,
-    SHADOW_STACK_GROW_RESERVE, SHADOW_STACK_HEADER_SLOTS, SHADOW_STATE_FRAME_TOP_OFFSET,
-    SHADOW_STATE_LEN_OFFSET, SHADOW_STATE_PTR_OFFSET,
+    SHADOW_STACK_GROW_RESERVE, SHADOW_STACK_HEADER_SLOTS, SHADOW_STATE_CAP_OFFSET,
+    SHADOW_STATE_FRAME_TOP_OFFSET, SHADOW_STATE_LEN_OFFSET, SHADOW_STATE_PTR_OFFSET,
 };
 #[cfg(any(test, not(perry_native_stack_maps)))]
 pub(crate) use shadow_stack::bound_slot_meta;
@@ -80,7 +80,7 @@ pub(crate) use shadow_stack::SHADOW;
 #[cfg(any(test, not(perry_native_stack_maps)))]
 pub(crate) use shadow_stack::{frame_root_restore, frame_root_savepoint};
 // Only the WASI exception handlers name the savepoint type.
-#[cfg(target_os = "wasi")]
+#[cfg(any(test, target_os = "wasi"))]
 pub(crate) use shadow_stack::FrameRootSavepoint;
 #[cfg(any(test, not(perry_native_stack_maps)))]
 pub use shadow_stack::{
@@ -96,7 +96,7 @@ pub(crate) use temp_roots::temp_root_len;
 pub(crate) use temp_roots::temp_root_push_at;
 /// #7469: consumed by `crate::tls_hot::fill`, which lives outside `gc`.
 pub(crate) use temp_roots::temp_roots_hot_addr;
-#[cfg(target_os = "wasi")]
+#[cfg(any(test, target_os = "wasi"))]
 pub(crate) use temp_roots::temp_roots_truncate_to;
 pub use temp_roots::{
     js_array_push_f64_temp_rooted, js_gc_temp_root_get, js_gc_temp_root_push, js_gc_temp_root_set,
@@ -403,6 +403,23 @@ pub(crate) fn gc_register_named_mutable_root_scanner(
 /// scanners.
 pub fn gc_register_mutable_root_scanner_named(source: &'static str, scanner: MutableRootScanner) {
     gc_register_named_mutable_root_scanner(source, scanner);
+}
+
+/// Register an installer's per-thread scanner once, including late installs.
+pub(crate) fn gc_register_mutable_root_scanner_named_once(
+    name: &'static str,
+    scanner: MutableRootScanner,
+) {
+    let exists = MUTABLE_ROOT_SCANNERS.with(|scanners| {
+        scanners
+            .borrow()
+            .iter()
+            .rev()
+            .any(|entry| entry.name == name && std::ptr::fn_addr_eq(entry.scanner, scanner))
+    });
+    if !exists {
+        gc_register_named_mutable_root_scanner(name, scanner);
+    }
 }
 
 pub(super) fn gc_register_mutable_root_scanner_with_source(

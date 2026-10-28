@@ -241,10 +241,16 @@ pub(crate) unsafe fn options_field_value(
             let key_val = crate::array::js_array_get_f64(keys, i as u32);
             if let Some((ptr, len)) = crate::string::str_bytes_from_jsvalue(key_val, &mut scratch) {
                 if !ptr.is_null() && std::slice::from_raw_parts(ptr, len as usize) == field {
-                    return Some(crate::object::field_get_set::js_object_get_key_field(
-                        obj_ptr as *mut _,
-                        i as u32,
-                    ));
+                    // Only a data descriptor permits a raw slot read. An
+                    // accessor must use ordinary [[Get]] below, including its
+                    // receiver, effects and throws. object_keys may collect.
+                    let refreshed = options_object_ptr(options_handle.get_nanbox_f64())?;
+                    if !crate::object::key_attrs::object_key_is_accessor(refreshed, field) {
+                        return Some(crate::object::field_get_set::js_object_get_key_field(
+                            refreshed, i as u32,
+                        ));
+                    }
+                    break;
                 }
             }
         }

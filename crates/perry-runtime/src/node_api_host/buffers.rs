@@ -1,6 +1,6 @@
 use super::*;
 use crate::buffer::BufferHeader;
-use crate::typedarray::TypedArrayHeader;
+use crate::typedarray_hook_slots::TypedArrayHeader;
 use crate::value::JSValue;
 use std::ffi::c_void;
 use std::ptr;
@@ -45,7 +45,7 @@ enum NapiTypedArrayOwner {
 }
 
 fn classify_typed_array_owner(owner: usize) -> Option<NapiTypedArrayOwner> {
-    if crate::typedarray::lookup_typed_array_kind(owner).is_some() {
+    if crate::typedarray_hook_slots::lookup_typed_array_kind(owner).is_some() {
         Some(NapiTypedArrayOwner::Registered(owner))
     } else if crate::object::typed_array_proto_thunks::is_typed_array_buffer(owner) {
         Some(NapiTypedArrayOwner::Uint8Buffer(owner))
@@ -389,7 +389,7 @@ pub unsafe extern "C" fn napi_create_typedarray(
         Err(_) => return set_status(env, NapiStatus::InvalidArg, "byte offset exceeds u32"),
     };
     match catch_value_call(env, || {
-        let typed_array = crate::typedarray_view::js_typed_array_view(
+        let typed_array = crate::typedarray_hook_slots::js_typed_array_view(
             kind as i32,
             f64::from_bits(arraybuffer_bits),
             byte_offset as f64,
@@ -447,7 +447,7 @@ pub unsafe extern "C" fn napi_get_typedarray_info(
             let refreshed = refreshed_owner as *mut TypedArrayHeader;
             (
                 std::mem::transmute::<i32, NapiTypedarrayType>(
-                    crate::typedarray::lookup_typed_array_kind(refreshed as usize)
+                    crate::typedarray_hook_slots::lookup_typed_array_kind(refreshed as usize)
                         .expect("admitted typed-array kind") as i32,
                 ),
                 crate::buffer::store::length(refreshed as usize),

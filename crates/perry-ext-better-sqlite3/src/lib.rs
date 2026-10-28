@@ -257,9 +257,34 @@ pub unsafe extern "C" fn js_sqlite_stmt_raw(stmt_handle: Handle) -> Handle {
     stmt_handle
 }
 
-/// `stmt.run(...params)` — execute a non-query statement with
-/// parameters. Returns `{ changes, lastInsertRowid }` as an
-/// ObjectHeader pointer, or null on error.
+/// Build better-sqlite3's `RunResult` — `{ changes, lastInsertRowid }`.
+unsafe fn run_result(changes: f64, last_id: i64) -> *mut ObjectHeader {
+    let result = unsafe {
+        perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
+            perry_ffi::runtime_layouts::RECORD_F0_0
+        ))
+    };
+    js_object_set_field(result, 0, JsValue::from_number(changes));
+    js_object_set_field(result, 1, JsValue::from_number(last_id as f64));
+    result
+}
+
+/// `stmt.run(...params)` — run the statement and report
+/// `{ changes, lastInsertRowid }` as an ObjectHeader pointer, or null
+/// on error.
+///
+/// better-sqlite3 accepts **any** statement here, including one that
+/// returns rows: `run()` steps it to completion, discards the rows and
+/// reports the connection's change count, so `select 1` gives
+/// `{ changes: 0, lastInsertRowid: 0 }` on a fresh connection.
+/// rusqlite's `Connection::execute` refuses a row-returning statement
+/// with `ExecuteReturnedResults` instead, so dispatching on the
+/// statement's column count (0 = no rows possible) keeps both kinds
+/// working and runs the statement exactly once. Before this, every
+/// `run()` on a SELECT returned null, surfacing in JS as `undefined`
+/// with no error — ActiveRecord's sqlite3 adapter calls `run()` on
+/// `SELECT sqlite_version(*)` through its `step()` and read
+/// `.changes` off that `undefined`.
 ///
 /// # Safety
 ///
@@ -277,17 +302,26 @@ pub unsafe extern "C" fn js_sqlite_stmt_run(
             if let Ok(conn) = db.conn.lock() {
                 let param_refs: Vec<&dyn rusqlite::ToSql> =
                     sqlite_params.iter().map(|p| p.as_ref()).collect();
-                if let Ok(changes) = conn.execute(&stmt.sql, param_refs.as_slice()) {
-                    let last_id = conn.last_insert_rowid();
-
-                    let result = unsafe {
-                        perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
-                            perry_ffi::runtime_layouts::RECORD_F0_0
-                        ))
-                    };
-                    js_object_set_field(result, 0, JsValue::from_number(changes as f64));
-                    js_object_set_field(result, 1, JsValue::from_number(last_id as f64));
-                    return result;
+                // better-sqlite3 reports the rows THIS statement changed, not
+                // the connection's running counter: a CREATE TABLE or a SELECT
+                // run straight after an INSERT still reports 0, where
+                // `sqlite3_changes()` would still hold the INSERT's 1. Diffing
+                // `total_changes` across the statement gives that directly.
+                let before = conn.total_changes();
+                if let Ok(mut prepared) = conn.prepare(&stmt.sql) {
+                    if prepared.column_count() == 0 {
+                        if prepared.execute(param_refs.as_slice()).is_ok() {
+                            let changed = conn.total_changes().saturating_sub(before);
+                            return run_result(changed as f64, conn.last_insert_rowid());
+                        }
+                    } else if let Ok(mut rows) = prepared.query(param_refs.as_slice()) {
+                        // Step to completion so the statement's side effects
+                        // (e.g. `INSERT ... RETURNING`) all happen.
+                        while matches!(rows.next(), Ok(Some(_))) {}
+                        drop(rows);
+                        let changed = conn.total_changes().saturating_sub(before);
+                        return run_result(changed as f64, conn.last_insert_rowid());
+                    }
                 }
             }
         }

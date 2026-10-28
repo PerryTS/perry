@@ -42,7 +42,7 @@ use std::fmt::Write as FmtWrite;
 /// `GC_TYPE_*` tags, so the `gc_obj_type` match's `_` arm already skips them.
 /// The pending `toJSON` key must already be recorded.
 unsafe fn member_to_json(value: f64) -> Option<f64> {
-    if crate::proxy::js_proxy_is_proxy(value) != 0 {
+    if crate::proxy_hooks::proxy_is_proxy(value) != 0 {
         return super::stringify_proxy::to_json(value);
     }
     let bits = value.to_bits();
@@ -53,7 +53,7 @@ unsafe fn member_to_json(value: f64) -> Option<f64> {
     if crate::buffer::is_registered_buffer(ptr as usize) {
         return None;
     }
-    if crate::typedarray::lookup_typed_array_kind(ptr as usize).is_some() {
+    if crate::typedarray_hook_slots::lookup_typed_array_kind(ptr as usize).is_some() {
         return None;
     }
 
@@ -180,7 +180,9 @@ unsafe fn stringify_object_walk(
     // `is_url_object_shape` declines every class id but 0, so only those pay
     // for it; reading the class id is no more of a dereference than the shape
     // read just below, which every caller already relied on.
-    if (*obj).class_id == 0 && crate::url::is_url_object_shape(ptr as *mut crate::ObjectHeader) {
+    if (*obj).class_id == 0
+        && crate::object::url_layout::is_url_object_shape(ptr as *mut crate::ObjectHeader)
+    {
         *global_proof = false;
         write_url_href_json(ptr as *mut crate::ObjectHeader, buf);
         return;

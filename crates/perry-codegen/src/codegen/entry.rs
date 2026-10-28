@@ -344,6 +344,43 @@ pub(super) fn compile_module_entry(
                 (cn, len, prefix.clone())
             })
             .collect();
+        // The on-demand CommonJS modules of a program that is not closed: one
+        // generated function registers their initializers, which the runtime
+        // runs at its first path lookup (`js_register_path_inits_lazily`), so
+        // startup pays one call, not a registry insert per module.
+        let lazy_path_registrar: Option<String> = if cross_module.lazy_path_init_modules.is_empty()
+        {
+            None
+        } else {
+            let inits: Vec<(String, usize, String)> = cross_module
+                .lazy_path_init_modules
+                .iter()
+                .map(|(path, prefix)| {
+                    let (cn, len) =
+                        llmod.add_string_constant(&perry_hir::source_remap::baked_path(path));
+                    (cn, len, prefix.clone())
+                })
+                .collect();
+            let name = format!("{module_prefix}__perry_lazy_path_inits");
+            let registrar = llmod.define_function(&name, VOID, vec![]);
+            let _ = registrar.create_block("entry");
+            let blk = registrar.block_mut(0).unwrap();
+            for (const_name, byte_len, prefix) in &inits {
+                let path_ptr = format!("@{}", const_name);
+                let len_str = byte_len.to_string();
+                let init_addr = format!("ptrtoint (ptr @{}__init to i64)", prefix);
+                blk.call_void(
+                    "js_register_path_init",
+                    &[
+                        (PTR, path_ptr.as_str()),
+                        (I64, len_str.as_str()),
+                        (I64, init_addr.as_str()),
+                    ],
+                );
+            }
+            blk.ret_void();
+            Some(name)
+        };
         // Worker entries: `(path constant, byte_len, init symbol)`, registered
         // below before any module init so every way of constructing a Worker
         // can find a compiled entry by its path.
@@ -384,10 +421,14 @@ pub(super) fn compile_module_entry(
         } else {
             Vec::new()
         };
+        llmod.add_raw_global("@perry_static_seeds = external constant i8".to_string());
         llmod.add_raw_global(format!(
-            "@perry_layout_image = private constant {{ i32, i32, i32, i32 }} {}, align 4",
+            "@perry_layout_image = private constant {{ i32, i32, i32, i32, ptr }} {}, align 8",
             crate::layout_ordinals::current_plan().image_initializer()
         ));
+        // WRT step 1: the realm image's test fixture (a compile-time knob).
+        let realm_fixture = crate::codegen::realm_image::test_fixture_requested()
+            .then(|| crate::codegen::realm_image::emit_test_fixture(llmod));
         let main = if is_dylib {
             llmod.define_function("perry_module_init", VOID, vec![])
         } else {
@@ -422,6 +463,9 @@ pub(super) fn compile_module_entry(
             // agent before any module init or user code (the seed unit the
             // driver links registers the function; none = a no-op).
             blk.call_void("js_shape_run_static_seed", &[]);
+            if let Some(fixture) = realm_fixture.as_ref() {
+                crate::codegen::realm_image::emit_test_fixture_install(blk, fixture);
+            }
             if crate::expr::store_census::enabled() {
                 blk.call_void("perry_store_census_arm", &[]);
             }
@@ -598,6 +642,12 @@ pub(super) fn compile_module_entry(
                         (I64, len_str.as_str()),
                         (I64, init_addr.as_str()),
                     ],
+                );
+            }
+            if let Some(registrar) = &lazy_path_registrar {
+                blk.call_void(
+                    "js_register_path_inits_lazily",
+                    &[(PTR, format!("@{registrar}").as_str())],
                 );
             }
             for (const_name, byte_len, init) in &worker_entry_inits {
@@ -779,6 +829,7 @@ pub(super) fn compile_module_entry(
             class_hierarchy: &cross_module.class_hierarchy,
             wpfacts: cross_module.wpfacts.clone(),
             program_layouts: cross_module.program_layouts.clone(),
+            receiver_families: cross_module.receiver_families.clone(),
             wpfacts_sites: 0,
             wpfacts_tested: Vec::new(),
             wpfacts_off: false,
@@ -843,6 +894,7 @@ pub(super) fn compile_module_entry(
             resolved_versioned_loop_callback_targets: HashMap::new(),
             trusted_box_captures: false,
             fixed_generator_state: false,
+        private_resume_frame: false,
             versioned_loop_deopt_context: None,
             trusted_box_capture_ptrs: HashMap::new(),
             ready_cell_roots: Default::default(),

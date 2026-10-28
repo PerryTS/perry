@@ -46,6 +46,7 @@ use std::sync::RwLock;
 pub(crate) const INLINE_SLOT_FLOOR: usize = 2;
 // Submodules (issue #1103): behavior-preserving split of the former
 // 11.2k-line object.rs. Public re-exports keep FFI symbols stable.
+mod image_keys;
 #[cfg(test)]
 mod test_root_helpers;
 #[cfg(test)]
@@ -216,6 +217,7 @@ pub(crate) mod native_call_method;
 pub(crate) mod native_get;
 // `pub(crate)` since #340/#341: a family that owns its prototypes outside this
 // module (`timer.rs`) installs their method names and `.length` through here.
+pub(crate) mod native_method_install;
 pub(crate) mod native_module;
 mod nm_namespace_hooks;
 pub(crate) use native_module::class_ref_id;
@@ -269,6 +271,7 @@ pub(crate) mod shape_carriers;
 mod class_family_birth;
 mod function_family_birth;
 pub mod layout_desc;
+pub(crate) mod native_instance_layout;
 pub(crate) use shapes::layout_probe;
 #[cfg(test)]
 mod layout_desc_tests;
@@ -404,9 +407,9 @@ pub(crate) use descriptor_state::{
     reflect_getter_closure_bits, set_accessor_descriptor, set_builtin_accessor_descriptor,
     set_builtin_property_attrs, set_property_attrs, AccessorDescriptor, PropertyAttrs,
 };
-#[cfg(test)]
+#[cfg(any(test, target_os = "wasi"))]
 pub(crate) use field_get_set::private_lexical_brand_depth;
-#[cfg(test)]
+#[cfg(any(test, target_os = "wasi"))]
 pub(crate) use field_get_set::private_member_access_hints_depth;
 pub(crate) use field_get_set::FieldLookupCaches;
 pub(crate) use field_get_set::{
@@ -417,6 +420,10 @@ pub(crate) use field_get_set::{
     scan_private_lexical_brand_roots_mut,
 };
 #[cfg(test)]
+pub(crate) use this_binding::derived_super_scope_push_at;
+#[cfg(any(test, target_os = "wasi"))]
+pub(crate) use this_binding::static_private_owner_depth;
+#[cfg(test)]
 pub(crate) use this_binding::static_private_owner_push_at;
 pub(crate) use this_binding::{
     derived_super_binding_check_marks, derived_super_binding_len, derived_super_binding_truncate,
@@ -426,8 +433,6 @@ pub(crate) use this_binding::{
     static_private_owner_unwind_to, static_this_arm, static_this_arm_if_unarmed,
     static_this_disarm, SuperNewTargetScope,
 };
-#[cfg(test)]
-pub(crate) use this_binding::{derived_super_scope_push_at, static_private_owner_depth};
 pub use this_binding::{
     js_new_target_enter, js_new_target_get, js_new_target_leave, js_new_target_set,
     js_static_this_arm_classref, js_static_this_arm_value, js_static_this_resolve,
@@ -671,19 +676,26 @@ pub(crate) struct ObjectHotTables {
     /// (`Box`) — oversized inline storage overflowed the arm64_32 ILP32
     /// TLS layout when this lived in a `thread_local!`, and keeping it
     /// boxed inside the heap-allocated `RuntimeState` preserves that.
-    pub(crate) transition_cache: std::cell::UnsafeCell<Box<[TransitionEntry]>>,
+    pub(crate) transition_cache:
+        crate::zeroed_cache::ZeroPages<TransitionEntry, TRANSITION_CACHE_SIZE>,
     /// Bidirectional index over learned sequential numeric property appends.
     /// Array-subclass `push`/`pop` uses it to restore an exact historical
     /// ShapeId without cloning or compacting the ordered-keys array.
-    pub(crate) array_tail_forward:
-        std::cell::UnsafeCell<Box<[array_tail_transition::ArrayTailTransitionEntry]>>,
-    pub(crate) array_tail_reverse:
-        std::cell::UnsafeCell<Box<[array_tail_transition::ArrayTailTransitionEntry]>>,
+    pub(crate) array_tail_forward: crate::zeroed_cache::ZeroPages<
+        array_tail_transition::ArrayTailTransitionEntry,
+        { array_tail_transition::ARRAY_TAIL_TRANSITION_CACHE_SIZE },
+    >,
+    pub(crate) array_tail_reverse: crate::zeroed_cache::ZeroPages<
+        array_tail_transition::ArrayTailTransitionEntry,
+        { array_tail_transition::ARRAY_TAIL_TRANSITION_CACHE_SIZE },
+    >,
     /// Exact-ShapeId -> authoritative forward/reverse table indices. This is
     /// an accelerator only: collisions and stale indices revalidate the full
     /// entry and fall back to the complete open-addressed tables.
-    pub(crate) array_tail_direct:
-        std::cell::UnsafeCell<Box<[array_tail_transition::ArrayTailDirectIndex]>>,
+    pub(crate) array_tail_direct: crate::zeroed_cache::ZeroPages<
+        array_tail_transition::ArrayTailDirectIndex,
+        { array_tail_transition::ARRAY_TAIL_TRANSITION_CACHE_SIZE },
+    >,
     /// Set before the first entry is published into either tail table; while
     /// false every slot of both is `EMPTY`, so the GC scan and the prune have
     /// nothing to visit (see `array_tail_transition::tables_may_hold_entries`).
@@ -703,19 +715,12 @@ impl ObjectHotTables {
             ),
             shape_cache_overflow: RefCell::new(crate::fast_hash::new_ptr_hash_map()),
             class_keys_by_id: RefCell::new(crate::fast_hash::new_ptr_hash_map()),
-            // #11507: zero-allocated, so untouched pages are never mapped.
-            transition_cache: std::cell::UnsafeCell::new(crate::zeroed_cache::new_zeroed_cache(
-                TRANSITION_CACHE_SIZE,
-            )),
-            array_tail_forward: std::cell::UnsafeCell::new(crate::zeroed_cache::new_zeroed_cache(
-                array_tail_transition::ARRAY_TAIL_TRANSITION_CACHE_SIZE,
-            )),
-            array_tail_reverse: std::cell::UnsafeCell::new(crate::zeroed_cache::new_zeroed_cache(
-                array_tail_transition::ARRAY_TAIL_TRANSITION_CACHE_SIZE,
-            )),
-            array_tail_direct: std::cell::UnsafeCell::new(crate::zeroed_cache::new_zeroed_cache(
-                array_tail_transition::ARRAY_TAIL_TRANSITION_CACHE_SIZE,
-            )),
+            // Zero pages mapped by the first use: a thread that never takes
+            // a dynamic transition maps none of them.
+            transition_cache: crate::zeroed_cache::ZeroPages::new(),
+            array_tail_forward: crate::zeroed_cache::ZeroPages::new(),
+            array_tail_reverse: crate::zeroed_cache::ZeroPages::new(),
+            array_tail_direct: crate::zeroed_cache::ZeroPages::new(),
             array_tail_occupied: Cell::new(false),
         }
     }
@@ -738,8 +743,10 @@ pub(crate) use keys_lookup::*;
 
 pub(crate) mod array_tail_transition;
 mod call_method_depth;
+#[cfg(any(test, target_os = "wasi"))]
+pub(crate) use call_method_depth::call_method_depth;
 #[cfg(test)]
-pub(crate) use call_method_depth::{call_method_depth, test_enter_catch_method};
+pub(crate) use call_method_depth::test_enter_catch_method;
 mod meta_accessors;
 use call_method_depth::CallMethodDepthGuard;
 pub(crate) use call_method_depth::{call_method_depth_check_marks, call_method_depth_unwind_to};
@@ -1005,10 +1012,20 @@ fn transition_entry_is_minor_relevant(entry: &TransitionEntry) -> bool {
 fn with_transition_cache<R>(
     f: impl FnOnce(*mut [TransitionEntry; TRANSITION_CACHE_SIZE]) -> R,
 ) -> R {
-    unsafe {
-        let boxed = &mut *crate::state::state().object_hot.transition_cache.get();
-        f(boxed.as_mut_ptr() as *mut [TransitionEntry; TRANSITION_CACHE_SIZE])
-    }
+    f(crate::state::state().object_hot.transition_cache.get())
+}
+
+/// [`with_transition_cache`] for a scan or prune: `None` when this thread
+/// never used the cache (nothing to visit, and nothing to map).
+#[inline]
+fn with_used_transition_cache<R>(
+    f: impl FnOnce(*mut [TransitionEntry; TRANSITION_CACHE_SIZE]) -> R,
+) -> Option<R> {
+    crate::state::state()
+        .object_hot
+        .transition_cache
+        .mapped()
+        .map(f)
 }
 
 /// FNV-1a content hash for a property-name string.
@@ -1497,7 +1514,6 @@ pub fn scan_object_cache_roots(mark: &mut dyn FnMut(f64)) {
 }
 
 pub fn scan_object_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    crate::event_target::state::scan_roots(visitor);
     // Object-owned weak layout caches: rewrite moves without retaining keys.
     for slot in [
         &HTTP_METHODS_CACHE,
@@ -1906,3 +1922,23 @@ mod record_layout_tests;
 
 #[cfg(test)]
 mod address_free_slots_tests;
+
+pub(crate) mod property_ops;
+
+pub(crate) mod url_layout;
+
+#[cfg(any(test, target_os = "wasi"))]
+pub(crate) use call_method_depth::call_method_depth_restore_depth;
+
+#[cfg(any(test, target_os = "wasi"))]
+pub(crate) use this_binding::{
+    derived_super_binding_restore_depth, static_private_owner_restore_depth,
+};
+
+#[cfg(any(test, target_os = "wasi"))]
+pub(crate) use field_get_set::{
+    private_lexical_brand_restore_depth, private_member_access_hints_restore_depth,
+};
+
+#[cfg(any(test, target_os = "wasi"))]
+pub(crate) use native_call_method::{namespace_override_depth, namespace_override_restore_depth};

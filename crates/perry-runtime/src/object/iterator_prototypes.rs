@@ -1928,3 +1928,5 @@ pub(crate) unsafe fn array_record_close_is_absent() -> bool {
     }
     false
 }
+
+crate::realm_decl!("iterator_prototypes.realm.json#*");

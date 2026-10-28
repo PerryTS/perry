@@ -491,9 +491,40 @@ pub(crate) unsafe fn get_from(t: *const Table, obj: *const ObjectHeader, slot: u
     if *key_at(t, slot) == TAG_HOLE {
         return None;
     }
+    read_found_with_live(t, obj, slot, || super::object_live_slot_count(obj))
+}
+
+/// Read an entry just found in the actual table, using the receiver's current
+/// record rather than resolving that same published inline bound again.
+///
+/// # Safety
+/// `slot` is a successful lookup in this live, unmodified `t`; `record` is the
+/// current present record of `obj`. No callback or collection separates those
+/// proofs from this NoCollect read. The caller retains its property-kind checks.
+#[inline(always)]
+pub(crate) unsafe fn get_found_from_record(
+    t: *const Table,
+    obj: *const ObjectHeader,
+    slot: u32,
+    record: super::shapes::ShapeRecordRef,
+) -> Option<u64> {
+    debug_assert!(slot < (*t).length && *key_at(t, slot) != TAG_HOLE);
+    read_found_with_live(t, obj, slot, || record.live_inline_slot_count())
+}
+
+/// The single entry-value operation. General callers validate the entry above
+/// and resolve a bound only for a fixed reference; a proved lookup supplies its
+/// current record's same bound. No state is learned by either caller.
+#[inline(always)]
+unsafe fn read_found_with_live(
+    t: *const Table,
+    obj: *const ObjectHeader,
+    slot: u32,
+    inline_bound: impl FnOnce() -> u32,
+) -> Option<u64> {
     if *attrs_at(t, slot) & SLOT_REF != 0 {
         let fixed = *value_at(t, slot) as u32;
-        let live = super::object_live_slot_count(obj);
+        let live = inline_bound();
         if fixed < live {
             return Some(super::field_get_set::object_field_at_with_live(obj, fixed, live).bits());
         }

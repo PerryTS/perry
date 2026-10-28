@@ -435,7 +435,9 @@ pub extern "C" fn js_net_validate_socket_address_family(value: f64) -> i32 {
         return 0;
     }
     let text = if jv.is_any_string() {
-        Some(crate::url::get_string_content(value.get_nanbox_f64()))
+        Some(crate::value::boxed_text::get_string_content(
+            value.get_nanbox_f64(),
+        ))
     } else {
         None
     };

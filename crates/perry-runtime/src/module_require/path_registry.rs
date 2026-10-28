@@ -601,6 +601,8 @@ pub struct PathInitImage(std::sync::Arc<std::collections::HashMap<String, usize>
 /// addresses are code pointers of this image, so they are valid on any thread
 /// running it; the exports stay per-heap and are never handed over.
 pub fn current_path_init_image() -> PathInitImage {
+    // The worker runs the same image: it gets the whole table.
+    register_pending_path_inits();
     PathInitImage(PATH_MODULE_INIT_ADDRS.with(|addrs| addrs.borrow().clone()))
 }
 
@@ -638,6 +640,32 @@ fn register_init_addr(key: &str, init_addr: usize) -> bool {
 
 fn lookup_init_addr(key: &str) -> Option<usize> {
     PATH_MODULE_INIT_ADDRS.with(|addrs| addrs.borrow().get(key).copied())
+}
+
+crate::perry_thread_local! {
+    /// Generated functions that register initializer addresses on first need
+    /// (`js_register_path_inits_lazily`): the CommonJS modules a program that
+    /// is not closed evaluates on demand. A program reaches them through
+    /// their require edges; only a runtime path lookup needs their address,
+    /// so startup does not pay one registry insert per module. Per heap, as
+    /// the table they fill.
+    static PENDING_PATH_INITS: std::cell::RefCell<Vec<unsafe extern "C" fn()>> =
+        std::cell::RefCell::new(Vec::new());
+}
+
+/// Queue a registrar for [`register_pending_path_inits`].
+pub(crate) fn defer_path_inits(registrar: unsafe extern "C" fn()) {
+    PENDING_PATH_INITS.with(|p| p.borrow_mut().push(registrar));
+}
+
+/// Run this heap's queued registrars (each calls `js_register_path_init`).
+/// Called where a runtime path lookup starts, never under the registry lock
+/// (a registrar takes it).
+pub(crate) fn register_pending_path_inits() {
+    while let Some(registrar) = PENDING_PATH_INITS.with(|p| p.borrow_mut().pop()) {
+        // SAFETY: codegen passes a generated `extern "C" fn()` of this image.
+        unsafe { registrar() };
+    }
 }
 
 crate::perry_thread_local! {

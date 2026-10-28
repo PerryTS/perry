@@ -374,6 +374,21 @@ MECHANISMS: tuple[Mechanism, ...] = (
         },
     ),
     Mechanism(
+        id="wasip1-host-cases",
+        what=(
+            "wasm32-wasip1 reference-host fixtures. Each is a program the suite "
+            "compiles and runs under test-wasi/p1-host; one missing from the "
+            "case list is compiled by nothing and run by nothing."
+        ),
+        candidates=("test-wasi/p1-host/cases/*.ts",),
+        registry="test-wasi/p1-host/cases.txt",
+        runner="test-wasi/p1-host/suite.py (the wasi-execution job)",
+        key=_stem,
+        registered=lambda t: _read_hash_list(t, "test-wasi/p1-host/cases.txt"),
+        entry_to_path=lambda e: "test-wasi/p1-host/cases/%s.ts" % e,
+        min_candidates=10,
+    ),
+    Mechanism(
         id="rust-test-modules",
         what=(
             "Rust test files that cargo does NOT auto-discover. cargo builds "
@@ -540,6 +555,7 @@ _PLANT = {
     "gc-repsel-corpus": "test-files/test_gap_gc_selftest_planted_witness.ts",
     "feature-matrix-probes": "test-features/probes/closures/selftest-planted.ts",
     "compiler-output-workloads": "benchmarks/compiler_output/fixtures/selftest_planted.ts",
+    "wasip1-host-cases": "test-wasi/p1-host/cases/selftest_planted.ts",
     "rust-test-modules": "crates/perry-codegen/tests/native_proof_regressions/selftest_planted.rs",
 }
 

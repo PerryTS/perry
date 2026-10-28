@@ -1386,11 +1386,11 @@ pub(crate) unsafe fn gc_type_finalize_unmarked_payload(obj_type: u8, user_ptr: *
             );
         }
         GcFinalizeHookKind::AsyncResourceState => {
-            crate::async_hooks::resource_state::finalize(user_ptr.cast(), true);
+            crate::async_hook_slots::resource_state::finalize(user_ptr.cast(), true);
         }
         GcFinalizeHookKind::PromiseCleanup => {
             let promise = user_ptr as *mut crate::promise::Promise;
-            crate::async_hooks::enqueue_gc_destroy((*promise).async_id);
+            crate::async_hook_slots::enqueue_gc_destroy((*promise).async_id);
             crate::promise::clear_promise_context_for_gc(promise);
         }
 
@@ -1746,7 +1746,7 @@ pub(crate) const GC_ARRAY_KEY_ATTRS: u16 = 0x100;
 /// `GC_TYPE_ARRAY`), the same sharing bits 11 and 12 already use. The value
 /// MUST match `PLAIN_ORDINARY_OBJ_FLAG` in
 /// `perry-codegen/src/expr/proxy_reflect.rs`, which emits it as a literal.
-pub const OBJ_FLAG_PLAIN_ORDINARY: u16 = 0x200;
+pub const OBJ_FLAG_PLAIN_ORDINARY: u16 = perry_abi::OBJ_FLAG_PLAIN_ORDINARY;
 /// This OBJECT allocation has an Arguments private tail. Its class id stays
 /// zero: the identity does not invent a constructor or private class fields.
 /// Bit 12 is disjoint from object initialization state (14..15). Array

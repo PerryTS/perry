@@ -293,7 +293,10 @@ pub(crate) fn regexp(receiver: f64, argument: f64, limit_value: f64) -> Result<f
     if let Some(result) = canonical_split(&scope, &receiver, &input, &limit_value)? {
         return Ok(result);
     }
-    let constructor = super::match_all::species(&receiver)?.map(|v| scope.root_nanbox_f64(v));
+    let constructor = match super::match_all::species(&receiver)? {
+        Some(v) => Some(scope.root_nanbox_f64(v)),
+        None => None,
+    };
     let flags = scope.root_nanbox_f64(dispatch::get(&receiver, b"flags")?);
     let flags = text(&scope, &flags)?;
     let mut budget = Budget::new(api::WORK);
@@ -603,7 +606,8 @@ pub(crate) extern "C" fn regexp_thunk(
     api::finish(regexp(this.as_f64(), input, limit))
 }
 
-#[no_mangle]
 pub extern "C" fn js_string_split_js(receiver: f64, separator: f64, limit: f64) -> f64 {
     api::finish(string(receiver, separator, limit))
 }
+
+crate::realm_decl!("perex_split.realm.json#*");

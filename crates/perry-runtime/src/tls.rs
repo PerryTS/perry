@@ -1488,9 +1488,9 @@ pub fn tls_domain_to_ascii(host: &str) -> String {
         return String::new();
     }
 
-    if let Some(ascii) = crate::url::idna_domain_to_ascii(&normalized) {
+    if let Some(ascii) = crate::url_hooks::idna_domain_to_ascii(&normalized) {
         return ascii
-            .and_then(|ascii| crate::url::whatwg_canonicalize_host(&ascii))
+            .and_then(|ascii| crate::url_hooks::whatwg_canonicalize_host(&ascii))
             .unwrap_or_default();
     }
 

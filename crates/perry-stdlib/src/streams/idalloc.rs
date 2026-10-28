@@ -61,6 +61,8 @@ struct IdAlloc {
     pipe_ids: HashSet<usize>,
 }
 
+// Keep the streams initializer out of globals merged with unrelated fetch state.
+#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_streams")]
 static IDALLOC: std::sync::LazyLock<Mutex<IdAlloc>> = std::sync::LazyLock::new(|| {
     Mutex::new(IdAlloc {
         next: STREAM_HANDLE_ID_START,

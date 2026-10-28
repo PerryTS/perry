@@ -120,7 +120,7 @@ pub fn is_proxy_cell(addr: usize) -> bool {
         && addr % std::mem::align_of::<GcHeader>() == 0
         && addr as u64 <= crate::value::POINTER_MASK
         // SAFETY: the honest-pointer invariant above.
-        && crate::proxy::is_proxy_header(unsafe { &*((addr - GC_HEADER_SIZE) as *const GcHeader) })
+        && crate::proxy_hooks::is_proxy_header(unsafe { &*((addr - GC_HEADER_SIZE) as *const GcHeader) })
 }
 
 /// True when `id` is in the Web Streams sub-band of the handle band. Only a
@@ -571,7 +571,9 @@ unsafe fn tracked_gc_header_admitting(
         |candidate| crate::arena::classify_heap_space_in_range(candidate).map(|(_, base, _)| base),
         crate::gc::gc_malloc_header_is_tracked,
     ) else {
-        let header = image::header(addr)?;
+        // Outside every allocator: an immutable image string, or a cell of the
+        // realm image (WRT): both are immortal and admitted by their sections.
+        let header = image::header(addr).or_else(|| realm::header(addr))?;
         return admit((*header.as_ptr()).obj_type).then_some(header);
     };
     if header_addr % std::mem::align_of::<GcHeader>() != 0 {
@@ -906,6 +908,9 @@ pub(crate) fn wasm_image_selftest() {
 
 #[path = "addr_class/image.rs"]
 mod image;
+
+#[path = "addr_class/realm.rs"]
+pub(crate) mod realm;
 
 /// Validate the string layout after the canonical ownership/type admission.
 /// The empty singleton has no GC header and is admitted by exact identity.

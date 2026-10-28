@@ -94,3 +94,5 @@ pub(crate) extern "C" fn plural_rules_constructor_thunk(
         rest_arg(rest, 1),
     )
 }
+
+crate::realm_decl!("constructor_thunks.realm.json#*");

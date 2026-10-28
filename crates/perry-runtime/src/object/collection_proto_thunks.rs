@@ -853,3 +853,5 @@ pub(super) extern "C" fn weakmap_proto_delete_thunk(
 
 #[cfg(test)]
 mod subclass_tests;
+
+crate::realm_decl!("collection_proto_thunks.realm.json#*");

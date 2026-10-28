@@ -447,6 +447,15 @@ impl ShapeRecordRef {
         unsafe { (*self.0.as_ptr()).keys }
     }
 
+    /// A static record: an external carrier (a compiler-owned layout or
+    /// seed) or a cache carrier. No prune retires it, so a receiver of its
+    /// shape keeps nothing alive but the record's keys, which outlive every
+    /// trace only when they are image data.
+    pub(crate) fn is_static_record(self) -> bool {
+        // SAFETY: a live slab record.
+        unsafe { (*self.0.as_ptr()).cache_carrier() }
+    }
+
     /// The `keys` word's address: the slot the collector marks through and
     /// rewrites in place. `keys` is the first field of the `#[repr(C)]` slab
     /// record, so the record address IS the slot address.
@@ -6815,7 +6824,12 @@ pub(crate) fn recompute_record_handle_carriers() {
         }
     });
     while let Some(word) = pending.pop() {
-        let ptr = ShapeSlab::agent_record_for_word(word);
+        // A handle is weak: the record it names may have been retired by an
+        // earlier prune. An absent word answers the shared read-only
+        // `EMPTY_RECORD`, which must never be written; it carries nothing.
+        let Some(ptr) = ShapeSlab::agent_record_for_word_present(word) else {
+            continue;
+        };
         unsafe {
             let r = &*ptr;
             if !r.has(RECORD_FLAG_CACHE_CARRIER) {

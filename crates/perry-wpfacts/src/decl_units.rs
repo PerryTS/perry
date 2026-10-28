@@ -583,6 +583,13 @@ impl Flat<'_> {
                 let factory = name == "__perry_cjs_factory";
                 let uses = self.locals.get(id).copied().unwrap_or(0);
                 let once = match factory {
+                    // In a closed program this is the program fact
+                    // `cjs_closed` (design CJS_LINK §2.5). In one that is not
+                    // closed a reload can run the factory again, and the view
+                    // still flattens it, as before CJS_LINK: an unflattened
+                    // factory meets the per-unit gap pinned in
+                    // `tests/binding_write_gap.rs` (CWN decision (b),
+                    // 2026-10-26); the ownership ICE stays the guard.
                     true => uses == 1 + self.records.get(id).copied().unwrap_or(0),
                     false => uses == 1 && self.closed.contains_key(&(false, *id)),
                 };
