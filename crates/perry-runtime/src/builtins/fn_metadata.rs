@@ -154,6 +154,7 @@ fn function_name_overrides(
 ///
 /// The two locks are never held at the same time, here or anywhere else in
 /// this module, so there is no acquisition order to get wrong.
+#[inline(always)]
 pub(super) fn registered_name_string(func_ptr: usize) -> Option<String> {
     with_registered_name(func_ptr, str::to_owned)
 }
@@ -433,6 +434,7 @@ pub(crate) unsafe fn function_name_for_closure(
 /// when no non-empty name was registered. Used by the spec `fn.name`
 /// own-property read (#2059) and by `getOwnPropertyDescriptor(fn, "name")` —
 /// the same registry the `[Function: <name>]` console formatter consults.
+#[inline(always)]
 pub fn function_name_for_ptr(func_ptr: usize) -> Option<String> {
     if func_ptr == 0 {
         return None;
