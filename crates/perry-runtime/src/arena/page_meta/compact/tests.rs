@@ -155,13 +155,13 @@ fn overlapping_entering_objects_are_rejected_instead_of_aliasing() {
 }
 
 #[test]
-fn a_single_page_header_needs_no_heap_buffer_and_grows_in_order() {
+fn a_single_entering_header_needs_no_heap_buffer_and_grows_in_order() {
     let page = 101;
     let base = generation_page_base(page);
     for first in [base - 32, base, base + 4088] {
         let mut list = PageObjects::default();
         list.extend(page, &[first]);
-        assert_eq!(list.heap_bytes(), 0);
+        assert_eq!(list.heap_bytes() == 0, first < base);
         assert_eq!(list.len(), 1);
         assert_eq!(list.iter(page).collect::<Vec<_>>(), [first]);
         assert!(list.contains_prefix(page, first, 1));

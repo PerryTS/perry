@@ -4,8 +4,8 @@ use super::*;
 use std::io::{self, BorrowedBuf, Read};
 use std::mem::MaybeUninit;
 
-// Initial growth quantum for a native source without a size hint.
-const READ_CHUNK: usize = 64 * 1024;
+// Bounded I/O/scan window, also the initial growth quantum for unknown sizes.
+const READ_CHUNK: usize = 512 * 1024;
 
 #[path = "read_ascii.rs"]
 mod ascii;
@@ -90,7 +90,7 @@ pub(crate) fn read_utf8<R: Read + ?Sized>(
                 let data = string_data(owner.get_raw_const_ptr()).cast_mut().add(len);
                 let spare = slice::from_raw_parts_mut(
                     data.cast::<MaybeUninit<u8>>(),
-                    capacity as usize - len,
+                    (capacity as usize - len).min(READ_CHUNK),
                 );
                 let mut output = BorrowedBuf::from(spare);
                 loop {

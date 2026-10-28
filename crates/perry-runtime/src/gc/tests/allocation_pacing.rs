@@ -541,6 +541,10 @@ fn completed_native_input_preserves_its_result_while_draining_owed_collection() 
             !policy::gc_budgeted_cycle_active(),
             "the completed input must drain the minor blocking its owed bulk reclaim"
         );
+        assert!(
+            policy::GC_SAFEPOINT_PENDING.with(std::cell::Cell::get),
+            "completed bulk debt must arm the caller's existing precise loop poll"
+        );
         assert!(gc_safepoint_moving_minor());
         unsafe {
             result.with_string_bytes(|bytes| assert_eq!(bytes, expected.as_bytes()));
