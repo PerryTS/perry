@@ -89,7 +89,7 @@ function assertCoherentBuild(calls) {
   const args = [...alias[1].matchAll(/"([^"\n]*)"/g)].map(match => match[1]);
   assert.equal(args[0], 'build');
   for (const name of ['perry', 'perry-runtime-static', 'perry-stdlib-static',
-    'perry-ext-http', 'perry-ext-net', 'perry-ext-typescript', 'perry-ext-ws', 'perry-ext-zlib']) {
+    'perry-ext-events', 'perry-ext-http', 'perry-ext-net', 'perry-ext-typescript', 'perry-ext-ws', 'perry-ext-zlib']) {
     assert(args.some((arg, i) => arg === '-p' && args[i + 1] === name), name);
   }
   assert(!args.some(arg => arg === '--features' || arg.startsWith('--features=')),

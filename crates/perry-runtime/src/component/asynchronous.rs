@@ -23,7 +23,7 @@ struct Operation {
     started: bool,
     failed: bool,
 }
-thread_local! {
+crate::perry_thread_local! {
     // Native links retain traced payload cells; this queue holds no JS address.
     static PENDING: RefCell<Vec<OwnerLink>> = const { RefCell::new(Vec::new()) };
     static PUMPING: Cell<bool> = const { Cell::new(false) };

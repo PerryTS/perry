@@ -44,6 +44,9 @@ class RuntimeTestBatches(unittest.TestCase):
         self.assertEqual(calls[-2][-2:], ['--test', '*'])
         self.assertEqual(calls[-1][-1], '--doc')
         self.assertTrue(all(c[c.index('--profile') + 1] == 'dev' for c in calls))
+        for command in (c for c in calls if '--exact' in c):
+            self.assertEqual(command[command.index('--format') + 1], 'pretty')
+            self.assertIn('--nocapture', command)
 
     def test_child_process_summaries_do_not_replace_parent_coverage(self):
         _, base_run = self.runner()

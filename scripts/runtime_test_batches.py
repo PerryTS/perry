@@ -48,7 +48,9 @@ def run_batches(cargo_args=(), batch_size=128, lib_only=False, run=subprocess.ru
     for offset in range(0, len(names), batch_size):
         batch = names[offset:offset + batch_size]
         print(f"Runtime tests {offset + 1}–{offset + len(batch)} / {len(names)}", flush=True)
-        result = run([*unit, "--", "--exact", "--test-threads=1", "--format", "terse",
+        # A process abort has no libtest summary. Keep the active test name
+        # and its diagnostics visible so a release failure is attributable.
+        result = run([*unit, "--", "--exact", "--test-threads=1", "--format", "pretty", "--nocapture",
                       "--color", "never", *batch],
                      cwd=ROOT, text=True, stdout=subprocess.PIPE)
         print(result.stdout, flush=True)
