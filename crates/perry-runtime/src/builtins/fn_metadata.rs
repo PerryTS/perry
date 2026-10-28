@@ -188,10 +188,8 @@ fn with_registered_name<T>(func_ptr: usize, read: impl FnOnce(&str) -> T) -> Opt
             return Some(read(name));
         }
     }
-    function_name_registry()
-        .lock()
-        .ok()
-        .and_then(|map| decode_registered_with(map.get(&func_ptr).copied(), read))
+    let image = function_name_registry().lock().ok()?;
+    decode_registered_with(image.get(&func_ptr).copied(), read)
 }
 
 #[cfg(test)]
