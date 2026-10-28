@@ -1,0 +1,2 @@
+- Forward synchronous Brotli dictionary and quality options through native dispatch and compiler bindings, and preserve decoder dictionary diagnostics.
+- Preserve Brotli quality10/11 while matching short custom dictionary prefixes and the unindexed tail of longer prefixes, using a checksum-qualified Brotli9 library snapshot.
