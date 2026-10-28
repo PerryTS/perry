@@ -44,23 +44,24 @@ unsafe fn avx2(bytes: &[u8]) -> bool {
 #[target_feature(enable = "avx512f,avx512bw")]
 unsafe fn avx512(bytes: &[u8]) -> bool {
     use std::arch::x86_64::*;
-    let mut blocks = bytes.chunks_exact(256);
-    let (mut a, mut b, mut c, mut d) = (
-        _mm512_setzero_si512(),
-        _mm512_setzero_si512(),
-        _mm512_setzero_si512(),
-        _mm512_setzero_si512(),
-    );
+    let mut blocks = bytes.chunks_exact(512);
+    let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h] = [_mm512_setzero_si512(); 8];
     for block in &mut blocks {
         let p = block.as_ptr().cast::<__m512i>();
-        // No load crosses this complete block or the initialized input slice.
+        // Eight independent reductions overlap load latency. Every load is
+        // inside this complete block and the initialized input slice.
         a = _mm512_or_si512(a, _mm512_loadu_si512(p));
         b = _mm512_or_si512(b, _mm512_loadu_si512(p.add(1)));
         c = _mm512_or_si512(c, _mm512_loadu_si512(p.add(2)));
         d = _mm512_or_si512(d, _mm512_loadu_si512(p.add(3)));
+        e = _mm512_or_si512(e, _mm512_loadu_si512(p.add(4)));
+        f = _mm512_or_si512(f, _mm512_loadu_si512(p.add(5)));
+        g = _mm512_or_si512(g, _mm512_loadu_si512(p.add(6)));
+        h = _mm512_or_si512(h, _mm512_loadu_si512(p.add(7)));
     }
-    let bits = _mm512_or_si512(_mm512_or_si512(a, b), _mm512_or_si512(c, d));
-    _mm512_movepi8_mask(bits) == 0 && blocks.remainder().is_ascii()
+    let lo = _mm512_or_si512(_mm512_or_si512(a, b), _mm512_or_si512(c, d));
+    let hi = _mm512_or_si512(_mm512_or_si512(e, f), _mm512_or_si512(g, h));
+    _mm512_movepi8_mask(_mm512_or_si512(lo, hi)) == 0 && blocks.remainder().is_ascii()
 }
 
 #[cfg(test)]
@@ -111,6 +112,8 @@ mod tests {
             check(&[byte; 129]);
             check(&[byte; 256]);
             check(&[byte; 257]);
+            check(&[byte; 512]);
+            check(&[byte; 513]);
         }
     }
 }
