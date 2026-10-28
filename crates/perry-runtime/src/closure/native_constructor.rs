@@ -53,6 +53,7 @@ fn definition(module: &str, name: &str) -> Option<(*const PerryLayoutDesc, u64)>
 }
 
 /// Complete the runtime's definition before any program code can see it.
+#[inline(always)]
 pub(crate) fn seal(module: &str, name: &str, value: f64) {
     let Some((desc, serial)) = definition(module, name) else {
         return;

@@ -145,6 +145,7 @@ fn native_callable_export_arity_reference(module: &str, prop: &str) -> Option<u3
         ) => Some(1),
         ("process", "hasUncaughtExceptionCaptureCallback") => Some(0),
         ("fs", "_toUnixTimestamp") => Some(1),
+        ("fs", "readFileSync") => Some(2),
         ("util", "isArray") => Some(1),
         ("util", "debug" | "debuglog" | "inherits") => Some(2),
         ("console", "context") => Some(1),
@@ -447,6 +448,7 @@ static CALLABLE_EXPORT_ARITY_TABLE: &[(&str, &[(&str, u32)])] = &[
             ("_toUnixTimestamp", 1),
             ("mkdtempDisposableSync", 2),
             ("openAsBlob", 1),
+            ("readFileSync", 2),
         ],
     ),
     (

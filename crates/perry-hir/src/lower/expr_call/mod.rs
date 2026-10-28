@@ -658,6 +658,14 @@ fn lower_call_inner(
                         byte_offset: call.span.lo.0,
                     });
                 }
+                if native_module::namespace_call_needs_esm_binding(ctx, expr) {
+                    return Ok(Expr::Call {
+                        callee: Box::new(lower_expr(ctx, expr)?),
+                        args,
+                        type_args: Vec::new(),
+                        byte_offset: call.span.lo.0,
+                    });
+                }
                 // Nested 3-level Member dispatch: process.hrtime.bigint(),
                 // crypto.subtle.<method>(), util.types.<method>(), and
                 // path.posix/win32.<method>().

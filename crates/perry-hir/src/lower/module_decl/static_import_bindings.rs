@@ -13,7 +13,9 @@ pub(super) fn init_named_cell(
     imported: &str,
     method: Option<&String>,
 ) {
-    if method.is_none() || !perry_api_manifest::is_node_core_module(source) {
+    if (method.is_none() && imported == "default")
+        || !perry_api_manifest::is_node_core_module(source)
+    {
         return;
     }
     module.init.insert(
@@ -21,7 +23,7 @@ pub(super) fn init_named_cell(
         Stmt::Expr(Expr::Call {
             byte_end: 0,
             callee: Box::new(Expr::ExternFuncRef {
-                name: "js_native_module_named_esm_export_value".to_string(),
+                name: "__perry_init_named_builtin_cell".to_string(),
                 param_types: vec![Type::String, Type::String],
                 return_type: Type::Any,
             }),
@@ -124,4 +126,73 @@ pub(crate) fn import_is_runtime_erased(
                 ast::ImportSpecifier::Named(named) if named.is_type_only
             )
         })
+}
+
+/// Drop declaration-only export reads when lowering found no value use. Direct
+/// native calls already name their implementation. Retain preloads for escapes,
+/// reexports and synchronized calls so later CommonJS writes cannot change the
+/// initial ESM binding.
+pub(crate) fn prune_unused_named_cells(module: &mut Module) {
+    fn key(expr: &Expr) -> Option<(String, String)> {
+        let Expr::Call { callee, args, .. } = expr else {
+            return None;
+        };
+        let Expr::ExternFuncRef { name, .. } = callee.as_ref() else {
+            return None;
+        };
+        if name != "js_native_module_named_esm_export_value" {
+            return None;
+        }
+        let [Expr::String(source), Expr::String(export)] = args.as_slice() else {
+            return None;
+        };
+        Some((source.clone(), export.clone()))
+    }
+    let mut uses = std::collections::HashMap::<_, usize>::new();
+    crate::for_each_module_expr(module, &mut |expr| {
+        if let Some(key) = key(expr) {
+            *uses.entry(key).or_default() += 1;
+        }
+    });
+    let exported: std::collections::HashSet<_> = module
+        .exports
+        .iter()
+        .filter_map(|e| {
+            if let Export::Named { local, .. } = e {
+                Some(local.as_str())
+            } else {
+                None
+            }
+        })
+        .collect();
+    let reexports: std::collections::HashSet<_> = module
+        .imports
+        .iter()
+        .flat_map(|i| {
+            i.specifiers.iter().filter_map(|s| match s {
+                ImportSpecifier::Named { imported, local } if exported.contains(local.as_str()) => {
+                    Some((i.source.clone(), imported.clone()))
+                }
+                _ => None,
+            })
+        })
+        .collect();
+    module.init.retain_mut(|stmt| {
+        let Stmt::Expr(expr) = stmt else { return true };
+        let Expr::Call { callee, args, .. } = expr else {
+            return true;
+        };
+        let Expr::ExternFuncRef { name, .. } = callee.as_mut() else {
+            return true;
+        };
+        if name != "__perry_init_named_builtin_cell" {
+            return true;
+        }
+        let [Expr::String(source), Expr::String(export)] = args.as_slice() else {
+            unreachable!()
+        };
+        let key = (source.clone(), export.clone());
+        *name = "js_native_module_named_esm_export_value".to_string();
+        uses.contains_key(&key) || reexports.contains(&key)
+    });
 }

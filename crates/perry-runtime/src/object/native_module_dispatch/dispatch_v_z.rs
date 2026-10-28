@@ -11,6 +11,7 @@ use super::*;
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_v8(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
     let NmCtx {
         obj,
@@ -137,6 +138,7 @@ pub(crate) unsafe fn nm_dispatch_v8(ctx: &NmCtx, module_name: &str, method_name:
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_vm(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
     let NmCtx {
         obj,
@@ -178,6 +180,7 @@ pub(crate) unsafe fn nm_dispatch_vm(ctx: &NmCtx, module_name: &str, method_name:
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_wasi(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
     let NmCtx {
         obj,
@@ -220,6 +223,7 @@ pub(crate) unsafe fn nm_dispatch_wasi(ctx: &NmCtx, module_name: &str, method_nam
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_zlib(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
     let NmCtx {
         obj,

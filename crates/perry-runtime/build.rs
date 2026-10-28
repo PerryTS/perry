@@ -588,7 +588,11 @@ fn build_trap_shim() {
     cc::Build::new().object(&obj).compile("perry_trap");
 }
 
+#[path = "src/object/native_module/static_exports_build.rs"]
+mod static_exports_build;
+
 fn main() {
+    static_exports_build::emit(Path::new(&std::env::var("OUT_DIR").unwrap()));
     let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
     perry_runtime_manifest::realm_source::generate(std::path::Path::new("src"), &out)
         .expect("emit runtime realm manifest");

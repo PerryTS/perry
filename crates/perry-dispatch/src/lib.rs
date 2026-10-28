@@ -192,3 +192,7 @@ pub fn ui_method_to_runtime(method: &str) -> Option<&'static str> {
     }
     None
 }
+
+pub mod native_callable_exports;
+
+pub mod native_module_bucket;

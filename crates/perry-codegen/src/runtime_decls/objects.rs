@@ -332,6 +332,15 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, DOUBLE],
     );
+    for &(source, properties) in perry_dispatch::native_callable_exports::CALLABLE_EXPORT_TABLE {
+        for &property in properties {
+            if let Some(symbol) =
+                perry_dispatch::native_callable_exports::export_value_symbol(source, property)
+            {
+                module.declare_function(&symbol, DOUBLE, &[I32]);
+            }
+        }
+    }
     // Issue #894: materialize a NATIVE_MODULE_CLASS_ID-tagged namespace
     // object for `Expr::NativeModuleRef` when it reaches the value-form
     // fallback path (the require-call-result-then-member-access shape

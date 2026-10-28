@@ -381,7 +381,7 @@ pub(crate) fn is_cluster_emitter_method(prop: &str) -> bool {
     )
 }
 
-fn native_callable_export_display_name<'a>(module: &str, prop: &'a str) -> &'a str {
+pub(super) fn native_callable_export_display_name<'a>(module: &str, prop: &'a str) -> &'a str {
     if module == "fs" {
         match prop {
             "_toUnixTimestamp" => "toUnixTimestamp",
@@ -1242,7 +1242,8 @@ unsafe fn bound_native_callable_closure(
     // host) before probing `CLOSURE_MAGIC`. Refs test262
     // class/subclass/superclass-{arrow,async,generator,async-generator}-function.
     if !crate::closure::is_closure_ptr(closure as usize)
-        || (*closure).code() != crate::closure::BOUND_METHOD_FUNC_PTR
+        || ((*closure).code() != crate::closure::BOUND_METHOD_FUNC_PTR
+            && (*(*closure).info).flags & crate::codegen_abi::FN_NATIVE_EXPORT == 0)
     {
         return None;
     }
@@ -1296,6 +1297,7 @@ pub(crate) fn builtin_closure_is_non_constructable_value(value: f64) -> bool {
 // ---------------------------------------------------------------------------
 
 #[allow(unused_mut)]
+#[inline(always)]
 pub(crate) unsafe fn nm_attach_module(
     property_name: &str,
     mut value: f64,
@@ -1318,6 +1320,7 @@ pub(crate) unsafe fn nm_attach_module(
 }
 
 #[allow(unused_mut)]
+#[inline(always)]
 pub(crate) unsafe fn nm_attach_tty(
     property_name: &str,
     mut value: f64,
@@ -1330,6 +1333,7 @@ pub(crate) unsafe fn nm_attach_tty(
 }
 
 #[allow(unused_mut)]
+#[inline(always)]
 pub(crate) unsafe fn nm_attach_tls(
     property_name: &str,
     mut value: f64,
@@ -1347,6 +1351,7 @@ pub(crate) unsafe fn nm_attach_tls(
 /// prototypes, born on their static layouts (`object::node_http_prototypes`),
 /// so `util.inherits` / `setPrototypeOf` / `extends` subclasses inherit node's
 /// surface (#10454).
+#[inline(always)]
 pub(crate) unsafe fn nm_attach_http(property_name: &str, value: f64, _closure_addr: usize) -> f64 {
     let module = bound_native_callable_module_and_method(value).map(|(module, _)| module);
     if module.as_deref() == Some("http") {
@@ -1356,6 +1361,7 @@ pub(crate) unsafe fn nm_attach_http(property_name: &str, value: f64, _closure_ad
 }
 
 #[allow(unused_mut)]
+#[inline(always)]
 pub(crate) unsafe fn nm_attach_wasi(
     property_name: &str,
     mut value: f64,
@@ -1368,6 +1374,7 @@ pub(crate) unsafe fn nm_attach_wasi(
 }
 
 #[allow(unused_mut)]
+#[inline(always)]
 pub(crate) unsafe fn nm_attach_stream(
     property_name: &str,
     mut value: f64,
@@ -1438,6 +1445,7 @@ pub(crate) unsafe fn ensure_child_process_prototype(value: f64) -> f64 {
 
 /// Attach the public `ChildProcess.prototype` so low-level constructed
 /// instances participate in ordinary `instanceof ChildProcess` checks.
+#[inline(always)]
 pub(crate) unsafe fn nm_attach_child_process(
     property_name: &str,
     value: f64,
@@ -1450,6 +1458,7 @@ pub(crate) unsafe fn nm_attach_child_process(
     }
 }
 
+#[inline(always)]
 pub(crate) unsafe fn nm_attach_cluster(
     property_name: &str,
     value: f64,
@@ -1463,6 +1472,7 @@ pub(crate) unsafe fn nm_attach_cluster(
 }
 
 #[allow(unused_mut)]
+#[inline(always)]
 pub(crate) unsafe fn nm_attach_sqlite(
     property_name: &str,
     mut value: f64,
@@ -1489,6 +1499,7 @@ pub(crate) unsafe fn nm_attach_sqlite(
 }
 
 #[allow(unused_mut)]
+#[inline(always)]
 pub(crate) unsafe fn nm_attach_assert(
     property_name: &str,
     mut value: f64,
@@ -1501,6 +1512,7 @@ pub(crate) unsafe fn nm_attach_assert(
 }
 
 #[allow(unused_mut)]
+#[inline(always)]
 pub(crate) unsafe fn nm_attach_crypto(
     property_name: &str,
     mut value: f64,
@@ -1527,6 +1539,7 @@ pub(crate) unsafe fn nm_attach_crypto(
 }
 
 #[allow(unused_mut)]
+#[inline(always)]
 pub(crate) unsafe fn nm_attach_perf_hooks(
     _property_name: &str,
     value: f64,
@@ -1536,6 +1549,7 @@ pub(crate) unsafe fn nm_attach_perf_hooks(
 }
 
 #[allow(unused_mut)]
+#[inline(always)]
 pub(crate) unsafe fn nm_attach_async_hooks(
     property_name: &str,
     mut value: f64,
@@ -1607,6 +1621,7 @@ pub(crate) unsafe fn nm_attach_async_hooks(
     value
 }
 
+#[inline(always)]
 pub(crate) unsafe fn nm_attach_events(name: &str, value: f64, _addr: usize) -> f64 {
     if name == "EventEmitter" {
         super::constructor_shapes::install_event_emitter_statics(value)
@@ -1616,6 +1631,7 @@ pub(crate) unsafe fn nm_attach_events(name: &str, value: f64, _addr: usize) -> f
 }
 
 #[allow(unused_mut)]
+#[inline(always)]
 pub(crate) unsafe fn nm_attach_util(
     property_name: &str,
     mut value: f64,

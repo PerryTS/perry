@@ -11,6 +11,7 @@ use super::*;
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_assert(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
     let NmCtx {
         obj,
@@ -120,6 +121,7 @@ pub(crate) unsafe fn nm_dispatch_assert(ctx: &NmCtx, module_name: &str, method_n
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_async_hooks(
     ctx: &NmCtx,
     module_name: &str,
@@ -187,6 +189,7 @@ pub(crate) unsafe fn nm_dispatch_async_hooks(
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_bigint(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
     let NmCtx {
         obj,
@@ -225,6 +228,7 @@ pub(crate) unsafe fn nm_dispatch_bigint(ctx: &NmCtx, module_name: &str, method_n
 /// resolution lives in `crate::bun_ffi::dispatch`; this bucket just forwards
 /// the raw NaN-boxed args.
 #[allow(unused_variables, unused_mut, unused_unsafe, clippy::all)]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_bun_ffi(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
     let NmCtx {
         obj,
@@ -246,6 +250,7 @@ pub(crate) unsafe fn nm_dispatch_bun_ffi(ctx: &NmCtx, module_name: &str, method_
 /// `stderr` are property reads handled in `native_module.rs`, and
 /// `pathToFileURL`/`fileURLToPath` alias the `node:url` implementations.
 #[allow(clippy::all)]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_bun(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
     let NmCtx {
         obj,
@@ -347,6 +352,7 @@ pub(crate) unsafe fn nm_dispatch_bun(ctx: &NmCtx, module_name: &str, method_name
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_buffer(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
     let NmCtx {
         obj,
@@ -473,6 +479,7 @@ pub(crate) unsafe fn nm_dispatch_buffer(ctx: &NmCtx, module_name: &str, method_n
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_child_process(
     ctx: &NmCtx,
     module_name: &str,
@@ -553,6 +560,7 @@ pub(crate) unsafe fn nm_dispatch_child_process(
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_cluster(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
     let NmCtx {
         obj,
@@ -629,6 +637,7 @@ pub(crate) unsafe fn nm_dispatch_cluster(ctx: &NmCtx, module_name: &str, method_
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_console(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
     let NmCtx {
         obj,
@@ -745,6 +754,7 @@ pub(crate) unsafe fn nm_dispatch_console(ctx: &NmCtx, module_name: &str, method_
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_crypto(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
     let NmCtx {
         obj,

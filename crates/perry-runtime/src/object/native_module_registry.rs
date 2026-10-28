@@ -17,53 +17,12 @@ use super::native_module_dispatch::{
 };
 use std::sync::atomic::{AtomicPtr, Ordering};
 
+use perry_dispatch::native_module_bucket::{
+    native_module_bucket as nm_module_index, NativeModuleBucket as NmBucket,
+};
+
 type NmDispatchFn = unsafe fn(&NmCtx, &str, &str) -> f64;
 
-#[derive(Copy, Clone)]
-#[repr(usize)]
-enum NmBucket {
-    Assert,
-    AsyncHooks,
-    Bigint,
-    Buffer,
-    Bun,
-    BunFfi,
-    ChildProcess,
-    Cluster,
-    Console,
-    Crypto,
-    Dgram,
-    Dns,
-    Domain,
-    Events,
-    Fs,
-    Http,
-    Inspector,
-    Module,
-    Net,
-    NodePty,
-    Os,
-    Path,
-    Perf,
-    Process,
-    Punycode,
-    Querystring,
-    Readline,
-    Repl,
-    Sea,
-    Sqlite,
-    Stream,
-    Timers,
-    Tls,
-    Tty,
-    Url,
-    Util,
-    V8,
-    Vm,
-    Wasi,
-    Zlib,
-    WorkerThreads,
-}
 const NM_BUCKET_COUNT: usize = 41;
 // #6580 merge: inserting BunFfi shifted every later NmBucket up one; keep this array
 // big enough to index every variant (WorkerThreads is the last). Guard against silent overflow.
@@ -74,71 +33,6 @@ static NM_DISPATCH_REGISTRY: [AtomicPtr<()>; NM_BUCKET_COUNT] =
 
 /// Map a (normalized) module tag to its bucket. Pure string match — references
 /// no bucket fn, so it pins nothing.
-fn nm_module_index(name: &str) -> Option<NmBucket> {
-    match name {
-        "assert" | "assert/strict" => Some(NmBucket::Assert),
-        "async_hooks" => Some(NmBucket::AsyncHooks),
-        "bigint" => Some(NmBucket::Bigint),
-        "buffer" | "buffer.Buffer" => Some(NmBucket::Buffer),
-        "bun" | "bun.ant" | "bun:jsc" => Some(NmBucket::Bun),
-        // #6562: the `bun:` prefix is part of the name (not stripped like
-        // `node:`).
-        "bun:ffi" | "ffi" | "ffi.default" => Some(NmBucket::BunFfi),
-        "child_process" => Some(NmBucket::ChildProcess),
-        "cluster" => Some(NmBucket::Cluster),
-        "console" => Some(NmBucket::Console),
-        "crypto" | "crypto.Certificate" | "crypto.KeyObject" | "crypto.subtle"
-        | "crypto.webcrypto" => Some(NmBucket::Crypto),
-        "dgram" => Some(NmBucket::Dgram),
-        "dns" | "dns/promises" => Some(NmBucket::Dns),
-        "domain" => Some(NmBucket::Domain),
-        "events" => Some(NmBucket::Events),
-        "fs" => Some(NmBucket::Fs),
-        "http" | "http2" | "https" => Some(NmBucket::Http),
-        "inspector"
-        | "inspector.Network"
-        | "inspector.NetworkResources"
-        | "inspector.DOMStorage"
-        | "inspector.Session"
-        | "inspector/promises"
-        | "inspector/promises.Session" => Some(NmBucket::Inspector),
-        "module" => Some(NmBucket::Module),
-        "net" => Some(NmBucket::Net),
-        // #6563: node-pty + the API-identical @lydell fork, one bucket.
-        "node-pty" | "@lydell/node-pty" | "bun-pty" => Some(NmBucket::NodePty),
-        "os" => Some(NmBucket::Os),
-        "path" | "path.posix" | "path.win32" => Some(NmBucket::Path),
-        "perf_histogram" | "perf_hooks" | "perf_observer" | "perf_observer_list" => {
-            Some(NmBucket::Perf)
-        }
-        "process" => Some(NmBucket::Process),
-        "punycode" | "punycode.ucs2" | "punycode.default" => Some(NmBucket::Punycode),
-        "querystring" => Some(NmBucket::Querystring),
-        "readline" => Some(NmBucket::Readline),
-        "repl" => Some(NmBucket::Repl),
-        "sea" => Some(NmBucket::Sea),
-        "sqlite" => Some(NmBucket::Sqlite),
-        "stream" => Some(NmBucket::Stream),
-        "timers" => Some(NmBucket::Timers),
-        "tls" => Some(NmBucket::Tls),
-        "tty" => Some(NmBucket::Tty),
-        "url" => Some(NmBucket::Url),
-        "util" | "util.types" | "util/types" => Some(NmBucket::Util),
-        "v8"
-        | "v8.Deserializer"
-        | "v8.GCProfiler"
-        | "v8.Serializer"
-        | "v8.promiseHooks"
-        | "v8.startupSnapshot"
-        | "v8.DefaultSerializer"
-        | "v8.DefaultDeserializer" => Some(NmBucket::V8),
-        "vm" => Some(NmBucket::Vm),
-        "worker_threads" => Some(NmBucket::WorkerThreads),
-        "wasi" => Some(NmBucket::Wasi),
-        "zlib" => Some(NmBucket::Zlib),
-        _ => None,
-    }
-}
 
 per_test_global! {
     /// Test-only: suppress the `cfg(test)` lazy `js_nm_install_all()` fallback in

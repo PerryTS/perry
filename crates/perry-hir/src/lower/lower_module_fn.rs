@@ -1960,6 +1960,8 @@ pub fn lower_module_full_with_platform_globals(
         },
     );
 
+    super::module_decl::static_import_bindings::prune_unused_named_cells(&mut module);
+
     module.local_source_spans = std::mem::take(&mut ctx.local_source_spans);
     module.classic_for_lexical_bindings = std::mem::take(&mut ctx.classic_for_lexical_bindings);
 
