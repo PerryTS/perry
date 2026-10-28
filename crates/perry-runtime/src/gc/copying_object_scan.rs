@@ -196,7 +196,7 @@ impl CopyingNurseryCollector {
         // answer.
         let weak = weak_holder_fact(header);
         let remembering = ParentRemembering::of(header, self.skip_remembering);
-        let mut plan = plain_object_plan(header);
+        let plan = plain_object_plan(header);
         #[cfg(test)]
         let cross_check = !sabotage::cross_check_disabled();
         #[cfg(all(not(test), debug_assertions))]
@@ -205,8 +205,35 @@ impl CopyingNurseryCollector {
         if cross_check {
             assert_matches_generic_walk(header, &plan);
         }
-        while let Some(slot) = plan.next_slot() {
+        // Metadata edges and payload have different custody. Keep the five
+        // fixed metadata positions out of the payload loop: re-entering
+        // next_slot dispatched all five Options for every payload word.
+        for slot in plan.prefix.into_iter().flatten() {
             self.visit_slot_with_parent_facts(slot, header, weak, remembering);
+        }
+        match plan.walk {
+            PayloadWalk::Word(mut word) => {
+                while word != 0 {
+                    let index = word.trailing_zeros() as usize;
+                    word &= word - 1;
+                    self.visit_slot_with_parent_facts(
+                        GcMutableSlot::new(plan.payload.slot(index), None),
+                        header,
+                        weak,
+                        remembering,
+                    );
+                }
+            }
+            PayloadWalk::Range { next, count } => {
+                for index in next..count {
+                    self.visit_slot_with_parent_facts(
+                        GcMutableSlot::new(plan.payload.slot(index), None),
+                        header,
+                        weak,
+                        remembering,
+                    );
+                }
+            }
         }
         // Admission established that this descriptor has no post-rewrite
         // hook. There is no consumer for a per-slot before/after comparison.

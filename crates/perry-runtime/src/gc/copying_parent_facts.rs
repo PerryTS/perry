@@ -408,7 +408,11 @@ impl CopyingNurseryCollector {
         // address, never the child. Asked after, the optimizer duplicated the
         // call into both decode arms and then stopped inlining it.
         let remembering = slot.is_parent_owned() && remembering();
-        let visited = self.visit_value_bits_child(slot.read());
+        let bits = slot.read();
+        if slot.shared_keys_already_marked(bits) {
+            return;
+        }
+        let visited = self.visit_value_bits_child(bits);
         if let Some((_, Some(new_bits), _)) = visited {
             slot.write(new_bits);
         }

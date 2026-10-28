@@ -1,1 +1,1 @@
-Skip empty child scans for canonical leaf objects during copying collection, and avoid slot-change comparisons for ordinary objects with no rewrite hook. Preserve survivor accounting, mark clearing, forwarding and remembered-set coverage.
+Skip empty copying scans for canonical leaves; visit known object metadata and payload layouts directly; avoid rebuilding masks for all-Any shapes and reclassifying already marked shared keys arrays. Preserve forwarding, root custody, exact pointer widths, survivor accounting and remembered-set coverage.

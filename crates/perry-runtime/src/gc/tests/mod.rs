@@ -202,3 +202,5 @@ mod native_handle_props;
 
 mod young_collection_stores;
 mod young_dynamic_growth;
+
+mod object_descriptor_walk;
