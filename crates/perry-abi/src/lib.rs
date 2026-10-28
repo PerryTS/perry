@@ -46,6 +46,33 @@ pub const ARRAY_HEADER_SIZE: usize = 24;
 /// §3.2). A descriptor emits it only for such keys; the layout then carries
 /// the "may have holes" summary bit and every other layout keeps its cost.
 pub const LAYOUT_KEY_OPTIONAL: u8 = 0x80;
+/// `PerryLayoutDesc.gc_plan` bit 31: the descriptor carries a static GC scan
+/// plan. Bits 0..=30 are the slots that may hold a heap pointer (a lane whose
+/// representation is `Any`); every other slot is a raw number and is never
+/// scanned. A descriptor with more than [`LAYOUT_GC_PLAN_MAX_SLOTS`] slots, or
+/// with a `SPECIAL` representation lane (whose collectability is a runtime
+/// fact of the shape), carries 0: the collectors use the generic walk.
+pub const LAYOUT_GC_PLAN_STATIC: u32 = 1 << 31;
+pub const LAYOUT_GC_PLAN_MAX_SLOTS: u32 = 31;
+/// The static GC scan plan of a family layout of `slot_count` inline slots and
+/// field representation word `rep` (two bits per slot: 0 `Any`, 1 `F64`,
+/// 2 deprecated `F64`, 3 `SPECIAL`). Codegen emits it; the runtime reads it.
+pub const fn layout_gc_plan(slot_count: u32, rep: u64) -> u32 {
+    if slot_count > LAYOUT_GC_PLAN_MAX_SLOTS {
+        return 0;
+    }
+    let mut mask = 0u32;
+    let mut slot = 0;
+    while slot < slot_count {
+        match (rep >> (2 * slot)) & 0b11 {
+            0 => mask |= 1 << slot,
+            3 => return 0,
+            _ => {}
+        }
+        slot += 1;
+    }
+    LAYOUT_GC_PLAN_STATIC | mask
+}
 /// `PerryLayoutKey.attrs` attribute bits (the runtime's `key_attrs` entry
 /// bits, pinned there): `[[Writable]]`, `[[Enumerable]]`, `[[Configurable]]`
 /// false, an accessor, and which halves it has.

@@ -804,13 +804,15 @@ fn emit_desc(
             .collect::<Vec<_>>(),
     );
     llmod.add_raw_global(format!(
-        "@{desc_name} = global {DESC_TY} {{ i32 {family}, i16 0, i8 0, i8 0, i32 {slot_count}, i32 {}, i64 0, ptr inttoptr (i64 {} to ptr), ptr @{keys_name}, i32 {count}, i32 {}, ptr @{index_name}, i32 {}, i32 {}, ptr {methods}, i32 0, i32 0, ptr {image_keys} }}, section \"{sect}\", align 8",
+        "@{desc_name} = global {DESC_TY} {{ i32 {family}, i16 0, i8 0, i8 0, i32 {slot_count}, i32 {}, i64 0, ptr inttoptr (i64 {} to ptr), ptr @{keys_name}, i32 {count}, i32 {}, ptr @{index_name}, i32 {}, i32 {}, ptr {methods}, i32 0, i32 {}, ptr {image_keys} }}, section \"{sect}\", align 8",
         word as i32,
         // The `PerryLayoutDesc.proto` tag (perry-runtime `layout_desc`).
         proto,
         cap - 1,
         class.0,
-        class.1
+        class.1,
+        // Every slot of a class family is `Any` (rep 0): a hole or a value.
+        crate::runtime_abi::layout_gc_plan(slot_count, 0) as i32
     ));
 }
 
@@ -1396,10 +1398,11 @@ fn emit_descriptor(
                 .collect::<Vec<_>>(),
         );
         llmod.add_raw_global(format!(
-            "@{desc_name} = global {DESC_TY} {{ i32 {family}, i16 0, i8 0, i8 0, i32 {slot_count}, i32 {}, i64 {}, ptr inttoptr (i64 {proto} to ptr), ptr @{keys_name}, i32 {count}, i32 {}, ptr @{index_name}, i32 0, i32 0, ptr null, i32 {identity}, i32 0, ptr {image_keys} }}, section \"{sect}\", align 8",
+            "@{desc_name} = global {DESC_TY} {{ i32 {family}, i16 0, i8 0, i8 0, i32 {slot_count}, i32 {}, i64 {}, ptr inttoptr (i64 {proto} to ptr), ptr @{keys_name}, i32 {count}, i32 {}, ptr @{index_name}, i32 0, i32 0, ptr null, i32 {identity}, i32 {}, ptr {image_keys} }}, section \"{sect}\", align 8",
             word as i32,
             rep as i64,
-            cap - 1
+            cap - 1,
+            crate::runtime_abi::layout_gc_plan(slot_count, rep) as i32
         ));
     }
 }

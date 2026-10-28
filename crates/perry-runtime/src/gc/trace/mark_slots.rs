@@ -108,79 +108,85 @@ unsafe fn trace_heap_rewrite_slots_impl<const REMEMBER: bool, const OLD_PARENT: 
     #[cfg(test)]
     let weak_holder =
         crate::weakref::is_weak_holder_header(header) && !mark_hoist_sabotage::forgetting_weak();
+    let mut visit_slot = |slot: GcMutableSlot, sticky: &mut Option<&mut StickyRememberedSet>| {
+        if weak_holder && crate::weakref::is_weak_target_trace_slot(header, slot.slot) {
+            return false;
+        }
+        if let Some(kind) = slot.layout_kind {
+            record_layout_child_slot_read(kind);
+            record_trace_slot_read();
+        }
+        let bits = slot.read();
+        // Keys have an exact raw-array descriptor, unlike an unknown
+        // payload word. A marked shared array has already discharged
+        // its trace, including any active handle observer.
+        if slot.shared_keys_already_marked(bits) {
+            return false;
+        }
+        if !handles_active {
+            // Preserve the collector's observer-free specialization: the
+            // child descriptor can omit its handle gate too.
+            trace_decoded_slot::<REMEMBER, false>(
+                header, slot, bits, valid_ptrs, worklist, sticky, OLD_PARENT,
+            );
+            return false;
+        }
+        if !proxy_trace_active || (REMEMBER && bits & TAG_MASK == STRING_TAG) {
+            // A source string/shared word cannot invoke an observer, but
+            // its child's descriptor still has the globally active gate.
+            trace_decoded_slot::<REMEMBER, true>(
+                header, slot, bits, valid_ptrs, worklist, sticky, OLD_PARENT,
+            );
+            return false;
+        }
+        // Foreign proxy/Fetch/pool observers retain the original ordering,
+        // post-mark reread and barrier decode; no purity is assumed.
+        #[cfg(test)]
+        let observer_snapshot = if REMEMBER && full_mark_decode_sabotage::stale_observer_word() {
+            FieldWord::decode(slot.read())
+        } else {
+            None
+        };
+        mark_field_into_worklist(slot.read(), valid_ptrs, worklist, proxy_trace_active);
+        #[cfg(test)]
+        if let Some(word) = observer_snapshot {
+            remember_decoded_full_mark_slot(
+                sticky.as_deref_mut().unwrap(),
+                header,
+                slot,
+                word,
+                OLD_PARENT,
+            );
+            return false;
+        }
+        if REMEMBER {
+            #[cfg(test)]
+            {
+                let child = decode_heap_addr(slot.read());
+                if child != 0
+                    && crate::gc::barrier::remembered_child_needs_tracking(child)
+                    && remembered_mark_sabotage::drop_next_entry()
+                {
+                    return false;
+                }
+            }
+            remember_mutable_old_to_young_slot(sticky.as_deref_mut().unwrap(), header, slot);
+        }
+        false
+    };
+    // An object on a family layout is walked straight from its descriptor's
+    // static plan (`static_scan`); every other object takes the generic walk.
+    if super::super::static_scan::static_scan_admissible(header) && !layout_scan_trace_active() {
+        if let Some(scan) =
+            super::super::static_scan::static_scan(header, Some(full_trace_active()))
+        {
+            super::super::static_scan::for_each_mark_slot(&scan, |slot| {
+                visit_slot(slot, &mut sticky);
+            });
+            return;
+        }
+    }
     visit_gc_rewrite_slot_descriptors(header, |descriptor| unsafe {
-        let mut visit_slot =
-            |slot: GcMutableSlot, sticky: &mut Option<&mut StickyRememberedSet>| {
-                if weak_holder && crate::weakref::is_weak_target_trace_slot(header, slot.slot) {
-                    return false;
-                }
-                if let Some(kind) = slot.layout_kind {
-                    record_layout_child_slot_read(kind);
-                    record_trace_slot_read();
-                }
-                let bits = slot.read();
-                // Keys have an exact raw-array descriptor, unlike an unknown
-                // payload word. A marked shared array has already discharged
-                // its trace, including any active handle observer.
-                if slot.shared_keys_already_marked(bits) {
-                    return false;
-                }
-                if !handles_active {
-                    // Preserve the collector's observer-free specialization: the
-                    // child descriptor can omit its handle gate too.
-                    trace_decoded_slot::<REMEMBER, false>(
-                        header, slot, bits, valid_ptrs, worklist, sticky, OLD_PARENT,
-                    );
-                    return false;
-                }
-                if !proxy_trace_active || (REMEMBER && bits & TAG_MASK == STRING_TAG) {
-                    // A source string/shared word cannot invoke an observer, but
-                    // its child's descriptor still has the globally active gate.
-                    trace_decoded_slot::<REMEMBER, true>(
-                        header, slot, bits, valid_ptrs, worklist, sticky, OLD_PARENT,
-                    );
-                    return false;
-                }
-                // Foreign proxy/Fetch/pool observers retain the original ordering,
-                // post-mark reread and barrier decode; no purity is assumed.
-                #[cfg(test)]
-                let observer_snapshot =
-                    if REMEMBER && full_mark_decode_sabotage::stale_observer_word() {
-                        FieldWord::decode(slot.read())
-                    } else {
-                        None
-                    };
-                mark_field_into_worklist(slot.read(), valid_ptrs, worklist, proxy_trace_active);
-                #[cfg(test)]
-                if let Some(word) = observer_snapshot {
-                    remember_decoded_full_mark_slot(
-                        sticky.as_deref_mut().unwrap(),
-                        header,
-                        slot,
-                        word,
-                        OLD_PARENT,
-                    );
-                    return false;
-                }
-                if REMEMBER {
-                    #[cfg(test)]
-                    {
-                        let child = decode_heap_addr(slot.read());
-                        if child != 0
-                            && crate::gc::barrier::remembered_child_needs_tracking(child)
-                            && remembered_mark_sabotage::drop_next_entry()
-                        {
-                            return false;
-                        }
-                    }
-                    remember_mutable_old_to_young_slot(
-                        sticky.as_deref_mut().unwrap(),
-                        header,
-                        slot,
-                    );
-                }
-                false
-            };
         match descriptor {
             GcMutableSlotDescriptor::PointerFreeRange(range) => {
                 if proxy_trace_active {
