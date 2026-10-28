@@ -24,7 +24,15 @@ pub(crate) use reservation::contains;
 /// this answers "is this word inside Perry's GC memory" for any thread
 /// without per-thread metadata. Pooled blocks stay mapped and stay listed.
 #[cfg(not(target_os = "linux"))]
-static REGIONS: RwLock<BTreeMap<usize, usize>> = RwLock::new(BTreeMap::new());
+struct BackingExtent {
+    end: usize,
+    // Physical allocation layout survives pooling and generation/class retags.
+    #[cfg(not(target_vendor = "apple"))]
+    alignment: usize,
+}
+
+#[cfg(not(target_os = "linux"))]
+static REGIONS: RwLock<BTreeMap<usize, BackingExtent>> = RwLock::new(BTreeMap::new());
 
 #[cfg(not(target_os = "linux"))]
 fn extent_len(len: usize) -> usize {
@@ -52,7 +60,7 @@ pub(crate) fn contains(addr: usize, len: usize) -> bool {
     regions
         .range(..=addr)
         .next_back()
-        .is_some_and(|(_, &region_end)| end <= region_end)
+        .is_some_and(|(_, extent)| end <= extent.end)
 }
 
 #[cfg(target_os = "linux")]
@@ -159,7 +167,12 @@ pub(super) unsafe fn map(kind: Kind, len: usize) -> *mut u8 {
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = kind;
+        // A dedicated large region must own complete metadata pages. Other
+        // allocator-backed blocks preserve their existing alignment.
+        #[cfg(not(target_vendor = "apple"))]
+        let alignment = if kind == Kind::LargeObject { super::GENERATION_PAGE_SIZE } else { 16 };
+        #[cfg(target_vendor = "apple")]
+        let alignment = { let _ = kind; apple::ALIGN };
         #[cfg(target_vendor = "apple")]
         let data = match apple::extent(len) {
             Some(extent) => {
@@ -169,9 +182,9 @@ pub(super) unsafe fn map(kind: Kind, len: usize) -> *mut u8 {
             None => std::ptr::null_mut(),
         };
         #[cfg(not(target_vendor = "apple"))]
-        let data = std::alloc::alloc(std::alloc::Layout::from_size_align(len, 16).unwrap());
+        let data = std::alloc::alloc(std::alloc::Layout::from_size_align(len, alignment).unwrap());
         if !data.is_null() {
-            register(data, len);
+            register(data, len, alignment);
         }
         data
     }
@@ -198,28 +211,37 @@ pub(super) unsafe fn reuse(data: *mut u8, len: usize) {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn register(data: *mut u8, len: usize) {
+fn register(data: *mut u8, len: usize, alignment: usize) {
+    #[cfg(target_vendor = "apple")]
+    let _ = alignment;
     let start = data as usize;
     REGIONS
         .write()
         .unwrap_or_else(|e| e.into_inner())
-        .insert(start, start + extent_len(len));
+        .insert(start, BackingExtent {
+            end: start + extent_len(len),
+            #[cfg(not(target_vendor = "apple"))]
+            alignment,
+        });
 }
 
 /// Physical destruction, used by pool overflow, pool drain and TLS teardown.
 /// Callers remove page metadata and external owners before destruction.
 pub(super) unsafe fn unmap(data: *mut u8, len: usize) {
     #[cfg(not(target_os = "linux"))]
-    REGIONS
+    let extent = REGIONS
         .write()
         .unwrap_or_else(|e| e.into_inner())
-        .remove(&(data as usize));
+        .remove(&(data as usize)).expect("retiring an unowned arena backing");
+    #[cfg(not(target_os = "linux"))]
+    debug_assert_eq!(extent.end - data as usize, extent_len(len));
     #[cfg(target_os = "linux")]
     reservation::unmap(data, mapped_len(len).expect("invalid extent"));
     #[cfg(target_vendor = "apple")]
-    apple::unmap(data, extent_len(len));
+    apple::unmap(data, extent.end - data as usize);
     #[cfg(not(any(target_os = "linux", target_vendor = "apple")))]
-    std::alloc::dealloc(data, std::alloc::Layout::from_size_align(len, 16).unwrap());
+    std::alloc::dealloc(data, std::alloc::Layout::from_size_align(
+        extent.end - data as usize, extent.alignment).unwrap());
 }
 
 /// Matching backing for fixtures that seed the real region pool.
@@ -421,6 +443,30 @@ mod tests {
             libc::munmap(page, 4096);
             // MADV_NORMAL keeps this ENOMEM on kernels without THP too.
             advise_thp(page, 4096, libc::MADV_NORMAL);
+        }
+    }
+}
+
+#[cfg(all(test, not(any(target_os = "linux", target_vendor = "apple"))))]
+mod allocator_layout_tests {
+    use super::*;
+
+    #[test]
+    fn large_extent_owns_whole_pages_and_keeps_its_deallocation_layout() {
+        unsafe {
+            let len = 9 * super::super::GENERATION_PAGE_SIZE;
+            let data = map(Kind::LargeObject, len);
+            assert!(!data.is_null());
+            assert_eq!(data as usize % super::super::GENERATION_PAGE_SIZE, 0);
+            super::super::page_meta::register_block_with_kind(data as usize, len,
+                HeapGeneration::Nursery, super::super::HeapSpace::NurseryEden,
+                std::ptr::null_mut(), Kind::LargeObject);
+            super::super::unregister_block_generation(data as usize, len);
+            // Canonical generation facts can disappear before pooled backing
+            // is destroyed. Its original allocator layout is still owned.
+            assert!(contains(data as usize, len));
+            unmap(data, len);
+            assert!(!contains(data as usize, len));
         }
     }
 }
