@@ -72,11 +72,47 @@ fn decode_registered_with<R>(slot: Option<&[u8]>, read: impl FnOnce(&str) -> R) 
     decode_registered_bytes(slot?).map(read)
 }
 
+/// Prove ASCII with covering loads that stay wholly inside the slice.
+/// Overlap only repeats bytes in the OR; it cannot change their high bits.
+#[inline(always)]
+fn registered_bytes_are_ascii(bytes: &[u8]) -> bool {
+    let len = bytes.len();
+    let ptr = bytes.as_ptr();
+    const WORD: usize = std::mem::size_of::<usize>();
+    const HIGH_BITS: usize = usize::MAX / 255 * 128;
+    // SAFETY: each width is admitted by len before either covering load.
+    // The loop and final suffix also end at or before len. No alignment is
+    // required, and OR makes endianness and overlap irrelevant to the proof.
+    unsafe {
+        if len >= WORD {
+            let end = len - WORD;
+            let mut bits = ptr.cast::<usize>().read_unaligned();
+            let mut offset = WORD;
+            while offset < end {
+                bits |= ptr.add(offset).cast::<usize>().read_unaligned();
+                offset += WORD;
+            }
+            bits |= ptr.add(end).cast::<usize>().read_unaligned();
+            bits & HIGH_BITS == 0
+        } else if len >= std::mem::size_of::<u32>() {
+            let bits = ptr.cast::<u32>().read_unaligned()
+                | ptr.add(len - 4).cast::<u32>().read_unaligned();
+            bits & 0x8080_8080 == 0
+        } else if len >= std::mem::size_of::<u16>() {
+            let bits = ptr.cast::<u16>().read_unaligned()
+                | ptr.add(len - 2).cast::<u16>().read_unaligned();
+            bits & 0x8080 == 0
+        } else {
+            len == 0 || *ptr < 0x80
+        }
+    }
+}
+
 /// ASCII is already a UTF-8 proof. Consume that byte view without entering
 /// the general decoder; non-ASCII and malformed input keep its exact exits.
 #[inline]
 fn decode_registered_bytes(bytes: &[u8]) -> Option<&str> {
-    if bytes.is_ascii() {
+    if registered_bytes_are_ascii(bytes) {
         // SAFETY: every byte is below 0x80, including embedded NULs.
         Some(unsafe { std::str::from_utf8_unchecked(bytes) })
     } else {

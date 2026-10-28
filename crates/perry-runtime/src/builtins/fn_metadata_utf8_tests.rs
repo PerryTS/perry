@@ -6,7 +6,7 @@ fn metadata_decoding_matches_checked_utf8_at_offsets_and_word_boundaries() {
     // alignments and both sides of a machine-word boundary. This validates the
     // unsafe ASCII conversion against the checked contract, not a header hint.
     for offset in 0..16 {
-        for len in 0..=2 * std::mem::size_of::<usize>() + 1 {
+        for len in 0..=4 * std::mem::size_of::<usize>() + 1 {
             let mut storage = vec![b'a'; offset + len + 16];
             let range = offset..offset + len;
             assert_eq!(
@@ -37,6 +37,9 @@ fn metadata_decoding_matches_checked_utf8_at_offsets_and_word_boundaries() {
         &[0xff],
         b"ASCII\0name",
     ] {
-        assert_eq!(decode_registered_bytes(bytes), std::str::from_utf8(bytes).ok());
+        assert_eq!(
+            decode_registered_bytes(bytes),
+            std::str::from_utf8(bytes).ok()
+        );
     }
 }
