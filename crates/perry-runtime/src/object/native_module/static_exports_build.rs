@@ -2,6 +2,7 @@
 use std::{fmt::Write, path::Path};
 pub fn emit(out: &Path) {
     use perry_dispatch::native_callable_exports::{
+        canonical_native_callable_module, canonical_native_callable_property,
         export_bucket, export_value_symbol, CALLABLE_EXPORT_TABLE,
     };
     let mut source = String::new();
@@ -11,6 +12,11 @@ pub fn emit(out: &Path) {
         };
         for &property in properties {
             let symbol = export_value_symbol(module, property).unwrap();
+            let raw_module = module;
+            let raw_property = property;
+            let property = canonical_native_callable_property(module, property);
+            let module = canonical_native_callable_module(module, property);
+            let module = if module == "util/types" { "util.types" } else { module };
             let attach = match bucket {
                 "child_process" | "cluster" | "crypto" | "dgram" | "domain" | "events" | "fs"
                 | "http" | "inspector" | "net" | "readline" | "repl" | "stream" | "tls" | "tty"
@@ -71,15 +77,15 @@ pub extern "C" fn {symbol}(observe_writes: i32) -> f64 {{
     }}
     unsafe fn construct(args: *const f64, len: usize) -> Option<f64> {{
         let _ = (args, len);
-        {constructor}
+        with_arguments(args, len, |args| {{ {constructor} }})
     }}
     static INFO: NativeExportInfo = NativeExportInfo {{ function: {{
         let mut info = crate::closure::JsFunctionInfo::of_native_args(body, 0);
         info.flags |= crate::codegen_abi::FN_NATIVE_EXPORT | crate::codegen_abi::FN_BUILTIN;
         info
     }}, construct }};
-    export_value({module:?}, {property:?}, &INFO.function, observe_writes != 0,
-        |name, value, addr| unsafe {{ {attach}(name, value, addr) }})
+    export_value({raw_module:?}, {raw_property:?}, &INFO.function, observe_writes != 0,
+        |_name, value, addr| unsafe {{ {attach}({property:?}, value, addr) }})
 }}
 "#
             )

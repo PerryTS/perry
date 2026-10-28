@@ -3,6 +3,7 @@
 //! Reading one statically named member never installs a module dispatch bucket.
 use super::*;
 use crate::closure::JsFunctionInfo;
+use perry_dispatch::native_callable_exports::canonical_native_callable_module;
 
 /// The flag on `function` licenses this exact immutable descriptor layout.
 /// Construction follows the export's own body, without a module registry.
@@ -40,7 +41,6 @@ fn export_value(
     if !is_native_module_callable_export(module, property) {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    let property = canonical_native_callable_property(module, property);
     if observe_writes {
         if let Some(value) = native_namespace_user_value(module, property) {
             return value;
@@ -50,7 +50,11 @@ fn export_value(
     if let Some(bits) = NATIVE_ESM_EXPORT_VALUES.with(|v| v.borrow().get(&key).copied()) {
         return f64::from_bits(bits);
     }
-    let existing = NATIVE_CALLABLE_EXPORTS.with(|v| v.borrow().get(&key).copied());
+    // ESM aliases have separate live cells; the underlying callable is shared.
+    let property = canonical_native_callable_property(module, property);
+    let module = canonical_native_callable_module(module, property);
+    let callable_key = format!("{module}\0{property}");
+    let existing = NATIVE_CALLABLE_EXPORTS.with(|v| v.borrow().get(&callable_key).copied());
     let scope = crate::gc::RuntimeHandleScope::new();
     let value = if let Some(bits) = existing {
         scope.root_nanbox_f64(f64::from_bits(bits))
@@ -82,7 +86,7 @@ fn export_value(
         ));
         // Publish before decoration: constructor/prototype graphs can cycle.
         NATIVE_CALLABLE_EXPORTS.with(|v| {
-            v.borrow_mut().insert(key.clone(), value.get_nanbox_u64());
+            v.borrow_mut().insert(callable_key, value.get_nanbox_u64());
         });
         crate::gc::runtime_write_barrier_root_nanbox(value.get_nanbox_u64());
         decorate(
@@ -189,6 +193,7 @@ pub(crate) unsafe fn call_minted(
     len: usize,
 ) -> Option<f64> {
     let property = canonical_native_callable_property(module, property);
+    let module = canonical_native_callable_module(module, property);
     let value = callable_exports::minted_native_callable_export(&format!("{module}\0{property}"))?;
     let closure =
         crate::value::js_nanbox_get_pointer(value) as *const crate::closure::ClosureHeader;

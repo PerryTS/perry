@@ -1201,3 +1201,33 @@ pub fn constant_value_symbol(module: &str, property: &str) -> String {
     let encode = |text: &str| text.bytes().map(|b| format!("{b:02x}")).collect::<String>();
     format!("js_native_value_{}_{}", encode(module), encode(property))
 }
+
+/// Aliased exports share a callable identity but retain separate ESM cells.
+#[inline(always)]
+pub fn canonical_native_callable_property<'a>(
+    module_name: &str,
+    property_name: &'a str,
+) -> &'a str {
+    match (module_name, property_name) {
+        ("domain", "create") => "createDomain",
+        ("net", "Stream") => "Socket",
+        ("fs", "FileReadStream") => "ReadStream",
+        ("fs", "FileWriteStream") => "WriteStream",
+        ("path" | "path.posix" | "path.win32", "_makeLong") => "toNamespacedPath",
+        ("querystring", "decode") => "parse",
+        ("querystring", "encode") => "stringify",
+        ("cluster", "setupMaster") => "setupPrimary",
+        _ => property_name,
+    }
+}
+
+/// The module spelling used by the existing callable identity cells.
+#[inline(always)]
+pub fn canonical_native_callable_module<'a>(module: &'a str, property: &str) -> &'a str {
+    match (module, property) {
+        ("util.types" | "util/types", _) => "util/types",
+        ("assert/strict", "Assert") => "assert",
+        ("inspector/promises", name) if name != "Session" => "inspector",
+        _ => module,
+    }
+}
