@@ -13,6 +13,9 @@ on:
       enabled:
         description: Whether the resolved release source supports WASI bundles
         value: ${{ jobs.runtime.outputs.enabled }}
+      wasip1:
+        description: Whether the resolved release source also supports the wasip1 bundle
+        value: ${{ jobs.runtime.outputs.wasip1 }}
 
 permissions:
   contents: read
@@ -23,6 +26,7 @@ jobs:
     timeout-minutes: 60
     outputs:
       enabled: ${{ steps.profile.outputs.enabled }}
+      wasip1: ${{ steps.profile.outputs.wasip1 }}
     env:
       CARGO_BUILD_JOBS: "2"
       CARGO_INCREMENTAL: "0"
@@ -51,9 +55,15 @@ jobs:
           else
             echo enabled=false >> "$GITHUB_OUTPUT"
           fi
+          # A source whose packager predates wasip1 must not claim a bundle.
+          if grep -q wasm32-wasip1 scripts/wasi_release.py 2>/dev/null; then
+            echo wasip1=true >> "$GITHUB_OUTPUT"
+          else
+            echo wasip1=false >> "$GITHUB_OUTPUT"
+          fi
       - name: Install Rust with the WASI target
         if: steps.profile.outputs.enabled == 'true'
-        run: rustup toolchain install nightly-2026-10-04 --profile minimal --target wasm32-wasip2
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal --target wasm32-wasip2 --target wasm32-wasip1
       - uses: ./.github/actions/perry/Swatinem/rust-cache
         if: steps.profile.outputs.enabled == 'true'
         with:
@@ -61,11 +71,17 @@ jobs:
       - name: Install the pinned WASI SDK
         if: steps.profile.outputs.enabled == 'true'
         shell: bash
+        env:
+          WASIP1: ${{ steps.profile.outputs.wasip1 }}
         run: |
           set -euo pipefail
           toolchain_env="$(./scripts/wasi_toolchain.sh "$RUNNER_TEMP/wasi")"
           eval "$toolchain_env"
-          for key in WASI_SDK_PATH CC_wasm32_wasip2 AR_wasm32_wasip2 CFLAGS_wasm32_wasip2 CC_SHELL_ESCAPED_FLAGS; do
+          keys=(WASI_SDK_PATH CC_wasm32_wasip2 AR_wasm32_wasip2 CFLAGS_wasm32_wasip2 CC_SHELL_ESCAPED_FLAGS)
+          if [[ "$WASIP1" == true ]]; then
+            keys+=(CC_wasm32_wasip1 AR_wasm32_wasip1 CFLAGS_wasm32_wasip1)
+          fi
+          for key in "${keys[@]}"; do
             printf '%s=%s\n' "$key" "${!key}" >> "$GITHUB_ENV"
           done
       - name: Build and package the source-matched WASI archive
@@ -83,4 +99,22 @@ jobs:
         with:
           name: perry-cross-wasm32-wasip2
           path: wasi-release/*
+          if-no-files-found: error
+      - name: Build, check and package the source-matched wasip1 archive
+        if: steps.profile.outputs.wasip1 == 'true'
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ inputs.checkout-sha }}
+        run: |
+          set -euo pipefail
+          archive="$(python3 scripts/wasi_build_runtime.py wasm32-wasip1 | sed -n 's/^WASI archive: //p' | tail -n 1)"
+          python3 scripts/wasi_imports_check.py "$archive"
+          python3 scripts/wasi_release.py package --target wasm32-wasip1 --revision "$EXPECTED_SHA" \
+            --runtime "$archive" --output wasip1-release
+      - name: Upload the wasip1 runtime bundle
+        if: steps.profile.outputs.wasip1 == 'true'
+        uses: ./.github/actions/perry/actions/upload-artifact
+        with:
+          name: perry-cross-wasm32-wasip1
+          path: wasip1-release/*
           if-no-files-found: error
