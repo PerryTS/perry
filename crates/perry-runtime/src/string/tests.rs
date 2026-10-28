@@ -1900,6 +1900,7 @@ fn boxed_number_concat_matches_heap_builder_at_inline_boundary() {
             let expected_units = unsafe { (*expected).utf16_len };
             let expected_flags = unsafe { (*expected).flags };
             let actual = super::concat::js_string_concat_value_box(root.get_raw_const_ptr(), value);
+            let inline = crate::value::JSValue::from_bits(actual.to_bits()).is_short_string();
             let actual = crate::value::js_jsvalue_to_string(actual);
             let actual_bytes = unsafe {
                 std::slice::from_raw_parts(string_data(actual), (*actual).byte_len as usize)
@@ -1909,12 +1910,12 @@ fn boxed_number_concat_matches_heap_builder_at_inline_boundary() {
                 "prefix {bytes:?}, value {value}"
             );
             assert_eq!(unsafe { (*actual).utf16_len }, expected_units);
-            // Inline ASCII is converted through its standard SSO-to-heap
-            // constructor, which can additionally mark UTF-8 as validated.
-            assert_eq!(
-                unsafe { (*actual).flags } & !STRING_FLAG_WTF8_VALIDATED,
-                expected_flags & !STRING_FLAG_WTF8_VALIDATED
-            );
+            // Converting an inline result to heap text can return a numeric
+            // property atom. Those representation flags belong to conversion;
+            // only a result built on the heap must retain the builder flags.
+            if !inline {
+                assert_eq!(unsafe { (*actual).flags }, expected_flags);
+            }
         }
     }
 }
