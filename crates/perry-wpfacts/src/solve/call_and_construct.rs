@@ -1624,7 +1624,6 @@ impl Model {
                 let p = self.tok(TokKind::Proto(tm));
                 self.escape(p, reason);
                 // Unknown code may construct it with unknown arguments.
-                let inst = self.tok(TokKind::Obj(tm, NO_CTX));
                 let ret = self.node_l("top-new");
                 let args_n = self.node_l("top-args");
                 self.add_top(args_n, |m| {
@@ -1644,7 +1643,9 @@ impl Model {
                 });
                 self.construct(call, t);
                 self.sink_node(ret, reason);
-                self.escape(inst, reason);
+                // DEC221: only what unknown construction returns escapes.
+                // NO_CTX is a template-wide mark, which would also expose
+                // every existing private birth of this layout.
             }
             TokKind::Obj(tm, _) => {
                 // `.constructor` reaches the class value.

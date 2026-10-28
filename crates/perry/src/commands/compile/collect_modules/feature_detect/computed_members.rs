@@ -11,6 +11,7 @@ use std::{
 #[derive(Default)]
 pub(super) struct Capabilities {
     pub opaque_members: bool,
+    pub date_members: bool,
     pub file_handles: bool,
     pub bun_files: bool,
     pub json_members: bool,
@@ -36,6 +37,7 @@ pub(super) fn scan(module: &Module, native_modules: &BTreeMap<PathBuf, Module>) 
         .collect();
     let mut types = HirTypeEnv::from_module(module);
     refine_array_index_types(module, &mut types);
+    refine_enum_image_types(module, &mut types);
     // `as const` can leave a declaration typed Any even though its immutable
     // initializer carries a closed literal shape. Reuse the existing binding
     // analysis, and only recover that shape when every read is a member read:
@@ -98,6 +100,8 @@ pub(super) fn scan(module: &Module, native_modules: &BTreeMap<PathBuf, Module>) 
             Expr::IndexGet { object, index, .. } => {
                 caps.opaque_members |= opaque_key(index, &types)
                     && api_receiver(object, &types, module, native_modules);
+                caps.date_members |= opaque_key(index, &types)
+                    && date_receiver(object, &types, module, native_modules);
             }
             Expr::ReflectGet {
                 target: object,
@@ -110,15 +114,20 @@ pub(super) fn scan(module: &Module, native_modules: &BTreeMap<PathBuf, Module>) 
             } => {
                 caps.opaque_members |=
                     opaque_key(key, &types) && api_receiver(object, &types, module, native_modules);
+                caps.date_members |= opaque_key(key, &types)
+                    && date_receiver(object, &types, module, native_modules);
             }
             Expr::ObjectGetOwnPropertyDescriptor(object, key) => {
                 caps.opaque_members |=
                     opaque_key(key, &types) && api_receiver(object, &types, module, native_modules);
+                caps.date_members |= opaque_key(key, &types)
+                    && date_receiver(object, &types, module, native_modules);
             }
             Expr::ObjectGetOwnPropertyDescriptors(object)
             | Expr::ObjectValues(object)
             | Expr::ObjectEntries(object) => {
-                caps.opaque_members |= api_receiver(object, &types, module, native_modules)
+                caps.opaque_members |= api_receiver(object, &types, module, native_modules);
+                caps.date_members |= date_receiver(object, &types, module, native_modules);
             }
             Expr::ExternFuncRef { name, .. } if open_names.contains(&name.as_str()) => {
                 caps.file_handles = true
@@ -154,6 +163,141 @@ pub(super) fn scan(module: &Module, native_modules: &BTreeMap<PathBuf, Module>) 
         }
     });
     caps
+}
+
+// EnumImage is the existing lowering's proof that the IIFE births a
+// scalar enum shape. Preserve that shape for its single assigned binding;
+// escapes or later writes still prevent the passive-data proof.
+fn refine_enum_image_types(module: &Module, types: &mut HirTypeEnv) {
+    for_each_expr(module, &mut |expr| {
+        let Expr::LocalSet(id, value) = expr else {
+            return;
+        };
+        if !matches!(value.as_ref(), Expr::EnumImage { .. }) || !only_member_reads(module, *id) {
+            return;
+        }
+        let mut writes = 0;
+        for_each_expr(module, &mut |expr| {
+            writes += usize::from(matches!(expr,
+                Expr::LocalSet(local, _) | Expr::Update { id: local, .. } if local == id));
+        });
+        if writes == 1 {
+            types.insert_local(*id, infer_expr_type(value, types));
+        }
+    });
+}
+
+fn exported_enum_image(producer: &Module, exported: &str) -> bool {
+    let local = producer.exports.iter().find_map(|export| match export {
+        perry_hir::ir::Export::Named {
+            local,
+            exported: name,
+        } if name == exported => Some(local),
+        _ => None,
+    });
+    let Some(local) = local else {
+        return false;
+    };
+    let id = producer.init.iter().find_map(|stmt| match stmt {
+        Stmt::Let { id, name, .. } if name == local => Some(*id),
+        _ => None,
+    });
+    let Some(id) = id else {
+        return false;
+    };
+    let mut types = HirTypeEnv::from_module(producer);
+    refine_enum_image_types(producer, &mut types);
+    matches!(types.local_type(id), Some(Type::Object(shape))
+        if !shape.properties.is_empty() && shape.properties.values().all(|p| !api_value_type(&p.ty)))
+}
+
+fn date_receiver(
+    object: &Expr,
+    types: &HirTypeEnv,
+    module: &Module,
+    native_modules: &BTreeMap<PathBuf, Module>,
+) -> bool {
+    if !api_receiver(object, types, module, native_modules) {
+        return false;
+    }
+    if matches!(
+        object,
+        Expr::Object(_) | Expr::ObjectSpread { .. } | Expr::EnumImage { .. }
+    ) {
+        return false;
+    }
+    // Imports use ExternFuncRef for values as well as functions. An unresolved
+    // import can therefore be a Date despite its provisional function type.
+    if matches!(object, Expr::ExternFuncRef { .. }) {
+        return true;
+    }
+    fn returns_value(body: &[Stmt]) -> bool {
+        body.iter().any(|stmt| match stmt {
+            Stmt::Return(Some(_)) => true,
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => returns_value(then_branch) || else_branch.as_deref().is_some_and(returns_value),
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                returns_value(body)
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                returns_value(body)
+                    || catch
+                        .as_ref()
+                        .is_some_and(|catch| returns_value(&catch.body))
+                    || finally.as_deref().is_some_and(returns_value)
+            }
+            Stmt::Switch { cases, .. } => cases.iter().any(|case| returns_value(&case.body)),
+            Stmt::Labeled { body, .. } => returns_value(std::slice::from_ref(body)),
+            _ => false,
+        })
+    }
+    fn may_be_date(ty: &Type, module: &Module, depth: usize) -> bool {
+        match ty {
+            Type::Any | Type::Unknown | Type::TypeVar(_) | Type::Object(_) => true,
+            Type::Union(members) => members.iter().any(|ty| may_be_date(ty, module, depth)),
+            Type::Named(name) | Type::Generic { base: name, .. } => {
+                if name == "Date" || depth > module.classes.len() {
+                    return true;
+                }
+                let Some(class) = module.classes.iter().find(|class| &class.name == name) else {
+                    return true;
+                };
+                if class.is_literal_shape() {
+                    return false;
+                }
+                // A constructor can replace its instance with another
+                // object, including a Date. Its nominal name is then no proof.
+                if class
+                    .constructor
+                    .as_ref()
+                    .is_some_and(|ctor| returns_value(&ctor.body))
+                {
+                    return true;
+                }
+                if let Some(parent) = &class.extends_name {
+                    return may_be_date(&Type::Named(parent.clone()), module, depth + 1);
+                }
+                if let Some(parent) = class
+                    .extends
+                    .and_then(|id| module.classes.iter().find(|c| c.id == id))
+                {
+                    return may_be_date(&Type::Named(parent.name.clone()), module, depth + 1);
+                }
+                class.extends_expr.is_some()
+            }
+            // Arrays remain arrays even when their elements can carry APIs.
+            // A computed member read here cannot reach Date's prototype.
+            _ => false,
+        }
+    }
+    may_be_date(&infer_expr_type(object, types), module, 0)
 }
 
 // Native array iteration passes a numeric index even when an inline callback
@@ -218,7 +362,21 @@ fn opaque_key(key: &Expr, types: &HirTypeEnv) -> bool {
     };
     // ToPropertyKey of a number produces a numeric spelling, never the name
     // of a FileHandle, Date or process API (including NaN and infinities).
-    if matches!(infer_expr_type(key, types), Type::Number | Type::Int32) {
+    fn may_name_api(ty: &Type) -> bool {
+        match ty {
+            Type::Number
+            | Type::Int32
+            | Type::BigInt
+            | Type::Boolean
+            | Type::Symbol
+            | Type::Null
+            | Type::Void
+            | Type::Never => false,
+            Type::Union(members) => members.iter().any(may_name_api),
+            _ => true,
+        }
+    }
+    if !may_name_api(&infer_expr_type(key, types)) {
         return false;
     }
     !matches!(
@@ -307,14 +465,20 @@ fn api_receiver(
     // later in the pipeline; its members are scalar data, not native APIs.
     if let Expr::ExternFuncRef { name, .. } = object {
         if module.imports.iter().any(|import| {
-            let Some(producer) = import.resolved_path.as_deref()
-                .and_then(|path| native_modules.get(Path::new(path))) else { return false; };
+            let Some(producer) = import
+                .resolved_path
+                .as_deref()
+                .and_then(|path| native_modules.get(Path::new(path)))
+            else {
+                return false;
+            };
             import.specifiers.iter().any(|specifier| {
                 matches!(specifier, ImportSpecifier::Named { imported, local }
-                    if local == name && producer.enums.iter()
+                    if local == name && (producer.enums.iter()
                         .any(|value| value.is_exported && value.name == *imported
                             && value.members.iter().all(|member| matches!(member.value,
-                                perry_hir::EnumValue::Number(_) | perry_hir::EnumValue::String(_)))))
+                                perry_hir::EnumValue::Number(_) | perry_hir::EnumValue::String(_))))
+                        || exported_enum_image(producer, imported)))
             })
         }) {
             return false;
@@ -352,7 +516,9 @@ fn api_receiver(
         // Only passive reads or an immediate literal preserve this proof.
         _ => match object {
             Expr::LocalGet(id) => !only_member_reads(module, *id),
-            Expr::Object(_) | Expr::Array(_, _) | Expr::New { .. } => false,
+            Expr::Object(_) | Expr::Array(_, _) | Expr::New { .. } | Expr::EnumImage { .. } => {
+                false
+            }
             _ => true,
         },
     }
@@ -694,6 +860,158 @@ mod tests {
                 detect(&mut ctx, sources[i], &format!("module{i}.ts"));
             }
             assert!(ctx.native_module_imports.contains("stream/web"));
+        }
+    }
+    fn detect_transformed(source: &str, name: &str) -> (CompilationContext, perry_hir::Module) {
+        let ast = perry_parser::parse_typescript(source, name).expect("parse");
+        let mut module = perry_hir::lower_module(&ast, name, name).expect("lower");
+        perry_transform::transform_async_to_generator(&mut module);
+        perry_transform::transform_generators(&mut module);
+        let mut ctx = context();
+        super::super::detect_optional_feature_usage(&mut ctx, &module);
+        (ctx, module)
+    }
+
+    #[test]
+    fn todo_esm_enum_does_not_select_temporal() {
+        let mut ctx = context();
+        let producer = r#"export var Priority;
+            (function (Priority) {
+                Priority["Low"] = "low"; Priority["High"] = "high";
+            })(Priority || (Priority = {}));"#;
+        let ast = perry_parser::parse_typescript(producer, "types.js").expect("parse producer");
+        let module = perry_hir::lower_module(&ast, "types.js", "types.js").expect("lower producer");
+        ctx.native_modules
+            .insert(std::path::PathBuf::from("/tmp/types.js"), module);
+        let source = "import {Priority} from './types'; console.log(new Date(0).getTime(), Object.values(Priority));";
+        let ast = perry_parser::parse_typescript(source, "entry.js").expect("parse consumer");
+        let mut module =
+            perry_hir::lower_module(&ast, "entry.js", "entry.js").expect("lower consumer");
+        module.imports[0].resolved_path = Some("/tmp/types.js".into());
+        super::super::detect_optional_feature_usage(&mut ctx, &module);
+        assert!(ctx.uses_date);
+        assert!(!ctx.uses_temporal);
+    }
+
+    #[test]
+    fn classes_generics_ts_does_not_select_temporal() {
+        let (ctx, _) = detect_transformed(
+            r#"
+            class Stack<T> {
+                #items: T[] = [];
+                *[Symbol.iterator](): Iterator<T> {
+                    for (let i = this.#items.length - 1; i >= 0; i--) yield this.#items[i];
+                }
+            }
+            const tag = (strings: TemplateStringsArray, ...vals: unknown[]) =>
+                strings.reduce((acc, s, i) => acc + s + (i < vals.length ? vals[i] : ""), "");
+            console.log(new Date(0).getTime(), [...new Stack<string>()]);
+        "#,
+            "classes.ts",
+        );
+        assert!(ctx.uses_date);
+        assert!(!ctx.uses_temporal);
+    }
+
+    #[test]
+    fn classes_generics_esm_does_not_select_temporal() {
+        let (ctx, _) = detect_transformed(
+            r#"
+            class Stack {
+                #items = [];
+                *[Symbol.iterator]() {
+                    for (let i = this.#items.length - 1; i >= 0; i--) yield this.#items[i];
+                }
+            }
+            const tag = (strings, ...vals) =>
+                strings.reduce((acc, s, i) => acc + s + (i < vals.length ? vals[i] : ""), "");
+            console.log(new Date(0).getTime(), [...new Stack()]);
+        "#,
+            "classes.js",
+        );
+        assert!(ctx.uses_date);
+        assert!(!ctx.uses_temporal);
+    }
+
+    #[test]
+    fn date_string_key_still_selects_temporal() {
+        for source in [
+            "function f(d: Date, k: string) { return d[k](); } console.log(new Date(0).getTime());",
+            "const m = 'toTemporal' + 'Instant'; new Date()[m]();",
+            "function f(d: {toISOString(): string}, k: string) { return d[k](); } new Date(0);",
+            "class C { constructor() { return new Date(0); } } function f(k: string) { return new C()[k](); }",
+            "function f(k: string, ...values) { values = new Date(0); return values[k](); }",
+            "function f(d, k: string) { return d[k](); } console.log(new Date(0).getTime());",
+        ] {
+            let (ctx, _) = detect_transformed(source, "date.ts");
+            assert!(ctx.uses_date, "{source}");
+            assert!(ctx.uses_temporal, "{source}");
+        }
+    }
+
+    #[test]
+    fn enum_iife_keys_and_members_are_not_opaque() {
+        for source in [
+            r#"var E; (function(E) { E[E["a"] = 0] = "a"; E[E["b"] = 1] = "b"; })(E || (E = {}));
+               function f(k: string) { return E[k]; } console.log(Object.values(E));"#,
+            r#"var E; (function(E) { E["a"] = "a"; E["b"] = "b"; })(E || (E = {}));
+               function f(k: string) { return E[k]; } console.log(Object.values(E));"#,
+        ] {
+            let (_, module) = detect_transformed(source, "enum.js");
+            assert!(
+                !super::scan(&module, &Default::default()).opaque_members,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn known_array_receiver_with_string_key_does_not_select_temporal() {
+        let (ctx, module) = detect_transformed(
+            "function f(a: unknown[], k: string) { return a[k]; } console.log(new Date(0).getTime());",
+            "array.ts");
+        assert!(super::scan(&module, &Default::default()).opaque_members);
+        assert!(ctx.uses_date);
+        assert!(!ctx.uses_temporal);
+    }
+
+    #[test]
+    fn date_capability_and_unknown_receiver_accumulate_in_either_order() {
+        for order in [[0, 1], [1, 0]] {
+            let mut ctx = context();
+            let sources = [
+                "export const d = new Date(0);",
+                "export function invoke(d, key: string) { return d[key](); }",
+            ];
+            for i in order {
+                detect(&mut ctx, sources[i], &format!("date{i}.ts"));
+            }
+            assert!(ctx.uses_temporal);
+        }
+    }
+
+    #[test]
+    fn private_generator_numeric_key_does_not_select_diagnostics() {
+        let (ctx, module) = detect_transformed(
+            "class C { #items = []; *[Symbol.iterator]() { for (let i = this.#items.length - 1; i >= 0; i--) yield this.#items[i]; } } console.log(process.argv.length, new Date(0).getTime());",
+            "generator.ts");
+        assert!(!super::scan(&module, &Default::default()).opaque_members);
+        assert!(!ctx.uses_diagnostics);
+        assert!(!ctx.uses_temporal);
+    }
+
+    #[test]
+    fn escaped_or_reassigned_enum_image_remains_opaque() {
+        for use_value in ["Object.assign(E, source);", "mutate(E);", "E = source;"] {
+            let source = format!(
+                r#"var E; (function(E) {{ E[E["a"] = 0] = "a"; }})(E || (E = {{}}));
+                function f(source) {{ {use_value} return Object.values(E); }}"#
+            );
+            let (_, module) = detect_transformed(&source, "enum.js");
+            assert!(
+                super::scan(&module, &Default::default()).opaque_members,
+                "{source}"
+            );
         }
     }
 }

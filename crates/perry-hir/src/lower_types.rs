@@ -608,6 +608,18 @@ fn infer_type_from_expr_inner(expr: &ast::Expr, ctx: &LoweringContext) -> Type {
 
         // Method calls on known types
         ast::Expr::Member(member) => {
+            // Private-name resolution identifies the declaring class even in
+            // a nested class or on a receiver other than this. The brand
+            // check either succeeds with this field type or throws.
+            if let ast::MemberProp::PrivateName(prop) = &member.prop {
+                let name = format!("#{}", prop.name);
+                if let Some((class, _, _)) = ctx.resolve_private(&name) {
+                    return ctx
+                        .lookup_class_field_type(&class, &name)
+                        .cloned()
+                        .unwrap_or(Type::Any);
+                }
+            }
             // Property access on known types (e.g., arr.length → Number)
             if let ast::MemberProp::Ident(prop) = &member.prop {
                 let prop_name = prop.sym.as_ref();

@@ -1139,9 +1139,9 @@ fn field_value_arguments_to_sibling_methods_keep_the_proven_this_clone() {
 
 /// The single-pair shape-only arm is small enough to inline at the call site.
 /// Pin the complete safety gate: the holder is a prototype constant (no
-/// load), accept
-/// both the boxed-pointer and
-/// internal raw-pointer ABIs, reject addresses outside the target heap range
+/// load), require the boxed-pointer ABI, and reject addresses outside the target
+/// heap range before any header read. The legacy scalar probe separately keeps
+/// its internal raw-pointer ABI. Also reject addresses outside the target heap range
 /// before dereference, reject own descriptors, then compare the exact
 /// class/ShapeId pair. The out-of-line guard must be absent from this caller.
 #[test]
@@ -1161,10 +1161,8 @@ fn single_arm_method_shape_guard_is_inlined_with_the_runtime_contract() {
         "a monomorphic shape-only site must not retain the out-of-line guard call:\n{probe}"
     );
     assert!(
-        probe.contains("icmp eq i64")
-            && probe.contains(", 32765")
-            && probe.contains(", 0"),
-        "the dereference gate must accept the 0x7FFD boxed pointer tag and the internal raw-pointer form:\n{probe}"
+        probe.contains("icmp eq i64") && probe.contains(", 32765"),
+        "the dereference gate must accept the 0x7FFD boxed pointer tag:\n{probe}"
     );
     let target = crate::codegen::default_target_triple();
     let heap_floor = crate::target_layout::heap_addr_lower_bound_inclusive(&target);
@@ -1849,10 +1847,23 @@ fn class_dispatch_compares_the_authoritative_packed_word() {
         "only kind-plain ShapeIds may reach direct class dispatch\n{:?}",
         read.1
     );
-    assert!(read
+    assert!(!read.1.iter().any(|l| l.contains("select i1")));
+    let merge = blocks(&caller)
+        .into_iter()
+        .find(|(label, _)| label.starts_with("method_probe.merge"))
+        .unwrap();
+    assert!(merge
         .1
         .iter()
-        .any(|l| l.contains("select i1") && l.ends_with("i64 0")));
+        .any(|l| l.contains("phi i1") && l.matches("[ 0,").count() == 2));
+    assert!(merge.1.iter().any(|l| l.contains("br i1")
+        && l.contains("label %pconst.admitted")
+        && l.contains("label %pconst.selected")));
+    let dispatch = blocks(&caller)
+        .into_iter()
+        .find(|(label, _)| label.starts_with("pconst.admitted"))
+        .unwrap();
+    assert!(dispatch.1.iter().any(|l| l.contains("switch i32")));
 }
 
 #[test]
@@ -1956,4 +1967,6 @@ fn class_array_subclass_callback_keeps_its_public_body() {
     assert!(!subclass.1.iter().any(|line| line.contains("$pshape(")));
 }
 
+#[path = "proven_this_boxed_receiver_tests.rs"]
+mod boxed_receiver_tests;
 mod tower_cases;

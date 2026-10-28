@@ -73,6 +73,19 @@ fn fixed_generator_slots(stmts: &[perry_hir::Stmt]) -> HashSet<u32> {
                 collect_closure_refs_and_writes_in_stmts(body, shared, &mut HashSet::new());
             }
         }
+        if let Expr::NativeMethodCall {
+            module,
+            method,
+            args,
+            ..
+        } = expr
+        {
+            if module == "__perry_runtime" && method == "privateAsyncResumeFrame" {
+                if let Some(Expr::Closure { captures, .. }) = args.first() {
+                    out.extend(captures.iter().copied());
+                }
+            }
+        }
         // The caller handles each lexical scope independently.
         perry_hir::walker::walk_expr_children(expr, &mut |child| visit(child, out, shared));
     }
@@ -1712,6 +1725,17 @@ fn collect_compiler_private_async_control_locals_in_expr(
 ) {
     use perry_hir::Expr;
     match expr {
+        Expr::NativeMethodCall {
+            module,
+            method,
+            args,
+            ..
+        } if module == "__perry_runtime" && method == "privateAsyncResumeFrame" => {
+            crate::expr::private_resume_frame::collect_async_controls(args, i32_out, i1_out);
+            if let Some(closure) = args.first() {
+                collect_compiler_private_async_control_locals_in_expr(closure, i32_out, i1_out);
+            }
+        }
         Expr::LinkGeneratorPrototype {
             obj,
             fixed_state: true,

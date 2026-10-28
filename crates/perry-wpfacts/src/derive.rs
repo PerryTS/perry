@@ -424,6 +424,11 @@ fn template_facts(
         chain_problem.get_or_insert_with(|| r.clone());
     }
     let star = m.atom(crate::STAR_KEY);
+    // This obligation affects every receiver sharing the chain, even when
+    // a site's own token has not escaped (DEC220).
+    if accessor_keys.contains(&star) {
+        chain_problem.get_or_insert_with(|| "accessor under a computed key on the chain".into());
+    }
     let escape = if accessor_keys.contains(&star) && escape.is_none() {
         // A computed-key accessor on the chain runs as unknown code with
         // the receiver: treat the template as escaped (kills readonly and
@@ -673,6 +678,56 @@ fn field_kind(m: &Model, ts: &[Tok], a: Atom, definite: bool) -> KindFact {
     k
 }
 
+/// DEC220: an own-slot read depends on its receiver's objects. Another
+/// birth sharing their layout may escape or be reconfigured independently.
+/// Layout contracts and all chain/accessor obligations remain template-wide.
+fn private_own_slot(m: &Model, tf: &TemplateFacts, t: Tok, key: &str) -> Option<u32> {
+    if m.foreign.contains_key(&tf.id)
+        || m.is_escaped(t)
+        || m.hard.contains_key(&t)
+        || m.objproto_accessor
+        || tf.sabotaged
+    {
+        return None;
+    }
+    let tpl = &m.tmpls[tf.id as usize];
+    if tpl
+        .native_parent
+        .as_ref()
+        .is_some_and(|(_, n)| !crate::builtins::native_parent_summarized(n))
+    {
+        return None;
+    }
+    let star = m.atom_index.get(crate::STAR_KEY).copied();
+    let computed =
+        |t: Tok| star.is_some_and(|a| m.accessor_keys.get(&t).is_some_and(|ks| ks.contains(&a)));
+    if star.is_some_and(|a| tpl.accessor_keys.contains(&a))
+        || m.tmpl_toks(tf.id).into_iter().any(computed)
+    {
+        return None;
+    }
+    for p in chain_tokens(m, tf.id) {
+        // A literal-shape prototype is a layout, not a runtime object
+        // (DEC217(a)). Its fabricated constructor escape cannot let unknown
+        // code change a private sibling's own slot. Its real ancestors and
+        // every recorded accessor/HARD operation still have to be checked.
+        let layout = matches!(m.toks[p as usize], TokKind::Proto(tm)
+            if matches!(m.tmpls[tm as usize].kind,
+                TmplKind::Class { literal_shape: true, .. }));
+        if p == TOP
+            || m.hard.contains_key(&p)
+            || computed(p)
+            || (!layout && !matches!(m.toks[p as usize], TokKind::ObjectProto) && m.is_escaped(p))
+        {
+            return None;
+        }
+    }
+    tf.fields
+        .iter()
+        .find(|f| f.key == key && f.definite && f.data_field)
+        .and_then(|f| f.slot)
+}
+
 fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
     let m = &g.m;
     let by_id: crate::pts::FxHashMap<TmplId, &TemplateFacts> =
@@ -881,6 +936,14 @@ fn judge(
                 };
                 receivers.push(tf.display.clone());
                 if !tf.prefix_stable {
+                    if !s.is_call {
+                        if let Some(slot) = private_own_slot(m, tf, t, key) {
+                            slots.push(Some(slot));
+                            // This proves one slot, not a fixed full layout.
+                            fixed_shape = false;
+                            continue;
+                        }
+                    }
                     let why = if let Some(e) = &tf.escape {
                         format!("escape: {e}")
                     } else if let Some(h) = &tf.hard {

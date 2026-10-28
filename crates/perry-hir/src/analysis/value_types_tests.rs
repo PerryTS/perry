@@ -1947,3 +1947,6 @@ fn bitwise_result_is_number_only_with_a_non_bigint_operand() {
         Type::Number
     );
 }
+
+#[path = "value_types_computed_tests.rs"]
+mod computed_members;

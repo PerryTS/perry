@@ -168,7 +168,7 @@ pub(crate) unsafe fn keys_find_slot_by_bytes(
     for i in (0..n).rev() {
         let v = crate::JSValue::from_bits((*slots.add(i)).to_bits());
         if let Some(stored) = crate::string::js_string_key_bytes(v, &mut sso) {
-            if stored == key_bytes {
+            if crate::string::key_bytes_equal(stored, key_bytes) {
                 return Some(i as u32);
             }
         }
@@ -284,7 +284,7 @@ unsafe fn keys_find_slot_by_bytes_dense_resolved(
     for i in (0..n).rev() {
         let v = crate::JSValue::from_bits((*slots.add(i)).to_bits());
         if let Some(stored) = crate::string::js_string_key_bytes(v, &mut sso) {
-            if stored == key_bytes {
+            if crate::string::key_bytes_equal(stored, key_bytes) {
                 return Some(i as u32);
             }
         }
@@ -518,7 +518,9 @@ unsafe fn keys_find_slot_in_namespace(
             continue;
         }
         let value = crate::JSValue::from_bits((*slots.add(i)).to_bits());
-        if crate::string::js_string_key_bytes(value, &mut sso).is_some_and(|key| key == bytes) {
+        if crate::string::js_string_key_bytes(value, &mut sso)
+            .is_some_and(|key| crate::string::key_bytes_equal(key, bytes))
+        {
             return Some(i as u32);
         }
     }
