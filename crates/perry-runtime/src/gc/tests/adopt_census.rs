@@ -95,12 +95,26 @@ fn promote_then_collect_cohort(sabotaged: bool, traced: bool) -> Outcome {
 
     cohort::seed_for_tests(cohort::bound_bytes(), 0, 0);
     let adopted_before = adopt_census::adopted_blocks();
+    let survival_before_full = last_young_survival_permille();
+    if traced {
+        assert!(
+            adopt_census::ready_blocks().is_empty(),
+            "traced census records must not arm the untraced survival predictor"
+        );
+    }
     let ran = {
         let _sabotage = sabotaged.then(adopt_census::sabotage::Guard::arm);
         run_promoted_cohort_full_if_due()
     };
     assert!(ran, "premise: the cohort full ran");
     let adopted = adopt_census::adopted_blocks() - adopted_before;
+    if traced {
+        assert_eq!(
+            last_young_survival_permille(),
+            survival_before_full,
+            "census reuse must leave the traced minor's predictor unchanged"
+        );
+    }
     let alive = |user: usize| {
         crate::arena::pointer_in_old_gen(user)
             && unsafe { (*header_from_user_ptr(user as *const u8)).obj_type } == GC_TYPE_STRING

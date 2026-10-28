@@ -41,6 +41,9 @@ use std::cell::{Cell, RefCell};
 
 /// One promoted block's census record.
 pub(crate) struct AdoptableBlock {
+    // Existing promotion mode is provenance of this census. Traced records
+    // are adoptable, but must not enter the untraced-only controller probe.
+    liveness: crate::arena::PromotionLiveness,
     extent: usize,
     size: usize,
     words: usize,
@@ -123,15 +126,23 @@ pub(crate) fn discard() {
     }
 }
 
-/// `(data, extent, bytes)` of every block the minor at this safepoint recorded
-/// and a full has not started adopting yet. Read before `begin_adopting`: the
-/// census removes a record as it adopts it.
+/// `(data, extent, bytes)` for the existing untraced-only survival probe.
+/// Traced census facts may be adopted, but must never enable new controller
+/// feedback. Read before `begin_adopting` consumes the census records.
 pub(crate) fn ready_blocks() -> Vec<(usize, usize, u64)> {
     STATE.with(|s| match &*s.borrow() {
-        State::Ready(map) => map
-            .iter()
-            .map(|(&data, block)| (data, block.extent, block.bytes))
-            .collect(),
+        State::Ready(map)
+            if map.values().all(|block| {
+                matches!(
+                    block.liveness,
+                    crate::arena::PromotionLiveness::AssumeAllLive
+                )
+            }) =>
+        {
+            map.iter()
+                .map(|(&data, block)| (data, block.extent, block.bytes))
+                .collect()
+        }
         _ => Vec::new(),
     })
 }
@@ -156,7 +167,12 @@ pub(crate) struct AdoptableBlockBuilder {
 }
 
 impl AdoptableBlockBuilder {
-    pub(crate) fn begin(data: usize, offset: usize, size: usize) -> Self {
+    pub(crate) fn begin(
+        data: usize,
+        offset: usize,
+        size: usize,
+        liveness: crate::arena::PromotionLiveness,
+    ) -> Self {
         if offset == 0 || offset > CENSUS_BITMAP_MAX_EXTENT || !recording() {
             return Self { data, block: None };
         }
@@ -170,6 +186,7 @@ impl AdoptableBlockBuilder {
         Self {
             data,
             block: Some(AdoptableBlock {
+                liveness,
                 extent: offset,
                 size,
                 words,

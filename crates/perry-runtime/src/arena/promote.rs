@@ -484,8 +484,12 @@ fn stamp_and_index_block(block: &ArenaBlock, liveness: PromotionLiveness) -> (us
     // Traced marks are cleared below; retaining a premarked summary is only
     // conservative, as the adoption verifier independently checks. Recording
     // remains armed only for an imminent cohort full, after rollback can occur.
-    let mut census =
-        crate::gc::AdoptableBlockBuilder::begin(block.data as usize, block.offset, block.size);
+    let mut census = crate::gc::AdoptableBlockBuilder::begin(
+        block.data as usize,
+        block.offset,
+        block.size,
+        liveness,
+    );
     let mut stopped_early = false;
 
     let mut offset = 0usize;
