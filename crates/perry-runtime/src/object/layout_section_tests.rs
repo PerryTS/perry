@@ -18,6 +18,22 @@ static mut WRITABLE_ATOM: StaticAtom = StaticAtom {
     index: 0,
 };
 
+#[cfg(not(target_family = "wasm"))]
+#[used(linker)]
+#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
+#[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
+#[cfg_attr(
+    not(any(target_vendor = "apple", target_os = "windows")),
+    link_section = "perry_atoms"
+)]
+static READONLY_ATOM: StaticAtom = StaticAtom {
+    hash: 0x87654321,
+    string: std::ptr::null(),
+    kind: crate::codegen_abi::ATOM_KIND_BINDING_SYMBOL,
+    _pad: [0; 3],
+    index: 0,
+};
+
 #[test]
 #[cfg(not(target_family = "wasm"))]
 fn linked_layout_section_contains_runtime_prototypes() {
@@ -34,8 +50,9 @@ fn linked_layout_section_contains_runtime_prototypes() {
 #[test]
 #[cfg(not(target_family = "wasm"))]
 fn linked_atom_sections_include_readonly_and_writable_records() {
-    let descriptor = std::ptr::addr_of!(crate::object::runtime_layouts::OBJECT_PROTOTYPE);
-    let readonly = unsafe { (*(*descriptor).keys).atom };
+    // Reused runtime atoms can be const-readable views outside the section.
+    // The fixtures exercise actual read-only and writable section records.
+    let readonly = std::ptr::addr_of!(READONLY_ATOM);
     let writable = std::ptr::addr_of!(WRITABLE_ATOM);
     let atoms: Vec<_> = image_atoms().map(|p| p.cast_const()).collect();
     assert_eq!(atoms.iter().filter(|&&p| p == readonly).count(), 1);
