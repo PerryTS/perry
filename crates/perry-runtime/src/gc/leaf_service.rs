@@ -165,6 +165,8 @@ mod oracle {
 }
 
 pub(super) fn collect() {
+    // Must precede the root scan, and runs while allocation is still legal.
+    super::roots::ensure_stack_maps_built();
     let _in_alloc = InAlloc(GC_FLAGS.with(|flags| {
         let previous = flags.get();
         flags.set(previous | GC_FLAG_IN_ALLOC);
