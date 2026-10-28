@@ -17,7 +17,7 @@
 // (alias, parameter, closure capture, direct call) — each must return
 // the actual function result, not `undefined`.
 
-import add from "./test_default_import_as_value_helper.ts";
+import add from "./fixtures/default_import_as_value_helper.ts";
 
 // 1. Alias to local const + call through local.
 const fn = add;

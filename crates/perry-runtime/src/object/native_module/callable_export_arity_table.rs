@@ -75,6 +75,7 @@ fn native_callable_export_arity_reference(module: &str, prop: &str) -> Option<u3
         // `(cipher, key, iv, options)` arity matches Node's length 4.
         ("crypto", "Cipheriv" | "Decipheriv") => Some(4),
         ("crypto", "X509Certificate") => Some(1),
+        ("crypto", "Certificate") => Some(0),
         ("crypto", "KeyObject") => Some(2),
         ("crypto.KeyObject", "from") => Some(1),
         // #2706/#2716 and #2694: crypto module-level callable exports.
@@ -374,6 +375,7 @@ static CALLABLE_EXPORT_ARITY_TABLE: &[(&str, &[(&str, u32)])] = &[
     (
         "crypto",
         &[
+            ("Certificate", 0),
             ("Cipheriv", 4),
             ("Decipheriv", 4),
             ("DiffieHellman", 4),
