@@ -87,8 +87,12 @@ fn closure_fast_birth_is_leaf_and_retains_collecting_runtime_fallbacks() {
         );
         assert!(ir.contains(&format!("call i64 @{helper}")), "{helper}");
         assert!(
-            ir.contains("load volatile i8"),
-            "color must be live, not cached"
+            ir.contains("icmp ule i64"),
+            "must consume the live permission bound"
+        );
+        assert!(
+            !fast_body.contains("load volatile i8"),
+            "idle birth needs only its bound proof"
         );
     }
 }

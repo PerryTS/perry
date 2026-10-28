@@ -210,3 +210,5 @@ pub(crate) use page_meta::old_arena_block_ranges;
 pub(crate) use region::new_test_block_backing;
 #[cfg(all(test, target_vendor = "apple"))]
 pub(crate) use region::release_test_block_backing;
+
+pub(crate) use inline::refresh_inline_allocation_limit;

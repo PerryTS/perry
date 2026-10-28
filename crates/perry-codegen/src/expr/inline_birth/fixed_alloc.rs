@@ -28,20 +28,19 @@ fn allocate(
     slow: impl FnOnce(&mut FnCtx<'_>) -> String,
 ) -> (String, Option<String>) {
     let state = crate::expr::load_inline_arena_state(ctx);
-    let flags = super::flags(ctx, &state);
     let blk = ctx.block();
     let offset_ptr = blk.gep(I8, &state, &[(I64, "8")]);
     let offset = blk.load(I64, &offset_ptr);
     let next = blk.add(I64, &offset, &size.to_string());
     let limit_ptr = blk.gep(I8, &state, &[(I64, "16")]);
     let limit = blk.load(I64, &limit_ptr);
-    let idle = blk.icmp_eq(I64, &flags, "0");
-    let idle = if let Some(admitted) = admitted {
-        blk.and(I1, &idle, admitted)
+    // The runtime's canonical bump bound is zero during allocate-black.
+    // Only descriptor admission remains a separate condition.
+    let limit = if let Some(admitted) = admitted {
+        blk.select(I1, admitted, I64, &limit, "0")
     } else {
-        idle
+        limit
     };
-    let limit = blk.select(I1, &idle, I64, &limit, "0");
     let fits = blk.icmp_ule(I64, &next, &limit);
     let fast = ctx.new_block("fixed_birth.fast");
     let refused = ctx.new_block("fixed_birth.runtime");

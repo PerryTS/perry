@@ -12,7 +12,7 @@ use super::*;
 pub struct InlineArenaState {
     pub data: *mut u8, // offset  0  — current block's data pointer
     pub offset: usize, // offset  8  — bump pointer (mutated inline)
-    pub size: usize,   // offset 16 — current block's size
+    pub size: usize,   // offset 16 — permitted inline bump bound (0 during black births)
     /// Stable address of THIS thread's live birth flags, never a cached value.
     /// Generated code reads the byte again after every raw allocation merge.
     pub birth_flags: *const u8, // offset 24 on the 64-bit inline-allocation ABI
@@ -56,7 +56,7 @@ pub extern "C" fn js_inline_arena_state() -> *mut InlineArenaState {
             let block = &arena.blocks[arena.current];
             state.data = block.data;
             state.offset = block.offset;
-            state.size = super::alloc_sample::inline_limit(block.offset, block.size);
+            state.size = super::inline::allocation_limit(block.offset, block.size);
         }
         state as *mut InlineArenaState
     }
@@ -123,7 +123,7 @@ pub extern "C" fn js_inline_arena_slow_alloc(
         let state_ref = &mut *state;
         state_ref.data = data;
         state_ref.offset = block_offset;
-        state_ref.size = super::alloc_sample::inline_limit(block_offset, block_size);
+        state_ref.size = super::inline::allocation_limit(block_offset, block_size);
         ptr
     }
 }
@@ -185,8 +185,35 @@ pub fn arena_start_fresh_general_block() {
                 let block = &arena.blocks[arena.current];
                 inline.data = block.data;
                 inline.offset = block.offset;
-                inline.size = super::alloc_sample::inline_limit(block.offset, block.size);
+                inline.size = super::inline::allocation_limit(block.offset, block.size);
             }
         });
+    });
+}
+
+/// The canonical permission bound, not the physical block extent. Complete
+/// generated births may omit their color test because no positive-size bump
+/// fits during allocate-black. Runtime refills retain the physical ArenaBlock
+/// extent and the existing coloring/seeding path.
+#[inline(always)]
+pub(crate) fn allocation_limit(offset: usize, block_size: usize) -> usize {
+    if crate::gc::gc_birth_extra_flags() != 0 {
+        0
+    } else {
+        super::alloc_sample::inline_limit(offset, block_size)
+    }
+}
+
+/// Update the existing bump bound at a birth-color transition. Never
+/// initialize an unused arena here, allocate, or synchronize a stale offset.
+pub(crate) fn refresh_inline_allocation_limit() {
+    INLINE_STATE.with(|s| unsafe {
+        let state = &mut *s.get();
+        if !state.data.is_null() {
+            ARENA.with(|a| {
+                let arena = &*(*a).get();
+                state.size = allocation_limit(state.offset, arena.blocks[arena.current].size);
+            });
+        }
     });
 }
