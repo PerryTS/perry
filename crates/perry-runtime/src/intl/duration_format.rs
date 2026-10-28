@@ -126,7 +126,7 @@ fn get_duration_unit_options(
     let options_handle = scope.root_nanbox_f64(options);
     let current_options = &options_handle;
     // 1. style = GetOption(options, unit, string, allowed, undefined)
-    let mut style = match df_get_option_string((current_options.get_nanbox_f64()), unit) {
+    let mut style = match df_get_option_string(current_options.get_nanbox_f64(), unit) {
         Some(v) => {
             if !allowed.contains(&v.as_str()) {
                 throw_range_error(&format!(
@@ -166,7 +166,7 @@ fn get_duration_unit_options(
     }
     // 6. display = GetOption(options, unitDisplay, string, «auto,always», displayDefault)
     let display = df_enum_option(
-        (current_options.get_nanbox_f64()),
+        current_options.get_nanbox_f64(),
         &display_key_field(unit),
         &["auto", "always"],
         display_default,
@@ -237,13 +237,13 @@ pub(super) fn configure(obj: *mut ObjectHeader, options: f64) {
     // Order (constructor-options-order): localeMatcher, numberingSystem, style,
     // then each unit + unitDisplay, then fractionalDigits.
     let _matcher = df_enum_option(
-        (current_options.get_nanbox_f64()),
+        current_options.get_nanbox_f64(),
         "localeMatcher",
         &["lookup", "best fit"],
         "best fit",
     );
 
-    let opt_ns = match df_get_option_string((current_options.get_nanbox_f64()), "numberingSystem") {
+    let opt_ns = match df_get_option_string(current_options.get_nanbox_f64(), "numberingSystem") {
         Some(ns) => {
             if !valid_numbering_system(&ns) {
                 throw_range_error(&format!(
@@ -264,7 +264,7 @@ pub(super) fn configure(obj: *mut ObjectHeader, options: f64) {
     set_internal_field_from_raw_handle(&obj_handle, KEY_DF_NUMBERING, string_value(&numbering));
 
     let base_style = df_enum_option(
-        (current_options.get_nanbox_f64()),
+        current_options.get_nanbox_f64(),
         "style",
         &["long", "short", "narrow", "digital"],
         "short",
@@ -274,7 +274,7 @@ pub(super) fn configure(obj: *mut ObjectHeader, options: f64) {
     let mut prev_style: Option<String> = None;
     for (unit, allowed, digital_base) in UNITS.iter().copied() {
         let (style, display) = get_duration_unit_options(
-            (current_options.get_nanbox_f64()),
+            current_options.get_nanbox_f64(),
             unit,
             allowed,
             &base_style,
@@ -291,7 +291,7 @@ pub(super) fn configure(obj: *mut ObjectHeader, options: f64) {
     }
 
     // fractionalDigits: integer in [0, 9], else RangeError. Read last.
-    if let Some(n) = get_option_number((current_options.get_nanbox_f64()), "fractionalDigits") {
+    if let Some(n) = get_option_number(current_options.get_nanbox_f64(), "fractionalDigits") {
         if !n.is_finite() || n.fract() != 0.0 || !(0.0..=9.0).contains(&n) {
             throw_range_error(
                 "Value out of range for Intl.DurationFormat options property fractionalDigits",

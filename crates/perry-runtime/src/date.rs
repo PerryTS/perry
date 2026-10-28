@@ -8,8 +8,6 @@
 //! function parameter, closure capture) is visible through all of them
 //! (#2089). Getters dereference the cell; setters mutate it in place.
 
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use crate::date_layout::NANBOX_PTR_MASK;
 
 /// Allocate a fresh Date cell holding `ts` and return it as a NaN-boxed

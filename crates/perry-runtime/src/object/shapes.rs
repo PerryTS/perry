@@ -2658,6 +2658,10 @@ pub(crate) fn test_row_committed(word: u32) -> bool {
         .region_row_committed(crate::codegen_abi::LayoutWord(word).row().0 as usize)
 }
 #[cfg(test)]
+pub(crate) fn test_region_rows_per_page() -> usize {
+    crate::state::state().shapes.slab().region_rows_per_page()
+}
+#[cfg(test)]
 pub(crate) fn test_record_count() -> usize {
     crate::state::state().shapes.slab().len()
 }

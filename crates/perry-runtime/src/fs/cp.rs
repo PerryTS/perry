@@ -206,10 +206,16 @@ pub(crate) fn copy_file_with_options(
     dst: &Path,
     opts: FsCopyOptions,
 ) -> Result<(), f64> {
-    let _mode = opts.mode;
     if !copy_filter_allows(src, dst, opts)? {
         return Ok(());
     }
+    copy_file_after_filter(src, dst, opts)
+}
+
+// The symlink path has already applied the filter before following metadata.
+// Reuse the same I/O without invoking a user filter twice for one entry.
+fn copy_file_after_filter(src: &Path, dst: &Path, opts: FsCopyOptions) -> Result<(), f64> {
+    let _mode = opts.mode;
     match fs::symlink_metadata(dst) {
         Ok(meta) if meta.is_dir() => {
             return Err(unsafe {
@@ -272,13 +278,16 @@ fn copy_symlink_with_options_depth(
     if !copy_filter_allows(src, dst, opts)? {
         return Ok(());
     }
-    if opts.dereference && !opts.sync_symlink_resolution {
+    // Link-target rewriting is only for preserved symlinks. Dereferencing
+    // must follow the same file/directory path for sync and callback copies.
+    if opts.dereference {
         let target_meta = fs::metadata(src)
             .map_err(|err| unsafe { build_fs_error_value(&err, "stat", &src.to_string_lossy()) })?;
         if target_meta.is_dir() {
-            copy_dir_recursive_depth(src, dst, opts, depth + 1)
+            check_copy_dir_depth(src, depth + 1)?;
+            copy_dir_after_filter(src, dst, opts, depth + 1)
         } else {
-            copy_file_with_options(src, dst, opts)
+            copy_file_after_filter(src, dst, opts)
         }
     } else {
         match fs::symlink_metadata(dst) {
@@ -352,12 +361,7 @@ pub(crate) fn copy_dir_recursive(from: &Path, to: &Path, opts: FsCopyOptions) ->
 // stack-overflow Perry's process.
 pub(crate) const COPY_DIR_MAX_DEPTH: u32 = 256;
 
-pub(crate) fn copy_dir_recursive_depth(
-    from: &Path,
-    to: &Path,
-    opts: FsCopyOptions,
-    depth: u32,
-) -> Result<(), f64> {
+fn check_copy_dir_depth(from: &Path, depth: u32) -> Result<(), f64> {
     if depth >= COPY_DIR_MAX_DEPTH {
         return Err(unsafe {
             build_cp_error_value(
@@ -368,9 +372,28 @@ pub(crate) fn copy_dir_recursive_depth(
             )
         });
     }
+    Ok(())
+}
+
+pub(crate) fn copy_dir_recursive_depth(
+    from: &Path,
+    to: &Path,
+    opts: FsCopyOptions,
+    depth: u32,
+) -> Result<(), f64> {
+    check_copy_dir_depth(from, depth)?;
     if !copy_filter_allows(from, to, opts)? {
         return Ok(());
     }
+    copy_dir_after_filter(from, to, opts, depth)
+}
+
+fn copy_dir_after_filter(
+    from: &Path,
+    to: &Path,
+    opts: FsCopyOptions,
+    depth: u32,
+) -> Result<(), f64> {
     match fs::symlink_metadata(to) {
         Ok(meta) if !meta.is_dir() => {
             return Err(unsafe {
@@ -582,3 +605,6 @@ fn js_fs_cp_options_result(
 pub extern "C" fn js_fs_access_sync(path_value: f64) -> i32 {
     js_fs_access_sync_mode(path_value, f64::from_bits(crate::value::TAG_UNDEFINED))
 }
+
+#[cfg(test)]
+mod tests;

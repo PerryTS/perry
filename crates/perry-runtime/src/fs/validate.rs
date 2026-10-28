@@ -15,7 +15,7 @@
 //! it on the caught error — the same mechanism `fs` already uses for POSIX
 //! errors like `ENOENT`.
 
-use crate::string::{js_string_from_bytes, StringHeader};
+use crate::string::js_string_from_bytes;
 use crate::value::JSValue;
 
 use crate::closure::ClosureHeader;
@@ -460,11 +460,8 @@ pub(crate) fn validate_function(arg_name: &str, value: f64) {
 mod received_diagnostic_tests;
 
 pub(crate) use crate::validators::received::{
-    bigint_decimal, build_received_type_error, build_type_error_with_code_value,
-    describe_received_js, inspect_string_for_received_js, is_nullish, received_has_null_prototype,
-    received_inherited_property, received_key, received_name, received_native_brand,
-    received_native_fallback, received_native_prototype_shape, received_property, received_text,
-    string_header_to_string, throw_received_type_error,
+    build_received_type_error, build_type_error_with_code_value, describe_received_js, is_nullish,
+    throw_received_type_error,
 };
 pub use crate::validators::received::{
     describe_received, format_received_number, is_numeric, js_validate_event_listener,
@@ -473,4 +470,4 @@ pub use crate::validators::received::{
 };
 
 pub use crate::validators::received::read_js_string_pub;
-pub(crate) use crate::validators::received::{read_js_string, validate_int32};
+pub(crate) use crate::validators::received::validate_int32;

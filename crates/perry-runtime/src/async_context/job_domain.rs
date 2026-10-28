@@ -61,7 +61,10 @@ impl JobDomain {
     }
 
     pub(crate) fn cancel(&self) {
-        self.token.0.status.store(DOMAIN_CANCELLED, Ordering::Release);
+        self.token
+            .0
+            .status
+            .store(DOMAIN_CANCELLED, Ordering::Release);
         self.token.0.ready.store(false, Ordering::Release);
     }
 

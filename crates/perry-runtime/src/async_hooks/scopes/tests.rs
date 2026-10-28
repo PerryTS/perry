@@ -60,9 +60,9 @@ fn check_context(with_metadata: bool) {
         if with_metadata {
             metadata.set_nanbox_f64(crate::value::js_nanbox_pointer(ids.async_id as i64));
         }
-        snapshot.set_raw_mut_ptr(async_context::alloc_snapshot_holder(unsafe {
-            crate::promise::context_for_promise(promise.get_raw_mut_ptr())
-        }));
+        snapshot.set_raw_mut_ptr(async_context::alloc_snapshot_holder(
+            crate::promise::context_for_promise(promise.get_raw_mut_ptr()),
+        ));
         weak_promise.set_nanbox_f64(crate::value::js_nanbox_pointer(
             crate::weakref::js_weakref_new(crate::value::js_nanbox_pointer(
                 promise.get_raw_mut_ptr::<crate::promise::Promise>() as i64,

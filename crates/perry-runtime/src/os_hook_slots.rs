@@ -237,7 +237,9 @@ pub(crate) fn stdin_listeners_keep_loop_alive() -> bool {
         .get()
         .map_or_else(|| false, |run| run())
 }
+#[cfg(test)]
 static STDIN_PUSH_BYTES: Hook<fn(&[u8]) -> ()> = Hook::empty();
+#[cfg(test)]
 pub(crate) fn stdin_push_bytes(bytes: &[u8]) -> () {
     STDIN_PUSH_BYTES.get().map_or_else(|| (), |run| run(bytes))
 }
@@ -316,6 +318,7 @@ pub(crate) fn install() {
             .set(crate::os::os_process_emitter::remove_internal_process_listener);
         SIGNALS_ON_TURNLOOP.set(crate::os::signal::signals_on_turnloop);
         STDIN_LISTENERS_KEEP_LOOP_ALIVE.set(crate::os::stdin_listeners_keep_loop_alive);
+        #[cfg(test)]
         STDIN_PUSH_BYTES.set(crate::os::stdin_push_bytes);
         REGISTER_ROOTS.set(register_roots);
     });

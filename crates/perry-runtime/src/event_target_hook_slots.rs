@@ -1,6 +1,5 @@
 //! Installer-selected Web events, abort objects and DOMException operations.
 use crate::array::ArrayHeader;
-use crate::closure::ClosureHeader;
 use crate::feature_hooks::Hook;
 use crate::object::ObjectHeader;
 use crate::string::StringHeader;
@@ -159,7 +158,7 @@ pub(crate) extern "C" fn js_event_target_subclass_init(this: f64, kind: u32) -> 
     )
 }
 static NATIVE_CLASS_NAME: Hook<fn(u32) -> Option<&'static str>> = Hook::empty();
-pub(crate) fn native_class_name(mut class: u32) -> Option<&'static str> {
+pub(crate) fn native_class_name(class: u32) -> Option<&'static str> {
     NATIVE_CLASS_NAME
         .get()
         .map_or_else(|| None, |run| run(class))

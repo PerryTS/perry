@@ -82,6 +82,7 @@ pub(crate) fn read_utf8<R: Read + ?Sized>(
                 // The old owner can move during allocation: reload its root.
                 init_string_header(new, 0, 0, next, 0, STRING_FLAG_WTF8_VALIDATED);
                 ptr::copy_nonoverlapping(string_data(owner.get_raw_const_ptr()), data, len);
+                // GC_STORE_AUDIT(POINTER_FREE): one byte in the newly allocated string payload.
                 data.add(len).write(probe[0]);
             }
             owner.set_raw_mut_ptr(new);

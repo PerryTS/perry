@@ -4073,6 +4073,121 @@ jobs:
 
 
   # ---------------------------------------------------------------------------
+  # test262: every Test262 case, judged by Perry alone like other engines'
+  # published figures (test-compat/test262/README.md), sharded.
+  # `test262-aggregate` merges the shards into one pass rate and ratchets it
+  # against test-compat/test262/baseline.json.
+  # ---------------------------------------------------------------------------
+  test262:
+    needs: [plan, check]
+    if: fromJSON(needs.plan.outputs.plan).jobs.test262
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.plan.outputs.plan).test262.shards }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "false"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Install Rust toolchain
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+      - uses: ./.github/actions/setup-llvm22
+      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
+        with:
+          shared-key: "${{ runner.os }}-perry"
+          save-if: false
+      - name: Setup Node.js
+        uses: ./.github/actions/perry/actions/setup-node # v7
+        with:
+          # The oracle: never pin it inline (see .node-version).
+          node-version-file: .node-version
+      - name: Fetch Test262 at the pinned SHA
+        run: |
+          set -euo pipefail
+          git init -q vendor/test262
+          git -C vendor/test262 fetch -q --depth 1 https://github.com/tc39/test262 "$(cat test-compat/test262/pinned-sha.txt)"
+          git -C vendor/test262 checkout -q FETCH_HEAD
+      - name: Build compiler
+        run: cargo build --release
+      - name: Run Test262 subset (shard ${{ matrix.shard }}/${{ fromJSON(needs.plan.outputs.plan).test262.total }})
+        run: >-
+          python3 scripts/test262_subset.py --full-corpus --quiet --jobs "$(nproc)"
+          --shard ${{ matrix.shard }}/${{ fromJSON(needs.plan.outputs.plan).test262.total }}
+          --report test262-shard.json
+      - name: Upload shard report
+        if: always()
+        uses: ./.github/actions/perry/actions/upload-artifact # v7
+        with:
+          name: test262-shard-${{ matrix.shard }}
+          path: test262-shard.json
+          if-no-files-found: error
+
+  test262-aggregate:
+    needs: [plan, test262]
+    if: >-
+      ${{ !cancelled()
+          && fromJSON(needs.plan.outputs.plan).jobs.test262
+          && contains(fromJSON('["success", "failure"]'), needs.test262.result) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "false"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Download shard reports
+        uses: ./.github/actions/perry/actions/download-artifact # v8
+        with:
+          pattern: test262-shard-*
+          path: test262-shards
+      - name: Ratchet against the baseline
+        env:
+          EXPECT: ${{ fromJSON(needs.plan.outputs.plan).test262.total }}
+        run: |
+          set -euo pipefail
+          python3 tests/test_test262_ratchet.py
+          python3 scripts/test262_ratchet.py --expect "$EXPECT" test262-shards/*/test262-shard.json
+
+  # ---------------------------------------------------------------------------
   # Compile smoke test (all top-level test files must compile)
   # ---------------------------------------------------------------------------
   compile-smoke:

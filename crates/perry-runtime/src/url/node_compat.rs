@@ -87,7 +87,7 @@ fn throw_invalid_legacy_url_arg(value: f64) -> ! {
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_path_to_file_url_posix;
+    use crate::module_require::file_url_text::resolve_path_to_file_url_posix;
 
     fn cwd() -> String {
         crate::path::posix_cwd().trim_end_matches('/').to_string()
@@ -1521,6 +1521,5 @@ fn legacy_escape_auth(auth: &str) -> String {
 }
 
 pub(crate) use crate::module_require::file_url_text::{
-    encode_file_url_path, is_js_string_value, module_base_to_path, path_to_file_url_string,
-    resolve_path_to_file_url_posix, string_from_js_value,
+    is_js_string_value, path_to_file_url_string, string_from_js_value,
 };

@@ -102,6 +102,7 @@ JOBS: dict[str, tuple[str, ...]] = {
     # by `full-suite-gate` -- and a corpus no release waits for is a corpus
     # nobody reads. See the job comment in test.yml.
     "node_suite_guard": ("full",),
+    "test262": ("full",),
     "compile_smoke": ("full",),
     "native_abi_evidence_packet": ("full",),
     "drizzle_mysql_smoke": ("full",),
@@ -150,6 +151,13 @@ GAP_SUITE = {
 # full-tier jobs drain. `parity-aggregate` (not in JOBS: it keys off
 # `jobs.parity`) merges the shard reports and runs the aggregate-only gates.
 PARITY_SHARDS = 12
+
+# test262: full tier only. The full corpus (~53k cases, judged by Perry alone)
+# is ~1.1 CPU-s per case, so sixteen 4-core shards run about an hour each after
+# the build. `test262-aggregate` (not in JOBS: it keys off `jobs.test262`)
+# merges the shard reports and ratchets them against
+# test-compat/test262/baseline.json.
+TEST262_SHARDS = 16
 
 # The growing `perry` integration inventory cannot finish serially inside
 # cargo-test's 180-minute release bound (#8914). Eight round-robin shards put
@@ -353,6 +361,7 @@ def plan(
         "jobs": jobs,
         "gap": gap,
         "parity": {"total": PARITY_SHARDS, "shards": list(range(1, PARITY_SHARDS + 1))},
+        "test262": {"total": TEST262_SHARDS, "shards": list(range(TEST262_SHARDS))},
         # cargo-test: the ordinary PR tier scopes to the diff via
         # ci_test_scope.py (`--lib --bins` of the affected crates). A labelled
         # full-tier PR must run the same complete package set as a nightly or

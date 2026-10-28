@@ -49,7 +49,7 @@ pub fn proxy_wraps_callable(value: f64) -> bool {
 
 static PROXY_TARGET_CLASS_ID: Hook<fn(f64) -> Option<u32>> = Hook::empty();
 #[inline]
-pub fn proxy_target_class_id(mut value: f64) -> Option<u32> {
+pub fn proxy_target_class_id(value: f64) -> Option<u32> {
     if proxy_address(value).is_none() {
         if let Some(class_id) = crate::object::class_ref_id(value) {
             return Some(class_id);
@@ -222,7 +222,7 @@ static PROXY_DEFINE_OWN_PROPERTY_DECODED: Hook<
     ) -> bool,
 > = Hook::empty();
 #[inline]
-pub unsafe fn proxy_define_own_property_decoded(
+pub(crate) unsafe fn proxy_define_own_property_decoded(
     scope: &crate::gc::RuntimeHandleScope,
     receiver: &crate::gc::RuntimeHandle<'_>,
     key: &crate::gc::RuntimeHandle<'_>,

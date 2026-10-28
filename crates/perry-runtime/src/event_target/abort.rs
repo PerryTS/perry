@@ -1,12 +1,10 @@
 //! `AbortController` / `AbortSignal` runtime implementation.
 
-use crate::array::{js_array_alloc, js_array_push_f64};
 use crate::event_target::state::{
     get_slot as get_abort_slot, set_slot as set_abort_slot, SIGNAL_ABORTED, SIGNAL_REASON,
 };
-use crate::object::{js_object_set_field_f64, js_object_set_keys};
 use crate::value::boxed_text::*;
-use crate::{js_object_alloc, js_string_from_bytes, ArrayHeader, ObjectHeader, StringHeader};
+use crate::{js_object_alloc, js_string_from_bytes, ObjectHeader};
 
 // =========================================================================
 // AbortController implementation

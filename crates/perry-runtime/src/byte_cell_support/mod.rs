@@ -166,7 +166,7 @@ pub(crate) fn strip_nanbox(p: u64) -> usize {
 #[inline]
 pub fn clean_ta_ptr(ptr: *const TypedArrayHeader) -> *const TypedArrayHeader {
     let addr = strip_nanbox(ptr as u64);
-    if addr < 0x1000 {
+    if crate::value::addr_class::is_handle_band(addr) {
         return ptr::null();
     }
     addr as *const TypedArrayHeader
@@ -419,7 +419,7 @@ pub(crate) fn is_arena_backed_addr(addr: usize) -> bool {
 
 #[inline]
 pub(crate) unsafe fn arena_payload_has_gc_type(addr: usize, expected_type: u8) -> bool {
-    if addr < crate::gc::GC_HEADER_SIZE + 0x1000 {
+    if crate::value::addr_class::is_handle_band(addr) {
         return false;
     }
     let header_addr = addr - crate::gc::GC_HEADER_SIZE;
@@ -429,19 +429,15 @@ pub(crate) unsafe fn arena_payload_has_gc_type(addr: usize, expected_type: u8) -
     ) {
         return false;
     }
-    let header = header_addr as *const crate::gc::GcHeader;
-    let obj_type = (*header).obj_type;
-    if crate::gc::gc_type_info(obj_type).is_none() {
+    let Some(header) = crate::value::addr_class::try_read_gc_header(addr) else {
         return false;
-    }
-    let size = (*header).size as usize;
-    if size < crate::gc::GC_HEADER_SIZE || size as u64 > (1u64 << 34) {
-        return false;
-    }
-    if (*header).gc_flags & crate::gc::GC_FLAG_ARENA == 0 {
-        return false;
-    }
-    obj_type == expected_type
+    };
+    let size = header.size as usize;
+    crate::gc::gc_type_info(header.obj_type).is_some()
+        && size >= crate::gc::GC_HEADER_SIZE
+        && size as u64 <= (1u64 << 34)
+        && header.gc_flags & crate::gc::GC_FLAG_ARENA != 0
+        && header.obj_type == expected_type
 }
 
 #[inline]
@@ -461,7 +457,7 @@ pub(crate) unsafe fn strict_typed_array_from_raw(
     message: &[u8],
 ) -> *mut TypedArrayHeader {
     let addr = strip_nanbox(raw);
-    if addr < 0x1000 {
+    if crate::value::addr_class::is_handle_band(addr) {
         throw_type_error(message);
     }
     let Some(kind) = lookup_typed_array_kind(addr) else {
