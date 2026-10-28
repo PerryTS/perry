@@ -322,6 +322,10 @@ enum RootScanSubphase {
     MutableRegisteredScanners,
     LegacyRegisteredScanners,
     RememberedSet,
+    /// WRT: remembered realm-image cells are root objects in every cycle
+    /// (`gc::image_cells`). After `RememberedSet`, whose snapshot arms the
+    /// barrier and so runs the image reconstruct first.
+    ImageCells,
     Done,
 }
 
@@ -496,8 +500,13 @@ impl RootScanCycleState {
                     if let Some(trace) = trace.as_mut() {
                         trace.remembered_set = state.stats();
                     }
-                    self.subphase = RootScanSubphase::Done;
+                    self.subphase = RootScanSubphase::ImageCells;
                 }
+                false
+            }
+            RootScanSubphase::ImageCells => {
+                super::image_cells::mark_image_roots(valid_ptrs, self.minor_only);
+                self.subphase = RootScanSubphase::Done;
                 false
             }
             RootScanSubphase::Done => true,
@@ -676,7 +685,7 @@ impl GcCycleState {
         // and a mark they carried would leak into the next cycle as
         // "already traced"). Every black birth is also pushed as a mark
         // seed — see `gc_note_black_birth`.
-        super::barrier::GC_BIRTH_EXTRA_FLAGS.with(|cell| cell.set(GC_FLAG_MARKED));
+        super::barrier::set_birth_extra_flags(GC_FLAG_MARKED);
         Self {
             collection_kind: GcCollectionKind::Full,
             trigger_kind,
@@ -724,7 +733,7 @@ impl GcCycleState {
         // Allocate-black for the WHOLE cycle — see `new_full` above for why the
         // barrier window alone is not enough, and `gc_note_black_birth` for why
         // every black birth is also seeded.
-        super::barrier::GC_BIRTH_EXTRA_FLAGS.with(|cell| cell.set(GC_FLAG_MARKED));
+        super::barrier::set_birth_extra_flags(GC_FLAG_MARKED);
         Self {
             collection_kind: GcCollectionKind::Minor,
             trigger_kind,
@@ -1903,7 +1912,7 @@ impl GcCycleState {
             .map(|minor| minor.malloc_sweep_due)
             .unwrap_or(true);
 
-        super::barrier::GC_BIRTH_EXTRA_FLAGS.with(|cell| cell.set(0));
+        super::barrier::set_birth_extra_flags(0);
         self.outcome = Some(GcCollectOutcome {
             freed_bytes: self.freed_bytes,
             malloc_swept,
@@ -1921,7 +1930,7 @@ impl Drop for GcCycleState {
                 super::full_trace::abort_full_trace();
             }
             incremental_mark_barrier_disable();
-            super::barrier::GC_BIRTH_EXTRA_FLAGS.with(|cell| cell.set(0));
+            super::barrier::set_birth_extra_flags(0);
             clear_mark_seeds();
         }
     }

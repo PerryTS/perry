@@ -61,6 +61,7 @@ ir-corpus/
 !test-features/
 !test-parity/
 !test-coverage/
+!test-wasi/
 # But ignore compiled test binaries (no extension) inside them
 test-files/test_*
 test-files/test-*
@@ -95,6 +96,11 @@ tests/test-*
 !tests/test_repsel_census.py
 !tests/test_node_core_subset.py
 !tests/test_visual_test_check.py
+# The parity normalizer's golden-fixture test. A new `tests/test_*.py` is invisible
+# to git until it is named here, which pairs with the fact that each python test
+# also needs its own `lint` step: adding one is a conscious act in two places,
+# never a file that is committed and then never run.
+!tests/test_parity_normalize.py
 !tests/test_perf_frontier_gate_smoke.sh
 !tests/*/
 bench_*

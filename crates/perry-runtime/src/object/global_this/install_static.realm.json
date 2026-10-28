@@ -1,0 +1,1177 @@
+{
+  "version": 1,
+  "groups": {
+    "body:abort_signal_abort_thunk": [
+      {
+        "name": "AbortSignal.abort",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "abort"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::install_static::abort_signal_abort_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::install_static::abort_signal_abort_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_eeb0dfa3421b8a81970f",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "body:abort_signal_any_thunk": [
+      {
+        "name": "AbortSignal.any",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "any"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::install_static::abort_signal_any_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::install_static::abort_signal_any_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_b0faa78ac3d237600154",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "body:abort_signal_timeout_thunk": [
+      {
+        "name": "AbortSignal.timeout",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "timeout"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::install_static::abort_signal_timeout_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::install_static::abort_signal_timeout_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_9e59e77cd8b4f985b319",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "body:builtin_species_getter_thunk": [
+      {
+        "name": "%TypedArray%[\"@@species\"].<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "get [Symbol.species]"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::install_static::builtin_species_getter_thunk",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::install_static::builtin_species_getter_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_67eee5758c9294178364",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "ArrayBuffer[\"@@species\"].<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "get [Symbol.species]"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::install_static::builtin_species_getter_thunk",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::install_static::builtin_species_getter_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_67eee5758c9294178364",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Array[\"@@species\"].<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "get [Symbol.species]"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::install_static::builtin_species_getter_thunk",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::install_static::builtin_species_getter_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_67eee5758c9294178364",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Map[\"@@species\"].<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "get [Symbol.species]"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::install_static::builtin_species_getter_thunk",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::install_static::builtin_species_getter_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_67eee5758c9294178364",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Promise[\"@@species\"].<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "get [Symbol.species]"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::install_static::builtin_species_getter_thunk",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::install_static::builtin_species_getter_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_67eee5758c9294178364",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "RegExp[\"@@species\"].<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "get [Symbol.species]"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::install_static::builtin_species_getter_thunk",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::install_static::builtin_species_getter_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_67eee5758c9294178364",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Set[\"@@species\"].<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "get [Symbol.species]"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::install_static::builtin_species_getter_thunk",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::install_static::builtin_species_getter_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_67eee5758c9294178364",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "SharedArrayBuffer[\"@@species\"].<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "get [Symbol.species]"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::install_static::builtin_species_getter_thunk",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::install_static::builtin_species_getter_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_67eee5758c9294178364",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "body:subtle_crypto_supports_thunk": [
+      {
+        "name": "SubtleCrypto.supports",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "supports"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "crate::object::global_this::install_static::subtle_crypto_supports_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 1,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::install_static::subtle_crypto_supports_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_8b1a3a9cbb35524b67f3",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "body:uint8array_from_base64_thunk": [
+      {
+        "name": "Uint8Array.fromBase64",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "fromBase64"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::install_static::uint8array_from_base64_thunk",
+        "function_info": {
+          "params": 2,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 2,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::install_static::uint8array_from_base64_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_26a28112335ba11cee4d",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "body:uint8array_from_hex_thunk": [
+      {
+        "name": "Uint8Array.fromHex",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "fromHex"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::install_static::uint8array_from_hex_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::install_static::uint8array_from_hex_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_ff1a6441c4a533380c24",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "body:url_can_parse_thunk": [
+      {
+        "name": "URL.canParse",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "canParse"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::install_static::url_can_parse_thunk",
+        "function_info": {
+          "params": 2,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::install_static::url_can_parse_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_2d91b558b80be574a139",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "body:url_parse_thunk": [
+      {
+        "name": "URL.parse",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "parse"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::install_static::url_parse_thunk",
+        "function_info": {
+          "params": 2,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::install_static::url_parse_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_9fe61bbbea23f28ca2bc",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "objects": [
+      {
+        "name": "SubtleCrypto.prototype.decapsulateBits",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4008000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "decapsulateBits"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 3,
+        "body": "crate::object::global_this::install_static::subtle_crypto_decapsulate_bits_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 1537,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::install_static::subtle_crypto_decapsulate_bits_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_7307b62dc0351a282448",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "SubtleCrypto.prototype.decapsulateKey",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4018000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "decapsulateKey"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 6,
+        "body": "crate::object::global_this::install_static::subtle_crypto_decapsulate_key_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 1537,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::install_static::subtle_crypto_decapsulate_key_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_f1f1f3cb9554521e469d",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "SubtleCrypto.prototype.encapsulateBits",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "encapsulateBits"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "crate::object::global_this::install_static::subtle_crypto_encapsulate_bits_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 1537,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::install_static::subtle_crypto_encapsulate_bits_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_219a063ea4060b0fcc23",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "SubtleCrypto.prototype.encapsulateKey",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4014000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "encapsulateKey"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 5,
+        "body": "crate::object::global_this::install_static::subtle_crypto_encapsulate_key_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 1537,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::install_static::subtle_crypto_encapsulate_key_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_64a8c70dbe75a163ddad",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "URLPattern.prototype.exec",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "exec"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::install_static::url_pattern_exec_thunk",
+        "function_info": {
+          "params": 2,
+          "rest_fixed": 1,
+          "flags": 1537,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::install_static::url_pattern_exec_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_b5a2107e307e48b039e3",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "URLPattern.prototype.test",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "test"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::install_static::url_pattern_test_thunk",
+        "function_info": {
+          "params": 2,
+          "rest_fixed": 1,
+          "flags": 1537,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::install_static::url_pattern_test_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_fa48c6b8dd62197be534",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ]
+  }
+}

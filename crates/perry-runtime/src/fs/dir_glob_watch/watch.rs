@@ -19,6 +19,12 @@ use std::sync::Once;
 
 use super::watch_backend::{self, Backend, RawEvent, Source, WatchError, WatchEvent};
 
+#[path = "watch_abort.rs"]
+mod watch_abort;
+use watch_abort::{
+    abort_error_for_signal, abort_promise_watcher, promise_watcher_abort_impl, settle_watch_error,
+};
+
 use crate::closure::{
     js_closure_alloc, js_closure_get_capture_f64, js_closure_set_capture_f64, ClosureHeader,
 };
@@ -213,18 +219,6 @@ fn option_signal_value(options_value: f64) -> Result<Option<f64>, f64> {
 fn signal_is_aborted(signal: f64) -> bool {
     crate::event_target_hook_slots::abort_signal_ptr_from_value(signal)
         .is_some_and(|ptr| crate::event_target_hook_slots::js_abort_signal_is_aborted(ptr) != 0)
-}
-
-fn signal_abort_reason(signal: f64) -> f64 {
-    let Some(ptr) = crate::event_target_hook_slots::abort_signal_ptr_from_value(signal) else {
-        return crate::event_target_hook_slots::js_abort_error_value();
-    };
-    let reason = crate::object::js_object_get_field_f64(ptr, 1);
-    if crate::value::JSValue::from_bits(reason.to_bits()).is_undefined() {
-        crate::event_target_hook_slots::js_abort_error_value()
-    } else {
-        reason
-    }
 }
 
 fn add_abort_listener(signal: f64, id: usize, func: *const crate::closure::JsFunctionInfo) -> f64 {
@@ -576,25 +570,6 @@ fn close_promise_watcher_return(id: usize) -> Vec<*mut crate::promise::Promise> 
     state.pending.into_iter().collect()
 }
 
-fn abort_promise_watcher(id: usize, reason: f64) -> Vec<*mut crate::promise::Promise> {
-    PROMISE_WATCHERS.with(|watchers| {
-        let mut watchers = watchers.borrow_mut();
-        let Some(state) = watchers.get_mut(&id) else {
-            return Vec::new();
-        };
-        state.backend = None;
-        remove_abort_listener(state.signal, state.abort_listener);
-        state.active = false;
-        state.signal = undefined_value();
-        state.abort_listener = undefined_value();
-        state.object_value = undefined_value();
-        state.closed = true;
-        state.abort_reason = Some(reason);
-        state.queue.clear();
-        state.pending.drain(..).collect()
-    })
-}
-
 fn iterator_result(value: f64, done: bool) -> f64 {
     unsafe {
         crate::iter_result::make_iter_result(
@@ -761,11 +736,11 @@ fn route_raw_event(item: RawEvent, out: &mut Vec<Delivery>) {
             path,
             class,
         } => {
-            for (id, filename) in native_targets(source, &path) {
+            for (id, filename, exact_root) in native_targets(source, &path) {
                 out.push(Delivery::Event {
                     id,
                     event: WatchEvent {
-                        event_type: class.node_name(),
+                        event_type: class.node_name_for_target(exact_root),
                         filename,
                     },
                 });
@@ -790,7 +765,7 @@ fn route_raw_event(item: RawEvent, out: &mut Vec<Delivery>) {
 /// filename each reports. An own instance has exactly one owner; a shared
 /// instance's event is offered to every shared watcher whose root is the
 /// path or its parent (`filename_for` applies the depth rule).
-fn native_targets(source: Source, path: &Path) -> Vec<(usize, String)> {
+fn native_targets(source: Source, path: &Path) -> Vec<(usize, String, bool)> {
     let mut out = Vec::new();
     let mut consider = |id: usize, backend: &Backend, recursive: bool| {
         let root = match (source, backend) {
@@ -799,7 +774,7 @@ fn native_targets(source: Source, path: &Path) -> Vec<(usize, String)> {
             _ => return,
         };
         if let Some(filename) = watch_backend::filename_for(root, path, recursive) {
-            out.push((id, filename));
+            out.push((id, filename, root.as_path() == path));
         }
     };
     FS_WATCHERS.with(|watchers| {
@@ -918,9 +893,7 @@ fn deliver_error(id: usize, error: WatchError) {
         let reason = unsafe { build_fs_error_value(&error.to_io_error(), "watch", &path) };
         let reason_handle = scope.root_nanbox_f64(reason);
         let pending = abort_promise_watcher(id, reason_handle.get_nanbox_f64());
-        for promise in pending {
-            reject_promise(promise, reason_handle.get_nanbox_f64());
-        }
+        settle_watch_error(pending, reason_handle.get_nanbox_f64());
     }
 }
 
@@ -1003,26 +976,6 @@ extern "C" fn fs_watcher_abort_impl(
 ) -> f64 {
     let id = js_closure_get_capture_f64(closure, 0) as usize;
     close_fs_watcher(id);
-    undefined_value()
-}
-
-extern "C" fn promise_watcher_abort_impl(
-    closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
-) -> f64 {
-    let id = js_closure_get_capture_f64(closure, 0) as usize;
-    let signal = PROMISE_WATCHERS.with(|watchers| {
-        watchers
-            .borrow()
-            .get(&id)
-            .map(|state| state.signal)
-            .unwrap_or_else(undefined_value)
-    });
-    let reason = signal_abort_reason(signal);
-    let pending = abort_promise_watcher(id, reason);
-    for promise in pending {
-        reject_promise(promise, reason);
-    }
     undefined_value()
 }
 
@@ -1323,7 +1276,7 @@ extern "C" fn promise_watcher_next_impl(
         let Some(state) = watchers.get_mut(&id) else {
             return PromiseNextAction::Done;
         };
-        if let Some(reason) = state.abort_reason {
+        if let Some(reason) = state.abort_reason.take() {
             return PromiseNextAction::Reject(reason);
         }
         if state.closed {
@@ -1874,18 +1827,24 @@ pub extern "C" fn js_fs_unwatch_file(path_value: f64, listener: f64) -> f64 {
 }
 
 pub extern "C" fn js_fs_promises_watch(path_value: f64, options_value: f64) -> f64 {
-    validate::validate_path("filename", path_value);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let path_value = scope.root_nanbox_f64(path_value);
+    let options_value = scope.root_nanbox_f64(options_value);
+    validate::validate_path("filename", path_value.get_nanbox_f64());
     let path = unsafe {
-        decode_path_value(path_value)
-            .unwrap_or_else(|| validate::throw_invalid_path_arg("filename", path_value))
+        decode_path_value(path_value.get_nanbox_f64()).unwrap_or_else(|| {
+            validate::throw_invalid_path_arg("filename", path_value.get_nanbox_f64())
+        })
     };
-    let encoding = fs_encoding_option(options_value).unwrap_or_else(|| "utf8".to_string());
-    let persistent = option_bool_default_local(options_value, b"persistent", true);
-    let recursive = option_bool_default_local(options_value, b"recursive", false);
-    let signal = match option_signal_value(options_value) {
+    let encoding =
+        fs_encoding_option(options_value.get_nanbox_f64()).unwrap_or_else(|| "utf8".to_string());
+    let persistent = option_bool_default_local(options_value.get_nanbox_f64(), b"persistent", true);
+    let recursive = option_bool_default_local(options_value.get_nanbox_f64(), b"recursive", false);
+    let signal = match option_signal_value(options_value.get_nanbox_f64()) {
         Ok(signal) => signal,
         Err(err) => crate::exception::js_throw(err),
     };
+    let signal = signal.map(|signal| scope.root_nanbox_f64(signal));
     // Validate the path synchronously, matching Node's `watch()` which throws
     // (ENOENT etc.) at call time rather than at first iteration. The OS watch
     // itself starts on the first `next()` (`start_promise_watcher`).
@@ -1895,16 +1854,27 @@ pub extern "C" fn js_fs_promises_watch(path_value: f64, options_value: f64) -> f
         }
     }
     let id = next_watch_id();
-    let object_value = build_promise_watcher_object(id);
+    let object_value = scope.root_nanbox_f64(build_promise_watcher_object(id));
     let abort_listener = signal
-        .filter(|signal| !signal_is_aborted(*signal))
+        .as_ref()
+        .filter(|signal| !signal_is_aborted(signal.get_nanbox_f64()))
         .map(|signal| {
-            add_abort_listener(signal, id, crate::fn_info!(promise_watcher_abort_impl, 0))
+            add_abort_listener(
+                signal.get_nanbox_f64(),
+                id,
+                crate::fn_info!(promise_watcher_abort_impl, 0),
+            )
         })
         .unwrap_or_else(undefined_value);
-    let signal_value = signal.unwrap_or_else(undefined_value);
-    let abort_reason = if signal.map(signal_is_aborted).unwrap_or(false) {
-        Some(signal_abort_reason(signal_value))
+    let abort_listener = scope.root_nanbox_f64(abort_listener);
+    let signal_value = || {
+        signal
+            .as_ref()
+            .map(|signal| signal.get_nanbox_f64())
+            .unwrap_or_else(undefined_value)
+    };
+    let abort_reason = if signal_is_aborted(signal_value()) {
+        Some(abort_error_for_signal(signal_value()))
     } else {
         None
     };
@@ -1915,20 +1885,20 @@ pub extern "C" fn js_fs_promises_watch(path_value: f64, options_value: f64) -> f
                 path,
                 recursive,
                 encoding,
-                object_value,
+                object_value: object_value.get_nanbox_f64(),
                 backend: None,
                 persistent,
                 active: false,
                 queue: VecDeque::new(),
                 pending: VecDeque::new(),
-                signal: signal_value,
-                abort_listener,
+                signal: signal_value(),
+                abort_listener: abort_listener.get_nanbox_f64(),
                 closed: abort_reason.is_some(),
                 abort_reason,
             },
         );
     });
-    object_value
+    object_value.get_nanbox_f64()
 }
 
 pub(crate) fn scan_fs_watcher_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
@@ -1991,3 +1961,7 @@ pub(crate) fn promise_rejected_fs(reason: f64) -> f64 {
         f64::from_bits(crate::value::JSValue::pointer(promise as *const u8).bits())
     })
 }
+
+#[cfg(test)]
+#[path = "watch/tests.rs"]
+mod tests;

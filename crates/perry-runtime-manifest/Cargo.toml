@@ -10,3 +10,4 @@ workspace = true
 
 [dependencies]
 perry-dispatch.workspace = true
+

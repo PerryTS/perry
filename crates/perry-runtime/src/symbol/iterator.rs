@@ -218,7 +218,7 @@ pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
     // below (so a get trap / custom @@iterator remains observable); the
     // forwarded builtin iterator now uses KIND_PROXY_VALUES for live trapped
     // length/index reads.
-    let is_proxy = crate::proxy_hooks::proxy_is_proxy((val_h.get_nanbox_f64())) != 0;
+    let is_proxy = crate::proxy_hooks::proxy_is_proxy(val_h.get_nanbox_f64()) != 0;
     // `class X extends Array` — the instance is object-backed (a plain
     // `ObjectHeader` with indexed fields + `length`), but `array_values_iter`
     // reads a dense `ArrayHeader`. `js_array_is_array` now reports true for such
@@ -227,16 +227,16 @@ pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
     // `[Symbol.iterator]`, in which case fall through (past the `is_array` branch,
     // which is guarded below) to the generic symbol lookup that resolves the
     // user's iterator.
-    if crate::array::is_array_subclass_instance((val_h.get_nanbox_f64())) {
-        if !crate::array::array_subclass_has_iterator_override((val_h.get_nanbox_f64())) {
-            let snapshot = crate::array::array_subclass_dense_snapshot((val_h.get_nanbox_f64()));
+    if crate::array::is_array_subclass_instance(val_h.get_nanbox_f64()) {
+        if !crate::array::array_subclass_has_iterator_override(val_h.get_nanbox_f64()) {
+            let snapshot = crate::array::array_subclass_dense_snapshot(val_h.get_nanbox_f64());
             return crate::array::array_values_iter(snapshot);
         }
     } else if !is_proxy
-        && crate::array::js_array_is_array((val_h.get_nanbox_f64())).to_bits()
+        && crate::array::js_array_is_array(val_h.get_nanbox_f64()).to_bits()
             == crate::value::TAG_TRUE
     {
-        return unsafe { crate::array::array_shape_iterator((val_h.get_nanbox_f64())) };
+        return unsafe { crate::array::array_shape_iterator(val_h.get_nanbox_f64()) };
     }
     // Arguments objects iterate like arrays (spec:
     // `arguments[Symbol.iterator] === Array.prototype.values`). They are plain
@@ -261,7 +261,7 @@ pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
         if jsv.is_pointer() {
             let raw = jsv.as_pointer::<u8>() as usize;
             if crate::array::is_builtin_iterator_class_id(raw) {
-                return (val_h.get_nanbox_f64());
+                return val_h.get_nanbox_f64();
             }
         }
     }
@@ -274,7 +274,7 @@ pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
     // claim a receiver this arm accepts, and the lane disables itself the
     // moment any `@@iterator` write is observed.
     match crate::object::map_set_subclass::plain_collection_default_iteration(
-        (val_h.get_nanbox_f64()),
+        val_h.get_nanbox_f64(),
     ) {
         Some(crate::object::map_set_subclass::CollectionBacking::Map(m)) => {
             return crate::value::js_nanbox_pointer(
@@ -318,7 +318,7 @@ pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
             // shape probe above misses. Default `for (const [k, v] of r)` still
             // yields `[key, value]` pairs from the backing.
             if let Some(backing) =
-                crate::url_hooks::url_search_params_backing_of((val_h.get_nanbox_f64()))
+                crate::url_hooks::url_search_params_backing_of(val_h.get_nanbox_f64())
             {
                 let entries = crate::url_hooks::url_search_params_entries_arr(backing);
                 return crate::array::array_values_iter(entries);
@@ -326,7 +326,7 @@ pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
         }
     }
     match crate::object::map_set_subclass::subclass_backing_for_default_iteration(
-        (val_h.get_nanbox_f64()),
+        val_h.get_nanbox_f64(),
     ) {
         Some(crate::object::map_set_subclass::CollectionBacking::Map(m)) => {
             return crate::value::js_nanbox_pointer(
@@ -370,10 +370,9 @@ pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
     {
         let jsv = crate::value::JSValue::from_bits((val_h.get_nanbox_f64()).to_bits());
         if !jsv.is_reference() && !jsv.is_any_string() {
-            is_registered_class_ref =
-                crate::object::class_ref_id((val_h.get_nanbox_f64())).is_some();
+            is_registered_class_ref = crate::object::class_ref_id(val_h.get_nanbox_f64()).is_some();
             if !is_registered_class_ref {
-                throw_value_not_iterable((val_h.get_nanbox_f64()));
+                throw_value_not_iterable(val_h.get_nanbox_f64());
             }
         }
     }
@@ -391,12 +390,12 @@ pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
     {
         let jsv = crate::value::JSValue::from_bits((val_h.get_nanbox_f64()).to_bits());
         if jsv.is_any_string() {
-            let sptr = crate::value::js_get_string_pointer_unified((val_h.get_nanbox_f64()))
+            let sptr = crate::value::js_get_string_pointer_unified(val_h.get_nanbox_f64())
                 as *const crate::StringHeader;
             return crate::string::string_values_iter(sptr);
         }
     }
-    if let Some(iter) = get_iterator_from_method((val_h.get_nanbox_f64())) {
+    if let Some(iter) = get_iterator_from_method(val_h.get_nanbox_f64()) {
         return iter;
     }
     // We reach here only when NO `[Symbol.iterator]` method resolved. A
@@ -413,7 +412,7 @@ pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
     // corrupt/non-iterable handle reaches this point.
     {
         if crate::value::JSValue::from_bits((val_h.get_nanbox_f64()).to_bits()).is_handle() {
-            throw_value_not_iterable((val_h.get_nanbox_f64()));
+            throw_value_not_iterable(val_h.get_nanbox_f64());
         }
     }
     // #6454: the class ref admitted past the primitive guard above resolved no
@@ -424,21 +423,21 @@ pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
     // "next is not a function" later; throw here, exactly as before #6454 for
     // every non-pointer value.
     if is_registered_class_ref {
-        throw_value_not_iterable((val_h.get_nanbox_f64()));
+        throw_value_not_iterable(val_h.get_nanbox_f64());
     }
     let async_iter_wk = well_known_symbol("asyncIterator");
     if !async_iter_wk.is_null() {
         let sym_f64 =
             f64::from_bits(crate::value::JSValue::pointer(async_iter_wk as *const u8).bits());
         let async_iter_fn =
-            unsafe { js_object_get_symbol_property((val_h.get_nanbox_f64()), sym_f64) };
+            unsafe { js_object_get_symbol_property(val_h.get_nanbox_f64(), sym_f64) };
         if async_iter_fn.to_bits() != TAG_UNDEFINED
             && async_iter_fn.to_bits() != crate::value::TAG_NULL
         {
-            throw_value_not_iterable((val_h.get_nanbox_f64()));
+            throw_value_not_iterable(val_h.get_nanbox_f64());
         }
     }
-    (val_h.get_nanbox_f64())
+    val_h.get_nanbox_f64()
 }
 
 /// `ToPrimitive(value, hint)` — if `value` is an object with a

@@ -992,3 +992,5 @@ pub(crate) unsafe fn create_fs_constants_object() -> f64 {
     });
     result
 }
+
+crate::realm_decl!("namespace_builders.realm.json#*");

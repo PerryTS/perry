@@ -141,3 +141,5 @@ pub extern "C" fn js_async_local_storage_static_snapshot_method(
 pub extern "C" fn js_async_local_storage_static_snapshot_direct(_rest: i64) -> f64 {
     async_local_storage_static_snapshot_value()
 }
+
+crate::realm_decl!("context_snapshots.realm.json#*");

@@ -31,6 +31,7 @@ mod contract;
 mod copy_slot_decode;
 mod copy_slot_hoists;
 mod copying;
+mod copying_leaf_queue;
 mod copying_object_scan;
 mod copying_side_tables;
 mod cycle_state;
@@ -60,6 +61,8 @@ mod helper_stores;
 mod host_safepoints;
 mod idle_compact;
 mod idle_reclaim;
+mod image_cells;
+mod image_seeds;
 mod incremental_sweep_reclaim;
 mod inline_generation_gate_contract;
 mod inline_pointer_bearing_contract;
@@ -199,3 +202,7 @@ mod native_handle_props;
 
 mod young_collection_stores;
 mod young_dynamic_growth;
+
+mod object_descriptor_walk;
+
+mod inline_birth_bound;

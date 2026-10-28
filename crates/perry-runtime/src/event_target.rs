@@ -880,12 +880,12 @@ pub unsafe extern "C" fn js_event_target_dispatch_event(
     };
     let name_h = scope.root_string_ptr(event_name);
     set_event_field(
-        (crate::value::js_nanbox_get_pointer(event_h.get_nanbox_f64()) as *mut ObjectHeader),
+        crate::value::js_nanbox_get_pointer(event_h.get_nanbox_f64()) as *mut ObjectHeader,
         state::TARGET,
         boxed_ptr(target_h.get_raw_mut_ptr::<ObjectHeader>()),
     );
     set_event_field(
-        (crate::value::js_nanbox_get_pointer(event_h.get_nanbox_f64()) as *mut ObjectHeader),
+        crate::value::js_nanbox_get_pointer(event_h.get_nanbox_f64()) as *mut ObjectHeader,
         state::DISPATCHED,
         bool_value(true),
     );
@@ -927,23 +927,23 @@ pub unsafe extern "C" fn js_event_target_dispatch_event(
             1,
         );
         if event_bool_field(
-            (crate::value::js_nanbox_get_pointer(event_h.get_nanbox_f64()) as *mut ObjectHeader),
+            crate::value::js_nanbox_get_pointer(event_h.get_nanbox_f64()) as *mut ObjectHeader,
             state::IMMEDIATE_STOPPED,
         ) {
             break;
         }
     }
     set_event_field(
-        (crate::value::js_nanbox_get_pointer(event_h.get_nanbox_f64()) as *mut ObjectHeader),
+        crate::value::js_nanbox_get_pointer(event_h.get_nanbox_f64()) as *mut ObjectHeader,
         state::DISPATCHED,
         bool_value(false),
     );
     bool_value(
         !(event_bool_field(
-            (crate::value::js_nanbox_get_pointer(event_h.get_nanbox_f64()) as *mut ObjectHeader),
+            crate::value::js_nanbox_get_pointer(event_h.get_nanbox_f64()) as *mut ObjectHeader,
             state::CANCELABLE,
         ) && event_bool_field(
-            (crate::value::js_nanbox_get_pointer(event_h.get_nanbox_f64()) as *mut ObjectHeader),
+            crate::value::js_nanbox_get_pointer(event_h.get_nanbox_f64()) as *mut ObjectHeader,
             state::DEFAULT_PREVENTED,
         )),
     )
@@ -1266,3 +1266,5 @@ static KEEP_JS_EVENT_TARGET_SUBCLASS_INIT: extern "C" fn(f64, u32) -> f64 =
     js_event_target_subclass_init;
 
 pub(crate) mod abort;
+
+crate::realm_decl!("event_target.realm.json#*");

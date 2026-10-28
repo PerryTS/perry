@@ -22,9 +22,7 @@ pub use apply_construct::{call_proxy_value_with_this, js_proxy_apply, js_proxy_c
 pub(crate) use apply_construct::{is_callable_function, is_constructor_function};
 pub(crate) mod get;
 pub use get::js_proxy_get;
-pub(crate) use get::{proxy_get_from_prototype, proxy_get_with_receiver};
 pub(crate) mod has_delete;
-pub(crate) use has_delete::reflect_ordinary_delete_property_key;
 pub use has_delete::{js_proxy_delete, js_proxy_has};
 mod invariants;
 #[cfg(test)]
@@ -32,15 +30,14 @@ mod receiver_definition_tests;
 mod set_interceptor;
 pub(crate) use set_interceptor::set_interceptor;
 pub(crate) mod put_value;
+pub(crate) use put_value::IC_SLOT_OVERFLOW_BIT;
 pub use put_value::{js_proxy_set, js_put_value_set, js_put_value_set_dynamic};
-pub(crate) use put_value::{proxy_set_with_receiver, IC_SLOT_OVERFLOW_BIT};
 pub(crate) mod json;
 pub(crate) mod metadata;
 pub(crate) mod own_keys;
 pub(crate) mod prototype;
 pub(crate) mod reflect;
 pub(crate) mod reflect_misc;
-pub(crate) use reflect_misc::js_proxy_get_prototype_of;
 pub use reflect_misc::{
     js_reflect_apply, js_reflect_construct, js_reflect_define_property,
     js_reflect_get_prototype_of, js_reflect_is_extensible, js_reflect_own_keys,
@@ -48,15 +45,8 @@ pub use reflect_misc::{
 };
 
 pub use own_keys::js_proxy_own_keys;
-pub(crate) use own_keys::{
-    proxy_enum_own_keys, proxy_own_property_names, proxy_own_property_symbols,
-};
 pub use prototype::js_reflect_set_prototype_of;
 
-use crate::codegen_abi::LayoutWord;
-pub(crate) use json::{
-    js_proxy_checked_target, js_proxy_checked_target_for_is_array, js_proxy_own_keys_for_json,
-};
 pub(crate) use reflect::js_reflect_get_with_explicit_receiver;
 pub use reflect::{
     js_reflect_delete, js_reflect_get, js_reflect_get_own_property_descriptor, js_reflect_has,
@@ -82,6 +72,7 @@ pub struct ProxyEntry {
 
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
+#[cfg(test)]
 const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
 const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
 const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
@@ -90,9 +81,7 @@ const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 /// A Proxy is a nonmoving GC cell of kind `GC_TYPE_PROXY`, boxed under
 /// `POINTER_TAG` like any object (honest pointers), so its header byte is the
 /// whole proof. Returns the cell address.
-pub(crate) fn canonical_address(proxy_boxed: f64) -> Option<usize> {
-    lookup(proxy_boxed).map(|addr| addr as usize)
-}
+
 #[inline]
 fn lookup(proxy_boxed: f64) -> Option<u64> {
     let bits = proxy_boxed.to_bits();
@@ -550,6 +539,7 @@ pub(crate) fn test_proxy_slot_is_live(proxy_boxed: f64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codegen_abi::LayoutWord;
 
     fn obj_value() -> f64 {
         let obj = crate::object::js_object_alloc(0, 0);
@@ -1173,12 +1163,9 @@ mod tests {
     }
 }
 
-pub(crate) use reflect_misc::proxy_define_own_property_decoded;
-
 pub(crate) use crate::object::property_ops::common::{
-    call_with_this_and_args, closure_from, coerce_trap_bool, create_list_from_array_like,
-    dispatch_with_explicit_this, is_callable, legacy_dunder_proto_set, nanbox_bool,
-    reflect_non_object_typeerror, reflect_value_is_object, throw_type_error, value_display_string,
+    closure_from, create_list_from_array_like, is_callable, legacy_dunder_proto_set, nanbox_bool,
+    reflect_value_is_object, throw_type_error, value_display_string,
 };
 
 pub use crate::object::property_ops::js_super_put_value_set;

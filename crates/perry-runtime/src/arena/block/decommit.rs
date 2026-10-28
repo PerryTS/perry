@@ -25,7 +25,7 @@ fn interior_pages(address: usize, size: usize, page: usize) -> Option<(usize, us
 /// The caller owns `size` bytes at `data`, and no contents remain live. Return
 /// the bytes accepted by the kernel, so tests can distinguish success from a
 /// silently rejected (e.g. unaligned) advice call.
-pub(super) unsafe fn release(data: *mut u8, size: usize) -> usize {
+pub(crate) unsafe fn release(data: *mut u8, size: usize) -> usize {
     #[cfg(unix)]
     {
         let Some(page) = page_size() else { return 0 };

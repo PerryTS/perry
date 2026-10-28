@@ -1,0 +1,307 @@
+//! Private `(owner, offset_words, op, sent, out_kind)` resume ABI.
+//!
+//! `owner` is always the allocation start and the only GC root. The offset
+//! describes ordinary JSValue slots scanned by its existing closure layout.
+//! No frame address escapes an access, safepoint, call or queue operation.
+use super::*;
+use crate::types::{DOUBLE, I32, I64, PTR};
+
+pub(super) fn slot_index(ctx: &mut FnCtx<'_>, index: u32) -> String {
+    if ctx.private_resume_frame {
+        ctx.block().add(I32, "%frame_offset", &index.to_string())
+    } else {
+        index.to_string()
+    }
+}
+pub(super) fn slot_offset(ctx: &mut FnCtx<'_>, index: &str) -> String {
+    let header = crate::target_layout::closure_header_size_bytes(ctx.target_triple);
+    if ctx.private_resume_frame {
+        let index = ctx.block().zext(I32, index, I64);
+        let bytes = ctx.block().mul(I64, &index, "8");
+        ctx.block().add(I64, &bytes, &header.to_string())
+    } else {
+        (header + index.parse::<u64>().expect("constant capture") * 8).to_string()
+    }
+}
+pub(crate) fn write_out_kind(ctx: &mut FnCtx<'_>) -> Result<()> {
+    if !ctx.private_resume_frame {
+        return Ok(());
+    }
+    let owner = current_closure_ptr_value(ctx, "private resume output")?;
+    let index = slot_index(ctx, 4);
+    let offset = slot_offset(ctx, &index);
+    let address = ctx.block().add(I64, &owner, &offset);
+    let ptr = ctx.block().inttoptr(I64, &address);
+    let kind = ctx.block().load(DOUBLE, &ptr);
+    let kind = ctx.block().fptosi(DOUBLE, &kind, I32);
+    // GC_STORE_AUDIT(POINTER_FREE): output kind is a compiler-owned i32.
+    ctx.block().store(I32, &kind, "%frame_out_kind");
+    let header = crate::target_layout::closure_header_size_bytes(ctx.target_triple).to_string();
+    let parent = ctx.block().add(I64, &owner, &header);
+    let parent = ctx.block().inttoptr(I64, &parent);
+    let boxed = ctx.block().sitofp(I32, &kind, DOUBLE);
+    // GC_STORE_AUDIT(POINTER_FREE): the parent's own completion kind.
+    ctx.block().store(DOUBLE, &boxed, &parent);
+    Ok(())
+}
+
+fn birth(ctx: &mut FnCtx<'_>, link: &Expr) -> Result<String> {
+    let Expr::LinkGeneratorPrototype {
+        obj,
+        fixed_state: true,
+        is_async: false,
+        ..
+    } = link
+    else {
+        anyhow::bail!("private frame requires a proven sync resume layout");
+    };
+    let Expr::Closure {
+        func_id,
+        params,
+        body,
+        captures,
+        captures_this: false,
+        captures_new_target: false,
+        mutable_captures,
+        ..
+    } = obj.as_ref()
+    else {
+        anyhow::bail!("private frame cannot carry an observable closure receiver");
+    };
+    let captures = crate::type_analysis::compute_auto_captures(ctx, params, body, captures);
+    anyhow::ensure!(
+        mutable_captures.is_empty() && captures.iter().all(|id| !ctx.boxed_vars.contains(id)),
+        "private frame admission retained a shared cell"
+    );
+    let name = symbol(ctx.strings.module_prefix(), *func_id);
+    ctx.block().note_fn_info(&name, |facts| {
+        facts.fixed_generator_state = true;
+        facts.private_resume_frame = true;
+    });
+    let info = ctx.block().fn_info_ref(&name);
+    // Parent word zero holds the consumer's completion kind. The child's frame
+    // starts at word one: exercising a real nonzero offset prevents accidental
+    // reinterpretation of a child address as an independent ClosureHeader.
+    let mut birth = crate::stmt::binding_cell::BirthWords::new(ctx, &captures);
+    for id in &captures {
+        super::closure::push_capture_word(ctx, *id, &mut birth)?;
+    }
+    let words = birth.read(ctx);
+    let count = words.len() + 1;
+    let buffer = ctx.func.alloca_entry_array(I64, count);
+    let prefix = ctx.block().gep(I64, &buffer, &[(I64, "0")]);
+    ctx.block().store(I64, "0", &prefix);
+    for (i, word) in words.iter().enumerate() {
+        let ptr = ctx
+            .block()
+            .gep(I64, &buffer, &[(I64, &(i + 1).to_string())]);
+        ctx.block().store(I64, word, &ptr);
+    }
+    let header = (u64::from(crate::runtime_abi::FUNCTION_LAYOUT_WORD) << 32)
+        | u64::from(crate::runtime_abi::checked_closure_capture_count(count));
+    // Existing fixed allocation initializes all slots and uses the generic
+    // JSValue capture scanner; the parent owns every edge from birth onward.
+    let owner = ctx.block().call(
+        I64,
+        "js_closure_alloc_fixed",
+        &[(PTR, &info), (I64, &header.to_string()), (PTR, &buffer)],
+    );
+    birth.release(ctx);
+    Ok(super::nanbox_pointer_inline(ctx.block(), &owner))
+}
+fn resume(
+    ctx: &mut FnCtx<'_>,
+    owner: &Expr,
+    fid: u32,
+    op: &str,
+    sent: &str,
+) -> Result<(String, String)> {
+    let value = lower_expr(ctx, owner)?;
+    let bits = ctx.block().bitcast_double_to_i64(&value);
+    let owner = ctx.block().and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
+    let out = ctx.func.alloca_entry(I32);
+    let name = symbol(ctx.strings.module_prefix(), fid);
+    let result = ctx.block().call(
+        DOUBLE,
+        &name,
+        &[
+            (I64, &owner),
+            (I32, "1"),
+            (I32, op),
+            (DOUBLE, sent),
+            (PTR, &out),
+        ],
+    );
+    let kind = ctx.block().load(I32, &out);
+    Ok((result, kind))
+}
+pub(crate) fn lower(ctx: &mut FnCtx<'_>, method: &str, args: &[Expr]) -> Result<Option<String>> {
+    if method == "privateResumeFrame" {
+        return Ok(Some(birth(ctx, &args[0])?));
+    }
+    if !matches!(
+        method,
+        "privateResumeFrameStep" | "privateResumeFrameClose" | "privateResumeFrameCloseOnThrow"
+    ) {
+        return Ok(None);
+    }
+    let Expr::Integer(fid) = args[1] else {
+        anyhow::bail!("private resume needs a static entry");
+    };
+    let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+    if method == "privateResumeFrameStep" {
+        let Expr::LocalSet(id, output) = &args[2] else {
+            anyhow::bail!("private resume needs its output binding");
+        };
+        let (value, kind) = resume(ctx, &args[0], fid as u32, "0", &undef)?;
+        crate::expr::invalidate_local_write_facts(ctx, *id);
+        crate::expr::bind_lowered_value_to_local(ctx, *id, &value, output)?;
+        let done = ctx.block().icmp_ne(I32, &kind, "0");
+        let done = ctx.block().zext(crate::types::I1, &done, I32);
+        return Ok(Some(crate::expr::i32_bool_to_nanbox(ctx.block(), &done)));
+    }
+    // These compiler-owned close sites carry literal false for not-done.
+    // Keep refusal explicit instead of guessing at an unknown completion.
+    anyhow::ensure!(
+        matches!(args.get(2), Some(Expr::Bool(false))),
+        "private close needs its completion proof"
+    );
+    if method == "privateResumeFrameCloseOnThrow" {
+        // IteratorClose during a throw preserves the incoming exception even
+        // if return throws. Emit the ordinary HIR catch boundary around the
+        // private return and hand the original rooted exception back.
+        return crate::rooting::with_rooted_group(ctx, 1, |ctx, group| {
+            let incoming = group.lower(ctx, &args[3], true)?;
+            let close = Expr::NativeMethodCall {
+                module: "__perry_runtime".into(),
+                class_name: None,
+                object: None,
+                method: "privateResumeFrameClose".into(),
+                args: args[..3].to_vec(),
+            };
+            crate::stmt::lower_stmt(
+                ctx,
+                &perry_hir::Stmt::Try {
+                    body: vec![perry_hir::Stmt::Expr(close)],
+                    catch: Some(perry_hir::CatchClause {
+                        param: None,
+                        body: vec![],
+                    }),
+                    finally: None,
+                },
+            )?;
+            Ok(Some(group.reread(ctx, incoming)?))
+        });
+    }
+    // The consumer's completion lives in its own parent word, outside the
+    // child's subframe. A completed canonical generator needs no further
+    // private return; no source method/Get can be observed on this route.
+    let owner = lower_expr(ctx, &args[0])?;
+    let bits = ctx.block().bitcast_double_to_i64(&owner);
+    let owner = ctx.block().and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
+    let header = crate::target_layout::closure_header_size_bytes(ctx.target_triple).to_string();
+    let address = ctx.block().add(I64, &owner, &header);
+    let ptr = ctx.block().inttoptr(I64, &address);
+    let kind = ctx.block().load(DOUBLE, &ptr);
+    let done = ctx
+        .block()
+        .fcmp_ty(DOUBLE, "oeq", &kind, &crate::nanbox::double_literal(1.0));
+    let close = ctx.new_block("private_frame.close");
+    let after = ctx.new_block("private_frame.closed");
+    let close_label = ctx.block_label(close);
+    let after_label = ctx.block_label(after);
+    ctx.block().cond_br(&done, &after_label, &close_label);
+    ctx.current_block = close;
+    let _ = resume(ctx, &args[0], fid as u32, "1", &undef)?;
+    ctx.block().br(&after_label);
+    ctx.current_block = after;
+    Ok(Some(undef))
+}
+
+pub(crate) fn symbol(prefix: &str, fid: u32) -> String {
+    format!("perry_resume_frame__{prefix}__{fid}")
+}
+/// Record the private body ABI before closure compilation (module init is
+/// emitted later). Birth and body consume the same compiler-owned descriptor.
+pub(crate) fn record_entries(
+    llmod: &crate::module::LlModule,
+    hir: &perry_hir::Module,
+    prefix: &str,
+) {
+    fn visit(llmod: &crate::module::LlModule, e: &Expr, prefix: &str) {
+        if let Expr::NativeMethodCall {
+            module,
+            method,
+            args,
+            ..
+        } = e
+        {
+            if module == "__perry_runtime" && method == "privateResumeFrame" {
+                if let Some(Expr::LinkGeneratorPrototype { obj, .. }) = args.first() {
+                    if let Expr::Closure { func_id, .. } = obj.as_ref() {
+                        for name in [
+                            crate::fn_info::closure_body_symbol(prefix, *func_id),
+                            symbol(prefix, *func_id),
+                        ] {
+                            llmod.note_fn_info(&name, |facts| {
+                                facts.fixed_generator_state = true;
+                                facts.private_resume_frame = true;
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        if let Expr::Closure { body, .. } = e {
+            for s in body {
+                perry_hir::walker::stmt_any_expr(s, &mut |e| {
+                    visit(llmod, e, prefix);
+                    false
+                });
+            }
+        }
+        perry_hir::walker::walk_expr_children(e, &mut |e| visit(llmod, e, prefix));
+    }
+    for s in &hir.init {
+        perry_hir::walker::stmt_any_expr(s, &mut |e| {
+            visit(llmod, e, prefix);
+            false
+        });
+    }
+    for f in &hir.functions {
+        for s in &f.body {
+            perry_hir::walker::stmt_any_expr(s, &mut |e| {
+                visit(llmod, e, prefix);
+                false
+            });
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "private_resume_frame_tests.rs"]
+mod tests;
+
+pub(crate) fn is_entry(llmod: &crate::module::LlModule, prefix: &str, fid: u32) -> bool {
+    let mut private = false;
+    llmod.note_fn_info(&crate::fn_info::closure_body_symbol(prefix, fid), |facts| {
+        private = facts.private_resume_frame
+    });
+    private
+}
+pub(crate) fn abi_params(
+    params: &[perry_hir::Param],
+    private: bool,
+) -> Vec<(crate::types::LlvmType, String)> {
+    if !private {
+        return super::body_call::js_body_params(params.iter().map(|p| format!("%arg{}", p.id)));
+    }
+    assert_eq!(params.len(), 2, "private resume has op and sent bindings");
+    vec![
+        (I64, "%this_closure".into()),
+        (I32, "%frame_offset".into()),
+        (I32, "%frame_op".into()),
+        (DOUBLE, format!("%arg{}", params[1].id)),
+        (PTR, "%frame_out_kind".into()),
+    ]
+}

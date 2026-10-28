@@ -90,4 +90,9 @@ pub use type_alias_resolve::{resolve_type_aliases_in_module, AliasDef, AliasTabl
 mod iterator_record;
 
 pub mod dynamic_code;
+pub mod realm_reach;
 pub mod static_dynamic_code;
+
+// Build-time schema shared with codegen; the runtime producer stays dependency-free.
+#[path = "../../perry-runtime-manifest/src/realm.rs"]
+pub mod realm_manifest;

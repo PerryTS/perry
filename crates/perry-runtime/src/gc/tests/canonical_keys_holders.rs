@@ -589,6 +589,13 @@ fn a_dead_weak_keys_entry_is_dropped_before_its_storage_is_reused() {
             .any(|list| list as usize == addr)
     };
 
+    // Keep this allocation class's page live explicitly. Static layout lists
+    // now live in the image, so they no longer accidentally anchor this page;
+    // an entirely empty page may be returned instead of reusing its old address.
+    let anchors = RuntimeHandleScope::new();
+    let _before =
+        anchors.root_raw_mut_ptr(crate::array::js_array_alloc_canonical_keys(1, false, false));
+
     // An old canonical list nothing roots, also remembered as a class's keys
     // (the memo stores canonical lists; `remember_class_keys` is its writer).
     let raw = crate::array::js_array_alloc(1);
@@ -596,6 +603,9 @@ fn a_dead_weak_keys_entry_is_dropped_before_its_storage_is_reused() {
     let list = unsafe { canonical_keys::canonicalize(&SharedLayout::shape_cache_entry(), raw, 1) };
     let addr = list.addr();
     let capacity = unsafe { (*list.as_ptr()).capacity };
+    let _after = anchors.root_raw_mut_ptr(crate::array::js_array_alloc_canonical_keys(
+        capacity, false, false,
+    ));
     crate::state::state()
         .object_hot
         .class_keys_by_id

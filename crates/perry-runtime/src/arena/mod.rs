@@ -10,6 +10,7 @@ pub(crate) use std::collections::hash_map::Entry;
 pub(crate) mod alloc_sample;
 mod allocators;
 mod block;
+pub(crate) use block::discard_dead_payload_pages;
 mod construction;
 mod from_space;
 mod region;
@@ -18,6 +19,7 @@ pub(crate) use construction::ConstructionBatch;
 pub(crate) use region::Kind as ArenaBlockKind;
 mod inline;
 mod page_meta;
+pub(crate) use page_meta::GENERATION_PAGE_SIZE;
 mod pinned;
 pub(crate) use pinned::{collect_pinned_arena_headers, note_pinned_arena_header};
 /// #11842: record, poison and protect what the non-moving sweeps free.
@@ -200,7 +202,7 @@ pub(crate) use page_meta::{
     old_arena_page_index_clear_for_tests, old_page_meta_for_tests,
     old_page_meta_snapshot_calls_for_tests, pending_promoted_page_runs, promoted_page_run_pending,
     register_block_space, register_promoted_page_run, reset_old_page_meta_snapshot_calls_for_tests,
-    DEFERRED_OLD_PAGE_REGISTRATION_CAP, GENERATION_CLASS_SHIFT, GENERATION_PAGE_SIZE,
+    DEFERRED_OLD_PAGE_REGISTRATION_CAP, GENERATION_CLASS_SHIFT,
 };
 
 #[cfg(test)]
@@ -210,3 +212,5 @@ pub(crate) use page_meta::old_arena_block_ranges;
 pub(crate) use region::new_test_block_backing;
 #[cfg(all(test, target_vendor = "apple"))]
 pub(crate) use region::release_test_block_backing;
+
+pub(crate) use inline::refresh_inline_allocation_limit;

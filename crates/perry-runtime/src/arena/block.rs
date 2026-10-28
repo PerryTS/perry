@@ -212,6 +212,7 @@ fn block_pool_cap_bytes() -> usize {
 #[cfg_attr(target_vendor = "apple", allow(dead_code))]
 #[path = "block/decommit.rs"]
 mod decommit;
+pub(crate) use decommit::release as discard_dead_payload_pages;
 
 /// Offer a released block to the pool. Returns false (caller deallocs) when
 /// the pool is full or the block is null.
@@ -904,7 +905,7 @@ impl Arena {
                 let block = &self.blocks[self.current];
                 inline.data = block.data;
                 inline.offset = block.offset;
-                inline.size = super::alloc_sample::inline_limit(block.offset, block.size);
+                inline.size = super::inline::allocation_limit(block.offset, block.size);
             }
         });
     }

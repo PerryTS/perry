@@ -58,6 +58,7 @@ pub(super) fn link_args(
     runtime: &Path,
     output: &Path,
     keep_symbols: bool,
+    net: bool,
 ) -> Vec<String> {
     let mut args = vec![
         format!("--target={}", flavour.triple()),
@@ -75,6 +76,12 @@ pub(super) fn link_args(
     if flavour == Flavour::P2 {
         // The component adapter allocates through the module's allocator.
         args.push("-Wl,--export=cabi_realloc".to_string());
+    }
+    if net && flavour == Flavour::P1 {
+        // Load the runtime archive member that imports the `perry_net` host
+        // functions (outbound TCP and name resolution). Without it the module
+        // imports only `wasi_snapshot_preview1`. WASIp2 has sockets of its own.
+        args.push("-Wl,-u,perry_net_host".to_string());
     }
     args.extend([
         "-Wl,--stack-first".to_string(),
@@ -233,9 +240,15 @@ pub(crate) fn link_wasi(
         runtime,
         core.as_deref().unwrap_or(output),
         keep_symbols,
+        std::env::var("PERRY_WASM_NET").as_deref() == Ok("1"),
     );
     if optimizer.is_some() && flavour == Flavour::P2 {
         args.insert(0, "-Wl,--skip-wit-component".to_string());
+    }
+    // PERRY_EXTRA_LINK_ARGS: the native link's diagnostic escape hatch
+    // (e.g. `-Wl,--emit-relocs`), appended verbatim to the wasm-ld link.
+    if let Ok(extra) = std::env::var("PERRY_EXTRA_LINK_ARGS") {
+        args.extend(extra.split_whitespace().map(str::to_string));
     }
     let clang = sdk_clang(&sdk);
     if verbose > 0 {
@@ -354,6 +367,10 @@ mod tests {
     use super::*;
 
     fn link(flavour: Flavour, keep_symbols: bool) -> Vec<String> {
+        link_net(flavour, keep_symbols, false)
+    }
+
+    fn link_net(flavour: Flavour, keep_symbols: bool, net: bool) -> Vec<String> {
         link_args(
             flavour,
             Path::new("/sdk"),
@@ -361,6 +378,7 @@ mod tests {
             Path::new("/rt/libperry_runtime.a"),
             Path::new("app.wasm"),
             keep_symbols,
+            net,
         )
     }
 
@@ -434,6 +452,23 @@ mod tests {
                 "app.wasm",
             ]
         );
+    }
+
+    /// `PERRY_WASM_NET=1` adds one flag to a P1 link and changes nothing else;
+    /// a P2 link ignores it.
+    #[test]
+    fn net_loads_the_perry_net_imports_on_wasip1_only() {
+        let plain = link(Flavour::P1, false);
+        let net = link_net(Flavour::P1, false, true);
+        assert_eq!(net.len(), plain.len() + 1);
+        assert!(net.iter().any(|arg| arg == "-Wl,-u,perry_net_host"));
+        let without: Vec<_> = net
+            .iter()
+            .filter(|arg| *arg != "-Wl,-u,perry_net_host")
+            .cloned()
+            .collect();
+        assert_eq!(without, plain);
+        assert_eq!(link_net(Flavour::P2, false, true), link(Flavour::P2, false));
     }
 
     #[test]

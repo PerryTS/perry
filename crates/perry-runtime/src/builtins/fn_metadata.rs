@@ -132,13 +132,15 @@ fn function_name_registry(
 /// which INFERS a name at run time (a symbol's description, `get <key>`) from
 /// bytes that exist nowhere in the image.
 fn function_name_overrides(
-) -> &'static std::sync::Mutex<std::collections::HashMap<usize, std::sync::Arc<[u8]>>> {
+) -> &'static std::sync::Mutex<crate::fast_hash::PtrHashMap<usize, std::sync::Arc<[u8]>>> {
     use std::sync::OnceLock;
+    // The canonical keys are function addresses. Use the runtime's pointer
+    // hasher without changing ownership, replacement or lookup precedence.
     static OVERRIDES: OnceLock<
-        std::sync::Mutex<std::collections::HashMap<usize, std::sync::Arc<[u8]>>>,
+        std::sync::Mutex<crate::fast_hash::PtrHashMap<usize, std::sync::Arc<[u8]>>>,
     > = OnceLock::new();
     crate::once_init::get_or_init(&OVERRIDES, || {
-        std::sync::Mutex::new(std::collections::HashMap::new())
+        std::sync::Mutex::new(crate::fast_hash::new_ptr_hash_map())
     })
 }
 
@@ -153,15 +155,24 @@ fn function_name_overrides(
 /// The two locks are never held at the same time, here or anywhere else in
 /// this module, so there is no acquisition order to get wrong.
 pub(super) fn registered_name_string(func_ptr: usize) -> Option<String> {
+    with_registered_name(func_ptr, str::to_owned)
+}
+
+/// Read the canonical metadata under its owner lock. Presence checks need the
+/// same UTF-8/precedence rules as reflection, but do not need an owned String.
+fn with_registered_name<T>(func_ptr: usize, read: impl FnOnce(&str) -> T) -> Option<T> {
     if let Ok(overrides) = function_name_overrides().lock() {
-        if let Some(name) = decode_registered(overrides.get(&func_ptr).map(|b| &**b)) {
-            return Some(name);
+        if let Some(name) = overrides
+            .get(&func_ptr)
+            .and_then(|bytes| std::str::from_utf8(bytes).ok())
+        {
+            return Some(read(name));
         }
     }
-    function_name_registry()
-        .lock()
-        .ok()
-        .and_then(|map| decode_registered(map.get(&func_ptr).copied()))
+    function_name_registry().lock().ok().and_then(|map| {
+        let name = std::str::from_utf8(map.get(&func_ptr).copied()?).ok()?;
+        Some(read(name))
+    })
 }
 
 /// Register `func_ptr` as the compiled address of a JS function called
@@ -294,12 +305,17 @@ pub fn register_function_name_if_absent(func_ptr: usize, name: &str) {
     // "Absent" means "neither map holds bytes that DECODE" — which is exactly
     // the question the read side answers, so ask it rather than restating it
     // and letting the two drift.
-    if registered_name_string(func_ptr).is_some() {
+    if with_registered_name(func_ptr, |_| ()).is_some() {
         return;
     }
     if let Ok(mut overrides) = function_name_overrides().lock() {
         overrides
             .entry(func_ptr)
+            .and_modify(|bytes| {
+                if std::str::from_utf8(bytes).is_err() {
+                    *bytes = std::sync::Arc::from(name.as_bytes());
+                }
+            })
             .or_insert_with(|| std::sync::Arc::from(name.as_bytes()));
     }
 }
@@ -1089,6 +1105,36 @@ mod tests {
         assert_eq!(
             function_name_for_ptr(KEY_NAME_IF_ABSENT as usize).as_deref(),
             Some("inferred")
+        );
+    }
+
+    #[test]
+    fn inference_preserves_a_decodable_image_name_after_an_invalid_override() {
+        let key = 0x9188_0010usize as *const u8;
+        unsafe {
+            js_register_function_name_static(key, "image世界".as_ptr(), "image世界".len() as u32);
+            js_register_function_name(key, [0xffu8].as_ptr(), 1);
+        }
+        register_function_name_if_absent(key as usize, "inferred");
+        assert_eq!(
+            function_name_for_ptr(key as usize).as_deref(),
+            Some("image世界")
+        );
+
+        let absent = 0x9188_0011usize as *const u8;
+        unsafe { js_register_function_name_static(absent, [0xffu8].as_ptr(), 1) };
+        register_function_name_if_absent(absent as usize, "inferred世界");
+        assert_eq!(
+            function_name_for_ptr(absent as usize).as_deref(),
+            Some("inferred世界")
+        );
+
+        let invalid_owned = 0x9188_0012usize as *const u8;
+        unsafe { js_register_function_name(invalid_owned, [0xffu8].as_ptr(), 1) };
+        register_function_name_if_absent(invalid_owned as usize, "recovered世界");
+        assert_eq!(
+            function_name_for_ptr(invalid_owned as usize).as_deref(),
+            Some("recovered世界")
         );
     }
 

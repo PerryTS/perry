@@ -1,0 +1,425 @@
+{
+  "version": 1,
+  "groups": {
+    "body:domain_run_thunk": [
+      {
+        "name": "node:domain.Domain.prototype.run",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "run"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "perry_stdlib::domain::domain_run_thunk",
+        "function_info": {
+          "params": 2,
+          "rest_fixed": 1,
+          "flags": 3073,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_stdlib::domain::domain_run_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_cca9e2e6e73ec6dc29bd",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "objects": [
+      {
+        "name": "node:domain.Domain.prototype._errorHandler",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "_errorHandler"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "perry_stdlib::domain::domain_error_handler_thunk",
+        "function_info": {
+          "params": 2,
+          "rest_fixed": 0,
+          "flags": 3072,
+          "length": 0,
+          "declared": 2,
+          "plain_params": 0,
+          "source_symbol": "source:perry_stdlib::domain::domain_error_handler_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_2d2937c64fd19e2e6c02",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:domain.Domain.prototype.add",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "add"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "perry_stdlib::domain::domain_add_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 3072,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_stdlib::domain::domain_add_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_9c15852d209765438e28",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:domain.Domain.prototype.bind",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "bind"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "perry_stdlib::domain::domain_bind_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 3072,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_stdlib::domain::domain_bind_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_99ea3fa7574556ba6b16",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:domain.Domain.prototype.enter",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "enter"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "perry_stdlib::domain::domain_enter_thunk",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 3072,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_stdlib::domain::domain_enter_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_f30e00931cba7bd41962",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:domain.Domain.prototype.exit",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "exit"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "perry_stdlib::domain::domain_exit_thunk",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 3072,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_stdlib::domain::domain_exit_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_849f4035791f096ac84d",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:domain.Domain.prototype.intercept",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "intercept"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "perry_stdlib::domain::domain_intercept_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 3072,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_stdlib::domain::domain_intercept_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_fe753c91c422b1bff94d",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:domain.Domain.prototype.remove",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "remove"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "perry_stdlib::domain::domain_remove_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 3072,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_stdlib::domain::domain_remove_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_d5ff300d64ca306b792e",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ]
+  }
+}

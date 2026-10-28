@@ -653,8 +653,9 @@ mod regex_census_tests {
 // Process-level numbers
 // ---------------------------------------------------------------------------
 
-#[cfg(target_vendor = "apple")]
+#[cfg(target_os = "macos")]
 fn phys_footprint_bytes() -> Option<u64> {
+    // libc exposes proc_pid_rusage on macOS, not on the Apple mobile targets.
     // SAFETY: proc_pid_rusage fills a caller-provided rusage_info_v4.
     unsafe {
         let mut info: libc::rusage_info_v4 = std::mem::zeroed();
@@ -671,7 +672,7 @@ fn phys_footprint_bytes() -> Option<u64> {
     }
 }
 
-#[cfg(not(target_vendor = "apple"))]
+#[cfg(not(target_os = "macos"))]
 fn phys_footprint_bytes() -> Option<u64> {
     None
 }

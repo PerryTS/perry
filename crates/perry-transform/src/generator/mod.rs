@@ -20,6 +20,7 @@ mod iter_result_rewrite;
 mod linearize;
 mod lower;
 mod per_iteration;
+mod private_frame;
 mod rewrite_returns;
 
 // Explicit named re-exports so siblings can reach each other via
@@ -246,6 +247,7 @@ pub fn transform_generators(module: &mut Module) {
         let collected = std::mem::take(&mut *s.borrow_mut());
         module.async_generator_funcs.extend(collected);
     });
+    private_frame::run(module);
 }
 
 fn transform_generator_closures_in_stmts(

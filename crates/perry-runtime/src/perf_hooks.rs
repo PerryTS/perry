@@ -33,8 +33,6 @@ use crate::object::{
 use crate::string::StringHeader;
 use crate::value::JSValue;
 use std::cell::{Cell, RefCell};
-use std::sync::OnceLock;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 mod prototypes;
 
@@ -345,7 +343,7 @@ pub fn performance_namespace() -> f64 {
     ns
 }
 
-pub(crate) use crate::perf_clock::{init_time_origin, performance_now_ms, time_origin_ms};
+pub(crate) use crate::perf_clock::{performance_now_ms, time_origin_ms};
 
 /// Read a `*StringHeader` into an owned `String`.
 unsafe fn header_to_string(p: *const StringHeader) -> String {
@@ -1898,3 +1896,5 @@ mod sso_tests_1781 {
         }
     }
 }
+
+crate::realm_decl!("perf_hooks.realm.json#*");

@@ -677,3 +677,5 @@ extern "C" fn worker_threads_locks_query(
 pub extern "C" fn js_worker_threads_locks_query() -> f64 {
     worker_threads_locks_query(std::ptr::null(), crate::closure::JsThis::UNDEFINED)
 }
+
+crate::realm_decl!("web_locks.realm.json#*");

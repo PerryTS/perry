@@ -447,6 +447,15 @@ impl ShapeRecordRef {
         unsafe { (*self.0.as_ptr()).keys }
     }
 
+    /// A static record: an external carrier (a compiler-owned layout or
+    /// seed) or a cache carrier. No prune retires it, so a receiver of its
+    /// shape keeps nothing alive but the record's keys, which outlive every
+    /// trace only when they are image data.
+    pub(crate) fn is_static_record(self) -> bool {
+        // SAFETY: a live slab record.
+        unsafe { (*self.0.as_ptr()).cache_carrier() }
+    }
+
     /// The `keys` word's address: the slot the collector marks through and
     /// rewrites in place. `keys` is the first field of the `#[repr(C)]` slab
     /// record, so the record address IS the slot address.
@@ -2647,6 +2656,10 @@ pub(crate) fn test_row_committed(word: u32) -> bool {
         .shapes
         .slab()
         .region_row_committed(crate::codegen_abi::LayoutWord(word).row().0 as usize)
+}
+#[cfg(test)]
+pub(crate) fn test_region_rows_per_page() -> usize {
+    crate::state::state().shapes.slab().region_rows_per_page()
 }
 #[cfg(test)]
 pub(crate) fn test_record_count() -> usize {

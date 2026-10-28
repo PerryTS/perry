@@ -101,6 +101,8 @@ impl AsRef<[u8]> for OwnedStringBytes {
 // below so external callers see the same names as before.
 
 mod alloc;
+mod read;
+pub(crate) use read::read_utf8;
 mod json_construction;
 pub(crate) use json_construction::string_from_json_bytes;
 mod append;
@@ -378,7 +380,8 @@ pub extern "C" fn js_get_empty_string() -> *const StringHeader {
 /// 48-bit AND yields 1, which passes is_null() but crashes on dereference.
 #[inline]
 pub fn is_valid_string_ptr(p: *const StringHeader) -> bool {
-    !p.is_null() && (p as usize) >= 0x1000
+    // The lower bound already excludes null and every NaN-unboxed sentinel.
+    (p as usize) >= 0x1000
 }
 
 /// Borrowed byte view for a Perry string-like dispatch key.
@@ -732,8 +735,8 @@ pub(crate) fn byte_offset_to_utf16_index(s: &str, byte_off: usize) -> usize {
 ///
 /// - `js_string_new_sso` returns inline `SHORT_STRING_TAG` values for short boxed
 ///   strings that do not require a real `StringHeader*`.
-/// - Every heap `StringHeader` allocation uses GC-managed arenas, not
-///   `gc_malloc`, so it stays out of `MALLOC_STATE`.
+/// - Normal heap strings, including native input, use GC-managed arenas.
+///   Large JSON result leaves may use GC-tracked malloc storage instead.
 /// - `arena_alloc_gc` routes small and medium payloads to nursery pages and
 ///   large payloads to old-gen pages using `LARGE_OBJECT_THRESHOLD_BYTES`.
 ///

@@ -188,3 +188,5 @@ extern "C" fn deferred_bind_trampoline(
         )
     }
 }
+
+crate::realm_decl!("resource_methods.realm.json#*");

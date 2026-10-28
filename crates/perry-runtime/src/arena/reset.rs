@@ -33,7 +33,7 @@ pub fn arena_reset_all_blocks_to_zero() {
                 let block = &arena.blocks[0];
                 inline.data = block.data;
                 inline.offset = 0;
-                inline.size = super::alloc_sample::inline_limit(0, block.size);
+                inline.size = super::inline::allocation_limit(0, block.size);
             }
         });
     });
@@ -241,7 +241,7 @@ pub(crate) fn copying_reset_from_spaces_and_flip() -> ArenaResetStats {
                 let block = &arena.blocks[arena.current];
                 inline.data = block.data;
                 inline.offset = block.offset;
-                inline.size = super::alloc_sample::inline_limit(block.offset, block.size);
+                inline.size = super::inline::allocation_limit(block.offset, block.size);
             }
         });
     });
@@ -628,7 +628,7 @@ pub fn arena_reset_empty_blocks(block_has_live: &[bool]) -> ArenaResetStats {
                     if !block.data.is_null() {
                         inline.data = block.data;
                         inline.offset = block.offset;
-                        inline.size = super::alloc_sample::inline_limit(block.offset, block.size);
+                        inline.size = super::inline::allocation_limit(block.offset, block.size);
                     }
                 }
             });
@@ -949,8 +949,7 @@ impl ArenaResetEmptyBlocksState {
                         if !block.data.is_null() {
                             inline.data = block.data;
                             inline.offset = block.offset;
-                            inline.size =
-                                super::alloc_sample::inline_limit(block.offset, block.size);
+                            inline.size = super::inline::allocation_limit(block.offset, block.size);
                         }
                     }
                 }

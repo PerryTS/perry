@@ -238,7 +238,7 @@ pub(crate) unsafe fn validate_array_buffer_species_constructor(addr: usize) {
     let receiver = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(addr as i64));
     let receiver_value = &receiver;
     let receiver_addr =
-        || crate::value::js_nanbox_get_pointer((receiver_value.get_nanbox_f64())) as usize;
+        || crate::value::js_nanbox_get_pointer(receiver_value.get_nanbox_f64()) as usize;
 
     // SpeciesConstructor starts with ordinary Get(O, "constructor"). Buffer
     // own data/accessor properties live in side tables; absent own state falls
@@ -251,11 +251,8 @@ pub(crate) unsafe fn validate_array_buffer_species_constructor(addr: usize) {
             f64::from_bits(crate::value::TAG_UNDEFINED)
         } else {
             f64::from_bits(
-                super::super::invoke_accessor_getter(
-                    accessor.get,
-                    (receiver_value.get_nanbox_f64()),
-                )
-                .bits(),
+                super::super::invoke_accessor_getter(accessor.get, receiver_value.get_nanbox_f64())
+                    .bits(),
             )
         }
     } else if let Some(value) = crate::buffer::buffer_get_own_prop(receiver_addr(), "constructor") {
@@ -812,3 +809,5 @@ pub(crate) fn typed_array_uint8_intrinsic_prototype_value() -> f64 {
         as *const crate::closure::ClosureHeader;
     crate::closure::js_closure_get_capture_f64(ctor, 0)
 }
+
+crate::realm_decl!("typed_array.realm.json#*");

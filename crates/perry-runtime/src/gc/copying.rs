@@ -273,14 +273,6 @@ impl CopyingNurseryCollector {
         }
     }
 
-    /// Mirror a `worklist.push` into the survival diag's origin vector.
-    #[inline]
-    fn survival_push(&mut self) {
-        if let Some(d) = self.survival.as_mut() {
-            d.note_worklist_push();
-        }
-    }
-
     pub(super) unsafe fn record_large_excluded(&mut self, header: *mut GcHeader) {
         if header.is_null() {
             return;
@@ -430,8 +422,7 @@ impl CopyingNurseryCollector {
                     let flags = (*ptr.header).gc_flags;
                     if flags & GC_FLAG_MARKED == 0 && !super::pin::pinned_counts_as_marked(flags) {
                         (*ptr.header).gc_flags = flags | GC_FLAG_MARKED;
-                        self.worklist.push(ptr.header);
-                        self.survival_push();
+                        self.queue_child_scan(ptr.header);
                         self.marked_headers.push(ptr.header);
                     }
                 }
@@ -473,8 +464,7 @@ impl CopyingNurseryCollector {
         if flags & GC_FLAG_MARKED == 0 {
             (*header).gc_flags = flags | GC_FLAG_MARKED;
             let total = (*header).size as usize;
-            self.worklist.push(header);
-            self.survival_push();
+            self.queue_child_scan(header);
             if let Some(d) = self.survival.as_mut() {
                 d.record((*header).obj_type, total, true);
             }
@@ -616,10 +606,7 @@ impl CopyingNurseryCollector {
         // survivor: `clear_marks` walks it, so a header missing from it carries
         // GC_FLAG_MARKED past the end of the cycle and reads as live to the
         // next full sweep. Only the worklist push is skipped.
-        if !gc_object_yields_no_child_slots(new_header) {
-            self.worklist.push(new_header);
-        }
-        self.survival_push();
+        self.queue_child_scan(new_header);
         if let Some(d) = self.survival.as_mut() {
             d.record((*new_header).obj_type, total, promote);
         }
@@ -1336,6 +1323,9 @@ pub(super) fn run_copied_minor_attempt(
         }
         remembered_entries = remembered_stats.entries_scanned;
         remembered_slots = remembered_stats.dirty_slots_scanned;
+        // WRT: remembered realm-image cells are roots (`gc::image_cells`).
+        let _phase = super::pin::CopyingWalkPhaseGuard::enter("image_cells");
+        unsafe { super::image_cells::visit_image_roots_copying(&mut collector) };
     }
     if let Some(diag) = phase_diag.as_mut() {
         diag.record(Phase::RememberedSetYoungLogs, remembered_phase_start);

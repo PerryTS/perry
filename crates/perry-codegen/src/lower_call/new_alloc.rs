@@ -878,20 +878,7 @@ fn emit_instance_alloc_inner(
             let complete_birth = constructor_birth.filter(|_| !deferred_keys);
             let compact_slots =
                 complete_birth.and_then(|_| crate::expr::inline_birth::compact_slots(total_size));
-            let fits = if compact_slots.is_some() {
-                // Live color is a slow case too: the shared helper stamps and
-                // seeds black births after initializing every capacity slot.
-                let flags = crate::expr::inline_birth::flags(ctx, &state_ptr);
-                let idle = ctx.block().icmp_eq(I64, &flags, "0");
-                // A zero limit rejects every positive-size birth. Select the
-                // bound instead of materializing two booleans and ANDing them.
-                let limit = ctx
-                    .block()
-                    .select(crate::types::I1, &idle, I64, &size_val, "0");
-                ctx.block().icmp_ule(I64, &new_offset, &limit)
-            } else {
-                fits
-            };
+            // The canonical bound also excludes births requiring color/seed work.
             let fast_idx = ctx.new_block("alloc.fast");
             let slow_idx = ctx.new_block("alloc.slow");
             let merge_idx = ctx.new_block("alloc.merge");

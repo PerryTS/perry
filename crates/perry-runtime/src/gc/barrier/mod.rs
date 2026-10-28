@@ -460,7 +460,7 @@ pub(super) fn incremental_mark_barrier_disable() {
     // sweep can never visit them — while a birth mark they carry would leak
     // into the next cycle as "already traced" (post-snapshot objects are
     // exactly the ones this sweep never visits and never unmarks).
-    GC_BIRTH_EXTRA_FLAGS.with(|cell| cell.set(0));
+    set_birth_extra_flags(0);
 }
 
 /// True when no thread anywhere has an incremental mark barrier installed.
@@ -490,6 +490,13 @@ pub(super) fn incremental_mark_barrier_disable() {
 #[inline(always)]
 pub(crate) fn incremental_mark_barrier_globally_idle() -> bool {
     PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT.load(Ordering::Relaxed) == 0
+}
+
+/// Change the live color and the existing allocator permission atomically
+/// with respect to this thread's mutator (no allocation/safepoint intervenes).
+pub(crate) fn set_birth_extra_flags(flags: u8) {
+    GC_BIRTH_EXTRA_FLAGS.with(|cell| cell.set(flags));
+    crate::arena::refresh_inline_allocation_limit();
 }
 
 /// Allocate-black birth flags for all allocations — see
@@ -990,6 +997,13 @@ pub(super) fn write_barrier_decoded_parent(
         bump_write_barrier_trace_counter(BarrierTraceCounter::ParentNotOldSkips);
         return;
     };
+    if parent_kind == RememberingParent::Image {
+        // Any collectable child, not only a young one (`gc::image_cells`).
+        if super::image_cells::remember_image_parent(parent_addr, child_addr) {
+            bump_write_barrier_trace_counter(BarrierTraceCounter::NewInserts);
+        }
+        return;
+    }
     if !remembered_child_needs_tracking(child_addr) {
         bump_write_barrier_trace_counter(BarrierTraceCounter::ChildNotYoungSkips);
         return;
@@ -1057,6 +1071,17 @@ pub(super) fn replay_old_parent_slot_range(parent_addr: usize, slots: *mut u64, 
         bump_write_barrier_trace_counter(BarrierTraceCounter::ParentNotOldSkips);
         return;
     };
+    if parent_kind == RememberingParent::Image {
+        for i in 0..count {
+            let child_addr = decode_heap_addr(unsafe { *slots.add(i) });
+            if child_addr != 0 && super::image_cells::remember_image_parent(parent_addr, child_addr)
+            {
+                bump_write_barrier_trace_counter(BarrierTraceCounter::NewInserts);
+                break;
+            }
+        }
+        return;
+    }
     let mut dirtied_page = usize::MAX;
     for i in 0..count {
         let slot_addr = slots as usize + i * std::mem::size_of::<u64>();
@@ -1153,9 +1178,15 @@ fn relocate_old_object_dirty_pages(
     if !write_barriers_enabled() || !barrier_remembering_active() {
         return true;
     }
-    if !barrier_parent_addr_is_dereferenceable(new_parent_addr)
-        || !barrier_parent_needs_remembering(new_parent_addr)
-    {
+    if !barrier_parent_addr_is_dereferenceable(new_parent_addr) {
+        return true;
+    }
+    if crate::value::addr_class::realm::is_image_object(new_parent_addr) {
+        // An image parent's coverage is its cell, not pages (`gc::image_cells`).
+        super::image_cells::remember_image_cell(new_parent_addr);
+        return true;
+    }
+    if !barrier_parent_needs_remembering(new_parent_addr) {
         return true;
     }
     if !growth_source_can_donate_dirty_pages(old_base) {
@@ -1276,6 +1307,10 @@ pub(crate) fn remembered_child_needs_tracking(child_addr: usize) -> bool {
 pub(crate) enum RememberingParent {
     Old,
     Malloc,
+    /// A realm image cell (WRT): never traced, so its edges are roots kept
+    /// in the image's own remembered set (`gc::image_cells`), never in the
+    /// page-granular one below.
+    Image,
 }
 
 #[inline]
@@ -1295,6 +1330,13 @@ pub(crate) fn barrier_remembering_parent(parent_addr: usize) -> Option<Rememberi
         // `gc/tests/oldgen.rs` family), some deliberately. It fired on those,
         // not on a defect. Reinstating it means fixing those fixtures first.
         crate::arena::HeapGeneration::Old => Some(RememberingParent::Old),
+        // Before the malloc arm: an image cell's header passes the structural
+        // malloc test (known type, no ARENA flag) but is no malloc cell.
+        crate::arena::HeapGeneration::Unknown
+            if crate::value::addr_class::realm::is_image_object(parent_addr) =>
+        {
+            Some(RememberingParent::Image)
+        }
         crate::arena::HeapGeneration::Unknown if malloc_gc_parent_addr(parent_addr) => {
             Some(RememberingParent::Malloc)
         }
@@ -1306,7 +1348,13 @@ pub(crate) fn barrier_remembering_parent(parent_addr: usize) -> Option<Rememberi
 /// [`RememberingParent`].
 #[inline]
 pub(crate) fn barrier_parent_needs_remembering(parent_addr: usize) -> bool {
-    barrier_remembering_parent(parent_addr).is_some()
+    // The page-granular set's question. An image parent remembers through the
+    // barrier's image arm instead; collectors never meet one (no collector
+    // traces or walks an image cell).
+    matches!(
+        barrier_remembering_parent(parent_addr),
+        Some(RememberingParent::Old | RememberingParent::Malloc)
+    )
 }
 
 /// #7187: this DEREFERENCES `parent_addr - GC_HEADER_SIZE`, and its only

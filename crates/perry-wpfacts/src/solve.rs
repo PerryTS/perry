@@ -176,7 +176,9 @@ impl Model {
         let mut ks: Vec<_> = p.kind.iter().collect();
         ks.sort_by(|a, b| (b.1 .1 + b.1 .3).cmp(&(a.1 .1 + a.1 .3)));
         for (k, (n, w, rn, rw)) in ks.iter().take(25) {
-            eprintln!("perry: wpfacts kindwork {k} applies={n} work={w} attach={rn} attachwork={rw}");
+            eprintln!(
+                "perry: wpfacts kindwork {k} applies={n} work={w} attach={rn} attachwork={rw}"
+            );
         }
         let mut ns: Vec<_> = p.node.iter().map(|(n, w)| (*w, *n)).collect();
         ns.sort_unstable_by(|a, b| b.cmp(a));
@@ -189,7 +191,13 @@ impl Model {
             let mut kinds: Vec<_> = kinds.into_iter().collect();
             kinds.sort_by(|a, b| b.1.cmp(&a.1));
             kinds.truncate(6);
-            let some: Vec<String> = node.pts.to_sorted().iter().take(8).map(|&t| self.tok_name(t)).collect();
+            let some: Vec<String> = node
+                .pts
+                .to_sorted()
+                .iter()
+                .take(8)
+                .map(|&t| self.tok_name(t))
+                .collect();
             eprintln!(
                 "perry: wpfacts nodework #{n} {} work={w} pts={} top={} succ={} cons={} kinds={kinds:?} some={some:?}",
                 self.labels[n as usize],

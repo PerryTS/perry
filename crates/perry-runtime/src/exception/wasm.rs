@@ -5,6 +5,7 @@ use perry_abi::WasmEhCheckpoint;
 #[no_mangle]
 pub unsafe extern "C" fn js_wasm_eh_checkpoint_save(out: *mut WasmEhCheckpoint) {
     let shadow = crate::gc::frame_root_savepoint();
+    // GC_STORE_AUDIT(STACK): caller-owned checkpoint of stack depths, not managed pointers.
     out.write(WasmEhCheckpoint {
         handles: crate::gc::runtime_handle_stack_len() as u64,
         shadow_frame_top: shadow.frame_top as u64,

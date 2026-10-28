@@ -3,9 +3,8 @@
 
 use super::{
     call_trap, entry, handler_trap, is_callable_function, js_reflect_is_extensible, lookup,
-    nanbox_bool, pin_proxy_for_native_call, reflect_non_object_typeerror,
-    reflect_target_get_prototype_of, reflect_value_is_object, revoked_return, throw_type_error,
-    TAG_NULL, TAG_UNDEFINED,
+    nanbox_bool, pin_proxy_for_native_call, reflect_target_get_prototype_of, revoked_return,
+    throw_type_error, TAG_NULL, TAG_UNDEFINED,
 };
 
 /// Proxy `[[SetPrototypeOf]]` (ECMA-262 §10.5.2): invoke the `setPrototypeOf`

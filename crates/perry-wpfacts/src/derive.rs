@@ -121,6 +121,8 @@ pub struct TemplateFacts {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Verdict {
+    /// Immutable own length of an exclusively primitive String receiver.
+    StringLength,
     T0Mono,
     T0Set,
     /// Proven in the typed body behind the entry guard on the receiver
@@ -810,6 +812,22 @@ fn judge(
                 FxHashMap::default(),
             ),
         };
+    }
+    // String boxing creates a non-configurable own length property. Its
+    // value is the published UTF-16 count; prototypes cannot override it.
+    // Keep this native primitive certificate distinct from layout/body T0.
+    if !s.is_call
+        && key == "length"
+        && prim == crate::model::prim::STR
+        && toks.iter().all(|&t| m.closed_marker(t))
+    {
+        return (
+            vec!["primitive:string".into()],
+            false,
+            Verdict::StringLength,
+            true,
+            FxHashMap::default(),
+        );
     }
     let mut receivers = Vec::new();
     let mut top = false;

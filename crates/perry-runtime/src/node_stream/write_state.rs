@@ -262,9 +262,9 @@ pub(super) fn clear_buffer(stream: f64) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let s = scope.root_nanbox_f64(stream);
     let st = &s;
-    set_flag((st.get_nanbox_f64()), WRITABLE_BUFFER_PROCESSING_KEY, true);
+    set_flag(st.get_nanbox_f64(), WRITABLE_BUFFER_PROCESSING_KEY, true);
     loop {
-        let Some(buffered) = buffered_writable_writes((st.get_nanbox_f64())) else {
+        let Some(buffered) = buffered_writable_writes(st.get_nanbox_f64()) else {
             break;
         };
         let records = scope.root_nanbox_f64(buffered);
@@ -279,23 +279,23 @@ pub(super) fn clear_buffer(stream: f64) {
         }
         // The records are ours from here; writes made meanwhile buffer anew.
         set_hidden_value(
-            (st.get_nanbox_f64()),
+            st.get_nanbox_f64(),
             hidden_writable_buffered_key(),
             box_pointer(crate::array::js_array_alloc(0) as *const u8),
         );
-        if len > 4 && writable_hidden_writev((st.get_nanbox_f64())).is_some() {
-            set_flag((st.get_nanbox_f64()), WRITABLE_WRITING_KEY, true);
+        if len > 4 && writable_hidden_writev(st.get_nanbox_f64()).is_some() {
+            set_flag(st.get_nanbox_f64(), WRITABLE_WRITING_KEY, true);
             let chunks = build_writev_chunks(arr(), len);
-            invoke_writable_writev((st.get_nanbox_f64()), chunks);
-            set_flag((st.get_nanbox_f64()), WRITABLE_WRITING_KEY, false);
+            invoke_writable_writev(st.get_nanbox_f64(), chunks);
+            set_flag(st.get_nanbox_f64(), WRITABLE_WRITING_KEY, false);
             let mut i = 0;
             while i < len {
                 let chunk = crate::array::js_array_get_f64(arr(), i);
                 let write_len = crate::array::js_array_get_f64(arr(), i + 2);
                 let callback = crate::array::js_array_get_f64(arr(), i + 3);
-                emit_writable_chunk((st.get_nanbox_f64()), chunk);
+                emit_writable_chunk(st.get_nanbox_f64(), chunk);
                 complete_writable_write(
-                    (st.get_nanbox_f64()),
+                    st.get_nanbox_f64(),
                     write_len,
                     callback,
                     f64::from_bits(TAG_UNDEFINED),
@@ -306,27 +306,27 @@ pub(super) fn clear_buffer(stream: f64) {
         }
         let mut i = 0;
         while i < len {
-            if writable_writing((st.get_nanbox_f64())) || stream_destroyed((st.get_nanbox_f64())) {
+            if writable_writing(st.get_nanbox_f64()) || stream_destroyed(st.get_nanbox_f64()) {
                 break;
             }
             let chunk = crate::array::js_array_get_f64(arr(), i);
             let enc = crate::array::js_array_get_f64(arr(), i + 1);
             let write_len = crate::array::js_array_get_f64(arr(), i + 2);
             let callback = crate::array::js_array_get_f64(arr(), i + 3);
-            do_write((st.get_nanbox_f64()), chunk, enc, write_len, callback);
+            do_write(st.get_nanbox_f64(), chunk, enc, write_len, callback);
             i += 4;
         }
         if i < len {
             // A write is in flight: the unstarted records go back in front
             // of anything buffered meanwhile.
-            requeue_front((st.get_nanbox_f64()), arr(), i, len);
+            requeue_front(st.get_nanbox_f64(), arr(), i, len);
             break;
         }
-        if writable_writing((st.get_nanbox_f64())) {
+        if writable_writing(st.get_nanbox_f64()) {
             break;
         }
     }
-    set_flag((st.get_nanbox_f64()), WRITABLE_BUFFER_PROCESSING_KEY, false);
+    set_flag(st.get_nanbox_f64(), WRITABLE_BUFFER_PROCESSING_KEY, false);
 }
 
 /// Put `records[from..len]` back in front of the stream's buffered array.

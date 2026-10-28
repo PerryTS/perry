@@ -79,7 +79,7 @@ fn arena_alloc_slow(size: usize, align: usize) -> *mut u8 {
             let inline = &mut *inline_ptr;
             inline.data = data;
             inline.offset = offset;
-            inline.size = super::alloc_sample::inline_limit(offset, block_size);
+            inline.size = super::inline::allocation_limit(offset, block_size);
         }
         ptr
     }
@@ -179,7 +179,7 @@ fn arena_alloc_no_collect_slow(size: usize, align: usize) -> *mut u8 {
             let inline = &mut *inline_ptr;
             inline.data = data;
             inline.offset = offset;
-            inline.size = super::alloc_sample::inline_limit(offset, block_size);
+            inline.size = super::inline::allocation_limit(offset, block_size);
         }
         ptr
     }

@@ -421,10 +421,14 @@ pub(super) fn compile_module_entry(
         } else {
             Vec::new()
         };
+        llmod.add_raw_global("@perry_static_seeds = external constant i8".to_string());
         llmod.add_raw_global(format!(
-            "@perry_layout_image = private constant {{ i32, i32, i32, i32 }} {}, align 4",
+            "@perry_layout_image = private constant {{ i32, i32, i32, i32, ptr }} {}, align 8",
             crate::layout_ordinals::current_plan().image_initializer()
         ));
+        // WRT step 1: the realm image's test fixture (a compile-time knob).
+        let realm_fixture = crate::codegen::realm_image::test_fixture_requested()
+            .then(|| crate::codegen::realm_image::emit_test_fixture(llmod));
         let main = if is_dylib {
             llmod.define_function("perry_module_init", VOID, vec![])
         } else {
@@ -459,6 +463,9 @@ pub(super) fn compile_module_entry(
             // agent before any module init or user code (the seed unit the
             // driver links registers the function; none = a no-op).
             blk.call_void("js_shape_run_static_seed", &[]);
+            if let Some(fixture) = realm_fixture.as_ref() {
+                crate::codegen::realm_image::emit_test_fixture_install(blk, fixture);
+            }
             if crate::expr::store_census::enabled() {
                 blk.call_void("perry_store_census_arm", &[]);
             }
@@ -781,6 +788,9 @@ pub(super) fn compile_module_entry(
         let mut init_local_types: HashMap<u32, perry_hir::types::Type> = HashMap::new();
         crate::boxed_vars::collect_let_types_in_stmts(main_init, &mut init_local_types);
         let mut ctx = FnCtx {
+            numeric_order_functions: cross_module.numeric_order_functions,
+            numeric_order_closures: cross_module.numeric_order_closures,
+            numeric_order_ready: Default::default(),
             program_has_worker: cross_module.program_has_worker,
             program_has_thread_agents: cross_module.program_has_thread_agents,
             program_class_accessor_names: cross_module.program_class_accessor_names.clone(),
@@ -887,6 +897,7 @@ pub(super) fn compile_module_entry(
             resolved_versioned_loop_callback_targets: HashMap::new(),
             trusted_box_captures: false,
             fixed_generator_state: false,
+            private_resume_frame: false,
             versioned_loop_deopt_context: None,
             trusted_box_capture_ptrs: HashMap::new(),
             ready_cell_roots: Default::default(),

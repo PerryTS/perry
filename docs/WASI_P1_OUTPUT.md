@@ -53,6 +53,13 @@ Plain Wasmtime's p1 layer does not implement these four calls (it reports
 `ENOTSOCK`), so a module that serves TCP needs an embedder that does. Modules
 that do not use sockets run on plain Wasmtime.
 
+While the module is idle it waits in a single `poll_oneoff` over every open
+socket, the signal stream, fd 0 once the program reads standard input, and the
+next timer deadline. The reference host in `test-wasi/p1-host` (Unix only;
+built and exercised by the `wasi-execution` job) implements these calls over a
+single descriptor table and is what the inbound-TCP, signal and stdin cases
+run under.
+
 Fails with a documented error:
 
 | Operation | Result |

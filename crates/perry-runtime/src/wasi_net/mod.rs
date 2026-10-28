@@ -16,6 +16,8 @@ use std::time::{Duration, Instant};
 pub mod abi;
 #[path = "../event_pump/service_errors.rs"]
 pub(crate) mod errors;
+#[cfg(all(target_os = "wasi", target_env = "p1"))]
+mod p1;
 #[path = "../turnloop_net/sink.rs"]
 mod sink;
 pub mod transport;
@@ -25,6 +27,8 @@ pub use sink::{
     MAX_SUBSYSTEMS,
 };
 // The completion kinds, as the native `turnloop_net` exports them.
+#[cfg(all(target_os = "wasi", target_env = "p1"))]
+pub(crate) use p1::{drain_signals, park, poll_stdin};
 pub use sink::{
     NET_ACCEPT, NET_CLOSED, NET_CONNECT, NET_DATA, NET_EOF, NET_ERROR, NET_FLAG_HANDLE_PARTS,
     NET_FLAG_LINK, NET_FLAG_PLAINTEXT, NET_FLAG_STALE, NET_SHUTDOWN, NET_TIMER, NET_WROTE,
@@ -75,6 +79,10 @@ struct Handle {
     /// `read_once`: stop after one buffer until the caller rearms.
     read_once: bool,
     nodelay: bool,
+    /// What `server.address()` reports when the host cannot be asked: preview 1
+    /// has no `getsockname`, so this is the address the caller requested.
+    #[cfg(all(target_os = "wasi", target_env = "p1"))]
+    bound: Option<SocketAddr>,
     referenced: bool,
     writes: VecDeque<Write>,
     shutdown: Option<u64>,
@@ -93,6 +101,8 @@ impl Handle {
             reading: false,
             read_once: false,
             nodelay: false,
+            #[cfg(all(target_os = "wasi", target_env = "p1"))]
+            bound: None,
             referenced: true,
             writes: VecDeque::new(),
             shutdown: None,
@@ -149,6 +159,13 @@ fn initialize() {
     crate::stdlib_pump::js_register_aux_pump(pump);
     crate::stdlib_pump::js_register_aux_has_active(has_active);
 }
+/// Put the pump on the event loop without opening a socket: a preview 1 guest
+/// that only reads stdin or waits for a host signal still needs the ordinary
+/// pump to watch those descriptors when its loop never parks.
+#[cfg(all(target_os = "wasi", target_env = "p1"))]
+pub(crate) fn register_pump() {
+    initialize();
+}
 pub fn available() -> bool {
     initialize();
     true
@@ -185,6 +202,10 @@ pub fn tcp_listen(
         let mut handle = Handle::new(fd, subsystem);
         handle.listener = true;
         handle.nodelay = nodelay;
+        #[cfg(all(target_os = "wasi", target_env = "p1"))]
+        {
+            handle.bound = Some(addr);
+        }
         state.handles.insert(id, handle);
         Ok(())
     })?;
@@ -389,6 +410,9 @@ fn address(id: i64, peer: bool) -> Option<SocketAddr> {
             )
         };
         if result < 0 {
+            #[cfg(all(target_os = "wasi", target_env = "p1"))]
+            return if peer { None } else { h.bound };
+            #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
             return None;
         }
         let ip = unsafe { CStr::from_ptr(text.as_ptr()) }
@@ -414,17 +438,25 @@ extern "C" fn has_active() -> i32 {
 }
 /// Bound the legacy WASI event-loop park while sockets await readiness.
 /// This also preserves timer deadlines; idle programs without sockets sleep normally.
+/// A preview 1 guest parks in `poll_oneoff` (`p1::park`), which wakes on socket
+/// readiness itself, so sockets add no polling interval there and only work the
+/// pump owes right now or a timer deadline bound the park.
 pub(crate) fn next_wake_ms() -> f64 {
     STATE.with(|s| {
         let s = s.borrow();
         if !s.events.is_empty() {
             return 0.0;
         }
-        let mut next = if s.handles.is_empty() {
-            f64::INFINITY
-        } else {
-            1.0
-        };
+        #[cfg(all(target_os = "wasi", target_env = "p1"))]
+        // A connect still pending (`connecting`) is not work: its descriptor
+        // is in the park's write subscriptions and the host wakes the loop.
+        if s.handles.values().any(|h| {
+            !h.connecting && (h.connected_event || (h.shutdown.is_some() && h.writes.is_empty()))
+        }) {
+            return 0.0;
+        }
+        let polled = !cfg!(all(target_os = "wasi", target_env = "p1")) && !s.handles.is_empty();
+        let mut next = if polled { 1.0 } else { f64::INFINITY };
         let now = Instant::now();
         for timer in s.timers.values() {
             if let Some(d) = timer.deadline {
@@ -448,6 +480,11 @@ fn completion(
 }
 
 extern "C" fn pump() -> i32 {
+    #[cfg(all(target_os = "wasi", target_env = "p1"))]
+    {
+        drain_signals();
+        poll_stdin();
+    }
     let mut events = STATE.with(|s| {
         let mut s = s.borrow_mut();
         let State {
@@ -658,6 +695,13 @@ extern "C" fn pump() -> i32 {
                 sink::emit(subsystem, NetCompletion::accept(server, id, peer_addr(id)));
             }
         }
+    }
+    // What the sinks just received (a request, a read) is consumed by the next
+    // turn's pumps. Nothing else tells the loop it owes that turn, so without
+    // this a preview 1 guest would park on its idle cap with the work queued.
+    #[cfg(all(target_os = "wasi", target_env = "p1"))]
+    if count > 0 {
+        crate::event_pump::js_notify_main_thread();
     }
     count
 }

@@ -426,3 +426,5 @@ pub(super) extern "C" fn string_proto_index_of_thunk(
         from,
     ) as f64
 }
+
+crate::realm_decl!("string_proto_thunks.realm.json#*");

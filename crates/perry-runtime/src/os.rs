@@ -843,7 +843,6 @@ pub use chdir::js_process_chdir;
 // `pub(crate)` since turnloop P2: `turnloop_proc::registry` routes a signal
 // completion straight into `signal::on_signal_completion`.
 pub(crate) mod signal;
-pub(crate) use signal::ignore_sigpipe_at_startup;
 pub use signal::{js_process_kill, js_util_convert_process_signal_to_exit_code};
 
 #[path = "os_process_stream_write.rs"]
@@ -864,6 +863,8 @@ pub use process_streams::{
     stdin_encoding_flush_jsvalue, stdin_has_encoding, stdin_is_detached,
     stdin_keypress_events_enabled, stdin_listeners_keep_loop_alive, stdin_push_bytes,
 };
+#[cfg(all(target_os = "wasi", target_env = "p1"))]
+pub(crate) use process_streams::{p1_stdin_ready, p1_stdin_wanted};
 
 /// Get the operating system name
 /// Returns: "Darwin", "Linux", "Windows_NT", etc.
@@ -1519,3 +1520,5 @@ mod tests {
         assert!(!eol.is_null());
     }
 }
+
+crate::realm_decl!("os.realm.json#*");

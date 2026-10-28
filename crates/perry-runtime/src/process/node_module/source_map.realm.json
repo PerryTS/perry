@@ -1,0 +1,221 @@
+{
+  "version": 1,
+  "groups": {
+    "body:source_map_find_entry_thunk": [
+      {
+        "name": "node:module.SourceMap.prototype.findEntry",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "findEntry"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "crate::process::node_module::source_map::source_map_find_entry_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 1,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::process::node_module::source_map::source_map_find_entry_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_66dcc5dadaed76af2682",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "body:source_map_find_origin_thunk": [
+      {
+        "name": "node:module.SourceMap.prototype.findOrigin",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "findOrigin"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "crate::process::node_module::source_map::source_map_find_origin_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 1,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::process::node_module::source_map::source_map_find_origin_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_e705d8bc4815ce451334",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "body:source_map_line_lengths_getter": [
+      {
+        "name": "node:module.SourceMap.prototype.lineLengths.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "get lineLengths"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::process::node_module::source_map::source_map_line_lengths_getter",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::process::node_module::source_map::source_map_line_lengths_getter",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_659eca44e88f26e28f0b",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "body:source_map_payload_getter": [
+      {
+        "name": "node:module.SourceMap.prototype.payload.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "get payload"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::process::node_module::source_map::source_map_payload_getter",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::process::node_module::source_map::source_map_payload_getter",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_ed55a05664c875b681d6",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ]
+  }
+}
