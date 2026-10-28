@@ -734,8 +734,8 @@ pub(crate) fn byte_offset_to_utf16_index(s: &str, byte_off: usize) -> usize {
 ///
 /// - `js_string_new_sso` returns inline `SHORT_STRING_TAG` values for short boxed
 ///   strings that do not require a real `StringHeader*`.
-/// - Normal heap strings use GC-managed arenas. Native input and large JSON
-///   result leaves may use the existing GC-tracked malloc allocator instead.
+/// - Normal heap strings, including native input, use GC-managed arenas.
+///   Large JSON result leaves may use GC-tracked malloc storage instead.
 /// - `arena_alloc_gc` routes small and medium payloads to nursery pages and
 ///   large payloads to old-gen pages using `LARGE_OBJECT_THRESHOLD_BYTES`.
 ///

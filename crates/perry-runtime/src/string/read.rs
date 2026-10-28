@@ -4,20 +4,11 @@ use super::*;
 use std::io::{self, BorrowedBuf, Read};
 use std::mem::MaybeUninit;
 
-// A streaming I/O buffer size, also used when a source supplies no size hint.
+// Initial growth quantum for a native source without a size hint.
 const READ_CHUNK: usize = 64 * 1024;
 
 #[path = "read_ascii.rs"]
 mod ascii;
-
-/// Native input produces a pointer-free leaf. Existing malloc GC ownership
-/// lets a minor reclaim it without an old-arena page index for every payload
-/// page. The ordinary allocation trigger and runtime roots still apply.
-fn input_storage_alloc(capacity: u32) -> (*mut StringHeader, *mut u8) {
-    let size = std::mem::size_of::<StringHeader>() + capacity as usize;
-    let header = crate::gc::gc_malloc(size, crate::gc::GC_TYPE_STRING).cast::<StringHeader>();
-    (header, string_data(header).cast_mut())
-}
 
 #[derive(Default)]
 struct Utf8Progress {
@@ -62,7 +53,7 @@ pub(crate) fn read_utf8<R: Read + ?Sized>(
 ) -> io::Result<*mut StringHeader> {
     let scope = crate::gc::RuntimeHandleScope::new();
     let mut capacity = hint.min(MAX_STRING_LENGTH as u64) as u32;
-    let (header, _) = input_storage_alloc(capacity);
+    let (header, _) = string_storage_alloc(capacity);
     unsafe { init_string_header(header, 0, 0, capacity, 0, STRING_FLAG_WTF8_VALIDATED) };
     let owner = scope.root_string_ptr(header);
     let mut len = 0usize;
@@ -84,7 +75,7 @@ pub(crate) fn read_utf8<R: Read + ?Sized>(
             if next <= capacity {
                 throw_invalid_string_length();
             }
-            let (new, data) = input_storage_alloc(next);
+            let (new, data) = string_storage_alloc(next);
             unsafe {
                 // The old owner can move during allocation: reload its root.
                 init_string_header(new, 0, 0, next, 0, STRING_FLAG_WTF8_VALIDATED);
@@ -99,7 +90,7 @@ pub(crate) fn read_utf8<R: Read + ?Sized>(
                 let data = string_data(owner.get_raw_const_ptr()).cast_mut().add(len);
                 let spare = slice::from_raw_parts_mut(
                     data.cast::<MaybeUninit<u8>>(),
-                    (capacity as usize - len).min(READ_CHUNK),
+                    capacity as usize - len,
                 );
                 let mut output = BorrowedBuf::from(spare);
                 loop {
@@ -140,23 +131,31 @@ pub(crate) fn read_utf8<R: Read + ?Sized>(
             if units > MAX_STRING_LENGTH || text.len() > u32::MAX as usize {
                 throw_invalid_string_length();
             }
-            return Ok(js_string_from_bytes_known_utf16(
+            let repaired = js_string_from_bytes_known_utf16(
                 text.as_ptr(),
                 text.len() as u32,
                 units as u32,
                 STRING_FLAG_WTF8_VALIDATED,
-            ));
+            );
+            owner.set_raw_mut_ptr(repaired);
+        } else {
+            init_string_header(
+                header,
+                progress.units as u32,
+                len as u32,
+                capacity,
+                0,
+                STRING_FLAG_WTF8_VALIDATED,
+            );
         }
-        init_string_header(
-            header,
-            progress.units as u32,
-            len as u32,
-            capacity,
-            0,
-            STRING_FLAG_WTF8_VALIDATED,
-        );
     }
-    Ok(header)
+    // A complete native input is a bulk producer boundary. Publish existing
+    // byte debt before returning, so the caller's next precise poll can pay it
+    // after its result dies instead of allocating another large input first.
+    // This may drain an already active non-moving cycle: the canonical result
+    // is rooted, and its native source/output borrows have ended. Reload it.
+    crate::gc::allocation_pacing::burst_boundary();
+    Ok(owner.get_raw_mut_ptr())
 }
 
 #[cfg(test)]
