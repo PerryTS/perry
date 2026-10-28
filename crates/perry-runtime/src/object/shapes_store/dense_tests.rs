@@ -52,6 +52,9 @@ fn page_boundary_keeps_partial_page_and_dynamic_rows_never_reuse() {
         .unwrap();
     assert_eq!(third.word.row().0, start + 2);
     let boundary = (slab.region.page / 128) as u32;
+    // A 16 KiB page can extend beyond the default native-layout prefix.
+    // Declare both fixture rows as static before testing their page custody.
+    slab.static_rows = slab.static_rows.max(boundary + 1);
     for row in [boundary - 1, boundary] {
         let identity = ShapeId(SHAPE_ID_BASE + 100 + row);
         let word = LayoutWord::new(LayoutRow(row), 0, 0).unwrap();
