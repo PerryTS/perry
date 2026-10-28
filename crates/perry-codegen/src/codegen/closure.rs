@@ -594,13 +594,16 @@ pub(super) fn compile_closure(
     // so its ABI and register footprint stay identical to the ordinary
     // trusted clone.
     let llvm_params = crate::expr::private_resume_frame::abi_params(
-        params, private_resume_frame, private_async_resume_frame,
+        params,
+        private_resume_frame,
+        private_async_resume_frame,
     );
 
     let ic_base = llmod.ic_counter;
     let buffer_alias_base = llmod.buffer_alias_counter;
     let closure_function_index = llmod.function_count();
     let lf = llmod.define_function(&llvm_name, DOUBLE, llvm_params);
+    lf.private_resume_entry = private_resume_frame || private_async_resume_frame;
     // #7908: closures live outside `hir.functions`, so they do not pass
     // through `codegen/function.rs`, which applies this same collector result
     // to ordinary functions. Without propagating the bit here, bounded
@@ -721,7 +724,11 @@ pub(super) fn compile_closure(
         );
         for p in params {
             let arg_name = crate::expr::private_resume_frame::parameter_value(
-                blk, params, p.id, private_resume_frame, private_async_resume_frame,
+                blk,
+                params,
+                p.id,
+                private_resume_frame,
+                private_async_resume_frame,
             );
             // A closure region's Number parameter: an int32 box becomes the
             // equal plain double once, here (`split_regions`).
