@@ -981,6 +981,7 @@ pub struct CompilationContext {
     pub uses_json_engine: bool,
     /// Native capabilities and computed member keys may occur in different modules.
     pub uses_computed_member_keys: bool,
+    pub uses_date_computed_member_keys: bool,
     pub uses_file_handle_capability: bool,
     pub uses_bun_file_capability: bool,
     pub uses_turnloop: bool,
@@ -1445,6 +1446,7 @@ impl CompilationContext {
             uses_json_format: false,
             uses_json_engine: false,
             uses_computed_member_keys: false,
+            uses_date_computed_member_keys: false,
             uses_file_handle_capability: false,
             uses_bun_file_capability: false,
             uses_turnloop: false,
