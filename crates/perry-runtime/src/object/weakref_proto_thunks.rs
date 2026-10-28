@@ -542,3 +542,5 @@ mod tests {
         );
     }
 }
+
+crate::realm_decl!("weakref_proto_thunks.realm.json#*");

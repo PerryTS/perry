@@ -76,6 +76,8 @@ NON_HANDLE_TABLES = {
     ("crates/perry-runtime/src/gc/barrier/mod.rs", "REMEMBERED_SET"),
     ("crates/perry-runtime/src/gc/barrier/mod.rs", "CONS_PINNED"),
     ("crates/perry-runtime/src/gc/barrier/mod.rs", "EVER_DIRTY_OLD_PAGES"),
+    # The realm image's remembered set (WRT): image cells holding heap children.
+    ("crates/perry-runtime/src/gc/image_cells.rs", "IMAGE_REMEMBERED"),
     ("crates/perry-runtime/src/gc/fromspace_scan.rs", "SNAPSHOT_PAGES"),
     ("crates/perry-runtime/src/gc/diag_sites.rs", "CHARGES"),
     # Compiled code/literal/site metadata, not heap object identity.

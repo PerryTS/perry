@@ -41,7 +41,9 @@ pub(in crate::gc) unsafe fn trace_heap_rewrite_slots_remembering(
                 remember_malloc_mark_slots(header, sticky);
                 return;
             }
-            None => {}
+            // No collector traces an image cell (marking stops at the image
+            // boundary); its edges are roots in `gc::image_cells`.
+            Some(crate::gc::barrier::RememberingParent::Image) | None => {}
         }
     }
     trace_heap_rewrite_slots(header, valid_ptrs, worklist);

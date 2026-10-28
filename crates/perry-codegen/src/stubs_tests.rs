@@ -31,6 +31,8 @@ fn elf64_sections(obj: &[u8]) -> Vec<(String, u32, u64, u64)> {
 /// `UseInitArray=false`), which glibc on aarch64 never runs, so no feature
 /// installer and no shape seed was ever registered. The object must carry
 /// the registration in a writable SHT_INIT_ARRAY section and no `.ctors`.
+/// The seed unit registers nothing since WRT step 2: it is data (the seed
+/// table, atoms, image strings and key list cells in their sections).
 #[test]
 fn elf_startup_registration_lands_in_init_array() {
     let shape = crate::BirthShape {
@@ -55,7 +57,7 @@ fn elf_startup_registration_lands_in_init_array() {
         .expect("the installer unit compiles");
         let seed = generate_static_shape_seed_object(&[(0x1000_0042, shape.clone())], Some(target))
             .expect("the seed unit compiles");
-        for (what, obj) in [("installers", installers), ("seed", seed)] {
+        for (what, obj) in [("installers", installers)] {
             let sections = elf64_sections(&obj);
             let init = sections
                 .iter()
@@ -79,5 +81,18 @@ fn elf_startup_registration_lands_in_init_array() {
                 "{target} {what}: legacy .ctors is never run"
             );
         }
+        let sections = elf64_sections(&seed);
+        for section in ["perry_realm", "perry_atoms", "perry_strings"] {
+            assert!(
+                sections.iter().any(|s| s.0 == section),
+                "{target} seed: no {section} in {sections:?}"
+            );
+        }
+        assert!(
+            !sections
+                .iter()
+                .any(|s| s.0 == ".init_array" || s.0 == ".ctors"),
+            "{target} seed: the seed unit is data and registers nothing"
+        );
     }
 }

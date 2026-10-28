@@ -1,0 +1,643 @@
+{
+  "version": 1,
+  "groups": {
+    "objects": [
+      {
+        "name": "Performance.prototype.clearMarks",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "clearMarks"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::perf_hooks::prototypes::performance_methods::clear_marks",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::perf_hooks::prototypes::performance_methods::clear_marks",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_8aee14d5eda275981702",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Performance.prototype.clearMeasures",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "clearMeasures"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::perf_hooks::prototypes::performance_methods::clear_measures",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::perf_hooks::prototypes::performance_methods::clear_measures",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_f2db73e2cb8c0873f0c9",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Performance.prototype.clearResourceTimings",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "clearResourceTimings"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::perf_hooks::prototypes::performance_methods::clear_resource_timings",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::perf_hooks::prototypes::performance_methods::clear_resource_timings",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_14a2946e939a614c7264",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Performance.prototype.getEntries",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "getEntries"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::perf_hooks::prototypes::performance_methods::get_entries",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::perf_hooks::prototypes::performance_methods::get_entries",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_5d72b2de9af062f61216",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Performance.prototype.getEntriesByName",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "getEntriesByName"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::perf_hooks::prototypes::performance_methods::get_entries_by_name",
+        "function_info": {
+          "params": 2,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::perf_hooks::prototypes::performance_methods::get_entries_by_name",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_213fecff2ba1363ad5f9",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Performance.prototype.getEntriesByType",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "getEntriesByType"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::perf_hooks::prototypes::performance_methods::get_entries_by_type",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::perf_hooks::prototypes::performance_methods::get_entries_by_type",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_e04c066030f4015ff0cc",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Performance.prototype.mark",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "mark"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::perf_hooks::prototypes::performance_methods::mark",
+        "function_info": {
+          "params": 2,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::perf_hooks::prototypes::performance_methods::mark",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_d944039413e4994ae9c7",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Performance.prototype.markResourceTiming",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "401c000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "markResourceTiming"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 7,
+        "body": "crate::perf_hooks::prototypes::performance_methods::mark_resource_timing",
+        "function_info": {
+          "params": 8,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 7,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::perf_hooks::prototypes::performance_methods::mark_resource_timing",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_b8e51792d868ca2b6187",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Performance.prototype.measure",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "measure"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::perf_hooks::prototypes::performance_methods::measure",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::perf_hooks::prototypes::performance_methods::measure",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_493be77d48ce108a7a31",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Performance.prototype.now",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "now"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::perf_hooks::prototypes::performance_methods::now",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::perf_hooks::prototypes::performance_methods::now",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_d290031c028fc1155f3f",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Performance.prototype.setResourceTimingBufferSize",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "setResourceTimingBufferSize"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::perf_hooks::prototypes::performance_methods::set_resource_timing_buffer_size",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::perf_hooks::prototypes::performance_methods::set_resource_timing_buffer_size",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_2295796f73e3eb31dc20",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Performance.prototype.toJSON",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "toJSON"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::perf_hooks::prototypes::performance_methods::to_json",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::perf_hooks::prototypes::performance_methods::to_json",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_4188857f8ad2ffd78c5f",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ]
+  }
+}

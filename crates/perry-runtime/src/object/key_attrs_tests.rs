@@ -3,6 +3,25 @@
 use super::*;
 
 #[test]
+fn default_attribute_word_does_not_hash_its_key() {
+    struct NoBloom;
+    impl AttributeKey for NoBloom {
+        fn bloom_bit(self) -> u16 {
+            panic!("a default entry contributes no Bloom bit");
+        }
+    }
+    unsafe {
+        for previous in [Word::EMPTY, Word::EMPTY.with_slot(Some(3))] {
+            let word = Word::after(previous, 0, NoBloom);
+            assert_eq!(
+                word.encode(),
+                perry_abi::canonical_key_attribute_word(previous.encode(), 0, 0, None)
+            );
+        }
+    }
+}
+
+#[test]
 fn descriptor_holder_probe_rejects_a_spoofed_native_box_header() {
     let _lock = crate::gc::global_side_table_test_lock();
     unsafe {

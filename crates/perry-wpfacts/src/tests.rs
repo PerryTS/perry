@@ -28,6 +28,7 @@ mod indexed_owner;
 mod layout_key;
 mod named_accessors;
 mod native_proto;
+mod native_fs;
 mod parent_value;
 mod prim_result;
 mod proof_receivers;

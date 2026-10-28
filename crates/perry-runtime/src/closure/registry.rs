@@ -607,3 +607,5 @@ pub const NO_THIS_REBIND_FLAG: u32 = 0x4000_0000;
 pub fn real_capture_count(capture_count: u32) -> u32 {
     capture_count & crate::codegen_abi::CLOSURE_CAPTURE_COUNT_MASK
 }
+
+crate::realm_decl!("registry.realm.json#*");

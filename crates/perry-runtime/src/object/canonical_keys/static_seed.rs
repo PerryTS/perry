@@ -93,3 +93,105 @@ pub(crate) unsafe fn from_static_layout(
 
 #[cfg(test)]
 mod tests;
+
+/// WRT step 2: link a canonical key list the compiler emitted as a cell of
+/// the realm image into this agent's trie. `cell` is the user address of a
+/// list holding exactly the strings of `keys`' atoms, in order; the
+/// canonical list of that key sequence in this agent is then the cell, or
+/// the list a receiver published first. `None` when a key is not an image
+/// atom, or the cell does not hold its string: the caller mints by names.
+///
+/// # Safety
+/// `keys` are this program's atom records and `cell` an image cell of
+/// `keys.len()` slots. GC is suppressed, as for layout registration.
+#[cold]
+#[inline(never)]
+pub(crate) unsafe fn link_image_list(
+    _proof: &SharedLayout,
+    keys: &[PerryLayoutKey],
+    cell: *mut ArrayHeader,
+) -> Option<CanonicalKeys> {
+    debug_assert!(crate::gc::gc_is_suppressed());
+    let count = keys.len() as u32;
+    if keys.is_empty()
+        || !crate::value::addr_class::realm::is_image_object(cell as usize)
+        || (*cell).length != count
+    {
+        return None;
+    }
+    let slots = crate::array::array_elements_ptr(cell) as *const u64;
+    let mapped = keys
+        .iter()
+        .enumerate()
+        .any(|(i, key)| key.slot as usize != i);
+    for (i, key) in keys.iter().enumerate() {
+        if key.atom.is_null() {
+            return None;
+        }
+        let atom = &*key.atom;
+        if atom.kind == crate::codegen_abi::ATOM_KIND_BINDING_SYMBOL {
+            return None;
+        }
+        if atom.kind == crate::codegen_abi::ATOM_KIND_STRING
+            && (atom.string.is_null() || !crate::string::is_image_string(atom.string))
+        {
+            return None;
+        }
+        let expected = crate::object::layout_desc::layout_key_word(key, &[], &mut 0);
+        if *slots.add(i) != expected {
+            return None;
+        }
+        let entry = u64::from(key.attrs)
+            | if mapped {
+                (u64::from(key.slot) + 1) << 8
+            } else {
+                0
+            };
+        if crate::object::key_attrs::token_of_word(crate::object::key_attrs::key_word(
+            cell, i as u32,
+        )) != entry
+        {
+            return None;
+        }
+    }
+    Some(with_table_or(CanonicalKeys::new(cell, count), |t| {
+        let mut parent = ROOT_NODE;
+        let mut missing = false;
+        for (i, key) in keys.iter().enumerate() {
+            let atom = &*key.atom;
+            let entry = u64::from(key.attrs)
+                | if mapped {
+                    (u64::from(key.slot) + 1) << 8
+                } else {
+                    0
+                };
+            let appended = if atom.kind == crate::codegen_abi::ATOM_KIND_STRING {
+                Appended::Key(atom.string)
+            } else {
+                Appended::Slot(JSValue::from_bits(*slots.add(i)))
+            };
+            let hash = if atom.kind == crate::codegen_abi::ATOM_KIND_STRING {
+                edge_hash_with_entry(atom.hash, entry)
+            } else {
+                appended.edge_hash(entry)
+            };
+            if !missing {
+                if let Some(id) = probe_node(t, parent, i as u32, appended, entry, hash) {
+                    parent = id;
+                    continue;
+                }
+                missing = true;
+            }
+            parent = t.alloc_node(cell as usize, parent, hash, i as u32 + 1, true, false);
+        }
+        let node = &t.nodes[parent as usize];
+        if node.published {
+            let existing = CanonicalKeys::new(node.addr as *mut ArrayHeader, count);
+            t.note_reached(parent);
+            return existing;
+        }
+        // The cell is image data: no backing was allocated for it.
+        t.publish(parent, cell as usize, true);
+        CanonicalKeys::new(cell, count)
+    }))
+}
