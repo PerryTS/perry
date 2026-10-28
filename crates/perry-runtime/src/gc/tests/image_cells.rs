@@ -827,10 +827,9 @@ fn knockout_missing_image_birth_facts_fails_the_store_audit() {
             crate::object::shapes::store_kind::audit_store_facts_for_test(object);
         });
         (*object_header())._reserved |= OBJ_FLAG_PLAIN_ORDINARY;
-        assert_eq!(
+        assert!(
             result.is_err(),
-            cfg!(any(debug_assertions, feature = "shape-fact-audit")),
-            "the invalid birth mark must follow the configured store audit mode"
+            "the explicit test audit must reject an invalid birth mark"
         );
     }
 }
