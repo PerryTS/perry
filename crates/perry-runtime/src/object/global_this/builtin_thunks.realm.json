@@ -1,0 +1,4905 @@
+{
+  "version": 1,
+  "groups": {
+    "objects": [
+      {
+        "name": "Array",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "from",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Array.from"
+            }
+          },
+          {
+            "key": "isArray",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Array.isArray"
+            }
+          },
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "Array"
+            }
+          },
+          {
+            "key": "of",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Array.of"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "Array.prototype"
+            }
+          },
+          {
+            "key": "@@species",
+            "symbol": true,
+            "attributes": 4,
+            "get": "Array[\"@@species\"].<get>"
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "isArray",
+          "from",
+          "of",
+          "prototype"
+        ],
+        "own_symbol_order": [
+          "@@species"
+        ],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 1082130432
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::builtin_thunks::global_this_array_thunk",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 1,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::global_this_array_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "int32",
+            "value": 1
+          }
+        ],
+        "info_symbol": "perry_realm_info_c8ac2289aa7c15fc11c6",
+        "births": [
+          "%ArrayIteratorPrototype%",
+          "Array.from",
+          "Array.isArray",
+          "Array.of",
+          "Array.prototype",
+          "Array[\"@@species\"].<get>",
+          "Function.prototype"
+        ],
+        "constructor": {
+          "identity": 1,
+          "prototype_callable": false,
+          "instance_identity": "BuiltinInstanceIdentity::Class(0xFFFF0024)",
+          "named_serial": "crate::closure::shape::INTRINSIC_SERIAL_ARRAY_PROTOTYPE"
+        }
+      },
+      {
+        "name": "BigInt",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "asIntN",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "BigInt.asIntN"
+            }
+          },
+          {
+            "key": "asUintN",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "BigInt.asUintN"
+            }
+          },
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "BigInt"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "BigInt.prototype"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "asIntN",
+          "asUintN",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 1283457024
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::builtin_thunks::global_this_bigint_thunk",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::global_this_bigint_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "int32",
+            "value": 25
+          }
+        ],
+        "info_symbol": "perry_realm_info_0615655a5780e8a5b477",
+        "births": [
+          "BigInt.asIntN",
+          "BigInt.asUintN",
+          "BigInt.prototype",
+          "Function.prototype"
+        ],
+        "constructor": {
+          "identity": 25,
+          "prototype_callable": false,
+          "instance_identity": "BuiltinInstanceIdentity::Class(0xFFFF00D3)"
+        }
+      },
+      {
+        "name": "BigInt.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "BigInt"
+            }
+          },
+          {
+            "key": "toLocaleString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "BigInt.prototype.toLocaleString"
+            }
+          },
+          {
+            "key": "toString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "BigInt.prototype.toString"
+            }
+          },
+          {
+            "key": "valueOf",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "BigInt.prototype.valueOf"
+            }
+          }
+        ],
+        "own_key_order": [
+          "constructor",
+          "toString",
+          "valueOf",
+          "toLocaleString"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2176,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "BigInt",
+          "BigInt.prototype.toLocaleString",
+          "BigInt.prototype.toString",
+          "BigInt.prototype.valueOf",
+          "Object.prototype"
+        ]
+      },
+      {
+        "name": "Boolean",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "Boolean"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "Boolean.prototype"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 1115684864
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::builtin_thunks::global_this_boolean_thunk",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::global_this_boolean_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "int32",
+            "value": 5
+          }
+        ],
+        "info_symbol": "perry_realm_info_17bc9d97616a8bb5a29d",
+        "births": [
+          "Boolean.prototype",
+          "Function.prototype"
+        ],
+        "constructor": {
+          "identity": 5,
+          "prototype_callable": false,
+          "instance_identity": "BuiltinInstanceIdentity::Class(0xFFFF00D2)"
+        }
+      },
+      {
+        "name": "Boolean.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Boolean"
+            }
+          },
+          {
+            "key": "toLocaleString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Boolean.prototype.toLocaleString"
+            }
+          },
+          {
+            "key": "toString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Boolean.prototype.toString"
+            }
+          },
+          {
+            "key": "valueOf",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Boolean.prototype.valueOf"
+            }
+          }
+        ],
+        "own_key_order": [
+          "constructor",
+          "toString",
+          "valueOf",
+          "toLocaleString"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2176,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "Boolean",
+          "Boolean.prototype.toLocaleString",
+          "Boolean.prototype.toString",
+          "Boolean.prototype.valueOf",
+          "Object.prototype"
+        ]
+      },
+      {
+        "name": "Error.captureStackTrace",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "captureStackTrace"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "crate::object::global_this::builtin_thunks::global_this_error_capture_stack_trace_thunk",
+        "function_info": {
+          "params": 2,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 2,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::global_this_error_capture_stack_trace_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_413d2d0503cdda27e8f1",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Error.isError",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "isError"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::builtin_thunks::global_this_error_is_error_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::global_this_error_is_error_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_bc2f119ba2fd3f0ed6c2",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Error.prepareStackTrace",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "prepareStackTrace"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "crate::object::global_this::builtin_thunks::global_this_error_prepare_stack_trace_thunk",
+        "function_info": {
+          "params": 2,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 2,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::global_this_error_prepare_stack_trace_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_68f099e8753208433902",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Function",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "Function"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "Function.prototype"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 1124073472
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::builtin_thunks::global_this_function_call_thunk",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 1,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::global_this_function_call_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "int32",
+            "value": 6
+          }
+        ],
+        "info_symbol": "perry_realm_info_4918c66b0ebcd5f0ee7e",
+        "births": [
+          "Function.prototype"
+        ],
+        "constructor": {
+          "identity": 6,
+          "prototype_callable": true,
+          "prototype_serial": "crate::closure::shape::INTRINSIC_SERIAL_FUNCTION",
+          "instance_identity": "BuiltinInstanceIdentity::Class(0xFFFF00F0)"
+        }
+      },
+      {
+        "name": "Math.abs",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "abs"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::builtin_thunks::math_abs_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 3072,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::math_abs_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_0d07951abeced7883bc7",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Math.acos",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "acos"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::builtin_thunks::math_acos_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 3072,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::math_acos_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_9d8824d0bf10183790ed",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Math.acosh",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "acosh"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::builtin_thunks::math_acosh_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 3072,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::math_acosh_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_dfd54832c61f9f0b80cf",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Math.asin",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "asin"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::builtin_thunks::math_asin_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 3072,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::math_asin_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_d48cd42da2026df3b2d9",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Math.asinh",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "asinh"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::builtin_thunks::math_asinh_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 3072,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::math_asinh_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_713d3e3366a1ca0dc301",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Math.atan",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "atan"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::builtin_thunks::math_atan_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 3072,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::math_atan_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_6b386ddd04406206b816",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Math.atan2",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "atan2"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "crate::object::global_this::builtin_thunks::math_atan2_thunk",
+        "function_info": {
+          "params": 2,
+          "rest_fixed": 0,
+          "flags": 3072,
+          "length": 0,
+          "declared": 2,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::math_atan2_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_af2504f12686ddeae97f",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Math.atanh",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "atanh"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::builtin_thunks::math_atanh_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 3072,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::math_atanh_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_987ae35f6a051b061751",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Math.cbrt",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "cbrt"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::builtin_thunks::math_cbrt_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 3072,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::math_cbrt_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_e2aa98564af3b27c3a71",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Math.ceil",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "ceil"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::builtin_thunks::math_ceil_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 3072,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::math_ceil_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_c966a51048e696565662",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Math.clz32",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "clz32"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::builtin_thunks::math_clz32_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 3072,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::math_clz32_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_e80d40e33540d833653f",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Math.cos",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "cos"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::builtin_thunks::math_cos_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 3072,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::math_cos_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_3a84b99f5a8b82673e03",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Math.cosh",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "cosh"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::builtin_thunks::math_cosh_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 3072,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::math_cosh_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_2c5bcde85f033808e962",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Math.exp",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "exp"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::builtin_thunks::math_exp_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 3072,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::math_exp_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_c101f90ea5a182c3556b",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Math.expm1",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "expm1"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::builtin_thunks::math_expm1_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 3072,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::math_expm1_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_7218199c2bb5237b7dbd",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Math.f16round",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "f16round"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::builtin_thunks::math_f16round_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 3072,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::math_f16round_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_dc4ccd67d5aa0a2e6ed3",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Math.floor",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "floor"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::builtin_thunks::math_floor_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 3072,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::math_floor_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_9472073ca205286fefbe",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Math.fround",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "fround"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::builtin_thunks::math_fround_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 3072,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::math_fround_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_df5d3e9cbc2782775138",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Math.hypot",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "hypot"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "crate::object::global_this::builtin_thunks::math_hypot_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 1025,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::math_hypot_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_5423c349a311ff2736fe",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Math.imul",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "imul"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "crate::object::global_this::builtin_thunks::math_imul_thunk",
+        "function_info": {
+          "params": 2,
+          "rest_fixed": 0,
+          "flags": 3072,
+          "length": 0,
+          "declared": 2,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::math_imul_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_db23f77f4c88ebb97239",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Math.log",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "log"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::builtin_thunks::math_log_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 3072,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::math_log_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_16d79aee528ae2c50f83",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Math.log10",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "log10"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::builtin_thunks::math_log10_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 3072,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::math_log10_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_d5579353ae5d408706f3",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Math.log1p",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "log1p"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::builtin_thunks::math_log1p_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 3072,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::math_log1p_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_07a29251c1cde63b959f",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Math.log2",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "log2"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::builtin_thunks::math_log2_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 3072,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::math_log2_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_2708e6e51bcf8396e01b",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Math.max",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "max"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "crate::object::global_this::builtin_thunks::math_max_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 1025,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::math_max_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_59565504a3ccb65f0970",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Math.min",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "min"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "crate::object::global_this::builtin_thunks::math_min_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 1025,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::math_min_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_9a380bb5134613c3779a",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Math.pow",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "pow"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "crate::object::global_this::builtin_thunks::math_pow_thunk",
+        "function_info": {
+          "params": 2,
+          "rest_fixed": 0,
+          "flags": 3072,
+          "length": 0,
+          "declared": 2,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::math_pow_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_b62f24c9d6c40f4c9491",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Math.random",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "random"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::builtin_thunks::math_random_thunk",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 3072,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::math_random_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_7fcf4057f906f5008bd2",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Math.round",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "round"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::builtin_thunks::math_round_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 3072,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::math_round_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_a87e6493e4e9e7497460",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Math.sign",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "sign"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::builtin_thunks::math_sign_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 3072,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::math_sign_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_ce18fdcac2e8028bff04",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Math.sin",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "sin"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::builtin_thunks::math_sin_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 3072,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::math_sin_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_285b8efa40f8d6a3379e",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Math.sinh",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "sinh"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::builtin_thunks::math_sinh_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 3072,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::math_sinh_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_8b85a75288fce43b3f04",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Math.sqrt",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "sqrt"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::builtin_thunks::math_sqrt_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 3072,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::math_sqrt_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_53f84d64e9d7c8d3a953",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Math.tan",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "tan"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::builtin_thunks::math_tan_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 3072,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::math_tan_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_fb31f78994299a289074",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Math.tanh",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "tanh"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::builtin_thunks::math_tanh_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 3072,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::math_tanh_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_517b68ac6f5e0d571b62",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Math.trunc",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "trunc"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::builtin_thunks::math_trunc_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 3072,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::math_trunc_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_64eb874c788bcf2442f3",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Number",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "EPSILON",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "number_bits",
+              "value": "3cb0000000000000"
+            }
+          },
+          {
+            "key": "MAX_SAFE_INTEGER",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "number_bits",
+              "value": "433fffffffffffff"
+            }
+          },
+          {
+            "key": "MAX_VALUE",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "number_bits",
+              "value": "7fefffffffffffff"
+            }
+          },
+          {
+            "key": "MIN_SAFE_INTEGER",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "number_bits",
+              "value": "c33fffffffffffff"
+            }
+          },
+          {
+            "key": "MIN_VALUE",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000001"
+            }
+          },
+          {
+            "key": "NEGATIVE_INFINITY",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "number_bits",
+              "value": "fff0000000000000"
+            }
+          },
+          {
+            "key": "NaN",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "number_bits",
+              "value": "7ff8000000000000"
+            }
+          },
+          {
+            "key": "POSITIVE_INFINITY",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "number_bits",
+              "value": "7ff0000000000000"
+            }
+          },
+          {
+            "key": "isFinite",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Number.isFinite"
+            }
+          },
+          {
+            "key": "isInteger",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Number.isInteger"
+            }
+          },
+          {
+            "key": "isNaN",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Number.isNaN"
+            }
+          },
+          {
+            "key": "isSafeInteger",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Number.isSafeInteger"
+            }
+          },
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "Number"
+            }
+          },
+          {
+            "key": "parseFloat",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "parseFloat"
+            }
+          },
+          {
+            "key": "parseInt",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "parseInt"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "Number.prototype"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "isNaN",
+          "isFinite",
+          "isInteger",
+          "isSafeInteger",
+          "parseFloat",
+          "parseInt",
+          "NaN",
+          "POSITIVE_INFINITY",
+          "NEGATIVE_INFINITY",
+          "MAX_VALUE",
+          "MIN_VALUE",
+          "EPSILON",
+          "MAX_SAFE_INTEGER",
+          "MIN_SAFE_INTEGER",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 1107296256
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::builtin_thunks::global_this_number_thunk",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::global_this_number_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "int32",
+            "value": 4
+          }
+        ],
+        "info_symbol": "perry_realm_info_3184cf5ab3433187c098",
+        "births": [
+          "Function.prototype",
+          "Number.isFinite",
+          "Number.isInteger",
+          "Number.isNaN",
+          "Number.isSafeInteger",
+          "Number.prototype",
+          "parseFloat",
+          "parseInt"
+        ],
+        "constructor": {
+          "identity": 4,
+          "prototype_callable": false,
+          "instance_identity": "BuiltinInstanceIdentity::Class(0xFFFF00D0)"
+        }
+      },
+      {
+        "name": "Number.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Number"
+            }
+          },
+          {
+            "key": "toExponential",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Number.prototype.toExponential"
+            }
+          },
+          {
+            "key": "toFixed",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Number.prototype.toFixed"
+            }
+          },
+          {
+            "key": "toLocaleString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Number.prototype.toLocaleString"
+            }
+          },
+          {
+            "key": "toPrecision",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Number.prototype.toPrecision"
+            }
+          },
+          {
+            "key": "toString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Number.prototype.toString"
+            }
+          },
+          {
+            "key": "valueOf",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Number.prototype.valueOf"
+            }
+          }
+        ],
+        "own_key_order": [
+          "constructor",
+          "toExponential",
+          "toFixed",
+          "toLocaleString",
+          "toPrecision",
+          "toString",
+          "valueOf"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2176,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "Number",
+          "Number.prototype.toExponential",
+          "Number.prototype.toFixed",
+          "Number.prototype.toLocaleString",
+          "Number.prototype.toPrecision",
+          "Number.prototype.toString",
+          "Number.prototype.valueOf",
+          "Object.prototype"
+        ]
+      },
+      {
+        "name": "Object",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "assign",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Object.assign"
+            }
+          },
+          {
+            "key": "create",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Object.create"
+            }
+          },
+          {
+            "key": "defineProperties",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Object.defineProperties"
+            }
+          },
+          {
+            "key": "defineProperty",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Object.defineProperty"
+            }
+          },
+          {
+            "key": "entries",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Object.entries"
+            }
+          },
+          {
+            "key": "freeze",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Object.freeze"
+            }
+          },
+          {
+            "key": "fromEntries",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Object.fromEntries"
+            }
+          },
+          {
+            "key": "getOwnPropertyDescriptor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Object.getOwnPropertyDescriptor"
+            }
+          },
+          {
+            "key": "getOwnPropertyDescriptors",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Object.getOwnPropertyDescriptors"
+            }
+          },
+          {
+            "key": "getOwnPropertyNames",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Object.getOwnPropertyNames"
+            }
+          },
+          {
+            "key": "getOwnPropertySymbols",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Object.getOwnPropertySymbols"
+            }
+          },
+          {
+            "key": "getPrototypeOf",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Object.getPrototypeOf"
+            }
+          },
+          {
+            "key": "groupBy",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Object.groupBy"
+            }
+          },
+          {
+            "key": "hasOwn",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Object.hasOwn"
+            }
+          },
+          {
+            "key": "hasOwnProperty",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Object.hasOwnProperty"
+            }
+          },
+          {
+            "key": "is",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Object.is"
+            }
+          },
+          {
+            "key": "isExtensible",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Object.isExtensible"
+            }
+          },
+          {
+            "key": "isFrozen",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Object.isFrozen"
+            }
+          },
+          {
+            "key": "isPrototypeOf",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Object.isPrototypeOf"
+            }
+          },
+          {
+            "key": "isSealed",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Object.isSealed"
+            }
+          },
+          {
+            "key": "keys",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Object.keys"
+            }
+          },
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "Object"
+            }
+          },
+          {
+            "key": "preventExtensions",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Object.preventExtensions"
+            }
+          },
+          {
+            "key": "propertyIsEnumerable",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Object.propertyIsEnumerable"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "Object.prototype"
+            }
+          },
+          {
+            "key": "seal",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Object.seal"
+            }
+          },
+          {
+            "key": "setPrototypeOf",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Object.setPrototypeOf"
+            }
+          },
+          {
+            "key": "toLocaleString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Object.toLocaleString"
+            }
+          },
+          {
+            "key": "toString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Object.toString"
+            }
+          },
+          {
+            "key": "valueOf",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Object.valueOf"
+            }
+          },
+          {
+            "key": "values",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Object.values"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "keys",
+          "values",
+          "entries",
+          "freeze",
+          "create",
+          "seal",
+          "isSealed",
+          "isFrozen",
+          "isExtensible",
+          "preventExtensions",
+          "is",
+          "setPrototypeOf",
+          "getOwnPropertySymbols",
+          "getOwnPropertyDescriptors",
+          "defineProperties",
+          "groupBy",
+          "getPrototypeOf",
+          "getOwnPropertyNames",
+          "getOwnPropertyDescriptor",
+          "defineProperty",
+          "fromEntries",
+          "assign",
+          "hasOwn",
+          "hasOwnProperty",
+          "isPrototypeOf",
+          "propertyIsEnumerable",
+          "toString",
+          "toLocaleString",
+          "valueOf",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 1090519040
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::builtin_thunks::global_this_object_thunk",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::global_this_object_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "int32",
+            "value": 2
+          }
+        ],
+        "info_symbol": "perry_realm_info_9111fc9a4a6c8cd8daf1",
+        "births": [
+          "Function.prototype",
+          "Object.assign",
+          "Object.create",
+          "Object.defineProperties",
+          "Object.defineProperty",
+          "Object.entries",
+          "Object.freeze",
+          "Object.fromEntries",
+          "Object.getOwnPropertyDescriptor",
+          "Object.getOwnPropertyDescriptors",
+          "Object.getOwnPropertyNames",
+          "Object.getOwnPropertySymbols",
+          "Object.getPrototypeOf",
+          "Object.groupBy",
+          "Object.hasOwn",
+          "Object.hasOwnProperty",
+          "Object.is",
+          "Object.isExtensible",
+          "Object.isFrozen",
+          "Object.isPrototypeOf",
+          "Object.isSealed",
+          "Object.keys",
+          "Object.preventExtensions",
+          "Object.propertyIsEnumerable",
+          "Object.prototype",
+          "Object.seal",
+          "Object.setPrototypeOf",
+          "Object.toLocaleString",
+          "Object.toString",
+          "Object.valueOf",
+          "Object.values"
+        ],
+        "constructor": {
+          "identity": 2,
+          "prototype_callable": false,
+          "instance_identity": "BuiltinInstanceIdentity::Class(0xFFFF0050)"
+        }
+      },
+      {
+        "name": "Proxy.revocable",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "revocable"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "crate::object::global_this::builtin_thunks::proxy_revocable_thunk",
+        "function_info": {
+          "params": 2,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 2,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::proxy_revocable_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_6ba389bbfc5e4ec1c142",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "String",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "fromCharCode",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.fromCharCode"
+            }
+          },
+          {
+            "key": "fromCodePoint",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.fromCodePoint"
+            }
+          },
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "String"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "String.prototype"
+            }
+          },
+          {
+            "key": "raw",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.raw"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "fromCharCode",
+          "fromCodePoint",
+          "raw",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 1098907648
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::builtin_thunks::global_this_string_thunk",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::global_this_string_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "int32",
+            "value": 3
+          }
+        ],
+        "info_symbol": "perry_realm_info_06fd2c902afbd63daa8b",
+        "births": [
+          "%StringIteratorPrototype%",
+          "Array",
+          "Function.prototype",
+          "RegExp",
+          "String.fromCharCode",
+          "String.fromCodePoint",
+          "String.prototype",
+          "String.raw"
+        ],
+        "constructor": {
+          "identity": 3,
+          "prototype_callable": false,
+          "instance_identity": "BuiltinInstanceIdentity::Class(0xFFFF00D1)"
+        }
+      },
+      {
+        "name": "String.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "anchor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.prototype.anchor"
+            }
+          },
+          {
+            "key": "at",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.prototype.at"
+            }
+          },
+          {
+            "key": "big",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.prototype.big"
+            }
+          },
+          {
+            "key": "blink",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.prototype.blink"
+            }
+          },
+          {
+            "key": "bold",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.prototype.bold"
+            }
+          },
+          {
+            "key": "charAt",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.prototype.charAt"
+            }
+          },
+          {
+            "key": "charCodeAt",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.prototype.charCodeAt"
+            }
+          },
+          {
+            "key": "codePointAt",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.prototype.codePointAt"
+            }
+          },
+          {
+            "key": "concat",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.prototype.concat"
+            }
+          },
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String"
+            }
+          },
+          {
+            "key": "endsWith",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.prototype.endsWith"
+            }
+          },
+          {
+            "key": "fixed",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.prototype.fixed"
+            }
+          },
+          {
+            "key": "fontcolor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.prototype.fontcolor"
+            }
+          },
+          {
+            "key": "fontsize",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.prototype.fontsize"
+            }
+          },
+          {
+            "key": "includes",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.prototype.includes"
+            }
+          },
+          {
+            "key": "indexOf",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.prototype.indexOf"
+            }
+          },
+          {
+            "key": "isWellFormed",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.prototype.isWellFormed"
+            }
+          },
+          {
+            "key": "italics",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.prototype.italics"
+            }
+          },
+          {
+            "key": "lastIndexOf",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.prototype.lastIndexOf"
+            }
+          },
+          {
+            "key": "link",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.prototype.link"
+            }
+          },
+          {
+            "key": "localeCompare",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.prototype.localeCompare"
+            }
+          },
+          {
+            "key": "match",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.prototype.match"
+            }
+          },
+          {
+            "key": "matchAll",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.prototype.matchAll"
+            }
+          },
+          {
+            "key": "normalize",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.prototype.normalize"
+            }
+          },
+          {
+            "key": "padEnd",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.prototype.padEnd"
+            }
+          },
+          {
+            "key": "padStart",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.prototype.padStart"
+            }
+          },
+          {
+            "key": "repeat",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.prototype.repeat"
+            }
+          },
+          {
+            "key": "replace",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.prototype.replace"
+            }
+          },
+          {
+            "key": "replaceAll",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.prototype.replaceAll"
+            }
+          },
+          {
+            "key": "search",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.prototype.search"
+            }
+          },
+          {
+            "key": "slice",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.prototype.slice"
+            }
+          },
+          {
+            "key": "small",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.prototype.small"
+            }
+          },
+          {
+            "key": "split",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.prototype.split"
+            }
+          },
+          {
+            "key": "startsWith",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.prototype.startsWith"
+            }
+          },
+          {
+            "key": "strike",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.prototype.strike"
+            }
+          },
+          {
+            "key": "sub",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.prototype.sub"
+            }
+          },
+          {
+            "key": "substr",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.prototype.substr"
+            }
+          },
+          {
+            "key": "substring",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.prototype.substring"
+            }
+          },
+          {
+            "key": "sup",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.prototype.sup"
+            }
+          },
+          {
+            "key": "toLocaleLowerCase",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.prototype.toLocaleLowerCase"
+            }
+          },
+          {
+            "key": "toLocaleString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.prototype.toLocaleString"
+            }
+          },
+          {
+            "key": "toLocaleUpperCase",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.prototype.toLocaleUpperCase"
+            }
+          },
+          {
+            "key": "toLowerCase",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.prototype.toLowerCase"
+            }
+          },
+          {
+            "key": "toString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.prototype.toString"
+            }
+          },
+          {
+            "key": "toUpperCase",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.prototype.toUpperCase"
+            }
+          },
+          {
+            "key": "toWellFormed",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.prototype.toWellFormed"
+            }
+          },
+          {
+            "key": "trim",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.prototype.trim"
+            }
+          },
+          {
+            "key": "trimEnd",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.prototype.trimEnd"
+            }
+          },
+          {
+            "key": "trimLeft",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.prototype.trimLeft"
+            }
+          },
+          {
+            "key": "trimRight",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.prototype.trimEnd"
+            }
+          },
+          {
+            "key": "trimStart",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.prototype.trimLeft"
+            }
+          },
+          {
+            "key": "valueOf",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.prototype.valueOf"
+            }
+          },
+          {
+            "key": "@@iterator",
+            "symbol": true,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "String.prototype[\"@@iterator\"]"
+            }
+          }
+        ],
+        "own_key_order": [
+          "constructor",
+          "at",
+          "charAt",
+          "charCodeAt",
+          "codePointAt",
+          "anchor",
+          "big",
+          "blink",
+          "bold",
+          "fixed",
+          "fontcolor",
+          "fontsize",
+          "italics",
+          "link",
+          "small",
+          "strike",
+          "sub",
+          "sup",
+          "concat",
+          "endsWith",
+          "includes",
+          "indexOf",
+          "isWellFormed",
+          "lastIndexOf",
+          "localeCompare",
+          "match",
+          "matchAll",
+          "normalize",
+          "padEnd",
+          "padStart",
+          "repeat",
+          "replace",
+          "replaceAll",
+          "search",
+          "slice",
+          "split",
+          "startsWith",
+          "substr",
+          "substring",
+          "toLocaleLowerCase",
+          "toLocaleUpperCase",
+          "toLowerCase",
+          "toUpperCase",
+          "toWellFormed",
+          "trim",
+          "trimEnd",
+          "trimStart",
+          "trimLeft",
+          "trimRight",
+          "toLocaleString",
+          "valueOf",
+          "toString"
+        ],
+        "own_symbol_order": [
+          "@@iterator"
+        ],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2176,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "Object.prototype",
+          "String",
+          "String.prototype.anchor",
+          "String.prototype.at",
+          "String.prototype.big",
+          "String.prototype.blink",
+          "String.prototype.bold",
+          "String.prototype.charAt",
+          "String.prototype.charCodeAt",
+          "String.prototype.codePointAt",
+          "String.prototype.concat",
+          "String.prototype.endsWith",
+          "String.prototype.fixed",
+          "String.prototype.fontcolor",
+          "String.prototype.fontsize",
+          "String.prototype.includes",
+          "String.prototype.indexOf",
+          "String.prototype.isWellFormed",
+          "String.prototype.italics",
+          "String.prototype.lastIndexOf",
+          "String.prototype.link",
+          "String.prototype.localeCompare",
+          "String.prototype.match",
+          "String.prototype.matchAll",
+          "String.prototype.normalize",
+          "String.prototype.padEnd",
+          "String.prototype.padStart",
+          "String.prototype.repeat",
+          "String.prototype.replace",
+          "String.prototype.replaceAll",
+          "String.prototype.search",
+          "String.prototype.slice",
+          "String.prototype.small",
+          "String.prototype.split",
+          "String.prototype.startsWith",
+          "String.prototype.strike",
+          "String.prototype.sub",
+          "String.prototype.substr",
+          "String.prototype.substring",
+          "String.prototype.sup",
+          "String.prototype.toLocaleLowerCase",
+          "String.prototype.toLocaleString",
+          "String.prototype.toLocaleUpperCase",
+          "String.prototype.toLowerCase",
+          "String.prototype.toString",
+          "String.prototype.toUpperCase",
+          "String.prototype.toWellFormed",
+          "String.prototype.trim",
+          "String.prototype.trimEnd",
+          "String.prototype.trimLeft",
+          "String.prototype.valueOf",
+          "String.prototype[\"@@iterator\"]"
+        ]
+      },
+      {
+        "name": "Symbol",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "asyncIterator",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "symbol",
+              "value": "@@asyncIterator"
+            }
+          },
+          {
+            "key": "for",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Symbol.for"
+            }
+          },
+          {
+            "key": "iterator",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "symbol",
+              "value": "@@iterator"
+            }
+          },
+          {
+            "key": "keyFor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Symbol.keyFor"
+            }
+          },
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "Symbol"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "Symbol.prototype"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "for",
+          "keyFor",
+          "iterator",
+          "asyncIterator",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 1216348160
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::builtin_thunks::global_this_symbol_thunk",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::global_this_symbol_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "int32",
+            "value": 17
+          }
+        ],
+        "info_symbol": "perry_realm_info_398d79aa64566491945d",
+        "births": [
+          "Function.prototype",
+          "Symbol.for",
+          "Symbol.keyFor",
+          "Symbol.prototype"
+        ],
+        "constructor": {
+          "identity": 17,
+          "prototype_callable": false,
+          "instance_identity": "BuiltinInstanceIdentity::Class(0xFFFF00D4)"
+        }
+      },
+      {
+        "name": "Symbol.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Symbol"
+            }
+          },
+          {
+            "key": "toLocaleString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Symbol.prototype.toLocaleString"
+            }
+          },
+          {
+            "key": "toString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Symbol.prototype.toString"
+            }
+          },
+          {
+            "key": "valueOf",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Symbol.prototype.valueOf"
+            }
+          }
+        ],
+        "own_key_order": [
+          "constructor",
+          "toString",
+          "valueOf",
+          "toLocaleString"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2176,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "Object.prototype",
+          "Symbol",
+          "Symbol.prototype.toLocaleString",
+          "Symbol.prototype.toString",
+          "Symbol.prototype.valueOf"
+        ]
+      },
+      {
+        "name": "atob",
+        "kind": "function",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "atob"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::builtin_thunks::global_this_atob_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::global_this_atob_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_5f512a807d6b4a4f1c1e",
+        "births": [
+          "DOMException",
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "btoa",
+        "kind": "function",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "btoa"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::builtin_thunks::global_this_btoa_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::global_this_btoa_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_0da1b1f39bda95131c4e",
+        "births": [
+          "DOMException",
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "decodeURI",
+        "kind": "function",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "decodeURI"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::builtin_thunks::global_this_decode_uri_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::global_this_decode_uri_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_580ca59aca0595657541",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "decodeURIComponent",
+        "kind": "function",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "decodeURIComponent"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::builtin_thunks::global_this_decode_uri_component_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::global_this_decode_uri_component_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_1ac25b3375d27be45c66",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "encodeURI",
+        "kind": "function",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "encodeURI"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::builtin_thunks::global_this_encode_uri_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::global_this_encode_uri_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_9951c9881e25d243fa66",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "encodeURIComponent",
+        "kind": "function",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "encodeURIComponent"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::builtin_thunks::global_this_encode_uri_component_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::global_this_encode_uri_component_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_dead633da75248ca0e61",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "escape",
+        "kind": "function",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "escape"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::builtin_thunks::global_this_escape_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::global_this_escape_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_064f9804e90703804ff2",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "gc",
+        "kind": "function",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "gc"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::builtin_thunks::global_this_gc_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::global_this_gc_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_3f0fc42c5dad9e957e84",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "isFinite",
+        "kind": "function",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "isFinite"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::builtin_thunks::global_this_is_finite_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::global_this_is_finite_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_e8a9bfab7d75c1ba8097",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "isNaN",
+        "kind": "function",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "isNaN"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::builtin_thunks::global_this_is_nan_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::global_this_is_nan_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_c4fa654d07d50aa095fe",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "parseFloat",
+        "kind": "function",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "parseFloat"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::builtin_thunks::global_this_parse_float_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::global_this_parse_float_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_ee712eb80fa2bb3836d7",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "parseInt",
+        "kind": "function",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "parseInt"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "crate::object::global_this::builtin_thunks::global_this_parse_int_thunk",
+        "function_info": {
+          "params": 2,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 2,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::global_this_parse_int_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_94fcd0dc798c26219ee5",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "structuredClone",
+        "kind": "function",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "structuredClone"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "crate::object::global_this::builtin_thunks::global_this_structured_clone_thunk",
+        "function_info": {
+          "params": 2,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 2,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::global_this_structured_clone_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_e1e02244255d51e38b60",
+        "births": [
+          "ArrayBuffer",
+          "DOMException",
+          "Function.prototype",
+          "Uint8Array"
+        ]
+      },
+      {
+        "name": "unescape",
+        "kind": "function",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "unescape"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::builtin_thunks::global_this_unescape_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::builtin_thunks::global_this_unescape_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_71da65d9667a125d0ced",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ]
+  }
+}

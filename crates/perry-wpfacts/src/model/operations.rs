@@ -226,6 +226,7 @@ impl Model {
             ctor_fn: None,
             rooted: false,
             deep: false,
+            key_value: None,
         });
         id
     }
@@ -241,6 +242,7 @@ impl Model {
             ctor_fn: None,
             rooted: false,
             deep: false,
+            key_value: None,
         });
         id
     }

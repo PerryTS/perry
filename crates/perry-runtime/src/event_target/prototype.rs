@@ -558,3 +558,5 @@ pub(crate) fn install_constructor_constants(name: &str, constructor: *mut Object
         );
     }
 }
+
+crate::realm_decl!("prototype.realm.json#*");

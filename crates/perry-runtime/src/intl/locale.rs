@@ -1203,3 +1203,5 @@ pub(super) fn install_locale(ns_obj: *mut ObjectHeader) {
 mod info;
 mod likely_subtags;
 pub(in crate::intl) use likely_subtags::install as install_likely_subtags;
+
+crate::realm_decl!("locale.realm.json#*");

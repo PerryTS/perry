@@ -12,6 +12,7 @@ mod export;
 pub(crate) use export::UNDESCRIBED;
 mod for_in;
 mod glue;
+mod native_result;
 mod primitives;
 mod shared_closures;
 mod view;
@@ -139,6 +140,8 @@ pub struct Gen<'a> {
     /// DECISIONS 126: the stand-ins of other units' typed-array fields
     /// (report, token), one per class and key.
     pub stand_in_tas: Vec<(String, Tok)>,
+    /// Stable source-allocation ordinals, independent of imported stand-ins.
+    pub indexed_allocation_sites: FxHashMap<(u32, usize), u32>,
     /// Design §17.16 (b): the cells this unit names (key, node), the cells
     /// whose values no contract describes (sunk, published unknown), and
     /// the cells it reads.
@@ -307,6 +310,7 @@ mod import_values;
 
 #[path = "gen/class_values.rs"]
 mod class_values;
+mod indexed_owner;
 
 impl<'a> Gen<'a> {
     pub fn new(modules: Vec<(&'a str, &'a Module)>, relations: bool, explain: bool) -> Self {
@@ -389,6 +393,7 @@ impl<'a> Gen<'a> {
             describing: Default::default(),
             ta_reported: Default::default(),
             stand_in_tas: Vec::new(),
+            indexed_allocation_sites: FxHashMap::default(),
             cells: Vec::new(),
             cell_bad: Default::default(),
             cell_flows: Default::default(),
@@ -462,6 +467,7 @@ impl<'a> Gen<'a> {
     pub fn register_all(&mut self) {
         self.index_emitted_closures();
         self.note_const_inits();
+        self.note_indexed_allocation_sites();
         let modules = self.modules.clone();
         for (mi, (path, module)) in modules.iter().enumerate() {
             let mi = mi as u32;
@@ -703,14 +709,10 @@ impl<'a> Gen<'a> {
         // A value stored under a named key of it is one the owner does not
         // see (an element store is the typed array's own data).
         for (rep, t) in &self.stand_in_tas {
-            let written = self.m.field_keys.get(t).is_some_and(|ks| {
-                ks.iter().any(|&a| {
-                    self.m.fields.get(&(*t, a)).is_some_and(|&n| {
-                        !self.m.nodes[n as usize].pts.is_empty()
-                            || self.m.nodes[n as usize].prim != 0
-                    })
-                })
-            });
+            let written = self
+                .m
+                .tmpl_of(*t)
+                .is_none_or(|tm| crate::bindings::owner_metadata_written(&self.m, tm));
             if self.m.aborted || written || self.m.is_escaped(*t) || self.m.hard.contains_key(t) {
                 if self.m.explain {
                     let esc = self
@@ -1160,7 +1162,7 @@ impl<'a> Gen<'a> {
             let this = self.m.funcs[f as usize].this;
             self.m.this_class.insert(this, tm);
             let a = self.m.atom(name);
-            self.m.accessor_atoms.insert(a);
+            self.m.add_accessor_atom(a);
             let ft = self.m.funcs[f as usize].token;
             self.m.accessors.entry((proto, a)).or_default().0.push(ft);
             push_unique(self.m.accessor_keys.entry(proto).or_default(), a);
@@ -1171,7 +1173,7 @@ impl<'a> Gen<'a> {
             let this = self.m.funcs[f as usize].this;
             self.m.this_class.insert(this, tm);
             let a = self.m.atom(name);
-            self.m.accessor_atoms.insert(a);
+            self.m.add_accessor_atom(a);
             let ft = self.m.funcs[f as usize].token;
             self.m.accessors.entry((proto, a)).or_default().1.push(ft);
             push_unique(self.m.accessor_keys.entry(proto).or_default(), a);
@@ -1189,7 +1191,7 @@ impl<'a> Gen<'a> {
                 // Under a constant key: that key's accessor.
                 let this = self.m.funcs[f as usize].this;
                 self.m.this_class.insert(this, tm);
-                self.m.accessor_atoms.insert(a);
+                self.m.add_accessor_atom(a);
                 let ft = self.m.funcs[f as usize].token;
                 let e = self.m.accessors.entry((proto, a)).or_default();
                 if setter { &mut e.1 } else { &mut e.0 }.push(ft);

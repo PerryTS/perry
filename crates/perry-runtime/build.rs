@@ -589,6 +589,10 @@ fn build_trap_shim() {
 }
 
 fn main() {
+    let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
+    perry_runtime_manifest::realm_source::generate(std::path::Path::new("src"), &out)
+        .expect("emit runtime realm manifest");
+
     println!("cargo:rerun-if-env-changed=PERRY_CHECK_CONTRACTS");
     println!("cargo:rustc-check-cfg=cfg(perry_check_contracts)");
     println!("cargo:rustc-check-cfg=cfg(perry_contract_checks)");

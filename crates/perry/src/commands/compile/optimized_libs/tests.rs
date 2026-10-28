@@ -863,24 +863,26 @@ fn the_instrumented_variant_names_its_archives_with_an_instr_suffix() {
 
 #[test]
 fn deserializers_install_regex_without_a_regex_literal() {
-    // Dynamic-code reachability belongs to a whole compilation and is process
-    // global. Run this negative feature witness in a fresh test process so a
-    // preceding parser fixture cannot turn its plain program into dyn-eval.
-    const CASE: &str = "commands::compile::optimized_libs::tests::deserializers_install_regex_without_a_regex_literal";
-    let isolated = ["--exact", CASE, "--nocapture", "--test-threads=1"];
-    if std::env::args().skip(1).collect::<Vec<_>>() != isolated {
-        let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(isolated)
+    // Other lowering tests share dynamic-code reach. A child keeps this
+    // plain-program negative check independent without draining their state.
+    const CHILD: &str = "PERRY_TEST_DESERIALIZER_FEATURES_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let module = module_path!().split_once("::").unwrap().1;
+        let name = format!("{module}::deserializers_install_regex_without_a_regex_literal");
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", &name, "--test-threads=1", "--nocapture"])
+            .env(CHILD, "1")
             .output()
-            .expect("run the isolated feature witness");
+            .expect("run isolated deserializer feature test");
         assert!(
-            output.status.success(),
-            "isolated witness failed:\n{}\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
+            child.status.success() && String::from_utf8_lossy(&child.stdout).contains("1 passed;"),
+            "isolated feature test failed or did not run\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&child.stdout),
+            String::from_utf8_lossy(&child.stderr)
         );
         return;
     }
+    assert!(!perry_hir::has_deferred_dynamic_code_sites());
     let dir = tempfile::tempdir().unwrap();
     let features = BTreeSet::new();
     let plain = CompilationContext::new(dir.path().to_path_buf());

@@ -256,3 +256,5 @@ pub(crate) fn process_finalization_value() -> f64 {
     PROCESS_FINALIZATION_OBJECT.with(|c| c.set(value));
     value
 }
+
+crate::realm_decl!("finalization.realm.json#*");

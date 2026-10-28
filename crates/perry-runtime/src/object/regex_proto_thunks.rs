@@ -538,3 +538,5 @@ pub(crate) fn install_regex_proto_accessors(proto_obj: *mut ObjectHeader) {
         crate::fn_info!(regex_proto_has_indices_getter, 0; with_declared(0)),
     );
 }
+
+crate::realm_decl!("regex_proto_thunks.realm.json#*");

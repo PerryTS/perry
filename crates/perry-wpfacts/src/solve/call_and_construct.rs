@@ -394,6 +394,7 @@ impl Model {
             ctor_fn: None,
             rooted: false,
             deep: false,
+            key_value: None,
         });
         id
     }
@@ -845,10 +846,7 @@ impl Model {
         // is its write; the others re-escaped it, each publishing ⊤ for
         // what it reaches (opencode: every unit ⊤ for the ~210 arrays the
         // program throws, 27M cell writes in round 3).
-        if self.thrown_reason == Some(reason)
-            && self.thrown_in.contains(&t)
-            && self.stand_in(t)
-        {
+        if self.thrown_reason == Some(reason) && self.thrown_in.contains(&t) && self.stand_in(t) {
             return;
         }
         if self.closed_pub_reason == Some(reason) {
@@ -1710,6 +1708,10 @@ impl Model {
         // prototype exotic object). A ⊤ target that may be it is no E6 on it.
         if kind == Hard::E6SetPrototypeOf && matches!(self.toks[t as usize], TokKind::ObjectProto) {
             return;
+        }
+        // DECISIONS 217: another unit's lookups see a HARD shared object.
+        if let Some(s) = self.shared_of(t) {
+            self.note_shared(SharedWrite::Hard(s, kind));
         }
         if self.hard.contains_key(&t) {
             return;

@@ -52,6 +52,7 @@ perry-gc-effects.workspace = true
 perry-dispatch.workspace = true
 perry-abi.workspace = true
 perry-api-manifest.workspace = true
+perry-runtime-manifest.workspace = true
 
 anyhow.workspace = true
 aho-corasick.workspace = true
@@ -90,4 +91,7 @@ perry-diagnostics.workspace = true
 perry-parser.workspace = true
 
 [build-dependencies]
+serde.workspace = true
+serde_json.workspace = true
+perry-runtime-manifest.workspace = true
 cc = "1"

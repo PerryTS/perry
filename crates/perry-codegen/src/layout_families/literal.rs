@@ -260,7 +260,7 @@ mod tests {
             "literal family must retain Object.prototype"
         );
         assert!(
-            descriptor.contains("ptr null, i32 0, i32 0 }"),
+            descriptor.contains("ptr null, i32 0, i32 0, ptr getelementptr"),
             "the identity cell must remain unpublished until first birth"
         );
         assert!(

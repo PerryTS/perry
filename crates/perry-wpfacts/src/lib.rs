@@ -159,6 +159,8 @@ pub struct ProgramFacts {
     pub tok_names: Vec<String>,
     /// Receiver facts per binding, per module (slice 2: codegen elision).
     pub bindings: Vec<ModuleBindings>,
+    /// No solved native-prototype/global write in any contributing unit.
+    pub indexed_metadata_unwritten: bool,
     /// Per-unit mode: each unit's path and statistics.
     pub units: Vec<(String, Stats)>,
     /// `FactsConfig::unit_io`: the `# uio` / `# uout` dump lines.
@@ -944,7 +946,9 @@ pub(crate) fn compute_in<'a>(
                 .pts
                 .to_sorted()
                 .into_iter()
-                .filter(|t| !g.cell_flow_toks.contains(t) && !read.is_some_and(|r| r.pts.contains_tok(*t)))
+                .filter(|t| {
+                    !g.cell_flow_toks.contains(t) && !read.is_some_and(|r| r.pts.contains_tok(*t))
+                })
                 .collect();
             let prim = node.prim & !read.map_or(0, |r| r.prim);
             if toks.is_empty() && prim == 0 {
@@ -1412,6 +1416,7 @@ pub(crate) fn compute_in<'a>(
         relations: g.m.relations.take(),
         tok_names,
         bindings,
+        indexed_metadata_unwritten: !g.m.aborted && g.m.native_writes.is_empty(),
         units: Vec::new(),
         unit_io: Vec::new(),
         rounds: 0,
@@ -1460,6 +1465,13 @@ pub fn compute_units(modules: &[(String, &Module)], cfg: &FactsConfig) -> Progra
 }
 
 impl ProgramFacts {
+    /// Conservative program-wide metadata effect contract. Handing a shared
+    /// object to another analyzed unit is not itself a mutation; every actual
+    /// mutation or exposure to unmodeled code withholds this proof.
+    pub fn indexed_metadata_pristine(&self) -> bool {
+        !self.stats.aborted && self.interp_guard.is_none() && self.indexed_metadata_unwritten
+    }
+
     fn module_index(&self, path: &str) -> Option<usize> {
         self.module_paths
             .binary_search_by(|p| p.as_str().cmp(path))

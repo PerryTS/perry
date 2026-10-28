@@ -1309,3 +1309,5 @@ pub(super) fn install_uint8array_base64_hex_proto_methods(proto_obj: *mut Object
         ipm(proto_obj, name, info, spec_length);
     }
 }
+
+crate::realm_decl!("typed_array_proto_thunks.realm.json#*");

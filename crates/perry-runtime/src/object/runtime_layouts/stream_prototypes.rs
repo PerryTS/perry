@@ -404,6 +404,7 @@ static READABLE_STATE_PROTO_INDEX: [u32; 32] = [
     link_section = "perry_layouts"
 )]
 pub(crate) static mut READABLE_STATE_PROTO: PerryLayoutDesc = PerryLayoutDesc {
+    image_keys: crate::object::image_keys::image_key_list!(READABLE_STATE_PROTO_KEYS),
     shape_id: 0,
     _layout_pad: 0,
     family: 0x53500001,
@@ -563,6 +564,7 @@ static WRITABLE_STATE_PROTO_INDEX: [u32; 32] = [
     link_section = "perry_layouts"
 )]
 pub(crate) static mut WRITABLE_STATE_PROTO: PerryLayoutDesc = PerryLayoutDesc {
+    image_keys: crate::object::image_keys::image_key_list!(WRITABLE_STATE_PROTO_KEYS),
     shape_id: 0,
     _layout_pad: 0,
     family: 0x53500002,
@@ -646,6 +648,7 @@ static EE_ASYNC_RESOURCE_PROTO_INDEX: [u32; 16] = [
     link_section = "perry_layouts"
 )]
 pub(crate) static mut EE_ASYNC_RESOURCE_PROTO: PerryLayoutDesc = PerryLayoutDesc {
+    image_keys: crate::object::image_keys::image_key_list!(EE_ASYNC_RESOURCE_PROTO_KEYS),
     shape_id: 0,
     _layout_pad: 0,
     family: 0x53500008,

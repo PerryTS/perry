@@ -323,3 +323,5 @@ pub(crate) fn install_dataview_proto_methods(proto_obj: *mut ObjectHeader) {
         install_proto_method_rest(proto_obj, name, ptr, 2);
     }
 }
+
+crate::realm_decl!("dataview_proto_thunks.realm.json#*");

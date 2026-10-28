@@ -306,14 +306,25 @@ pub struct PerryLayoutDesc {
     pub methods: *const methods::PerryFamilyMethods,
     pub shape_id: u32,
     pub _layout_pad: u32,
+    /// Immutable descriptor-owned canonical key-list cell; null for bindings
+    /// whose keys are local to an evaluation, and on the wasm fallback arm.
+    pub image_keys: *mut crate::array::ArrayHeader,
 }
 
 const _: () = assert!(
+    std::mem::offset_of!(PerryLayoutDesc, image_keys)
+        == if cfg!(target_pointer_width = "64") {
+            80
+        } else {
+            64
+        }
+);
+const _: () = assert!(
     std::mem::size_of::<PerryLayoutDesc>()
         == if cfg!(target_pointer_width = "32") {
-            64
+            72
         } else {
-            80
+            88
         }
 );
 const _: () = assert!(
@@ -413,7 +424,7 @@ macro_rules! section_sentinel {
         #[cfg_attr(target_vendor = "apple", link_section = $mach)]
         #[cfg_attr(target_os = "windows", link_section = $win)]
         #[cfg_attr(
-            not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
+            not(any(target_vendor = "apple", target_os = "windows")),
             link_section = $elf
         )]
         static $($mutable)* $name: $ty = $init;
@@ -424,6 +435,7 @@ section_sentinel!(
     LAYOUT_SECTION_SENTINEL,
     PerryLayoutDesc,
     PerryLayoutDesc {
+        image_keys: std::ptr::null_mut(),
         shape_id: 0,
         _layout_pad: 0,
         family: SENTINEL_FAMILY,
@@ -465,7 +477,7 @@ section_sentinel!(
 /// Runtime-only binaries use this empty weak definition. Its address is
 /// resolved by the linker, never registered, memoized or changed at startup.
 #[used(linker)]
-#[cfg_attr(not(target_family = "wasm"), linkage = "weak")]
+#[linkage = "weak"]
 #[export_name = "perry_shadow_name_descriptor"]
 static SHADOW_NAME_DESCRIPTOR: StaticAtom = StaticAtom {
     hash: 0,
@@ -523,7 +535,7 @@ fn layout_bounds() -> (usize, usize) {
             std::ptr::addr_of!(LAYOUT_END) as usize,
         )
     }
-    #[cfg(not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")))]
+    #[cfg(not(any(target_vendor = "apple", target_os = "windows")))]
     {
         unsafe extern "C" {
             static __start_perry_layouts: u8;
@@ -533,10 +545,6 @@ fn layout_bounds() -> (usize, usize) {
             std::ptr::addr_of!(__start_perry_layouts) as usize,
             std::ptr::addr_of!(__stop_perry_layouts) as usize,
         )
-    }
-    #[cfg(target_family = "wasm")]
-    {
-        (0, 0)
     }
 }
 
@@ -563,7 +571,7 @@ fn atom_bounds() -> (usize, usize) {
             std::ptr::addr_of!(ATOM_END) as usize,
         )
     }
-    #[cfg(not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")))]
+    #[cfg(not(any(target_vendor = "apple", target_os = "windows")))]
     {
         unsafe extern "C" {
             static __start_perry_atoms: u8;
@@ -573,10 +581,6 @@ fn atom_bounds() -> (usize, usize) {
             std::ptr::addr_of!(__start_perry_atoms) as usize,
             std::ptr::addr_of!(__stop_perry_atoms) as usize,
         )
-    }
-    #[cfg(target_family = "wasm")]
-    {
-        (0, 0)
     }
 }
 
@@ -677,13 +681,14 @@ pub(crate) fn seed_static_atoms() {
         }
     }
     crate::object::layout_probe::seed_colours();
+    #[cfg(all(feature = "wasm-image-selftest", target_family = "wasm"))]
+    wasm_program_image_checks::check_atoms();
 }
 
 #[path = "layout_desc/registration.rs"]
 mod registration;
 use registration::binding_symbol_keys;
 use registration::declared_kind;
-use registration::layout_key_word;
 pub(crate) use registration::layout_word_for_birth;
 
 /// Runtime layouts this agent installed (test builds).
@@ -691,6 +696,7 @@ pub(crate) use registration::layout_word_for_birth;
 pub(crate) fn registration_installs() -> u32 {
     registration::RUNTIME_LAYOUT_INSTALLS.with(|n| n.get())
 }
+pub(crate) use registration::layout_key_word;
 pub(crate) use registration::register_function_layout;
 pub(crate) use registration::register_namespace_layout;
 pub(crate) use registration::register_one;
@@ -1782,26 +1788,31 @@ pub(crate) unsafe fn prepare_hole_define(receiver: u64, key: u64) {
     }
 }
 
-// Wasm uses the same records and registration logic; only image enumeration
-// differs because relocated data cannot live in Rust's Wasm custom sections.
+// Program records use linker section bounds on every target. On wasm the
+// runtime also keeps its own existing inventory: Rust custom sections cannot
+// carry relocations. No program constructor or address registry is needed.
 fn image_atoms() -> impl Iterator<Item = *mut StaticAtom> {
     #[cfg(target_family = "wasm")]
     {
-        inventory::iter::<crate::wasm_image::Atom>
-            .into_iter()
-            .map(|item| item.0.cast_mut())
+        records::<StaticAtom>(atom_bounds()).chain(
+            inventory::iter::<crate::wasm_image::Atom>
+                .into_iter()
+                .map(|item| item.0.cast_mut()),
+        )
     }
     #[cfg(not(target_family = "wasm"))]
     {
         records::<StaticAtom>(atom_bounds())
     }
 }
-fn image_layouts() -> impl Iterator<Item = *mut PerryLayoutDesc> {
+pub(super) fn image_layouts() -> impl Iterator<Item = *mut PerryLayoutDesc> {
     #[cfg(target_family = "wasm")]
     {
-        inventory::iter::<crate::wasm_image::Layout>
-            .into_iter()
-            .map(|item| item.0)
+        records::<PerryLayoutDesc>(layout_bounds()).chain(
+            inventory::iter::<crate::wasm_image::Layout>
+                .into_iter()
+                .map(|item| item.0),
+        )
     }
     #[cfg(not(target_family = "wasm"))]
     {
@@ -1814,19 +1825,20 @@ fn image_layouts() -> impl Iterator<Item = *mut PerryLayoutDesc> {
 mod enumeration;
 
 fn descriptor_index(desc: *const PerryLayoutDesc) -> Option<u32> {
-    #[cfg(target_family = "wasm")]
-    {
-        enumeration::enumerated_layout_index(image_layouts(), desc)
-    }
-    #[cfg(not(target_family = "wasm"))]
-    {
-        let (start, end) = layout_bounds();
-        let at = desc as usize;
-        let size = std::mem::size_of::<PerryLayoutDesc>();
-        if at >= start && at < end && (at - start) % size == 0 {
-            Some(((at - start) / size) as u32)
-        } else {
-            literal_birth::literal_index(desc)
+    let (start, end) = layout_bounds();
+    let at = desc as usize;
+    let size = std::mem::size_of::<PerryLayoutDesc>();
+    if at >= start && at < end && (at - start) % size == 0 {
+        Some(((at - start) / size) as u32)
+    } else {
+        let literal = literal_birth::literal_index(desc);
+        #[cfg(target_family = "wasm")]
+        {
+            literal.or_else(|| literal_birth::runtime_index(desc))
+        }
+        #[cfg(not(target_family = "wasm"))]
+        {
+            literal
         }
     }
 }
@@ -1878,3 +1890,6 @@ mod windows_atom_bounds_tests {
 #[cfg(test)]
 #[path = "layout_section_tests.rs"]
 mod layout_section_tests;
+#[cfg(all(feature = "wasm-image-selftest", target_family = "wasm"))]
+#[path = "layout_desc/wasm_program_image_checks.rs"]
+mod wasm_program_image_checks;

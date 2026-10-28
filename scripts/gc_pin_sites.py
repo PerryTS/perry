@@ -128,6 +128,19 @@ ALLOWLIST: list[tuple[str, str, str]] = [
         "aggregate rule from recognising it. Same image-address argument.",
     ),
     (
+        "crates/perry-runtime/src/value/addr_class/realm.rs",
+        "pub(crate) const IMAGE_CELL_FLAGS: u8 = crate::gc::GC_FLAG_MARKED | crate::gc::GC_FLAG_PINNED",
+        "the flag shape of a realm image cell (WRT): emitted as static data in "
+        "the `perry_realm` section, never in Eden, so it cannot constrain the "
+        "copying minor; the classifier compares headers against it.",
+    ),
+    (
+        "crates/perry-runtime/src/gc/tests/image_cells.rs",
+        "const IMAGE_FLAGS: u8 = GC_FLAG_MARKED | GC_FLAG_PINNED",
+        "the realm fixture's `static` cells in the `perry_realm` section: an "
+        "address in the binary image, never in Eden. Same image argument.",
+    ),
+    (
         "crates/perry-runtime/src/value/addr_class/image.rs",
         "gc._reserved != crate::string::STRING_IMAGE_MARKER",
         "the image recogniser COMPARES a header's whole flag word against the "

@@ -462,6 +462,7 @@ impl<'a> Gen<'a> {
         if !(value.builtins.is_empty()
             && value.arrays.is_empty()
             && value.boxes.is_empty()
+            && value.indexed_owners.is_empty()
             && value.fns.is_empty())
         {
             let v = self.stand_in_value(mi, why, value);

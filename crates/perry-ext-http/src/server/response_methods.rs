@@ -269,3 +269,9 @@ mod tests {
             .unwrap();
     }
 }
+
+// Source-only realm facts beside the owning builtin bodies.
+macro_rules! realm_decl {
+    ($facts:literal) => {};
+}
+realm_decl!("response_methods.realm.json#*");

@@ -146,24 +146,39 @@ fn emit_public_typed_closure_trampoline(
     let wf = llmod.define_function(&public_name, DOUBLE, llvm_params);
     let _ = wf.create_block("entry");
 
-    let (guards, capture_guard) = {
+    let (entry_values, guards) = {
         let blk = wf.block_mut(0).unwrap();
-        let guards: Vec<EntryArgGuard> = arg_names
+        let mut values = arg_names.clone();
+        let mut guards: Vec<EntryArgGuard> = arg_names
             .iter()
             .zip(arg_reps.iter())
             .map(|(arg, rep)| typed_entry_arg_guard(blk, *rep, arg))
             .collect();
-        let capture_guard = emit_entry_typed_capture_guard(blk, capture_header, capture_reps);
-        (guards, capture_guard)
+        // Captures obey the same actual-value admission as arguments. Plain
+        // Numbers need only the ordered tier; boxed int32s and numeric NaNs
+        // retain the full second tier. No capture annotation is a proof.
+        for (idx, rep) in capture_reps.iter().enumerate() {
+            let bits = load_entry_capture_word(blk, capture_header, idx);
+            let value = blk.bitcast_i64_to_double(&bits);
+            guards.push(typed_entry_arg_guard(blk, *rep, &value));
+            values.push(value);
+        }
+        (values, guards)
     };
     emit_tiered_entry_dispatch(
         wf,
         "typed_closure_public",
-        &arg_names,
+        &entry_values,
         &guards,
-        capture_guard,
+        None,
         &mut |blk, values| {
-            emit_typed_closure_trampoline_fast_value(blk, kind, &typed_name, values, &arg_reps)
+            emit_typed_closure_trampoline_fast_value(
+                blk,
+                kind,
+                &typed_name,
+                &values[..arg_names.len()],
+                &arg_reps,
+            )
         },
         &mut |blk| {
             // The generic body is this entry's own continuation: it gets the
@@ -206,26 +221,6 @@ fn load_typed_capture(
     // The public entry's capture guard admitted this value, so the inline
     // conversions are exact (string materialization stays a call).
     emit_typed_arg_to_raw(blk, rep, &captured)
-}
-
-/// [`emit_typed_capture_guard`] for a closure body's own entry: the words are
-/// the running closure's, loaded inline ([`load_entry_capture_word`]).
-fn emit_entry_typed_capture_guard(
-    blk: &mut crate::block::LlBlock,
-    header_size: u64,
-    capture_reps: &[TypedParamRep],
-) -> Option<String> {
-    let mut guard: Option<String> = None;
-    for (idx, rep) in capture_reps.iter().enumerate() {
-        let captured_bits = load_entry_capture_word(blk, header_size, idx);
-        let captured = blk.bitcast_i64_to_double(&captured_bits);
-        let ok = emit_typed_arg_guard(blk, *rep, &captured);
-        guard = Some(match guard {
-            Some(prev) => blk.and(I1, &prev, &ok),
-            None => ok,
-        });
-    }
-    guard
 }
 
 pub(crate) fn emit_typed_capture_guard(

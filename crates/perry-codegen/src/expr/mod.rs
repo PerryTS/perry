@@ -3251,6 +3251,8 @@ pub(crate) mod class_env;
 pub(crate) mod class_field_push;
 pub(crate) mod class_first_evaluation;
 mod closure;
+#[cfg(test)]
+mod sort_numeric_codegen_tests;
 pub(crate) use closure::{plain_async_step_release_ids, push_capture_word};
 mod compare;
 pub(crate) use compare::ordinary_object_allocation;

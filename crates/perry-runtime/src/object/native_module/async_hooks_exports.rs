@@ -167,3 +167,5 @@ pub(super) fn attach_async_resource_prototype(constructor_value: f64) -> f64 {
     crate::async_hook_slots::adopt_async_resource_prototype(proto);
     constructor
 }
+
+crate::realm_decl!("async_hooks_exports.realm.json#*");

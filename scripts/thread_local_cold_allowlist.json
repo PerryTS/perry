@@ -69,7 +69,7 @@
     "crates/perry-runtime/src/object/alloc_basic.rs": 1,
     "crates/perry-runtime/src/object/builtin_namespace.rs": 1,
     "crates/perry-runtime/src/object/builtin_proto.rs": 1,
-    "crates/perry-runtime/src/object/layout_desc.rs": 1,
+    "crates/perry-runtime/src/object/layout_desc/diagnostics.rs": 1,
     "crates/perry-runtime/src/object/native_module/callable_exports.rs": 1,
     "crates/perry-runtime/src/object/spill.rs": 1,
     "crates/perry-runtime/src/os/os_process_emitter.rs": 1,

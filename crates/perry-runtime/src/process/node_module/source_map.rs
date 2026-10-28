@@ -801,3 +801,5 @@ pub extern "C" fn js_module_find_source_map(filename: f64) -> f64 {
     crate::gc::runtime_write_barrier_root_nanbox(map.to_bits());
     map
 }
+
+crate::realm_decl!("source_map.realm.json#*");
