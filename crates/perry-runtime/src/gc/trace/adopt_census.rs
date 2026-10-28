@@ -5,7 +5,7 @@
 //!
 //! A promoted-cohort full (`gc::promoted_cohort`) runs at the same precise
 //! safepoint as the nursery minor whose promotion made it due. That minor's
-//! untraced in-place promotion has just parsed every header of every block it
+//! in-place promotion has just parsed every header of every block it
 //! promoted (`arena::promote::stamp_and_index_block`), and the full's census
 //! would parse them all again before the mutator has run a single instruction.
 //! On `records_array_20m:parse` those blocks are two of the three JSON trees
