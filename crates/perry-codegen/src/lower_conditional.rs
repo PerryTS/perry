@@ -5,6 +5,8 @@
 
 #[path = "lower_conditional_array_record.rs"]
 pub(crate) mod array_record;
+#[path = "lower_conditional_numeric_schedule.rs"]
+mod numeric_schedule;
 use anyhow::Result;
 use perry_hir::{Expr, LogicalOp};
 
@@ -229,6 +231,19 @@ pub(crate) fn lower_test(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         right,
     } = expr
     {
+        // Only total primitive comparisons can move across this branch.
+        let (left, right) = if matches!(
+            expr,
+            Expr::Logical {
+                op: LogicalOp::And,
+                ..
+            }
+        ) && numeric_schedule::cheap_guard_first(ctx, left, right)
+        {
+            (right, left)
+        } else {
+            (left, right)
+        };
         let l = lower_test(ctx, left)?;
         let pred = ctx.block().label.clone();
         let rhs = ctx.new_block("test.right");

@@ -360,9 +360,7 @@ fn register_old_block_pages(base: usize, size: usize) {
     let last_page = generation_page_for_addr(end - 1);
     OLD_GEN_PAGE_META.with(|meta| {
         let mut meta = meta.borrow_mut();
-        for page in first_page..=last_page {
-            meta.get_or_insert(page);
-        }
+        meta.ensure_range(first_page, last_page);
     });
 }
 
@@ -376,15 +374,11 @@ pub(crate) fn unregister_old_block_pages(pages: &[usize]) {
     flush_deferred_old_page_registrations();
     OLD_GEN_PAGE_META.with(|meta| {
         let mut meta = meta.borrow_mut();
-        for &page in pages {
-            meta.remove(&page);
-        }
+        meta.remove_pages(pages);
     });
     OLD_GEN_PAGE_OBJECTS.with(|index| {
         let mut index = index.borrow_mut();
-        for &page in pages {
-            index.remove(&page);
-        }
+        index.remove_pages(pages);
     });
     // RUN REMOVER: DISCARD, never expand — the block backing these pages is
     // going away, so a run's `first_header` no longer points at memory this
@@ -1300,6 +1294,8 @@ fn flush_deferred_old_page_registrations_batch() {
         let mut index = index.borrow_mut();
         OLD_GEN_PAGE_META.with(|meta| {
             let mut meta = meta.borrow_mut();
+            let mut index_cursor = index.cursor();
+            let mut meta_cursor = meta.cursor();
             // Entries arrive in allocation order, so consecutive ones share a
             // page: resolve that page's object list (and, when needed, its
             // metadata) once per run, and cache its pre-batch length. Both
@@ -1325,7 +1321,7 @@ fn flush_deferred_old_page_registrations_batch() {
                     }
                     if run_page != Some(page) {
                         run_page = Some(page);
-                        run_headers = index.get_or_insert(page);
+                        run_headers = index_cursor.get_or_insert(page);
                         run_meta = std::ptr::null_mut();
                         // SAFETY: just resolved from the map for this page.
                         run_base_len = unsafe { (*run_headers).len() };
@@ -1339,7 +1335,7 @@ fn flush_deferred_old_page_registrations_batch() {
                         continue;
                     }
                     if run_meta.is_null() {
-                        run_meta = meta.get_or_insert(page);
+                        run_meta = meta_cursor.get_or_insert(page);
                     }
                     // SAFETY: as `run_headers`.
                     let page_meta = unsafe { &mut *run_meta };
