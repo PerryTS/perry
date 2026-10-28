@@ -827,10 +827,11 @@ fn knockout_missing_image_birth_facts_fails_the_store_audit() {
             crate::object::shapes::store_kind::audit_store_facts_for_test(object);
         });
         (*object_header())._reserved |= OBJ_FLAG_PLAIN_ORDINARY;
-        assert_eq!(
+        // This calls the audit body directly, independent of the optional
+        // mutator hook. The knockout must trip in release builds too.
+        assert!(
             result.is_err(),
-            cfg!(any(debug_assertions, feature = "shape-fact-audit")),
-            "the invalid birth mark must follow the configured store audit mode"
+            "the direct audit must reject missing image birth facts in every audit mode"
         );
     }
 }
