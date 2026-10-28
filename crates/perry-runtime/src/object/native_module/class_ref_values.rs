@@ -290,7 +290,10 @@ pub(crate) fn class_method_declaration_value_bytes(
     if f.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    let entry_code = unsafe { (*f).code() } as usize;
+    let registered = entry != 0
+        && !name.is_empty()
+        && !crate::builtins::function_has_registered_name(unsafe { &*info })
+        && crate::builtins::register_function_name(unsafe { &*info }, name);
     // A compiled method whose body already names it (its image name, or the
     // name registered for its entry) answers `name` as the intrinsic of its
     // base Function shape: the same value and attributes (non-writable,
@@ -298,22 +301,15 @@ pub(crate) fn class_method_declaration_value_bytes(
     // and no property bag. The closure then stays on its body's base shape,
     // which every shape-proved function path (bind, call, `.name`) admits.
     // A computed or differing name is defined as an own property.
-    // The compiled, non-computed path needs both name inference and the
-    // canonical comparison. Share its read, or use the actual inferred write.
-    // Other method-name modes retain their ordinary registration/read path.
-    let intrinsic_name = if entry != 0 && !computed_name && !name.is_empty() {
-        unsafe { crate::builtins::infer_name_matches_closure(f, entry_code, name) }
-    } else {
-        if entry != 0
-            && !name.is_empty()
-            && !crate::builtins::function_has_registered_name(entry_code)
-        {
-            crate::builtins::register_function_name_bytes(entry_code, name);
-        }
-        entry != 0
-            && !computed_name
-            && unsafe { crate::builtins::function_name_matches_closure(f, name) }
-    };
+    // When this operation just published a legacy entry's name, the
+    // canonical bytes are already known. An image name still takes precedence,
+    // and a refused publication or invalid UTF-8 must use the ordinary read.
+    let intrinsic_name = entry != 0
+        && !computed_name
+        && ((registered
+            && unsafe { (*info).flags & crate::codegen_abi::FN_HAS_NAME == 0 }
+            && std::str::from_utf8(name).is_ok())
+            || unsafe { crate::builtins::function_name_matches_closure(f, name) });
     let facts = u64::from(params) | (u64::from(synthetic) << 32) | (u64::from(rest) << 33);
     unsafe {
         crate::closure::closure_install_boxed_captures(
@@ -487,11 +483,14 @@ mod method_birth_tests {
         0.0
     }
 
-    static INFO: crate::closure::JsFunctionInfo = {
-        let mut info = crate::closure::JsFunctionInfo::of_native_args(entry, 1);
-        info.flags |= crate::codegen_abi::FN_COMPILED_BODY;
-        info
-    };
+    static OWNER: crate::codegen_abi::FunctionMetadataOwner =
+        crate::codegen_abi::FunctionMetadataOwner::native();
+    static INFO: crate::codegen_abi::NativeFunctionInfo =
+        crate::codegen_abi::NativeFunctionInfo::new(
+            crate::closure::JsFunctionInfo::of_native_args(entry, 1)
+                .with_flags(crate::codegen_abi::FN_COMPILED_BODY),
+            &OWNER,
+        );
 
     #[test]
     fn compiled_literal_method_preserves_bind_birth_shape() {
@@ -505,7 +504,7 @@ mod method_birth_tests {
                     1,
                     false,
                     false,
-                    &INFO as *const _ as usize,
+                    &INFO.info as *const _ as usize,
                     computed,
                 )
             };
