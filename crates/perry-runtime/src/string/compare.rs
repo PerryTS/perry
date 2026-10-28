@@ -3,6 +3,7 @@
 use super::*;
 use crate::string::wtf8::{self, Wtf8Str};
 
+mod byte_eq;
 mod keys;
 #[cfg(test)]
 pub(crate) use keys::test_key_byte_reads;
@@ -175,7 +176,7 @@ pub extern "C" fn js_string_equals(a: *const StringHeader, b: *const StringHeade
         let data_b = string_data(b);
         let slice_a = std::slice::from_raw_parts(data_a, blen_a as usize);
         let slice_b = std::slice::from_raw_parts(data_b, blen_b as usize);
-        if slice_a == slice_b {
+        if byte_eq::equal(slice_a, slice_b) {
             1
         } else {
             0

@@ -69,7 +69,7 @@ pub(crate) unsafe fn js_string_key_matches_bytes(
         }
         let stored_data = (stored_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
         let stored_slice = std::slice::from_raw_parts(stored_data, stored_len);
-        return stored_slice == incoming_bytes;
+        return byte_eq::equal(stored_slice, incoming_bytes);
     }
     if stored.is_short_string() {
         let sso_len = stored.short_string_len();
