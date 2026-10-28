@@ -1177,7 +1177,7 @@ fn replace_this_in_expr(expr: &mut Expr, this_id: LocalId) {
             replace_this_in_expr(value, this_id);
         }
         Expr::PropertyUpdate { object, .. } => replace_this_in_expr(object, this_id),
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             replace_this_in_expr(object, this_id);
             replace_this_in_expr(index, this_id);
         }

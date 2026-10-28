@@ -199,7 +199,7 @@ fn flat_const_expr_is_safe(
         Expr::LocalGet(local_id) if *local_id == id || row_aliases.contains(local_id) => {
             use_kind == FlatConstUse::IndexObject
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             let produces_row =
                 matches!(object.as_ref(), Expr::LocalGet(array_id) if *array_id == id);
             if produces_row
@@ -579,7 +579,7 @@ pub fn expr_has_mutation(e: &perry_hir::Expr, id: u32) -> bool {
                 || expr_has_mutation(value, id)
                 || expr_has_mutation(receiver, id)
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             expr_has_mutation(object, id) || expr_has_mutation(index, id)
         }
         Expr::Array(elements, _) => elements.iter().any(|e| expr_has_mutation(e, id)),
@@ -617,6 +617,8 @@ mod tests {
 
     fn index(object: Expr, index: i64) -> Expr {
         Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(object),
             index: Box::new(Expr::Integer(index)),
         }
@@ -702,6 +704,7 @@ mod tests {
 
     fn call(callee: u32, args: Vec<Expr>) -> Expr {
         Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::FuncRef(callee)),
             args,
             type_args: Vec::new(),
@@ -719,6 +722,7 @@ mod tests {
         let body = vec![
             perry_hir::Stmt::Expr(call(101, Vec::new())),
             perry_hir::Stmt::Return(Some(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(7)),
                 property: "v".to_string(),
                 byte_offset: 0,
@@ -732,6 +736,7 @@ mod tests {
     #[test]
     fn a_call_free_body_of_reads_and_arithmetic_is_not_a_call() {
         let read = Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(7)),
             property: "v".to_string(),
             byte_offset: 0,

@@ -279,6 +279,7 @@ fn typed_number_remainder_keeps_integer_check_and_ieee_fallback() {
         op: BinaryOp::Mod,
         left: Box::new(Expr::LocalGet(10)),
         right: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::This),
             property: "divisor".to_string(),
             byte_offset: 0,

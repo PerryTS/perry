@@ -56,7 +56,7 @@ pub(super) struct InstalledViews {
 fn exact_entity_read(expr: &Expr, array_id: u32, counter_id: u32) -> bool {
     matches!(
         expr,
-        Expr::IndexGet { object, index }
+        Expr::IndexGet { object, index , .. }
             if matches!(object.as_ref(), Expr::LocalGet(id) if *id == array_id)
                 && matches!(index.as_ref(), Expr::LocalGet(id) if *id == counter_id)
     )
@@ -186,7 +186,7 @@ fn safe_expr(expr: &Expr, selected: &[u32], entity_array_id: u32, counter_id: u3
         | Expr::Number(_)
         | Expr::Integer(_)
         | Expr::LocalGet(_) => true,
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             exact_entity_read(expr, entity_array_id, counter_id)
                 || matches!(object.as_ref(), Expr::LocalGet(id) if selected.contains(id))
                     && exact_entity_read(index, entity_array_id, counter_id)

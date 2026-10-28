@@ -328,7 +328,9 @@ fn concat_accumulator_is_rooted_and_written_back() {
     let ir = ir_for(
         "concat_rooted.ts",
         vec![Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::Binary {
                     op: perry_hir::BinaryOp::Add,
                     left: Box::new(Expr::String("a".to_string())),
@@ -391,7 +393,9 @@ fn string_method_with_non_allocating_args_emits_no_rooting_calls() {
     let ir = ir_for(
         "string_method_no_gc.ts",
         vec![Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::Binary {
                     op: perry_hir::BinaryOp::Add,
                     left: Box::new(Expr::String("a".to_string())),
@@ -420,6 +424,7 @@ fn module_with_new(name: &str, args: Vec<Expr>) -> Module {
     let mut module = module_with_init(
         name,
         vec![Stmt::Expr(Expr::New {
+            byte_end: 0,
             class_name: "Pair".to_string(),
             args,
             type_args: Vec::new(),

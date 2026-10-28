@@ -179,6 +179,8 @@ mod tests {
         use perry_hir::{Expr, Module, Stmt};
         let mut module = Module::new("read_site_symbol.ts");
         module.init.push(Stmt::Expr(Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::GlobalGet(100)),
             index: Box::new(Expr::SymbolFor(Box::new(Expr::String("key".into())))),
         }));
@@ -210,6 +212,7 @@ mod tests {
         for (getter, memo) in [("width", true), ("height", false)] {
             let mut module = Module::new("read_site_names.ts");
             module.init.push(Stmt::Expr(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::GlobalGet(100)),
                 property: "width".into(),
                 byte_offset: 0,
@@ -253,6 +256,7 @@ mod tests {
         for (worker, thread_agent) in [(false, false), (true, false), (false, true), (true, true)] {
             let mut module = Module::new("read_site_agents.ts");
             module.init.push(Stmt::Expr(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::GlobalGet(100)),
                 property: "width".into(),
                 byte_offset: 0,

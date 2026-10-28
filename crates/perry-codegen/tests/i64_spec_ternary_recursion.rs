@@ -120,6 +120,7 @@ fn ternary_recursive_fn(id: u32, name: &str, base: Expr) -> Function {
             }),
             then_expr: Box::new(base),
             else_expr: Box::new(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::FuncRef(id)),
                 args: vec![Expr::Binary {
                     op: BinaryOp::Sub,

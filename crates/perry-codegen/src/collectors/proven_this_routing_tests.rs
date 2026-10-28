@@ -197,6 +197,7 @@ fn class(id: u32, name: &str, fields: Vec<ClassField>, methods: Vec<Function>) -
 
 fn this_get(f: &str) -> Expr {
     Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::This),
         property: f.to_string(),
         byte_offset: 0,
@@ -205,7 +206,9 @@ fn this_get(f: &str) -> Expr {
 
 fn call(recv: Expr, method: &str, args: Vec<Expr>) -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(recv),
             property: method.to_string(),
             byte_offset: 0,
@@ -399,6 +402,7 @@ fn ptr_shape_local_module() -> Module {
                 ty: Type::Named("Point".to_string()),
                 mutable: false,
                 init: Some(Expr::New {
+                    byte_end: 0,
                     class_name: "Point".to_string(),
                     args: vec![Expr::Number(3.0), Expr::Number(4.0)],
                     type_args: Vec::new(),
@@ -414,6 +418,7 @@ fn ptr_shape_local_module() -> Module {
                 value: Box::new(Expr::Binary {
                     op: BinaryOp::Add,
                     left: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         object: Box::new(Expr::LocalGet(2)),
                         property: "x".to_string(),
                         byte_offset: 0,
@@ -471,6 +476,7 @@ fn array_registry_class() -> Class {
                     op: perry_hir::CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(112)),
                     right: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         object: Box::new(this_get("keys")),
                         property: "length".to_string(),
                         byte_offset: 0,
@@ -487,6 +493,8 @@ fn array_registry_class() -> Class {
                         op: BinaryOp::Add,
                         left: Box::new(Expr::LocalGet(111)),
                         right: Box::new(Expr::IndexGet {
+                            byte_offset: 0,
+                            byte_end: 0,
                             object: Box::new(this_get("vals")),
                             index: Box::new(Expr::LocalGet(112)),
                         }),
@@ -529,6 +537,7 @@ fn ptr_array_cache_module() -> Module {
                     ty: Type::Named("ArrayRegistry".to_string()),
                     mutable: false,
                     init: Some(Expr::New {
+                        byte_end: 0,
                         class_name: "ArrayRegistry".to_string(),
                         args: Vec::new(),
                         type_args: Vec::new(),
@@ -646,6 +655,8 @@ fn bitset_truthiness_site_module(proven_index: bool) -> Module {
     let bitset_test = Expr::Binary {
         op: BinaryOp::BitAnd,
         left: Box::new(Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(MASK_ID)),
             index: Box::new(Expr::Unary {
                 op: perry_hir::UnaryOp::BitNot,
@@ -1425,6 +1436,8 @@ fn indexed_tower_site_module() -> Module {
         vec![Stmt::Return(Some(Expr::Binary {
             op: BinaryOp::Add,
             left: Box::new(Expr::IndexGet {
+                byte_offset: 0,
+                byte_end: 0,
                 object: Box::new(this_get("values")),
                 index: Box::new(Expr::LocalGet(INDEX_ID)),
             }),
@@ -1759,6 +1772,8 @@ fn polymorphic_array_site_module() -> Module {
     m.functions[0].params[0].ty = Type::Array(Box::new(Type::Named("Counter".into())));
     m.functions[0].body = vec![Stmt::Expr(call(
         Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(2)),
             index: Box::new(Expr::Integer(0)),
         },
@@ -1921,6 +1936,7 @@ fn class_array_subclass_callback_keeps_its_public_body() {
     m.classes[1].methods[0].body.insert(
         0,
         Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::FuncRef(901)),
             args: Vec::new(),
             byte_offset: 0,
@@ -1940,46 +1956,4 @@ fn class_array_subclass_callback_keeps_its_public_body() {
     assert!(!subclass.1.iter().any(|line| line.contains("$pshape(")));
 }
 
-/// Object model step 3: the class-id tower selects its body by the
-/// receiver's class id against the classes whose method is a prototype
-/// constant; no runtime proof, epoch, own-property probe or holder-directory
-/// read remains, and release code carries no contract check.
-#[test]
-fn tower_selects_by_prototype_constant() {
-    let ir = emit_static(&tower_site_module(), false);
-    assert!(ir.contains("idispatch.case"), "{ir}");
-    assert!(ir.contains("pconst.selected") && !ir.contains("certify"));
-    assert!(!ir.contains("@PERRY_PROTO_VALIDITY"));
-    let site = ir
-        .split("\ndefine ")
-        .find(|f| f.contains("pconst.selected"))
-        .expect("the function holding the selecting site");
-    assert!(
-        !site.contains("@js_object_get_own_field_or_undef("),
-        "{site}"
-    );
-    assert!(!site.contains("holder.tower"), "{site}");
-    assert!(!site.contains("call void @js_proto_constant_contract_check("));
-}
-
-/// A program with a dynamic write may write any prototype slot: the tower
-/// keeps its compiled cases, each behind its holders' shadow bits
-/// (`proto_constants::holder_constant`), so a written holder selects nothing
-/// and its receivers take the generic site.
-#[test]
-fn a_dynamic_write_cases_behind_the_holder_shadow_bits() {
-    let mut census = perry_hir::ProtoCensus::default();
-    census.dynamic_write = true;
-    let ir = crate::proto_constants::with_test_census(census, || {
-        emit_static(&tower_site_module(), false)
-    });
-    let site = ir
-        .split("\ndefine ")
-        .find(|f| f.contains("pconst.selected"))
-        .expect("the function holding the selecting site");
-    assert!(site.contains("pconst.case"), "{site}");
-    assert!(site.contains("holder.page"), "{site}");
-    // Without the dynamic write the slots are constants: no holder test.
-    let ir = emit_static(&tower_site_module(), false);
-    assert!(!ir.contains("holder.page"), "{ir}");
-}
+mod tower_cases;

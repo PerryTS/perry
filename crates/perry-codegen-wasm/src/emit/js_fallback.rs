@@ -622,7 +622,7 @@ impl WasmModuleEmitter {
                 format!("fromJsValue(JSON.stringify(toJsValue({})))", v)
             }
             Expr::This => "__this".to_string(),
-            Expr::IndexGet { object, index } => {
+            Expr::IndexGet { object, index, .. } => {
                 let obj = self.emit_js_expr(object, locals);
                 let idx = self.emit_js_expr(index, locals);
                 format!("fromJsValue(toJsValue({})[toJsValue({})])", obj, idx)

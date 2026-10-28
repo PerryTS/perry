@@ -268,6 +268,7 @@ mod tests {
             module: "array".to_string(),
             class_name: None,
             object: Some(Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::This),
                 property: "items".to_string(),
                 byte_offset: 0,
@@ -313,6 +314,7 @@ mod tests {
         let mut m = Module::new("array_pop_inline.ts");
         m.classes = vec![class];
         m.init = vec![Stmt::Expr(Expr::New {
+            byte_end: 0,
             class_name: "Stack".to_string(),
             args: Vec::new(),
             type_args: Vec::new(),
@@ -343,7 +345,9 @@ mod tests {
             }],
             return_type: Type::Any,
             body: vec![Stmt::Return(Some(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(XS)),
                     property: "pop".to_string(),
                     byte_offset: 0,
@@ -362,6 +366,7 @@ mod tests {
             was_unrolled: false,
         }];
         m.init = vec![Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::FuncRef(721)),
             args: vec![Expr::Array(vec![Expr::Number(1.0)], None)],
             type_args: Vec::new(),

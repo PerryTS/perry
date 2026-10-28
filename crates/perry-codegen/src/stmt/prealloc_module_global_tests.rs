@@ -177,6 +177,7 @@ fn module_with_hoisted_block_fn(prealloc: bool) -> Module {
         init: Some(Expr::Array(Vec::new(), None)),
     });
     init.push(Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::LocalGet(0)),
         args: vec![Expr::Integer(1)],
         type_args: Vec::new(),
@@ -292,6 +293,7 @@ fn a_function_local_prealloc_still_gets_its_box() {
             init: Some(Expr::Array(Vec::new(), None)),
         },
         Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::LocalGet(10)),
             args: vec![Expr::Integer(1)],
             type_args: Vec::new(),
@@ -299,6 +301,7 @@ fn a_function_local_prealloc_still_gets_its_box() {
         }),
     ];
     m.init = vec![Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::Closure {
             func_id: 2,
             params: Vec::new(),

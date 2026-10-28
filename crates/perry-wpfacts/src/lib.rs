@@ -22,6 +22,7 @@ mod ctor_phase;
 mod decl_units;
 pub mod delta;
 pub mod derive;
+mod diagnostics;
 mod dump;
 mod gen;
 mod gen_call;
@@ -47,6 +48,8 @@ pub(crate) const STAR_KEY: &str = "\u{1}*";
 
 #[derive(Clone, Debug, Default)]
 pub struct FactsConfig {
+    /// Capture observational site data for the existing facts dump only.
+    pub diagnostics: bool,
     /// Record the constraint relations for the independent recomputation.
     pub relations: bool,
     /// Test-only negative control: plant a wrong fact
@@ -130,6 +133,8 @@ pub struct Stats {
 
 #[derive(Clone, Debug, Default)]
 pub struct ProgramFacts {
+    /// Dump-only JSON records, scoped by emitting analysis-unit identity.
+    pub diagnostics: Vec<(String, Vec<String>)>,
     pub module_paths: Vec<String>,
     pub templates: Vec<TemplateFacts>,
     pub sites: Vec<SiteFacts>,
@@ -273,6 +278,10 @@ pub(crate) fn compute_in<'a>(
     let mut sorted: Vec<(&str, &Module)> = modules.iter().map(|(p, m)| (p.as_str(), *m)).collect();
     sorted.sort_by(|a, b| a.0.cmp(b.0));
     let mut g = gen::Gen::new(sorted.clone(), cfg.relations, cfg.explain);
+    if cfg.diagnostics {
+        g.diagnostic = Some(Default::default());
+        g.m.diagnostic = Some(Default::default());
+    }
     g.export_sources = cfg.export_sources.clone();
     g.unit_in = published;
     g.view = view;
@@ -1403,7 +1412,16 @@ pub(crate) fn compute_in<'a>(
     } else {
         std::mem::take(&mut g.m.shared_out).into_iter().collect()
     };
+    let diagnostics = if cfg.diagnostics {
+        vec![(
+            view.map_or("<whole>", |v| v.key.as_str()).to_owned(),
+            diagnostics::collect(&g),
+        )]
+    } else {
+        Vec::new()
+    };
     let mut pf = ProgramFacts {
+        diagnostics,
         super_unrelinked,
         fnproto_bind_written,
         module_paths: sorted.iter().map(|(p, _)| p.to_string()).collect(),

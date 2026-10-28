@@ -378,7 +378,7 @@ fn refs_expr<const FREE: bool>(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
             walk(value, out);
         }
         Expr::PropertyUpdate { object, .. } => walk(object, out),
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             walk(object, out);
             walk(index, out);
         }

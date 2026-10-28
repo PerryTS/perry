@@ -202,6 +202,7 @@ fn module_with_new(class: Class, args: Vec<Expr>) -> Module {
             params: Vec::new(),
             return_type: Type::Named(class_name.clone()),
             body: vec![Stmt::Return(Some(Expr::New {
+                byte_end: 0,
                 class_name,
                 args,
                 type_args: Vec::new(),
@@ -351,6 +352,7 @@ fn module_with_local_receiver_store(class: Class, stored: Expr) -> Module {
             ty: Type::Named(class_name.clone()),
             mutable: false,
             init: Some(Expr::New {
+                byte_end: 0,
                 class_name,
                 args: vec![Expr::Number(1.0)],
                 type_args: Vec::new(),
@@ -364,6 +366,7 @@ fn module_with_local_receiver_store(class: Class, stored: Expr) -> Module {
             value: Box::new(stored),
         }),
         Stmt::Return(Some(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(5)),
             property: "v".to_string(),
             byte_offset: 0,

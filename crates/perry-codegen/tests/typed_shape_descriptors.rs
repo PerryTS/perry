@@ -195,6 +195,7 @@ fn scalar_object_literal_skips_pure_unobserved_initializers() {
                 ])),
             },
             Stmt::Return(Some(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(1)),
                 property: "used".to_string(),
@@ -238,6 +239,8 @@ fn scalar_array_literal_skips_pure_unobserved_initializers() {
                 )),
             },
             Stmt::Return(Some(Expr::IndexGet {
+                byte_offset: 0,
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(1)),
                 index: Box::new(Expr::Integer(0)),
             })),
@@ -272,6 +275,7 @@ fn scalar_object_literal_keeps_observable_unobserved_initializers() {
                 ])),
             },
             Stmt::Return(Some(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(1)),
                 property: "used".to_string(),
@@ -487,7 +491,9 @@ fn c262_array_has_own_property_uses_object_prototype_dispatch() {
                 init: Some(Expr::Array(vec![Expr::Bool(true)], None)),
             },
             Stmt::Return(Some(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 0,
                     object: Box::new(Expr::LocalGet(1)),
                     property: "hasOwnProperty".to_string(),
@@ -565,6 +571,7 @@ fn bounded_integer_array_store_omits_layout_note_and_barrier() {
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(2)),
                     right: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: 0,
                         object: Box::new(Expr::LocalGet(1)),
                         property: "length".to_string(),
@@ -658,6 +665,7 @@ fn numeric_iota_fill_loop_uses_bulk_helper_without_barrier() {
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(2)),
                     right: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: 0,
                         object: Box::new(Expr::LocalGet(1)),
                         property: "length".to_string(),

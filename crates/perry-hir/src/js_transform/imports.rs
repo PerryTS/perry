@@ -829,7 +829,7 @@ pub fn transform_expr(
         Expr::PropertyUpdate { object, .. } => {
             transform_expr(object, js_imports, extern_func_to_js, local_name_to_js, tracker);
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index , .. } => {
             transform_expr(object, js_imports, extern_func_to_js, local_name_to_js, tracker);
             transform_expr(index, js_imports, extern_func_to_js, local_name_to_js, tracker);
         }

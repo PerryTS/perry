@@ -17,6 +17,7 @@ fn backing_buffer_exposure_records_pointer_invalidation_before_fallback() {
             "Uint8Array",
             perry_hir::TYPED_ARRAY_KIND_UINT8,
             Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(local(1)),
                 property: "buffer".to_string(),
@@ -221,6 +222,7 @@ fn backing_buffer_exposure_invalidates_copied_view_alias_group() {
             init: Some(local(1)),
         },
         Stmt::Expr(Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(local(2)),
             property: "buffer".to_string(),
@@ -259,6 +261,7 @@ fn native_memory_bulk_access_rejects_invalidated_cached_pointer() {
             int(4),
         ),
         Stmt::Expr(Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(local(1)),
             property: "buffer".to_string(),

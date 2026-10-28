@@ -45,7 +45,7 @@ fn accumulator_rhs_is_numeric(
 ) -> bool {
     match expr {
         Expr::Number(_) | Expr::Integer(_) => true,
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             let Expr::LocalGet(a) = object.as_ref() else {
                 return false;
             };

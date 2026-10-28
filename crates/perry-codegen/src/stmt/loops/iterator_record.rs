@@ -106,12 +106,15 @@ pub(super) fn lower(
         op: CompareOp::Lt,
         left: Box::new(Expr::LocalGet(*counter)),
         right: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(array)),
             property: "length".into(),
             byte_offset: 0,
         }),
     };
     let element = Expr::IndexGet {
+        byte_offset: 0,
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(array)),
         index: Box::new(Expr::LocalGet(*counter)),
     };
@@ -332,6 +335,8 @@ mod tests {
                                 mode,
                                 Expr::LocalGet(3),
                                 Expr::IndexGet {
+                                    byte_offset: 0,
+                                    byte_end: 0,
                                     object: Box::new(Expr::LocalGet(array_id)),
                                     index: Box::new(rt(
                                         "arrayRecordIndex",

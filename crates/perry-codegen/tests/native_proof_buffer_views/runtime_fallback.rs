@@ -276,6 +276,7 @@ fn alias_of_an_exposed_typed_array_records_runtime_fallback() {
             int(8),
         ),
         Stmt::Expr(Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(local(1)),
             property: "buffer".to_string(),

@@ -54,7 +54,9 @@ fn compile(m: &Module) -> String {
 
 fn method_call(property: &str, args: Vec<Expr>) -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(1)),
             property: property.into(),
             byte_offset: 0,
@@ -104,7 +106,10 @@ fn a_string_only_builtin_keeps_the_dispatcher_on_the_non_string_arm() {
 #[test]
 fn an_order_free_computed_key_call_probes_the_key_before_the_dispatcher() {
     let ir = function_ir(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(1)),
             index: Box::new(Expr::LocalGet(2)),
         }),

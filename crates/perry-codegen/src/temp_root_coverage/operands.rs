@@ -42,6 +42,7 @@ fn any_local(id: u32, name: &str) -> Stmt {
 
 fn packet_tag(id: u32) -> Expr {
     Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(id)),
         property: "tag".to_string(),
         byte_offset: 0,

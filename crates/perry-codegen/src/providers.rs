@@ -380,7 +380,9 @@ mod tests {
         assert!(providers_of(vec![undici]).contains(&OwnerKind::WellKnown("undici")));
         // `new globalThis.File(...)` reaches the builtin constructor arm.
         let file = Expr::NewDynamic {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::GlobalGet(0)),
                 property: "File".into(),
                 byte_offset: 0,

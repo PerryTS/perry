@@ -420,6 +420,7 @@ pub(crate) fn canonical_module() -> Module {
 #[test]
 fn same_expr_structure_matches_clones_and_rejects_differences() {
     let private_tail = |field: &str, op: u8| Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::PrivateGuard {
             class_name: "L".to_string(),
             class_id: 1,

@@ -66,6 +66,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             let callee = lower_expr(ctx, callee_expr)?;
             let args = lower_new_spread_args(ctx, args_ast)?;
             return Ok(Expr::NewDynamicSpread {
+                byte_end: 0,
                 callee: Box::new(callee),
                 args,
                 byte_offset: new_byte_offset,
@@ -95,7 +96,9 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
         {
             let args = lower_new_spread_args(ctx, args_ast)?;
             return Ok(Expr::NewDynamicSpread {
+                byte_end: 0,
                 callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 0,
                     object: Box::new(Expr::GlobalGet(0)),
                     property: name.to_string(),
@@ -130,6 +133,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             Some(("bun:sqlite", Some("Database")))
         ) {
             return Ok(Expr::New {
+                byte_end: 0,
                 class_name: "BunSqliteDatabase".to_string(),
                 args: lower_optional_args(ctx, new_expr.args.as_deref())?,
                 type_args: Vec::new(),
@@ -195,7 +199,9 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             .is_some_and(|args| args.iter().any(|arg| arg.spread.is_some()));
         if is_stream_constructor_value && !has_spread_arg {
             return Ok(Expr::NewDynamic {
+                byte_end: 0,
                 callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 0,
                     object: Box::new(Expr::NativeModuleRef("stream".to_string())),
                     property: "Stream".to_string(),
@@ -225,6 +231,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 || ctx.lookup_builtin_module_alias(callee_ident.sym.as_ref()) == Some("events");
             if is_events_module_value {
                 return Ok(Expr::New {
+                    byte_end: 0,
                     class_name: "EventEmitter".to_string(),
                     args: lower_optional_args(ctx, new_expr.args.as_deref())?,
                     type_args: Vec::new(),
@@ -326,6 +333,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     crate::lower_decl::fresh_class_decl_self_binding(ctx, source_class_name)
                 {
                     return Ok(Expr::NewDynamic {
+                        byte_end: 0,
                         callee: Box::new(Expr::LocalGet(self_id)),
                         args: lower_optional_args(ctx, new_expr.args.as_deref())?,
                         byte_offset: new_byte_offset,
@@ -537,7 +545,9 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             if let Some(method_name) = crypto_constructor_export {
                 let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
                 return Ok(Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: 0,
                         object: Box::new(Expr::NativeModuleRef("crypto".to_string())),
                         property: method_name,
@@ -580,6 +590,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 && !global_intrinsic_shadowed
             {
                 return Ok(Expr::New {
+                    byte_end: 0,
                     class_name: class_name.to_string(),
                     args: lower_optional_args(ctx, new_expr.args.as_deref())?,
                     type_args: Vec::new(),
@@ -618,7 +629,9 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             if let Some((module_name, method_name)) = repl_constructor {
                 let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
                 return Ok(Expr::NewDynamic {
+                    byte_end: 0,
                     callee: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: 0,
                         object: Box::new(Expr::NativeModuleRef(module_name)),
                         property: method_name,
@@ -647,7 +660,9 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             if let Some(export) = http_class_export {
                 let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
                 return Ok(Expr::NewDynamic {
+                    byte_end: 0,
                     callee: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: 0,
                         object: Box::new(Expr::NativeModuleRef("http".to_string())),
                         property: export,
@@ -712,7 +727,9 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             ) {
                 let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
                 return Ok(Expr::NewDynamic {
+                    byte_end: 0,
                     callee: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: 0,
                         object: Box::new(Expr::NativeModuleRef("v8".to_string())),
                         property: "GCProfiler".to_string(),
@@ -935,12 +952,14 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     // argument and the function got an empty body.
                     if args_slice.iter().any(|a| a.spread.is_some()) {
                         let callee = Expr::PropertyGet {
+                            byte_end: 0,
                             byte_offset: 0,
                             object: Box::new(Expr::GlobalGet(0)),
                             property: "Function".to_string(),
                         };
                         let args = lower_new_spread_args(ctx, args_slice)?;
                         return Ok(Expr::NewDynamicSpread {
+                            byte_end: 0,
                             callee: Box::new(callee),
                             args,
                             byte_offset: new_byte_offset,
@@ -1562,6 +1581,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 .unwrap_or_default();
             if let Some(func_id) = callee_func_at_entry {
                 return Ok(Expr::NewDynamic {
+                    byte_end: 0,
                     callee: Box::new(Expr::FuncRef(func_id)),
                     args,
                     byte_offset: new_byte_offset,
@@ -1608,6 +1628,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                             ));
                         }
                         return Ok(Expr::New {
+                            byte_end: 0,
                             class_name: resolved,
                             args,
                             type_args,
@@ -1648,6 +1669,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     }
                     None => {
                         return Ok(Expr::NewDynamic {
+                            byte_end: 0,
                             callee: Box::new(Expr::LocalGet(local_id)),
                             args,
                             byte_offset: new_byte_offset,
@@ -1683,6 +1705,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     }
                 }) {
                     return Ok(Expr::NewDynamic {
+                        byte_end: 0,
                         callee: Box::new(Expr::LocalGet(local_id)),
                         args,
                         byte_offset: new_byte_offset,
@@ -1744,7 +1767,9 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                         .is_some_and(|first| !first.is_uppercase())
                 {
                     return Ok(Expr::NewDynamic {
+                        byte_end: 0,
                         callee: Box::new(Expr::PropertyGet {
+                            byte_end: 0,
                             byte_offset: 0,
                             object: Box::new(Expr::NativeModuleRef(module.to_string())),
                             property: export.to_string(),
@@ -1847,6 +1872,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     );
                 }
                 return Ok(Expr::NewDynamic {
+                    byte_end: 0,
                     callee: Box::new(super::unresolved_global_get_expr(
                         source_class_name.to_string(),
                         new_byte_offset,
@@ -1885,6 +1911,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 args.push(Expr::LocalGet(cid));
             }
             let construct = Expr::New {
+                byte_end: 0,
                 class_name,
                 args,
                 type_args,

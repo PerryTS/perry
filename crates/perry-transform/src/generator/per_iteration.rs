@@ -1177,6 +1177,8 @@ fn rewrite_cells_in_stmt(stmt: &mut Stmt, cells: &HashSet<LocalId>, hoisted: &Ho
 /// `cell[slot]` for the cell bound to `id`.
 fn cell_slot(id: LocalId, slot: i64) -> Expr {
     Expr::IndexGet {
+        byte_offset: 0,
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(id)),
         index: Box::new(Expr::Integer(slot)),
     }
@@ -1720,7 +1722,7 @@ mod tests {
     fn is_cell_value_read(e: &Expr) -> bool {
         matches!(
             e,
-            Expr::IndexGet { object, index }
+            Expr::IndexGet { object, index , .. }
                 if matches!(object.as_ref(), Expr::LocalGet(X))
                     && matches!(index.as_ref(), Expr::Integer(0))
         )
@@ -1825,6 +1827,7 @@ mod tests {
 
     fn class_new(args: Vec<Expr>, cap_args_appended: u32) -> Expr {
         Expr::New {
+            byte_end: 0,
             class_name: "Holder".into(),
             args,
             type_args: Vec::new(),

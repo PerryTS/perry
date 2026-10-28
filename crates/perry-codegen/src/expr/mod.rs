@@ -2555,7 +2555,7 @@ pub(crate) fn element_shape_loop_fact_for_property_get<'f>(
         return None;
     }
     match object {
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             let Expr::LocalGet(array_local_id) = object.as_ref() else {
                 return None;
             };

@@ -397,7 +397,7 @@ fn collect_instantiations_in_expr(
         Expr::PropertyUpdate { object, .. } => {
             collect_instantiations_in_expr(object, ctx, module, idx);
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             collect_instantiations_in_expr(object, ctx, module, idx);
             collect_instantiations_in_expr(index, ctx, module, idx);
         }

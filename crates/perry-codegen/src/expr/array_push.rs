@@ -772,6 +772,7 @@ fn emit_field_push_writeback(
     let field_box = lower_expr(
         ctx,
         &Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::This),
             property: field.to_string(),
             byte_offset: 0,
@@ -1672,6 +1673,7 @@ mod receiver_order_tests {
         ));
         assert!(!expr_rebinds_local(
             &Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::LocalGet(3)),
                 args: vec![Expr::Number(1.0)],
                 type_args: Vec::new(),

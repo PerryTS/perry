@@ -133,6 +133,8 @@ pub enum Verdict {
 
 #[derive(Clone, Debug)]
 pub struct SiteFacts {
+    /// Observational solve identity. Never read by a proof or digest.
+    pub(crate) diagnostic_unit: Option<String>,
     pub module: u32,
     pub byte_offset: u32,
     pub key: String,
@@ -765,6 +767,10 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
         t.sort();
         t.dedup();
         out.push(SiteFacts {
+            diagnostic_unit: g
+                .diagnostic
+                .as_ref()
+                .map(|_| g.view.map_or("<whole>", |v| v.key.as_str()).to_owned()),
             module: s.module,
             byte_offset: s.byte_offset,
             key,

@@ -80,6 +80,7 @@ fn test_monomorphize_substitutes_pod_layout_type_vars() {
     let mut module = Module::new("test");
     module.functions.push(layout_func);
     module.init.push(Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(1)),
         args: vec![],
         type_args: vec![packet_ty.clone()],
@@ -157,6 +158,7 @@ fn test_monomorphize_substitutes_native_pod_view_type_vars() {
     let mut module = Module::new("test");
     module.functions.push(view_func);
     module.init.push(Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(1)),
         args: vec![Expr::NativeArenaAlloc(Box::new(Expr::Integer(64)))],
         type_args: vec![packet_ty],
@@ -217,6 +219,7 @@ fn test_monomorphize_generic_function() {
 
     // Add init code that calls identity<number>(42)
     module.init.push(Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(1)),
         args: vec![Expr::Number(42.0)],
         type_args: vec![Type::Number],
@@ -294,6 +297,7 @@ fn test_monomorphize_updates_call_sites() {
 
     // Add call to identity<string>("hello")
     module.init.push(Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(1)),
         args: vec![Expr::String("hello".to_string())],
         type_args: vec![Type::String],
@@ -337,12 +341,14 @@ fn test_monomorphize_updates_native_memory_copy_operand_generic_calls() {
 
     module.init.push(Stmt::Expr(Expr::NativeMemoryCopy {
         dst: Box::new(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::FuncRef(1)),
             args: vec![],
             type_args: vec![packet_ty.clone()],
             byte_offset: 0,
         }),
         src: Box::new(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::FuncRef(2)),
             args: vec![],
             type_args: vec![packet_ty],
@@ -372,12 +378,14 @@ fn test_monomorphize_updates_native_memory_fill_u32_operand_generic_calls() {
 
     module.init.push(Stmt::Expr(Expr::NativeMemoryFillU32 {
         view: Box::new(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::FuncRef(1)),
             args: vec![],
             type_args: vec![packet_ty.clone()],
             byte_offset: 0,
         }),
         value: Box::new(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::FuncRef(2)),
             args: vec![],
             type_args: vec![packet_ty],
@@ -574,6 +582,7 @@ fn test_type_inference_from_arguments() {
 
     // Add call to identity(42) WITHOUT explicit type args - should infer number
     module.init.push(Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(1)),
         args: vec![Expr::Number(42.0)],
         type_args: vec![], // Empty - should be inferred!
@@ -672,6 +681,7 @@ fn test_type_inference_string() {
 
     // Add call to identity("hello") WITHOUT explicit type args - should infer string
     module.init.push(Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(1)),
         args: vec![Expr::String("hello".to_string())],
         type_args: vec![], // Empty - should be inferred!
@@ -738,6 +748,7 @@ fn test_type_inference_rest_type_var_binds_tuple() {
     let mut module = Module::new("test");
     module.functions.push(collect_func);
     module.init.push(Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(1)),
         args: vec![
             Expr::String("a".to_string()),
@@ -797,6 +808,7 @@ fn test_type_inference_rest_array_binds_element_type() {
     let mut module = Module::new("test");
     module.functions.push(collect_func);
     module.init.push(Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(1)),
         args: vec![Expr::String("a".to_string()), Expr::String("b".to_string())],
         type_args: vec![],
@@ -901,6 +913,7 @@ fn generic_arena_function(id: FuncId, name: &str) -> Function {
 
 fn generic_call(func_id: FuncId, ty: &Type) -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(func_id)),
         args: vec![],
         type_args: vec![ty.clone()],
@@ -951,6 +964,7 @@ fn a_specialized_class_reports_the_generics_display_name() {
     let mut module = Module::new("test");
     module.classes.push(generic_class(1, "Gen"));
     module.init.push(Stmt::Expr(Expr::New {
+        byte_end: 0,
         class_name: "Gen".to_string(),
         args: vec![],
         type_args: vec![Type::Number],
@@ -1079,6 +1093,7 @@ fn fill_defaults_skips_constructors_that_read_arguments() {
     module.classes.push(class_with_ctor("Args", 2, true));
     for class_name in ["Plain", "Args"] {
         module.init.push(Stmt::Expr(Expr::New {
+            byte_end: 0,
             class_name: class_name.to_string(),
             args: vec![Expr::String("x".to_string())],
             type_args: Vec::new(),
@@ -1251,6 +1266,7 @@ fn specializations_do_not_reuse_other_modules_class_or_literal_ids() {
     for (module, name) in [(&mut first, "First"), (&mut second, "Second")] {
         for ty in [Type::Number, Type::String] {
             module.init.push(Stmt::Expr(Expr::New {
+                byte_end: 0,
                 class_name: name.to_string(),
                 args: vec![],
                 type_args: vec![ty],

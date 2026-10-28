@@ -28,6 +28,7 @@ fn fixture(ty: Type) -> Module {
             ty: Type::Any,
             mutable: false,
             init: Some(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::FuncRef(0)),
                 args: vec![],
                 type_args: vec![],
@@ -85,6 +86,7 @@ fn private_frame_escape_and_alias_keep_standalone_record() {
 fn private_frame_unknown_effect_and_target_keep_standalone_record() {
     for unknown in [
         Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::LocalGet(90)),
             args: vec![],
             type_args: vec![],
@@ -96,6 +98,8 @@ fn private_frame_unknown_effect_and_target_keep_standalone_record() {
             value: Box::new(Expr::Undefined),
         },
         Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::FuncRef(0)),
             index: Box::new(Expr::String("caller".into())),
         },
@@ -190,7 +194,9 @@ fn private_frame_cloning_gives_every_binding_a_fresh_identity() {
 fn private_frame_terminal_logging_cannot_hide_observable_getters() {
     let mut m = fixture(Type::Any);
     m.init.push(Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::GlobalGet(0)),
             property: "log".into(),
             byte_offset: 0,
@@ -199,6 +205,8 @@ fn private_frame_terminal_logging_cannot_hide_observable_getters() {
             op: BinaryOp::Add,
             left: Box::new(Expr::String("caller ".into())),
             right: Box::new(Expr::IndexGet {
+                byte_offset: 0,
+                byte_end: 0,
                 object: Box::new(Expr::FuncRef(0)),
                 index: Box::new(Expr::String("caller".into())),
             }),
@@ -245,7 +253,9 @@ fn private_frame_logging_requires_primitive_writes_not_a_number_annotation() {
             init: Some(value),
         });
         m.init.push(Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::GlobalGet(0)),
                 property: "log".into(),
                 byte_offset: 0,
