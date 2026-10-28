@@ -68,3 +68,7 @@ pub use writers::AsyncValueType;
 #[cfg(test)]
 #[path = "async_values/producer_tests.rs"]
 mod producer_tests;
+
+#[cfg(test)]
+#[path = "async_values/sync_reactor_tests.rs"]
+mod sync_reactor_tests;
