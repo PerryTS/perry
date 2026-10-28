@@ -638,6 +638,10 @@ impl ShapeSlab {
     pub(in super::super) fn region_row_committed(&self, row: usize) -> bool {
         self.region.row_committed(row)
     }
+    #[cfg(test)]
+    pub(in super::super) fn region_rows_per_page(&self) -> usize {
+        self.region.page / core::mem::size_of::<ShapeRecord>()
+    }
     pub(in super::super) fn get_handle(&self, word: LayoutWord) -> Option<ShapeRecord> {
         self.handle_record_ptr(word).map(|p| unsafe { *p })
     }

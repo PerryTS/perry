@@ -297,10 +297,7 @@ fn only_a_unit_consuming_the_registry_union_reads_it() {
     // 2 of some 200 units.
     assert_eq!(
         readers,
-        [
-            "/t6/perry_cjs.js#u4",
-            "/t6/perry_cjs.js#u6"
-        ],
+        ["/t6/perry_cjs.js#u4", "/t6/perry_cjs.js#u6"],
         "{units} units, modules {modules:?}"
     );
 }
@@ -608,7 +605,9 @@ fn a_property_of_a_broken_function_holds_anything() {
     let lit = u
         .templates
         .iter()
-        .find(|t| t.display.starts_with("/t10/index.js:") && t.birth_keys.iter().any(|k| k == "aliases"))
+        .find(|t| {
+            t.display.starts_with("/t10/index.js:") && t.birth_keys.iter().any(|k| k == "aliases")
+        })
         .expect("the parse result literal");
     assert!(lit.escape.is_some(), "{lit:?}");
 }
