@@ -1,0 +1,500 @@
+{
+  "version": 1,
+  "groups": {
+    "body:js_tty_read_stream_set_raw_mode": [
+      {
+        "name": "node:tty.ReadStream.prototype.setRawMode",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "setRawMode"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "js_tty_read_stream_set_raw_mode",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:js_tty_read_stream_set_raw_mode",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_034c99d5621f488b9664",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "body:js_tty_write_stream_clear_line": [
+      {
+        "name": "node:tty.WriteStream.prototype.clearLine",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "clearLine"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "js_tty_write_stream_clear_line",
+        "function_info": {
+          "params": 2,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 2,
+          "plain_params": 0,
+          "source_symbol": "source:js_tty_write_stream_clear_line",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_2fff78a7ff3304d9884d",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "body:js_tty_write_stream_clear_screen_down": [
+      {
+        "name": "node:tty.WriteStream.prototype.clearScreenDown",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "clearScreenDown"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "js_tty_write_stream_clear_screen_down",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:js_tty_write_stream_clear_screen_down",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_f9fac91b7d42e67a5955",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "body:js_tty_write_stream_cursor_to": [
+      {
+        "name": "node:tty.WriteStream.prototype.cursorTo",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4008000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "cursorTo"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 3,
+        "body": "js_tty_write_stream_cursor_to",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 3,
+          "plain_params": 0,
+          "source_symbol": "source:js_tty_write_stream_cursor_to",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_d9475570d8a954f4b13b",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "body:js_tty_write_stream_get_color_depth": [
+      {
+        "name": "node:tty.WriteStream.prototype.getColorDepth",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "getColorDepth"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "js_tty_write_stream_get_color_depth",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:js_tty_write_stream_get_color_depth",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_1d22d887c8a82a2ec8b7",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "body:js_tty_write_stream_get_window_size": [
+      {
+        "name": "node:tty.WriteStream.prototype.getWindowSize",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "getWindowSize"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "js_tty_write_stream_get_window_size",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:js_tty_write_stream_get_window_size",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_bff5bec7be734be2fac8",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "body:js_tty_write_stream_has_colors": [
+      {
+        "name": "node:tty.WriteStream.prototype.hasColors",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "hasColors"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "js_tty_write_stream_has_colors",
+        "function_info": {
+          "params": 2,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 2,
+          "plain_params": 0,
+          "source_symbol": "source:js_tty_write_stream_has_colors",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_8fb63f40c25f73b4580b",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "body:js_tty_write_stream_move_cursor": [
+      {
+        "name": "node:tty.WriteStream.prototype.moveCursor",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4008000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "moveCursor"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 3,
+        "body": "js_tty_write_stream_move_cursor",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 3,
+          "plain_params": 0,
+          "source_symbol": "source:js_tty_write_stream_move_cursor",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_0b6b3d0e2a67b68a6cd3",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "body:js_tty_write_stream_refresh_size": [
+      {
+        "name": "node:tty.WriteStream.prototype._refreshSize",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "_refreshSize"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "js_tty_write_stream_refresh_size",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:js_tty_write_stream_refresh_size",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_793b8159fa2d6746c4d0",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ]
+  }
+}

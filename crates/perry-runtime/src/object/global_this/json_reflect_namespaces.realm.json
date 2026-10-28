@@ -1,0 +1,257 @@
+{
+  "version": 1,
+  "groups": {
+    "objects": [
+      {
+        "name": "JSON",
+        "kind": "namespace",
+        "properties": [
+          {
+            "key": "isRawJSON",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "JSON.isRawJSON"
+            }
+          },
+          {
+            "key": "parse",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "JSON.parse"
+            }
+          },
+          {
+            "key": "rawJSON",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "JSON.rawJSON"
+            }
+          },
+          {
+            "key": "stringify",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "JSON.stringify"
+            }
+          },
+          {
+            "key": "@@toStringTag",
+            "symbol": true,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "JSON"
+            }
+          }
+        ],
+        "own_key_order": [
+          "parse",
+          "stringify",
+          "rawJSON",
+          "isRawJSON"
+        ],
+        "own_symbol_order": [
+          "@@toStringTag"
+        ],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2176,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "Array",
+          "Boolean",
+          "JSON.isRawJSON",
+          "JSON.parse",
+          "JSON.rawJSON",
+          "JSON.stringify",
+          "Number",
+          "Object",
+          "Object.prototype",
+          "String"
+        ]
+      },
+      {
+        "name": "Reflect",
+        "kind": "namespace",
+        "properties": [
+          {
+            "key": "apply",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Reflect.apply"
+            }
+          },
+          {
+            "key": "construct",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Reflect.construct"
+            }
+          },
+          {
+            "key": "defineProperty",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Reflect.defineProperty"
+            }
+          },
+          {
+            "key": "deleteProperty",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Reflect.deleteProperty"
+            }
+          },
+          {
+            "key": "get",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Reflect.get"
+            }
+          },
+          {
+            "key": "getOwnPropertyDescriptor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Reflect.getOwnPropertyDescriptor"
+            }
+          },
+          {
+            "key": "getPrototypeOf",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Reflect.getPrototypeOf"
+            }
+          },
+          {
+            "key": "has",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Reflect.has"
+            }
+          },
+          {
+            "key": "isExtensible",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Reflect.isExtensible"
+            }
+          },
+          {
+            "key": "ownKeys",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Reflect.ownKeys"
+            }
+          },
+          {
+            "key": "preventExtensions",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Reflect.preventExtensions"
+            }
+          },
+          {
+            "key": "set",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Reflect.set"
+            }
+          },
+          {
+            "key": "setPrototypeOf",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Reflect.setPrototypeOf"
+            }
+          },
+          {
+            "key": "@@toStringTag",
+            "symbol": true,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "Reflect"
+            }
+          }
+        ],
+        "own_key_order": [
+          "defineProperty",
+          "deleteProperty",
+          "apply",
+          "construct",
+          "get",
+          "getOwnPropertyDescriptor",
+          "getPrototypeOf",
+          "has",
+          "isExtensible",
+          "ownKeys",
+          "preventExtensions",
+          "set",
+          "setPrototypeOf"
+        ],
+        "own_symbol_order": [
+          "@@toStringTag"
+        ],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2176,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "Object.prototype",
+          "Reflect.apply",
+          "Reflect.construct",
+          "Reflect.defineProperty",
+          "Reflect.deleteProperty",
+          "Reflect.get",
+          "Reflect.getOwnPropertyDescriptor",
+          "Reflect.getPrototypeOf",
+          "Reflect.has",
+          "Reflect.isExtensible",
+          "Reflect.ownKeys",
+          "Reflect.preventExtensions",
+          "Reflect.set",
+          "Reflect.setPrototypeOf"
+        ]
+      }
+    ]
+  }
+}

@@ -1846,3 +1846,5 @@ pub(super) fn web_webcrypto_proto_methods(builtin_name: &str, proto_obj: *mut Ob
         _ => {}
     }
 }
+
+crate::realm_decl!("proto_methods.realm.json#*");

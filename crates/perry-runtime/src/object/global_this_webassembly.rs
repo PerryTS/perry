@@ -1653,3 +1653,5 @@ mod tests {
         ));
     }
 }
+
+crate::realm_decl!("global_this_webassembly.realm.json#*");

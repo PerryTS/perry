@@ -654,3 +654,5 @@ mod tests {
         );
     }
 }
+
+crate::realm_decl!("ctor_thunks.realm.json#*");

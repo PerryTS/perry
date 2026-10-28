@@ -1663,3 +1663,5 @@ fn value_to_string(value: f64) -> Option<String> {
             .map(|s| s.to_string())
     }
 }
+
+crate::realm_decl!("cluster.realm.json#*");

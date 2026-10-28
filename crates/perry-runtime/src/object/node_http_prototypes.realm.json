@@ -1,0 +1,4227 @@
+{
+  "version": 1,
+  "groups": {
+    "body:http_getter_thunk": [
+      {
+        "name": "node:http.IncomingMessage.prototype.connection.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "connection"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::node_http_prototypes::http_getter_thunk",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::node_http_prototypes::http_getter_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b89356"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0xa"
+          }
+        ],
+        "info_symbol": "perry_realm_info_1cc7ca8913862c6b7c86",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.IncomingMessage.prototype.headers.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "headers"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::node_http_prototypes::http_getter_thunk",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::node_http_prototypes::http_getter_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b9ea6c"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0x7"
+          }
+        ],
+        "info_symbol": "perry_realm_info_1cc7ca8913862c6b7c86",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.IncomingMessage.prototype.headersDistinct.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "headersDistinct"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::node_http_prototypes::http_getter_thunk",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::node_http_prototypes::http_getter_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b9ebb0"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0xf"
+          }
+        ],
+        "info_symbol": "perry_realm_info_1cc7ca8913862c6b7c86",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.IncomingMessage.prototype.signal.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "signal"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::node_http_prototypes::http_getter_thunk",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::node_http_prototypes::http_getter_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b7fbee"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0x6"
+          }
+        ],
+        "info_symbol": "perry_realm_info_1cc7ca8913862c6b7c86",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.IncomingMessage.prototype.trailers.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "trailers"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::node_http_prototypes::http_getter_thunk",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::node_http_prototypes::http_getter_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x29b67e8"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0x8"
+          }
+        ],
+        "info_symbol": "perry_realm_info_1cc7ca8913862c6b7c86",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.IncomingMessage.prototype.trailersDistinct.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "trailersDistinct"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::node_http_prototypes::http_getter_thunk",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::node_http_prototypes::http_getter_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x29b33c0"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0x10"
+          }
+        ],
+        "info_symbol": "perry_realm_info_1cc7ca8913862c6b7c86",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.OutgoingMessage.prototype.closed.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "closed"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::node_http_prototypes::http_getter_thunk",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::node_http_prototypes::http_getter_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b8ff6f"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0x6"
+          }
+        ],
+        "info_symbol": "perry_realm_info_1cc7ca8913862c6b7c86",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.OutgoingMessage.prototype.connection.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "connection"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::node_http_prototypes::http_getter_thunk",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::node_http_prototypes::http_getter_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b89356"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0xa"
+          }
+        ],
+        "info_symbol": "perry_realm_info_1cc7ca8913862c6b7c86",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.OutgoingMessage.prototype.errored.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "errored"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::node_http_prototypes::http_getter_thunk",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::node_http_prototypes::http_getter_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b7ff9f"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0x7"
+          }
+        ],
+        "info_symbol": "perry_realm_info_1cc7ca8913862c6b7c86",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.OutgoingMessage.prototype.headersSent.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "headersSent"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::node_http_prototypes::http_getter_thunk",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::node_http_prototypes::http_getter_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b9eb21"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0xb"
+          }
+        ],
+        "info_symbol": "perry_realm_info_1cc7ca8913862c6b7c86",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.OutgoingMessage.prototype.socket.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "socket"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::node_http_prototypes::http_getter_thunk",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::node_http_prototypes::http_getter_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b8a80b"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0x6"
+          }
+        ],
+        "info_symbol": "perry_realm_info_1cc7ca8913862c6b7c86",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.OutgoingMessage.prototype.writableCorked.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "writableCorked"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::node_http_prototypes::http_getter_thunk",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::node_http_prototypes::http_getter_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b90b8d"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0xe"
+          }
+        ],
+        "info_symbol": "perry_realm_info_1cc7ca8913862c6b7c86",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.OutgoingMessage.prototype.writableEnded.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "writableEnded"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::node_http_prototypes::http_getter_thunk",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::node_http_prototypes::http_getter_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b90b6f"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0xd"
+          }
+        ],
+        "info_symbol": "perry_realm_info_1cc7ca8913862c6b7c86",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.OutgoingMessage.prototype.writableFinished.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "writableFinished"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::node_http_prototypes::http_getter_thunk",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::node_http_prototypes::http_getter_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x29b32f0"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0x10"
+          }
+        ],
+        "info_symbol": "perry_realm_info_1cc7ca8913862c6b7c86",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.OutgoingMessage.prototype.writableHighWaterMark.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "writableHighWaterMark"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::node_http_prototypes::http_getter_thunk",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::node_http_prototypes::http_getter_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b908b7"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0x15"
+          }
+        ],
+        "info_symbol": "perry_realm_info_1cc7ca8913862c6b7c86",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.OutgoingMessage.prototype.writableLength.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "writableLength"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::node_http_prototypes::http_getter_thunk",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::node_http_prototypes::http_getter_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b90b9b"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0xe"
+          }
+        ],
+        "info_symbol": "perry_realm_info_1cc7ca8913862c6b7c86",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.OutgoingMessage.prototype.writableNeedDrain.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "writableNeedDrain"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::node_http_prototypes::http_getter_thunk",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::node_http_prototypes::http_getter_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b90b7c"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0x11"
+          }
+        ],
+        "info_symbol": "perry_realm_info_1cc7ca8913862c6b7c86",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.OutgoingMessage.prototype.writableObjectMode.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "writableObjectMode"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::node_http_prototypes::http_getter_thunk",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::node_http_prototypes::http_getter_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b908a5"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0x12"
+          }
+        ],
+        "info_symbol": "perry_realm_info_1cc7ca8913862c6b7c86",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "body:http_setter_thunk": [
+      {
+        "name": "node:http.IncomingMessage.prototype.connection.<set>",
+        "kind": "setter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "connection"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::node_http_prototypes::http_setter_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::node_http_prototypes::http_setter_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b89356"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0xa"
+          }
+        ],
+        "info_symbol": "perry_realm_info_c0739364e221eb3d1691",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.IncomingMessage.prototype.headers.<set>",
+        "kind": "setter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "headers"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::node_http_prototypes::http_setter_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::node_http_prototypes::http_setter_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b9ea6c"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0x7"
+          }
+        ],
+        "info_symbol": "perry_realm_info_c0739364e221eb3d1691",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.IncomingMessage.prototype.headersDistinct.<set>",
+        "kind": "setter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "headersDistinct"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::node_http_prototypes::http_setter_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::node_http_prototypes::http_setter_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b9ebb0"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0xf"
+          }
+        ],
+        "info_symbol": "perry_realm_info_c0739364e221eb3d1691",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.IncomingMessage.prototype.trailers.<set>",
+        "kind": "setter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "trailers"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::node_http_prototypes::http_setter_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::node_http_prototypes::http_setter_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x29b67e8"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0x8"
+          }
+        ],
+        "info_symbol": "perry_realm_info_c0739364e221eb3d1691",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.IncomingMessage.prototype.trailersDistinct.<set>",
+        "kind": "setter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "trailersDistinct"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::node_http_prototypes::http_setter_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::node_http_prototypes::http_setter_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x29b33c0"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0x10"
+          }
+        ],
+        "info_symbol": "perry_realm_info_c0739364e221eb3d1691",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.OutgoingMessage.prototype.connection.<set>",
+        "kind": "setter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "connection"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::node_http_prototypes::http_setter_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::node_http_prototypes::http_setter_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b89356"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0xa"
+          }
+        ],
+        "info_symbol": "perry_realm_info_c0739364e221eb3d1691",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.OutgoingMessage.prototype.socket.<set>",
+        "kind": "setter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "socket"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::node_http_prototypes::http_setter_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::node_http_prototypes::http_setter_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b8a80b"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0x6"
+          }
+        ],
+        "info_symbol": "perry_realm_info_c0739364e221eb3d1691",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "body:js_node_http_method_fallback": [
+      {
+        "name": "node:http.IncomingMessage.prototype._addHeaderLine",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4008000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "_addHeaderLine"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 3,
+        "body": "js_node_http_method_fallback",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 3,
+          "plain_params": 0,
+          "source_symbol": "source:js_node_http_method_fallback",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b9ebce"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0xe"
+          }
+        ],
+        "info_symbol": "perry_realm_info_76ebae0273242e3024e0",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.IncomingMessage.prototype._addHeaderLineDistinct",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4008000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "_addHeaderLineDistinct"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 3,
+        "body": "js_node_http_method_fallback",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 3,
+          "plain_params": 0,
+          "source_symbol": "source:js_node_http_method_fallback",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b9ebdc"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0x16"
+          }
+        ],
+        "info_symbol": "perry_realm_info_76ebae0273242e3024e0",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.IncomingMessage.prototype._addHeaderLines",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "_addHeaderLines"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "js_node_http_method_fallback",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 3,
+          "plain_params": 0,
+          "source_symbol": "source:js_node_http_method_fallback",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b9ebbf"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0xf"
+          }
+        ],
+        "info_symbol": "perry_realm_info_76ebae0273242e3024e0",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.IncomingMessage.prototype._destroy",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "_destroy"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "js_node_http_method_fallback",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 3,
+          "plain_params": 0,
+          "source_symbol": "source:js_node_http_method_fallback",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x29b6ea0"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0x8"
+          }
+        ],
+        "info_symbol": "perry_realm_info_76ebae0273242e3024e0",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.IncomingMessage.prototype._dump",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "_dump"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "js_node_http_method_fallback",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 3,
+          "plain_params": 0,
+          "source_symbol": "source:js_node_http_method_fallback",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b9ec07"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0x5"
+          }
+        ],
+        "info_symbol": "perry_realm_info_76ebae0273242e3024e0",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.IncomingMessage.prototype._dumpAndCloseReadable",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "_dumpAndCloseReadable"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "js_node_http_method_fallback",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 3,
+          "plain_params": 0,
+          "source_symbol": "source:js_node_http_method_fallback",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b9ebf2"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0x15"
+          }
+        ],
+        "info_symbol": "perry_realm_info_76ebae0273242e3024e0",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.IncomingMessage.prototype._read",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "_read"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "js_node_http_method_fallback",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 3,
+          "plain_params": 0,
+          "source_symbol": "source:js_node_http_method_fallback",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b801dd"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0x5"
+          }
+        ],
+        "info_symbol": "perry_realm_info_76ebae0273242e3024e0",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.IncomingMessage.prototype.setTimeout",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "setTimeout"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "js_node_http_method_fallback",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 3,
+          "plain_params": 0,
+          "source_symbol": "source:js_node_http_method_fallback",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b884aa"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0xa"
+          }
+        ],
+        "info_symbol": "perry_realm_info_76ebae0273242e3024e0",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.IncomingMessage.prototype[\"@runtime:kAttachAbortSignal\"]",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "kAttachAbortSignal"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "js_node_http_method_fallback",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 3,
+          "plain_params": 0,
+          "source_symbol": "source:js_node_http_method_fallback",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b9ec0c"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0x12"
+          }
+        ],
+        "info_symbol": "perry_realm_info_76ebae0273242e3024e0",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.IncomingMessage.prototype[\"@runtime:kDetachAbortSignal\"]",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "kDetachAbortSignal"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "js_node_http_method_fallback",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 3,
+          "plain_params": 0,
+          "source_symbol": "source:js_node_http_method_fallback",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b9ec1e"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0x12"
+          }
+        ],
+        "info_symbol": "perry_realm_info_76ebae0273242e3024e0",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.OutgoingMessage.prototype._finish",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "_finish"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "js_node_http_method_fallback",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 3,
+          "plain_params": 0,
+          "source_symbol": "source:js_node_http_method_fallback",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b9eb37"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0x7"
+          }
+        ],
+        "info_symbol": "perry_realm_info_76ebae0273242e3024e0",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.OutgoingMessage.prototype._flush",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "_flush"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "js_node_http_method_fallback",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 3,
+          "plain_params": 0,
+          "source_symbol": "source:js_node_http_method_fallback",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b801d0"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0x6"
+          }
+        ],
+        "info_symbol": "perry_realm_info_76ebae0273242e3024e0",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.OutgoingMessage.prototype._flushOutput",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "_flushOutput"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "js_node_http_method_fallback",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 3,
+          "plain_params": 0,
+          "source_symbol": "source:js_node_http_method_fallback",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b9eb3e"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0xc"
+          }
+        ],
+        "info_symbol": "perry_realm_info_76ebae0273242e3024e0",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.OutgoingMessage.prototype._implicitHeader",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "_implicitHeader"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "js_node_http_method_fallback",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 3,
+          "plain_params": 0,
+          "source_symbol": "source:js_node_http_method_fallback",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b9eb12"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0xf"
+          }
+        ],
+        "info_symbol": "perry_realm_info_76ebae0273242e3024e0",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.OutgoingMessage.prototype._isLenientHeaderValidation",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "_isLenientHeaderValidation"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "js_node_http_method_fallback",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 3,
+          "plain_params": 0,
+          "source_symbol": "source:js_node_http_method_fallback",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b9ea73"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0x1a"
+          }
+        ],
+        "info_symbol": "perry_realm_info_76ebae0273242e3024e0",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.OutgoingMessage.prototype._renderHeaders",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "_renderHeaders"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "js_node_http_method_fallback",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 3,
+          "plain_params": 0,
+          "source_symbol": "source:js_node_http_method_fallback",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b9ea8d"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0xe"
+          }
+        ],
+        "info_symbol": "perry_realm_info_76ebae0273242e3024e0",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.OutgoingMessage.prototype._send",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4008000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "_send"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 3,
+        "body": "js_node_http_method_fallback",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 3,
+          "plain_params": 0,
+          "source_symbol": "source:js_node_http_method_fallback",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b9ea9b"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0x5"
+          }
+        ],
+        "info_symbol": "perry_realm_info_76ebae0273242e3024e0",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.OutgoingMessage.prototype._storeHeader",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "_storeHeader"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "js_node_http_method_fallback",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 3,
+          "plain_params": 0,
+          "source_symbol": "source:js_node_http_method_fallback",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b9eaa9"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0xc"
+          }
+        ],
+        "info_symbol": "perry_realm_info_76ebae0273242e3024e0",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.OutgoingMessage.prototype._writeRaw",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4008000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "_writeRaw"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 3,
+        "body": "js_node_http_method_fallback",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 3,
+          "plain_params": 0,
+          "source_symbol": "source:js_node_http_method_fallback",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b9eaa0"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0x9"
+          }
+        ],
+        "info_symbol": "perry_realm_info_76ebae0273242e3024e0",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.OutgoingMessage.prototype.addTrailers",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "addTrailers"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "js_node_http_method_fallback",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 3,
+          "plain_params": 0,
+          "source_symbol": "source:js_node_http_method_fallback",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b9eb2c"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0xb"
+          }
+        ],
+        "info_symbol": "perry_realm_info_76ebae0273242e3024e0",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.OutgoingMessage.prototype.appendHeader",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "appendHeader"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "js_node_http_method_fallback",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 3,
+          "plain_params": 0,
+          "source_symbol": "source:js_node_http_method_fallback",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b9eabf"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0xc"
+          }
+        ],
+        "info_symbol": "perry_realm_info_76ebae0273242e3024e0",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.OutgoingMessage.prototype.cork",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "cork"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "js_node_http_method_fallback",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 3,
+          "plain_params": 0,
+          "source_symbol": "source:js_node_http_method_fallback",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2a15018"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0x4"
+          }
+        ],
+        "info_symbol": "perry_realm_info_76ebae0273242e3024e0",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.OutgoingMessage.prototype.destroy",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "destroy"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "js_node_http_method_fallback",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 3,
+          "plain_params": 0,
+          "source_symbol": "source:js_node_http_method_fallback",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b84b8c"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0x7"
+          }
+        ],
+        "info_symbol": "perry_realm_info_76ebae0273242e3024e0",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.OutgoingMessage.prototype.flushHeaders",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "flushHeaders"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "js_node_http_method_fallback",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 3,
+          "plain_params": 0,
+          "source_symbol": "source:js_node_http_method_fallback",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b9eb4a"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0xc"
+          }
+        ],
+        "info_symbol": "perry_realm_info_76ebae0273242e3024e0",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.OutgoingMessage.prototype.getHeader",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "getHeader"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "js_node_http_method_fallback",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 3,
+          "plain_params": 0,
+          "source_symbol": "source:js_node_http_method_fallback",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b9eacb"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0x9"
+          }
+        ],
+        "info_symbol": "perry_realm_info_76ebae0273242e3024e0",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.OutgoingMessage.prototype.getHeaderNames",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "getHeaderNames"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "js_node_http_method_fallback",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 3,
+          "plain_params": 0,
+          "source_symbol": "source:js_node_http_method_fallback",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b9ead4"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0xe"
+          }
+        ],
+        "info_symbol": "perry_realm_info_76ebae0273242e3024e0",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.OutgoingMessage.prototype.getHeaders",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "getHeaders"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "js_node_http_method_fallback",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 3,
+          "plain_params": 0,
+          "source_symbol": "source:js_node_http_method_fallback",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b9eaf3"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0xa"
+          }
+        ],
+        "info_symbol": "perry_realm_info_76ebae0273242e3024e0",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.OutgoingMessage.prototype.getRawHeaderNames",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "getRawHeaderNames"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "js_node_http_method_fallback",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 3,
+          "plain_params": 0,
+          "source_symbol": "source:js_node_http_method_fallback",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b9eae2"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0x11"
+          }
+        ],
+        "info_symbol": "perry_realm_info_76ebae0273242e3024e0",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.OutgoingMessage.prototype.hasHeader",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "hasHeader"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "js_node_http_method_fallback",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 3,
+          "plain_params": 0,
+          "source_symbol": "source:js_node_http_method_fallback",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b9eafd"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0x9"
+          }
+        ],
+        "info_symbol": "perry_realm_info_76ebae0273242e3024e0",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.OutgoingMessage.prototype.pipe",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "pipe"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "js_node_http_method_fallback",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 3,
+          "plain_params": 0,
+          "source_symbol": "source:js_node_http_method_fallback",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2a15014"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0x4"
+          }
+        ],
+        "info_symbol": "perry_realm_info_76ebae0273242e3024e0",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.OutgoingMessage.prototype.removeHeader",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "removeHeader"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "js_node_http_method_fallback",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 3,
+          "plain_params": 0,
+          "source_symbol": "source:js_node_http_method_fallback",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b9eb06"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0xc"
+          }
+        ],
+        "info_symbol": "perry_realm_info_76ebae0273242e3024e0",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.OutgoingMessage.prototype.setHeaders",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "setHeaders"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "js_node_http_method_fallback",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 3,
+          "plain_params": 0,
+          "source_symbol": "source:js_node_http_method_fallback",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b9eab5"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0xa"
+          }
+        ],
+        "info_symbol": "perry_realm_info_76ebae0273242e3024e0",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.OutgoingMessage.prototype.setTimeout",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "setTimeout"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "js_node_http_method_fallback",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 3,
+          "plain_params": 0,
+          "source_symbol": "source:js_node_http_method_fallback",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b884aa"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0xa"
+          }
+        ],
+        "info_symbol": "perry_realm_info_76ebae0273242e3024e0",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.OutgoingMessage.prototype.uncork",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "uncork"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "js_node_http_method_fallback",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 3,
+          "plain_params": 0,
+          "source_symbol": "source:js_node_http_method_fallback",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b90b49"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0x6"
+          }
+        ],
+        "info_symbol": "perry_realm_info_76ebae0273242e3024e0",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.OutgoingMessage.prototype[\"@runtime:nodejs.rejection\"]",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "destroy"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "js_node_http_method_fallback",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 3,
+          "plain_params": 0,
+          "source_symbol": "source:js_node_http_method_fallback",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b84b8c"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0x7"
+          }
+        ],
+        "info_symbol": "perry_realm_info_76ebae0273242e3024e0",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.ServerResponse.prototype._finish",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "_finish"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "js_node_http_method_fallback",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 3,
+          "plain_params": 0,
+          "source_symbol": "source:js_node_http_method_fallback",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b9eb37"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0x7"
+          }
+        ],
+        "info_symbol": "perry_realm_info_76ebae0273242e3024e0",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.ServerResponse.prototype._implicitHeader",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "_implicitHeader"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "js_node_http_method_fallback",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 3,
+          "plain_params": 0,
+          "source_symbol": "source:js_node_http_method_fallback",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b9eb12"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0xf"
+          }
+        ],
+        "info_symbol": "perry_realm_info_76ebae0273242e3024e0",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.ServerResponse.prototype.assignSocket",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "assignSocket"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "js_node_http_method_fallback",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 3,
+          "plain_params": 0,
+          "source_symbol": "source:js_node_http_method_fallback",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b9eb6d"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0xc"
+          }
+        ],
+        "info_symbol": "perry_realm_info_76ebae0273242e3024e0",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.ServerResponse.prototype.detachSocket",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "detachSocket"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "js_node_http_method_fallback",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 3,
+          "plain_params": 0,
+          "source_symbol": "source:js_node_http_method_fallback",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b9eb79"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0xc"
+          }
+        ],
+        "info_symbol": "perry_realm_info_76ebae0273242e3024e0",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.ServerResponse.prototype.writeContinue",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "writeContinue"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "js_node_http_method_fallback",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 3,
+          "plain_params": 0,
+          "source_symbol": "source:js_node_http_method_fallback",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b9eb85"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0xd"
+          }
+        ],
+        "info_symbol": "perry_realm_info_76ebae0273242e3024e0",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.ServerResponse.prototype.writeEarlyHints",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "writeEarlyHints"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "js_node_http_method_fallback",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 3,
+          "plain_params": 0,
+          "source_symbol": "source:js_node_http_method_fallback",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b9eba1"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0xf"
+          }
+        ],
+        "info_symbol": "perry_realm_info_76ebae0273242e3024e0",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.ServerResponse.prototype.writeInformation",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "writeInformation"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "js_node_http_method_fallback",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 3,
+          "plain_params": 0,
+          "source_symbol": "source:js_node_http_method_fallback",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x29b4fe0"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0x10"
+          }
+        ],
+        "info_symbol": "perry_realm_info_76ebae0273242e3024e0",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:http.ServerResponse.prototype.writeProcessing",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "writeProcessing"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "js_node_http_method_fallback",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 3,
+          "plain_params": 0,
+          "source_symbol": "source:js_node_http_method_fallback",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b9eb92"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0xf"
+          }
+        ],
+        "info_symbol": "perry_realm_info_76ebae0273242e3024e0",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ]
+  }
+}

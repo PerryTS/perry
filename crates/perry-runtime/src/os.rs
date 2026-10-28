@@ -1521,3 +1521,5 @@ mod tests {
         assert!(!eol.is_null());
     }
 }
+
+crate::realm_decl!("os.realm.json#*");

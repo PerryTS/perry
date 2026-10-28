@@ -1,0 +1,111 @@
+{
+  "version": 1,
+  "groups": {
+    "objects": [
+      {
+        "name": "Intl.getCanonicalLocales",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "getCanonicalLocales"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::intl::locales::get_canonical_locales_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::intl::locales::get_canonical_locales_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_e3b7b8cf22954650a4b1",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Intl.supportedValuesOf",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "supportedValuesOf"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::intl::locales::supported_values_of_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::intl::locales::supported_values_of_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_d64f1cc060681124244d",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ]
+  }
+}

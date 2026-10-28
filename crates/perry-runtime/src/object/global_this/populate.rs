@@ -1192,3 +1192,5 @@ unsafe fn name_first_realm_prototype(proto: *mut ObjectHeader, serial: u64) {
     crate::object::proto_validity::assign_intrinsic_prototype_serial(proto as usize, serial);
     let _ = crate::object::builtin_proto::name_runtime_prototype(proto, serial);
 }
+
+crate::realm_decl!("populate.realm.json#*");
