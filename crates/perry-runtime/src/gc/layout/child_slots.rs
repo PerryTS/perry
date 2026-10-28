@@ -475,6 +475,23 @@ impl GcMutableSlot {
         }
     }
 
+    /// RuntimeRoot slots are the shape's keys array, prototype identity or
+    /// evaluation holder. Only the keys array is an untagged word; the two
+    /// identities are NaN-boxed. Thus this exact descriptor proves that a
+    /// nonzero raw word is a live ArrayHeader, without a speculative header
+    /// read through an arbitrary JS value. An already marked, nonforwarded
+    /// array owes no further marking or rewrite; custody is with its runtime
+    /// root scanner, so there is no parent remembered-set work either.
+    #[inline(always)]
+    pub(in crate::gc) unsafe fn shared_keys_already_marked(self, bits: u64) -> bool {
+        if self.is_parent_owned() || bits == 0 || bits & TAG_MASK != 0 {
+            return false;
+        }
+        let header = header_from_user_ptr(bits as usize as *const u8);
+        debug_assert_eq!((*header).obj_type, GC_TYPE_ARRAY);
+        (*header).gc_flags & (GC_FLAG_MARKED | GC_FLAG_FORWARDED) == GC_FLAG_MARKED
+    }
+
     #[inline(always)]
     pub(in crate::gc) fn is_parent_owned(self) -> bool {
         self.owner == GcSlotOwner::Parent

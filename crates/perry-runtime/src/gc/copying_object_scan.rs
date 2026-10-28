@@ -19,7 +19,7 @@
 //! header and thread state: a full trace or layout-scan trace in progress (the
 //! generic walk records carrier notes and slot counters this path does not), or
 //! a type-table entry that stopped describing `GC_TYPE_OBJECT` the way this
-//! assumes. Once admitted it never hands the object back, so no edge is visited
+//! assumes, or a post-rewrite hook is required. Once admitted it never hands the object back, so no edge is visited
 //! twice.
 //!
 //! Drift is the risk of a second enumeration, so it is not trusted: in test and
@@ -102,6 +102,7 @@ unsafe fn plain_object_admissible(header: *mut GcHeader) -> bool {
             gc_type_layout_slot_kind(GC_TYPE_OBJECT),
             GcLayoutSlotKind::ObjectFields
         )
+        && gc_type_rewrite_hook_kind(GC_TYPE_OBJECT) == GcRewriteHookKind::None
 }
 
 /// `gc_child_slots`' ObjectFields arm and `visit_gc_layout_slot_descriptors`'
@@ -190,14 +191,12 @@ impl CopyingNurseryCollector {
         if !plain_object_admissible(header) {
             return false;
         }
-        let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE) as usize;
-        let mut changed = false;
         // Asked lazily by the generic walk, at its first slot; both are
         // properties of the header alone, so asking them up front is the same
         // answer.
         let weak = weak_holder_fact(header);
         let remembering = ParentRemembering::of(header, self.skip_remembering);
-        let mut plan = plain_object_plan(header);
+        let plan = plain_object_plan(header);
         #[cfg(test)]
         let cross_check = !sabotage::cross_check_disabled();
         #[cfg(all(not(test), debug_assertions))]
@@ -206,14 +205,38 @@ impl CopyingNurseryCollector {
         if cross_check {
             assert_matches_generic_walk(header, &plan);
         }
-        while let Some(slot) = plan.next_slot() {
-            let before = slot.read();
+        // Metadata edges and payload have different custody. Keep the five
+        // fixed metadata positions out of the payload loop: re-entering
+        // next_slot dispatched all five Options for every payload word.
+        for slot in plan.prefix.into_iter().flatten() {
             self.visit_slot_with_parent_facts(slot, header, weak, remembering);
-            changed |= slot.read() != before;
         }
-        if changed {
-            run_gc_rewrite_hook(GC_TYPE_OBJECT, user_ptr);
+        match plan.walk {
+            PayloadWalk::Word(mut word) => {
+                while word != 0 {
+                    let index = word.trailing_zeros() as usize;
+                    word &= word - 1;
+                    self.visit_slot_with_parent_facts(
+                        GcMutableSlot::new(plan.payload.slot(index), None),
+                        header,
+                        weak,
+                        remembering,
+                    );
+                }
+            }
+            PayloadWalk::Range { next, count } => {
+                for index in next..count {
+                    self.visit_slot_with_parent_facts(
+                        GcMutableSlot::new(plan.payload.slot(index), None),
+                        header,
+                        weak,
+                        remembering,
+                    );
+                }
+            }
         }
+        // Admission established that this descriptor has no post-rewrite
+        // hook. There is no consumer for a per-slot before/after comparison.
         true
     }
 }

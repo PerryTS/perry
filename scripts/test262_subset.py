@@ -489,12 +489,15 @@ def main() -> int:
         staged = workdir / "case.js"
         try:
             staged.write_text(program)
+            # `import('./x_FIXTURE.js')` resolves next to the case.
+            for fixture in (root / "test" / rel).parent.glob("*_FIXTURE*"):
+                shutil.copy(fixture, workdir / fixture.name)
             if meta.self_validate:
                 # Oracle (Node) can't run this feature — judge Perry alone on
                 # the case's own `assert.*` self-checks (#4792).
                 out_bin = workdir / "case.out"
                 c_env = dict(base_env, PERRY_ALLOW_UNIMPLEMENTED="1",
-                             PERRY_NO_AUTO_OPTIMIZE="1",
+                             PERRY_NO_AUTO_OPTIMIZE="1", PERRY_ALLOW_EVAL="1",
                              PERRY_GLOBAL_SCRIPT_THIS="1")
                 c_exit, c_out = run(
                     [str(args.perry_bin), "compile", str(staged), "-o",

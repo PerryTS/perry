@@ -1862,3 +1862,68 @@ fn ascii_prefix_with_trailing_lone_surrogate_preserves_flag_and_bytes() {
         );
     }
 }
+
+/// Reusing formatted digits across the inline capacity miss must keep the
+/// heap builder's bytes, UTF-16 length and surrogate/validation metadata.
+#[test]
+fn boxed_number_concat_matches_heap_builder_at_inline_boundary() {
+    let prefixes: &[&[u8]] = &[
+        b"",
+        b"x",
+        b"xy",
+        b"xyz",
+        b"wxyz",
+        b"abcde",
+        b"long-prefix-",
+        "é".as_bytes(),
+        "€".as_bytes(),
+        &[0xED, 0xA0, 0xBD],
+        &[0xC3],
+    ];
+    let values = [
+        -0.0,
+        0.0,
+        1.0,
+        999.0,
+        9999.0,
+        10000.0,
+        999999999.0,
+        1000000000.0,
+        -1.0,
+        0.5,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::NAN,
+    ];
+    for &bytes in prefixes {
+        for value in values {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let prefix = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+            let root = scope.root_string_ptr(prefix);
+            let expected = js_string_concat_value(root.get_raw_const_ptr(), value);
+            let expected_bytes = unsafe {
+                std::slice::from_raw_parts(string_data(expected), (*expected).byte_len as usize)
+            }
+            .to_vec();
+            let expected_units = unsafe { (*expected).utf16_len };
+            let expected_flags = unsafe { (*expected).flags };
+            let actual = super::concat::js_string_concat_value_box(root.get_raw_const_ptr(), value);
+            let inline = crate::value::JSValue::from_bits(actual.to_bits()).is_short_string();
+            let actual = crate::value::js_jsvalue_to_string(actual);
+            let actual_bytes = unsafe {
+                std::slice::from_raw_parts(string_data(actual), (*actual).byte_len as usize)
+            };
+            assert_eq!(
+                actual_bytes, expected_bytes,
+                "prefix {bytes:?}, value {value}"
+            );
+            assert_eq!(unsafe { (*actual).utf16_len }, expected_units);
+            // Converting an inline result to heap text can return a numeric
+            // property atom. Those representation flags belong to conversion;
+            // only a result built on the heap must retain the builder flags.
+            if !inline {
+                assert_eq!(unsafe { (*actual).flags }, expected_flags);
+            }
+        }
+    }
+}

@@ -211,6 +211,19 @@ pub(crate) fn native_namespace_user_value(module: &str, prop: &str) -> Option<f6
     if obj.is_null() {
         return None;
     }
+    // Accessor descriptors occupy the property's ordinary slot. Do not expose
+    // that storage object as an override (or snapshot it as a named export).
+    if let Some(accessor) = super::descriptor_state::get_accessor_descriptor(obj as usize, prop) {
+        if accessor.get == 0 {
+            return Some(f64::from_bits(crate::value::TAG_UNDEFINED));
+        }
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let receiver = scope.root_nanbox_u64(ns_bits);
+        let value = unsafe {
+            super::field_get_set::invoke_accessor_getter(accessor.get, receiver.get_nanbox_f64())
+        };
+        return Some(f64::from_bits(value.bits()));
+    }
     unsafe { super::field_get_set::native_module_own_field_by_key(obj, key) }
         .map(|v| f64::from_bits(v.bits()))
 }
@@ -1530,3 +1543,6 @@ pub(crate) use cjs_default::{
 mod buffer_pool_size_tests;
 
 crate::realm_decl!("native_module.realm.json#*");
+
+#[cfg(test)]
+mod namespace_accessor_tests;

@@ -159,20 +159,22 @@ pub(crate) fn js_array_alloc_named_props_reserved(
     let scope = crate::gc::RuntimeHandleScope::new();
     let array = scope.root_raw_mut_ptr(js_array_alloc(capacity));
     unsafe {
-        let named = crate::object::layout_desc::perry_alloc_layout(match set {
-            crate::array::NamedPropertyKeys::ExecResult => {
-                std::ptr::addr_of!(crate::object::runtime_layouts::REGEX_EXEC_NAMED)
-            }
-            crate::array::NamedPropertyKeys::ExecResultIndices => {
-                std::ptr::addr_of!(crate::object::runtime_layouts::REGEX_EXEC_INDICES_NAMED)
-            }
-            crate::array::NamedPropertyKeys::IndicesGroups => {
-                std::ptr::addr_of!(crate::object::runtime_layouts::REGEX_INDICES_GROUPS_NAMED)
-            }
+        let (named, array) = array.across_mut::<ArrayHeader, _>(|| {
+            crate::object::layout_desc::perry_alloc_layout(match set {
+                crate::array::NamedPropertyKeys::ExecResult => {
+                    std::ptr::addr_of!(crate::object::runtime_layouts::REGEX_EXEC_NAMED)
+                }
+                crate::array::NamedPropertyKeys::ExecResultIndices => {
+                    std::ptr::addr_of!(crate::object::runtime_layouts::REGEX_EXEC_INDICES_NAMED)
+                }
+                crate::array::NamedPropertyKeys::IndicesGroups => {
+                    std::ptr::addr_of!(crate::object::runtime_layouts::REGEX_INDICES_GROUPS_NAMED)
+                }
+            })
         });
-        super::named_props::publish_named(array.get_raw_mut_ptr::<ArrayHeader>(), named);
+        super::named_props::publish_named(array, named);
+        array
     }
-    array.get_raw_mut_ptr::<ArrayHeader>()
 }
 
 /// Allocate a fresh array whose initialized prefix is known to contain only

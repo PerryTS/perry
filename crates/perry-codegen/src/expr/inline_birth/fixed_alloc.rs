@@ -28,20 +28,19 @@ fn allocate(
     slow: impl FnOnce(&mut FnCtx<'_>) -> String,
 ) -> (String, Option<String>) {
     let state = crate::expr::load_inline_arena_state(ctx);
-    let flags = super::flags(ctx, &state);
     let blk = ctx.block();
     let offset_ptr = blk.gep(I8, &state, &[(I64, "8")]);
     let offset = blk.load(I64, &offset_ptr);
     let next = blk.add(I64, &offset, &size.to_string());
     let limit_ptr = blk.gep(I8, &state, &[(I64, "16")]);
     let limit = blk.load(I64, &limit_ptr);
-    let idle = blk.icmp_eq(I64, &flags, "0");
-    let idle = if let Some(admitted) = admitted {
-        blk.and(I1, &idle, admitted)
+    // The runtime's canonical bump bound is zero during allocate-black.
+    // Only descriptor admission remains a separate condition.
+    let limit = if let Some(admitted) = admitted {
+        blk.select(I1, admitted, I64, &limit, "0")
     } else {
-        idle
+        limit
     };
-    let limit = blk.select(I1, &idle, I64, &limit, "0");
     let fits = blk.icmp_ule(I64, &next, &limit);
     let fast = ctx.new_block("fixed_birth.fast");
     let refused = ctx.new_block("fixed_birth.runtime");
@@ -172,22 +171,31 @@ pub(crate) fn layout_with(
             .and_then(|f| f.iter().find(|(s, _)| *s == slot))
             .map_or_else(|| crate::nanbox::TAG_HOLE.to_string(), |(_, v)| v.clone())
     };
-    // Registration gives a carried descriptor exactly three possible states:
-    // 0 (unsupported), -1 (not registered), or its registered ShapeId. Refuse
-    // the first two before committing the bump, preserving the runtime error.
-    let id_ptr = ctx.block().gep(
-        I8,
-        desc,
-        &[(I64, &crate::layout_desc::DESC_LAYOUT_ID_OFFSET.to_string())],
-    );
-    let id = ctx.block().load(I32, &id_ptr);
-    let nonzero = ctx.block().icmp_ne(I32, &id, "0");
-    let registered = ctx.block().icmp_ne(I32, &id, "-1");
-    let registered = ctx.block().and(I1, &nonzero, &registered);
+    // Whole-image templates are immutable and the image plan is exactly
+    // what emitted desc.layout_id. Consume that proof instead of reloading
+    // and testing old registration sentinels for each object. An opaque or
+    // ambiguous descriptor keeps the original checked admission.
+    let template = desc
+        .strip_prefix('@')
+        .and_then(|symbol| crate::layout_ordinals::current_plan().descriptor_template_word(symbol));
+    let (id, registered) = if let Some(word) = template {
+        ((word as i32).to_string(), None)
+    } else {
+        let id_ptr = ctx.block().gep(
+            I8,
+            desc,
+            &[(I64, &crate::layout_desc::DESC_LAYOUT_ID_OFFSET.to_string())],
+        );
+        let id = ctx.block().load(I32, &id_ptr);
+        let nonzero = ctx.block().icmp_ne(I32, &id, "0");
+        let registered = ctx.block().icmp_ne(I32, &id, "-1");
+        let registered = ctx.block().and(I1, &nonzero, &registered);
+        (id, Some(registered))
+    };
     allocate(
         ctx,
         size,
-        Some(&registered),
+        registered.as_deref(),
         fields.is_some(),
         |ctx, raw| {
             let blk = ctx.block();

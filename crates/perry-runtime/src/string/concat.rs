@@ -878,117 +878,7 @@ pub extern "C" fn js_string_concat_value(
         let mut num_buf = [0u8; 32]; // max f64 string is ~24 chars
         let num_len = format_number_into(value, &mut num_buf);
 
-        // Single allocation for prefix + number string. `Some` from the
-        // no-collect allocator means the open nursery block served it and
-        // nothing moved — `prefix` stays valid raw. `None` (block boundary,
-        // large size, free-list latch) takes the original rooted path:
-        // `string_storage_alloc` → `arena_alloc_gc` can collect and evacuate,
-        // so the incoming `prefix` may have moved — re-read it from its
-        // handle before touching the header or copying the payload (#6655).
-        let total_blen = prefix_blen as usize + num_len;
-
-        // Memo probe, ahead of the allocation. This is the `"prefix" + i`
-        // shape (computed property keys, id building) and it is where the
-        // allocations actually come from: `js_string_concat_value_box`'s SSO
-        // arm handles results up to 5 bytes, so everything longer lands here
-        // and heap-allocates. Restricted to a plain ASCII prefix so the cached
-        // string is bit-identical to what the block below would build
-        // (flags == 0, utf16_len == byte_len).
-        //
-        // `prefix_u16 == prefix_blen` is NOT the runtime's ASCII predicate —
-        // it is necessary but not sufficient: a truncated multi-byte lead
-        // byte can make a non-ASCII `prefix` coincide on `utf16_len ==
-        // byte_len` too (see `str_bytes_ascii_from_jsvalue`'s doc in
-        // `string/mod.rs`, and `string/compare.rs`'s `utf16_cmp_bytes` doc,
-        // for the exact mechanism and a concrete payload). It DOES soundly
-        // rule out non-ASCII when the lengths differ, so it stays first in
-        // the chain as a free short-circuit — but when it's true, the
-        // `bytes_all_ascii` scan below is still required, not redundant
-        // with it.
-        let memoizable = total_blen <= CONCAT_MEMO_MAX_BYTES as usize
-            && is_valid_string_ptr(prefix)
-            && prefix_u16 == prefix_blen
-            && unsafe { (*prefix).flags & !STRING_FLAG_WTF8_VALIDATED == 0 }
-            && bytes_all_ascii(string_data(prefix), prefix_blen)
-            && concat_memo_should_probe();
-        let mut memo_buf = [0u8; CONCAT_MEMO_MAX_BYTES as usize];
-        let mut memo_slot = 0usize;
-        let mut memo_admitted = false;
-        if memoizable {
-            unsafe {
-                if prefix_blen > 0 {
-                    copy_bytes_small(
-                        string_data(prefix),
-                        memo_buf.as_mut_ptr(),
-                        prefix_blen as usize,
-                    );
-                }
-                copy_bytes_small(
-                    num_buf.as_ptr(),
-                    memo_buf.as_mut_ptr().add(prefix_blen as usize),
-                    num_len,
-                );
-            }
-            let bytes = &memo_buf[..total_blen];
-            let (slot, tag) = concat_memo_slot_and_tag(bytes);
-            memo_slot = slot;
-            let hit = concat_memo_lookup(memo_slot, bytes);
-            if !hit.is_null() {
-                concat_memo_note_hit();
-                return hit;
-            }
-            // Missed: admit only a result we have seen before, so a stream of
-            // never-repeated keys costs a tag byte instead of a rooted string.
-            memo_admitted = concat_memo_admit(memo_slot, tag);
-        }
-
-        let (ptr, data_ptr, prefix) =
-            match crate::string::string_storage_alloc_no_collect(total_blen as u32) {
-                Some((ptr, data_ptr)) => (ptr, data_ptr, prefix),
-                None => {
-                    let scope = crate::gc::RuntimeHandleScope::new();
-                    let prefix_handle = scope.root_string_ptr(prefix);
-                    let (ptr, data_ptr) = string_storage_alloc(total_blen as u32);
-                    (
-                        ptr,
-                        data_ptr,
-                        prefix_handle.get_raw_const_ptr::<StringHeader>(),
-                    )
-                }
-            };
-
-        unsafe {
-            // Both prefix and number digits are ASCII, so utf16_len == byte_len for the number part
-            let flags = if is_valid_string_ptr(prefix) {
-                (*prefix).flags
-            } else {
-                0
-            };
-            init_string_header(
-                ptr,
-                prefix_u16 + num_len as u32,
-                total_blen as u32,
-                total_blen as u32,
-                0,
-                flags,
-            );
-
-            if is_valid_string_ptr(prefix) && prefix_blen > 0 {
-                copy_bytes_small(string_data(prefix), data_ptr, prefix_blen as usize);
-            }
-            copy_bytes_small(
-                num_buf.as_ptr(),
-                data_ptr.add(prefix_blen as usize),
-                num_len,
-            );
-        }
-
-        if memoizable && memo_admitted {
-            // Publish only after header and payload are written: the memo is a
-            // GC root, so a half-built entry would be traced.
-            concat_memo_insert(memo_slot, ptr);
-        }
-        return ptr;
+        return concat_formatted_number(prefix, &num_buf, num_len, prefix_blen, prefix_u16);
     }
 
     // Slow path: non-number value — fall back to js_jsvalue_to_string + js_string_concat.
@@ -998,6 +888,130 @@ pub extern "C" fn js_string_concat_value(
     let prefix_handle = scope.root_string_ptr(prefix);
     let value_str = crate::value::js_jsvalue_to_string(value);
     js_string_concat(prefix_handle.get_raw_const_ptr::<StringHeader>(), value_str)
+}
+
+/// Build the heap result from digits already formatted by the caller. The
+/// inline-result admission must not discard these digits and format again on
+/// a capacity miss. Prefix metadata and the ordinary rooted allocation path
+/// are shared with `js_string_concat_value`.
+fn concat_formatted_number(
+    prefix: *const StringHeader,
+    num_buf: &[u8; 32],
+    num_len: usize,
+    prefix_blen: u32,
+    prefix_u16: u32,
+) -> *mut StringHeader {
+    // Single allocation for prefix + number string. `Some` from the
+    // no-collect allocator means the open nursery block served it and
+    // nothing moved — `prefix` stays valid raw. `None` (block boundary,
+    // large size, free-list latch) takes the original rooted path:
+    // `string_storage_alloc` → `arena_alloc_gc` can collect and evacuate,
+    // so the incoming `prefix` may have moved — re-read it from its
+    // handle before touching the header or copying the payload (#6655).
+    let total_blen = prefix_blen as usize + num_len;
+
+    // Memo probe, ahead of the allocation. This is the `"prefix" + i`
+    // shape (computed property keys, id building) and it is where the
+    // allocations actually come from: `js_string_concat_value_box`'s SSO
+    // arm handles results up to 5 bytes, so everything longer lands here
+    // and heap-allocates. Restricted to a plain ASCII prefix so the cached
+    // string is bit-identical to what the block below would build
+    // (flags == 0, utf16_len == byte_len).
+    //
+    // `prefix_u16 == prefix_blen` is NOT the runtime's ASCII predicate —
+    // it is necessary but not sufficient: a truncated multi-byte lead
+    // byte can make a non-ASCII `prefix` coincide on `utf16_len ==
+    // byte_len` too (see `str_bytes_ascii_from_jsvalue`'s doc in
+    // `string/mod.rs`, and `string/compare.rs`'s `utf16_cmp_bytes` doc,
+    // for the exact mechanism and a concrete payload). It DOES soundly
+    // rule out non-ASCII when the lengths differ, so it stays first in
+    // the chain as a free short-circuit — but when it's true, the
+    // `bytes_all_ascii` scan below is still required, not redundant
+    // with it.
+    let memoizable = total_blen <= CONCAT_MEMO_MAX_BYTES as usize
+        && is_valid_string_ptr(prefix)
+        && prefix_u16 == prefix_blen
+        && unsafe { (*prefix).flags & !STRING_FLAG_WTF8_VALIDATED == 0 }
+        && bytes_all_ascii(string_data(prefix), prefix_blen)
+        && concat_memo_should_probe();
+    let mut memo_buf = [0u8; CONCAT_MEMO_MAX_BYTES as usize];
+    let mut memo_slot = 0usize;
+    let mut memo_admitted = false;
+    if memoizable {
+        unsafe {
+            if prefix_blen > 0 {
+                copy_bytes_small(
+                    string_data(prefix),
+                    memo_buf.as_mut_ptr(),
+                    prefix_blen as usize,
+                );
+            }
+            copy_bytes_small(
+                num_buf.as_ptr(),
+                memo_buf.as_mut_ptr().add(prefix_blen as usize),
+                num_len,
+            );
+        }
+        let bytes = &memo_buf[..total_blen];
+        let (slot, tag) = concat_memo_slot_and_tag(bytes);
+        memo_slot = slot;
+        let hit = concat_memo_lookup(memo_slot, bytes);
+        if !hit.is_null() {
+            concat_memo_note_hit();
+            return hit;
+        }
+        // Missed: admit only a result we have seen before, so a stream of
+        // never-repeated keys costs a tag byte instead of a rooted string.
+        memo_admitted = concat_memo_admit(memo_slot, tag);
+    }
+
+    let (ptr, data_ptr, prefix) =
+        match crate::string::string_storage_alloc_no_collect(total_blen as u32) {
+            Some((ptr, data_ptr)) => (ptr, data_ptr, prefix),
+            None => {
+                let scope = crate::gc::RuntimeHandleScope::new();
+                let prefix_handle = scope.root_string_ptr(prefix);
+                let (ptr, data_ptr) = string_storage_alloc(total_blen as u32);
+                (
+                    ptr,
+                    data_ptr,
+                    prefix_handle.get_raw_const_ptr::<StringHeader>(),
+                )
+            }
+        };
+
+    unsafe {
+        // Both prefix and number digits are ASCII, so utf16_len == byte_len for the number part
+        let flags = if is_valid_string_ptr(prefix) {
+            (*prefix).flags
+        } else {
+            0
+        };
+        init_string_header(
+            ptr,
+            prefix_u16 + num_len as u32,
+            total_blen as u32,
+            total_blen as u32,
+            0,
+            flags,
+        );
+
+        if is_valid_string_ptr(prefix) && prefix_blen > 0 {
+            copy_bytes_small(string_data(prefix), data_ptr, prefix_blen as usize);
+        }
+        copy_bytes_small(
+            num_buf.as_ptr(),
+            data_ptr.add(prefix_blen as usize),
+            num_len,
+        );
+    }
+
+    if memoizable && memo_admitted {
+        // Publish only after header and payload are written: the memo is a
+        // GC root, so a half-built entry would be traced.
+        concat_memo_insert(memo_slot, ptr);
+    }
+    ptr
 }
 
 /// NaN-box-returning twin of [`js_string_concat_value`]: SSO immediate when
@@ -1059,6 +1073,14 @@ pub extern "C" fn js_string_concat_value_box(prefix: *const StringHeader, value:
                     );
                 }
             }
+            // The inline capacity test already formatted the exact digits.
+            // Reuse them when the result needs a heap string, including a
+            // non-ASCII prefix whose bytes cannot use the inline encoding.
+            let ptr =
+                concat_formatted_number(prefix, &num_buf, num_len, prefix_blen as u32, unsafe {
+                    (*prefix).utf16_len
+                });
+            return f64::from_bits(crate::value::js_nanbox_string(ptr as i64).to_bits());
         }
     }
     let ptr = js_string_concat_value(prefix, value);

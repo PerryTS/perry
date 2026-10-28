@@ -484,3 +484,15 @@ relevance filters.
 
 [generational-plan]: https://github.com/PerryTS/perry/blob/main/docs/generational-gc-plan.md
 [statepoint-experiment]: https://github.com/PerryTS/perry/blob/main/docs/statepoint-gc-experiment.md
+
+The inline nursery cursor carries a permission bound at `InlineArenaState.size`.
+It is zero while allocate-black is active; the physical block extent remains in
+`ArenaBlock.size`. Every birth-color transition and cursor refill updates this
+same bound. A successful positive-size bump therefore proves idle birth color
+for a complete unpublished layout, while the refused path retains ordinary
+coloring and mark seeding. Native roots still use LLVM statepoints.
+
+For compiler-owned descriptors uniquely named in the whole-image layout plan,
+fixed births initialize the header with the immutable template word from that
+same plan. Opaque or ambiguous descriptors keep their checked runtime load;
+no runtime shape lookup or validity structure is introduced.
