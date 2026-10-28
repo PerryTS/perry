@@ -68,6 +68,8 @@ fn ir_body(body: Vec<Stmt>) -> String {
 #[test]
 fn array_record_unsigned_index_preserves_number_on_cold_read() {
     let ll = ir(Expr::IndexGet {
+        byte_offset: 0,
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(1)),
         index: Box::new(runtime("arrayRecordIndex", vec![Expr::LocalGet(2)])),
     });
@@ -143,6 +145,8 @@ fn array_record_cursor_increment_keeps_full_unsigned_range() {
             prefix: false,
         }),
         Stmt::Return(Some(Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(1)),
             index: Box::new(runtime("arrayRecordIndex", vec![Expr::LocalGet(3)])),
         })),
@@ -165,6 +169,7 @@ fn array_record_cursor_increment_keeps_full_unsigned_range() {
 fn array_record_length_uses_the_existing_indexed_property_read() {
     let ll = ir(runtime("arrayRecordLength", vec![Expr::LocalGet(1)]));
     let indexed = ir(Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(1)),
         property: "length".into(),
         byte_offset: 0,
@@ -292,6 +297,8 @@ fn array_record_local_flow_preserves_numeric_cursor_and_boolean_entry() {
 #[test]
 fn array_record_index_retains_boxed_cold_forwarding_custody() {
     let ll = ir(Expr::IndexGet {
+        byte_offset: 0,
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(1)),
         index: Box::new(runtime("arrayRecordIndex", vec![Expr::LocalGet(2)])),
     });
@@ -308,6 +315,8 @@ fn array_record_index_retains_boxed_cold_forwarding_custody() {
 #[test]
 fn ordinary_index_read_preserves_its_existing_forwarding_custody() {
     let ll = ir(Expr::IndexGet {
+        byte_offset: 0,
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(1)),
         index: Box::new(Expr::LocalGet(2)),
     });
@@ -415,6 +424,7 @@ fn constructed_done_predicate_keeps_normal_completion_outlined() {
 fn ordinary_indexed_length_keeps_main_hot_guard() {
     crate::temp_root_coverage::under_both_lowerings(|_mode| {
         let ll = ir(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(1)),
             property: "length".into(),
             byte_offset: 0,
@@ -548,6 +558,8 @@ fn stack_record_ir(fused: bool) -> String {
                             mode(),
                             Expr::LocalGet(8),
                             Expr::IndexGet {
+                                byte_offset: 0,
+                                byte_end: 0,
                                 object: Box::new(Expr::LocalGet(6)),
                                 index: Box::new(runtime(
                                     "arrayRecordIndex",
@@ -567,12 +579,15 @@ fn stack_record_ir(fused: bool) -> String {
                 },
                 Stmt::If {
                     condition: Expr::PropertyGet {
+                        byte_end: 0,
                         object: Box::new(Expr::LocalGet(10)),
                         property: "record_body_enabled".into(),
                         byte_offset: 0,
                     },
                     then_branch: vec![Stmt::Expr(Expr::Call {
+                        byte_end: 0,
                         callee: Box::new(Expr::PropertyGet {
+                            byte_end: 0,
                             object: Box::new(Expr::LocalGet(10)),
                             property: "record_body_member".into(),
                             byte_offset: 0,

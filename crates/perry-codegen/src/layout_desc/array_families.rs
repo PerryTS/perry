@@ -145,7 +145,7 @@ impl<'a> Flow<'a> {
                 }
                 self.edge(expr(value), here);
             }
-            Expr::IndexGet { object, index } => {
+            Expr::IndexGet { object, index, .. } => {
                 if let Expr::String(key) = index.as_ref() {
                     let field = self.field(scope, object, key);
                     self.edge(field, here);

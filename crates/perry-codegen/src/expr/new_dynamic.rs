@@ -73,6 +73,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             callee,
             args,
             byte_offset,
+            ..
         } => {
             use perry_hir::CallArg;
             let new_byte_offset = *byte_offset;
@@ -206,6 +207,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             callee,
             args,
             byte_offset,
+            byte_end,
+            ..
         } => {
             // #5253: source location of this `new` for the not-a-constructor
             // throws below. `const X: any = undefined; new X()` lowers here
@@ -612,11 +615,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             } = callee.as_ref()
             {
                 let then_synth = Expr::NewDynamic {
+                    byte_end: *byte_end,
                     callee: then_expr.clone(),
                     args: args.clone(),
                     byte_offset: new_byte_offset,
                 };
                 let else_synth = Expr::NewDynamic {
+                    byte_end: *byte_end,
                     callee: else_expr.clone(),
                     args: args.clone(),
                     byte_offset: new_byte_offset,
@@ -867,6 +872,7 @@ mod tests {
         use perry_hir::{Expr, Module, Stmt};
         let mut module = Module::new("thread_construct_site.ts");
         module.init.push(Stmt::Expr(Expr::NewDynamic {
+            byte_end: 0,
             callee: Box::new(Expr::GlobalGet(100)),
             args: vec![],
             byte_offset: 0,
@@ -898,6 +904,7 @@ mod tests {
         use perry_hir::{Expr, Module, Stmt};
         let mut module = Module::new("imported_construct_site.ts");
         module.init.push(Stmt::Expr(Expr::New {
+            byte_end: 0,
             class_name: "Ctor".into(),
             args: vec![],
             type_args: vec![],
@@ -935,6 +942,7 @@ mod tests {
         use perry_hir::{Expr, Module, Stmt};
         let mut module = Module::new("construct_site.ts");
         module.init.push(Stmt::Expr(Expr::NewDynamic {
+            byte_end: 0,
             callee: Box::new(Expr::GlobalGet(100)),
             args: vec![],
             byte_offset: 0,

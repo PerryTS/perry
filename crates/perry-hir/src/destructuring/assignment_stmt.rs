@@ -32,6 +32,7 @@ fn runtime_iterator_call(method: &str, args: Vec<Expr>) -> Expr {
 
 fn extern_call(name: &str, args: Vec<Expr>) -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::ExternFuncRef {
             name: name.to_string(),
             param_types: Vec::new(),
@@ -340,6 +341,7 @@ fn lower_object_assignment_from_expr(
                     ty: Type::Any,
                     mutable: false,
                     init: Some(Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: 0,
                         object: Box::new(source.clone()),
                         property: name.clone(),
@@ -392,6 +394,8 @@ fn lower_object_assignment_from_expr(
                     });
                     for key_id in &computed_key_temps {
                         result.push(Stmt::Expr(Expr::Delete(Box::new(Expr::IndexGet {
+                            byte_offset: 0,
+                            byte_end: 0,
                             object: Box::new(Expr::LocalGet(rest_id)),
                             index: Box::new(Expr::LocalGet(*key_id)),
                         }))));
@@ -421,6 +425,7 @@ fn object_property_get_expr(
         ast::PropName::Ident(ident) => Ok((
             Vec::new(),
             Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(source),
                 property: ident.sym.to_string(),
@@ -429,6 +434,7 @@ fn object_property_get_expr(
         ast::PropName::Str(s) => Ok((
             Vec::new(),
             Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(source),
                 property: s.value.as_str().unwrap_or("").to_string(),
@@ -437,6 +443,7 @@ fn object_property_get_expr(
         ast::PropName::Num(n) => Ok((
             Vec::new(),
             Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(source),
                 property: n.value.to_string(),
@@ -458,6 +465,8 @@ fn object_property_get_expr(
                     init: Some(key_expr),
                 }],
                 Expr::IndexGet {
+                    byte_offset: 0,
+                    byte_end: 0,
                     object: Box::new(source),
                     index: Box::new(Expr::LocalGet(key_id)),
                 },

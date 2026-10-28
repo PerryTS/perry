@@ -25,6 +25,7 @@ fn function(id: u32, name: &str, body: Vec<Stmt>) -> Function {
 
 fn module(constructor: bool) -> Module {
     let read = Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::This),
         property: "m".to_string(),
         byte_offset: 0,

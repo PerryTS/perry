@@ -755,6 +755,8 @@ mod tests {
 
     fn s_read(index: Expr) -> Expr {
         Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(S)),
             index: Box::new(index),
         }
@@ -1054,6 +1056,8 @@ mod tests {
                 mutable: false,
                 init: Some(add(
                     Expr::IndexGet {
+                        byte_offset: 0,
+                        byte_end: 0,
                         object: Box::new(Expr::LocalGet(arr)),
                         index: Box::new(Expr::Integer(0)),
                     },
@@ -1231,6 +1235,7 @@ mod shape_input_tests {
             ty: HirType::Any,
             mutable: false,
             init: Some(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(receiver)),
                 property: property.to_string(),
                 byte_offset: 0,

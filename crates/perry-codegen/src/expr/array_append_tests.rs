@@ -21,6 +21,7 @@ fn append_ir(ty: Type, value: Expr) -> String {
             Stmt::Expr(Expr::IndexSet {
                 object: Box::new(Expr::LocalGet(0)),
                 index: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(0)),
                     property: "length".into(),
                     byte_offset: 0,

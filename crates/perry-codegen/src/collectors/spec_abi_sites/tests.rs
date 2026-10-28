@@ -21,6 +21,7 @@ fn ta_new(kind: u8, arg: Option<Expr>) -> Expr {
 
 fn call(fid: u32, args: Vec<Expr>) -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(fid)),
         args,
         type_args: vec![],
@@ -539,6 +540,8 @@ fn local_is_reassigned_sees_closure_writes() {
 #[test]
 fn guarded_number_array_rejects_stale_or_aliasable_reads() {
     let read = || Expr::IndexGet {
+        byte_offset: 0,
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(5)),
         index: Box::new(Expr::Integer(0)),
     };
@@ -615,6 +618,7 @@ fn a_var_redeclared_parameter_is_demoted_like_a_reassigned_one() {
 fn rows_length() -> Expr {
     // `rows.length`, with `rows` (local 1) of unknown provenance.
     Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(1)),
         property: "length".to_string(),
         byte_offset: 0,

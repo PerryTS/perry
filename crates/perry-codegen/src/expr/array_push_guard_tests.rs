@@ -219,6 +219,7 @@ fn push_module(elem: Type, value: Expr, classes: Vec<Class>) -> Module {
     // Called once from module init so the function is not dead-stripped before
     // the census can see it.
     m.init = vec![Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(700)),
         args: vec![Expr::Number(1.0)],
         type_args: Vec::new(),
@@ -343,6 +344,7 @@ fn a_pointer_push_keeps_the_historical_unguarded_shape() {
     let ir = ir_for(push_module(
         Type::Named("Node".to_string()),
         Expr::New {
+            byte_end: 0,
             class_name: "Node".to_string(),
             args: vec![Expr::LocalGet(COUNTER_ID)],
             type_args: Vec::new(),
@@ -417,6 +419,8 @@ fn element_read_push_module() -> Module {
     body[0] = Stmt::Expr(Expr::ArrayPush {
         array_id: ARRAY_ID,
         value: Box::new(Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(ARRAY_ID)),
             index: Box::new(Expr::LocalGet(COUNTER_ID)),
         }),
@@ -522,6 +526,7 @@ fn field_push_module(field_writeback: Option<String>) -> Module {
                 ty: Type::Array(Box::new(Type::Number)),
                 mutable: true,
                 init: Some(Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(Expr::This),
                     property: "items".to_string(),
                     byte_offset: 0,
@@ -559,6 +564,7 @@ fn field_push_module(field_writeback: Option<String>) -> Module {
     let mut m = Module::new("array_push_field_writeback.ts");
     m.classes = vec![class];
     m.init = vec![Stmt::Expr(Expr::New {
+        byte_end: 0,
         class_name: "Buffer".to_string(),
         args: Vec::new(),
         type_args: Vec::new(),

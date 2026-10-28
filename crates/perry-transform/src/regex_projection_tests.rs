@@ -6,7 +6,9 @@ fn init() -> Stmt {
         ty: Type::Any,
         mutable: false,
         init: Some(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(1)),
                 property: "exec".into(),
                 byte_offset: 0,
@@ -19,6 +21,8 @@ fn init() -> Stmt {
 }
 fn get(n: i64) -> Expr {
     Expr::IndexGet {
+        byte_offset: 0,
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(2)),
         index: Box::new(Expr::Integer(n)),
     }
@@ -68,6 +72,7 @@ fn rejects_escapes_metadata_aliases_writes_and_multiple_captures() {
     for extra in [
         Stmt::Return(Some(Expr::LocalGet(2))),
         Stmt::Expr(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(2)),
             property: "index".into(),
             byte_offset: 0,
@@ -82,6 +87,8 @@ fn rejects_escapes_metadata_aliases_writes_and_multiple_captures() {
         Stmt::Expr(Expr::LocalSet(2, Box::new(Expr::Null))),
         Stmt::Expr(get(6)),
         Stmt::Expr(Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(2)),
             index: Box::new(Expr::LocalGet(4)),
         }),

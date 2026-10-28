@@ -112,6 +112,7 @@ fn match_shape<'a>(
     let Expr::IndexGet {
         object: read_object,
         index: read_index,
+        ..
     } = left.as_ref()
     else {
         return None;

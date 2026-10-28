@@ -31,6 +31,8 @@ fn bigint_array_element_negation_uses_dynamic_numeric_dispatch() {
                 init: Some(Expr::Unary {
                     op: UnaryOp::Neg,
                     operand: Box::new(Expr::IndexGet {
+                        byte_offset: 0,
+                        byte_end: 0,
                         object: Box::new(Expr::LocalGet(VALUES)),
                         index: Box::new(Expr::Integer(0)),
                     }),

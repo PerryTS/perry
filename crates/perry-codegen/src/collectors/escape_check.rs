@@ -621,7 +621,7 @@ pub fn check_escapes_in_expr(
                 check_escapes_in_expr(a, candidates, classes, escaped);
             }
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index , .. } => {
             check_escapes_in_expr(object, candidates, classes, escaped);
             check_escapes_in_expr(index, candidates, classes, escaped);
         }

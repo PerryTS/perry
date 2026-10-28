@@ -94,6 +94,7 @@ fn cheerio_call_handle_lowers_to_select() {
 #[test]
 fn non_native_fluent_chains_are_walked_linearly() {
     let mut init = Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::ExternFuncRef {
             name: "yargs".to_string(),
             param_types: vec![Type::Any],
@@ -110,7 +111,9 @@ fn non_native_fluent_chains_are_walked_linearly() {
 
     for i in 0..32 {
         init = Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(init),
                 property: "command".to_string(),
@@ -126,7 +129,9 @@ fn non_native_fluent_chains_are_walked_linearly() {
     }
 
     init = Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(init),
             property: "strict".to_string(),

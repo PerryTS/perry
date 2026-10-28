@@ -565,6 +565,7 @@ mod tests {
         let expr = Expr::ObjectAssign {
             target: Box::new(Expr::LocalGet(3)),
             sources: vec![Expr::New {
+                byte_end: 0,
                 class_name: "__AnonShape_test".to_string(),
                 args: vec![closure],
                 type_args: Vec::new(),

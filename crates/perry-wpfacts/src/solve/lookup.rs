@@ -884,6 +884,7 @@ impl Model {
     /// The argument half of `call_tok(call, t, Some(_))` (builtin namespace
     /// values excepted: they run per receiver, `BuiltinCallee`).
     pub(super) fn call_args(&mut self, call: CallId, t: Tok) {
+        self.diagnostic_callee(call, t);
         match self.toks[t as usize] {
             TokKind::Top | TokKind::BuiltinFn => {
                 if self.bind_done.insert((call, t, u32::MAX - 2)) {

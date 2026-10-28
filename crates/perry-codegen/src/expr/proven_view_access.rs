@@ -215,7 +215,7 @@ fn lower_checked_index(ctx: &mut FnCtx<'_>, index: &Expr) -> Result<String> {
 }
 
 pub(crate) fn is_proven_u32_view_read(ctx: &FnCtx<'_>, value: &Expr) -> bool {
-    let Expr::IndexGet { object, index } = value else {
+    let Expr::IndexGet { object, index, .. } = value else {
         return false;
     };
     let Expr::LocalGet(id) = object.as_ref() else {

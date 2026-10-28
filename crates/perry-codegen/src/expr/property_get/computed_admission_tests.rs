@@ -111,6 +111,7 @@ fn object_computed_accessors_admit_literal_property_choices_without_symbol_names
         )])),
     });
     module.init.push(Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::ExternFuncRef {
             name: "js_object_define_accessor".into(),
             param_types: vec![],
@@ -119,6 +120,7 @@ fn object_computed_accessors_admit_literal_property_choices_without_symbol_names
         args: vec![
             Expr::LocalGet(2),
             Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(1)),
                 property: "prop".into(),
                 byte_offset: 0,

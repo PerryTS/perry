@@ -19,6 +19,7 @@ fn comparison_ir(init: Expr) -> String {
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(Expr::Object(vec![])),
                     property: "value".into(),
                     byte_offset: 0,
@@ -53,6 +54,7 @@ fn structural_object_identity_uses_tags_without_header_probes() {
 #[test]
 fn an_erased_object_annotation_does_not_prove_identity() {
     let ir = comparison_ir(Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::Object(vec![])),
         property: "value".into(),
         byte_offset: 0,
@@ -77,12 +79,15 @@ fn readonly_array_claim_selects_a_runtime_guarded_indexed_read() {
                 },
                 mutable: false,
                 init: Some(Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(Expr::Object(vec![])),
                     property: "value".into(),
                     byte_offset: 0,
                 }),
             },
             Stmt::Expr(Expr::IndexGet {
+                byte_offset: 0,
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(1)),
                 index: Box::new(Expr::Integer(0)),
             }),
@@ -105,6 +110,7 @@ fn a_local_hole_fill_checks_capacity_length_and_prototype() {
                 ty: Type::Array(Box::new(Type::Any)),
                 mutable: true,
                 init: Some(Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(Expr::Object(vec![])),
                     property: "value".into(),
                     byte_offset: 0,
@@ -154,6 +160,7 @@ fn a_factory_parameter_name_cannot_supply_allocation_provenance() {
         is_strict: false,
     };
     let ir = comparison_ir(Expr::Call {
+        byte_end: 0,
         callee: Box::new(factory),
         args: vec![Expr::Object(vec![])],
         type_args: vec![],

@@ -103,6 +103,9 @@ impl Model {
                 }
             }
         }
+        if top_new && self.diagnostic.is_some() {
+            self.diagnostic_predecessor(n, self.cur_src, self.cur_why);
+        }
         if top_new && self.explain {
             self.top_pred
                 .entry(n)
@@ -298,14 +301,23 @@ impl Model {
     /// Seed ⊤ into `n` as an ORIGIN (not a propagation): `why` names the
     /// unmodeled thing; only interned in explain mode (diagnostics).
     pub fn add_top(&mut self, n: NodeId, why: impl FnOnce(&Self) -> String) {
-        if self.explain {
+        if self.explain || self.diagnostic.is_some() {
             let w = why(self);
-            let r = self.reason(&w);
-            let saved = (self.cur_src, self.cur_why);
-            self.cur_src = NO_NODE;
-            self.cur_why = r;
-            self.add_tok(n, TOP);
-            (self.cur_src, self.cur_why) = saved;
+            if !self.nodes[n as usize].pts.contains_tok(TOP) {
+                if let Some(d) = &mut self.diagnostic {
+                    d.seeds.entry(n).or_insert(w.clone());
+                }
+            }
+            if self.explain {
+                let r = self.reason(&w);
+                let saved = (self.cur_src, self.cur_why);
+                self.cur_src = NO_NODE;
+                self.cur_why = r;
+                self.add_tok(n, TOP);
+                (self.cur_src, self.cur_why) = saved;
+            } else {
+                self.add_tok(n, TOP);
+            }
         } else {
             self.add_tok(n, TOP);
         }

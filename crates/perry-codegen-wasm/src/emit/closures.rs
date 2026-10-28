@@ -168,7 +168,7 @@ pub(super) fn collect_closures_from_expr(
             collect_closures_from_expr(object, out);
             collect_closures_from_expr(value, out);
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             collect_closures_from_expr(object, out);
             collect_closures_from_expr(index, out);
         }

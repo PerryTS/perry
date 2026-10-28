@@ -3,6 +3,7 @@ use perry_hir::{Class, ClassField};
 
 fn property(object: Expr, name: &str) -> Expr {
     Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(object),
         property: name.into(),
         byte_offset: 0,
@@ -91,6 +92,7 @@ fn scalar_loop(poison: Option<Expr>) -> String {
             ty: Type::Named(name.into()),
             mutable: false,
             init: Some(Expr::New {
+                byte_end: 0,
                 class_name: name.into(),
                 args: vec![Expr::Integer(1), Expr::Integer(2)],
                 type_args: Vec::new(),

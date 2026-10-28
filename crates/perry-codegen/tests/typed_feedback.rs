@@ -401,7 +401,9 @@ fn typed_feedback_instruments_property_and_method_boundaries() {
                 value: Box::new(Expr::Number(1.0)),
             }),
             Stmt::Expr(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 0,
                     object: Box::new(Expr::LocalGet(1)),
                     property: "run".to_string(),
@@ -411,6 +413,7 @@ fn typed_feedback_instruments_property_and_method_boundaries() {
                 byte_offset: 0,
             }),
             Stmt::Return(Some(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(1)),
                 property: "x".to_string(),
@@ -511,6 +514,7 @@ fn sloppy_property_set_uses_strictness_aware_put_value() {
                 value: Box::new(Expr::Number(1.0)),
             }),
             Stmt::Return(Some(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(1)),
                 property: "x".to_string(),
@@ -581,7 +585,9 @@ fn a_default_build_emits_no_typed_feedback_recording_calls() {
                 value: Box::new(Expr::Number(1.0)),
             }),
             Stmt::Expr(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 0,
                     object: Box::new(Expr::LocalGet(1)),
                     property: "run".to_string(),
@@ -591,6 +597,7 @@ fn a_default_build_emits_no_typed_feedback_recording_calls() {
                 byte_offset: 0,
             }),
             Stmt::Return(Some(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(1)),
                 property: "x".to_string(),
@@ -674,6 +681,7 @@ fn typed_feedback_guards_direct_class_field_specialization() {
             Stmt::Return(Some(Expr::Binary {
                 op: BinaryOp::Sub,
                 left: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 0,
                     object: Box::new(Expr::LocalGet(1)),
                     property: "x".to_string(),
@@ -810,6 +818,7 @@ fn full_outline_ic_collapses_class_field_get_to_single_call() {
             vec![param(1, "p", Type::Named("Point".to_string()))],
             Type::Number,
             vec![Stmt::Return(Some(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(1)),
                 property: "x".to_string(),
@@ -1058,7 +1067,9 @@ fn typed_feedback_guards_direct_class_method_specialization() {
         vec![param(1, "p", Type::Named("Point".to_string()))],
         Type::Number,
         vec![Stmt::Return(Some(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(1)),
                 property: "inc".to_string(),
@@ -1121,6 +1132,7 @@ fn synthetic_arguments_only_method_uses_shape_guarded_direct_call() {
         ],
         return_type: Type::Number,
         body: vec![Stmt::Return(Some(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(3)),
             property: "length".to_string(),
             byte_offset: 0,
@@ -1169,7 +1181,9 @@ fn synthetic_arguments_only_method_uses_shape_guarded_direct_call() {
         vec![param(1, "counter", Type::Named("Counter".to_string()))],
         Type::Number,
         vec![Stmt::Return(Some(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(1)),
                 property: "count".to_string(),
                 byte_offset: 0,
@@ -1261,6 +1275,7 @@ fn typed_feedback_guards_direct_closure_call_specialization() {
                 }),
             },
             Stmt::Return(Some(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::LocalGet(2)),
                 args: vec![Expr::Number(9.0)],
                 type_args: Vec::new(),
@@ -1295,6 +1310,8 @@ fn typed_feedback_guards_array_index_specialization() {
                 value: Box::new(Expr::Number(7.0)),
             }),
             Stmt::Return(Some(Expr::IndexGet {
+                byte_offset: 0,
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(1)),
                 index: Box::new(Expr::Number(0.0)),
             })),
@@ -1435,6 +1452,8 @@ fn typed_feedback_guards_computed_numeric_array_index_hot_path() {
         vec![param(1, "xs", array_ty), param(2, "i", Type::Number)],
         Type::Number,
         vec![Stmt::Return(Some(Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(1)),
             index: Box::new(Expr::Binary {
                 op: BinaryOp::BitAnd,
@@ -1471,6 +1490,8 @@ fn profile_replay_selects_numeric_read_with_guard_fallback_and_deterministic_ir(
         vec![param(1, "xs", Type::Array(Box::new(Type::Any)))],
         Type::Any,
         vec![Stmt::Return(Some(Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(1)),
             index: Box::new(Expr::Number(0.0)),
         }))],

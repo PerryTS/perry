@@ -227,7 +227,7 @@ pub fn scan_lowered(module: &crate::Module, entries: &[RealmEntry], out: &mut Re
         | Expr::PropertyUpdate {
             object, property, ..
         } => permit(object, property),
-        Expr::IndexGet { object, index }
+        Expr::IndexGet { object, index, .. }
         | Expr::IndexSet { object, index, .. }
         | Expr::IndexUpdate { object, index, .. } => {
             if let Expr::String(key) = index.as_ref() {

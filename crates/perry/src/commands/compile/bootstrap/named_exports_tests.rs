@@ -219,6 +219,7 @@ fn typescript_importer_is_held_only_to_names_used_as_values() {
         .unwrap()
         .init
         .push(Stmt::Expr(Expr::New {
+            byte_end: 0,
             class_name: "local_alias".into(),
             args: vec![],
             type_args: vec![],

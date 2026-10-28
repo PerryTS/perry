@@ -14,6 +14,7 @@ fn emit(properties: &[&str], colored: bool, target: &str) -> String {
     module.init.truncate(1);
     for property in properties {
         module.init.push(Stmt::Expr(Expr::PropertyGet {
+            byte_end: 0,
             object: receiver.clone(),
             property: (*property).into(),
             byte_offset: 0,
@@ -233,6 +234,7 @@ fn shared_refusal_preserves_length_and_required_global_entries() {
     }
     let mut module = Module::new("global_refusal.ts");
     module.init.push(Stmt::Expr(Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::GlobalGet(0)),
         property: "Object".into(),
         byte_offset: 0,

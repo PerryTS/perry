@@ -738,7 +738,7 @@ pub fn infer_expr_type<F: HirTypeFacts + ?Sized>(expr: &Expr, env: &F) -> Type {
         } => infer_property_get_type(object, property, env),
         Expr::PropertySet { value, .. } => infer_expr_type(value, env),
         Expr::PropertyUpdate { .. } => Type::Number,
-        Expr::IndexGet { object, index } => match infer_expr_type(object, env) {
+        Expr::IndexGet { object, index, .. } => match infer_expr_type(object, env) {
             Type::Array(elem) => *elem,
             Type::Tuple(elems) => {
                 if elems.len() == 1 {

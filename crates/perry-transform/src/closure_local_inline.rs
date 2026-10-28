@@ -724,6 +724,7 @@ mod tests {
 
     fn call_local(id: LocalId, args: Vec<Expr>) -> Expr {
         Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::LocalGet(id)),
             args,
             type_args: Vec::new(),
@@ -733,7 +734,9 @@ mod tests {
 
     fn this_exists(arg: Expr) -> Expr {
         Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::This),
                 property: "exists".to_string(),
                 byte_offset: 0,
@@ -913,6 +916,7 @@ mod tests {
             },
             // `f` escapes as an argument.
             Stmt::Expr(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::GlobalGet(0)),
                 args: vec![Expr::LocalGet(F)],
                 type_args: Vec::new(),

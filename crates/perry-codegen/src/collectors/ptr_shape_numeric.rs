@@ -760,7 +760,7 @@ fn expr_numeric_by_construction_with_region(
         // (bench_int_arithmetic: 7.7x node; `acc += (px[i] | 0)` was 2000x
         // faster than `acc += px[i]`). Both nodes read the same storage.
         let (object, index) = match x {
-            Expr::IndexGet { object, index } => (object, index),
+            Expr::IndexGet { object, index, .. } => (object, index),
             Expr::Uint8ArrayGet { array, index } => (array, index),
             _ => return false,
         };
@@ -1037,6 +1037,7 @@ mod region_number_tests {
 
     fn read() -> Expr {
         Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(OBJECT)),
             property: "x".to_string(),
             byte_offset: 0,
@@ -1113,6 +1114,7 @@ mod region_number_tests {
         // region planner. Only the first read's exact Expr identity is an
         // F64 leaf; the second write must withdraw ACC from N_F.
         stmts.push(Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::LocalGet(99)),
             args: Vec::new(),
             type_args: Vec::new(),
@@ -1188,6 +1190,7 @@ mod region_number_tests {
         let call_write = Expr::LocalSet(
             ACC,
             Box::new(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::LocalGet(99)),
                 args: Vec::new(),
                 type_args: Vec::new(),

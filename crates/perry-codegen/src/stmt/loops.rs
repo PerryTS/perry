@@ -108,7 +108,7 @@ fn ordinary_counted_array_region_enders(
     let is_trusted_operation = |expr: &perry_hir::Expr| {
         let trusted = matches!(
             expr,
-            perry_hir::Expr::IndexGet { object, index }
+            perry_hir::Expr::IndexGet { object, index , .. }
                 if matches!(object.as_ref(), perry_hir::Expr::LocalGet(id) if *id == hoist.arr_id)
                     && matches!(index.as_ref(), perry_hir::Expr::LocalGet(id) if *id == hoist.counter_id)
         );
@@ -464,7 +464,7 @@ fn match_numeric_range_add_loop(
             Expr::IndexGet {
                 object,
                 index
-            } if matches!(object.as_ref(), Expr::LocalGet(id) if *id == array_id)
+            , .. } if matches!(object.as_ref(), Expr::LocalGet(id) if *id == array_id)
                 && matches!(index.as_ref(), Expr::LocalGet(id) if *id == counter_id)
         ) =>
         {
@@ -2922,7 +2922,7 @@ fn dense_masked_store_rhs_is_admissible(
         // pure walk records its window for the same dense guard, and the
         // lowering serves it from the clone's `PackedF64LoopFact` as a raw
         // load of a slot that guard proved holds a raw-f64 number (#10718).
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             matches!(object.as_ref(), Expr::LocalGet(_))
                 && (packed_f64_range_loop_index_offset(index, counter_id).is_some()
                     || crate::collectors::static_index_window(index)
@@ -2991,7 +2991,7 @@ fn masked_window_expression_proof(
         // read. Under its active fact the access itself is a guarded numeric
         // load, but evaluating the index must still pass this same whole-tree
         // proof before that fact may be installed.
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             if !matches!(object.as_ref(), Expr::LocalGet(_)) {
                 return None;
             }
@@ -3127,7 +3127,7 @@ pub(super) fn packed_f64_range_loop_pure_expr_collect(
 ) -> bool {
     use perry_hir::Expr;
     match expr {
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             let Expr::LocalGet(arr_id) = object.as_ref() else {
                 return false;
             };
@@ -4731,7 +4731,7 @@ fn match_object_array_write_loop(
         let Some((
             Stmt::Let {
                 id: alias_id,
-                init: Some(Expr::IndexGet { object, index }),
+                init: Some(Expr::IndexGet { object, index, .. }),
                 ..
             },
             tail,
@@ -4852,6 +4852,7 @@ fn match_object_array_write_loop(
             if let Expr::IndexGet {
                 object: table_obj,
                 index: table_idx,
+                ..
             } = key.as_ref()
             {
                 if let Expr::LocalGet(table_id) = table_obj.as_ref() {
@@ -6336,7 +6337,7 @@ fn expr_is_packed_f64_loop_store_rhs_safe(
     use perry_hir::Expr;
 
     match expr {
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             is_packed_f64_loop_index(object, index, arr_id, counter_id)
         }
         Expr::LocalGet(id) => *id != arr_id && crate::type_analysis::is_numeric_expr(ctx, expr),
@@ -6360,7 +6361,7 @@ fn expr_is_packed_f64_loop_store_abs_rhs_safe(
 ) -> bool {
     matches!(
         expr,
-        perry_hir::Expr::IndexGet { object, index }
+        perry_hir::Expr::IndexGet { object, index , .. }
             if is_packed_f64_loop_index(object, index, arr_id, counter_id)
     )
 }
@@ -6374,7 +6375,7 @@ fn expr_is_packed_i32_loop_store_rhs_safe(
     use perry_hir::{BinaryOp, Expr};
 
     match expr {
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             is_packed_f64_loop_index(object, index, arr_id, counter_id)
         }
         Expr::LocalGet(id) => *id != arr_id && local_is_int32_value(ctx, *id),
@@ -6505,7 +6506,7 @@ fn expr_is_coercion_free_primitive(
         Expr::LocalGet(id) => *id == counter_id,
         // An element of the packed f64 array is a genuine double: the versioned
         // loop only entered the fast clone after proving that layout.
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             matches!(object.as_ref(), Expr::LocalGet(id) if *id == arr_id)
                 && expr_is_coercion_free_primitive(ctx, index, arr_id, counter_id)
         }
@@ -6528,7 +6529,7 @@ fn expr_is_packed_f64_loop_safe(
 ) -> bool {
     use perry_hir::{ArrayElement, Expr};
     match expr {
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             is_packed_f64_loop_foreign_read_index(ctx, object, index, arr_id, counter_id)
         }
         // A numeric-store fallback can downgrade/invalidate raw-f64 layout.
@@ -7274,6 +7275,7 @@ fn lower_for_after_init_impl(
             let arr_box_loaded = lower_expr(
                 ctx,
                 &perry_hir::Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 0,
                     object: Box::new(perry_hir::Expr::LocalGet(hoist.arr_id)),
                     property: "length".to_string(),
@@ -9262,7 +9264,9 @@ fn expr_array_length_effect(
         } => first_blocking_loop_effect([walk(condition), walk(then_expr), walk(else_expr)]),
         Expr::PropertyGet { object, .. } => walk(object),
         Expr::PropertySet { .. } => LoopArrayLengthEffect::DynamicPropertyWrite,
-        Expr::IndexGet { object, index } => first_blocking_loop_effect([walk(object), walk(index)]),
+        Expr::IndexGet { object, index, .. } => {
+            first_blocking_loop_effect([walk(object), walk(index)])
+        }
         Expr::Uint8ArrayGet { array, index } => {
             first_blocking_loop_effect([walk(array), walk(index)])
         }
@@ -9728,7 +9732,7 @@ pub(crate) fn expr_preserves_array_length(
         // future effect summary instead of assuming writes preserve the guarded
         // array length.
         Expr::PropertySet { .. } => false,
-        Expr::IndexGet { object, index } => walk(object) && walk(index),
+        Expr::IndexGet { object, index, .. } => walk(object) && walk(index),
         // Buffer / Uint8Array reads + writes preserve the underlying array
         // length — Buffer.alloc allocates a fixed-capacity blob, and the
         // GEP-based fast path (`Expr::Uint8ArrayGet`/`Set`,

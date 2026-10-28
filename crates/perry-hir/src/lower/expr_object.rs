@@ -67,6 +67,7 @@ fn builtin_global_value_expr(ctx: &mut LoweringContext, name: &str) -> Option<Ex
         ctx.uses_fetch = true;
     }
     Some(Expr::PropertyGet {
+        byte_end: 0,
         byte_offset: 0,
         object: Box::new(Expr::GlobalGet(0)),
         property: name.to_string(),
@@ -806,6 +807,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
             .unwrap_or(0);
         let class_name = ctx.synthesize_empty_site_class(obj.span.lo.0, width_hint);
         return Ok(Expr::New {
+            byte_end: 0,
             class_name,
             args: Vec::new(),
             type_args: Vec::new(),
@@ -939,6 +941,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
             let class_name = ctx.synthesize_anon_shape_class(&field_shapes);
             let args: Vec<Expr> = fields.into_iter().map(|(_, _, value)| value).collect();
             return Ok(Expr::New {
+                byte_end: 0,
                 class_name,
                 args,
                 type_args: Vec::new(),
@@ -1308,6 +1311,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                     names.iter().map(|name| (name.clone(), Type::Any)).collect();
                 let class_name = ctx.synthesize_anon_shape_class(&fields);
                 Expr::New {
+                    byte_end: 0,
                     class_name,
                     args: names.iter().map(|_| Expr::Undefined).collect(),
                     type_args: Vec::new(),
@@ -1323,6 +1327,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
         // shape seed when eligible, otherwise as an empty object, and each op
         // mutates it in source order.
         let extern_call = |name: &str, args: Vec<Expr>| Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::ExternFuncRef {
                 name: name.to_string(),
                 param_types: Vec::new(),
@@ -1467,6 +1472,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
             is_strict: ctx.current_strict,
         };
         return Ok(Expr::Call {
+            byte_end: 0,
             callee: Box::new(closure),
             args: vec![static_shape_seed.unwrap_or_else(|| Expr::Object(Vec::new()))],
             type_args: vec![],
@@ -1593,6 +1599,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
     let mut body: Vec<Stmt> = Vec::with_capacity(computed_post_init.len() * 4 + 1);
     let mut inner_local_ids = vec![param_id];
     let extern_call = |name: &str, args: Vec<Expr>| Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::ExternFuncRef {
             name: name.to_string(),
             param_types: Vec::new(),
@@ -1697,6 +1704,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
         is_strict: ctx.current_strict,
     };
     Ok(Expr::Call {
+        byte_end: 0,
         callee: Box::new(closure),
         args: vec![static_obj],
         type_args: vec![],

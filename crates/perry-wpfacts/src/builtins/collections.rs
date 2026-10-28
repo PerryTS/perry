@@ -6,6 +6,10 @@ use super::*;
 // ------------------------------------------------- function protocol
 
 pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
+    if let Some(name @ ("call" | "apply" | "bind" | "toString")) = name {
+        m.diagnostic_builtin(call, |_| format!("Function.prototype.{name}"));
+    }
+
     let c = m.calls[call as usize].clone();
     match name {
         // A well-known-symbol member of `Function.prototype`: only
@@ -85,6 +89,13 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
                     let bargs: Vec<NodeId> = c.args.iter().skip(1).copied().collect();
                     let b = m.bound.len() as u32;
                     m.bound.push((target, bthis, bargs));
+                    if let Some(source) = m.diagnostic_source_call(call) {
+                        m.diagnostic
+                            .as_mut()
+                            .unwrap()
+                            .bound_origins
+                            .insert(b, source);
+                    }
                     m.bound_index.insert(key, b);
                     b
                 }
@@ -304,6 +315,17 @@ fn iterator_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
 }
 
 pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
+    if let Some(name) = name {
+        if matches!(members::member(Family::Array, name), Some(Mem::Fn)) {
+            let owner = if matches!(members::member(Family::Object, name), Some(Mem::Fn)) {
+                "Object"
+            } else {
+                "Array"
+            };
+            m.diagnostic_builtin(call, |_| format!("{owner}.prototype.{name}"));
+        }
+    }
+
     let c = m.calls[call as usize].clone();
     let elems = m.field_any(t);
     let num = m.node_l("num");
@@ -516,6 +538,15 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
 }
 
 pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>, call: CallId) {
+    if let Some(name) = name {
+        if matches!(
+            members::member(members::bobj_family(what), name),
+            Some(Mem::Fn)
+        ) {
+            m.diagnostic_builtin(call, |_| format!("{what}.prototype.{name}"));
+        }
+    }
+
     let c = m.calls[call as usize].clone();
     let elems = m.field_any(t);
     match (what, name) {
