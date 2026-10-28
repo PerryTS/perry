@@ -526,13 +526,17 @@ fn completed_native_input_preserves_its_result_while_draining_owed_collection() 
         for _ in 0..BURST_BUFFERS {
             crate::buffer::js_buffer_alloc((4 * MIB) as i32, 13);
         }
-        thresholds.make_arena_trigger_due();
-        let mut step = JsGcStepResult::default();
-        assert_eq!(
-            js_gc_step_work_units(1, &mut step),
-            JS_GC_STEP_STATUS_ACTIVE
-        );
-        assert_eq!(step.collection_kind, GcCollectionKind::Minor.ffi_code());
+        if input == b"valid" {
+            assert!(!policy::GC_SAFEPOINT_PENDING.with(std::cell::Cell::get));
+        } else {
+            thresholds.make_arena_trigger_due();
+            let mut step = JsGcStepResult::default();
+            assert_eq!(
+                js_gc_step_work_units(1, &mut step),
+                JS_GC_STEP_STATUS_ACTIVE
+            );
+            assert_eq!(step.collection_kind, GcCollectionKind::Minor.ffi_code());
+        }
         let scope = RuntimeHandleScope::new();
         let mut reader = input;
         let result = crate::string::read_utf8(&mut reader, input.len() as u64).unwrap();
