@@ -51,7 +51,10 @@ fn direct_objects_preserve_slot_order_custody_width_and_representation_masks() {
                 for i in 0..width as usize {
                     *fields.add(i) = (i as f64).to_bits();
                 }
-                restamp_with_rep(obj, pattern);
+                // The zero-slot support fixture deliberately has no ShapeId.
+                if width != 0 {
+                    restamp_with_rep(obj, pattern);
+                }
                 let header = header_from_user_ptr(obj.cast()) as *mut GcHeader;
                 assert_eq!(
                     slots(header, true),
