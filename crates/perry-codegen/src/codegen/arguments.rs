@@ -94,7 +94,7 @@ fn arguments_observed_on_every_path(body: &[Stmt], id: u32) -> bool {
         match expr {
             Expr::LocalGet(local) => *local == id,
             Expr::PropertyGet { object, .. } => observes(object, id),
-            Expr::IndexGet { object, index } => observes(object, id) || observes(index, id),
+            Expr::IndexGet { object, index, .. } => observes(object, id) || observes(index, id),
             Expr::Unary { operand, .. } => observes(operand, id),
             Expr::Binary { left, right, .. } | Expr::Compare { left, right, .. } => {
                 observes(left, id) || observes(right, id)
@@ -795,6 +795,7 @@ mod length_only_tests {
 
     fn length() -> Expr {
         Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(ARGUMENTS)),
             property: "length".to_string(),
             byte_offset: 0,
@@ -819,6 +820,8 @@ mod length_only_tests {
         ));
         assert!(!arguments_used_only_for_length(
             &[Stmt::Return(Some(Expr::IndexGet {
+                byte_offset: 0,
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(ARGUMENTS)),
                 index: Box::new(Expr::Integer(0)),
             }))],
@@ -884,6 +887,8 @@ mod elision_tests {
 
     fn index(i: i64) -> Expr {
         Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: args(),
             index: Box::new(Expr::Integer(i)),
         }
@@ -891,6 +896,7 @@ mod elision_tests {
 
     fn length() -> Expr {
         Expr::PropertyGet {
+            byte_end: 0,
             object: args(),
             property: "length".to_string(),
             byte_offset: 0,
@@ -901,6 +907,8 @@ mod elision_tests {
         vec![
             Stmt::Expr(length()),
             Stmt::Return(Some(Expr::IndexGet {
+                byte_offset: 0,
+                byte_end: 0,
                 object: args(),
                 index: Box::new(Expr::Binary {
                     op: perry_hir::BinaryOp::Sub,
@@ -990,6 +998,7 @@ mod elision_tests {
         // `arguments[0]()`: the object is the callee's `this`.
         let mut body = reads();
         body.push(Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(index(0)),
             args: Vec::new(),
             type_args: Vec::new(),

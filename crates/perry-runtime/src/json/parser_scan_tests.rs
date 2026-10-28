@@ -437,3 +437,30 @@ fn depth_preflight_byte_bound_keeps_the_first_excess_opening() {
     assert!(!nesting_depth_exceeds(b"\"[[[[\"", 1));
     assert!(nesting_depth_exceeds(b"[\"[\",[]]", 1));
 }
+
+#[test]
+fn matched_shape_prefix_stops_proving_uniqueness_on_first_mismatch() {
+    use crate::json::{js_json_parse, js_json_stringify, str_from_header, TYPE_UNKNOWN};
+    let cases = [
+        (
+            r#"[{"a":1,"b":2},{"a":3,"b":4},{"a":5,"a":6,"b":7}]"#,
+            r#"[{"a":1,"b":2},{"a":3,"b":4},{"a":6,"b":7}]"#,
+        ),
+        (
+            r#"[{"a":1,"b":2},{"\u0061":3,"b":4},{"a":5,"b":6,"\u0061":7}]"#,
+            r#"[{"a":1,"b":2},{"a":3,"b":4},{"a":7,"b":6}]"#,
+        ),
+        (
+            r#"[{"a":1,"nested":{"x":1},"b":2},{"a":3,"nested":{"z":4},"a":5,"b":6}]"#,
+            r#"[{"a":1,"nested":{"x":1},"b":2},{"a":5,"nested":{"z":4},"b":6}]"#,
+        ),
+    ];
+    for (input, expected) in cases {
+        let text = crate::js_string_from_bytes(input.as_ptr(), input.len() as u32);
+        unsafe {
+            let value = js_json_parse(text);
+            let output = js_json_stringify(f64::from_bits(value.bits()), TYPE_UNKNOWN);
+            assert_eq!(str_from_header(output).unwrap(), expected);
+        }
+    }
+}

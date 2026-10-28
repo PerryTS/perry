@@ -36,7 +36,10 @@ pub(super) fn is_filehandle_readlines_for_await_target(
 
 pub(super) fn async_iterator_method_call(iterable: Expr) -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(iterable),
             index: Box::new(Expr::SymbolFor(Box::new(Expr::String(
                 "@@__perry_wk_asyncIterator".to_string(),

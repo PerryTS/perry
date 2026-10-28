@@ -24,7 +24,8 @@ What lands in which step, in order:
 4. A runtime bundle with the Node-module crates (http, zlib, ws and others).
 5. Inbound TCP and signals on standard imports, qualified with a reference
    host, then the opt-in `perry_net` outbound and DNS imports.
-6. The opt-in `perry_host.discard_pages` import.
+6. The opt-in `perry_host.discard_pages` import: with `PERRY_WASM_DISCARD=1`
+   the runtime offers freed memory back to the host.
 7. Further wasm32 code-size and relocation options, then release packaging of
    the P1 runtime archive beside the P2 one.
 
@@ -168,6 +169,29 @@ back to the host (for example with `madvise`). The return value is:
 
 The WebAssembly memory-control proposal's `memory.discard` has the same
 zero-fill semantics and would replace the import if it ships.
+
+Contract for the host:
+
+- `ptr` and `len` are multiples of 4096. A call that is empty or not aligned
+  may be answered `0`.
+- A range outside linear memory is a bug of the caller, so the host traps.
+- On `1` every byte of the range reads as zero; the runtime does not clear it
+  again. Pages the guest does not offer are never touched.
+- The memory stays mapped and the size of the linear memory does not change.
+  The call frees host pages, not address space.
+- Answering `0` once is final: the runtime does not call again in that
+  process, so a host that cannot discard can say so on the first call.
+
+What the runtime offers, only in a module built with `PERRY_WASM_DISCARD=1`:
+
+- Freed arena blocks and the tail of a resizable `ArrayBuffer` that shrinks
+  by at least 64 KiB.
+- Freed `malloc` blocks of 64 KiB or more, which the allocator first keeps for
+  reuse (at most 8 MiB). A block is released to the host when the keep list
+  evicts it, when the program has been idle for a second, or when the list
+  overflows. A block taken from the keep list by `calloc` is cleared first.
+- Only whole pages inside a range are offered; the partial pages at its edges
+  stay with the guest.
 
 ## Environment conventions
 

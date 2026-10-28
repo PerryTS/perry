@@ -122,6 +122,7 @@ pub(crate) fn check_eval_function_call(
                 .map(|a| lower_expr(ctx, &a.expr))
                 .collect::<Result<Vec<_>>>()?;
             return Ok(Some(Expr::New {
+                byte_end: 0,
                 class_name: "Function".to_string(),
                 args,
                 type_args: Vec::new(),
@@ -186,6 +187,7 @@ pub(crate) fn try_strict_eval_arguments_assignment(
         return None;
     }
     Some(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::ExternFuncRef {
             name: "js_throw_strict_eval_arguments_syntax_error".to_string(),
             param_types: Vec::new(),

@@ -79,6 +79,7 @@ pub(crate) fn prepare_ordered_class_computed_names(
         field_keys.push((
             name.clone(),
             Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::ClassRef(registration_class_name.to_string())),
                 property: name,
                 byte_offset: 0,
@@ -88,6 +89,7 @@ pub(crate) fn prepare_ordered_class_computed_names(
 
     for member in &class.computed_members {
         let to_property_key = Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::ExternFuncRef {
                 name: "js_to_property_key".to_string(),
                 param_types: vec![Type::Any],
@@ -188,6 +190,7 @@ pub(crate) fn push_deduped_class_computed_keys(
             // matching the non-deduped registration path (Test262
             // computed-err-to-prop-key).
             result.push(Stmt::Expr(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::ExternFuncRef {
                     name: "js_to_property_key".to_string(),
                     param_types: vec![Type::Any],

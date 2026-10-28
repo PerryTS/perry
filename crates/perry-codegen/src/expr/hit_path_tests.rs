@@ -106,6 +106,7 @@ fn module_ir(module_name: &str, functions: Vec<Function>) -> String {
     let mut module = Module::new(module_name);
     for f in &functions {
         module.init.push(Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::FuncRef(f.id)),
             args: f.params.iter().map(|_| Expr::Undefined).collect(),
             type_args: Vec::new(),
@@ -163,6 +164,7 @@ fn typeof_object_function_symbol_bigint_ask_the_integer_classifier_once() {
 #[test]
 fn typeof_of_a_property_read_and_loose_equality_use_the_tag_route() {
     let property = Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(X)),
         property: "a".to_string(),
         byte_offset: 0,
@@ -340,6 +342,7 @@ fn module_global_increment_uses_final_remark_instead_of_root_shading() {
         })],
     );
     module.init.push(Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(1)),
         args: Vec::new(),
         type_args: Vec::new(),
@@ -461,6 +464,7 @@ fn a_clone_identical_to_its_generic_body_drops_the_entry_guard() {
         "read",
         vec![param(10, payload)],
         vec![Stmt::Return(Some(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(10)),
             property: "label".to_string(),
             byte_offset: 0,

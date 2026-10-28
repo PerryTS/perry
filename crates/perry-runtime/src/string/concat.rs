@@ -1042,7 +1042,10 @@ pub extern "C" fn js_string_concat_value_box(prefix: *const StringHeader, value:
     // which on the baseline x86-64 target is a libm `trunc` call (#10762). NaN
     // fails the range test, and the range test runs first, so the cast only
     // ever sees a value it can represent.
-    if (0.0..=999_999_999.0).contains(&value)
+    // The exact u32 formatter serves both inline results and the existing
+    // heap fallback, which reuses these digits. Admit its full integer domain
+    // rather than sending larger results through a second general formatter.
+    if (0.0..=u32::MAX as f64).contains(&value)
         && (value as u32) as f64 == value
         && is_valid_string_ptr(prefix)
     {
@@ -1301,33 +1304,8 @@ fn note_no_collect_hit() {
 #[inline(always)]
 fn note_no_collect_hit() {}
 
-/// The unrooted arm of [`concat_chain_sized`]: every part is already a live
-/// heap string, so classification touches no allocator at all, and the one
-/// allocation it needs is taken through the **no-collect** entry point.
-///
-/// ★ Why this is sound, stated as the invariant it rests on:
-///
-/// > `string_storage_alloc_no_collect` returns `Some` only when the request
-/// > was served by bumping the nursery block that was already open. That is
-/// > the one path through `arena_cell_alloc` that precedes `gc_check_trigger`,
-/// > so a `Some` is a proof that no collection ran and therefore that nothing
-/// > moved.
-///
-/// With that proof in hand the transient handle stack is not merely
-/// unnecessary, it is unreachable work: the pointers read in the sizing loop
-/// are still the pointers to copy from. `None` (block full, oversized result)
-/// re-enters the rooted path below, which behaves exactly as it always did —
-/// and re-reads its operands from `parts`, which is still valid because
-/// nothing has collected *yet* either.
-///
-/// The rooted path costs ~2N thread-local + `RefCell` round trips per call
-/// (N `root_string_ptr` pushes in the classify loop, N
-/// `get_raw_const_ptr` reads in the copy loop) plus the scope's own two.
-/// On Darwin every one of those is an `_tlv_get_addr` call. On a
-/// tree-walking-interpreter workload whose environment lookup appends
-/// `seen = seen + "[" + names[i] + "]"` per frame, that bookkeeping measured
-/// **12.6%** of total run time — more than the concatenation it was
-/// protecting.
+// Keep the established heap-only path ahead of primitive conversion: callers
+// with heap strings pay exactly its original admission and copy work.
 #[inline]
 fn concat_chain_all_heap_strings_no_collect<const MAX_PARTS: usize>(
     parts: *const f64,
@@ -1340,9 +1318,9 @@ fn concat_chain_all_heap_strings_no_collect<const MAX_PARTS: usize>(
     let mut total_u16: u32 = 0;
 
     // Admission scan FIRST, and it touches nothing but `parts`. A chain with
-    // a number, an SSO value or an object in it needs `js_jsvalue_to_string`,
-    // which allocates, so it belongs on the rooted path — and it must reach
-    // that path having paid only n register compares, not n cold
+    // a number, an SSO value or an object in it needs a different conversion
+    // path. It must reach that path having paid only n register compares,
+    // not n cold
     // `StringHeader` loads it is about to throw away and redo.
     // STRING_TAG = 0x7FFF; `is_valid_string_ptr` is a range test, no deref.
     for i in 0..n {
@@ -1389,15 +1367,160 @@ fn concat_chain_all_heap_strings_no_collect<const MAX_PARTS: usize>(
     }
 }
 
+/// Primitive operands can be sized and converted without invoking user code
+/// or allocating a GC object. Keep numeric/inline-string bytes on the stack
+/// and borrow heap-string bytes until the no-collect allocation answers.
+/// A block-boundary refusal roots/reloads heap operands and reuses the stack
+/// conversions. Unsupported kinds retain the original general rooted path.
+#[inline]
+fn concat_chain_primitives<const MAX_PARTS: usize>(
+    parts: *const f64,
+    n: usize,
+) -> Option<*mut StringHeader> {
+    // Reject user conversions before touching headers or formatting numbers.
+    // Tagged integers retain the rooted path: they can represent class IDs.
+    for i in 0..n {
+        let bits = unsafe { *parts.add(i) }.to_bits();
+        let value = crate::value::JSValue::from_bits(bits);
+        if bits >> 48 == 0x7FFF {
+            if !is_valid_string_ptr((bits & 0x0000_FFFF_FFFF_FFFF) as *const StringHeader) {
+                return None;
+            }
+        } else if !value.is_number() && !value.is_short_string() {
+            return None;
+        }
+    }
+
+    let mut scratch: [core::mem::MaybeUninit<[u8; 32]>; MAX_PARTS] =
+        [core::mem::MaybeUninit::uninit(); MAX_PARTS];
+    let mut piece_ptrs: [*const u8; MAX_PARTS] = [std::ptr::null(); MAX_PARTS];
+    let mut piece_lens: [u32; MAX_PARTS] = [0; MAX_PARTS];
+    let mut piece_flags = STRING_FLAG_WTF8_VALIDATED;
+    let mut total_blen: u32 = 0;
+    let mut total_u16: u32 = 0;
+    for i in 0..n {
+        let raw = unsafe { *parts.add(i) };
+        let value = crate::value::JSValue::from_bits(raw.to_bits());
+        let (blen, u16len) = if raw.to_bits() >> 48 == 0x7FFF {
+            let ptr = (raw.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *const StringHeader;
+            let blen = unsafe { (*ptr).byte_len };
+            // Empty operands contribute neither bytes nor provenance flags,
+            // exactly as in the rooted path.
+            if blen == 0 {
+                continue;
+            }
+            piece_ptrs[i] = string_data(ptr);
+            piece_flags = combine_string_flags(piece_flags, unsafe { (*ptr).flags });
+            (blen, unsafe { (*ptr).utf16_len })
+        } else {
+            let buf = scratch[i].write([0u8; 32]);
+            let (len, u16len) = if value.is_short_string() {
+                let mut bytes = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+                let len = value.short_string_to_buf(&mut bytes);
+                buf[..len].copy_from_slice(&bytes[..len]);
+                let (units, flags) = raw_string_metadata(buf.as_ptr(), len as u32);
+                if len != 0 {
+                    piece_flags = combine_string_flags(piece_flags, flags);
+                }
+                (len, units)
+            } else {
+                let len = format_number_into(raw, buf);
+                (len, len as u32) // NumberToString is ASCII.
+            };
+            piece_ptrs[i] = buf.as_ptr();
+            (len as u32, u16len)
+        };
+        piece_lens[i] = blen;
+        total_blen = total_blen.saturating_add(blen);
+        total_u16 = total_u16.saturating_add(u16len);
+    }
+
+    // Some proves that the borrowed payloads remain valid. A refusal has
+    // moved nothing; root every heap operand before the collecting allocation
+    // and reuse the numeric/inline bytes instead of converting them again.
+    let (ptr, mut cursor) = match string_storage_alloc_no_collect(total_blen) {
+        Some(result) => {
+            note_no_collect_hit();
+            result
+        }
+        None => {
+            return Some(concat_primitive_rooted_copy::<MAX_PARTS>(
+                parts,
+                n,
+                &mut piece_ptrs,
+                &piece_lens,
+                total_blen,
+                total_u16,
+                piece_flags,
+            ))
+        }
+    };
+    unsafe {
+        init_string_header(ptr, total_u16, total_blen, total_blen, 0, piece_flags);
+        for i in 0..n {
+            let len = piece_lens[i] as usize;
+            if len != 0 {
+                ptr::copy_nonoverlapping(piece_ptrs[i], cursor, len);
+                cursor = cursor.add(len);
+            }
+        }
+        // Joining primitive strings can create a surrogate pair; raw inputs
+        // can also contain interior pairs. Preserve the complete repair.
+        Some(canonicalize_surrogate_pairs(ptr))
+    }
+}
+
+/// The converted primitive bytes are stack-owned. Only heap-string payloads
+/// can move, so root their headers before allocation and reload them after it.
+#[cold]
+fn concat_primitive_rooted_copy<const MAX_PARTS: usize>(
+    parts: *const f64,
+    n: usize,
+    piece_ptrs: &mut [*const u8; MAX_PARTS],
+    piece_lens: &[u32; MAX_PARTS],
+    total_blen: u32,
+    total_u16: u32,
+    flags: u32,
+) -> *mut StringHeader {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let mut handles = [None; MAX_PARTS];
+    for i in 0..n {
+        let bits = unsafe { *parts.add(i) }.to_bits();
+        if bits >> 48 == 0x7FFF && piece_lens[i] != 0 {
+            handles[i] =
+                Some(scope.root_string_ptr((bits & 0x0000_FFFF_FFFF_FFFF) as *const StringHeader));
+        }
+    }
+    let (result, mut cursor) = string_storage_alloc(total_blen);
+    unsafe {
+        init_string_header(result, total_u16, total_blen, total_blen, 0, flags);
+        for i in 0..n {
+            let len = piece_lens[i] as usize;
+            if len == 0 {
+                continue;
+            }
+            if let Some(handle) = handles[i] {
+                piece_ptrs[i] = string_data(handle.get_raw_const_ptr::<StringHeader>());
+            }
+            ptr::copy_nonoverlapping(piece_ptrs[i], cursor, len);
+            cursor = cursor.add(len);
+        }
+        canonicalize_surrogate_pairs(result)
+    }
+}
+
 /// The body of [`js_string_concat_chain`], monomorphised on the scratch-array
 /// size. `0 < n <= MAX_PARTS` and `!parts.is_null()` are preconditions the
 /// dispatcher establishes.
 ///
-/// The `#7912` fast arm above answers first for an all-heap-string chain;
-/// everything below is the original rooted path, reached when it declines.
+/// Heap strings first use their established no-collect path. Known primitive
+/// conversions are formatted once; other kinds use the general rooted path.
 fn concat_chain_sized<const MAX_PARTS: usize>(parts: *const f64, n: usize) -> *mut StringHeader {
     debug_assert!(n > 0 && n <= MAX_PARTS);
     if let Some(result) = concat_chain_all_heap_strings_no_collect::<MAX_PARTS>(parts, n) {
+        return result;
+    }
+    if let Some(result) = concat_chain_primitives::<MAX_PARTS>(parts, n) {
         return result;
     }
     // Per-part scratch buffer for number formatting. 32 bytes is enough
@@ -1792,3 +1915,7 @@ pub(crate) fn fast_itoa_u32(mut n: u32, buf: &mut [u8; 32]) -> usize {
     }
     len
 }
+
+#[cfg(test)]
+#[path = "concat_primitive_tests.rs"]
+mod primitive_tests;

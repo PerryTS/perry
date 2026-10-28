@@ -47,6 +47,7 @@ fn param(id: u32, name: &str) -> Param {
 
 fn get(key: &str) -> Expr {
     Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(O)),
         property: key.to_string(),
         byte_offset: 0,
@@ -618,6 +619,7 @@ fn a_receiver_read_beneath_a_property_access_requests_no_number_lane() {
                 op: BinaryOp::Add,
                 left: Box::new(Expr::LocalGet(H)),
                 right: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(get("x")),
                     property: "length".to_string(),
                     byte_offset: 0,
@@ -1014,7 +1016,9 @@ fn numeric_arithmetic_twins_keep_all_reads_bare_without_a_recheck() {
 #[test]
 fn arithmetic_getter_operand_requires_generic_recheck() {
     let getter = Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::LocalGet(V)),
             args: Vec::new(),
             type_args: Vec::new(),
@@ -1066,6 +1070,7 @@ fn post_read_mutation_call_forces_next_iteration_recheck() {
     let body = vec![
         accumulated(&["a"], 1),
         Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::LocalGet(V)),
             args: Vec::new(),
             type_args: Vec::new(),

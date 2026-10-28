@@ -74,6 +74,7 @@ fn concat_probe_ir(property: &str) -> String {
                 op: BinaryOp::Add,
                 left: Box::new(Expr::String("t:".to_string())),
                 right: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(1)),
                     property: property.to_string(),
                     byte_offset: 0,

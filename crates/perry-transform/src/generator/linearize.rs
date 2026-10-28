@@ -74,7 +74,9 @@ impl DelegationRoute {
         let mut call_args = vec![Expr::LocalGet(self.iter_id)];
         call_args.extend(args);
         let call = Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(method)),
                 property: "call".to_string(),
@@ -105,6 +107,7 @@ const YIELD_RESULT_MARKER: &str = "__perry_generator_yield_inner_result";
 fn passthrough_yield(result_id: LocalId, kind_id: LocalId) -> Expr {
     Expr::Yield {
         value: Some(Box::new(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::ExternFuncRef {
                 name: YIELD_RESULT_MARKER.to_string(),
                 param_types: vec![Type::Any, Type::Number],
@@ -235,7 +238,9 @@ fn delegate_next_call(del_next_id: LocalId, del_iter_id: LocalId, arg: Expr) -> 
     // stepped through its intrinsic `next` resumes its record directly.
     let captured_call = if linearize_async_generator() {
         Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(del_next_id)),
                 property: "call".to_string(),
@@ -246,6 +251,7 @@ fn delegate_next_call(del_next_id: LocalId, del_iter_id: LocalId, arg: Expr) -> 
         }
     } else {
         Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::ExternFuncRef {
                 name: "js_iterator_delegate_step".to_string(),
                 param_types: vec![Type::Any, Type::Any, Type::Any],
@@ -268,7 +274,9 @@ fn delegate_next_call(del_next_id: LocalId, del_iter_id: LocalId, arg: Expr) -> 
         }),
         then_expr: Box::new(captured_call),
         else_expr: Box::new(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(del_iter_id)),
                 property: "next".to_string(),
@@ -287,6 +295,7 @@ fn delegate_kind_set(kind_id: LocalId, del_next_id: LocalId, del_iter_id: LocalI
     Stmt::Expr(Expr::LocalSet(
         kind_id,
         Box::new(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::ExternFuncRef {
                 name: "js_iterator_delegate_kind".to_string(),
                 param_types: vec![Type::Any, Type::Any],
@@ -345,6 +354,7 @@ fn emit_yield_star_loop(
     current.push(Stmt::Expr(Expr::LocalSet(
         del_next_id,
         Box::new(Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(Expr::LocalGet(del_iter_id)),
             property: "next".to_string(),
@@ -370,6 +380,7 @@ fn emit_yield_star_loop(
     let reyield = match del_kind_id {
         None => Stmt::Expr(Expr::Yield {
             value: Some(Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(del_result_id)),
                 property: "value".to_string(),
@@ -403,6 +414,7 @@ fn emit_yield_star_loop(
     let not_done = Expr::Unary {
         op: UnaryOp::Not,
         operand: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(Expr::LocalGet(del_result_id)),
             property: "done".to_string(),
@@ -464,6 +476,7 @@ fn emit_yield_star_loop(
     // `yield* e`, where the value is otherwise discarded.
     let del_value_id = alloc_local(next_local_id);
     let inner_value = Expr::PropertyGet {
+        byte_end: 0,
         byte_offset: 0,
         object: Box::new(Expr::LocalGet(del_result_id)),
         property: "value".to_string(),

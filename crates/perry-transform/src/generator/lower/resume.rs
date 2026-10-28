@@ -92,7 +92,9 @@ pub(crate) fn generator_executing_type_error() -> Expr {
 
 pub(crate) fn promise_reject(value: Expr) -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(Expr::GlobalGet(0)),
             property: "reject".to_string(),

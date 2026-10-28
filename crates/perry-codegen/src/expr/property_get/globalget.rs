@@ -44,6 +44,7 @@ pub(crate) fn emit_global_value_installs(ctx: &mut FnCtx<'_>, name: &str) {
 /// every hit, and a key added or deleted changes the ShapeId.
 fn global_object_expr() -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::ExternFuncRef {
             name: "js_get_global_this".to_string(),
             param_types: Vec::new(),

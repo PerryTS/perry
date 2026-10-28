@@ -135,6 +135,7 @@ fn module_with_boxed_local() -> Module {
                 init: Some(Expr::Array(Vec::new(), None)),
             },
             Stmt::Expr(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::LocalGet(BUMP)),
                 args: Vec::new(),
                 type_args: Vec::new(),

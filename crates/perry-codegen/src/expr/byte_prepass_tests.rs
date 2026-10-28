@@ -49,6 +49,7 @@ fn ir(module: Module) -> String {
 
 fn call_callback() -> Stmt {
     Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::LocalGet(2)),
         args: vec![],
         type_args: vec![],
@@ -80,7 +81,9 @@ fn unregistered_writes_and_intrinsics_resolve_per_access() {
             for local in [false, true] {
                 let access = if intrinsic {
                     Expr::Call {
+                        byte_end: 0,
                         callee: Box::new(Expr::PropertyGet {
+                            byte_end: 0,
                             object: Box::new(Expr::LocalGet(1)),
                             property: "readUInt32LE".into(),
                             byte_offset: 0,
@@ -197,6 +200,7 @@ fn loop_writes_register_before_local_initializers_and_callbacks() {
                     ty: Type::Named("Uint8Array".into()),
                     mutable: false,
                     init: Some(Expr::Call {
+                        byte_end: 0,
                         callee: Box::new(Expr::LocalGet(2)),
                         args: vec![],
                         type_args: vec![],
@@ -310,6 +314,7 @@ fn shared_and_native_byte_views_take_the_runtime_arm() {
                 Expr::NativeArenaAlloc(Box::new(Expr::Integer(64)))
             } else {
                 Expr::New {
+                    byte_end: 0,
                     class_name: "SharedArrayBuffer".into(),
                     args: vec![Expr::Integer(64)],
                     type_args: vec![],
@@ -353,6 +358,7 @@ fn shared_and_native_byte_views_take_the_runtime_arm() {
                         init: Some(view),
                     },
                     Stmt::Return(Some(Expr::Call {
+                        byte_end: 0,
                         callee: Box::new(Expr::FuncRef(2)),
                         args: vec![Expr::LocalGet(1), Expr::LocalGet(3)],
                         type_args: vec![],
@@ -365,6 +371,8 @@ fn shared_and_native_byte_views_take_the_runtime_arm() {
             // tracked construction descriptor and exercises the plain resolver.
             let mut reader = function(
                 vec![Stmt::Return(Some(Expr::IndexGet {
+                    byte_offset: 0,
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(1)),
                     index: Box::new(Expr::LocalGet(3)),
                 }))],
@@ -409,6 +417,8 @@ fn reassigned_module_table_cannot_get_a_fixed_receiver() {
         vec![loop_body(vec![
             call_callback(),
             Stmt::Expr(Expr::IndexGet {
+                byte_offset: 0,
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(1)),
                 index: Box::new(Expr::LocalGet(3)),
             }),

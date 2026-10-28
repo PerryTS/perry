@@ -24,6 +24,7 @@ fn local(id: u32, mutable: bool, init: Expr) -> Stmt {
 }
 fn len(id: u32) -> Expr {
     Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(id)),
         property: "length".into(),
         byte_offset: 0,
@@ -31,6 +32,8 @@ fn len(id: u32) -> Expr {
 }
 fn get(id: u32, index: Expr) -> Expr {
     Expr::IndexGet {
+        byte_offset: 0,
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(id)),
         index: Box::new(index),
     }
@@ -72,6 +75,7 @@ fn ir(op: CompareOp, offset: Expr, other: bool, exposure: u8, recheck: bool) -> 
     ];
     if exposure == 1 {
         body.push(Stmt::Expr(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(3)),
             property: "buffer".into(),
             byte_offset: 0,
@@ -101,6 +105,7 @@ fn ir(op: CompareOp, offset: Expr, other: bool, exposure: u8, recheck: bool) -> 
                 right: Box::new(Expr::Integer(3)),
             },
             then_branch: vec![Stmt::Expr(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::FuncRef(2)),
                 args: vec![],
                 type_args: vec![],
@@ -125,6 +130,7 @@ fn ir(op: CompareOp, offset: Expr, other: bool, exposure: u8, recheck: bool) -> 
     });
     if exposure == 2 {
         body.push(Stmt::Expr(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(3)),
             property: "buffer".into(),
             byte_offset: 0,

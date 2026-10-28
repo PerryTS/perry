@@ -1552,7 +1552,9 @@ fn lower_stmts_using_aware_inner(
                 // ordinary "not a function" method-call path.
                 for &id in &decl_ids {
                     let check_call = Expr::Call {
+                        byte_end: 0,
                         callee: Box::new(Expr::PropertyGet {
+                            byte_end: 0,
                             byte_offset: 0,
                             object: Box::new(Expr::LocalGet(id)),
                             property: "__perry_using_check__".to_string(),
@@ -1633,7 +1635,9 @@ fn lower_stmts_using_aware_inner(
                     }),
                 };
                 let mut call_expr = Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: 0,
                         object: Box::new(Expr::LocalGet(id)),
                         property: method_name.to_string(),
@@ -1655,6 +1659,7 @@ fn lower_stmts_using_aware_inner(
                         then_branch: vec![Stmt::Expr(Expr::LocalSet(
                             pending,
                             Box::new(Expr::New {
+                                byte_end: 0,
                                 class_name: "SuppressedError".to_string(),
                                 args: vec![
                                     Expr::LocalGet(dispose_err),

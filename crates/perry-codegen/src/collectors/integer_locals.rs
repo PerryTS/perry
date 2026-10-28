@@ -272,7 +272,7 @@ fn scan_ta_view_escapes_expr(e: &perry_hir::Expr, views: &mut HashMap<u32, i64>)
     use perry_hir::Expr;
     match e {
         // Receiver position of an element access is the one allowed use.
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             if !matches!(object.as_ref(), Expr::LocalGet(_)) {
                 scan_ta_view_escapes_expr(object, views);
             }
@@ -334,7 +334,7 @@ fn scan_ta_view_escapes_expr(e: &perry_hir::Expr, views: &mut HashMap<u32, i64>)
 /// static window is inside `[0, length)` — an integer by construction.
 pub(crate) fn is_proven_int_ta_load(views: &HashMap<u32, i64>, e: &perry_hir::Expr) -> bool {
     use perry_hir::Expr;
-    let Expr::IndexGet { object, index } = e else {
+    let Expr::IndexGet { object, index, .. } = e else {
         return false;
     };
     let Expr::LocalGet(id) = object.as_ref() else {

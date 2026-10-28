@@ -311,6 +311,7 @@ mod tests {
 
     fn call(func: FuncId, args: Vec<Expr>) -> Expr {
         Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::FuncRef(func)),
             args,
             type_args: Vec::new(),
@@ -466,7 +467,9 @@ mod tests {
             },
         );
         let method_call = Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(7)),
                 property: "m".into(),
                 byte_offset: 0,

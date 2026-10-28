@@ -163,6 +163,8 @@ pub enum Expr {
         /// when unknown (synthesized calls from transforms/intrinsics, etc.) —
         /// a 0 sentinel resolves to no location, falling back to `<anonymous>`.
         byte_offset: u32,
+        /// Diagnostic source coordinates (SWC 1-based, end exclusive); ignored by stable hashing.
+        byte_end: u32,
     },
 
     /// Function call with spread arguments (e.g., fn(a, ...arr, b))
@@ -170,6 +172,9 @@ pub enum Expr {
         callee: Box<Expr>,
         args: Vec<CallArg>,
         type_args: Vec<Type>,
+        /// Diagnostic source coordinates (SWC 1-based, end exclusive); ignored by stable hashing.
+        byte_offset: u32,
+        byte_end: u32,
     },
 
     /// `super(...)` with spread arguments (`super(...arguments)` — the tsc
@@ -221,6 +226,8 @@ pub enum Expr {
         /// transforms/desugaring) — resolves to no location. Mirrors
         /// `Call.byte_offset` / `New::byte_offset`; excluded from stable-hashing.
         byte_offset: u32,
+        /// Diagnostic source coordinates (SWC 1-based, end exclusive); ignored by stable hashing.
+        byte_end: u32,
     },
     PropertySet {
         object: Box<Expr>,
@@ -240,6 +247,9 @@ pub enum Expr {
     IndexGet {
         object: Box<Expr>,
         index: Box<Expr>,
+        /// Diagnostic source coordinates (SWC 1-based, end exclusive); ignored by stable hashing.
+        byte_offset: u32,
+        byte_end: u32,
     },
     IndexSet {
         object: Box<Expr>,
@@ -438,6 +448,8 @@ pub enum Expr {
         /// Excluded from stable-hashing (derived metadata, like `byte_offset`;
         /// the appended `LocalGet` args it counts are themselves hashed).
         cap_args_appended: u32,
+        /// Diagnostic source coordinates (SWC 1-based, end exclusive); ignored by stable hashing.
+        byte_end: u32,
     },
 
     /// Dynamic new expression (new with non-identifier callee)
@@ -453,6 +465,8 @@ pub enum Expr {
         /// not-a-constructor case lowers here (callee is `LocalGet`), so this
         /// is the field that localizes ajv's `undefined is not a constructor`.
         byte_offset: u32,
+        /// Diagnostic source coordinates (SWC 1-based, end exclusive); ignored by stable hashing.
+        byte_end: u32,
     },
 
     /// Dynamic `new` with spread arguments — `new <callee>(...args)`.
@@ -467,6 +481,8 @@ pub enum Expr {
         /// #5253: source byte offset of the `new` expression — see
         /// `New::byte_offset`.
         byte_offset: u32,
+        /// Diagnostic source coordinates (SWC 1-based, end exclusive); ignored by stable hashing.
+        byte_end: u32,
     },
 
     /// Runtime `new.target` value for ordinary functions.

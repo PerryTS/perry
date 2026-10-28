@@ -30,6 +30,8 @@ fn xor(l: Expr, r: Expr) -> Expr {
 /// `S[idx]` — an element read on local `arr_id`.
 fn idx_get(arr_id: u32, idx: Expr) -> Expr {
     Expr::IndexGet {
+        byte_offset: 0,
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(arr_id)),
         index: Box::new(idx),
     }
@@ -156,6 +158,7 @@ fn console_log_style_observation_excludes_local() {
     let stmts = vec![
         let_stmt(5, HirType::Any, Some(idx_get(0, Expr::LocalGet(1)))),
         Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::FuncRef(42)),
             args: vec![Expr::LocalGet(5)],
             type_args: vec![],

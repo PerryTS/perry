@@ -168,7 +168,9 @@ pub(super) fn try_url_date_weakref_instance(
                         | Expr::BufferConcatWithLength { .. }
                 ) {
                     return Ok(Ok(Expr::Call {
+                        byte_end: 0,
                         callee: Box::new(Expr::PropertyGet {
+                            byte_end: 0,
                             byte_offset: 0,
                             object: Box::new(recv_expr),
                             property: "toJSON".to_string(),

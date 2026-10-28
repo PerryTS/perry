@@ -261,7 +261,7 @@ impl<'a> Model<'a> {
             // An index is the canonical i32-consuming position: with a boxed
             // local this is exactly the `fptosi` per access the representation
             // exists to delete.
-            Expr::IndexGet { object, index } => {
+            Expr::IndexGet { object, index, .. } => {
                 self.expr(object, UseCtx::Neutral, depth);
                 self.expr(index, UseCtx::Int, depth);
             }

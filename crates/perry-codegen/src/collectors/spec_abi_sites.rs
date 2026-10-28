@@ -591,7 +591,7 @@ fn record_expr_use(e: &Expr, depth: u32, scan: &mut ModuleScan) {
         }
         // Element-access receiver position is length-safe; everything nested
         // below it (index/value) is scanned normally.
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             record_receiver_use(object, depth, scan);
             record_expr_use(index, depth, scan);
         }
@@ -1353,7 +1353,7 @@ pub(crate) fn guarded_number_array_param_eligible(stmts: &[Stmt], param_id: u32)
                     scan_expr(child, param_id, uses)
                 });
             }
-            Expr::IndexGet { object, index } if matches!(object.as_ref(), Expr::LocalGet(id) if *id == param_id) =>
+            Expr::IndexGet { object, index, .. } if matches!(object.as_ref(), Expr::LocalGet(id) if *id == param_id) =>
             {
                 uses.read = true;
                 scan_expr(index, param_id, uses);

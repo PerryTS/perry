@@ -34,6 +34,7 @@ const IMPORTS: &str = r#"
   (import "perry_net" "tcp_connect" (func $tcp_connect (param i32 i32 i32) (result i32)))
   (import "perry_net" "sock_error" (func $sock_error (param i32 i32) (result i32)))
   (import "perry_net" "resolve" (func $resolve (param i32 i32 i32 i32) (result i32)))
+  (import "perry_host" "discard_pages" (func $discard (param i32 i32) (result i32)))
 "#;
 
 const ONE_PAGE: &str = r#"(memory (export "memory") 1)"#;
@@ -78,6 +79,7 @@ const NET_HELPERS: &str = r#"
 struct Run {
     status: Option<i32>,
     stats: String,
+    stderr: String,
     elapsed: std::time::Duration,
 }
 
@@ -88,7 +90,13 @@ fn run_net(name: &str, host_args: &[&str], data: &str, start: &str) -> Run {
   (data (i32.const 1000) "{data}")
   (func (export "_start") {start}))"#
     );
-    let wasm = module(name, &wat);
+    let run = run_wat(name, host_args, &wat);
+    assert!(run.stderr.is_empty(), "{}", run.stderr);
+    run
+}
+
+fn run_wat(name: &str, host_args: &[&str], wat: &str) -> Run {
+    let wasm = module(name, wat);
     let stats_path = wasm.with_extension("json");
     let began = std::time::Instant::now();
     let out = Command::new(HOST)
@@ -99,14 +107,10 @@ fn run_net(name: &str, host_args: &[&str], data: &str, start: &str) -> Run {
         .output()
         .unwrap();
     let elapsed = began.elapsed();
-    assert!(
-        out.stderr.is_empty(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
     Run {
         status: out.status.code(),
-        stats: stats(&stats_path),
+        stats: std::fs::read_to_string(&stats_path).unwrap_or_default(),
+        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
         elapsed,
     }
 }
@@ -502,4 +506,136 @@ fn guest_pointers_that_overflow_or_leave_memory_fault_instead_of_panicking() {
         "stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
+}
+
+/// Helpers for the `perry_host.discard_pages` guests: `$is` is 1 when `len`
+/// bytes from `ptr` all equal `byte`.
+const DISCARD_HELPERS: &str = r#"
+  (func $is (param $ptr i32) (param $len i32) (param $byte i32) (result i32)
+    (local $i i32)
+    (loop $next
+      (if (i32.ge_u (local.get $i) (local.get $len)) (then (return (i32.const 1))))
+      (if (i32.ne (i32.load8_u (i32.add (local.get $ptr) (local.get $i))) (local.get $byte))
+        (then (return (i32.const 0))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $next))
+    (i32.const 0))
+"#;
+
+fn run_discard(name: &str, host_args: &[&str], start: &str) -> Run {
+    let wat = format!(
+        r#"(module {IMPORTS}{ONE_PAGE}{DISCARD_HELPERS}
+  (func (export "_start") {start}))"#
+    );
+    run_wat(name, host_args, &wat)
+}
+
+#[test]
+fn discard_pages_zero_fills_the_range_and_nothing_around_it() {
+    // 0xAB from 0x1000 to 0x6000; discard 0x2000..0x4000: it reads zero after
+    // the 1, the page before and the two after keep their bytes.
+    let run = run_discard(
+        "discard_zero_fill",
+        &[],
+        r#"
+    (memory.fill (i32.const 0x1000) (i32.const 0xAB) (i32.const 0x5000))
+    (if (i32.ne (call $discard (i32.const 0x2000) (i32.const 0x2000)) (i32.const 1)) (then (call $exit (i32.const 1))))
+    (if (i32.eqz (call $is (i32.const 0x2000) (i32.const 0x2000) (i32.const 0))) (then (call $exit (i32.const 2))))
+    (if (i32.eqz (call $is (i32.const 0x1000) (i32.const 0x1000) (i32.const 0xAB))) (then (call $exit (i32.const 3))))
+    (if (i32.eqz (call $is (i32.const 0x4000) (i32.const 0x2000) (i32.const 0xAB))) (then (call $exit (i32.const 4))))
+    (call $exit (i32.const 0))"#,
+    );
+    assert_eq!(run.status, Some(0), "{}", run.stderr);
+    assert!(run.stderr.is_empty(), "{}", run.stderr);
+    assert!(
+        run.stats
+            .contains(r#""discard_calls":1,"discard_bytes":8192"#),
+        "{}",
+        run.stats
+    );
+}
+
+#[test]
+fn a_discarded_range_is_ordinary_memory_afterwards() {
+    // Discard twice, writing between: the second write reads back, and the
+    // second discard zeroes it again.
+    let run = run_discard(
+        "discard_reuse",
+        &[],
+        r#"
+    (memory.fill (i32.const 0x3000) (i32.const 1) (i32.const 0x1000))
+    (drop (call $discard (i32.const 0x3000) (i32.const 0x1000)))
+    (memory.fill (i32.const 0x3000) (i32.const 2) (i32.const 0x1000))
+    (if (i32.eqz (call $is (i32.const 0x3000) (i32.const 0x1000) (i32.const 2))) (then (call $exit (i32.const 1))))
+    (if (i32.ne (call $discard (i32.const 0x3000) (i32.const 0x1000)) (i32.const 1)) (then (call $exit (i32.const 2))))
+    (if (i32.eqz (call $is (i32.const 0x3000) (i32.const 0x1000) (i32.const 0))) (then (call $exit (i32.const 3))))
+    (call $exit (i32.const 0))"#,
+    );
+    assert_eq!(run.status, Some(0), "{}", run.stderr);
+    assert!(
+        run.stats
+            .contains(r#""discard_calls":2,"discard_bytes":8192"#),
+        "{}",
+        run.stats
+    );
+}
+
+#[test]
+fn discard_pages_answers_0_for_a_range_that_is_not_whole_pages_and_leaves_it_alone() {
+    let run = run_discard(
+        "discard_unaligned",
+        &[],
+        r#"
+    (memory.fill (i32.const 0x1000) (i32.const 0xAB) (i32.const 0x3000))
+    (if (i32.ne (call $discard (i32.const 0x1001) (i32.const 0x1000)) (i32.const 0)) (then (call $exit (i32.const 1))))
+    (if (i32.ne (call $discard (i32.const 0x1000) (i32.const 0x0fff)) (i32.const 0)) (then (call $exit (i32.const 2))))
+    (if (i32.ne (call $discard (i32.const 0x1000) (i32.const 0)) (i32.const 0)) (then (call $exit (i32.const 3))))
+    (if (i32.eqz (call $is (i32.const 0x1000) (i32.const 0x3000) (i32.const 0xAB))) (then (call $exit (i32.const 4))))
+    (call $exit (i32.const 0))"#,
+    );
+    assert_eq!(run.status, Some(0), "{}", run.stderr);
+    assert!(
+        run.stats.contains(r#""discard_calls":3,"discard_bytes":0"#),
+        "{}",
+        run.stats
+    );
+}
+
+#[test]
+fn no_discard_answers_0_and_leaves_the_memory() {
+    let run = run_discard(
+        "discard_declined",
+        &["--no-discard"],
+        r#"
+    (memory.fill (i32.const 0x2000) (i32.const 0xAB) (i32.const 0x1000))
+    (if (i32.ne (call $discard (i32.const 0x2000) (i32.const 0x1000)) (i32.const 0)) (then (call $exit (i32.const 1))))
+    (if (i32.eqz (call $is (i32.const 0x2000) (i32.const 0x1000) (i32.const 0xAB))) (then (call $exit (i32.const 2))))
+    (call $exit (i32.const 0))"#,
+    );
+    assert_eq!(run.status, Some(0), "{}", run.stderr);
+    assert!(
+        run.stats.contains(r#""discard_calls":1,"discard_bytes":0"#),
+        "{}",
+        run.stats
+    );
+}
+
+#[test]
+fn a_discard_range_outside_the_memory_traps() {
+    // One page of memory: 0xf000 + 0x2000 ends past it, and so does a length
+    // that overflows the 32-bit space. Each is a trap, not an answer.
+    for (name, ptr, len) in [
+        ("discard_past_end", "0xf000", "0x2000"),
+        ("discard_overflow", "0x1000", "0xfffff000"),
+    ] {
+        let run = run_discard(
+            name,
+            &[],
+            &format!(
+                "(drop (call $discard (i32.const {ptr}) (i32.const {len}))) (call $exit (i32.const 0))"
+            ),
+        );
+        assert_eq!(run.status, Some(134), "{name}: {}", run.stderr);
+        assert!(run.stderr.contains("outside"), "{name}: {}", run.stderr);
+    }
 }

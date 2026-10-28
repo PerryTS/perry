@@ -59,6 +59,8 @@ fn bin(op: BinaryOp, left: Expr, right: Expr) -> Expr {
 
 fn get(arr: u32, idx: u32) -> Expr {
     Expr::IndexGet {
+        byte_offset: 0,
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(arr)),
         index: Box::new(Expr::LocalGet(idx)),
     }
@@ -101,6 +103,7 @@ fn module_ir(body: Vec<Stmt>) -> String {
 fn module_ir_with_x(body: Vec<Stmt>, x_arg: Expr) -> String {
     let mut module = Module::new("dense_rmw");
     module.init.push(Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(1)),
         args: vec![Expr::Array(vec![Expr::Number(0.5)], None), x_arg],
         type_args: Vec::new(),

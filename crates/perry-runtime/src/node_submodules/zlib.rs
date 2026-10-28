@@ -299,6 +299,32 @@ pub extern "C" fn js_zlib_zstd_dictionary(opts: f64) -> f64 {
     dictionary.get_nanbox_f64()
 }
 
+/// Capture Brotli's dictionary without applying DEFLATE option ranges.
+#[no_mangle]
+pub extern "C" fn js_zlib_brotli_dictionary(opts: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let opts = scope.root_nanbox_f64(opts);
+    let dictionary = scope.root_nanbox_f64(gzip_read_option(opts.get_nanbox_f64(), b"dictionary"));
+    validate_dictionary_value(dictionary.get_nanbox_f64());
+    dictionary.get_nanbox_f64()
+}
+
+/// Resolve the encoder quality after the caller has copied dictionary bytes.
+#[no_mangle]
+pub extern "C" fn js_zlib_brotli_quality(opts: f64) -> i32 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let opts = scope.root_nanbox_f64(opts);
+    let params = scope.root_nanbox_f64(gzip_read_option(opts.get_nanbox_f64(), b"params"));
+    // BROTLI_PARAM_QUALITY is parameter 1. Absent parameters use Node's 11.
+    gzip_range(
+        gzip_read_option(params.get_nanbox_f64(), b"1"),
+        "options.params.1",
+        0,
+        11,
+        11.0,
+    ) as i32
+}
+
 fn validate_dictionary_value(value: f64) {
     if crate::value::JSValue::from_bits(value.to_bits()).is_undefined() {
         return;

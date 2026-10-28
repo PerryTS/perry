@@ -212,6 +212,7 @@ mod tests {
 
     fn call(args: Vec<Expr>) -> Expr {
         Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::Undefined),
             args,
             type_args: vec![],
@@ -337,6 +338,7 @@ mod tests {
 
         // A read (`PropertyGet`) is deliberately NOT a safepoint (it inlines).
         let get = Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(this()),
             property: "x".to_string(),
             byte_offset: 0,

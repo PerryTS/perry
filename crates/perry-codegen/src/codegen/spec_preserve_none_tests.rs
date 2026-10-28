@@ -37,6 +37,7 @@ fn number_param(id: u32, name: &str) -> Param {
 
 fn call(fid: u32, args: Vec<Expr>) -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(fid)),
         args,
         type_args: Vec::new(),

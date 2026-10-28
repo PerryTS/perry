@@ -53,6 +53,7 @@ fn num(id: u32) -> Expr {
 
 fn call(args: Vec<Expr>) -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::Undefined),
         args,
         type_args: vec![],
@@ -462,6 +463,8 @@ fn ordinary_loop_descriptor_is_not_installed_across_a_call() {
 #[test]
 fn trusting_an_operation_does_not_trust_its_effectful_children() {
     let read = Expr::IndexGet {
+        byte_offset: 0,
+        byte_end: 0,
         object: Box::new(num(OBJ)),
         index: Box::new(call(vec![])),
     };
@@ -637,6 +640,7 @@ fn coercion_is_an_ender_exactly_when_the_node_is_not_proven_inert() {
 #[test]
 fn generic_property_and_index_reads_are_enders() {
     let get = vec![Stmt::Expr(Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(num(OBJ)),
         property: "x".to_string(),
         byte_offset: 0,
@@ -645,6 +649,8 @@ fn generic_property_and_index_reads_are_enders() {
     assert!(has(&get, RegionEnder::CollectingCall));
 
     let idx = vec![Stmt::Expr(Expr::IndexGet {
+        byte_offset: 0,
+        byte_end: 0,
         object: Box::new(num(OBJ)),
         index: Box::new(num(NUM)),
     })];
@@ -803,6 +809,7 @@ fn battery() -> Vec<(&'static str, Vec<Stmt>)> {
         (
             "generic property read",
             vec![Stmt::Expr(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(num(OBJ)),
                 property: "x".to_string(),
                 byte_offset: 0,
@@ -811,6 +818,8 @@ fn battery() -> Vec<(&'static str, Vec<Stmt>)> {
         (
             "generic index read",
             vec![Stmt::Expr(Expr::IndexGet {
+                byte_offset: 0,
+                byte_end: 0,
                 object: Box::new(num(OBJ)),
                 index: Box::new(num(NUM)),
             })],

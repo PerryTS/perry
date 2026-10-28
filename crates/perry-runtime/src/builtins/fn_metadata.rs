@@ -62,8 +62,62 @@ fn eager_fn_metadata_validation() -> bool {
 /// for metadata something actually reads. Invalid bytes yield `None`, which is
 /// what the caller saw before when registration rejected them up front.
 fn decode_registered(slot: Option<&[u8]>) -> Option<String> {
-    let bytes = slot?;
-    std::str::from_utf8(bytes).ok().map(str::to_owned)
+    decode_registered_with(slot, str::to_owned)
+}
+
+/// Consume a validated view while its registry owner is locked. The caller
+/// chooses whether the result needs owned bytes; presence checks do not.
+#[inline(always)]
+fn decode_registered_with<R>(slot: Option<&[u8]>, read: impl FnOnce(&str) -> R) -> Option<R> {
+    decode_registered_bytes(slot?).map(read)
+}
+
+/// Prove ASCII with covering loads that stay wholly inside the slice.
+/// Overlap only repeats bytes in the OR; it cannot change their high bits.
+#[inline(always)]
+fn registered_bytes_are_ascii(bytes: &[u8]) -> bool {
+    let len = bytes.len();
+    let ptr = bytes.as_ptr();
+    const WORD: usize = std::mem::size_of::<usize>();
+    const HIGH_BITS: usize = usize::MAX / 255 * 128;
+    // SAFETY: each width is admitted by len before either covering load.
+    // The loop and final suffix also end at or before len. No alignment is
+    // required, and OR makes endianness and overlap irrelevant to the proof.
+    unsafe {
+        if len >= WORD {
+            let end = len - WORD;
+            let mut bits = ptr.cast::<usize>().read_unaligned();
+            let mut offset = WORD;
+            while offset < end {
+                bits |= ptr.add(offset).cast::<usize>().read_unaligned();
+                offset += WORD;
+            }
+            bits |= ptr.add(end).cast::<usize>().read_unaligned();
+            bits & HIGH_BITS == 0
+        } else if len >= std::mem::size_of::<u32>() {
+            let bits = ptr.cast::<u32>().read_unaligned()
+                | ptr.add(len - 4).cast::<u32>().read_unaligned();
+            bits & 0x8080_8080 == 0
+        } else if len >= std::mem::size_of::<u16>() {
+            let bits = ptr.cast::<u16>().read_unaligned()
+                | ptr.add(len - 2).cast::<u16>().read_unaligned();
+            bits & 0x8080 == 0
+        } else {
+            len == 0 || *ptr < 0x80
+        }
+    }
+}
+
+/// ASCII is already a UTF-8 proof. Consume that byte view without entering
+/// the general decoder; non-ASCII and malformed input keep its exact exits.
+#[inline]
+fn decode_registered_bytes(bytes: &[u8]) -> Option<&str> {
+    if registered_bytes_are_ascii(bytes) {
+        // SAFETY: every byte is below 0x80, including embedded NULs.
+        Some(unsafe { std::str::from_utf8_unchecked(bytes) })
+    } else {
+        std::str::from_utf8(bytes).ok()
+    }
 }
 
 /// Link-time-relative descriptor emitted by codegen. Keeping offsets instead
@@ -160,20 +214,23 @@ pub(super) fn registered_name_string(func_ptr: usize) -> Option<String> {
 
 /// Read the canonical metadata under its owner lock. Presence checks need the
 /// same UTF-8/precedence rules as reflection, but do not need an owned String.
+#[inline(always)]
 fn with_registered_name<T>(func_ptr: usize, read: impl FnOnce(&str) -> T) -> Option<T> {
     if let Ok(overrides) = function_name_overrides().lock() {
         if let Some(name) = overrides
             .get(&func_ptr)
-            .and_then(|bytes| std::str::from_utf8(bytes).ok())
+            .and_then(|bytes| decode_registered_bytes(bytes))
         {
             return Some(read(name));
         }
     }
-    function_name_registry().lock().ok().and_then(|map| {
-        let name = std::str::from_utf8(map.get(&func_ptr).copied()?).ok()?;
-        Some(read(name))
-    })
+    let image = function_name_registry().lock().ok()?;
+    decode_registered_with(image.get(&func_ptr).copied(), read)
 }
+
+#[cfg(test)]
+#[path = "fn_metadata_utf8_tests.rs"]
+mod utf8_read_tests;
 
 /// Register `func_ptr` as the compiled address of a JS function called
 /// `<name>` (`name_len` bytes, not NUL-terminated). The registry COPIES the
@@ -202,11 +259,25 @@ pub unsafe extern "C" fn js_register_function_name(
         return;
     }
     let bytes = std::slice::from_raw_parts(name_ptr, name_len as usize);
+    register_function_name_bytes(func_ptr as usize, bytes);
+}
+
+/// Copy a name into its canonical owner and report whether publication
+/// succeeded. An immediate consumer can use this result without looking up
+/// the same entry again. This says nothing about UTF-8; reads keep their
+/// existing validation and image-name precedence.
+pub(crate) fn register_function_name_bytes(func_ptr: usize, bytes: &[u8]) -> bool {
+    if func_ptr == 0 || bytes.is_empty() {
+        return false;
+    }
     if eager_fn_metadata_validation() && std::str::from_utf8(bytes).is_err() {
-        return;
+        return false;
     }
     if let Ok(mut overrides) = function_name_overrides().lock() {
-        overrides.insert(func_ptr as usize, std::sync::Arc::from(bytes));
+        overrides.insert(func_ptr, std::sync::Arc::from(bytes));
+        true
+    } else {
+        false
     }
 }
 
@@ -305,6 +376,8 @@ pub fn register_function_name_if_absent(func_ptr: usize, name: &str) {
     // "Absent" means "neither map holds bytes that DECODE" — which is exactly
     // the question the read side answers, so ask it rather than restating it
     // and letting the two drift.
+    // Presence and reflection share decoded-byte semantics and owned-first
+    // lookup; presence consumes only a validated view and never copies a name.
     if with_registered_name(func_ptr, |_| ()).is_some() {
         return;
     }
@@ -1140,6 +1213,62 @@ mod tests {
     }
 
     #[test]
+    fn metadata_ascii_views_match_utf8_validation_at_every_exit() {
+        for len in 0..128 {
+            let bytes: Vec<_> = (0..len).map(|i| ((i * 37) % 128) as u8).collect();
+            assert_eq!(
+                decode_registered_bytes(&bytes),
+                std::str::from_utf8(&bytes).ok()
+            );
+        }
+        for bytes in [
+            "é".as_bytes(),
+            "界😀".as_bytes(),
+            b"a\0z",
+            b"\xff",
+            b"a\xc2",
+            b"\x80",
+            b"\xed\xa0\x80",
+            b"\xf4\x90\x80\x80",
+        ] {
+            assert_eq!(
+                decode_registered_bytes(bytes),
+                std::str::from_utf8(bytes).ok()
+            );
+        }
+    }
+
+    #[test]
+    fn if_absent_preserves_valid_name_behind_invalid_override() {
+        let key = 0x9188_0171usize;
+        function_name_registry()
+            .lock()
+            .unwrap()
+            .insert(key, b"imageName");
+        function_name_overrides()
+            .lock()
+            .unwrap()
+            .insert(key, std::sync::Arc::from(&b"\xff"[..]));
+        register_function_name_if_absent(key, "inferred");
+        assert_eq!(function_name_for_ptr(key).as_deref(), Some("imageName"));
+        assert_eq!(
+            &**function_name_overrides().lock().unwrap().get(&key).unwrap(),
+            b"\xff"
+        );
+
+        function_name_registry()
+            .lock()
+            .unwrap()
+            .insert(key, b"\xff");
+        function_name_overrides()
+            .lock()
+            .unwrap()
+            .insert(key, std::sync::Arc::from(&b"ownedName"[..]));
+        register_function_name_if_absent(key, "inferred");
+        assert_eq!(function_name_for_ptr(key).as_deref(), Some("ownedName"));
+    }
+
+    #[test]
     fn borrowed_name_queries_preserve_utf8_empty_and_override_rules() {
         extern "C" fn body(
             _: *const crate::closure::ClosureHeader,
@@ -1296,5 +1425,35 @@ mod compressed_source_tests {
                 if versioned { 16 } else { 0 }
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod name_publication_tests {
+    use super::*;
+
+    #[test]
+    fn publication_reports_success_and_copies_the_exact_bytes() {
+        let key = publication_reports_success_and_copies_the_exact_bytes as *const () as usize;
+        let mut bytes = b"published-name".to_vec();
+        assert!(register_function_name_bytes(key, &bytes));
+        bytes.fill(b'x');
+        assert_eq!(
+            registered_name_string(key).as_deref(),
+            Some("published-name")
+        );
+        assert!(register_function_name_bytes(key, b"replacement"));
+        assert_eq!(registered_name_string(key).as_deref(), Some("replacement"));
+    }
+
+    #[test]
+    fn invalid_or_empty_publication_cannot_prove_a_reflected_name() {
+        let key = invalid_or_empty_publication_cannot_prove_a_reflected_name as *const () as usize;
+        assert!(!register_function_name_bytes(0, b"name"));
+        assert!(!register_function_name_bytes(key, b""));
+        let _ = register_function_name_bytes(key, &[0xff]);
+        assert!(registered_name_string(key).is_none());
+        assert!(register_function_name_bytes(key, b"valid"));
+        assert_eq!(registered_name_string(key).as_deref(), Some("valid"));
     }
 }

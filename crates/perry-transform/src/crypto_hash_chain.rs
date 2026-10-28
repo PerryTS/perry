@@ -708,7 +708,9 @@ fn allowed_refs_stmt(stmt: &Stmt, id: LocalId) -> usize {
 
 fn crypto_call(method: &str, args: Vec<Expr>, byte_offset: u32) -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::NativeModuleRef("crypto".to_string())),
             property: method.to_string(),
             byte_offset,
@@ -740,6 +742,7 @@ fn rewrite_create(expr: Expr) -> Expr {
         object,
         property,
         byte_offset: prop_offset,
+        ..
     } = *callee
     else {
         unreachable!("checked by create_call_kind")
@@ -754,6 +757,7 @@ fn rewrite_create(expr: Expr) -> Expr {
         Expr::NativeModuleRef(_) => init_call,
         receiver => Expr::Sequence(vec![
             Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(receiver),
                 property,
                 byte_offset: prop_offset,
@@ -787,7 +791,9 @@ fn rewrite_chain(expr: Expr, root: &mut dyn FnMut(Expr) -> Expr) -> Expr {
         _ => {
             // The root create call itself.
             return root(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     object,
                     property,
                     byte_offset,

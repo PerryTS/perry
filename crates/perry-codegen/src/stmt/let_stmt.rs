@@ -243,7 +243,7 @@ pub(crate) fn lower_let(
     // Only fires for non-mutable lets (reassignment would invalidate
     // the alias relationship).
     if !mutable {
-        if let Some(perry_hir::Expr::IndexGet { object, index }) = init {
+        if let Some(perry_hir::Expr::IndexGet { object, index, .. }) = init {
             if let perry_hir::Expr::LocalGet(const_id) = object.as_ref() {
                 if ctx.flat_const_arrays.contains_key(const_id) {
                     ctx.array_row_aliases

@@ -113,6 +113,7 @@ fn event_emitter_constructor_call(args: Vec<Expr>) -> Expr {
     let receiver = it.next().unwrap_or(Expr::Undefined);
     let options = it.next().unwrap_or(Expr::Undefined);
     let mut exprs = vec![Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::ExternFuncRef {
             name: "js_event_emitter_subclass_init".to_string(),
             param_types: Vec::new(),

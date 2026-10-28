@@ -77,7 +77,7 @@ fn bound(stmts: &[Stmt], m: u32) -> Option<(u32, u32, u32, u32, bool)> {
                     && matches!(body.first(), Some(Stmt::Expr(Expr::LocalSet(id, e)))
                         if id == value && runtime(e, "arrayRecordForValue").is_some_and(|v| v.len() == 3 && mode(&v[0]) == Some(m)
                             && matches!(&v[1], Expr::LocalGet(id) if id == value)
-                            && matches!(&v[2], Expr::IndexGet { object, index }
+                            && matches!(&v[2], Expr::IndexGet { object, index , .. }
                                 if matches!(object.as_ref(), Expr::LocalGet(id) if id == payload)
                                 && runtime(index, "arrayRecordIndex").is_some_and(|v| matches!((v, &a[2]), ([Expr::LocalGet(id)], Expr::LocalGet(counter)) if id == counter)))))
                     && runtime(&a[1], "arrayRecordLength").is_some_and(|v| matches!(v, [Expr::LocalGet(id)] if id == payload))

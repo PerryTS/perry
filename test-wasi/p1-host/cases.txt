@@ -1,4 +1,6 @@
 # Cases of the reference-host suite (suite.py); one per file in cases/.
+discard_reuse
+discard_resizable
 echo
 fd_reuse
 http_server

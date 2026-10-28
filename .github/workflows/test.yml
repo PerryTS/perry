@@ -1880,6 +1880,8 @@ jobs:
             # inside a bounded Node fixture and fail before running it.
             cargo build-perry --release
             scripts/gc_call_effects/sidecars.sh target/release
+            # This shard can also contain GC fixtures that select instruments.
+            scripts/build_instr_runtime.sh
             export PERRY_TEST_RUNTIME_PREBUILT=1
           else
             cargo build --release -p perry-runtime -p perry-stdlib \
@@ -5485,9 +5487,10 @@ jobs:
       run: |
         python scripts/wasi_imports_check.py --self-test
         archive="$(python scripts/wasi_build_runtime.py wasm32-wasip1 | sed -n 's/^WASI archive: //p' | tail -n 1)"
-        # The archive carries the opt-in perry_net imports in their own member; a
-        # linked module has them only when built with PERRY_WASM_NET=1.
-        python scripts/wasi_imports_check.py "$archive" --allow-perry-net
+        # The archive carries the opt-in perry_net and perry_host imports in their
+        # own members; a linked module has them only when built with
+        # PERRY_WASM_NET=1 or PERRY_WASM_DISCARD=1.
+        python scripts/wasi_imports_check.py "$archive" --allow-perry-net --allow-perry-host
     - name: Image classifier checks as a wasip1 program
       run: python scripts/wasi_image_selftest.py target/perry-dev/perry --flavour p1
     - name: WASI smoke and complete issue 11375 acceptance
@@ -5518,10 +5521,10 @@ jobs:
         cargo build --locked --manifest-path "$manifest"
         cargo test --locked --manifest-path "$manifest" 2>&1 | tee target/wasi-validation/p1-host-unit.log
         ran=$(awk '/^test result: ok\./ { n += $4 } END { print n + 0 }' target/wasi-validation/p1-host-unit.log)
-        test "$ran" -ge 17 || { echo "the host crate ran $ran tests, expected at least 17"; exit 1; }
+        test "$ran" -ge 22 || { echo "the host crate ran $ran tests, expected at least 22"; exit 1; }
         python test-wasi/p1-host/suite.py target/perry-dev/perry \
           --host test-wasi/p1-host/target/debug/perry-p1-host \
-          --output target/wasi-validation/p1-host --min-cases 22
+          --output target/wasi-validation/p1-host --min-cases 26
     - name: Typed components, resources, moving GC and cross-language composition
       run: ./scripts/component_check.sh
     - name: Retain WASI and component execution evidence

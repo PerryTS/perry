@@ -74,6 +74,7 @@ fn compile_body(name: &str, body: Vec<Stmt>) -> String {
 /// the HIR small enough to read.
 fn timer_call(timer: &str, delay: Expr) -> Vec<Stmt> {
     vec![Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::ExternFuncRef {
             name: timer.to_string(),
             param_types: vec![Type::Any, Type::Number],

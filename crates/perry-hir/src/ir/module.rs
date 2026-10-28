@@ -58,6 +58,8 @@ pub struct LocalSourceSpan {
 /// methods and other callable forms that share the same closure layout.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionSourceMetadata {
+    /// SWC source positions, diagnostic only; absent for generated text.
+    pub source_span: Option<(u32, u32)>,
     pub text: SourceText,
     pub is_non_strict_ordinary: bool,
 }

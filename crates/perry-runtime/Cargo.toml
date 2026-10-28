@@ -58,6 +58,12 @@ shape-fact-audit = []
 # are what they classify against. This crate's own test target does not build
 # for wasm32. Never part of a shipped archive.
 wasm-image-selftest = []
+# wasm32-wasip1 only (a no-op elsewhere): hand freed linear-memory pages back
+# to the host through the opt-in `perry_host.discard_pages` import. Enables the
+# allocator wrapper in `wasm_discard.rs` and its call sites. Only the wasip1
+# runtime build turns it on (`scripts/wasi_build_runtime.py`); the WASIp2
+# archive has none of that code.
+wasm-discard = []
 
 # `default` keeps the shipped prebuilt libperry_runtime.a and plain
 # `cargo build`/test full-featured. The auto-optimize path builds with

@@ -61,7 +61,10 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             args,
             type_args,
             byte_offset,
+            byte_end,
+            ..
         } => Expr::Call {
+            byte_end: *byte_end,
             callee: Box::new(substitute_expr(callee, substitutions)),
             args: args
                 .iter()
@@ -155,8 +158,12 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
 
         // Property access
         Expr::PropertyGet {
-            object, property, ..
+            object,
+            property,
+            byte_end,
+            ..
         } => Expr::PropertyGet {
+            byte_end: *byte_end,
             byte_offset: 0,
             object: Box::new(substitute_expr(object, substitutions)),
             property: property.clone(),
@@ -185,7 +192,15 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
         },
 
         // Index access
-        Expr::IndexGet { object, index } => Expr::IndexGet {
+        Expr::IndexGet {
+            object,
+            index,
+            byte_end,
+            byte_offset,
+            ..
+        } => Expr::IndexGet {
+            byte_offset: *byte_offset,
+            byte_end: *byte_end,
             object: Box::new(substitute_expr(object, substitutions)),
             index: Box::new(substitute_expr(index, substitutions)),
         },
@@ -272,7 +287,10 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             type_args,
             byte_offset,
             cap_args_appended,
+            byte_end,
+            ..
         } => Expr::New {
+            byte_end: *byte_end,
             class_name: class_name.clone(),
             args: args
                 .iter()

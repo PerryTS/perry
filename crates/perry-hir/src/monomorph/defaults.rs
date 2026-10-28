@@ -308,7 +308,7 @@ fn fill_defaults_in_expr(expr: &mut Expr, cx: &DefaultFill) {
                 fill_defaults_in_expr(val, cx);
             }
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             fill_defaults_in_expr(object, cx);
             fill_defaults_in_expr(index, cx);
         }

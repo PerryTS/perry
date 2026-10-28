@@ -253,7 +253,7 @@ pub(crate) fn masked_store_rhs_is_genuine_f64(ctx: &FnCtx<'_>, expr: &Expr) -> b
     match expr {
         Expr::Number(_) | Expr::Integer(_) => true,
         Expr::LocalGet(id) => ctx.i32_counter_slots.contains_key(id),
-        Expr::IndexGet { object, index } => match object.as_ref() {
+        Expr::IndexGet { object, index, .. } => match object.as_ref() {
             Expr::LocalGet(arr_id) => {
                 masked_window_fact_for_index(ctx, *arr_id, index.as_ref()).is_some()
                     || counter_read_is_genuine_f64(ctx, *arr_id, index.as_ref())

@@ -751,7 +751,9 @@ pub(super) fn an_escaped_value_beside_top_is_that_top() {
     // computed key fills) -> the pin below (the same n² growth).
     assert_eq!(
         (e8, e16, e32),
-        (1068, 2948, 9396),
+        // DEC221 removes four entries from the redundant wildcard escape
+        // at each n; the existing quadratic storage behavior is unchanged.
+        (1064, 2944, 9392),
         "entries {e8} {e16} {e32}"
     );
 }

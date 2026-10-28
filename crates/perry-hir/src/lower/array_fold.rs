@@ -31,6 +31,7 @@ pub(crate) fn try_fold_array_method_call(call: Expr) -> Expr {
         } => (object, property),
         other => {
             return Expr::Call {
+                byte_end: 0,
                 callee: Box::new(other),
                 args,
                 type_args: Vec::new(),
@@ -40,7 +41,9 @@ pub(crate) fn try_fold_array_method_call(call: Expr) -> Expr {
     };
     // Helper to rebuild the original Call if we don't want to fold.
     let rebuild = |obj: Box<Expr>, prop: String, args: Vec<Expr>| Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: obj,
             property: prop,

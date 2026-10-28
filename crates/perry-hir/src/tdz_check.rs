@@ -38,6 +38,7 @@ pub const TDZ_THROW: &str = "js_throw_reference_error_tdz";
 
 fn extern_call(name: &str, args: Vec<Expr>) -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::ExternFuncRef {
             name: name.to_string(),
             param_types: Vec::new(),
