@@ -1510,6 +1510,17 @@ pub(crate) unsafe fn nm_attach_crypto(
     if property_name == "X509Certificate" {
         attach_crypto_x509_certificate_shape(closure_addr, value);
     }
+    if property_name == "Certificate" {
+        for method in ["verifySpkac", "exportPublicKey", "exportChallenge"] {
+            let method_value = bound_native_callable_export_value("crypto.Certificate", method);
+            crate::closure::closure_set_dynamic_prop(closure_addr, method, method_value);
+            super::set_builtin_property_attrs(
+                closure_addr,
+                method.to_string(),
+                super::PropertyAttrs::new(true, false, true),
+            );
+        }
+    }
     value
 }
 
