@@ -863,6 +863,9 @@ fn the_instrumented_variant_names_its_archives_with_an_instr_suffix() {
 
 #[test]
 fn deserializers_install_regex_without_a_regex_literal() {
+    // Earlier compiler tests can leave deferred sites in this process-global sink.
+    // This fixture starts a fresh compile with no dynamic-code sites.
+    let _ = perry_hir::take_deferred_eval_sites();
     let dir = tempfile::tempdir().unwrap();
     let features = BTreeSet::new();
     let plain = CompilationContext::new(dir.path().to_path_buf());
