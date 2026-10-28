@@ -9,7 +9,7 @@ use std::sync::Arc;
 #[test]
 fn private_async_producer_drives_a_sync_factory_stream_without_another_guest_call() {
     let world = perry_wit::parse(
-        "package test:sync-reactor; world plugin { export make: func() -> stream<u8>; export finished: func() -> u32; }",
+        "package test:sync-reactor; world plugin { export make: func() -> stream<u8>; export finished: func() -> u32; export state: func() -> u32; }",
         None,
     ).unwrap();
     let bytes = wat::parse_str(include_str!("sync-reactor.component.wat")).unwrap();
@@ -51,5 +51,11 @@ fn private_async_producer_drives_a_sync_factory_stream_without_another_guest_cal
     assert_eq!(
         result(&mut driver, &mut client.call("", "finished", &[]).unwrap()).unwrap(),
         Some(json!(1))
+    );
+    let state = result(&mut driver, &mut client.call("", "state", &[]).unwrap()).unwrap();
+    assert_eq!(
+        state,
+        Some(json!(2)),
+        "private kick must return inline so its subtask is reaped"
     );
 }
