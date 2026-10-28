@@ -214,6 +214,16 @@ class FlavourTests(CaseFixture):
         self.assertEqual(result["stage"], "imports")
         self.assertEqual(run.call_count, 1)
 
+    def test_p1_perry_host_import_is_not_part_of_the_default_surface(self):
+        module = core_module(("wasi_snapshot_preview1", "fd_write"),
+                             ("perry_host", "discard_pages"),
+                             signatures={"discard_pages": "ii-i"})
+        with patch("wasi_run.subprocess.run", side_effect=self.execute_with(module)) as run:
+            result = self.run_p1()
+        self.assertFalse(result["passed"])
+        self.assertEqual(result["stage"], "imports")
+        self.assertEqual(run.call_count, 1)
+
     def test_p1_component_output_is_rejected(self):
         component = b"\0asm\x0d\0\x01\0"
         with patch("wasi_run.subprocess.run", side_effect=self.execute_with(component)) as run:

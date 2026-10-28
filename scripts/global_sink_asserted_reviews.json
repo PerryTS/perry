@@ -73,5 +73,17 @@
       "crates/perry-runtime/src/tls/roots/macos.rs": "8054ebf28b4fe4ca12686d4d38cf0d1813f9a5123575cb503f3455ea319b44ce",
       "crates/perry-runtime/src/tls/roots/macos_tests.rs": "b6ba6b5914f2955aa87fd57ae09b2c543ade4a19c0516eebdeeacf9faa577be2"
     }
+  },
+  "crates/perry-runtime/src/wasm_discard.rs::STATE": {
+    "claim": "The lexical audit joins assertion names across all files. This private WASIp1 allocator static collides with unrelated STATE/CALLS test names, but wasm_discard.rs contains no tests or child modules and no assertion reads this static. Private visibility prevents another module from reading it. The source pin forces review if that visibility, a child module, or a test is added; production discard state remains process-wide.",
+    "source_sha256": {
+      "crates/perry-runtime/src/wasm_discard.rs": "2cb2446f1d2fe25896efde527a274a7953f7a1983802ac1fc8b20e0d9aac4a23"
+    }
+  },
+  "crates/perry-runtime/src/wasm_discard.rs::CALLS": {
+    "claim": "The lexical audit joins assertion names across all files. This private WASIp1 allocator static collides with unrelated STATE/CALLS test names, but wasm_discard.rs contains no tests or child modules and no assertion reads this static. Private visibility prevents another module from reading it. The source pin forces review if that visibility, a child module, or a test is added; production discard state remains process-wide.",
+    "source_sha256": {
+      "crates/perry-runtime/src/wasm_discard.rs": "2cb2446f1d2fe25896efde527a274a7953f7a1983802ac1fc8b20e0d9aac4a23"
+    }
   }
 }

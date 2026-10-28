@@ -8,11 +8,14 @@ const astral = "🦆";
 
 let badWellFormed = 0;
 let badClone = 0;
+// Carry the source across the loop poll: an iteration-local source is dead
+// before that poll, so the collector can reclaim every string without moving one.
+let source = `well-formed-${astral}-0-`.repeat(16) + "tail";
 for (let i = 0; i < 1000; i++) {
-  // A fresh, non-SSO source gives the collector a young heap cell each time.
-  const source = `well-formed-${astral}-${i}-`.repeat(16) + "tail";
   if (source.toWellFormed() !== source) badWellFormed++;
   if (structuredClone(source) !== source) badClone++;
+  // This fresh, non-SSO copy source must survive until the next iteration.
+  source = `well-formed-${astral}-${i + 1}-`.repeat(16) + "tail";
 }
 
 console.log("toWellFormed copies:", badWellFormed === 0);
