@@ -585,17 +585,17 @@
         },
         "prototype": "Function.prototype",
         "length": 1,
-        "body": "crate::messaging::js_broadcast_channel_constructor_call_error",
+        "body": "crate::messaging_hook_slots::js_broadcast_channel_constructor_call_error",
         "construct": "crate::object::js_new_function_construct",
         "function_info": {
-          "params": 1,
-          "rest_fixed": 0,
+          "declared": 1,
           "flags": 2048,
           "length": 0,
-          "declared": 1,
+          "native_method": false,
+          "params": 1,
           "plain_params": 0,
-          "source_symbol": "source:perry_runtime::messaging::js_broadcast_channel_constructor_call_error",
-          "native_method": false
+          "rest_fixed": 0,
+          "source_symbol": "source:perry_runtime::messaging_hook_slots::js_broadcast_channel_constructor_call_error"
         },
         "captures": [
           {
@@ -603,7 +603,7 @@
             "value": 71
           }
         ],
-        "info_symbol": "perry_realm_info_290aead44e1ad4b61cdd",
+        "info_symbol": "perry_realm_info_9288e3f46aea98239144",
         "births": [
           "BroadcastChannel.prototype",
           "Function.prototype"
@@ -758,17 +758,17 @@
         },
         "prototype": "Function.prototype",
         "length": 0,
-        "body": "crate::messaging::js_message_channel_constructor_call_error",
+        "body": "crate::messaging_hook_slots::js_message_channel_constructor_call_error",
         "construct": "crate::object::js_new_function_construct",
         "function_info": {
-          "params": 0,
-          "rest_fixed": 0,
+          "declared": 0,
           "flags": 2048,
           "length": 0,
-          "declared": 0,
+          "native_method": false,
+          "params": 0,
           "plain_params": 0,
-          "source_symbol": "source:perry_runtime::messaging::js_message_channel_constructor_call_error",
-          "native_method": false
+          "rest_fixed": 0,
+          "source_symbol": "source:perry_runtime::messaging_hook_slots::js_message_channel_constructor_call_error"
         },
         "captures": [
           {
@@ -776,7 +776,7 @@
             "value": 69
           }
         ],
-        "info_symbol": "perry_realm_info_f72a5b9223887ae19c99",
+        "info_symbol": "perry_realm_info_2ab3060eaa612bd02337",
         "births": [
           "Function.prototype",
           "MessageChannel.prototype"
@@ -860,17 +860,17 @@
         },
         "prototype": "Function.prototype",
         "length": 0,
-        "body": "crate::messaging::js_message_port_constructor_call_error",
+        "body": "crate::messaging_hook_slots::js_message_port_constructor_call_error",
         "construct": "crate::object::js_new_function_construct",
         "function_info": {
-          "params": 0,
-          "rest_fixed": 0,
+          "declared": 0,
           "flags": 2048,
           "length": 0,
-          "declared": 0,
+          "native_method": false,
+          "params": 0,
           "plain_params": 0,
-          "source_symbol": "source:perry_runtime::messaging::js_message_port_constructor_call_error",
-          "native_method": false
+          "rest_fixed": 0,
+          "source_symbol": "source:perry_runtime::messaging_hook_slots::js_message_port_constructor_call_error"
         },
         "captures": [
           {
@@ -878,7 +878,7 @@
             "value": 70
           }
         ],
-        "info_symbol": "perry_realm_info_ea2ab05997379e57bbd4",
+        "info_symbol": "perry_realm_info_860deead8e76d4570d18",
         "births": [
           "Function.prototype",
           "MessagePort.prototype"

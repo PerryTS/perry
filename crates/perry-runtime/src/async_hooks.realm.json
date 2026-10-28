@@ -37,19 +37,19 @@
         },
         "prototype": "Function.prototype",
         "length": 1,
-        "body": "crate::async_hooks::js_async_local_storage_static_bind_method",
+        "body": "crate::async_hook_slots::js_async_local_storage_static_bind_method",
         "function_info": {
-          "params": 2,
-          "rest_fixed": 1,
+          "declared": 0,
           "flags": 1,
           "length": 0,
-          "declared": 0,
+          "native_method": false,
+          "params": 2,
           "plain_params": 0,
-          "source_symbol": "source:perry_runtime::async_hooks::js_async_local_storage_static_bind_method",
-          "native_method": false
+          "rest_fixed": 1,
+          "source_symbol": "source:perry_runtime::async_hook_slots::js_async_local_storage_static_bind_method"
         },
         "captures": [],
-        "info_symbol": "perry_realm_info_a4499e3b94efbc615b2f",
+        "info_symbol": "perry_realm_info_5f8c650478b8e56fb592",
         "births": [
           "Function.prototype"
         ]
@@ -89,19 +89,19 @@
         },
         "prototype": "Function.prototype",
         "length": 3,
-        "body": "crate::async_hooks::js_async_resource_static_bind_method",
+        "body": "crate::async_hook_slots::js_async_resource_static_bind_method",
         "function_info": {
-          "params": 4,
-          "rest_fixed": 3,
+          "declared": 0,
           "flags": 1,
           "length": 0,
-          "declared": 0,
+          "native_method": false,
+          "params": 4,
           "plain_params": 0,
-          "source_symbol": "source:perry_runtime::async_hooks::js_async_resource_static_bind_method",
-          "native_method": false
+          "rest_fixed": 3,
+          "source_symbol": "source:perry_runtime::async_hook_slots::js_async_resource_static_bind_method"
         },
         "captures": [],
-        "info_symbol": "perry_realm_info_9998e65249325c668b1c",
+        "info_symbol": "perry_realm_info_ad6570d62d19951237c7",
         "births": [
           "Function.prototype"
         ]
