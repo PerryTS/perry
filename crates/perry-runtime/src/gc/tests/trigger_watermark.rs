@@ -193,3 +193,35 @@ fn a_watermark_the_ladder_disagrees_with_trips_the_verifier() {
     publish_trigger_watermark(TriggerWatermark::for_test(usize::MAX, usize::MAX));
     gc_check_trigger();
 }
+
+/// Fixed young-leaf bytes reduce the small-allocation headroom even without
+/// another leaf birth to invalidate the cached trigger answer.
+#[test]
+fn small_allocation_crosses_the_leaf_window_before_the_copying_cap() {
+    let _isolation = GcTestIsolationGuard::new();
+    let _pacing = force_moving_gc_pacing();
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let inline = crate::arena::js_inline_arena_state();
+    let leaf = crate::arena::arena_alloc_gc(LARGE_OBJECT_THRESHOLD_BYTES + 8, 8, GC_TYPE_STRING);
+    std::hint::black_box(leaf);
+    let leaves = crate::arena::young_large_in_use_bytes();
+    assert!(leaves > 0, "fixture must exercise dedicated young ownership");
+    assert_eq!(crate::arena::copying_active_survivor_in_use_bytes(), 0);
+    let small = crate::arena::copying_from_space_in_use_bytes();
+    let cap = small + leaves + 4096;
+    let _cap = ScavengeNurseryCapTestGuard::due_at_bytes(cap);
+    let sealed = small - unsafe { (*inline).offset };
+    let (_, limit) = publish();
+    assert_eq!(limit, cap - leaves - sealed);
+    let before = trigger_watermark_fast_path_hits();
+    while crate::arena::copying_from_space_in_use_bytes() + leaves < cap {
+        assert!(nothing_due());
+        gc_check_trigger(); // The existing verifier checks the full ladder too.
+        crate::arena::arena_alloc_gc(64, 8, GC_TYPE_STRING);
+    }
+    assert!(trigger_watermark_fast_path_hits() > before);
+    assert!(crate::arena::copying_from_space_in_use_bytes() < cap);
+    assert_eq!(crate::arena::young_large_in_use_bytes(), leaves);
+    assert!(!nothing_due(), "the residual window must reach the full ladder");
+    assert_eq!(gc_budgeted_due_trigger(), Some(BudgetedGcTrigger::YoungScavengeCap));
+}

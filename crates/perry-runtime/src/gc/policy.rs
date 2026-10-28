@@ -166,8 +166,12 @@ fn young_scavenge_cap_probe(old_reclaimable: impl FnOnce() -> usize) -> YoungSca
     } else {
         cap.min(super::tenuring::object_census_seed_point_bytes())
     };
+    let (leaf_due, leaf_small_limit) = leaf_memory_due_at_cap(cap, from_space_in_use);
+    // Growing the inline small allocation can cross the leaf window before
+    // the copying cap. Publish the same residual bound to the fast shortcut.
+    let limit = limit.min(leaf_small_limit);
     YoungScavengeCapProbe {
-        due: from_space_in_use >= cap || leaf_memory_due_at_cap(cap, from_space_in_use),
+        due: from_space_in_use >= cap || leaf_due,
         reading: Some(super::trigger_watermark::YoungArmReading {
             from_space_in_use,
             limit,
@@ -5378,9 +5382,15 @@ pub(crate) fn byte_store_test_external_live_bytes() -> usize {
     external_side_live_bytes()
 }
 
-fn leaf_memory_due_at_cap(cap: usize, small_bytes: usize) -> bool {
+fn leaf_memory_due_at_cap(cap: usize, small_bytes: usize) -> (bool, usize) {
+    let leaf_bytes = crate::arena::young_large_in_use_bytes();
+    if leaf_bytes == 0 {
+        return (false, usize::MAX);
+    }
     let window = super::tenuring::eden_allocation_window_bytes(
         cap, crate::arena::copying_active_survivor_in_use_bytes());
-    let leaf_bytes = crate::arena::young_large_in_use_bytes();
-    leaf_bytes > 0 && small_bytes.saturating_add(leaf_bytes) >= window
+    (
+        small_bytes.saturating_add(leaf_bytes) >= window,
+        window.saturating_sub(leaf_bytes),
+    )
 }
