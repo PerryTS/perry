@@ -51,8 +51,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b89356"
+            "kind": "bytes",
+            "value": "connection"
           },
           {
             "kind": "raw_word",
@@ -113,8 +113,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b9ea6c"
+            "kind": "bytes",
+            "value": "headers"
           },
           {
             "kind": "raw_word",
@@ -175,8 +175,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b9ebb0"
+            "kind": "bytes",
+            "value": "headersDistinct"
           },
           {
             "kind": "raw_word",
@@ -237,8 +237,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b7fbee"
+            "kind": "bytes",
+            "value": "signal"
           },
           {
             "kind": "raw_word",
@@ -299,8 +299,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x29b67e8"
+            "kind": "bytes",
+            "value": "trailers"
           },
           {
             "kind": "raw_word",
@@ -361,8 +361,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x29b33c0"
+            "kind": "bytes",
+            "value": "trailersDistinct"
           },
           {
             "kind": "raw_word",
@@ -423,8 +423,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b8ff6f"
+            "kind": "bytes",
+            "value": "closed"
           },
           {
             "kind": "raw_word",
@@ -485,8 +485,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b89356"
+            "kind": "bytes",
+            "value": "connection"
           },
           {
             "kind": "raw_word",
@@ -547,8 +547,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b7ff9f"
+            "kind": "bytes",
+            "value": "errored"
           },
           {
             "kind": "raw_word",
@@ -609,8 +609,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b9eb21"
+            "kind": "bytes",
+            "value": "headersSent"
           },
           {
             "kind": "raw_word",
@@ -671,8 +671,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b8a80b"
+            "kind": "bytes",
+            "value": "socket"
           },
           {
             "kind": "raw_word",
@@ -733,8 +733,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b90b8d"
+            "kind": "bytes",
+            "value": "writableCorked"
           },
           {
             "kind": "raw_word",
@@ -795,8 +795,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b90b6f"
+            "kind": "bytes",
+            "value": "writableEnded"
           },
           {
             "kind": "raw_word",
@@ -857,8 +857,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x29b32f0"
+            "kind": "bytes",
+            "value": "writableFinished"
           },
           {
             "kind": "raw_word",
@@ -919,8 +919,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b908b7"
+            "kind": "bytes",
+            "value": "writableHighWaterMark"
           },
           {
             "kind": "raw_word",
@@ -981,8 +981,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b90b9b"
+            "kind": "bytes",
+            "value": "writableLength"
           },
           {
             "kind": "raw_word",
@@ -1043,8 +1043,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b90b7c"
+            "kind": "bytes",
+            "value": "writableNeedDrain"
           },
           {
             "kind": "raw_word",
@@ -1105,8 +1105,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b908a5"
+            "kind": "bytes",
+            "value": "writableObjectMode"
           },
           {
             "kind": "raw_word",
@@ -1169,8 +1169,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b89356"
+            "kind": "bytes",
+            "value": "connection"
           },
           {
             "kind": "raw_word",
@@ -1231,8 +1231,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b9ea6c"
+            "kind": "bytes",
+            "value": "headers"
           },
           {
             "kind": "raw_word",
@@ -1293,8 +1293,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b9ebb0"
+            "kind": "bytes",
+            "value": "headersDistinct"
           },
           {
             "kind": "raw_word",
@@ -1355,8 +1355,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x29b67e8"
+            "kind": "bytes",
+            "value": "trailers"
           },
           {
             "kind": "raw_word",
@@ -1417,8 +1417,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x29b33c0"
+            "kind": "bytes",
+            "value": "trailersDistinct"
           },
           {
             "kind": "raw_word",
@@ -1479,8 +1479,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b89356"
+            "kind": "bytes",
+            "value": "connection"
           },
           {
             "kind": "raw_word",
@@ -1541,8 +1541,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b8a80b"
+            "kind": "bytes",
+            "value": "socket"
           },
           {
             "kind": "raw_word",
@@ -1605,8 +1605,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b9ebce"
+            "kind": "bytes",
+            "value": "_addHeaderLine"
           },
           {
             "kind": "raw_word",
@@ -1667,8 +1667,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b9ebdc"
+            "kind": "bytes",
+            "value": "_addHeaderLineDistinct"
           },
           {
             "kind": "raw_word",
@@ -1729,8 +1729,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b9ebbf"
+            "kind": "bytes",
+            "value": "_addHeaderLines"
           },
           {
             "kind": "raw_word",
@@ -1791,8 +1791,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x29b6ea0"
+            "kind": "bytes",
+            "value": "_destroy"
           },
           {
             "kind": "raw_word",
@@ -1853,8 +1853,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b9ec07"
+            "kind": "bytes",
+            "value": "_dump"
           },
           {
             "kind": "raw_word",
@@ -1915,8 +1915,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b9ebf2"
+            "kind": "bytes",
+            "value": "_dumpAndCloseReadable"
           },
           {
             "kind": "raw_word",
@@ -1977,8 +1977,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b801dd"
+            "kind": "bytes",
+            "value": "_read"
           },
           {
             "kind": "raw_word",
@@ -2039,8 +2039,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b884aa"
+            "kind": "bytes",
+            "value": "setTimeout"
           },
           {
             "kind": "raw_word",
@@ -2101,8 +2101,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b9ec0c"
+            "kind": "bytes",
+            "value": "kAttachAbortSignal"
           },
           {
             "kind": "raw_word",
@@ -2163,8 +2163,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b9ec1e"
+            "kind": "bytes",
+            "value": "kDetachAbortSignal"
           },
           {
             "kind": "raw_word",
@@ -2225,8 +2225,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b9eb37"
+            "kind": "bytes",
+            "value": "_finish"
           },
           {
             "kind": "raw_word",
@@ -2287,8 +2287,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b801d0"
+            "kind": "bytes",
+            "value": "_flush"
           },
           {
             "kind": "raw_word",
@@ -2349,8 +2349,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b9eb3e"
+            "kind": "bytes",
+            "value": "_flushOutput"
           },
           {
             "kind": "raw_word",
@@ -2411,8 +2411,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b9eb12"
+            "kind": "bytes",
+            "value": "_implicitHeader"
           },
           {
             "kind": "raw_word",
@@ -2473,8 +2473,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b9ea73"
+            "kind": "bytes",
+            "value": "_isLenientHeaderValidation"
           },
           {
             "kind": "raw_word",
@@ -2535,8 +2535,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b9ea8d"
+            "kind": "bytes",
+            "value": "_renderHeaders"
           },
           {
             "kind": "raw_word",
@@ -2597,8 +2597,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b9ea9b"
+            "kind": "bytes",
+            "value": "_send"
           },
           {
             "kind": "raw_word",
@@ -2659,8 +2659,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b9eaa9"
+            "kind": "bytes",
+            "value": "_storeHeader"
           },
           {
             "kind": "raw_word",
@@ -2721,8 +2721,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b9eaa0"
+            "kind": "bytes",
+            "value": "_writeRaw"
           },
           {
             "kind": "raw_word",
@@ -2783,8 +2783,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b9eb2c"
+            "kind": "bytes",
+            "value": "addTrailers"
           },
           {
             "kind": "raw_word",
@@ -2845,8 +2845,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b9eabf"
+            "kind": "bytes",
+            "value": "appendHeader"
           },
           {
             "kind": "raw_word",
@@ -2907,8 +2907,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2a15018"
+            "kind": "bytes",
+            "value": "cork"
           },
           {
             "kind": "raw_word",
@@ -2969,8 +2969,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b84b8c"
+            "kind": "bytes",
+            "value": "destroy"
           },
           {
             "kind": "raw_word",
@@ -3031,8 +3031,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b9eb4a"
+            "kind": "bytes",
+            "value": "flushHeaders"
           },
           {
             "kind": "raw_word",
@@ -3093,8 +3093,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b9eacb"
+            "kind": "bytes",
+            "value": "getHeader"
           },
           {
             "kind": "raw_word",
@@ -3155,8 +3155,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b9ead4"
+            "kind": "bytes",
+            "value": "getHeaderNames"
           },
           {
             "kind": "raw_word",
@@ -3217,8 +3217,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b9eaf3"
+            "kind": "bytes",
+            "value": "getHeaders"
           },
           {
             "kind": "raw_word",
@@ -3279,8 +3279,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b9eae2"
+            "kind": "bytes",
+            "value": "getRawHeaderNames"
           },
           {
             "kind": "raw_word",
@@ -3341,8 +3341,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b9eafd"
+            "kind": "bytes",
+            "value": "hasHeader"
           },
           {
             "kind": "raw_word",
@@ -3403,8 +3403,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2a15014"
+            "kind": "bytes",
+            "value": "pipe"
           },
           {
             "kind": "raw_word",
@@ -3465,8 +3465,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b9eb06"
+            "kind": "bytes",
+            "value": "removeHeader"
           },
           {
             "kind": "raw_word",
@@ -3527,8 +3527,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b9eab5"
+            "kind": "bytes",
+            "value": "setHeaders"
           },
           {
             "kind": "raw_word",
@@ -3589,8 +3589,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b884aa"
+            "kind": "bytes",
+            "value": "setTimeout"
           },
           {
             "kind": "raw_word",
@@ -3651,8 +3651,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b90b49"
+            "kind": "bytes",
+            "value": "uncork"
           },
           {
             "kind": "raw_word",
@@ -3713,8 +3713,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b84b8c"
+            "kind": "bytes",
+            "value": "destroy"
           },
           {
             "kind": "raw_word",
@@ -3775,8 +3775,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b9eb37"
+            "kind": "bytes",
+            "value": "_finish"
           },
           {
             "kind": "raw_word",
@@ -3837,8 +3837,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b9eb12"
+            "kind": "bytes",
+            "value": "_implicitHeader"
           },
           {
             "kind": "raw_word",
@@ -3899,8 +3899,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b9eb6d"
+            "kind": "bytes",
+            "value": "assignSocket"
           },
           {
             "kind": "raw_word",
@@ -3961,8 +3961,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b9eb79"
+            "kind": "bytes",
+            "value": "detachSocket"
           },
           {
             "kind": "raw_word",
@@ -4023,8 +4023,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b9eb85"
+            "kind": "bytes",
+            "value": "writeContinue"
           },
           {
             "kind": "raw_word",
@@ -4085,8 +4085,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b9eba1"
+            "kind": "bytes",
+            "value": "writeEarlyHints"
           },
           {
             "kind": "raw_word",
@@ -4147,8 +4147,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x29b4fe0"
+            "kind": "bytes",
+            "value": "writeInformation"
           },
           {
             "kind": "raw_word",
@@ -4209,8 +4209,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b9eb92"
+            "kind": "bytes",
+            "value": "writeProcessing"
           },
           {
             "kind": "raw_word",

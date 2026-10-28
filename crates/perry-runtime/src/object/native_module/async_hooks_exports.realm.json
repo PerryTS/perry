@@ -51,8 +51,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b84c26"
+            "kind": "bytes",
+            "value": "disable"
           },
           {
             "kind": "raw_word",
@@ -113,8 +113,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2ba9b04"
+            "kind": "bytes",
+            "value": "enterWith"
           },
           {
             "kind": "raw_word",
@@ -175,8 +175,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2a1517c"
+            "kind": "bytes",
+            "value": "exit"
           },
           {
             "kind": "raw_word",
@@ -237,8 +237,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x29b6bc0"
+            "kind": "bytes",
+            "value": "getStore"
           },
           {
             "kind": "raw_word",
@@ -299,8 +299,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2b88436"
+            "kind": "bytes",
+            "value": "run"
           },
           {
             "kind": "raw_word",
