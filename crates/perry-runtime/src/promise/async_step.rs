@@ -463,6 +463,9 @@ fn then_backpatch_result(
 
 #[no_mangle]
 pub extern "C" fn js_async_step_chain(value: f64, step_closure: ClosurePtr) -> *mut Promise {
+    if let Some(next) = super::settled_step::try_enqueue(value, step_closure) {
+        return next;
+    }
     // PR #1004 followup: if `value` is a JS_HANDLE_TAG handle to a V8
     // Promise (the common case for `await <V8-fallback-call>(...)` —
     // e.g. `await new SignJWT(...).sign(key)` in jose), convert it to
@@ -651,6 +654,18 @@ pub extern "C" fn js_async_step_chain(value: f64, step_closure: ClosurePtr) -> *
             || js_promise_resolved(value),
         );
     };
+
+    // Native snapshot/queue allocations cannot collect. Keep the ordinary
+    // collecting path below for async_hooks resource initialization.
+    if !async_hooks_active {
+        return super::settled_step::enqueue(
+            rooted_step(),
+            queued_value,
+            next,
+            is_error,
+            trap.box_activation,
+        );
+    }
 
     // #7497: `capture_context()` allocates, and `next` / `queued_value` are the
     // OTHER two GC values this task carries, so root them across it too and take
