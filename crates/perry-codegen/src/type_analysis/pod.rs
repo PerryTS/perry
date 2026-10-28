@@ -543,6 +543,14 @@ pub(crate) fn numeric_proof_is_declared_only(ctx: &FnCtx<'_>, expr: &Expr) -> bo
                 return false;
             }
 
+            // The whole-program field contract already licenses a canonical
+            // raw-f64 load. Carry that same proof through arithmetic instead
+            // of reclassifying the value from its erased field annotation.
+            // Guarded/absent/non-F64 fields are refused by proves_raw_f64.
+            if crate::expr::wpfacts_access::proves_raw_f64(ctx, expr) {
+                return false;
+            }
+
             // R admits this exact fresh bare read only after the shape's F64
             // representation check; there is no boxed fallback in F.
             if crate::stmt::region_loop::is_f64_read(ctx, expr) {

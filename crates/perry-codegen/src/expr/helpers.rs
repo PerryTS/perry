@@ -4,7 +4,7 @@
 
 use anyhow::Result;
 use perry_hir::types::Type as HirType;
-use perry_hir::{BinaryOp, Expr, UnaryOp};
+use perry_hir::{Expr, UnaryOp};
 
 use super::{lower_expr, FnCtx};
 use crate::block::LlBlock;
@@ -70,11 +70,12 @@ fn expr_produces_numeric_bits_by_construction(ctx: &FnCtx<'_>, expr: &Expr) -> b
             }
             UnaryOp::Not => false,
         },
-        Expr::Binary { op, left, right } => {
-            !matches!(op, BinaryOp::Add)
-                && expr_produces_numeric_bits_by_construction(ctx, left)
-                && expr_produces_numeric_bits_by_construction(ctx, right)
-        }
+        // Arithmetic has already applied its Number/BigInt/coercion rules.
+        // Consume the canonical-result proof, including closed raw-field
+        // contracts, rather than requiring both syntax leaves to be literals
+        // or counters. Add still needs both operands proven Number; dynamic
+        // concatenation and BigInt results remain pointer-bearing.
+        Expr::Binary { .. } => crate::type_analysis::expr_produces_canonical_raw_f64(ctx, expr),
         Expr::Conditional {
             then_expr,
             else_expr,
