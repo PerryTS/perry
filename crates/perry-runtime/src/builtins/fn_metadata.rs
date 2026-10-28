@@ -159,23 +159,38 @@ pub(super) fn registered_name_string(func_ptr: usize) -> Option<String> {
     with_registered_name(func_ptr, str::to_owned)
 }
 
+/// Decode names from their actual bytes. ASCII itself proves UTF-8; all
+/// other inputs retain the checked decoder, including invalid FFI metadata.
+#[inline(always)]
+fn registered_utf8(bytes: &[u8]) -> Option<&str> {
+    if bytes.is_ascii() {
+        // SAFETY: every byte is in 0..=0x7f, so the complete slice is UTF-8.
+        Some(unsafe { std::str::from_utf8_unchecked(bytes) })
+    } else {
+        std::str::from_utf8(bytes).ok()
+    }
+}
+
 /// Read the canonical metadata under its owner lock. Presence checks need the
 /// same UTF-8/precedence rules as reflection, but do not need an owned String.
 #[inline(always)]
 fn with_registered_name<T>(func_ptr: usize, read: impl FnOnce(&str) -> T) -> Option<T> {
     if let Ok(overrides) = function_name_overrides().lock() {
-        if let Some(name) = overrides
-            .get(&func_ptr)
-            .and_then(|bytes| std::str::from_utf8(bytes).ok())
-        {
-            return Some(read(name));
+        if let Some(bytes) = overrides.get(&func_ptr) {
+            if let Some(name) = registered_utf8(bytes) {
+                return Some(read(name));
+            }
         }
     }
-    function_name_registry().lock().ok().and_then(|map| {
-        let name = std::str::from_utf8(map.get(&func_ptr).copied()?).ok()?;
-        Some(read(name))
-    })
+    let image = function_name_registry().lock().ok()?;
+    let bytes = image.get(&func_ptr).copied()?;
+    let name = registered_utf8(bytes)?;
+    Some(read(name))
 }
+
+#[cfg(test)]
+#[path = "fn_metadata_utf8_tests.rs"]
+mod utf8_read_tests;
 
 /// Register `func_ptr` as the compiled address of a JS function called
 /// `<name>` (`name_len` bytes, not NUL-terminated). The registry COPIES the
