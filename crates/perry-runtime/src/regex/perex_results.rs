@@ -324,11 +324,15 @@ mod projection_tests {
             make_string(""),
         ));
         let input = scope.root_string_ptr(make_string("abcdefg"));
+        let receiver = re.with_mut_ptr::<crate::regex::RegExpHeader, _>(|p| {
+            crate::value::js_nanbox_pointer(p as i64)
+        });
+        let receiver = scope.root_nanbox_f64(receiver);
         let mut polls = 0;
-        let found = crate::regex::perex_api::execute_output(
-            re.with_mut_ptr(|p| p),
-            input.with_const_ptr(|p| p),
-            crate::regex::perex_api::ExecOutput::Capture(7),
+        let found = crate::regex::perex_api::execute_capture_rooted(
+            &receiver,
+            &input,
+            7,
             &mut Budget::new(crate::regex::perex_api::WORK),
             &crate::regex::perex_memory::MemoryBudget::new(crate::regex::perex_api::SCRATCH_BYTES),
             &mut || {
