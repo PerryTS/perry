@@ -85,7 +85,7 @@
       "path": "crates/perry-runtime/src/string/concat.rs",
       "function": "append_chain_all_heap_strings",
       "body_sha256": "f0495c8c29ff12b765cce3e18cf4dab3bb7a25fdf2afc59d3dcc6ac8ead1d137",
-      "claim": "Every non-heap operand returns through js_string_concat_chain before any header dereference; that full coercion path handles inline strings.",
+      "claim": "Every non-heap operand returns through js_string_concat_chain before any header dereference; that full coercion path handles inline strings. Re-audited #13411: the numeric formatting helper extraction does not change these admission checks or the full-coercion chain fallback.",
       "rule": "mask-cast",
       "support_files": [
         "crates/perry-runtime/src/string/concat.rs"
@@ -95,7 +95,7 @@
       "path": "crates/perry-runtime/src/string/concat.rs",
       "function": "append_chain_all_heap_strings",
       "body_sha256": "f0495c8c29ff12b765cce3e18cf4dab3bb7a25fdf2afc59d3dcc6ac8ead1d137",
-      "claim": "Every non-heap operand returns through js_string_concat_chain before any header dereference; that full coercion path handles inline strings.",
+      "claim": "Every non-heap operand returns through js_string_concat_chain before any header dereference; that full coercion path handles inline strings. Re-audited #13411: the numeric formatting helper extraction does not change these admission checks or the full-coercion chain fallback.",
       "rule": "heap-tag-only",
       "support_files": [
         "crates/perry-runtime/src/string/concat.rs"
@@ -230,7 +230,7 @@
   ],
   "support_files": {
     "crates/perry-runtime/src/node_stream_event_emitter.rs": "8d6a9d72d9cf1111db024b271c51e32a7f937942d7d1ac75da12a69b803d2e92",
-    "crates/perry-runtime/src/string/concat.rs": "aff51a40e1cf03321ddec88547a7baf0666391598b7289fa8d662f0c19596ed0",
+    "crates/perry-runtime/src/string/concat.rs": "f42fde2d1033fa7854d7972ced6865c3502b0f497b28de70b1d6a4195e2f2d74",
     "crates/perry-runtime/src/object/builtin_proto_entries.rs": "7a042517091eb0dd104d97acb44dbb8dbcb8c97c1051a9ab8af3359f7db28626",
     "crates/perry-runtime/src/object/property_ops/put_value.rs": "ae738e2022442a63e7057c81623798e4d081983c4c3bc9085439d8133643d477",
     "crates/perry-runtime/src/array/join.rs": "2d787ac0b51390f859464b0b88a133e573980c082e2f9d648d041ee11614e2be"

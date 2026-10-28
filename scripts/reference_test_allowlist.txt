@@ -1,7 +1,7 @@
 # path | owning function | exact raw-test count | why a header-only (POINTER_TAG) test is right here
 # Gate: scripts/reference_test_inventory.py. A JavaScript-semantic branch uses JSValue::is_reference()
 # (heap object OR native handle, #12540); is_pointer() only where the next step reads a GC header.
-crates/perry-runtime/src/builtins/numbers.rs | js_number_coerce | 1 | Heap-object arm (symbol brand, Date cell, array join, typed array); HANDLE_TAG took the ToPrimitive arm just above it.
+crates/perry-runtime/src/builtins/numbers.rs | number_coerce_non_plain | 1 | Heap-object arm (symbol brand, Date cell, array join, typed array); HANDLE_TAG took the ToPrimitive arm just above it.
 crates/perry-runtime/src/value/addr_class.rs | object_ref_addr | 1 | Header address of a heap object reference.
 crates/perry-runtime/src/value/dyn_index.rs | js_dyn_index_get | 3 | Heap-only fast paths (string-key IC, typed-array index, raw-word gate); handles take the generic reference path.
 crates/perry-runtime/src/value/dyn_index.rs | js_dyn_index_set_strict | 8 | After the handle arm returns through [[Set]], only heap and raw allocator-owned receivers remain; selects their header-safe form.

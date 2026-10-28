@@ -1622,7 +1622,9 @@ jobs:
             # changed suites run in e2e-scoped on PRs, and the complete set
             # runs in cargo-test-perry on the full tier.
             if printf '%s\n' "$scope" | grep -qx 'perry-runtime'; then
-              RUST_TEST_THREADS=1 python3 scripts/runtime_test_batches.py
+              # Match the PR lane: Blaze cannot unwind through the naked ABI
+              # trampoline. Keep the full unit/integration/doc test inventory.
+              MBX_BLAZE=0 RUST_TEST_THREADS=1 python3 scripts/runtime_test_batches.py
             fi
             # `cargo test` only builds lib/bin/test targets — NOT the `staticlib`
             # crate-type — so libperry_runtime.a / libperry_stdlib.a are never

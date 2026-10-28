@@ -292,18 +292,12 @@ pub(crate) fn lower_module_decl(
                                     (format!("inspector.{imported}"), None)
                                 } else if matches!(
                                     source.as_str(),
-                                    "fs" | "dns" | "stream" | "readline" | "timers"
+                                    "dns" | "stream" | "readline" | "timers"
                                 ) && imported == "promises"
                                 {
-                                    // `import { promises } from "node:fs"` binds the
-                                    // promises SUBMODULE namespace — route it exactly
-                                    // like `import * as x from "node:fs/promises"`.
-                                    // The generic arm below made it a native METHOD
-                                    // (`fs.promises`), so `promises.realpath(p)`
-                                    // dispatched the callback-API `fs.realpath` and
-                                    // resolved `undefined` (the compiled CLI's file cache
-                                    // normalized every path to `undefined` and every
-                                    // later fs call threw).
+                                    // Other promises exports retain their submodule
+                                    // dispatch. FS uses the parent export cell so
+                                    // its named value is the CommonJS object.
                                     (format!("{source}/promises"), None)
                                 } else {
                                     (source.clone(), Some(imported.clone()))

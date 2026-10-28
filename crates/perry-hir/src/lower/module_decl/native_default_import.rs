@@ -50,6 +50,10 @@ pub(crate) fn node_submodule_default_export_key(module_name: &str) -> Option<&'s
 }
 
 #[cfg(test)]
+#[path = "fs_promises_import_tests.rs"]
+mod fs_promises_import_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

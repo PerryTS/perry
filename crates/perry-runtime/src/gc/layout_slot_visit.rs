@@ -106,6 +106,24 @@ pub(super) unsafe fn visit_gc_layout_slot_descriptors_inline<F>(
         }
         return;
     }
+    if (*header).obj_type == GC_TYPE_OBJECT
+        && (*header).gc_flags & GC_FLAG_FORWARDED == 0
+        && gc_type_layout_slot_kind(GC_TYPE_OBJECT) == GcLayoutSlotKind::ObjectFields
+    {
+        visit_object_layout_slots(header, visit);
+        return;
+    }
+    visit_gc_layout_slot_descriptors_generic(header, visit);
+}
+
+/// Reference enumeration also used by the differential descriptor tests.
+#[inline(always)]
+pub(super) unsafe fn visit_gc_layout_slot_descriptors_generic<F>(
+    header: *mut GcHeader,
+    visit: &mut F,
+) where
+    F: FnMut(GcMutableSlotDescriptor) + ?Sized,
+{
     let mut child_slots = gc_child_slots(header);
     // #8112: the authoritative ordered-keys edge, taken from the shape record
     // `gc_child_slots` already resolved for this receiver. It is the boxed
@@ -717,5 +735,110 @@ pub(crate) mod inline_mask_sabotage {
             let prior = self.0;
             PERTURB.with(|p| p.set(prior));
         }
+    }
+}
+
+/// ObjectFields already proves the exact carrier. Enumerate its descriptor
+/// directly instead of constructing a general child iterator and unpacking
+/// it again at every prefix/payload boundary. Slot custody, ordering, full
+/// trace notes, pointer widths and layout telemetry are the generic walk's.
+#[inline(always)]
+unsafe fn visit_object_layout_slots<F>(header: *mut GcHeader, visit: &mut F)
+where
+    F: FnMut(GcMutableSlotDescriptor) + ?Sized,
+{
+    let obj = (header as *mut u8).add(GC_HEADER_SIZE) as *mut crate::object::ObjectHeader;
+    let shape = crate::object::shapes::object_shape_record(obj);
+    let Some(payload) = crate::object::gc_field_slot_range(obj, shape) else {
+        return;
+    };
+    let meta = crate::object::gc_object_meta_slot(obj as usize);
+    let arguments = crate::object::arguments_mapping_slot(obj);
+    let selection = heap_payload_slot_selection_from(header, payload, shape);
+    let full = full_trace_active();
+    let prototype = crate::object::gc_shape_prototype_edge_slot(shape, full);
+    if full {
+        crate::object::shapes::note_full_trace_carrier(shape);
+    }
+    if !crate::object::shapes::old_generation_carrier_already_noted(shape)
+        && !crate::arena::pointer_in_nursery(obj as usize)
+    {
+        crate::object::shapes::note_old_generation_carrier(shape);
+    }
+    if let Some(slot) = crate::object::gc_shape_keys_edge_slot(shape) {
+        visit(
+            GcMutableSlotDescriptor::Slot(GcMutableSlot::runtime_root(slot))
+                .with_layout(HeapChildSlotReadKind::Prefix),
+        );
+    }
+    if let Some(slot) = prototype {
+        visit(
+            GcMutableSlotDescriptor::Slot(GcMutableSlot::runtime_root(slot))
+                .with_layout(HeapChildSlotReadKind::Prefix),
+        );
+    }
+    if let Some(slot) = crate::object::shapes::evaluation_holder_slot(shape, full) {
+        visit(
+            GcMutableSlotDescriptor::Slot(GcMutableSlot::runtime_root(slot))
+                .with_layout(HeapChildSlotReadKind::Prefix),
+        );
+    }
+    if let Some(slot) = meta {
+        visit(pointer_slot(slot.cast()).with_layout(HeapChildSlotReadKind::Prefix));
+    }
+    if let Some(slot) = arguments {
+        visit(fixed_slot(slot).with_layout(HeapChildSlotReadKind::Prefix));
+    }
+    match selection {
+        HeapPayloadSlotSelection::Empty => {}
+        HeapPayloadSlotSelection::PointerFree {
+            raw_numeric_object_slots,
+            ..
+        } => {
+            record_layout_pointer_free_range_skipped(payload.slot_count());
+            if raw_numeric_object_slots != 0 {
+                record_layout_raw_numeric_object_field_range_skipped(raw_numeric_object_slots);
+            }
+            visit(GcMutableSlotDescriptor::PointerFreeRange(payload));
+        }
+        HeapPayloadSlotSelection::Masked {
+            mask,
+            raw_numeric_object_slots,
+            ..
+        } => {
+            if raw_numeric_object_slots != 0 {
+                record_layout_raw_numeric_object_field_range_skipped(raw_numeric_object_slots);
+            }
+            match mask {
+                LayoutSlotMask::Inline(bits) => {
+                    let count = payload.slot_count().min(64);
+                    let limit = if count == 64 {
+                        u64::MAX
+                    } else {
+                        (1u64 << count) - 1
+                    };
+                    let word = bits & limit;
+                    #[cfg(test)]
+                    let word = inline_mask_sabotage::perturb(word);
+                    let mut word = word;
+                    while word != 0 {
+                        let index = word.trailing_zeros() as usize;
+                        word &= word - 1;
+                        visit(GcMutableSlotDescriptor::Slot(GcMutableSlot::new(
+                            payload.slot(index),
+                            Some(HeapChildSlotReadKind::Masked),
+                        )));
+                    }
+                }
+                LayoutSlotMask::AllPointers => visit(GcMutableSlotDescriptor::Range {
+                    range: payload,
+                    layout_kind: Some(HeapChildSlotReadKind::Masked),
+                }),
+            }
+        }
+        HeapPayloadSlotSelection::All { .. } => visit(GcMutableSlotDescriptor::Range {
+            range: payload,
+            layout_kind: Some(HeapChildSlotReadKind::Unknown),
+        }),
     }
 }
