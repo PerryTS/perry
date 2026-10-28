@@ -88,28 +88,31 @@ fn named_builtin_cell_references_its_export_without_a_module_installer() {
 }
 
 #[test]
-fn named_fs_promises_installs_dependency_before_snapshot() {
+fn named_fs_exports_initialize_only_the_selected_value() {
     for module in ["fs", "node:fs"] {
         for property in ["promises", "readFileSync"] {
             let ir = compile_lookup(module, property);
-            let parent = ir
-                .find("call void @js_nm_install_fs(")
-                .expect("fs installer");
-            let lookup = ir
-                .find("call double @js_native_module_named_esm_export_value(")
-                .expect("named export lookup");
-            assert!(parent < lookup, "parent installed before snapshot: {ir}");
+            assert!(
+                !ir.contains("call void @js_nm_install_fs("),
+                "parent module retained: {ir}"
+            );
             let dependency = ir.find("call void @js_node_submod_install_fs_promises(");
+            let lookup = ir.find("call double @js_native_module_named_esm_export_value(");
             if property == "promises" {
-                let dependency = dependency.expect("promises dependency installer");
                 assert!(
-                    dependency < lookup,
-                    "dependency installed before snapshot: {ir}"
+                    dependency.expect("child namespace installer")
+                        < lookup.expect("named child snapshot"),
+                    "child initialized before snapshot: {ir}"
                 );
             } else {
                 assert!(
                     dependency.is_none(),
-                    "sync import retains no promises dependency: {ir}"
+                    "sync export retains no promises dependency: {ir}"
+                );
+                assert!(lookup.is_none(), "sync export retains no module read: {ir}");
+                assert!(
+                    ir.contains("call double @js_native_export_"),
+                    "missing export declaration: {ir}"
                 );
             }
             assert!(!ir.contains("call void @js_nm_install_all("));

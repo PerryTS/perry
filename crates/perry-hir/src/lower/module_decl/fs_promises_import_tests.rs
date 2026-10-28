@@ -72,14 +72,15 @@ fn parent_export_snapshot_is_initialized_before_user_mutation() {
 }
 
 #[test]
-fn other_native_promises_keep_their_existing_submodule_routes() {
+fn other_native_promises_values_retain_the_parent_export_identity() {
     for source in ["dns", "stream", "readline"] {
         let module = lower(format!(
             "import {{ promises as child }} from {source:?}; export function value() {{ return child; }}"
         ));
         let hir = format!("{module:?}");
         assert!(
-            hir.contains(&format!("NativeModuleRef(\"{source}/promises\")")),
+            hir.contains("js_native_module_named_esm_export_value")
+                && hir.contains(&format!("String(\"{source}\"), String(\"promises\")")),
             "{hir}"
         );
     }
