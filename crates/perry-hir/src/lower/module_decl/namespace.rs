@@ -183,6 +183,7 @@ fn namespace_object(
                 let init = match outer {
                     Some(outer) if is_exported => {
                         let published = || Expr::PropertyGet {
+                            byte_end: 0,
                             object: Box::new(Expr::LocalGet(outer.object)),
                             property: name.to_string(),
                             byte_offset: 0,

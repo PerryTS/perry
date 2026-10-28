@@ -40,6 +40,12 @@ impl<'a> Gen<'a> {
     ) -> (CallId, NodeId) {
         let ret = self.tmp("callret");
         let id = self.m.calls.len() as CallId;
+        if let Some(d) = &mut self.diagnostic {
+            d.calls.insert(ret, id);
+        }
+        if let Some(d) = &mut self.m.diagnostic {
+            d.source_calls.insert(id);
+        }
         self.m.calls.push(CallSite {
             this,
             args,
@@ -418,6 +424,9 @@ impl<'a> Gen<'a> {
     pub(crate) fn expr(&mut self, fx: &Fx, e: &Expr) -> NodeId {
         let prev = std::mem::replace(&mut self.m.cur_fn, fx.f);
         let n = self.expr_inner(fx, e);
+        if self.diagnostic.is_some() {
+            self.diagnostic_expr(fx, e, n);
+        }
         self.m.cur_fn = prev;
         n
     }
@@ -695,6 +704,7 @@ impl<'a> Gen<'a> {
                 object,
                 property,
                 byte_offset,
+                ..
             } => {
                 let o = match self.ns_member(mi, object, property, false) {
                     Some(o) => o,
@@ -822,7 +832,7 @@ impl<'a> Gen<'a> {
                 let key = self.m.atom("length");
                 self.load(o, Key::Named(key))
             }
-            Expr::IndexGet { object, index }
+            Expr::IndexGet { object, index, .. }
             | Expr::Uint8ArrayGet {
                 array: object,
                 index,
@@ -944,7 +954,7 @@ impl<'a> Gen<'a> {
                         let key = self.m.atom(property);
                         self.m.cons(o, Cons::DeleteKey { key, reason: r });
                     }
-                    Expr::IndexGet { object, index } => {
+                    Expr::IndexGet { object, index, .. } => {
                         let o = self.expr(fx, object);
                         let _ = self.expr(fx, index);
                         self.m.cons(

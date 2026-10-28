@@ -67,7 +67,9 @@ fn reads(
     different: &mut bool,
 ) {
     match expr {
-        Expr::IndexGet { object, index: key } if matches!(object.as_ref(), Expr::LocalGet(l) if *l == id) => {
+        Expr::IndexGet {
+            object, index: key, ..
+        } if matches!(object.as_ref(), Expr::LocalGet(l) if *l == id) => {
             if let Some(n) = index(key) {
                 if capture.is_some_and(|previous| previous != n) {
                     *different = true;
@@ -132,6 +134,7 @@ fn block(stmts: &mut [Stmt], counts: &HashMap<LocalId, usize>) {
             continue;
         }
         let projected = Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::ExternFuncRef {
                 name: "js_regexp_exec_projected".into(),
                 param_types: vec![Type::Any; 4],

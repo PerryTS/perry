@@ -390,6 +390,7 @@ mod tests {
 
     fn call(args: Vec<Expr>) -> Stmt {
         Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::FuncRef(MATMUL)),
             args,
             type_args: Vec::new(),
@@ -456,6 +457,7 @@ mod tests {
     fn func_ref_used_as_a_value_poisons_the_function() {
         let mut init = vec![call(vec![Expr::Integer(0), Expr::Integer(4)])];
         init.push(Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::FuncRef(77)),
             args: vec![Expr::FuncRef(MATMUL)],
             type_args: Vec::new(),

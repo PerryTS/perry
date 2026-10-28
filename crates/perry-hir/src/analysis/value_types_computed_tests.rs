@@ -29,11 +29,15 @@ fn enum_image_computed_reads_use_the_existing_member_shape() {
         strict: true,
     };
     let named = Expr::IndexGet {
+        byte_offset: 0,
+        byte_end: 0,
         object: Box::new(image.clone()),
         index: Box::new(Expr::String("a".into())),
     };
     assert_eq!(infer_expr_type(&named, &env), Type::Number);
     let indexed = Expr::IndexGet {
+        byte_offset: 0,
+        byte_end: 0,
         object: Box::new(image),
         index: Box::new(Expr::LocalGet(0)),
     };

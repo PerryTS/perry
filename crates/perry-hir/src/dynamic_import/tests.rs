@@ -150,6 +150,7 @@ fn open_chunk_registry() -> Expr {
 // `new __AnonShape_…(value0, value1)` whose args are the field values in order.
 fn closed_chunk_registry() -> Expr {
     Expr::New {
+        byte_end: 0,
         class_name: "__AnonShape_deadbeef".to_string(),
         args: vec![
             Expr::String("./chunk-a.js".into()),
@@ -179,6 +180,8 @@ fn assert_resolves_both_chunks(arg: &Expr) {
 fn resolve_registry_computed_key_enumerates_all() {
     // `import(R[key])` with a runtime key — the core registry pattern.
     assert_resolves_both_chunks(&Expr::IndexGet {
+        byte_offset: 0,
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(5)),
         index: Box::new(Expr::LocalGet(99)), // not a known literal
     });
@@ -188,6 +191,7 @@ fn resolve_registry_computed_key_enumerates_all() {
 fn resolve_registry_static_property_enumerates_all() {
     // `import(R.a)` — over-approximate to the whole (relative) chunk set.
     assert_resolves_both_chunks(&Expr::PropertyGet {
+        byte_end: 0,
         byte_offset: 0,
         object: Box::new(Expr::LocalGet(5)),
         property: "a".to_string(),
@@ -198,6 +202,8 @@ fn resolve_registry_static_property_enumerates_all() {
 fn resolve_closed_shape_registry_enumerates_all() {
     // The realistic lowering: a `new __AnonShape_…(…)` closed-shape literal.
     let arg = Expr::IndexGet {
+        byte_offset: 0,
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(5)),
         index: Box::new(Expr::LocalGet(99)),
     };
@@ -223,6 +229,8 @@ fn resolve_non_relative_registry_defers() {
         ("port".to_string(), Expr::String("3000".into())),
     ]);
     let arg = Expr::IndexGet {
+        byte_offset: 0,
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(5)),
         index: Box::new(Expr::LocalGet(99)),
     };
@@ -243,6 +251,8 @@ fn resolve_circular_registry_defers_without_overflow() {
     let r5 = Expr::Object(vec![(
         "a".to_string(),
         Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(6)),
             index: Box::new(Expr::LocalGet(99)),
         },
@@ -250,11 +260,15 @@ fn resolve_circular_registry_defers_without_overflow() {
     let r6 = Expr::Object(vec![(
         "b".to_string(),
         Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(5)),
             index: Box::new(Expr::LocalGet(99)),
         },
     )]);
     let arg = Expr::IndexGet {
+        byte_offset: 0,
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(5)),
         index: Box::new(Expr::LocalGet(99)),
     };
@@ -276,12 +290,15 @@ fn resolve_chained_distinct_registries_resolves() {
     let b = Expr::Object(vec![(
         "y".to_string(),
         Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(Expr::LocalGet(1)),
             property: "x".to_string(),
         },
     )]);
     let arg = Expr::IndexGet {
+        byte_offset: 0,
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(2)),
         index: Box::new(Expr::LocalGet(99)),
     };
@@ -299,6 +316,7 @@ fn resolve_chained_distinct_registries_resolves() {
 fn resolve_non_registry_member_access_defers() {
     // `import(cfg.path)` where cfg is opaque — must keep deferring, not panic.
     let arg = Expr::PropertyGet {
+        byte_end: 0,
         byte_offset: 0,
         object: Box::new(Expr::LocalGet(7)),
         property: "path".to_string(),
@@ -656,7 +674,9 @@ fn resolve_cjs_path_default_join_over_replaced_dirname_local() {
         ty: Type::String,
         mutable: true,
         init: Some(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::String(
                     "D:\\tmp\\probe\\node_modules\\node-pty\\lib".to_string(),
@@ -673,9 +693,12 @@ fn resolve_cjs_path_default_join_over_replaced_dirname_local() {
     });
 
     let filename = Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::NativeModuleRef("path".to_string())),
                 property: "default".to_string(),

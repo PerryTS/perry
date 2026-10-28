@@ -95,6 +95,8 @@ fn int32_new(len: Expr) -> Expr {
 
 fn get(view: u32, index: Expr) -> Expr {
     Expr::IndexGet {
+        byte_offset: 0,
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(view)),
         index: Box::new(index),
     }

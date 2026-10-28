@@ -1334,7 +1334,7 @@ fn collect_aliases(
         if let Stmt::Let {
             id,
             mutable: false,
-            init: Some(Expr::IndexGet { object, index }),
+            init: Some(Expr::IndexGet { object, index, .. }),
             ..
         } = stmt
         {
@@ -1390,7 +1390,7 @@ fn candidate_field(
 ) -> Option<usize> {
     let index = match object {
         Expr::LocalGet(alias) => aliases.get(alias).copied(),
-        Expr::IndexGet { object, index } if matches!(object.as_ref(), Expr::LocalGet(id) if *id == array_id) => {
+        Expr::IndexGet { object, index, .. } if matches!(object.as_ref(), Expr::LocalGet(id) if *id == array_id) => {
             const_index(index)
         }
         _ => None,
@@ -1493,7 +1493,7 @@ fn stmts_are_safe(
             Stmt::Let { id, init, .. } if *id == array_id => true,
             Stmt::Let {
                 id,
-                init: Some(Expr::IndexGet { object, index }),
+                init: Some(Expr::IndexGet { object, index, .. }),
                 ..
             } if aliases.contains_key(id)
                 && matches!(object.as_ref(), Expr::LocalGet(candidate) if *candidate == array_id)
@@ -1601,7 +1601,7 @@ fn replacement_for_expr(
     }
     let index = match object.as_ref() {
         Expr::LocalGet(alias) => aliases.get(alias).copied(),
-        Expr::IndexGet { object, index } if matches!(object.as_ref(), Expr::LocalGet(id) if *id == array_id) => {
+        Expr::IndexGet { object, index, .. } if matches!(object.as_ref(), Expr::LocalGet(id) if *id == array_id) => {
             const_index(index)
         }
         _ => None,
@@ -1730,6 +1730,7 @@ mod tests {
 
     fn property(object: Expr, name: &str) -> Expr {
         Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(object),
             property: name.to_string(),
             byte_offset: 0,
@@ -1752,6 +1753,8 @@ mod tests {
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::IndexGet {
+                    byte_offset: 0,
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(1)),
                     index: Box::new(Expr::Integer(0)),
                 }),
@@ -1824,6 +1827,7 @@ mod tests {
             },
             Expr::ObjectKeys(Box::new(Expr::LocalGet(2))),
             Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::FuncRef(99)),
                 args: vec![Expr::LocalGet(2)],
                 type_args: Vec::new(),
@@ -1851,6 +1855,7 @@ mod tests {
 
     fn shape_new(name: &str, args: Vec<Expr>) -> Expr {
         Expr::New {
+            byte_end: 0,
             class_name: name.to_string(),
             args,
             type_args: Vec::new(),

@@ -77,6 +77,7 @@ fn super_heritage_specialized_layout_uses_source_constructor() {
     let name = specialized.name.clone();
     hir.classes.push(specialized);
     hir.init.push(perry_hir::Stmt::Expr(perry_hir::Expr::New {
+        byte_end: 0,
         class_name: name.clone(),
         args: vec![],
         type_args: vec![],

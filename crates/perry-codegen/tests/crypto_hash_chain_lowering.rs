@@ -159,7 +159,9 @@ fn crypto() -> Expr {
 
 fn call(recv: Expr, method: &str, args: Vec<Expr>) -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(recv),
             property: method.to_string(),
             byte_offset: 0,

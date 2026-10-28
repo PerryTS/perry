@@ -300,6 +300,7 @@ fn left_chain_declines_when_a_late_leaf_is_a_property_read() {
         Expr::LocalGet(P_A),
         Expr::LocalGet(P_B),
         Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(P_C)),
             property: "x".into(),
             byte_offset: 0,
@@ -459,6 +460,8 @@ fn declared_number_left_chain_declines_when_a_late_leaf_is_an_element_read() {
     let mut arr = param(P_A, "a");
     arr.ty = Type::Array(Box::new(Type::Number));
     let elem = |i: i64| Expr::IndexGet {
+        byte_offset: 0,
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(P_A)),
         index: Box::new(Expr::Integer(i)),
     };

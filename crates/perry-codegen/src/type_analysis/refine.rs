@@ -710,7 +710,7 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
                 None
             }
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index , .. } => {
             // arr[i] where arr is Array<T> → element type T.
             // Handles both LocalGet(arr) and PropertyGet(this, "field")
             // — the latter lets `this.parts[i]` get the right type

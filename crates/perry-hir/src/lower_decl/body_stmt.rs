@@ -157,6 +157,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                                                 ty: Type::Array(Box::new(Type::Any)),
                                                 mutable: true,
                                                 init: Some(Expr::PropertyGet {
+                                                    byte_end: 0,
                                                     byte_offset: 0,
                                                     object: Box::new(Expr::This),
                                                     property: field_name.clone(),
@@ -1367,6 +1368,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                         ty: Type::Any,
                         mutable: false,
                         init: Some(Expr::PropertyGet {
+                            byte_end: 0,
                             byte_offset: 0,
                             object: Box::new(Expr::LocalGet(res_id)),
                             property: "value".to_string(),
@@ -1381,6 +1383,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                         Stmt::Expr(Expr::LocalSet(res_id, Box::new(read_call()))),
                         Stmt::If {
                             condition: Expr::PropertyGet {
+                                byte_end: 0,
                                 byte_offset: 0,
                                 object: Box::new(Expr::LocalGet(res_id)),
                                 property: "done".to_string(),
@@ -1516,7 +1519,9 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                     async_iterator_method_call(iter_expr_raw)
                 } else if is_node_readable_for_await {
                     Expr::Call {
+                        byte_end: 0,
                         callee: Box::new(Expr::PropertyGet {
+                            byte_end: 0,
                             byte_offset: 0,
                             object: Box::new(iter_expr_raw),
                             property: "iterator".to_string(),
@@ -1556,7 +1561,9 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                 ctx.locals
                     .push((format!("__result_{}", result_id), result_id, Type::Any));
                 let raw_next_call = Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: 0,
                         object: Box::new(Expr::LocalGet(iter_id)),
                         property: "next".to_string(),
@@ -1588,6 +1595,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                     };
                 let value_expr = if needs_await {
                     Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: 0,
                         object: Box::new(Expr::LocalGet(result_id)),
                         property: "value".into(),
@@ -2099,6 +2107,8 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                         // `!is_await`, so the await arm is always the index path.
                         let item_expr = if for_of_stmt.is_await {
                             let raw_item_expr = Expr::IndexGet {
+                                byte_offset: 0,
+                                byte_end: 0,
                                 object: Box::new(Expr::LocalGet(arr_id)),
                                 index: Box::new(Expr::LocalGet(idx_id)),
                             };
@@ -2305,6 +2315,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(idx_id)),
                     right: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: 0,
                         object: Box::new(Expr::LocalGet(arr_id)),
                         property: "length".to_string(),
@@ -2373,6 +2384,8 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
             // Lower the body and prepend the key binding/assignment
             let mut loop_body = lower_body_stmt(ctx, &for_in_stmt.body)?;
             let key_source = Expr::IndexGet {
+                byte_offset: 0,
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(keys_id)),
                 index: Box::new(Expr::LocalGet(idx_id)),
             };
@@ -2398,6 +2411,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(idx_id)),
                     right: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: 0,
                         object: Box::new(Expr::LocalGet(keys_id)),
                         property: "length".to_string(),

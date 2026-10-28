@@ -236,7 +236,9 @@ fn a_string_method_on_a_proven_receiver_keeps_the_fused_concat() {
         vec![param(1, "n", Type::Number)],
         add(
             Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(Expr::String("ab".to_string())),
                     property: "toUpperCase".to_string(),
                     byte_offset: 0,
@@ -265,7 +267,9 @@ fn a_string_method_name_on_an_unproven_receiver_is_guarded() {
         vec![param(1, "a", Type::Any)],
         add(
             Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(1)),
                     property: "slice".to_string(),
                     byte_offset: 0,
@@ -382,7 +386,9 @@ fn string_concat_method_fuses_four_arguments_into_one_chain_call() {
     let ir = ir(
         Vec::new(),
         Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::String("head".to_string())),
                 property: "concat".to_string(),
                 byte_offset: 0,

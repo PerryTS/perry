@@ -566,7 +566,7 @@ impl<'a> UseWalk<'a> {
     /// tracked array itself" (number|undefined — valid exactly where a
     /// ToNumber/short-circuit context absorbs the undefined).
     fn value_or_element_is_numeric(&self, tracked: u32, e: &Expr) -> bool {
-        if let Expr::IndexGet { object, index } = e {
+        if let Expr::IndexGet { object, index, .. } = e {
             if let Expr::LocalGet(id) = object.as_ref() {
                 if *id == tracked && self.key_is_provably_numeric(index) {
                     return true;
@@ -678,7 +678,7 @@ impl<'a> UseWalk<'a> {
             // non-numeric key is an ordinary [[Get]] — harmless for the
             // element invariants, but the KEY expression may itself contain a
             // bare reference; keep it simple and require numeric).
-            Expr::IndexGet { object, index } => {
+            Expr::IndexGet { object, index, .. } => {
                 if let Expr::LocalGet(id) = object.as_ref() {
                     if self.is_candidate(*id) {
                         if !self.key_is_provably_numeric(index) {
@@ -924,6 +924,7 @@ mod tests {
 
     fn new_array(args: Vec<Expr>) -> Expr {
         Expr::New {
+            byte_end: 0,
             class_name: "Array".to_string(),
             args,
             type_args: vec![],
@@ -939,6 +940,8 @@ mod tests {
 
     fn index_get(id: u32, index: Expr) -> Expr {
         Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(id)),
             index: Box::new(index),
         }
@@ -954,6 +957,7 @@ mod tests {
 
     fn property_get(object: Expr, property: &str) -> Expr {
         Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(object),
             property: property.to_string(),
             byte_offset: 0,

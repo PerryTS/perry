@@ -226,7 +226,7 @@ pub fn try_lower_index_get_call(
     // call undefined. Route through `js_native_call_method_str_key` which
     // walks the class vtable chain (parent inheritance included). Refs
     // #420 / #618 followup.
-    if let Expr::IndexGet { object, index } = callee {
+    if let Expr::IndexGet { object, index, .. } = callee {
         // A numeric key is a method call too, also on an array: `fns[0]()`
         // binds `this = fns` (ECMA-262 EvaluateCall: the callee is a property
         // reference, so its base is the this value). The keyed site's probe

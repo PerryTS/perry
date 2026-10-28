@@ -91,6 +91,7 @@ fn fixture(with_args: bool) -> Module {
         });
     }
     module.init.push(Stmt::Expr(Expr::New {
+        byte_end: 0,
         class_name: "Pair".into(),
         args: if with_args {
             vec![Expr::Object(Vec::new()), Expr::Object(Vec::new())]

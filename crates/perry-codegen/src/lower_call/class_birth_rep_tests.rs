@@ -22,6 +22,7 @@ fn mint_rep(ir: &str, callee: &str) -> String {
 fn early_module() -> perry_hir::Module {
     let mut m = loop_new_module("Early", Type::Number, Expr::Integer(2));
     m.classes[0].fields[0].init = Some(Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::This),
         property: "b".to_string(),
         byte_offset: 0,

@@ -185,7 +185,7 @@ impl<'a> LoopFacts<'a> {
                     return false;
                 }
             }
-            Expr::IndexGet { object, index }
+            Expr::IndexGet { object, index, .. }
             | Expr::Uint8ArrayGet {
                 array: object,
                 index,
@@ -601,7 +601,7 @@ pub(super) fn has_guarded_byte_index(ctx: &FnCtx<'_>, body: &[Stmt], controls: &
     fn guarded(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
         let index = match expr {
             Expr::Uint8ArrayGet { index, .. } | Expr::BufferIndexGet { index, .. } => index,
-            Expr::IndexGet { object, index }
+            Expr::IndexGet { object, index, .. }
                 if crate::expr::ta_element_read::receiver_kind(ctx, object) == Some(1) =>
             {
                 index

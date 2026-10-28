@@ -34,6 +34,7 @@ fn function(id: FuncId, name: &str, params: Vec<Param>, body: Vec<Stmt>) -> Func
 
 fn call(id: FuncId, args: Vec<Expr>) -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(id)),
         args,
         type_args: vec![],
@@ -59,6 +60,7 @@ fn optional(id: LocalId, value: Expr, body: Expr) -> Expr {
 
 fn property(id: LocalId) -> Expr {
     Expr::PropertyGet {
+        byte_end: 0,
         byte_offset: 0,
         object: Box::new(Expr::LocalGet(id)),
         property: "value".into(),
@@ -340,6 +342,7 @@ fn closure_scoped_temps_are_activation_local() {
                     else_expr: Box::new(Expr::Binary {
                         op: BinaryOp::Add,
                         left: Box::new(Expr::Call {
+                            byte_end: 0,
                             callee: Box::new(Expr::LocalGet(10)),
                             args: vec![Expr::Binary {
                                 op: BinaryOp::Sub,

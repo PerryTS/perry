@@ -180,6 +180,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 return lower_expr(
                     ctx,
                     &Expr::PropertyGet {
+                        byte_end: 0,
                         object: Box::new(object),
                         property: private_static_storage_name(class_id, field_name),
                         byte_offset: 0,

@@ -24,6 +24,8 @@ fn local(id: u32, ty: Type, mutable: bool, init: Expr) -> Stmt {
 }
 fn get(id: u32, index: Expr) -> Expr {
     Expr::IndexGet {
+        byte_offset: 0,
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(id)),
         index: Box::new(index),
     }
@@ -102,6 +104,7 @@ fn compile(name: &str, params: Vec<Param>, body: Vec<Stmt>, kind: u8) -> String 
         _ => unreachable!(),
     };
     m.init.push(Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(1)),
         args,
         type_args: vec![],
@@ -174,6 +177,7 @@ fn native_packed_columns_resolve_each_owner_data_word() {
         vec![
             loop_body(
                 Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(1)),
                     property: "length".into(),
                     byte_offset: 0,

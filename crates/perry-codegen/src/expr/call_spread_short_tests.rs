@@ -80,7 +80,10 @@ fn fixture() -> Module {
         ],
         return_type: Type::Number,
         body: vec![Stmt::Return(Some(Expr::CallSpread {
+            byte_end: 0,
+            byte_offset: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(2)),
                 property: "reset".to_string(),
                 byte_offset: 0,

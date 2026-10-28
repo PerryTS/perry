@@ -280,6 +280,8 @@ pub(crate) fn lower(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
     let source = if let Some(id) = spread_temp {
         args.clear();
         Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(id)),
             index: Box::new(Expr::Number(0.0)),
         }
@@ -290,6 +292,7 @@ pub(crate) fn lower(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
     };
     let caller_this = lower_expr(ctx, &ast::Expr::This(ast::ThisExpr { span: call.span }))?;
     let result = Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::ExternFuncRef {
             name: "js_eval_in_scope".into(),
             param_types: vec![Type::Any; 6],
@@ -324,6 +327,7 @@ pub(crate) fn lower(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
         callee,
         type_args,
         byte_offset,
+        ..
     } = result
     else {
         unreachable!()
@@ -331,6 +335,7 @@ pub(crate) fn lower(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
     let value = eval_args.remove(0);
     eval_args.insert(0, Expr::LocalGet(id));
     args.push(Expr::Call {
+        byte_end: 0,
         callee,
         args: eval_args,
         type_args,

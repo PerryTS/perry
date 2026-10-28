@@ -148,7 +148,7 @@ impl Model {
         batch: &Batch,
         prim: u16,
     ) {
-        let top = self.explain
+        let top = (self.explain || self.diagnostic.is_some())
             && self.nodes[src as usize].pts.contains_tok(TOP)
             && !self.nodes[dst as usize].pts.contains_tok(TOP);
         let targets = Targets::capture(
@@ -159,7 +159,10 @@ impl Model {
         self.work += self.nodes[dst as usize].delta.append_to(batch, &targets);
         let before = self.pts_entries;
         self.pts_entries += batch.len() as u64;
-        if top {
+        if top && self.diagnostic.is_some() {
+            self.diagnostic_predecessor(dst, src, self.cur_why);
+        }
+        if top && self.explain {
             self.top_pred
                 .entry(dst)
                 .or_insert((self.cur_src, self.cur_why));

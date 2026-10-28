@@ -5,6 +5,8 @@ fn get(id: u32) -> Expr {
 }
 fn index(a: u32, i: Expr) -> Expr {
     Expr::IndexGet {
+        byte_offset: 0,
+        byte_end: 0,
         object: Box::new(get(a)),
         index: Box::new(i),
     }
@@ -195,6 +197,7 @@ fn effectful_rhs_keeps_the_original_evaluation_order_lowering() {
             BinaryOp::Add,
             index(4, get(5)),
             Expr::Call {
+                byte_end: 0,
                 callee: Box::new(get(2)),
                 args: vec![],
                 type_args: vec![],
@@ -324,6 +327,7 @@ fn certified_numeric_leaf_calls_are_emitted_without_a_call_in_the_region() {
             object: Box::new(get(1)),
             index: Box::new(get(3)),
             value: Box::new(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::FuncRef(90)),
                 args: vec![get(3), get(2)],
                 type_args: vec![],
