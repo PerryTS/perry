@@ -175,6 +175,19 @@ pub(super) fn plain_local(ctx: &FnCtx<'_>, id: u32) -> bool {
         && !ctx.strings.tdz_binding_names.contains_key(&id)
 }
 
+// Canonical I32/U32 locals deliberately have no boxed slot in ctx.locals.
+// Their existing storage selection already proves initialized scalar storage.
+fn scalar_local(ctx: &FnCtx<'_>, id: u32) -> bool {
+    plain_local(ctx, id)
+        || (ctx.local_slot_reps.contains_key(&id)
+            && !ctx.boxed_vars.contains(&id)
+            && !ctx.closure_captures.contains_key(&id)
+            && !ctx.module_globals.contains_key(&id)
+            && !ctx.repsel_closure_ref_locals.contains(&id)
+            && !ctx.tdz_boxes.contains(&id)
+            && !ctx.strings.tdz_binding_names.contains_key(&id))
+}
+
 /// A private loop owns only scalar state. User calls, property access,
 /// coercions of unknown inputs, allocations and suspension stay in the
 /// original loop. Invariant unknown locals join the live entry Number tests.
@@ -190,12 +203,12 @@ pub(super) fn scalar_loop(
         match e {
             Expr::Integer(_) | Expr::Number(_) | Expr::Bool(_) => true,
             Expr::LocalGet(id) => {
-                plain_local(ctx, *id)
+                scalar_local(ctx, *id)
                     && (n.contains(id) || crate::type_analysis::is_numeric_expr(ctx, e))
             }
-            Expr::LocalSet(id, value) => plain_local(ctx, *id) && expr(ctx, value, n),
+            Expr::LocalSet(id, value) => scalar_local(ctx, *id) && expr(ctx, value, n),
             Expr::Update { id, .. } => {
-                plain_local(ctx, *id)
+                scalar_local(ctx, *id)
                     && (n.contains(id)
                         || crate::type_analysis::is_numeric_expr(ctx, &Expr::LocalGet(*id)))
             }
