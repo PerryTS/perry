@@ -1085,4 +1085,59 @@ mod tests {
             assert!(ctx.native_module_imports.contains("stream/web"), "{source}");
         }
     }
+    #[test]
+    fn cjs_todo_mutable_export_origin_retains_temporal() {
+        let mut ctx = context();
+        for (name, source) in [
+            (
+                "main.js",
+                include_str!("../../../../../tests/fixtures/cjs_closed_support/03-todo.cjs"),
+            ),
+            (
+                "lib/format.js",
+                include_str!("../../../../../tests/fixtures/cjs_closed_support/todo-cjs/format.js"),
+            ),
+            (
+                "lib/store.js",
+                include_str!("../../../../../tests/fixtures/cjs_closed_support/todo-cjs/store.js"),
+            ),
+            (
+                "lib/types.js",
+                include_str!("../../../../../tests/fixtures/cjs_closed_support/todo-cjs/types.js"),
+            ),
+        ] {
+            let path = std::path::PathBuf::from("/p").join(name);
+            let (wrapped, _) = crate::commands::compile::cjs_wrap::wrap_commonjs_with_addon_paths(
+                source, &path, None, false, None, None, &mut Vec::new(), None,
+            );
+            let ast = perry_parser::parse_typescript(&wrapped, name).unwrap();
+            let mut module = perry_hir::lower_module(&ast, name, path.to_str().unwrap()).unwrap();
+            module.class_family_syntax = Some(
+                crate::commands::compile::cjs_wrap::family_syntax::analyze(source),
+            );
+            crate::commands::compile::cjs_wrap::capability_values::refine(&mut module);
+            crate::commands::compile::cjs_link::resolve_open_sites(&mut module, true).unwrap();
+            for import in &mut module.imports {
+                if import.source.starts_with('.') {
+                    let filename = std::path::Path::new(&import.source)
+                        .file_stem()
+                        .unwrap()
+                        .to_str()
+                        .unwrap();
+                    import.resolved_path = Some(format!("/p/lib/{filename}.js"));
+                }
+            }
+            ctx.native_modules.insert(path, module);
+        }
+        // Follow-up: CJS export origin. Only the consumer's Object.values of
+        // types_1.Priority lacks a proven plain-object receiver. The producer's
+        // enum IIFE and the other two modules do not select Temporal themselves.
+        for (path, module) in &ctx.native_modules {
+            let caps = super::scan(module, &ctx.native_modules);
+            assert_eq!(caps.date_members, path == std::path::Path::new("/p/main.js"));
+        }
+        super::super::detect_program_optional_feature_usage(&mut ctx);
+        assert!(ctx.uses_date);
+        assert!(ctx.uses_temporal);
+    }
 }
