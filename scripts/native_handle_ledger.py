@@ -76,6 +76,8 @@ NON_HANDLE_TABLES = {
     ("crates/perry-runtime/src/gc/barrier/mod.rs", "REMEMBERED_SET"),
     ("crates/perry-runtime/src/gc/barrier/mod.rs", "CONS_PINNED"),
     ("crates/perry-runtime/src/gc/barrier/mod.rs", "EVER_DIRTY_OLD_PAGES"),
+    # The realm image's remembered set (WRT): image cells holding heap children.
+    ("crates/perry-runtime/src/gc/image_cells.rs", "IMAGE_REMEMBERED"),
     ("crates/perry-runtime/src/gc/fromspace_scan.rs", "SNAPSHOT_PAGES"),
     ("crates/perry-runtime/src/gc/diag_sites.rs", "CHARGES"),
     # Compiled code/literal/site metadata, not heap object identity.
@@ -93,8 +95,8 @@ NON_HANDLE_TABLES = {
     ("crates/perry-runtime/src/contracts.rs", "CLAIMS"),
     # Diagnostic site/class ids and owned Rust spellings -> numeric counters.
     ("crates/perry-runtime/src/object/dynamic_key_read/census.rs", "COUNTS"),
-    ("crates/perry-runtime/src/object/layout_desc.rs", "OUT_OF_ORDER_PAIRS"),
-    ("crates/perry-runtime/src/object/layout_desc.rs", "OTHER_KEYS"),
+    ("crates/perry-runtime/src/object/layout_desc/diagnostics.rs", "OUT_OF_ORDER_PAIRS"),
+    ("crates/perry-runtime/src/object/layout_desc/diagnostics.rs", "OTHER_KEYS"),
     # Keyed by agent id: two AtomicUsize counts, not a per-resource registry.
     ("crates/perry-stdlib/src/worker_threads.rs", "AGENT_WORKER_COUNTS"),
 }

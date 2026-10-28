@@ -580,20 +580,24 @@ mod tests {
     fn data_view_reads_multi_byte_typed_array_writes() {
         let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
         for (kind, elem_size) in [
-            (crate::typedarray::KIND_UINT16, 2usize),
-            (crate::typedarray::KIND_UINT32, 4),
-            (crate::typedarray::KIND_FLOAT64, 8),
+            (crate::typedarray_hook_slots::KIND_UINT16, 2usize),
+            (crate::typedarray_hook_slots::KIND_UINT32, 4),
+            (crate::typedarray_hook_slots::KIND_FLOAT64, 8),
         ] {
             let ab = js_array_buffer_new(elem_size as i32);
             let ab_value = f64::from_bits(crate::value::JSValue::pointer(ab as *const u8).bits());
-            let ta =
-                crate::typedarray_view::js_typed_array_view(kind as i32, ab_value, undef, undef);
+            let ta = crate::typedarray_hook_slots::js_typed_array_view(
+                kind as i32,
+                ab_value,
+                undef,
+                undef,
+            );
             assert!(!ta.is_null(), "kind={kind}: typed-array view");
             // Constructed BEFORE the write, so its snapshot is all zeroes and a
             // stale read is unambiguous.
             let dv = js_data_view_new(ab_value, undef, undef);
 
-            crate::typedarray::js_typed_array_set(ta, 0, 258.0);
+            crate::typedarray_hook_slots::js_typed_array_set(ta, 0, 258.0);
 
             // Subject-liveness: without a store that actually reaches the
             // ArrayBuffer, every byte comparison below would pass vacuously
@@ -624,8 +628,8 @@ mod tests {
         let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
         let ab = js_array_buffer_new(16);
         let ab_value = f64::from_bits(crate::value::JSValue::pointer(ab as *const u8).bits());
-        let ta = crate::typedarray_view::js_typed_array_view(
-            crate::typedarray::KIND_UINT32 as i32,
+        let ta = crate::typedarray_hook_slots::js_typed_array_view(
+            crate::typedarray_hook_slots::KIND_UINT32 as i32,
             ab_value,
             undef,
             undef,
@@ -643,13 +647,13 @@ mod tests {
             "windowed DataView write must land at byteOffset 4 of the backing"
         );
         assert_eq!(
-            crate::typedarray::js_typed_array_get(ta, 1),
+            crate::typedarray_hook_slots::js_typed_array_get(ta, 1),
             u32::from_ne_bytes([0x01, 0x02, 0x03, 0x04]) as f64,
             "typed array must read the DataView's bytes"
         );
 
         // typed array -> windowed DataView, at the window's far end.
-        crate::typedarray::js_typed_array_set(ta, 2, 0xDEAD_BEEFu32 as f64);
+        crate::typedarray_hook_slots::js_typed_array_set(ta, 2, 0xDEAD_BEEFu32 as f64);
         let backing = backing_bytes(ab, 16);
         for i in 0..8usize {
             assert_eq!(

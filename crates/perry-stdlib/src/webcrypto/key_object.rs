@@ -18,7 +18,7 @@ unsafe fn throw_dom_exception(name: &str, message: &str) -> ! {
     let message_str = perry_runtime::js_string_from_bytes(message.as_ptr(), message.len() as u32);
     let name_val = f64::from_bits(JSValue::string_ptr(name_str).bits());
     let message_val = f64::from_bits(JSValue::string_ptr(message_str).bits());
-    let err = perry_runtime::event_target::js_dom_exception_new(message_val, name_val);
+    let err = perry_runtime::event_target_hook_slots::js_dom_exception_new(message_val, name_val);
     if err.is_null() {
         throw_type_error(message);
     }
@@ -76,7 +76,7 @@ unsafe fn key_material(value: &str, kind: KeyKind, asym_type: u8) -> Vec<u8> {
             parse_p256_signing_key_pem(value).map(|key| key.to_bytes().as_slice().to_vec())
         }
         (2, KeyKind::Public) => parse_p256_verifying_key_pem(value)
-            .map(|key| key.to_encoded_point(false).as_bytes().to_vec()),
+            .map(|key| key.to_sec1_point(false).as_bytes().to_vec()),
         (3, KeyKind::Private) => {
             parse_ed25519_private_surrogate(value).map(|key| key.to_bytes().to_vec())
         }

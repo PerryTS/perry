@@ -1,0 +1,1 @@
+CI keeps mbx and the pinned nightly. It runs Perry's full runtime test harness through Cargo because Blaze crashes while executing the low-level unwind tests. Compatible package tests and development builds continue to use Blaze.

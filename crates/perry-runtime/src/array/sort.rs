@@ -147,20 +147,20 @@ unsafe fn with_sorted_indices<R>(
     // slices remain valid across arbitrary callbacks and copying collections.
     // Keep both allocations rooted, including across allocation of the second.
     let scope = crate::gc::RuntimeHandleScope::new();
-    let order_handle = scope.root_raw_mut_ptr(crate::typedarray::typed_array_alloc(
-        crate::typedarray::KIND_UINT32,
+    let order_handle = scope.root_raw_mut_ptr(crate::typedarray_hook_slots::typed_array_alloc(
+        crate::typedarray_hook_slots::KIND_UINT32,
         n as u32,
     ));
-    let scratch_handle = scope.root_raw_mut_ptr(crate::typedarray::typed_array_alloc(
-        crate::typedarray::KIND_UINT32,
+    let scratch_handle = scope.root_raw_mut_ptr(crate::typedarray_hook_slots::typed_array_alloc(
+        crate::typedarray_hook_slots::KIND_UINT32,
         n as u32,
     ));
     let order = std::slice::from_raw_parts_mut(
-        order_handle.with_mut_ptr(crate::typedarray::data_ptr_mut) as *mut u32,
+        order_handle.with_mut_ptr(crate::typedarray_hook_slots::data_ptr_mut) as *mut u32,
         n,
     );
     let scratch = std::slice::from_raw_parts_mut(
-        scratch_handle.with_mut_ptr(crate::typedarray::data_ptr_mut) as *mut u32,
+        scratch_handle.with_mut_ptr(crate::typedarray_hook_slots::data_ptr_mut) as *mut u32,
         n,
     );
     sort_permutation(data, order, scratch, c, cmp_handle);
@@ -673,7 +673,8 @@ pub extern "C" fn js_array_sort_default(arr: *mut ArrayHeader) -> *mut ArrayHead
         // `GC_TYPE_TYPED_ARRAY` one — so `ta.sort()` returned the null'd
         // pointer having sorted nothing, with no error and no diagnostic.
         if let Some(ta) = crate::array::typed_array_receiver(arr) {
-            return crate::typedarray::js_typed_array_sort_default(ta) as *mut ArrayHeader;
+            return crate::typedarray_hook_slots::js_typed_array_sort_default(ta)
+                as *mut ArrayHeader;
         }
         let arr = clean_arr_ptr(arr as *const ArrayHeader) as *mut ArrayHeader;
         if arr.is_null() {
@@ -712,8 +713,8 @@ pub extern "C" fn js_validate_array_comparator(cmp_boxed: f64) -> i64 {
         // this bare proxy id, which then performs the Proxy [[Call]]. Check
         // callability here so a Proxy of a non-callable still throws before
         // sorting starts.
-        if crate::proxy::js_proxy_is_proxy(cmp_boxed) == 1
-            && crate::proxy::proxy_wraps_callable(cmp_boxed)
+        if crate::proxy_hooks::proxy_is_proxy(cmp_boxed) == 1
+            && crate::proxy_hooks::proxy_wraps_callable(cmp_boxed)
         {
             return ptr as i64;
         }
@@ -788,7 +789,7 @@ pub extern "C" fn js_array_sort_with_comparator(
         // asked at the same point — before `clean_arr_ptr` rejects the
         // receiver — for the same reason.
         if let Some(ta) = crate::array::typed_array_receiver(arr) {
-            return crate::typedarray::js_typed_array_sort_with_comparator(ta, comparator)
+            return crate::typedarray_hook_slots::js_typed_array_sort_with_comparator(ta, comparator)
                 as *mut ArrayHeader;
         }
         let arr = clean_arr_ptr(arr as *const ArrayHeader) as *mut ArrayHeader;

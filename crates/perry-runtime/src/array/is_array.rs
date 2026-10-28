@@ -18,7 +18,7 @@ pub extern "C" fn js_array_is_array(value: f64) -> f64 {
     // ordinary heap-pointer inspection below (proxy ids are small encoded
     // values that the pointer checks would otherwise reject as non-arrays).
     let mut value = value;
-    while let Some(target) = crate::proxy::is_array_proxy_step(value) {
+    while let Some(target) = crate::proxy_hooks::is_array_proxy_step(value) {
         value = target;
     }
 
@@ -83,7 +83,7 @@ mod tests {
             super::js_array_is_array(object).to_bits(),
             crate::value::TAG_FALSE
         );
-        crate::node_stream::js_array_subclass_init(object, 0.0);
+        crate::array::subclass_init::js_array_subclass_init(object, 0.0);
         assert_eq!(
             super::js_array_is_array(object).to_bits(),
             crate::value::TAG_TRUE

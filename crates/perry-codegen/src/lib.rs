@@ -102,6 +102,8 @@ pub(crate) mod typed_shape;
 pub mod types;
 pub mod unit_cache;
 #[cfg(feature = "target-wasi")]
+pub mod wasi_toolchain;
+#[cfg(feature = "target-wasi")]
 mod wasm32;
 pub mod workers;
 
@@ -112,8 +114,9 @@ pub use codegen::{
     resolve_target_triple, short_spread_method_capabilities, take_module_static_seeds,
     target_os_of, user_function_symbol, AppMetadata, BirthProto, BirthShape, ClassAccessorNames,
     CompileOptions, ConstFnBirth, ConstructorContracts, CtorAbi, DefinedClassShape, ElisionFacts,
-    ExportedObjectLiteralCapability, FactsBody, FactsClass, FactsField, FactsRecv, FpContractMode,
-    ImportedClass, ImportedObjectLiteral, ImportedObjectLiteralMethod, ModuleBirth, NamespaceEntry,
+    ExportedObjectLiteralCapability, FactsBody, FactsClass, FactsField, FactsIndexedOwner,
+    FactsNumericExpr, FactsNumericFunction, FactsRecv, FpContractMode, ImportedClass,
+    ImportedObjectLiteral, ImportedObjectLiteralMethod, ModuleBirth, NamespaceEntry,
     NamespaceEntryKind, ObjectLiteralMethodCandidate, ProgramClassShapeIds, ProgramFactsView,
     ResolvedConstructorContracts, ShortSpreadMethodCandidate, TypedMasks, STATIC_SEED_FORMAT,
     TARGET_NAMES,
@@ -195,8 +198,8 @@ pub fn method_supports_arguments_length_direct_abi(method: &perry_hir::Function)
 pub mod expr_shadow_layout {
     pub use crate::expr::shadow_inline::{
         SHADOW_ENTRY_META_OFFSET, SHADOW_ENTRY_SHIFT, SHADOW_ENTRY_SIZE, SHADOW_SLOT_ACTIVE_BIT,
-        SHADOW_STACK_HEADER_SLOTS, SHADOW_STATE_FRAME_TOP_OFFSET, SHADOW_STATE_LEN_OFFSET,
-        SHADOW_STATE_PTR_OFFSET,
+        SHADOW_STACK_HEADER_SLOTS, SHADOW_STATE_CAP_OFFSET, SHADOW_STATE_FRAME_TOP_OFFSET,
+        SHADOW_STATE_LEN_OFFSET, SHADOW_STATE_PTR_OFFSET,
     };
 }
 
@@ -330,3 +333,24 @@ mod lower_array_record_length;
 
 /// Canonical linker symbol constructors for JavaScript names.
 pub mod symbol_names;
+
+/// Build-time runtime facts; WRT3a does not use them in emission.
+pub mod realm_manifest {
+    include!(concat!(env!("OUT_DIR"), "/realm_table.rs"));
+
+    #[test]
+    fn temporal_reach_closes_the_generated_family_without_selecting_top() {
+        let mut reach = perry_hir::realm_reach::RealmReach::default();
+        reach.names.insert("Temporal".into());
+        reach.close(REALM);
+        assert!(!reach.is_full());
+        for name in [
+            "Temporal.Duration.prototype.years.<get>",
+            "Temporal.ZonedDateTime.prototype.toString",
+            "Temporal.Now.instant",
+        ] {
+            assert!(reach.names.contains(name), "missing {name}");
+        }
+        assert!(reach.names.len() < REALM.len());
+    }
+}

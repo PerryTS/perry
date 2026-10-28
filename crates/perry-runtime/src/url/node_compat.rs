@@ -4,7 +4,7 @@
 
 use super::*;
 
-use super::parse::{create_url_object, is_valid_absolute_url, resolve_url};
+use super::parse::create_url_object;
 use super::search_params::url_decode;
 
 const QUERYSTRING_ESCAPE_HEX: &[u8; 16] = b"0123456789ABCDEF";
@@ -50,15 +50,6 @@ fn throw_url_type_error_with_code(message: &str, code: &'static str) -> ! {
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
-fn is_js_string_value(value: f64) -> bool {
-    crate::value::JSValue::from_bits(value.to_bits()).is_any_string()
-}
-
-fn string_from_js_value(value: f64) -> String {
-    let ptr = crate::value::js_get_string_pointer_unified(value) as *mut crate::StringHeader;
-    string_from_header(ptr)
-}
-
 fn url_received(value: f64) -> String {
     if crate::buffer::js_buffer_is_buffer(value.to_bits() as i64) == 1 {
         return "an instance of Buffer".to_string();
@@ -92,15 +83,6 @@ fn throw_invalid_legacy_url_arg(value: f64) -> ! {
         url_received(value)
     );
     throw_url_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
-}
-
-fn resolve_path_to_file_url_posix(path: &str) -> String {
-    let preserve_trailing_slash = !path.is_empty() && path.ends_with('/');
-    let mut resolved = crate::path::resolve_posix_str(path);
-    if preserve_trailing_slash && !resolved.ends_with('/') {
-        resolved.push('/');
-    }
-    resolved
 }
 
 #[cfg(test)]
@@ -339,7 +321,7 @@ fn decode_file_url_pathname_bytes_win32(pathname: &str) -> Vec<u8> {
 /// is true, applies Node's Win32 conversion (UNC hosts, drive-letter
 /// validation, `/`→`\`, encoded-`\` rejection) instead of the POSIX path
 /// (which still rejects non-empty/non-localhost hosts on darwin). #2975
-fn file_url_to_path_bytes(url_f64: f64, windows: bool) -> Vec<u8> {
+pub(crate) fn file_url_to_path_bytes(url_f64: f64, windows: bool) -> Vec<u8> {
     let url_string = if is_js_string_value(url_f64) {
         string_from_js_value(url_f64)
     } else if let Some(obj) = object_from_f64(url_f64) {
@@ -425,32 +407,6 @@ pub(crate) fn file_url_to_path_string_posix(url_f64: f64) -> String {
     String::from_utf8_lossy(&file_url_to_path_bytes(url_f64, false)).into_owned()
 }
 
-/// Resolve a `node:module` "base" argument (file URL object/string or a
-/// bare path string) to a filesystem path string. URL-shaped values and
-/// `file:`-scheme strings go through the file-URL decoder; any other string
-/// is treated as a path and returned verbatim. Used by
-/// `module.findPackageJSON` (#3120). Returns `None` for non-string,
-/// non-URL-object values so the caller can raise `ERR_INVALID_ARG_TYPE`.
-pub(crate) fn module_base_to_path(base_f64: f64) -> Option<String> {
-    if is_js_string_value(base_f64) {
-        let s = string_from_js_value(base_f64);
-        if s.starts_with("file:") {
-            return Some(
-                String::from_utf8_lossy(&file_url_to_path_bytes(base_f64, false)).into_owned(),
-            );
-        }
-        return Some(s);
-    }
-    if let Some(obj) = object_from_f64(base_f64) {
-        if is_url_object_shape(obj) {
-            return Some(
-                String::from_utf8_lossy(&file_url_to_path_bytes(base_f64, false)).into_owned(),
-            );
-        }
-    }
-    None
-}
-
 /// Convert a file:// URL to a filesystem path
 /// Strips the "file://" prefix and percent-decodes the result
 /// js_url_file_url_to_path(url_f64: f64, options_f64: f64) -> f64 (NaN-boxed string)
@@ -474,22 +430,6 @@ pub extern "C" fn js_url_file_url_to_path_buffer(url_f64: f64, options_f64: f64)
     crate::buffer::bytes::from_slice(crate::buffer::bytes::Brand::Buffer, &bytes)
 }
 
-/// Percent-encode a file-URL path component (after separator normalization),
-/// keeping the WHATWG path-safe set plus `/` and `:` (drive-letter colon).
-fn encode_file_url_path(path: &str) -> String {
-    let mut encoded = String::new();
-    for b in path.bytes() {
-        match b {
-            b'/' | b':' => encoded.push(b as char),
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                encoded.push(b as char)
-            }
-            _ => encoded.push_str(&format!("%{b:02X}")),
-        }
-    }
-    encoded
-}
-
 #[no_mangle]
 pub extern "C" fn js_url_path_to_file_url(path_f64: f64, options_f64: f64) -> f64 {
     if !is_js_string_value(path_f64) {
@@ -501,49 +441,6 @@ pub extern "C" fn js_url_path_to_file_url(path_f64: f64, options_f64: f64) -> f6
     let href = path_to_file_url_string(&path, windows);
     let obj = create_url_object(&href);
     crate::value::js_nanbox_pointer(obj as i64)
-}
-
-pub(crate) fn path_to_file_url_string(path: &str, windows: bool) -> String {
-    if windows {
-        // Win32 (#2975). UNC paths (`\\host\share\...`) become
-        // `file://host/share/...`; everything else is a (drive-letter) path
-        // with `\` separators rewritten to `/`.
-        if let Some(unc) = path.strip_prefix("\\\\") {
-            // First segment after `\\` is the host; the remainder is the path.
-            let (host, rest) = match unc.find('\\') {
-                Some(idx) => (&unc[..idx], &unc[idx..]),
-                None => (unc, ""),
-            };
-            let rest_fwd = rest.replace('\\', "/");
-            format!("file://{}{}", host, encode_file_url_path(&rest_fwd))
-        } else {
-            // Node's win32 `pathToFileURL` resolves the input against the
-            // cwd first (`path.win32.resolve(filepath)`), then preserves a
-            // trailing separator — mirroring the posix arm below. Absolute
-            // inputs pass through resolution unchanged (modulo
-            // normalization).
-            let preserve_trailing_sep = path.ends_with('\\') || path.ends_with('/');
-            let mut resolved = crate::path::resolve_win32_str(&path);
-            if preserve_trailing_sep && !resolved.ends_with('\\') {
-                resolved.push('\\');
-            }
-            let fwd = resolved.replace('\\', "/");
-            let encoded = encode_file_url_path(&fwd);
-            if encoded.starts_with('/') {
-                format!("file://{}", encoded)
-            } else {
-                format!("file:///{}", encoded)
-            }
-        }
-    } else {
-        let resolved = resolve_path_to_file_url_posix(&path);
-        let encoded = encode_file_url_path(&resolved);
-        if encoded.starts_with('/') {
-            format!("file://{}", encoded)
-        } else {
-            format!("file:///{}", encoded)
-        }
-    }
 }
 
 /// `url.domainToASCII(domain)` (#3059). Node Web-IDL-stringifies the argument
@@ -1060,9 +957,9 @@ fn legacy_url_resolve_impl(from: &str, to: &str) -> String {
     }
 
     let last = src.last().cloned().unwrap_or_default();
-    let has_trailing_slash = (((base.host.is_some() || rel.host.is_some() || src.len() > 1)
+    let has_trailing_slash = ((base.host.is_some() || rel.host.is_some() || src.len() > 1)
         && (last == "." || last == ".."))
-        || last.is_empty());
+        || last.is_empty();
 
     let mut up = 0usize;
     let mut i = src.len();
@@ -1618,3 +1515,8 @@ fn legacy_escape_auth(auth: &str) -> String {
     }
     out
 }
+
+pub(crate) use crate::module_require::file_url_text::{
+    encode_file_url_path, is_js_string_value, module_base_to_path, path_to_file_url_string,
+    resolve_path_to_file_url_posix, string_from_js_value,
+};

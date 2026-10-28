@@ -1238,6 +1238,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         &[I64, I32, PTR, I32, I32, I32, I32, I64, PTR, I32],
     );
     module.declare_function("perry_alloc_layout", PTR, &[PTR]);
+    module.declare_function("perry_alloc_literal_layout", PTR, &[PTR]);
     module.declare_function("perry_alloc_class_family", PTR, &[PTR, I32, I32]);
     module.declare_function(
         "perry_function_family_symbol_set",
@@ -1252,8 +1253,6 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     );
     // `PERRY_CHECK_CONTRACTS` builds only.
     module.declare_function("js_create_family_contract_check", VOID, &[PTR, DOUBLE]);
-    module.declare_function("js_layout_seed_plain", I32, &[PTR, PTR, I32, I32, I32, I64]);
-    module.declare_function("js_shape_register_static_seed", VOID, &[PTR]);
     module.declare_function("js_shape_run_static_seed", VOID, &[]);
     // Inline bump-allocator state accessor + slow path. Ordinary allocation
     // kernels cache `js_inline_arena_state` at function entry. Self-recursive
@@ -1405,6 +1404,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_array_flat_depth", I64, &[I64, DOUBLE]);
     module.declare_function("js_array_flatMap", I64, &[I64, I64]);
     module.declare_function("js_array_sort_with_comparator", I64, &[I64, I64]);
+    module.declare_function("js_array_sort_numeric_order", I64, &[I64, I64, I32]);
+    module.declare_function("js_array_sort_key_order", I64, &[I64, I64, I32, DOUBLE]);
     // #2796: validate sort/toSorted comparator (function | undefined) before sorting.
     module.declare_function("js_validate_array_comparator", I64, &[DOUBLE]);
     // #4091: non-callable callback validators for higher-order array /

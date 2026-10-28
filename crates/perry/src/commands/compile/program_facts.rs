@@ -129,10 +129,15 @@ pub(crate) fn run(
         // else the budget's CPU slots, else cores bounded by memory).
         jobs: perry_codegen::workers::unit_workers(),
         unit_io: dump.is_some(),
+        report: std::env::var("PERRY_FACTS_REPORT").is_ok_and(|v| v == "1"),
     };
-    let list: Vec<(String, &perry_hir::Module)> = modules
+    // Entry outlining moves module bindings into compiler-owned functions.
+    // Facts need the same logical module scope that codegen's globals and
+    // export getters use; retain the emitted HIR unchanged for codegen.
+    let inputs = facts_inputs(modules);
+    let list: Vec<(String, &perry_hir::Module)> = inputs
         .iter()
-        .map(|(p, m)| (p.display().to_string(), m))
+        .map(|(p, m)| (p.clone(), m.as_ref()))
         .collect();
     let pf = if per_unit_facts(std::env::var("PERRY_FACTS_UNITS").ok().as_deref()) {
         perry_wpfacts::compute_units(&list, &cfg)
@@ -303,6 +308,7 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
     let unchecked = pf.sabotage.as_deref() == Some("unchecked");
     out.interp_guard = pf.interp_guard.is_some() && !unchecked;
     out.super_unrelinked = pf.super_unrelinked.clone();
+    out.indexed_metadata_pristine = pf.indexed_metadata_pristine();
     // `PERRY_FACTS_SABOTAGE=fnproto-unwritten`: claim the fact for every
     // program (the bind gap tests that write Function.prototype must fail).
     out.fnproto_bind_unwritten =
@@ -310,6 +316,18 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
     let Some(mb) = pf.bindings_for(path) else {
         return out;
     };
+    if !out.interp_guard {
+        for (id, params, expression) in &mb.numeric_functions {
+            out.numeric_functions.insert(
+                *id,
+                perry_codegen::FactsNumericFunction {
+                    params: params.clone(),
+                    expression: perry_codegen::FactsNumericExpr::from_hir(expression)
+                        .expect("validated numeric expression"),
+                },
+            );
+        }
+    }
     let stable = pf.stable_classes();
     let recv = |b: &perry_wpfacts::BindingFacts| -> Option<FactsRecv> {
         let class_ids: Vec<u32> = b
@@ -355,6 +373,22 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
             .collect()
     };
     for (id, b) in &mb.locals {
+        if !interp {
+            if let Some(o) = &b.indexed_owner {
+                out.indexed_owners.insert(
+                    *id,
+                    perry_codegen::FactsIndexedOwner {
+                        kind: o.kind,
+                        min_len: o.min_len,
+                        exact_len: o.exact_len,
+                        allocations: o.allocations.clone(),
+                    },
+                );
+            }
+            if !b.other && b.class_ids.is_empty() && b.prims == prim::NUM {
+                out.number_inputs.insert(*id);
+            }
+        }
         if let Some(r) = recv(b) {
             out.locals.insert(*id, r);
         }
@@ -441,4 +475,23 @@ mod facts_mode_tests {
     fn whole_program_is_an_explicit_opt_in() {
         assert!(!per_unit_facts(Some("0")));
     }
+}
+
+#[cfg(test)]
+#[path = "program_facts/outlined_tests.rs"]
+mod outlined_tests;
+
+/// Borrow ordinary modules; reconstruct only outlined module entries.
+fn facts_inputs(
+    modules: &BTreeMap<PathBuf, perry_hir::Module>,
+) -> Vec<(String, std::borrow::Cow<'_, perry_hir::Module>)> {
+    modules
+        .iter()
+        .map(|(p, m)| {
+            (
+                p.display().to_string(),
+                perry_codegen::codegen::entry_outline::logical_entry_module(m),
+            )
+        })
+        .collect()
 }

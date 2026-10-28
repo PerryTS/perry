@@ -113,7 +113,7 @@ unsafe fn existing_own_data_overwrite(
         // URL's visible fields are live views over one backing URL. An own
         // slot exists for e.g. `pathname`, but its setter must also rebuild
         // `href`/`origin`; do not mistake that slot for ordinary data.
-        || ((*obj).class_id == 0 && crate::url::is_url_object_shape(obj))
+        || ((*obj).class_id == 0 && crate::object::url_layout::is_url_object_shape(obj))
     {
         return false;
     }
@@ -523,7 +523,8 @@ pub(crate) fn try_readd_stable_tombstone(
                     && gc._reserved & crate::gc::OBJ_FLAG_STABLE_TOMBSTONES != 0
                     && crate::object::object_is_regular(obj)
                     && !crate::array::object_prototype_addr_matches(obj as usize)
-                    && ((*obj).class_id != 0 || !crate::url::is_url_object_shape(obj)),
+                    && ((*obj).class_id != 0
+                        || !crate::object::url_layout::is_url_object_shape(obj)),
             )
         })?;
         if !eligible {
@@ -620,7 +621,7 @@ unsafe fn try_readd_stable_tombstone_sso_no_grow(
         || gc._reserved & crate::gc::OBJ_FLAG_STABLE_TOMBSTONES == 0
         || !crate::object::object_is_regular(obj)
         || crate::array::object_prototype_addr_matches(obj as usize)
-        || ((*obj).class_id == 0 && crate::url::is_url_object_shape(obj))
+        || ((*obj).class_id == 0 && crate::object::url_layout::is_url_object_shape(obj))
     {
         return None;
     }

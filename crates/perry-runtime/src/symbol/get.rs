@@ -250,7 +250,7 @@ unsafe fn resolve_explicit_object_prototype_symbol(
     explicit_prototype_symbol_lookup(obj_f64, sym_f64).map(|lookup| match lookup {
         PrototypeSymbolLookup::Slot(slot) => slot.read(receiver),
         PrototypeSymbolLookup::Proxy(proxy) => {
-            crate::proxy::proxy_get_from_prototype(proxy, sym_f64, receiver)
+            crate::proxy_hooks::proxy_get_from_prototype(proxy, sym_f64, receiver)
         }
     })
 }
@@ -308,7 +308,7 @@ unsafe fn explicit_prototype_symbol_lookup(
             return None;
         }
         let proto = f64::from_bits(proto_bits);
-        if crate::proxy::js_proxy_is_proxy(proto) != 0 {
+        if crate::proxy_hooks::proxy_is_proxy(proto) != 0 {
             return Some(PrototypeSymbolLookup::Proxy(proto));
         }
         if let Some(slot) = own_symbol_slot(f64::from_bits(proto_bits), sym_f64) {
@@ -537,8 +537,8 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
     // trap (which forwards to the target). drizzle's aliased-column proxies are
     // read with symbol keys (`col[entityKind]`, `col[Table.Symbol.*]`) while
     // building a relational query.
-    if crate::proxy::js_proxy_is_proxy(obj_f64) != 0 {
-        return crate::proxy::proxy_get_with_receiver(obj_f64, sym_f64, receiver_f64);
+    if crate::proxy_hooks::proxy_is_proxy(obj_f64) != 0 {
+        return crate::proxy_hooks::proxy_get_with_receiver(obj_f64, sym_f64, receiver_f64);
     }
     // A `Date` is a `DateCell` (NaN-boxed pointer, NOT an `ObjectHeader`). A
     // symbol-keyed read (`d[Symbol.toPrimitive]`, `d[Symbol.iterator]`) must
@@ -830,7 +830,7 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
         // undefined. Proxies (registered small ids) keep their own semantics.
         if crate::value::addr_class::is_small_handle(id)
             && !crate::object::is_valid_obj_ptr(id as *const u8)
-            && crate::proxy::js_proxy_is_proxy(obj_f64) == 0
+            && crate::proxy_hooks::proxy_is_proxy(obj_f64) == 0
         {
             // A user-stored symbol property (set via the symbol side table,
             // keyed by the handle pointer — e.g. @hono/node-server's
@@ -1136,7 +1136,9 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
             }
         }
     }
-    if raw_addr >= 0x1000 && crate::typedarray::lookup_typed_array_kind(raw_addr).is_some() {
+    if raw_addr >= 0x1000
+        && crate::typedarray_hook_slots::lookup_typed_array_kind(raw_addr).is_some()
+    {
         let iter_wk = well_known_symbol("iterator");
         if !iter_wk.is_null() {
             let iter_f64 =

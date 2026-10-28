@@ -1,0 +1,1521 @@
+{
+  "version": 1,
+  "groups": {
+    "body:object_prototype_dunder_proto_getter_thunk": [
+      {
+        "name": "Object.prototype.__proto__.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "get __proto__"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::proto_methods::object_prototype_dunder_proto_getter_thunk",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::proto_methods::object_prototype_dunder_proto_getter_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_6e17bc79323da081430c",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "body:object_prototype_dunder_proto_setter_thunk": [
+      {
+        "name": "Object.prototype.__proto__.<set>",
+        "kind": "setter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "set __proto__"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::proto_methods::object_prototype_dunder_proto_setter_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::proto_methods::object_prototype_dunder_proto_setter_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_1b692688bc305fec9a6e",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "body:url_prototype_href_thunk": [
+      {
+        "name": "URL.prototype.toJSON",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "toJSON"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::proto_methods::url_prototype_href_thunk",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 3584,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::proto_methods::url_prototype_href_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_bd15d1c5620c2edf88d8",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "URL.prototype.toString",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "toString"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::proto_methods::url_prototype_href_thunk",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 3584,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::proto_methods::url_prototype_href_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_bd15d1c5620c2edf88d8",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "objects": [
+      {
+        "name": "Request.prototype.body.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "get body"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::proto_methods::fetch_body",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 3584,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::proto_methods::fetch_body",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_c020d00df942c43d3a72",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Request.prototype.bodyUsed.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "get bodyUsed"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::proto_methods::fetch_body_used",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 3584,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::proto_methods::fetch_body_used",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_88f425afe30e7775a773",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Request.prototype.cache.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "get cache"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::proto_methods::fetch_cache",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 3584,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::proto_methods::fetch_cache",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_f615b34378d4a136c99d",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Request.prototype.credentials.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "get credentials"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::proto_methods::fetch_credentials",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 3584,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::proto_methods::fetch_credentials",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_c731436cb3356a33a7f8",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Request.prototype.destination.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "get destination"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::proto_methods::fetch_destination",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 3584,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::proto_methods::fetch_destination",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_169686279853a5747f16",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Request.prototype.duplex.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "get duplex"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::proto_methods::fetch_duplex",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 3584,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::proto_methods::fetch_duplex",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_2df609fbe73456a4444d",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Request.prototype.headers.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "get headers"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::proto_methods::fetch_headers",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 3584,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::proto_methods::fetch_headers",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_931fec444b44c7f2b50f",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Request.prototype.integrity.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "get integrity"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::proto_methods::fetch_integrity",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 3584,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::proto_methods::fetch_integrity",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_c7b278b52ec53c37e3e5",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Request.prototype.keepalive.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "get keepalive"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::proto_methods::fetch_keepalive",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 3584,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::proto_methods::fetch_keepalive",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_046e9899abd3031171c5",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Request.prototype.method.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "get method"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::proto_methods::fetch_method",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 3584,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::proto_methods::fetch_method",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_d904f49954b016dbeb3d",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Request.prototype.mode.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "get mode"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::proto_methods::fetch_mode",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 3584,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::proto_methods::fetch_mode",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_6dcca9faec4179ec2aa1",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Request.prototype.redirect.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "get redirect"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::proto_methods::fetch_redirect",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 3584,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::proto_methods::fetch_redirect",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_fcd58abf1b9c49ca7dc7",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Request.prototype.referrer.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "get referrer"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::proto_methods::fetch_referrer",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 3584,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::proto_methods::fetch_referrer",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_df23d14a7cafdacf5c5a",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Request.prototype.referrerPolicy.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "get referrerPolicy"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::proto_methods::fetch_referrer_policy",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 3584,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::proto_methods::fetch_referrer_policy",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_f60e77e0c896b3c40439",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Request.prototype.signal.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "get signal"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::proto_methods::fetch_signal",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 3584,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::proto_methods::fetch_signal",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_2e962e5fc8ad8688d589",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Request.prototype.url.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "get url"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::proto_methods::fetch_url",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 3584,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::proto_methods::fetch_url",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_7c7b9df3297567b7f4e9",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Response.prototype.body.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "get body"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::proto_methods::fetch_body",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 3584,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::proto_methods::fetch_body",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_c020d00df942c43d3a72",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Response.prototype.bodyUsed.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "get bodyUsed"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::proto_methods::fetch_body_used",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 3584,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::proto_methods::fetch_body_used",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_88f425afe30e7775a773",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Response.prototype.headers.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "get headers"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::proto_methods::fetch_headers",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 3584,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::proto_methods::fetch_headers",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_931fec444b44c7f2b50f",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Response.prototype.ok.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "get ok"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::proto_methods::fetch_ok",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 3584,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::proto_methods::fetch_ok",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_78a4bd29f5f5c8f6faa1",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Response.prototype.redirected.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "get redirected"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::proto_methods::fetch_redirected",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 3584,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::proto_methods::fetch_redirected",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_40f52d24425c5d42eeee",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Response.prototype.status.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "get status"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::proto_methods::fetch_status",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 3584,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::proto_methods::fetch_status",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_4b78de1630e64d69d58a",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Response.prototype.statusText.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "get statusText"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::proto_methods::fetch_status_text",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 3584,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::proto_methods::fetch_status_text",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_66675fa47c30666b440b",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Response.prototype.type.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "get type"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::proto_methods::fetch_type",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 3584,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::proto_methods::fetch_type",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_1f3d0dacc4a8adc8f384",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "Response.prototype.url.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "get url"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::proto_methods::fetch_url",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 3584,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::proto_methods::fetch_url",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_7c7b9df3297567b7f4e9",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ]
+  }
+}

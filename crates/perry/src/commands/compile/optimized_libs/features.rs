@@ -165,13 +165,34 @@ pub(crate) fn auto_optimized_cross_features(
     }
     // Binary-size feature gating (kept in sync with the inline list on `main`):
     // each engine/table is linked only when the program actually uses it.
-    if ctx.uses_regex {
+    // V8/IPC/worker deserialization can materialize a RegExp supplied by
+    // another program, even when this program has no RegExp literal.
+    if ctx.uses_regex
+        || ctx.uses_proc_ipc
+        || ctx.uses_get_builtin_module
+        || ctx.native_module_imports.contains("v8")
+        || ctx.native_module_imports.contains("worker_threads")
+    {
         cross_features.push("perry-runtime/regex-engine".to_string());
     }
-    if ctx.uses_temporal {
+    let needs_dyn_eval = perry_hir::has_deferred_dynamic_code_sites()
+        || ctx.native_module_imports.contains("vm")
+        || ctx.uses_data_url_dynamic_import;
+    if ctx.uses_temporal
+        || ctx.uses_get_builtin_module
+        || needs_dyn_eval
+        || !ctx.native_addons.is_empty()
+    {
         cross_features.push("perry-runtime/temporal".to_string());
     }
-    if ctx.uses_url {
+    if ctx.uses_url
+        || ctx.uses_get_builtin_module
+        || ctx
+            .native_module_imports
+            .iter()
+            .any(|module| matches!(module.as_str(), "url" | "module"))
+        || !ctx.native_addons.is_empty()
+    {
         cross_features.push("perry-runtime/url-engine".to_string());
     }
     if ctx.uses_string_normalize {
@@ -183,11 +204,240 @@ pub(crate) fn auto_optimized_cross_features(
     // `Intl.*` namespace surface — see perry-runtime's `intl-namespace`.
     // A deferred dynamic-code site can construct `Intl.…` from a runtime
     // string, so force it on there too (mirrors the dyn-eval regex rule).
-    let needs_dyn_eval = perry_hir::has_deferred_dynamic_code_sites()
-        || ctx.native_module_imports.contains("vm")
-        || ctx.uses_data_url_dynamic_import;
     if ctx.uses_intl_namespace || needs_dyn_eval {
         cross_features.push("perry-runtime/intl-namespace".to_string());
+    }
+    let io_module = ctx.native_module_imports.iter().any(|module| {
+        matches!(
+            module.as_str(),
+            "net"
+                | "tls"
+                | "http"
+                | "https"
+                | "http2"
+                | "dgram"
+                | "dns"
+                | "dns/promises"
+                | "fs"
+                | "fs/promises"
+                | "child_process"
+                | "worker_threads"
+                | "readline"
+                | "readline/promises"
+                | "node-pty"
+                | "zlib"
+                | "crypto"
+        )
+    });
+    // Native producers include binary deserialization, bigint-valued OS/fs
+    // metadata, FFI, histogram and WebAssembly results. Their returned values
+    // must keep the generic BigInt operators and formatting paths installed.
+    if features.contains("crypto")
+        || features.contains("database-sqlite")
+        || features.contains("bundled-ethers")
+        || ctx.uses_bigint
+        || ctx.uses_proc_ipc
+        || ctx.uses_get_builtin_module
+        || ctx.uses_temporal
+        || ctx.needs_wasm_runtime
+        || !ctx.native_addons.is_empty()
+        || needs_dyn_eval
+        || ctx.native_module_imports.iter().any(|m| {
+            matches!(
+                m.as_str(),
+                "v8" | "worker_threads"
+                    | "child_process"
+                    | "fs"
+                    | "fs/promises"
+                    | "os"
+                    | "perf_hooks"
+                    | "bun"
+                    | "bun:ffi"
+                    | "crypto"
+                    | "ethers"
+                    | "sqlite"
+                    | "bun:sqlite"
+            )
+        })
+    {
+        cross_features.push("perry-runtime/bigint".to_string());
+    }
+    if ctx.uses_date
+        || ctx.uses_get_builtin_module
+        || ctx.uses_proc_ipc
+        || needs_dyn_eval
+        || !ctx.native_addons.is_empty()
+        || ctx.native_module_imports.iter().any(|m| {
+            matches!(
+                m.as_str(),
+                "v8" | "worker_threads"
+                    | "child_process"
+                    | "fs"
+                    | "fs/promises"
+                    | "crypto"
+                    | "bun"
+                    | "bun:ffi"
+            )
+        })
+    {
+        cross_features.push("perry-runtime/date".to_string());
+    }
+    if ctx.uses_perf_hooks
+        || ctx.uses_get_builtin_module
+        || needs_dyn_eval
+        || !ctx.native_addons.is_empty()
+        || ctx.native_module_imports.contains("perf_hooks")
+    {
+        cross_features.push("perry-runtime/perf-hooks".to_string());
+    }
+    if ctx.uses_os
+        || ctx.uses_get_builtin_module
+        || ctx.uses_proc_ipc
+        || needs_dyn_eval
+        || !ctx.native_addons.is_empty()
+        || ctx.native_module_imports.iter().any(|m| {
+            matches!(
+                m.as_str(),
+                "os" | "process"
+                    | "tty"
+                    | "readline"
+                    | "readline/promises"
+                    | "repl"
+                    | "node-pty"
+                    | "@lydell/node-pty"
+                    | "bun-pty"
+            )
+        })
+    {
+        cross_features.push("perry-runtime/os".to_string());
+    }
+    if ctx.uses_messaging
+        || ctx.uses_get_builtin_module
+        || needs_dyn_eval
+        || !ctx.native_addons.is_empty()
+        || ctx.native_module_imports.contains("worker_threads")
+    {
+        cross_features.push("perry-runtime/messaging".to_string());
+    }
+    if ctx.uses_event_target
+        || ctx.uses_get_builtin_module
+        || ctx.uses_thread_codec
+        || ctx.uses_perf_hooks
+        || ctx.uses_messaging
+        || ctx.uses_fetch
+        || ctx.uses_global_webfetch
+        || ctx.uses_global_webcrypto
+        || ctx.uses_global_websocket
+        || needs_dyn_eval
+        || !ctx.native_addons.is_empty()
+        || ctx.native_module_imports.iter().any(|m| {
+            matches!(
+                m.as_str(),
+                "perf_hooks" | "crypto" | "worker_threads" | "undici" | "bun" | "perry/thread"
+            )
+        })
+    {
+        cross_features.push("perry-runtime/event-target".to_string());
+    }
+    if ctx.uses_typedarray
+        || ctx.uses_proc_ipc
+        || ctx.uses_get_builtin_module
+        || ctx.uses_thread_codec
+        || ctx.uses_fetch
+        || ctx.uses_global_webfetch
+        || ctx.uses_global_webcrypto
+        || ctx.uses_global_websocket
+        || needs_dyn_eval
+        || !ctx.native_addons.is_empty()
+        || ctx.native_module_imports.iter().any(|m| {
+            matches!(
+                m.as_str(),
+                "buffer"
+                    | "fs"
+                    | "fs/promises"
+                    | "crypto"
+                    | "v8"
+                    | "http"
+                    | "http2"
+                    | "https"
+                    | "net"
+                    | "tls"
+                    | "dgram"
+                    | "worker_threads"
+                    | "child_process"
+                    | "process"
+                    | "os"
+                    | "bun"
+                    | "bun:jsc"
+                    | "bun:ffi"
+                    | "sqlite"
+                    | "perry/thread"
+            )
+        })
+    {
+        cross_features.push("perry-runtime/typedarray".to_string());
+    }
+    // Clone-producing APIs and worker completions share the thread codec.
+    if ctx.uses_thread_codec
+        || ctx.uses_worker_threads
+        || ctx.uses_proc_ipc
+        || ctx.uses_global_atomics
+        || ctx.uses_get_builtin_module
+        || needs_dyn_eval
+        || !ctx.native_addons.is_empty()
+        || ctx.native_module_imports.iter().any(|m| {
+            matches!(
+                m.as_str(),
+                "worker_threads"
+                    | "perry/thread"
+                    | "perf_hooks"
+                    | "module"
+                    | "diagnostics_channel"
+                    | "v8"
+                    | "child_process"
+            )
+        })
+    {
+        cross_features.push("perry-runtime/thread".to_string());
+    }
+    // Install observation before user scheduling, even for a later require.
+    if ctx
+        .native_module_imports
+        .iter()
+        .any(|m| matches!(m.as_str(), "async_hooks" | "events"))
+        || ctx.uses_get_builtin_module
+        || needs_dyn_eval
+        || !ctx.native_addons.is_empty()
+    {
+        cross_features.push("perry-runtime/async-hooks".to_string());
+    }
+    if ctx.uses_proxy
+        || ctx.uses_get_builtin_module
+        || needs_dyn_eval
+        || !ctx.native_addons.is_empty()
+    {
+        cross_features.push("perry-runtime/proxy".to_string());
+    }
+    if ctx.uses_turnloop
+        || io_module
+        || ctx.uses_fetch
+        || ctx.uses_proc_ipc
+        || ctx.uses_get_builtin_module
+        || features.contains("async-runtime")
+        || needs_dyn_eval
+    {
+        cross_features.push("perry-runtime/turnloop".to_string());
+    }
+    // A formatter-only program can reach stringify, without creating a global
+    // namespace or constructing parser/tape values. The full JSON installer
+    // also fills formatting slots when the JSON API itself is reachable.
+    let json_namespace =
+        ctx.uses_global_json || (ctx.uses_json_format && !ctx.native_addons.is_empty());
+    if ctx.uses_json_engine && !json_namespace && !needs_dyn_eval {
+        cross_features.push("perry-runtime/json-engine".to_string());
+    }
+    if ctx.uses_json_format && !ctx.uses_json_engine && !json_namespace && !needs_dyn_eval {
+        cross_features.push("perry-runtime/json-format".to_string());
     }
     // Per-namespace globalThis member tables — see perry-runtime's `global-*`.
     // A deferred dynamic-code site can reach any namespace by runtime string,
@@ -195,7 +445,7 @@ pub(crate) fn auto_optimized_cross_features(
     let dynamic_code = needs_dyn_eval;
     for (used, feat) in [
         (ctx.uses_global_math, "global-math"),
-        (ctx.uses_global_json, "global-json"),
+        (json_namespace, "global-json"),
         (ctx.uses_global_reflect, "global-reflect"),
         (ctx.uses_global_atomics, "global-atomics"),
         (ctx.uses_global_url, "global-url"),
@@ -203,7 +453,14 @@ pub(crate) fn auto_optimized_cross_features(
         (ctx.uses_global_websocket, "global-websocket"),
         (ctx.uses_global_webcrypto, "global-webcrypto"),
         (ctx.uses_global_webfetch, "global-webfetch"),
-        (ctx.uses_proc_ipc, "proc-ipc"),
+        (
+            ctx.uses_proc_ipc
+                || ctx.uses_get_builtin_module
+                || ctx.native_module_imports.contains("cluster")
+                || needs_dyn_eval
+                || !ctx.native_addons.is_empty(),
+            "proc-ipc",
+        ),
     ] {
         if used || dynamic_code {
             cross_features.push(format!("perry-runtime/{feat}"));
@@ -220,7 +477,11 @@ pub(crate) fn auto_optimized_cross_features(
     // archive and installed only for a program that references one. The GC and
     // typed-feedback instruments are not installs at all: they exist only in
     // the instrumented archives (`instrumented_variant_requested`).
-    if ctx.uses_diagnostics {
+    if ctx.uses_diagnostics
+        || ctx.uses_get_builtin_module
+        || needs_dyn_eval
+        || !ctx.native_addons.is_empty()
+    {
         cross_features.push("perry-runtime/diagnostics".to_string());
     }
     if ctx.uses_dgram {

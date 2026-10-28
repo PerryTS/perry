@@ -99,7 +99,7 @@ pub(super) fn attach_promise_all_state(promise: *mut Promise, state: PromiseAllS
         match (*promise).state {
             PromiseState::Fulfilled => {
                 TASK_QUEUE.with(|q| {
-                    q.borrow_mut().push_back(Task::PromiseAll(
+                    q.borrow_mut().enqueue_promise_job(Task::PromiseAll(
                         state,
                         (*promise).value,
                         true,
@@ -110,7 +110,7 @@ pub(super) fn attach_promise_all_state(promise: *mut Promise, state: PromiseAllS
             }
             PromiseState::Rejected => {
                 TASK_QUEUE.with(|q| {
-                    q.borrow_mut().push_back(Task::PromiseAll(
+                    q.borrow_mut().enqueue_promise_job(Task::PromiseAll(
                         state,
                         (*promise).reason,
                         false,
@@ -282,7 +282,7 @@ pub extern "C" fn js_value_is_promise(value: f64) -> i32 {
     }
     // Off-GC-heap header-less allocations (small typed arrays / buffers) are
     // never Promises and must not be header-probed (#5226).
-    if crate::typedarray::is_offheap_sidetable_alloc(ptr_usize) {
+    if crate::typedarray_hook_slots::is_offheap_sidetable_alloc(ptr_usize) {
         return 0;
     }
     unsafe {
@@ -1303,7 +1303,7 @@ pub extern "C" fn js_assimilate_thenable(value: f64) -> f64 {
     // first: they have no GcHeader, so they must be excluded before any probe
     // that back-reads `raw_ptr - GC_HEADER_SIZE` — including the
     // `is_date_cell_addr` call in this very chain (#5226).
-    if crate::typedarray::is_offheap_sidetable_alloc(raw_ptr)
+    if crate::typedarray_hook_slots::is_offheap_sidetable_alloc(raw_ptr)
         || crate::set::is_registered_set(raw_ptr)
         || crate::map::is_registered_map(raw_ptr)
         || crate::symbol::is_registered_symbol(raw_ptr)

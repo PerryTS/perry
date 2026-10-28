@@ -5,7 +5,7 @@ use std::sync::{
     Mutex,
 };
 
-const WORLD: &str = r#"
+pub(crate) const WORLD: &str = r#"
 package perry:host-resources@1.0.0;
 interface tokens {
   resource token { constructor(); read: func() -> u32; }
@@ -28,7 +28,7 @@ world plugin {
 }
 "#;
 
-const COMPONENT: &str = r#"
+pub(crate) const COMPONENT: &str = r#"
 (component
   (import "perry:host-resources/tokens@1.0.0" (instance $tokens
     (export "token" (type $token (sub resource)))

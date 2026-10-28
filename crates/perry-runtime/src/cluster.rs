@@ -855,7 +855,7 @@ extern "C" fn cluster_worker_kill(
     signal: f64,
 ) -> f64 {
     if is_self_worker_value(this.as_f64()) {
-        let _ = crate::os::js_process_kill(crate::os::js_process_pid(), signal);
+        let _ = crate::os_hook_slots::js_process_kill(crate::os::js_process_pid(), signal);
         return TAG_UNDEFINED_F64;
     }
     let _ = crate::child_process::cp_method_kill(std::ptr::null(), this, signal);
@@ -1663,3 +1663,5 @@ fn value_to_string(value: f64) -> Option<String> {
             .map(|s| s.to_string())
     }
 }
+
+crate::realm_decl!("cluster.realm.json#*");

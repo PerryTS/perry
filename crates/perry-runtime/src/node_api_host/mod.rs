@@ -404,9 +404,29 @@ impl Env {
 
 static NEXT_ENV_SERIAL: AtomicU64 = AtomicU64::new(1);
 
-crate::perry_thread_local! {
-    static NODE_API_ENV: RefCell<Option<Box<Env>>> = const { RefCell::new(None) };
+mod env_storage {
+    use super::*;
+    type Value = RefCell<Option<Box<Env>>>;
+    type Storage = crate::tls_hot::HotCell<Value, { std::mem::needs_drop::<Value>() as usize }>;
+    crate::__perry_thread_local_storage!(Storage, const { RefCell::new(None) });
+    pub(super) fn resolve(idx: u32) -> Result<*mut u8, crate::tls_hot::AccessError> {
+        STORAGE.try_with(|cell| {
+            cell.arm_guard(idx);
+            cell.value_addr()
+        })
+    }
+    pub(super) static KEY: crate::tls_hot::HotKey<Value> = crate::tls_hot::HotKey::new(
+        crate::tls_hot::SlotId::named(concat!(
+            module_path!(),
+            "::NODE_API_ENV@",
+            line!(),
+            ":",
+            column!()
+        )),
+        crate::native_finalizer_hook::resolve_env_storage,
+    );
 }
+use env_storage::KEY as NODE_API_ENV;
 
 /// Return the current Perry agent's lazily-created Node-API environment.
 pub fn current_env() -> NapiEnv {
@@ -525,7 +545,10 @@ pub fn scan_node_api_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) 
         // including contexts created without a JavaScript resource value.
         for context in &mut env.async_contexts {
             if !context.destroyed {
-                crate::async_hooks::resource_state::scan_token(&mut context.ids.async_id, visitor);
+                crate::async_hook_slots::resource_state::scan_token(
+                    &mut context.ids.async_id,
+                    visitor,
+                );
             }
         }
         for tsfn in &env.tsfns {
@@ -603,3 +626,10 @@ pub(crate) fn reset_env_for_test() {
 mod tests;
 #[cfg(test)]
 mod v10_tests;
+
+pub(crate) fn install_storage_resolvers() {
+    crate::native_finalizer_hook::set_env_storage(env_storage::resolve);
+    loader::install_legacy_storage();
+    metadata::install_finalizer_storage();
+    async_work::install_completion_queue();
+}

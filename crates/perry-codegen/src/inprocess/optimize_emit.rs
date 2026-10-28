@@ -15,6 +15,8 @@ pub(super) fn optimize_and_emit(
     native_roots: bool,
     mut stats: Option<&mut UnitCodegenStats>,
 ) -> Result<Vec<Vec<u8>>> {
+    #[cfg(feature = "target-wasi")]
+    crate::wasi_toolchain::check_linked(effective_target)?;
     global_init(mllvm);
     announce();
 
@@ -75,6 +77,7 @@ pub(super) fn optimize_and_emit(
     // machine's real datalayout.
     module.set_triple(&triple);
     module.set_data_layout(&tm.get_target_data().get_data_layout());
+    super::coff::coalesce_helpers(module, effective_target);
 
     // RS4GC must run BEFORE the optimization pipeline, and — critically — in
     // this process, against this LLVM.

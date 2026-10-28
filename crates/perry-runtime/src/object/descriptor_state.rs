@@ -279,7 +279,7 @@ pub(crate) fn note_descriptor_target_edits(obj: usize, edits: &[AttrsEdit<'_>]) 
         edit.materialize_data_keys(edits);
     }
     let obj = function.as_ref().map_or(obj, |edit| edit.bag as usize);
-    if crate::typedarray::lookup_typed_array_kind(obj).is_some() {
+    if crate::typedarray_hook_slots::lookup_typed_array_kind(obj).is_some() {
         return;
     }
     unsafe {
@@ -525,7 +525,7 @@ pub(crate) unsafe fn holder_word_blocks_store(mut bits: u64, name: &[u8]) -> Opt
             // attributes when they are live there, else the walk decides.
             if (*holder).class_id == crate::object::NATIVE_MODULE_CLASS_ID
                 || class_registry::is_class_object_ptr(holder.cast())
-                || crate::typedarray::lookup_typed_array_kind(p).is_some()
+                || crate::typedarray_hook_slots::lookup_typed_array_kind(p).is_some()
                 || super::exotic_expando::exotic_expando_kind_of_value(
                     crate::value::js_nanbox_pointer(p as i64),
                 )
@@ -723,7 +723,7 @@ pub(crate) unsafe fn plain_custom_prototype_may_intercept(obj_addr: usize, key: 
         {
             return true;
         }
-        if crate::typedarray::lookup_typed_array_kind(p).is_some() {
+        if crate::typedarray_hook_slots::lookup_typed_array_kind(p).is_some() {
             return true;
         }
         let proto_value = crate::value::js_nanbox_pointer(p as i64);
@@ -835,7 +835,7 @@ pub(crate) unsafe fn plain_data_write_may_intercept(addr: usize, class_id: u32, 
     // arrays (small ones are plain-alloc'd without a GcHeader) or for exotic
     // expando hosts, so their descriptors are invisible to the flag check
     // above — never fast-path them once any descriptor exists.
-    if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
+    if crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some() {
         return true;
     }
     let value = crate::value::js_nanbox_pointer(addr as i64);

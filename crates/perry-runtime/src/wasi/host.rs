@@ -94,7 +94,7 @@ pub(super) fn new(options: &ValidatedOptions) -> f64 {
         // Process stdio is inherited by the provider. Explicit descriptors
         // from fs.openSync are Perry IDs and must be cloned through fs.
         fd.map(|fd| {
-            crate::fs::try_clone_registered_fd(fd).unwrap_or_else(|| {
+            crate::fs_hook_slots::try_clone_registered_fd(fd).unwrap_or_else(|| {
                 crate::fs::validate::throw_error_with_code(
                     "bad WASI stdio descriptor",
                     "UVWASI_EINVAL",

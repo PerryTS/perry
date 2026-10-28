@@ -262,21 +262,12 @@ impl Word {
     /// This position's word: `entry` for `key`, after the cumulative `prev`.
     #[inline(always)]
     unsafe fn after(prev: Word, entry: u8, key: impl AttributeKey) -> Word {
-        let mut w = Word { entry, ..prev };
-        if prev.summary & WORD_SLOT != 0 {
-            w.summary &= !WORD_SLOT;
-            w.entry_bloom = u16::MAX;
-            w.accessor_bloom = u16::MAX;
-        }
-        if entry != 0 {
-            w.summary |= entry_summary(entry);
-            let bit = key.bloom_bit();
-            w.entry_bloom |= bit;
-            if entry & ENTRY_ACCESSOR != 0 {
-                w.accessor_bloom |= bit;
-            }
-        }
-        w
+        Word::decode(perry_abi::canonical_key_attribute_word(
+            prev.encode(),
+            entry,
+            if entry != 0 { key.bloom_bit() } else { 0 },
+            None,
+        ))
     }
 }
 
@@ -1074,8 +1065,10 @@ pub(crate) fn attrs_live_in_keys_of_bits(bits: u64) -> bool {
     let header = unsafe { header.as_ref() };
     header.obj_type == crate::gc::GC_TYPE_OBJECT
         && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
-        && crate::typedarray::lookup_typed_array_kind((bits & crate::value::POINTER_MASK) as usize)
-            .is_none()
+        && crate::typedarray_hook_slots::lookup_typed_array_kind(
+            (bits & crate::value::POINTER_MASK) as usize,
+        )
+        .is_none()
 }
 
 /// [`attrs_live_in_keys_of_bits`] for a raw owner address of unknown
@@ -1393,7 +1386,7 @@ pub(crate) enum AttrsEdit<'a> {
     Accessor(&'a [u8], bool, bool),
     /// `key` stops being an accessor. Data attributes are kept.
     ClearAccessor(&'a [u8]),
-    /// Every string key becomes non-configurable, and with `freeze` also
+    /// Every property key becomes non-configurable, and with `freeze` also
     /// non-writable (`Object.freeze` / `Object.seal`).
     Integrity { freeze: bool },
     /// Every key returns to the default.
@@ -1460,12 +1453,18 @@ unsafe fn slot_key_bytes<'b>(
 }
 
 /// The entry position `pos` of a list takes after `edits`, from `old`.
-/// Whole-list edits apply to string keys only (a hole or a symbol slot keeps
-/// its entry: symbol attributes are the symbol tables').
+/// Whole-list integrity edits include symbol property entries. Byte-keyed
+/// edits compare string keys only; holes and private entries stay untouched.
 #[inline]
 unsafe fn fold_edits(edits: &[AttrsEdit<'_>], slot: crate::JSValue, old: u8) -> u8 {
     let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     let Some(bytes) = slot_key_bytes(slot, &mut sso) else {
+        if slot.is_pointer() && crate::symbol::js_is_symbol(f64::from_bits(slot.bits())) != 0 {
+            return edits
+                .iter()
+                .filter(|edit| matches!(edit, AttrsEdit::Integrity { .. }))
+                .fold(old, |entry, edit| edit.apply(entry));
+        }
         return old;
     };
     let mut entry = old;
@@ -1595,6 +1594,24 @@ pub(crate) unsafe fn apply_edits(obj: *mut crate::object::ObjectHeader, edits: &
             fold_edits(edits, slot, old)
         });
     crate::object::set_object_keys(obj, rebuilt.view());
+}
+
+/// Restrict an ordinary holder's owned entries inside its integrity operation.
+/// The caller holds a no-move window and publishes the final shape once after
+/// setting its final integrity flags. Other descriptor edits publish normally.
+///
+/// # Safety
+/// obj owns an overflow table and cannot be observed before final publication.
+pub(crate) unsafe fn restrict_owned_integrity(obj: *mut crate::object::ObjectHeader, freeze: bool) {
+    let table = crate::object::overflow::table(obj);
+    debug_assert!(!table.is_null());
+    edit_private_list(
+        obj,
+        table.cast(),
+        0,
+        (*table).length,
+        &[AttrsEdit::Integrity { freeze }],
+    );
 }
 
 /// Edit a dictionary receiver's PRIVATE list in place from position `from`.

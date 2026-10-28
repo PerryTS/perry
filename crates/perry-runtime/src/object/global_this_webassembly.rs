@@ -606,7 +606,7 @@ extern "C" fn webassembly_memory_ctor_thunk(
     } else {
         let buffer = wasm_memory_new_buffer(pages);
         if let Some(this_obj) = value_object_ptr(this) {
-            crate::webassembly::set_memory_buffer(this_obj, buffer);
+            crate::wasm_hook_slots::set_memory_buffer(this_obj, buffer);
             undefined()
         } else {
             // Reached only from a non-construct dispatch that faked new.target;
@@ -615,7 +615,7 @@ extern "C" fn webassembly_memory_ctor_thunk(
             if obj.is_null() {
                 return undefined();
             }
-            crate::webassembly::set_memory_buffer(obj, buffer);
+            crate::wasm_hook_slots::set_memory_buffer(obj, buffer);
             crate::value::js_nanbox_pointer(obj as i64)
         }
     }
@@ -695,7 +695,7 @@ fn wasm_memory_grow_on(this: f64, delta: f64) -> Result<u32, MemoryCtorError> {
             target[..old_bytes].copy_from_slice(source);
         });
     }
-    crate::webassembly::set_memory_buffer(
+    crate::wasm_hook_slots::set_memory_buffer(
         this_obj,
         crate::value::js_nanbox_pointer(new_buf as i64),
     );
@@ -1607,6 +1607,9 @@ mod tests {
 
     #[test]
     fn memory_grow_replaces_buffer_and_returns_old_page_count() {
+        // Direct implementation calls need the installer emitted for a Wasm program.
+        crate::gc::ensure_gc_initialized();
+        crate::feature_hooks::js_runtime_install_wasm_host();
         let instance = js_object_alloc(0, 1);
         js_object_set_field_by_name(instance, named_key(b"buffer"), wasm_memory_new_buffer(1));
         let instance_value = crate::value::js_nanbox_pointer(instance as i64);
@@ -1650,3 +1653,5 @@ mod tests {
         ));
     }
 }
+
+crate::realm_decl!("global_this_webassembly.realm.json#*");

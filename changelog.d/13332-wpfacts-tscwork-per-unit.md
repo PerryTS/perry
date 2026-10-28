@@ -1,0 +1,1 @@
+Per-unit facts keep the callee of a call to a function whose contract the census broke: the reader calls it through the contract its owner publishes after the break, instead of an unknown function. tscwork per unit proves 51,851 of 122,966 read/call sites (was 29,438; whole-program 52,047).

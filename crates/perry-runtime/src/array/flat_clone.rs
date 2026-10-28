@@ -251,7 +251,7 @@ pub(crate) fn dense_spread_copy(value: f64) -> *mut ArrayHeader {
 pub(crate) fn flattenable_array_ptr(value: f64) -> *const ArrayHeader {
     // IsArray recurses through proxies and must throw for a revoked proxy.
     let mut value = value;
-    while let Some(target) = crate::proxy::is_array_proxy_step(value) {
+    while let Some(target) = crate::proxy_hooks::is_array_proxy_step(value) {
         value = target;
     }
 
@@ -594,8 +594,8 @@ pub extern "C" fn js_array_clone(src: *const ArrayHeader) -> *mut ArrayHeader {
             // The previous heuristic required `keys_array.length == 1`, but a
             // URL-adopted URLSearchParams also carries an owner key (2 keys),
             // so spread fell through to the array-like path and produced `[]`.
-            if crate::url::try_read_as_search_params(obj).is_some() {
-                let boxed = crate::url::js_url_search_params_entries_arr(obj);
+            if crate::url_hooks::try_read_as_search_params(obj).is_some() {
+                let boxed = crate::url_hooks::url_search_params_entries_arr(obj);
                 let bits = boxed.to_bits();
                 let ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as *mut ArrayHeader;
                 if !ptr.is_null() {
@@ -682,9 +682,9 @@ pub extern "C" fn js_array_clone(src: *const ArrayHeader) -> *mut ArrayHeader {
         } else {
             0
         };
-        if crate::typedarray::lookup_typed_array_kind(raw_addr).is_some() {
-            return crate::typedarray::typed_array_to_array(
-                raw_addr as *const crate::typedarray::TypedArrayHeader,
+        if crate::typedarray_hook_slots::lookup_typed_array_kind(raw_addr).is_some() {
+            return crate::typedarray_hook_slots::typed_array_to_array(
+                raw_addr as *const crate::typedarray_hook_slots::TypedArrayHeader,
             );
         }
     }

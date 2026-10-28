@@ -75,8 +75,8 @@ preopens and files independently of the shared store's lifetime.
   Async WASI/component scheduling and guest execution quotas are not provided.
 - Node-specific error messages and codes are not a complete compatibility
   promise. Guest pointer failures can surface as WebAssembly runtime errors.
-- Execution qualification is Linux x86_64. The provider has Unix and Windows
-  implementations, but this change does not certify macOS or Windows execution.
+- Execution is qualified on Linux x86_64 and macOS ARM64. Windows qualification
+  remains pending; provider availability alone does not establish execution.
 
 ## Validation
 
@@ -106,3 +106,9 @@ NODE_BIN=/path/to/pinned/node python3 scripts/node_suite_run.py \
 
 See [WASI_ROADMAP.md](WASI_ROADMAP.md) for subsequent component work and
 [WASI_SUPPORT.md](WASI_SUPPORT.md) for the standalone P2 output profile.
+
+The [native platform receipt](validation/wasi-native-host-platforms-20261021.json)
+records source `17318d3ad30db9d43fc09193e3efb1a3f1729381` passing all 56
+P1 oracle comparisons plus the moving-GC context-lifetime case on Linux x86_64
+and macOS ARM64. It also records 26 Linux / 25 macOS P1-host unit tests and
+retained output identities. Windows is not included in those passing results.

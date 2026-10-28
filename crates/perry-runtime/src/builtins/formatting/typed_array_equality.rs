@@ -22,11 +22,11 @@ fn typed_array_view<'s>(
     scope: &'s crate::buffer::bytes::NoGc<'s>,
 ) -> Option<TypedArrayView<'s>> {
     let addr = value_pointer_addr(value)?;
-    let kind = if let Some(kind) = crate::typedarray::lookup_typed_array_kind(addr) {
+    let kind = if let Some(kind) = crate::typedarray_hook_slots::lookup_typed_array_kind(addr) {
         kind
     } else if crate::buffer::is_registered_buffer(addr) && crate::buffer::is_uint8array_buffer(addr)
     {
-        crate::typedarray::KIND_UINT8
+        crate::typedarray_hook_slots::KIND_UINT8
     } else {
         return None;
     };

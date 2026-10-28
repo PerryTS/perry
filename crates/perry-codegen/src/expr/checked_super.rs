@@ -64,9 +64,7 @@ fn ancestor_fields_in_scope(ctx: &FnCtx<'_>, class: &Class) -> bool {
     let mut refs = Vec::new();
     let mut visited = std::collections::HashSet::new();
     for field in &class.fields {
-        if field.origin.is_reservation()
-            || field.name.starts_with("__perry_cap_")
-        {
+        if field.origin.is_reservation() || field.name.starts_with("__perry_cap_") {
             continue;
         }
         for expr in field.init.iter().chain(field.key_expr.iter()) {

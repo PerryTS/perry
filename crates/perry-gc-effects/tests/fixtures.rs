@@ -277,3 +277,77 @@ fn duplicate_definitions_take_the_weaker_row_in_any_order() {
         }
     }
 }
+
+#[test]
+fn installed_callback_delegation_derives_the_actual_callback_effect() {
+    let tmp = tempfile::tempdir().unwrap();
+    for (tag, normal, _, _) in FORMATS {
+        let lib = archive(tmp.path(), &format!("callback-{tag}.a"), normal);
+        let graph = build_graph(&[lib]).unwrap();
+        for (target, expected) in [
+            (
+                "leaf_helper",
+                Entry {
+                    class: Class::Leaf,
+                    throws: false,
+                },
+            ),
+            (
+                "alloc_helper",
+                Entry {
+                    class: Class::AllocOnly,
+                    throws: false,
+                },
+            ),
+            (
+                "throw_helper",
+                Entry {
+                    class: Class::ThrowOnly,
+                    throws: true,
+                },
+            ),
+            (
+                "reenter_helper",
+                Entry {
+                    class: Class::Reenters,
+                    throws: true,
+                },
+            ),
+        ] {
+            let text = format!("{RULES}\nindirect exact indirect_helper => exact {target} -- fixture of a closed installer slot with this exact callback\n");
+            let result = classify(&graph, &load_rules(&text).unwrap(), None).unwrap();
+            assert_eq!(result.table["indirect_helper"], expected, "{tag}: {target}");
+        }
+    }
+}
+
+#[test]
+fn an_active_delegation_requires_an_actual_callback_target() {
+    let tmp = tempfile::tempdir().unwrap();
+    for (tag, normal, _, _) in FORMATS {
+        let lib = archive(tmp.path(), &format!("missing-callback-{tag}.a"), normal);
+        let graph = build_graph(&[lib]).unwrap();
+        let text = format!("{RULES}\nindirect exact indirect_helper => exact renamed_callback -- a callback rename must not silently produce a Leaf cut\n");
+        let error = classify(&graph, &load_rules(&text).unwrap(), None)
+            .err()
+            .expect("missing callback must reject the active delegation");
+        let message = error.to_string();
+        assert!(
+            message.contains("delegated callback pattern matched no functions"),
+            "{tag}: {message}"
+        );
+        assert!(
+            message.contains("indirect_helper") && message.contains("renamed_callback"),
+            "{tag}: {message}"
+        );
+        // Exemptions for other targets remain allowed when the caller is absent.
+        let unused = text.replace(
+            "indirect exact indirect_helper",
+            "indirect exact target_specific_caller",
+        );
+        assert!(
+            classify(&graph, &load_rules(&unused).unwrap(), None).is_ok(),
+            "{tag}: unused rule"
+        );
+    }
+}

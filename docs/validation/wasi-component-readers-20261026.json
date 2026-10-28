@@ -1,0 +1,229 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-26",
+  "scope": "Native TypeScript canonical component readers on Linux",
+  "status": "qualified readers; full WASI 0.3 integration remains open",
+  "sourceParent": "0d84856386af4dc38df9323f8225dbdcd3dd2d80",
+  "qualifiedSnapshot": "v344",
+  "expandedFixtureSnapshot": "v347",
+  "componentHostAbi": 10,
+  "changes": [
+    "Decode WIT future/stream results into private owned nonthenable readers with typed payloads, bounded reads and idempotent disposal.",
+    "Promote observed native read Promises into producer custody without retaining unobserved Promise/reader cycles.",
+    "Soft-close collected unread handles and abandoned pending reads without retiring the Store.",
+    "Invalidate transferred aliases after validated native ownership receipts.",
+    "Collect owned native output when a before hook rejects the result or the read observer was collected."
+  ],
+  "development": {
+    "component": 72,
+    "promise": 59,
+    "asyncHooks": 12
+  },
+  "production": {
+    "component": 72,
+    "promise": 59,
+    "asyncHooks": 12,
+    "closureAbi": 1,
+    "nativeClassGuard": 1,
+    "uid": 65534,
+    "gid": 65534,
+    "panicAbort": true
+  },
+  "compiledProduction": {
+    "reader": {
+      "phases": 6,
+      "allPassed": true,
+      "copiedObjects": 343,
+      "protectedFromspaceEvents": 5
+    },
+    "persistent": {
+      "phases": 6,
+      "allPassed": true,
+      "copiedObjects": 3331,
+      "protectedFromspaceEvents": 7
+    },
+    "async": {
+      "phases": 6,
+      "allPassed": true,
+      "copiedObjects": 3937,
+      "protectedFromspaceEvents": 19
+    },
+    "p3-command": {
+      "phases": 12,
+      "allPassed": true
+    },
+    "p3-http": {
+      "phases": 8,
+      "allPassed": true
+    },
+    "expanded-readers": {
+      "phases": 14,
+      "allPassed": true,
+      "copiedObjects": 10191,
+      "protectedFromspaceEvents": 10
+    }
+  },
+  "isolatedTestHarness": {
+    "initialExitCode": 101,
+    "reason": "panic-abort child thread is main; nested isolation selected zero tests",
+    "correctedEnvironment": {
+      "PERRY_RUNTIME_ISOLATED_TEST_NAME": "main"
+    },
+    "completionMarkers": 11,
+    "productChanges": false
+  },
+  "nonTestNewComponentWarnings": 0,
+  "runtimeTestBinary": {
+    "path": "/root/codex-components-p2-20261021/async-runtime-target/prod/build/perry-runtime/d71d6d2d7042b42b/out/perry_runtime-d71d6d2d7042b42b",
+    "sha256": "d42bc4bf102dd55faf6e335f9f38336ad575e8c72cf2f969c093ddd9b7a6340e",
+    "fresh": false,
+    "uid": 65534,
+    "gid": 65534
+  },
+  "nativeArtifactHashes": {
+    "/root/codex-components-p2-20261021/perry-readers-v344-v347-artifacts/toolchain/perry": "d7b8b26196ae22d291d7be416eab03ed6031e1c378d5c2b58a31004cc12eb2ec",
+    "/root/codex-components-p2-20261021/perry-readers-v344-v347-artifacts/toolchain/perry-wit": "f88a1d8b0649c9bda6752cb1f7a1752924cb7114c483bb9cc5d02e0e980eea5a",
+    "/root/codex-components-p2-20261021/perry-readers-v344-v347-artifacts/toolchain/perry-gc-effects": "4ad22c8634e14ba54bf6b937d36c7c35b1d82d52eac406f27a01e2c5b6c6b28e",
+    "/root/codex-components-p2-20261021/perry-readers-v344-v347-artifacts/toolchain/libperry_runtime.a": "234a982800d6bc1562f31e123c4ac8575d7ef76dba440a4089a0bd513b91cedb",
+    "/root/codex-components-p2-20261021/perry-readers-v344-v347-artifacts/toolchain/libperry_stdlib.a": "6706a63ea7d7addde9882bb13fe456eeef009bbb5e49ff3fc1adf50c47ace902",
+    "/root/codex-components-p2-20261021/perry-readers-v344-v347-artifacts/toolchain/libperry_component_host.a": "41e53e952fa5e96ffd5503b33f02bbed387b56e07699a80116043c50ee85168d",
+    "/root/codex-components-p2-20261021/perry-readers-v344-v347-artifacts/toolchain/libperry_runtime_instr.a": "f8c4692e41c1f0122a5864762cc8ba235d86f2abaffd2a71308bd410870566b8",
+    "/root/codex-components-p2-20261021/perry-readers-v344-v347-artifacts/toolchain/libperry_stdlib_instr.a": "1fc5226b22875591b3d090b72d9f07ca5baa0ef925b6247214f831490be92144",
+    "/root/codex-components-p2-20261021/perry-readers-v344-v347-artifacts/toolchain/component_wat": "344f5f143c8022cf623586d82aaf3e8f7d2f815491999f924687120273da54a1",
+    "/root/codex-components-p2-20261021/perry-readers-v344-v347-artifacts/toolchain/libperry_runtime.a.gc-effects": "a8f7bf8e965e7041c4a056d657c2581867c0e6ddb6fc86a2e80a0f464f170629",
+    "/root/codex-components-p2-20261021/perry-readers-v344-v347-artifacts/toolchain/libperry_runtime_instr.a.gc-effects": "7b75fc1f6a02fbaa2aa75d01c8cc2f6d3feda95c87a330e65d576f32f719efb7",
+    "/root/codex-components-p2-20261021/perry-readers-v344-v347-artifacts/runtime-tests": "d42bc4bf102dd55faf6e335f9f38336ad575e8c72cf2f969c093ddd9b7a6340e",
+    "/root/codex-components-p2-20261021/perry-readers-v344-v347-artifacts/reader/host-ordinary": "e9e5b4feb11ca4518b23c4ef3cd367124e983cbc97e0e05bf2aaf58183f744fe",
+    "/root/codex-components-p2-20261021/perry-readers-v344-v347-artifacts/reader/host-moving": "071d6209c4de1123f8974df2b6824e602c2450a77fe3140e224691700a12912c",
+    "/root/codex-components-p2-20261021/perry-readers-v344-v347-artifacts/reader/clock.wasm": "bf317e0b3698ac79158db1a31022ad35ba3340b7d0841faa156d217f417b54ef",
+    "/root/codex-components-p2-20261021/perry-readers-v344-v347-artifacts/persistent/host-ordinary": "75e6467f0065dc056e2b15ebc62fa15aaf8204e5c586504a5adb2c9f3010ccbb",
+    "/root/codex-components-p2-20261021/perry-readers-v344-v347-artifacts/persistent/host-moving": "a0b9f93baa1901da68633cf10b419bfc7dee2ff38fe1335d826147f01064e741",
+    "/root/codex-components-p2-20261021/perry-readers-v344-v347-artifacts/persistent/clock.wasm": "0926c2d641c4469b224a88b47639d2599ebf08f254fac13c6b7683287c560f52",
+    "/root/codex-components-p2-20261021/perry-readers-v344-v347-artifacts/async/host-ordinary": "c0a1a45026ddc54ad1e3bb6ae452ed5e028d4b4f0631d0efad069466c9d6112e",
+    "/root/codex-components-p2-20261021/perry-readers-v344-v347-artifacts/async/host-moving": "915f3b25378d92aeace531b8aa93a2ceb374d5a5ad5780c952d922e5db00f3bf",
+    "/root/codex-components-p2-20261021/perry-readers-v344-v347-artifacts/async/clock.wasm": "bb6718d064d60b9f0db240fad92e7f37d1d2bcf48cefbd46ff04a06f2e43780f",
+    "/root/codex-components-p2-20261021/perry-readers-v344-v347-artifacts/p3-command/host-ordinary": "427e675a9c6ef25a769ab49ad2b52e2b3b7bbd11ee23e1fbffedd6b52b0cc263",
+    "/root/codex-components-p2-20261021/perry-readers-v344-v347-artifacts/p3-command/bad-init.wasm": "9177d71374df12eb08c9f0f344ad6e35b0bae1594e09b1544617bceff764ffa4",
+    "/root/codex-components-p2-20261021/perry-readers-v344-v347-artifacts/p3-command/exit.wasm": "bc0fd891b8c5bb9244129a0e883bc2e5da96ca61e9ae33cf6a120b4d58cc1fb3",
+    "/root/codex-components-p2-20261021/perry-readers-v344-v347-artifacts/p3-command/wrong-version.wasm": "aa3dce4661d36820dddfb0527e2138a12f92ecbd24414b59ce62cbcf9cab10fb",
+    "/root/codex-components-p2-20261021/perry-readers-v344-v347-artifacts/p3-command/late-trap.wasm": "f2a604877e7e6cb4312780f3bb6fb2312c5ba0025a17cfb95e068e38fc646668",
+    "/root/codex-components-p2-20261021/perry-readers-v344-v347-artifacts/p3-command/init-exit.wasm": "9ce9bc5378a24114d5a19172d76dda670f533597cb11001ad4f9c17a07bef193",
+    "/root/codex-components-p2-20261021/perry-readers-v344-v347-artifacts/p3-command/ok.wasm": "3d7aa3448a73ac25a5aba6e43e1ac9604eaa0efce059a064ae168344c48a3d6b",
+    "/root/codex-components-p2-20261021/perry-readers-v344-v347-artifacts/p3-command/err.wasm": "bafef5203a1a7c645ff8b6e58db6a059de8033ae47d776867a173339b8bacf06",
+    "/root/codex-components-p2-20261021/perry-readers-v344-v347-artifacts/p3-command/clock.wasm": "6b4ee891e9218991c79f6c6bad40b4589ea08eaf3168daff6a5751912f5c50a9",
+    "/root/codex-components-p2-20261021/perry-readers-v344-v347-artifacts/p3-command/closed-stdio.wasm": "7653c44fe43f159a860c692ba550fed4b58704af1078bb43033fec4d1a9c6911",
+    "/root/codex-components-p2-20261021/perry-readers-v344-v347-artifacts/p3-http/host-ordinary": "9a02c50c9ce53ed24e34a3dda1d94f9e7ed09150d9c924ee0de433747c51b460",
+    "/root/codex-components-p2-20261021/perry-readers-v344-v347-artifacts/p3-http/trap.wasm": "7f4675b88b4b5c6952e595782d65338fd18e1dccaa01955c3bdabfac9bab79d8",
+    "/root/codex-components-p2-20261021/perry-readers-v344-v347-artifacts/p3-http/echo.wasm": "1a2a780ec251da91a098c10f08e352fb23b272caefb6260ac3fabe952abb5fb6",
+    "/root/codex-components-p2-20261021/perry-readers-v344-v347-artifacts/p3-http/denied.wasm": "dc7d77faaaf67ed377071e951953ca7d6071753e260de83dc8e27142986da0e7",
+    "/root/codex-components-p2-20261021/perry-readers-v344-v347-artifacts/p3-http/late-trap.wasm": "2681325b5634c85dce1452de979b655c63a491024db295318d217c48da9e1161",
+    "/root/codex-components-p2-20261021/perry-readers-v344-v347-artifacts/expanded-readers/host-ordinary": "9ad62f1fec4bbe833eaf4610d64a4b7f4ac424794157487c15b1a1782f2912e0",
+    "/root/codex-components-p2-20261021/perry-readers-v344-v347-artifacts/expanded-readers/host-moving": "03925bf1219b73009169438cec0b0f2a6fbddcfe04b0d9f5c7b37c9bc5540ee5",
+    "/root/codex-components-p2-20261021/perry-readers-v344-v347-artifacts/expanded-readers/paused.wasm": "6c51994d6aa8aa3870800e8cd5f996510f0f73b52023cabd91508cb5a4c2a666",
+    "/root/codex-components-p2-20261021/perry-readers-v344-v347-artifacts/expanded-readers/compound.wasm": "4b09af35f0b9eff8f6157a81cd45161f2b9ed2c489e45891e2f9039819f9c9e6",
+    "/root/codex-components-p2-20261021/perry-readers-v344-v347-artifacts/expanded-readers/nested.wasm": "6f2ca1485ee892ad15854fbf8565242461c694619aa5b00717c3e9a35aef9c7a",
+    "/root/codex-components-p2-20261021/perry-readers-v344-v347-artifacts/expanded-readers/stream.wasm": "a93be313c94546833d5d21cec4373dca5a06066fe92d47f0c96cd1576347a0f4",
+    "/root/codex-components-p2-20261021/perry-readers-v344-v347-artifacts/expanded-readers/future.wasm": "bf317e0b3698ac79158db1a31022ad35ba3340b7d0841faa156d217f417b54ef"
+  },
+  "sourceHashes": {
+    "crates/perry-runtime/src/component/async_value.rs": "4f82b56a3719d71a15d53ca1213777b3c51d3cd396d22f4f4185f340294cff43",
+    "crates/perry-runtime/src/component/cleanup.rs": "d9c94a8a0a5fb4b4b4242adf4ef5eeca508c5caf3704edc149a41b30efbd2cd1",
+    "crates/perry-runtime/src/component/mod.rs": "dd72bd9156581c0761aa6fb45353dd1c6b5fbf6fd12645172699e3aaaf8a2800",
+    "crates/perry-runtime/src/component/persistent/poll.rs": "d1bfcbec69f0df183cde7411d4c02c5bc467b7974db414f5e5149f102b2637d8",
+    "crates/perry-runtime/src/component/persistent/records.rs": "837619714c45b278afa0f5f26f4e4b08191f72ad8433772736fc8a0092ceaa4b",
+    "crates/perry-runtime/src/component/persistent/submit.rs": "0c26010bead78b0c78fbd3eae1c88a4645d9e826b64ede1da21f79b7db7720bc",
+    "crates/perry-runtime/src/component/persistent/tests.rs": "cafc193f56f48ecaa66526f51c95c5d11392c057f4163ae58cebbe6e5fa1a1c6",
+    "crates/perry-runtime/src/component/persistent/tests/readers.rs": "dd4440b43de73a00a097237ba7d05908ce84ad1c9a27ae439673e9b3fe8f110e",
+    "crates/perry-runtime/src/component/value.rs": "323f4c761aa89487feb86caef305697f73454b3bacdf96e2a21c8becc298379c",
+    "crates/perry-runtime/src/component/value/retention.rs": "f4c8016316f8346f2d734755fcf75ed4037dd24e7a8731b9615a819bf8a2b975",
+    "crates/perry-runtime/src/object/owned_state_bag.rs": "c2bb1963911f80bc2a497c4946b68e5e407a04f65871a44244533fa8e3e290c9",
+    "crates/perry-runtime/src/promise/mod.rs": "f73493c149d0c6874385aaea603c331d77c301ed6b00dcfc2072ee92914a471d",
+    "crates/perry-runtime/src/promise/operation_owner.rs": "ec7a0275d61e95bb8cfbb27a038a0cda9e9532b7463a47e98e0593b95b3c1de1",
+    "crates/perry-runtime/src/promise/owned_state.rs": "4dd31feddd2eb5db1797efad29b9f7cb03ec6015f1c0d1b0b5e7c6f7365637ef",
+    "crates/perry-runtime/src/promise/then.rs": "93b3920fc4457882fc88e7c127785af93366d214902a47813f432a524690c2e3",
+    "scripts/component_reader_acceptance.py": "ee77bb286befbfe97f2779eb6cea4d10289c3f57b6f7372c26a15371c547fa1d",
+    "test-wasi/components/readers/compound.wit": "e68a5a58bec2b6cd6a40d03e90aac560d8145e9602020c0245c52bed0d3186e3",
+    "test-wasi/components/readers/host.ts": "6cec24fa0f27664cad7e99197454eab539eff6d4099c2ea9c9d4b7dbe788562d",
+    "test-wasi/components/readers/nested.wit": "4778e7a96423dd96a10a8df888a88509b7b8dacf247a9dc72e3f467cc6497603",
+    "test-wasi/components/readers/paused.wit": "0815da565ac6df9acc18b61e6aefec40c69e3bc67ec5e2acb253e38c0ba032ab",
+    "test-wasi/components/readers/stream.wit": "20ad563c12644f0f3000639b8191df50f7d74aa42a6543e48b7a5bc439a5a488",
+    "test-wasi/components/readers/world.wit": "752c6110a027101abd30182ba3d0257bbaf74a2048225c44cb4e6c020fe28fb8"
+  },
+  "lint": {
+    "phases": [
+      {
+        "phase": "address",
+        "exitCode": 1,
+        "identicalToParent": true
+      },
+      {
+        "phase": "holders",
+        "exitCode": 1,
+        "identicalToParent": true
+      },
+      {
+        "phase": "tokio",
+        "exitCode": 0,
+        "identicalToParent": true
+      },
+      {
+        "phase": "node",
+        "exitCode": 0,
+        "identicalToParent": true
+      },
+      {
+        "phase": "size",
+        "exitCode": 1,
+        "identicalToParent": true
+      }
+    ],
+    "changedRustFileLines": {
+      "crates/perry-runtime/src/component/async_value.rs": 257,
+      "crates/perry-runtime/src/component/cleanup.rs": 226,
+      "crates/perry-runtime/src/component/mod.rs": 373,
+      "crates/perry-runtime/src/component/persistent/poll.rs": 676,
+      "crates/perry-runtime/src/component/persistent/records.rs": 110,
+      "crates/perry-runtime/src/component/persistent/submit.rs": 356,
+      "crates/perry-runtime/src/component/persistent/tests.rs": 887,
+      "crates/perry-runtime/src/component/persistent/tests/readers.rs": 372,
+      "crates/perry-runtime/src/component/value.rs": 344,
+      "crates/perry-runtime/src/component/value/retention.rs": 129,
+      "crates/perry-runtime/src/object/owned_state_bag.rs": 84,
+      "crates/perry-runtime/src/promise/mod.rs": 981,
+      "crates/perry-runtime/src/promise/operation_owner.rs": 66,
+      "crates/perry-runtime/src/promise/owned_state.rs": 111,
+      "crates/perry-runtime/src/promise/then.rs": 1975
+    },
+    "baselineOversizedFilesByteUnchanged": [
+      "crates/perry-codegen/src/codegen/closure.rs",
+      "crates/perry-codegen/src/lower_call/console_promise.rs",
+      "crates/perry-hir/src/lower/module_decl.rs",
+      "crates/perry-runtime/src/arena/page_meta/mod.rs",
+      "crates/perry-runtime/src/arena/tests.rs",
+      "crates/perry-runtime/src/array/header.rs",
+      "crates/perry-runtime/src/json/replacer.rs",
+      "crates/perry-runtime/src/node_stream_event_emitter.rs",
+      "crates/perry-runtime/src/node_stream_readwrite.rs",
+      "crates/perry-runtime/src/object/field_get_set/enumeration.rs",
+      "crates/perry-runtime/src/object/layout_desc.rs",
+      "crates/perry-runtime/src/object/layout_probe.rs",
+      "crates/perry-runtime/src/object/runtime_layouts.rs",
+      "crates/perry-runtime/src/object/shapes_store.rs",
+      "crates/perry/src/commands/compile/resolve/tests.rs"
+    ],
+    "newCustodyVerdicts": [],
+    "shippingCargoLockSha256": "c0c77b202d422016fdb7fc1e3312f5fc500d35fbb8923c17a851f6917b2626ab"
+  },
+  "evidence": {
+    "file": "perry-component-readers-v344-v347-evidence.tar.gz",
+    "sha256": "e8521414090a990d5367b4c8f46fed7a1d8cb7fb33078ab1155d217270dde58a",
+    "bytes": 5899606,
+    "members": 210
+  },
+  "limits": [
+    "JavaScript producer factories and writable handles, persistent concurrent HTTP handoff and maintained async guest adapters remain unfinished.",
+    "macOS, Windows, final WASM/npm distribution packages and released Turnloop adoption remain unqualified.",
+    "Component checks now invoke persistent/async/reader acceptance and Promise/async-hook regressions; the full component_check.sh SDK pipeline was not rerun in this reader step.",
+    "Existing address-classification/root-custody/file-size gate failures and the recorded crypto-bigint advisory remain open; this step adds no waiver or dependency change."
+  ]
+}

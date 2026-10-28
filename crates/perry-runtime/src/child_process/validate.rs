@@ -425,7 +425,7 @@ pub unsafe extern "C" fn js_child_process_validate_command(
 pub extern "C" fn js_child_process_validate_fork_module(value: f64) -> f64 {
     let js = JSValue::from_bits(value.to_bits());
     let raw = (value.to_bits() & crate::value::POINTER_MASK) as usize;
-    let is_url = cp_object_ptr(value).is_some_and(crate::url::is_url_object_shape);
+    let is_url = cp_object_ptr(value).is_some_and(crate::object::url_layout::is_url_object_shape);
     if js.is_any_string()
         || (raw >= 0x10000
             && crate::buffer::is_registered_buffer(raw)

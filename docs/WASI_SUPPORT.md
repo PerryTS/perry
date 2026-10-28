@@ -19,11 +19,20 @@ WASI versions here mean 0.1 (Preview 1), 0.2 (Preview 2), and 0.3
 | Path | Current contract | Main gap |
 | --- | --- | --- |
 | Browser `wasm` / `web` output | Core Wasm with Perry's JavaScript bridge | Not standalone WASI; raw Wasm output omits generated async JavaScript |
-| WASI 0.1 output | `--target wasip1` core module, in progress ([#13259](https://github.com/PerryTS/perry/issues/13259)); not yet available. Contract in [WASI_P1_OUTPUT.md](WASI_P1_OUTPUT.md) | Everything lands in steps; opt-in `perry_net` and `perry_host` extensions need an embedder that implements them |
-| WASI 0.1 hosting in native Perry | Operational `node:wasi` over wasmi and wasi-common; all 46 P1 imports dispatch to the provider; Linux qualified | Other host platforms, socket grants, scheduling and execution quotas; see [P1 limits](WASI_P1_HOSTING.md#limits) |
-| WASI 0.2 output | Command components on Linux/macOS/Windows; synchronous library components and resource adapters qualified on Linux | Deferred resource cleanup, HTTP and broader component qualification |
-| WASI 0.2 component hosting | Optional native `perry/component` host with typed WIT values, guest-defined resources and opt-in P2 WASI providers | Host-defined resources, HTTP providers and broader platform qualification |
-| WASI 0.3 output/hosting | Not implemented | Native component async ABI, futures/streams, scheduling and cancellation |
+| WASI 0.1 output | `--target wasip1` core modules with bundled stdlib/Node APIs; see [P1 output](WASI_P1_OUTPUT.md) | Networking needs explicit host extensions; wider API/platform qualification |
+| WASI 0.1 hosting in native Perry | Operational `node:wasi` over wasmi and wasi-common; all 46 P1 imports dispatch to the provider; Linux x86_64 and macOS ARM64 qualified | Windows qualification, socket grants, scheduling and execution quotas; see [P1 limits](WASI_P1_HOSTING.md#limits) |
+| WASI 0.2 output | Command components on Linux/macOS/Windows; synchronous libraries, resources, deferred cleanup and HTTP guests qualified on Linux | Wider library/HTTP platform qualification and final combined packages |
+| WASI 0.2 component hosting | Optional native `perry/component` host with typed WIT values, resources, commands, Turnloop providers and HTTP client/server; current Turnloop integration qualified on Linux | Blocking P2 I/O cancellation, current provider qualification on macOS/Windows, released dependencies and final packages |
+| WASI 0.3 output | Experimental Promise imports/exports, cooperative cancellation, basic/compound resource ownership and runtime-only public ALS qualified on Linux | Public async CLI and guest future/stream values remain guarded; native 0.3.0 command/runtime output and wider platform/package coverage remain |
+| WASI 0.3 hosting | Linux-qualified async Promise bindings, Turnloop 0.3.0 providers, commands and HTTP handlers; Rust persistent driver supports concurrent calls and generic future/stream reads, transfers and producer factories | Broader ownership/platform qualification, released provider dependencies and final packages |
+
+The target here is **0.3.0**: it requires async lifting/lowering, futures and
+streams. Version 0.3.1 additionally requires maps and `implements`/`external-id`
+annotations. `error-context` remains an experimental Component Model feature;
+its rejection is separate from the 0.3.0 completion criteria. See the official
+[feature adoption table](https://wasi.dev/releases#component-model-features) and
+[candidate features](https://wasi.dev/roadmap#wasi-03).
+
 
 Perry's existing `perry/plugin` API loads native shared libraries; it does
 not load Wasm components. A command component with a `wasi:cli/run` export
@@ -31,16 +40,54 @@ also does not provide arbitrary typed plugin exports. See
 [the WASI roadmap](WASI_ROADMAP.md) for the proposed hosting and reusable
 component contracts, their priorities, and acceptance criteria.
 
-The planned `--target wasip1` is a sibling output for hosts that take core
+`--target wasip1` is a sibling output for hosts that take core
 modules; its profile and host contracts are in
 [WASI_P1_OUTPUT.md](WASI_P1_OUTPUT.md). Everything on this page describes
 `--target wasi`.
+
+The [combined component qualification](validation/component-integration-20261021.json)
+records execution of library and command interfaces, resource ownership and
+cleanup, and TCP/UDP/DNS interoperability against matching Linux artifacts.
+The [native host platform receipt](validation/wasi-native-host-platforms-20261021.json)
+additionally qualifies P1 hosting and the combined native P2 host profile on
+Linux x86_64 and macOS ARM64. Windows native hosting remains pending. These
+historical results predate the Turnloop replacement and do not qualify the
+current provider selection on macOS or Windows. Newer Linux HTTP and partial
+0.3.0 qualification is recorded in [WASI_COMPONENTS.md](WASI_COMPONENTS.md); it
+does not establish complete P3 support or wider guest-output platform support.
+
+The [combined landing receipt](validation/wasi-component-landing-20261027.json)
+records current-main Linux native and generated Wasm execution, positive moving-GC
+witnesses, the Windows engine/provider compile check, and the exact lint and
+full-runtime failures. It also records which qualified inputs differ from the
+final landing source; historical receipts retain their original scope.
+
 
 WASI components run through a host such as Wasmtime. The current repair was
 tested on Linux x86_64 with Wasmtime 48.0.0, wasi-sdk 34,
 nightly-2026-10-04 and LLVM 22. Fresh Windows x64 qualification is recorded below. See
 [Wasmtime platform support](https://docs.wasmtime.dev/stability-platform-support.html)
 and [the agreed scope, #11375](https://github.com/PerryTS/perry/issues/11375).
+
+## Toolchain prerequisites
+
+WASI code generation requires **LLVM >= 22.1.5**. For the default in-process
+backend this is the LLVM linked into Perry, so upgrading a system clang does
+not upgrade an existing Perry binary: rebuild Perry against the supported
+LLVM. If the external clang backend is explicitly selected, that clang must
+also satisfy the minimum. Perry checks the selected backend before code
+generation and does not automatically switch backends. Native targets retain
+their existing requirements.
+
+LLVM [issue #194184](https://github.com/llvm/llvm-project/issues/194184)
+miscounted EH pad depth in `fixCallUnwindMismatches` and could abort on complex
+WASI exception CFGs, including Storage's glob closure. The fix,
+[`5c9647b8e680`](https://github.com/llvm/llvm-project/commit/5c9647b8e680),
+shipped in LLVM 22.1.5. The regression witness is compiled through Perry's
+in-process LLVM in the WASI codegen CI job.
+
+Build hosts also need WASI SDK 34 and the source-matched wasm32 runtime;
+Wasmtime 48.0.0 with exceptions enabled is the tested execution host.
 
 ## Release artifacts
 
@@ -121,10 +168,13 @@ skips relocation compression and wasm-opt, which change debug offsets.
   catchable error.
 - UTC date operations. Local-time operations use the existing UTC fallback.
 - Nested exceptions, catch/finally/rethrow, runtime-originated errors and
-  errors crossing promise callbacks. Generated try blocks and the C runtime
-  use LLVM's wasm SjLj lowering, modern wasm EH, and wasi-libc `libsetjmp`.
-  Unwinding restores the GC shadow stack and async context. Locals visible
-  after setjmp stay in volatile stack slots through optimization.
+  errors crossing promise callbacks. Generated regions use wasm-native
+  `invoke`/`catchswitch`/`catchpad` lowering and the standard tag-0 ABI, with a
+  Perry exception-class check that forwards foreign exceptions. Each lexical
+  boundary owns a depth-only checkpoint restoring the GC shadow stack,
+  runtime handles, and managed guards. Runtime callbacks use the same wasm
+  catch shape; an outer command boundary reports uncaught throws. Generated
+  functions contain no `setjmp`, and linking does not require `libsetjmp`.
 - Perry's collector, including moving collections. GC slot descriptors
   distinguish native 32-bit pointers from 64-bit tagged values, including
   object metadata, promises, errors, regexps, buffer owners and lazy JSON.

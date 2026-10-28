@@ -51,20 +51,18 @@ unsafe fn validate_load_env_file_url(value: f64) {
         return;
     }
     let obj = jv.as_pointer::<crate::object::ObjectHeader>() as *mut crate::object::ObjectHeader;
-    if obj.is_null() || !crate::url::is_url_object_shape(obj) {
+    if obj.is_null() || !crate::object::url_layout::is_url_object_shape(obj) {
         return;
     }
-    let protocol = crate::url::get_string_content(crate::object::js_object_get_field_f64(
-        obj,
-        crate::url::parse::URL_PROTOCOL,
-    ));
+    let protocol = crate::value::boxed_text::get_string_content(
+        crate::object::js_object_get_field_f64(obj, crate::url::parse::URL_PROTOCOL),
+    );
     if protocol != "file:" {
         throw_invalid_load_env_file_url_scheme();
     }
-    let pathname = crate::url::get_string_content(crate::object::js_object_get_field_f64(
-        obj,
-        crate::url::parse::URL_PATHNAME,
-    ));
+    let pathname = crate::value::boxed_text::get_string_content(
+        crate::object::js_object_get_field_f64(obj, crate::url::parse::URL_PATHNAME),
+    );
     if has_encoded_forward_slash(&pathname) {
         crate::fs::validate::throw_type_error_with_code(
             "File URL path must not include encoded / characters",

@@ -26,6 +26,20 @@ pub struct ClassFamilySyntax {
     pub writes: Vec<(Option<String>, String)>,
 }
 
+/// The program's CommonJS closed-world fact (design CJS_LINK §2.5): no
+/// dynamic code, and every module's original-source census is clear. One
+/// definition for the wrapper's escape forms (`cjs_link`), codegen's
+/// run-once classes and wpfacts' run-once factory. A module without a census
+/// (compiler-synthesized source) is not known closed.
+pub fn program_is_cjs_closed<'a>(modules: impl IntoIterator<Item = &'a Module>) -> bool {
+    !crate::has_deferred_dynamic_code_sites()
+        && modules.into_iter().all(|m| {
+            m.class_family_syntax
+                .as_ref()
+                .is_some_and(|s| s.module_capability_uses == 0)
+        })
+}
+
 /// Source range of a user-visible local binding.
 ///
 /// Offsets use SWC's 1-based `BytePos` coordinates. Keeping this metadata in a

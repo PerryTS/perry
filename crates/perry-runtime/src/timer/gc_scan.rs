@@ -138,7 +138,7 @@ fn scan_store_step(
                 if !consume_timer_root_work(remaining) {
                     return false;
                 }
-                crate::async_hooks::resource_state::scan_token(&mut entry.async_id, visitor);
+                crate::async_hook_slots::resource_state::scan_token(&mut entry.async_id, visitor);
                 state.slot = 5;
             }
             state.index += 1;

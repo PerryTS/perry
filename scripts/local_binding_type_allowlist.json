@@ -322,7 +322,7 @@
       "reason": "The map contains only structural module-initializer kinds and omits every binding with a module-wide write."
     },
     {
-      "path": "crates/perry-codegen/src/lower_call/console_promise.rs",
+      "path": "crates/perry-codegen/src/lower_call/console_promise/util_types.rs",
       "function": "util_types_arg_is_async_function_static",
       "access": "stable_local_type_proof",
       "count": 1,
@@ -448,6 +448,14 @@
       "count": 1,
       "classification": "runtime-validated",
       "reason": "A falsy-local fold consumes only the private method clone's proof: its public wrapper bit-compares the live argument with TAG_UNDEFINED, candidate discovery rejects user writes and closure capture, and the proof API rejects every remaining reassigned binding."
+    },
+    {
+      "path": "crates/perry-codegen/src/stmt/indexed_owner_loop.rs",
+      "function": "receiver",
+      "access": "local_type_hint",
+      "count": 1,
+      "classification": "runtime-validated",
+      "reason": "The declaration only selects an element-width candidate. admit_owner requires a matching whole-program owner proof or the live byte-cell brand guard, then rejects views, shared/resizable owners and frozen writes before the numeric loop; every failed guard enters the original loop."
     },
     {
       "path": "crates/perry-codegen/src/stmt/loops.rs",
@@ -744,6 +752,14 @@
       "count": 2,
       "classification": "metadata-only",
       "reason": "The generic HIR environment exposes source-level metadata only; codegen supplies its separate runtime-proof facts adapter."
+    },
+    {
+      "path": "crates/perry-hir/src/lexical_frames.rs",
+      "function": "local",
+      "access": "raw:self.locals",
+      "count": 1,
+      "classification": "metadata-only",
+      "reason": "LocalId renaming map of a copied frame (commit 678511e58): maps old ids to fresh ids; holds no type fact."
     },
     {
       "path": "crates/perry-hir/src/lower/context.rs",

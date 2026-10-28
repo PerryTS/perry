@@ -107,25 +107,28 @@ fn typed_array_new_from_heap_source(
 ) -> *mut TypedArrayHeader {
     // Re-read the (possibly rewritten) box; never cache the address across a
     // potentially-allocating probe.
-    let cur = || {
-        let val = rooted.get_nanbox_f64();
-        let addr = (val.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
-        (val, addr)
-    };
 
     // Issue #654: a NaN-boxed pointer can also point at a registered
     // typed array (e.g. when the source flowed through a path that
     // re-applied POINTER_TAG). Detect via the registry and copy
     // through `typed_array_to_typed_array` so element values stay
     // numeric instead of being read as f64-NaN-boxed bits.
-    let (_, raw_addr) = cur();
+    let (_, raw_addr) = {
+        let val = rooted.get_nanbox_f64();
+        let addr = (val.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+        (val, addr)
+    };
     if lookup_typed_array_kind(raw_addr).is_some() {
         return typed_array_copy_from_typed_array(kind as u8, raw_addr as *const TypedArrayHeader);
     }
     if crate::buffer::is_registered_buffer(raw_addr) {
         if crate::buffer::is_any_array_buffer(raw_addr) {
             let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
-            let (val, _) = cur();
+            let (val, _) = {
+                let val = rooted.get_nanbox_f64();
+                let addr = (val.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+                (val, addr)
+            };
             return crate::typedarray_view::js_typed_array_view(kind, val, undefined, undefined);
         }
         return bigint::copy_from_uint8_buffer(
@@ -142,7 +145,11 @@ fn typed_array_new_from_heap_source(
     // materialization (their `@@iterator` is native, not a stored symbol
     // property). Functions are valid array-like/iterable sources too —
     // previously they were reinterpreted as an `ArrayHeader` (crash).
-    let (val, raw_addr) = cur();
+    let (val, raw_addr) = {
+        let val = rooted.get_nanbox_f64();
+        let addr = (val.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+        (val, addr)
+    };
     if crate::map::is_registered_map(raw_addr)
         || crate::set::is_registered_set(raw_addr)
         || crate::array::is_builtin_iterator_class_id(raw_addr)
@@ -153,26 +160,50 @@ fn typed_array_new_from_heap_source(
         // generator objects (Perry generators carry own `next`/`return`
         // closures and no `@@iterator` symbol prop). The shared
         // `Array.from` materialization drives these correctly.
-        let (val, _) = cur();
+        let (val, _) = {
+            let val = rooted.get_nanbox_f64();
+            let addr = (val.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+            (val, addr)
+        };
         let materialized = crate::array::js_array_from_value(val);
         return js_typed_array_new_from_array(kind, materialized);
     }
     // `js_util_types_is_generator_object` above walks own properties and can
     // collect, so re-derive before every remaining dereference.
-    let (_, raw_addr) = cur();
+    let (_, raw_addr) = {
+        let val = rooted.get_nanbox_f64();
+        let addr = (val.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+        (val, addr)
+    };
     if crate::closure::is_closure_ptr(raw_addr) {
-        let (val, _) = cur();
+        let (val, _) = {
+            let val = rooted.get_nanbox_f64();
+            let addr = (val.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+            (val, addr)
+        };
         return unsafe { typed_array_from_plain_object(kind as u8, val) };
     }
-    let (_, raw_addr) = cur();
+    let (_, raw_addr) = {
+        let val = rooted.get_nanbox_f64();
+        let addr = (val.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+        (val, addr)
+    };
     if raw_addr >= crate::gc::GC_HEADER_SIZE + 0x1000 {
         let gc_hdr = (raw_addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         if unsafe { (*gc_hdr).obj_type } == crate::gc::GC_TYPE_OBJECT {
-            let (val, _) = cur();
+            let (val, _) = {
+                let val = rooted.get_nanbox_f64();
+                let addr = (val.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+                (val, addr)
+            };
             return unsafe { typed_array_from_plain_object(kind as u8, val) };
         }
     }
-    let (_, raw_addr) = cur();
+    let (_, raw_addr) = {
+        let val = rooted.get_nanbox_f64();
+        let addr = (val.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+        (val, addr)
+    };
     js_typed_array_new_from_array(kind, raw_addr as *const crate::array::ArrayHeader)
 }
 

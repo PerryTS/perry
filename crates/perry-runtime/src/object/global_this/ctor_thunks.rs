@@ -50,7 +50,7 @@ pub(crate) extern "C" fn regexp_constructor_call_thunk(
     pattern: f64,
     flags: f64,
 ) -> f64 {
-    crate::value::js_nanbox_pointer(crate::regex::js_regexp_construct_call(pattern, flags) as i64)
+    crate::value::js_nanbox_pointer(crate::regex::hooked::construct_call(pattern, flags) as i64)
 }
 
 /// Without the regex engine there is no RegExp to construct — keep the
@@ -124,7 +124,7 @@ pub(crate) extern "C" fn global_this_url_pattern_call_thunk(
     input: f64,
     base: f64,
 ) -> f64 {
-    crate::url::js_url_pattern_constructor_call(input, base)
+    crate::url_hooks::url_pattern_constructor_call(input, base)
 }
 
 fn error_constructor_call(kind: u32, message: f64) -> f64 {
@@ -654,3 +654,5 @@ mod tests {
         );
     }
 }
+
+crate::realm_decl!("ctor_thunks.realm.json#*");

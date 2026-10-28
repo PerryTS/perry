@@ -1024,6 +1024,9 @@ pub(super) fn verify_old_to_young_edges_collect() -> OldYoungEdgeVerifyStats {
             verify_old_young_parent_slots_covered(&snapshot, &mut stats, header);
         }
     }
+    // WRT: every image cell holding a collectable child, of any generation,
+    // must be in the image's remembered set (`gc::image_cells`).
+    super::image_cells::verify_image_cells_remembered(&mut stats);
     stats
 }
 
@@ -1368,10 +1371,42 @@ pub(super) fn verify_array_pointer_slots_enumerated_report(phase: &str) {
 }
 
 #[allow(dead_code)] // GC heap-invariant verifier exercised by cfg(test) suite in gc/tests/barrier.rs
+/// An image cell's own slots after a full mark: every collectable child is
+/// marked (the image root pass made it a root). Only parent-owned slots, as
+/// the old→young gate checks: the shape record's keys word the layout also
+/// yields is a shared runtime root with its own scanner.
+#[cold]
+#[inline(never)]
+unsafe fn verify_image_cell_child_marks(
+    stats: &mut MarkInvariantVerifyStats,
+    header: *mut GcHeader,
+) {
+    stats.checked_marked_objects = stats.checked_marked_objects.saturating_add(1);
+    visit_gc_rewrite_slots(header, |slot| {
+        if !slot.is_parent_owned() {
+            return;
+        }
+        let child = decode_heap_addr(slot.read());
+        if child == 0 || !super::image_cells::image_child_is_collectable(child) {
+            return;
+        }
+        stats.checked_edges = stats.checked_edges.saturating_add(1);
+        let flags = (*header_from_user_ptr(child as *const u8)).gc_flags;
+        if flags & (GC_FLAG_MARKED | GC_FLAG_PINNED) == 0 {
+            stats.record_missing(header as usize, slot.slot as usize, child);
+        }
+    });
+}
+
+#[allow(dead_code)] // Test-facing whole-heap verifier; release uses the nonfatal report.
 pub(super) fn verify_marked_heap_no_unmarked_children() -> MarkInvariantVerifyStats {
     let mut stats = MarkInvariantVerifyStats::default();
     crate::arena::arena_walk_objects(|hp| unsafe {
         verify_marked_object_child_marks(&mut stats, hp as *mut GcHeader);
+    });
+    // WRT: image cells are born marked; their children are roots.
+    super::image_cells::for_each_image_cell(|header| unsafe {
+        verify_image_cell_child_marks(&mut stats, header);
     });
     for header in malloc_headers_for_verification() {
         unsafe {
@@ -1392,6 +1427,9 @@ pub(super) fn verify_marked_heap_report_nonfatal(phase: &str) {
     let mut stats = MarkInvariantVerifyStats::default();
     crate::arena::arena_walk_objects(|hp| unsafe {
         verify_marked_object_child_marks(&mut stats, hp as *mut GcHeader);
+    });
+    super::image_cells::for_each_image_cell(|header| unsafe {
+        verify_image_cell_child_marks(&mut stats, header);
     });
     for header in malloc_headers_for_verification() {
         unsafe {
@@ -1794,6 +1832,9 @@ pub(super) fn verify_heap_objects(verifier: EvacuationVerifier<'_>) -> Evacuatio
     for header in malloc_headers_for_verification() {
         verify_one(header);
     }
+    // WRT: every realm image cell, remembered or not, is live and must name
+    // no forwarded object.
+    super::image_cells::for_each_image_cell(|header| verify_one(header));
     stats
 }
 
@@ -1829,6 +1870,7 @@ pub(super) fn rewrite_forwarded_references(
         }
     }
     rewrite_remembered_dirty_ranges(valid_ptrs);
+    super::image_cells::rewrite_image_roots(valid_ptrs);
     rewrite_heap_objects(valid_ptrs);
 }
 

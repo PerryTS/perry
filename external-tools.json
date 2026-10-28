@@ -252,7 +252,7 @@
       "version": "1.28.0",
       "binary": "mbx",
       "repository": "github:jdx/mr-boxington",
-      "notes": "Install with cargo install mbx@1.28.0 --locked. This pin enables optional Blaze routing for local development; CI keeps using mbx directly. CI uses Perry's specialized local composite action, backed by the sparse-vendored upstream mr-boxington-action at a recorded immutable commit.",
+      "notes": "Install with cargo install mbx@1.28.0 --locked. Development and Rust unit-test CI use the required prebuilt Blaze toolchain. Production profiles use mbx directly. CI uses Perry's specialized local composite action, backed by the sparse-vendored upstream mr-boxington-action at a recorded immutable commit.",
       "soakBypass": {
         "version": "1.28.0",
         "published": "2026-10-26",

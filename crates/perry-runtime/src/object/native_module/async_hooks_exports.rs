@@ -164,6 +164,8 @@ pub(super) fn attach_async_resource_prototype(constructor_value: f64) -> f64 {
     let constructor = attach_prototype(constructor_value, &[]);
     let proto = crate::object::js_function_prototype_value_for_read(constructor);
     let proto = crate::value::js_nanbox_get_pointer(proto) as *mut ObjectHeader;
-    crate::async_hooks::adopt_async_resource_prototype(proto);
+    crate::async_hook_slots::adopt_async_resource_prototype(proto);
     constructor
 }
+
+crate::realm_decl!("async_hooks_exports.realm.json#*");

@@ -149,7 +149,7 @@ pub(super) unsafe fn dispatch_explicit_this_call(
     // indirect callees (e.g. `record.proxy()` off a `Proxy.revocable` result)
     // reach this generic value-call path with no static hint. Proxy ids encode
     // to small pointers, so real heap closures early-out of `js_proxy_is_proxy`.
-    if crate::proxy::js_proxy_is_proxy(func_value) == 1 {
+    if crate::proxy_hooks::proxy_is_proxy(func_value) == 1 {
         let arr = crate::array::js_array_alloc(0);
         let mut a = arr;
         if !args_ptr.is_null() {
@@ -158,7 +158,7 @@ pub(super) unsafe fn dispatch_explicit_this_call(
             }
         }
         let arr_box = f64::from_bits(0x7FFD_0000_0000_0000 | (a as u64 & 0x0000_FFFF_FFFF_FFFF));
-        return crate::proxy::js_proxy_apply(func_value, this.as_f64(), arr_box);
+        return crate::proxy_hooks::proxy_apply(func_value, this.as_f64(), arr_box);
     }
 
     // Dynamic `super()` for `class X extends <runtime value holding

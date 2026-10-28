@@ -25,7 +25,7 @@ pub(crate) fn fixture_shape_seed_plain(
         return shapes::handle_by_identity(ShapeId(id)).map_or(0, |w| w.0);
     }
     let mut request = request(requested);
-    super::js_layout_seed_plain(&mut request, packed, packed_len, count, live, rep)
+    super::seed_plain_by_names(&mut request, packed, packed_len, count, live, rep)
 }
 
 pub(crate) fn fixture_shape_seed_plain_constfn(
@@ -52,7 +52,7 @@ pub(crate) fn fixture_shape_seed_plain_constfn(
         return shapes::handle_by_identity(ShapeId(id)).map_or(0, |w| w.0);
     }
     let mut request = request(requested);
-    super::js_layout_seed_plain_constfn(
+    super::seed_plain_constfn_by_names(
         &mut request,
         packed,
         packed_len,
@@ -122,48 +122,6 @@ pub(crate) fn fixture_object_final_shape_id_for_class_keys_static_constfn(
         rep,
         entries,
         entry_count,
-    )
-}
-
-pub(crate) fn fixture_object_final_shape_id_for_class_keys_static_private(
-    keys: u64,
-    key_count: u32,
-    live: u32,
-    class_id: u32,
-    requested: u32,
-    rep: u64,
-    private_packed: *const u8,
-    private_len: u32,
-    brands: *const u64,
-    brand_count: u32,
-) -> u32 {
-    if requested == 0 {
-        let id = super::js_object_final_shape_id_for_class_keys_static_private(
-            keys,
-            key_count,
-            live,
-            class_id,
-            requested,
-            rep,
-            private_packed,
-            private_len,
-            brands,
-            brand_count,
-        );
-        return shapes::handle_by_identity(ShapeId(id)).map_or(0, |w| w.0);
-    }
-    let mut request = request(requested);
-    super::js_object_final_layout_for_class_keys_static_private(
-        keys,
-        key_count,
-        live,
-        class_id,
-        &mut request,
-        rep,
-        private_packed,
-        private_len,
-        brands,
-        brand_count,
     )
 }
 

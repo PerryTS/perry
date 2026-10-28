@@ -94,7 +94,7 @@ pub extern "C" fn js_object_create(proto_value: f64) -> f64 {
                 )
             }
             .is_some())
-        || crate::proxy::js_proxy_is_proxy(proto_value) != 0
+        || crate::proxy_hooks::proxy_is_proxy(proto_value) != 0
         || (!proto_is_symbol
             && (unsafe { value_is_object_like(proto_value) }
                 || super::class_ref_id(proto_value).is_some()));
@@ -297,8 +297,8 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
     // `Object.getPrototypeOf(proxy)` matches the target. drizzle aliases columns
     // as `new Proxy(column, …)` and `is(value, type)` reads
     // `getPrototypeOf(value).constructor`, which crashed on `null.constructor`.
-    if crate::proxy::js_proxy_is_proxy(obj_value) != 0 {
-        return crate::proxy::js_proxy_get_prototype_of(obj_value);
+    if crate::proxy_hooks::proxy_is_proxy(obj_value) != 0 {
+        return crate::proxy_hooks::proxy_get_prototype_of(obj_value);
     }
     // A Temporal value is a NaN-boxed opaque cell, not an `ObjectHeader` — the
     // heap-object resolution below would deref its boxed payload as a class id
@@ -498,7 +498,7 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
         }
     };
     let typed_array_instance_prototype = |addr: usize| -> Option<f64> {
-        let kind = crate::typedarray::lookup_typed_array_kind(addr)?;
+        let kind = crate::typedarray_hook_slots::lookup_typed_array_kind(addr)?;
         // A `Reflect.construct(TA, …, newTarget)` view with a custom
         // `[[Prototype]]` (spec `GetPrototypeFromConstructor`) resolves to the
         // recorded prototype rather than the default per-kind prototype. The
@@ -508,7 +508,9 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
                 return Some(f64::from_bits(proto_bits));
             }
         }
-        let proto = crate::object::builtin_prototype_value(crate::typedarray::name_for_kind(kind));
+        let proto = crate::object::builtin_prototype_value(
+            crate::typedarray_hook_slots::name_for_kind(kind),
+        );
         if proto.to_bits() != crate::value::TAG_UNDEFINED {
             Some(proto)
         } else {

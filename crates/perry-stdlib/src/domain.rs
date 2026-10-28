@@ -650,3 +650,9 @@ pub unsafe extern "C" fn js_domain_native_dispatch(
         _ => undefined(),
     }
 }
+
+// Source-only realm facts beside the owning builtin bodies.
+macro_rules! realm_decl {
+    ($facts:literal) => {};
+}
+realm_decl!("domain.realm.json#*");

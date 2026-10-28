@@ -177,3 +177,5 @@ pub(crate) fn install_url_prototype_accessors(proto: *mut ObjectHeader) {
         }
     }
 }
+
+crate::realm_decl!("prototype.realm.json#*");

@@ -4,7 +4,7 @@ use crate::exception::{catch_js_throw, js_has_exception, js_throw};
 /// Every managed stack must supply a witness that pushes a real entry owned
 /// by the frame `mark` names. Tests both nested landings with a nonempty
 /// outer scope, through the production `js_throw` + trap shim pad (the
-/// setjmp trampoline on WASI), never a test-only replay of the restore.
+/// wasm catch shim on WASI), never a test-only replay of the restore.
 pub(super) fn assert_nested_restore(name: &str, depth: fn() -> usize, push: fn(u32, usize)) {
     let _lock = crate::gc::global_side_table_test_lock();
     let base = depth();
@@ -393,4 +393,120 @@ fn each_skipped_unwind_turns_its_witness_red() {
         );
         eprintln!("eh sabotage {fault}: RED ({})", output.status);
     }
+}
+
+/// Exercise the production wasm checkpoint restore with real subsystem
+/// entries. Equal frame marks deliberately prevent native mark unwinding from
+/// distinguishing the prefix; the lexical depths must make that distinction.
+#[cfg(not(windows))]
+pub(super) fn assert_wasm_depth_restore(name: &str, depth: fn() -> usize, push: fn(u32, usize)) {
+    use crate::exception::wasm::{js_wasm_eh_checkpoint_save, js_wasm_eh_pad_enter};
+    use perry_abi::WasmEhCheckpoint;
+    let _lock = crate::gc::global_side_table_test_lock();
+    let mut base = WasmEhCheckpoint::default();
+    let mut outer = WasmEhCheckpoint::default();
+    let mut inner = WasmEhCheckpoint::default();
+    unsafe {
+        js_wasm_eh_checkpoint_save(&mut base);
+        let before = depth();
+        push(1, 1);
+        js_wasm_eh_checkpoint_save(&mut outer);
+        assert_eq!(depth(), before + 1, "{name}: establish surviving scope");
+        for _ in 0..100 {
+            push(2, 1);
+            js_wasm_eh_checkpoint_save(&mut inner);
+            push(3, 1);
+            js_wasm_eh_pad_enter(&inner);
+            assert_eq!(depth(), before + 2, "{name}: nested prefix survives");
+            js_wasm_eh_pad_enter(&outer);
+            js_wasm_eh_pad_enter(&outer);
+            assert_eq!(
+                depth(),
+                before + 1,
+                "{name}: restore is idempotent, no growth"
+            );
+        }
+        js_wasm_eh_pad_enter(&base);
+        assert_eq!(depth(), before, "{name}: outer prefix restored");
+    }
+}
+
+#[test]
+#[cfg(not(windows))]
+fn wasm_checkpoint_restores_new_target_and_shadow_without_an_own_frame() {
+    use crate::exception::wasm::{js_wasm_eh_checkpoint_save, js_wasm_eh_pad_enter};
+    use crate::gc::{js_shadow_frame_push, shadow_stack_depth};
+    use crate::object::{js_new_target_enter, js_new_target_get};
+    let _lock = crate::gc::global_side_table_test_lock();
+    let mut base = perry_abi::WasmEhCheckpoint::default();
+    let mut outer = perry_abi::WasmEhCheckpoint::default();
+    let original = js_new_target_get().to_bits();
+    let shadow = shadow_stack_depth();
+    unsafe {
+        js_wasm_eh_checkpoint_save(&mut base);
+        js_new_target_enter(7.0);
+        js_wasm_eh_checkpoint_save(&mut outer);
+        js_new_target_enter(8.0);
+        js_new_target_enter(9.0);
+        js_shadow_frame_push(2);
+        js_shadow_frame_push(1);
+        js_wasm_eh_pad_enter(&outer);
+        assert_eq!(js_new_target_get(), 7.0);
+        assert_eq!(shadow_stack_depth(), shadow);
+        js_wasm_eh_pad_enter(&outer);
+        js_wasm_eh_pad_enter(&base);
+        assert_eq!(js_new_target_get().to_bits(), original);
+        assert_eq!(shadow_stack_depth(), shadow);
+    }
+}
+
+/// Nonempty contexts prove that restoring a depth applies its displaced
+/// actions in reverse order rather than simply truncating their stack.
+#[test]
+#[cfg(not(windows))]
+fn wasm_checkpoint_restores_nonempty_async_contexts() {
+    use crate::async_context::{
+        capture_context, context_guard_depth, enter_context, get_store,
+        js_async_context_als_exit_enter, js_async_context_als_run_enter, push_context_guard,
+        restore_context, set_store, AsyncLocalStoragePayload, ContextGuardAction,
+    };
+    use crate::exception::wasm::{js_wasm_eh_checkpoint_save, js_wasm_eh_pad_enter};
+    let _lock = crate::gc::global_side_table_test_lock();
+    let original = capture_context();
+    let payload = AsyncLocalStoragePayload::default();
+    let token = payload.token();
+    let guards = context_guard_depth();
+    let mut base = perry_abi::WasmEhCheckpoint::default();
+    let mut outer = perry_abi::WasmEhCheckpoint::default();
+    let mut inner = perry_abi::WasmEhCheckpoint::default();
+    unsafe {
+        js_wasm_eh_checkpoint_save(&mut base);
+        js_async_context_als_run_enter(token, 7.0);
+        js_wasm_eh_checkpoint_save(&mut outer);
+        for _ in 0..100 {
+            js_async_context_als_run_enter(token, 8.0);
+            js_wasm_eh_checkpoint_save(&mut inner);
+            js_async_context_als_exit_enter(token);
+            assert_eq!(get_store(token), None);
+            js_async_context_als_run_enter(token, 9.0);
+            let displaced = enter_context(&original);
+            push_context_guard(ContextGuardAction::RestoreSnapshot(displaced));
+            assert_eq!(get_store(token), None);
+            js_wasm_eh_pad_enter(&inner);
+            assert_eq!(get_store(token), Some(8.0), "restore inner async context");
+            assert_eq!(context_guard_depth(), guards + 2);
+            js_wasm_eh_pad_enter(&outer);
+            js_wasm_eh_pad_enter(&outer);
+            assert_eq!(get_store(token), Some(7.0), "preserve outer async context");
+            assert_eq!(context_guard_depth(), guards + 1);
+        }
+        // A checkpoint contains depths only: a surviving store stays mutable.
+        set_store(token, 70.0);
+        js_wasm_eh_pad_enter(&outer);
+        assert_eq!(get_store(token), Some(70.0));
+        js_wasm_eh_pad_enter(&base);
+        assert_eq!(get_store(token), None);
+        assert_eq!(context_guard_depth(), guards);
+    }
+    restore_context(original);
 }

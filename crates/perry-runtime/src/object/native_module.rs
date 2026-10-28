@@ -687,7 +687,7 @@ pub extern "C" fn js_create_native_module_namespace(
     };
     let module_name = normalize_native_module_alias(module_name);
     if module_name == "wasi" {
-        crate::wasi::emit_wasi_static_warning();
+        crate::wasi_hook_slots::emit_wasi_static_warning();
     }
     if should_cache_native_module_namespace(module_name) {
         if let Some(bits) =
@@ -873,7 +873,7 @@ unsafe fn native_module_property_by_name_impl(
     {
         // Singleton so `require("perf_hooks").performance` and the global
         // `performance` are the same object (Node identity guarantee, #1327).
-        return crate::perf_hooks::performance_namespace();
+        return crate::perf_hook_slots::performance_namespace();
     }
     if matches!(module_name, "perf_hooks" | "perf_hooks.default") && property_name == "constants" {
         // Its OWN tag. Sharing the `perf_hooks` tag made every read of the
@@ -941,9 +941,9 @@ unsafe fn native_module_property_by_name_impl(
                 let submodule = "bun.ant";
                 return js_create_native_module_namespace(submodule.as_ptr(), submodule.len());
             }
-            "stdin" => return crate::bun_compat::js_bun_stdin(),
-            "stdout" => return crate::bun_compat::js_bun_stdout(),
-            "stderr" => return crate::bun_compat::js_bun_stderr(),
+            "stdin" => return crate::bun_hook_slots::js_bun_stdin(),
+            "stdout" => return crate::bun_hook_slots::js_bun_stdout(),
+            "stderr" => return crate::bun_hook_slots::js_bun_stderr(),
             "YAML" => return crate::bun_compat::js_bun_yaml(),
             "TOML" => return crate::bun_compat::js_bun_toml(),
             "semver" => return crate::bun_compat::js_bun_semver(),
@@ -1528,3 +1528,5 @@ pub(crate) use cjs_default::{
 
 #[cfg(test)]
 mod buffer_pool_size_tests;
+
+crate::realm_decl!("native_module.realm.json#*");

@@ -422,7 +422,7 @@ unsafe fn evaluated_parent_instance_field(
             return None;
         }
         let value = f64::from_bits(bits);
-        if crate::proxy::js_proxy_is_proxy(value) != 0 {
+        if crate::proxy_hooks::proxy_is_proxy(value) != 0 {
             return super::super::prototype_chain::resolve_inherited_field_from_prototype(
                 decl_proto as usize,
                 bits,
@@ -517,9 +517,9 @@ unsafe fn relinked_decl_prototype_field(
         return RelinkedRead::Missed;
     }
     let link = f64::from_bits(bits);
-    if crate::proxy::js_proxy_is_proxy(link) != 0 {
+    if crate::proxy_hooks::proxy_is_proxy(link) != 0 {
         let key_val = f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
-        let v = crate::proxy::proxy_get_with_receiver(link, key_val, receiver);
+        let v = crate::proxy_hooks::proxy_get_with_receiver(link, key_val, receiver);
         return RelinkedRead::Answered(JSValue::from_bits(v.to_bits()));
     }
     let addr = match bits >> 48 {

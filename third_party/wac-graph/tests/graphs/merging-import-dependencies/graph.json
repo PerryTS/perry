@@ -1,0 +1,25 @@
+{
+    "packages": [
+        {
+            "name": "foo:import",
+            "path": "import"
+        },
+        {
+            "name": "test:component",
+            "path": "component"
+        }
+    ],
+    "nodes": [
+        {
+            "type": "import",
+            "name": "foo:test-import/my-interface",
+            "package": 0,
+            "export": "foo:test-import/my-interface"
+        },
+        {
+            "type": "instantiation",
+            "package": 1
+        }
+    ],
+    "arguments": []
+}

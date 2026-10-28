@@ -171,9 +171,31 @@ struct PortState {
 
 static PORT_STATES: Mutex<Option<HashMap<usize, PortState>>> = Mutex::new(None);
 
-crate::perry_thread_local! {
-    // The mutable-root scanner registry is thread-local, so this latch must be too.
-    static GC_SCANNER_REGISTERED: Cell<bool> = const { Cell::new(false) };
+mod root_guard_tls {
+    use super::*;
+    type Value = Cell<bool>;
+    type Storage = crate::tls_hot::HotCell<Value, { std::mem::needs_drop::<Value>() as usize }>;
+    crate::__perry_thread_local_storage!(Storage, const { Value::new(false) });
+    pub(super) fn resolve(idx: u32) -> Result<*mut u8, crate::tls_hot::AccessError> {
+        STORAGE.try_with(|cell| {
+            cell.arm_guard(idx);
+            cell.value_addr()
+        })
+    }
+    pub(super) static KEY: crate::tls_hot::HotKey<Value> = crate::tls_hot::HotKey::new(
+        crate::tls_hot::SlotId::named(concat!(
+            module_path!(),
+            "::GC_SCANNER_REGISTERED@",
+            line!(),
+            ":",
+            column!()
+        )),
+        crate::messaging_hook_slots::resolve_root_guard,
+    );
+}
+use root_guard_tls::KEY as GC_SCANNER_REGISTERED;
+pub(crate) fn install_root_tls_resolver() {
+    crate::messaging_hook_slots::install_root_resolver(root_guard_tls::resolve);
 }
 
 fn ensure_gc_scanner_registered() {
@@ -817,3 +839,5 @@ fn throw_constructor_call_error() -> f64 {
     let err = crate::error::js_typeerror_new(msg);
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
+
+crate::realm_decl!("messaging.realm.json#*");

@@ -130,6 +130,11 @@ pub struct RegCounter {
     /// to find the loads that rewrite makes stale. See
     /// `docs/src/internals/gc-rooting-invariant.md`.
     shadow_slot_allocas: RefCell<HashSet<String>>,
+    /// Whether any `js_shadow_slot_bind` / `js_shadow_slot_set` was emitted in
+    /// this function, through the same choke points as `shadow_slot_allocas`.
+    /// A shadow frame nothing writes holds only zeroed slots, so it roots
+    /// nothing; [`crate::function::LlFunction`] renders no push or pop for it.
+    shadow_slot_written: Cell<bool>,
     /// #8175: module-level registry of `preserve_nonecc` function symbols
     /// (recursion-participating specialized clones). Injected by
     /// `LlModule::define_function` into every function's counter so the two
@@ -186,6 +191,7 @@ impl RegCounter {
             byte_owner_root_slots: RefCell::new(Vec::new()),
             eh_scopes: RefCell::new(Vec::new()),
             shadow_slot_allocas: RefCell::new(HashSet::new()),
+            shadow_slot_written: Cell::new(false),
             preserve_none_fns: RefCell::new(None),
             fn_infos: RefCell::new(None),
             null_guard_symbol: RefCell::new(None),
@@ -314,17 +320,22 @@ impl RegCounter {
         }
     }
 
-    /// Record `ptr` when `callee` is the precise-root bind.
+    /// Record a write into this function's shadow frame, and `ptr` when
+    /// `callee` is the precise-root bind.
     ///
-    /// Called from the two choke points every bind form passes through:
+    /// Called from the two choke points every bind and set form passes through:
     /// [`LlBlock::call_void`] — which carries the direct call AND the slow arm
     /// of #7088's inline diamond, since that arm emits the same call — and
     /// `LlFunction::entry_setup_call_void`, which carries the persistent-slot
     /// bind hoisted into the entry prelude.
-    pub(crate) fn note_shadow_slot_bind(&self, callee: &str, second_arg: Option<&str>) {
+    pub(crate) fn note_shadow_slot_write(&self, callee: &str, second_arg: Option<&str>) {
+        if callee == "js_shadow_slot_set" {
+            self.shadow_slot_written.set(true);
+        }
         if callee != "js_shadow_slot_bind" {
             return;
         }
+        self.shadow_slot_written.set(true);
         // `js_shadow_slot_bind(i32 idx, ptr %slot)`: the slot is argument two.
         // A non-register operand means the bind was built some other way, and
         // the conservative answer is to record nothing — a slot this set does
@@ -336,6 +347,11 @@ impl RegCounter {
                     .insert(ptr.to_string());
             }
         }
+    }
+
+    /// Whether this function wrote any shadow slot.
+    pub(crate) fn shadow_slot_written(&self) -> bool {
+        self.shadow_slot_written.get()
     }
 
     /// The shadow slots bound in this function. See [`crate::root_reload`].
@@ -1742,7 +1758,7 @@ impl LlBlock {
         // #835 + #846: same registry hook as `call` — see comment there.
         crate::ext_registry::record_ffi_call(func_name);
         self.counter
-            .note_shadow_slot_bind(func_name, args.get(1).map(|(_, v)| *v));
+            .note_shadow_slot_write(func_name, args.get(1).map(|(_, v)| *v));
         let cconv = self
             .counter
             .callee_preserve_none(func_name)

@@ -732,7 +732,7 @@ pub extern "C" fn js_process_versions() -> f64 {
 /// process.hrtime.bigint() -> bigint of nanoseconds
 #[no_mangle]
 pub extern "C" fn js_process_hrtime_bigint() -> f64 {
-    use crate::bigint::js_bigint_from_u64;
+    use crate::bigint_hooks::js_bigint_from_u64;
     use crate::value::js_nanbox_bigint;
 
     let elapsed = get_hrtime_start().elapsed();
@@ -864,6 +864,8 @@ pub use process_streams::{
     stdin_encoding_flush_jsvalue, stdin_has_encoding, stdin_is_detached,
     stdin_keypress_events_enabled, stdin_listeners_keep_loop_alive, stdin_push_bytes,
 };
+#[cfg(all(target_os = "wasi", target_env = "p1"))]
+pub(crate) use process_streams::{p1_stdin_ready, p1_stdin_wanted};
 
 /// Get the operating system name
 /// Returns: "Darwin", "Linux", "Windows_NT", etc.
@@ -1519,3 +1521,5 @@ mod tests {
         assert!(!eol.is_null());
     }
 }
+
+crate::realm_decl!("os.realm.json#*");

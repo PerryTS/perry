@@ -919,7 +919,7 @@ unsafe fn is_byte_stream_enqueue_chunk(chunk_bits: u64) -> bool {
     let Some(addr) = raw_pointer_addr(chunk_bits) else {
         return false;
     };
-    perry_runtime::typedarray::lookup_typed_array_kind(addr).is_some()
+    perry_runtime::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some()
         || perry_runtime::buffer::is_data_view(addr)
         || perry_runtime::buffer::is_uint8array_buffer(addr)
         || (perry_runtime::buffer::is_registered_buffer(addr)
@@ -1958,11 +1958,11 @@ pub unsafe extern "C" fn js_readable_stream_from_iterable(value: f64) -> f64 {
         let arr_ptr = ptr_addr.unwrap_or(0) as *const perry_runtime::ArrayHeader;
         ReadableFromSource::closed(chunks_from_array_ptr(arr_ptr))
     } else if let Some(addr) = ptr_addr {
-        if perry_runtime::typedarray::lookup_typed_array_kind(addr).is_some() {
-            let ta = addr as *const perry_runtime::typedarray::TypedArrayHeader;
-            let len = perry_runtime::typedarray::js_typed_array_length(ta).max(0);
+        if perry_runtime::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some() {
+            let ta = addr as *const perry_runtime::typedarray_hook_slots::TypedArrayHeader;
+            let len = perry_runtime::typedarray_hook_slots::js_typed_array_length(ta).max(0);
             let chunks = (0..len)
-                .map(|i| perry_runtime::typedarray::js_typed_array_get(ta, i).to_bits())
+                .map(|i| perry_runtime::typedarray_hook_slots::js_typed_array_get(ta, i).to_bits())
                 .collect();
             ReadableFromSource::closed(chunks)
         } else if perry_runtime::buffer::is_registered_buffer(addr)
@@ -2645,7 +2645,7 @@ unsafe fn pipe_through_options_error(options: f64) -> Option<&'static str> {
 
 fn pipe_through_signal_error(signal: f64) -> Option<&'static str> {
     (signal.to_bits() != TAG_UNDEFINED
-        && perry_runtime::url::js_abort_signal_resolve_ptr(signal).is_null())
+        && perry_runtime::event_target_hook_slots::js_abort_signal_resolve_ptr(signal).is_null())
     .then_some("The options.signal property must be an AbortSignal")
 }
 

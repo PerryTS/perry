@@ -138,7 +138,7 @@ unsafe fn listener_signal(options: f64) -> Option<*mut ObjectHeader> {
     if js_value.is_undefined() || js_value.is_null() || !js_value.is_pointer() {
         return None;
     }
-    crate::url::abort::abort_signal_ptr_from_value(own_option_value(options, b"signal"))
+    crate::event_target::abort::abort_signal_ptr_from_value(own_option_value(options, b"signal"))
 }
 
 fn set_event_field(event: *mut ObjectHeader, name: u32, value: f64) {
@@ -202,7 +202,10 @@ fn construct_event(
     let scope = crate::gc::RuntimeHandleScope::new();
     let type_value = scope.root_nanbox_f64(type_value);
     let options = scope.root_nanbox_f64(options);
-    let detail = detail.map(|value| scope.root_nanbox_f64(value));
+    let detail = match detail {
+        Some(value) => Some(scope.root_nanbox_f64(value)),
+        None => None,
+    };
     note_constructed();
     let event = scope.root_raw_mut_ptr(js_object_alloc(class_id, 0));
     let (_, result) = event.across_mut(|| {
@@ -234,7 +237,10 @@ fn init_event_fields(
     let scope = crate::gc::RuntimeHandleScope::new();
     let event = scope.root_raw_mut_ptr(event);
     let options = scope.root_nanbox_f64(options);
-    let detail = detail.map(|value| scope.root_nanbox_f64(value));
+    let detail = match detail {
+        Some(value) => Some(scope.root_nanbox_f64(value)),
+        None => None,
+    };
     let type_ptr = string_from_value(type_value);
     event.with_mut_ptr(|ptr| {
         set_event_field(
@@ -869,19 +875,24 @@ pub unsafe extern "C" fn js_event_target_dispatch_event(
     let scope = crate::gc::RuntimeHandleScope::new();
     let target_h = scope.root_raw_mut_ptr(target);
     let event_h = scope.root_nanbox_f64(event);
-    let target = || target_h.get_raw_mut_ptr::<ObjectHeader>();
-    let event_ptr =
-        || crate::value::js_nanbox_get_pointer(event_h.get_nanbox_f64()) as *mut ObjectHeader;
     let Some(event_name) = event_type_ptr(event_h.get_nanbox_f64()) else {
         return bool_value(true);
     };
     let name_h = scope.root_string_ptr(event_name);
-    set_event_field(event_ptr(), state::TARGET, boxed_ptr(target()));
-    set_event_field(event_ptr(), state::DISPATCHED, bool_value(true));
+    set_event_field(
+        (crate::value::js_nanbox_get_pointer(event_h.get_nanbox_f64()) as *mut ObjectHeader),
+        state::TARGET,
+        boxed_ptr(target_h.get_raw_mut_ptr::<ObjectHeader>()),
+    );
+    set_event_field(
+        (crate::value::js_nanbox_get_pointer(event_h.get_nanbox_f64()) as *mut ObjectHeader),
+        state::DISPATCHED,
+        bool_value(true),
+    );
     let callbacks = {
         let _gc = crate::gc::GcSuppressScope::new();
         let mut callbacks = Vec::new();
-        if let Some(arr) = listeners_bag(target())
+        if let Some(arr) = listeners_bag(target_h.get_raw_mut_ptr::<ObjectHeader>())
             .and_then(|bag| event_array(bag, name_h.get_raw_const_ptr(), false))
         {
             for i in 0..js_array_length(arr) {
@@ -902,7 +913,7 @@ pub unsafe extern "C" fn js_event_target_dispatch_event(
         if once {
             let _gc = crate::gc::GcSuppressScope::new();
             remove_event_listener_value_with_capture(
-                target(),
+                target_h.get_raw_mut_ptr::<ObjectHeader>(),
                 name_h.get_raw_const_ptr(),
                 callback.get_nanbox_f64(),
                 capture,
@@ -911,18 +922,30 @@ pub unsafe extern "C" fn js_event_target_dispatch_event(
         let args = [event_h.get_nanbox_f64()];
         crate::closure::js_native_call_value(
             callback.get_nanbox_f64(),
-            crate::closure::JsThis::from_f64(boxed_ptr(target())),
+            crate::closure::JsThis::from_f64(boxed_ptr(target_h.get_raw_mut_ptr::<ObjectHeader>())),
             args.as_ptr(),
             1,
         );
-        if event_bool_field(event_ptr(), state::IMMEDIATE_STOPPED) {
+        if event_bool_field(
+            (crate::value::js_nanbox_get_pointer(event_h.get_nanbox_f64()) as *mut ObjectHeader),
+            state::IMMEDIATE_STOPPED,
+        ) {
             break;
         }
     }
-    set_event_field(event_ptr(), state::DISPATCHED, bool_value(false));
+    set_event_field(
+        (crate::value::js_nanbox_get_pointer(event_h.get_nanbox_f64()) as *mut ObjectHeader),
+        state::DISPATCHED,
+        bool_value(false),
+    );
     bool_value(
-        !(event_bool_field(event_ptr(), state::CANCELABLE)
-            && event_bool_field(event_ptr(), state::DEFAULT_PREVENTED)),
+        !(event_bool_field(
+            (crate::value::js_nanbox_get_pointer(event_h.get_nanbox_f64()) as *mut ObjectHeader),
+            state::CANCELABLE,
+        ) && event_bool_field(
+            (crate::value::js_nanbox_get_pointer(event_h.get_nanbox_f64()) as *mut ObjectHeader),
+            state::DEFAULT_PREVENTED,
+        )),
     )
 }
 
@@ -1241,3 +1264,7 @@ pub extern "C" fn js_event_target_subclass_init(this: f64, kind: u32) -> f64 {
 #[used(compiler)]
 static KEEP_JS_EVENT_TARGET_SUBCLASS_INIT: extern "C" fn(f64, u32) -> f64 =
     js_event_target_subclass_init;
+
+pub(crate) mod abort;
+
+crate::realm_decl!("event_target.realm.json#*");

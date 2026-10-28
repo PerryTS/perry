@@ -1011,42 +1011,30 @@ pub(super) unsafe fn ec_jwk_export_object(
     let (public_bytes, private_d) = match (curve, mat.kind) {
         (EcNamedCurve::P256, KeyKind::Private) => {
             let secret = P256SecretKey::from_slice(key_bytes).ok()?;
-            let public = secret
-                .public_key()
-                .to_encoded_point(false)
-                .as_bytes()
-                .to_vec();
+            let public = secret.public_key().to_sec1_point(false).as_bytes().to_vec();
             (public, Some(key_bytes.to_vec()))
         }
         (EcNamedCurve::P256, _) => {
             let public = P256PublicKey::from_sec1_bytes(key_bytes).ok()?;
-            (public.to_encoded_point(false).as_bytes().to_vec(), None)
+            (public.to_sec1_point(false).as_bytes().to_vec(), None)
         }
         (EcNamedCurve::P384, KeyKind::Private) => {
             let secret = P384SecretKey::from_slice(key_bytes).ok()?;
-            let public = secret
-                .public_key()
-                .to_encoded_point(false)
-                .as_bytes()
-                .to_vec();
+            let public = secret.public_key().to_sec1_point(false).as_bytes().to_vec();
             (public, Some(key_bytes.to_vec()))
         }
         (EcNamedCurve::P384, _) => {
             let public = P384PublicKey::from_sec1_bytes(key_bytes).ok()?;
-            (public.to_encoded_point(false).as_bytes().to_vec(), None)
+            (public.to_sec1_point(false).as_bytes().to_vec(), None)
         }
         (EcNamedCurve::P521, KeyKind::Private) => {
             let secret = P521SecretKey::from_slice(key_bytes).ok()?;
-            let public = secret
-                .public_key()
-                .to_encoded_point(false)
-                .as_bytes()
-                .to_vec();
+            let public = secret.public_key().to_sec1_point(false).as_bytes().to_vec();
             (public, Some(key_bytes.to_vec()))
         }
         (EcNamedCurve::P521, _) => {
             let public = P521PublicKey::from_sec1_bytes(key_bytes).ok()?;
-            (public.to_encoded_point(false).as_bytes().to_vec(), None)
+            (public.to_sec1_point(false).as_bytes().to_vec(), None)
         }
     };
     let coord_len = ec_curve_private_len(curve);

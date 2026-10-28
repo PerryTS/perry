@@ -1,0 +1,22 @@
+package test:prod;
+
+interface ext {
+  record point {
+    x: s32,
+  }
+}
+
+interface defs {
+  use ext.{point};
+
+  record region {
+    inner: point,
+  }
+}
+
+world prod {
+  import ext;
+  export defs;
+  use defs.{region};
+  export make: func() -> region;
+}

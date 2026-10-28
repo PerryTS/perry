@@ -73,13 +73,6 @@ impl<'a> Gen<'a> {
                 return self.call_value(c, ThisArg::Undef, vec![lit], vec![]);
             }
         }
-        // A literal `require("...")` in a CommonJS-wrapped module: the one
-        // module the wrapper resolved it to (`Gen::cjs_static_require`).
-        if let (Expr::FuncRef(_) | Expr::LocalGet(_), [Expr::String(spec)]) = (callee, args) {
-            if let Some(n) = self.cjs_static_require(fx.module, callee, spec) {
-                return n;
-            }
-        }
         let a: Vec<NodeId> = args.iter().map(|x| self.expr(fx, x)).collect();
         self.call_lit_arg = match args.first().map(|x| self.const_eval(fx.module, x)) {
             Some(Some(crate::gen_const::Const::Str(s))) => Some(self.m.atom(&s)),
@@ -145,8 +138,16 @@ impl<'a> Gen<'a> {
                         proto: Protocol::ToPrimitive,
                     },
                 );
-                let key = self.read_key(index);
-                self.mcall(o, key, args, spread)
+                match self.read_key(index) {
+                    Key::Named(a) => self.mcall(o, Key::Named(a), args, spread),
+                    // DECISIONS 217: the key's values decide which members
+                    // it may name (`Cons::IdxMCall`).
+                    Key::Any => {
+                        let (call, ret) = self.new_call(ThisArg::Node(o), args, spread);
+                        self.m.cons(o, Cons::IdxMCall { idx: i, call });
+                        ret
+                    }
+                }
             }
             Expr::ExternFuncRef { name, .. } if self.is_runtime_extern(fx.module, name) => {
                 self.runtime_extern(fx, name, args, spread, vec![])
@@ -524,7 +525,7 @@ impl<'a> Gen<'a> {
                     None => self.m.atom(crate::STAR_KEY),
                 };
                 if k.is_some() {
-                    self.m.accessor_atoms.insert(a);
+                    self.m.add_accessor_atom(a);
                 }
                 if let Some(tm) = birth_tm {
                     // An accessor is never a data field (E25).

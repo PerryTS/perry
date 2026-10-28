@@ -321,7 +321,9 @@ pub(crate) fn store_alloc(brand: u8, len: u32, init: Init<'_>) -> *mut BufferHea
     let byte_len = (len as usize)
         .checked_mul(size)
         .filter(|&n| n <= crate::object::shape_rule3::MAX_PLUS_FOUR_WORD as usize)
-        .unwrap_or_else(|| crate::typedarray::throw_range_error(b"Array buffer allocation failed"));
+        .unwrap_or_else(|| {
+            crate::typedarray_hook_slots::throw_range_error(b"Array buffer allocation failed")
+        });
     let placement = crate::gc::byte_store_placement(brand, &init, byte_len);
     #[cfg(test)]
     let placement = if super::bytes::native_copy_fixture() {

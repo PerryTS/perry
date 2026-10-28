@@ -195,7 +195,7 @@ pub(crate) fn array_buffer_transfer(addr: usize, args: &[f64], preserve_resizabi
     let dst = match preserved_max {
         Some(max) => {
             if new_len as i64 > max as i64 {
-                crate::typedarray::throw_range_error(b"Invalid array buffer length");
+                crate::typedarray_hook_slots::throw_range_error(b"Invalid array buffer length");
             }
             // Allocates: re-read nothing from `src` across this call other
             // than through its (non-moving, old-arena) address.

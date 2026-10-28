@@ -688,6 +688,13 @@ pub struct CompilationContext {
     /// a string literal, or constructs a Worker). Gates worker entries named
     /// by URL literals (`collect_modules/worker_url.rs`).
     pub(crate) uses_worker_threads: bool,
+    pub(crate) uses_thread_codec: bool,
+    pub(crate) uses_date: bool,
+    pub(crate) uses_perf_hooks: bool,
+    pub(crate) uses_os: bool,
+    pub(crate) uses_messaging: bool,
+    pub(crate) uses_event_target: bool,
+    pub(crate) uses_typedarray: bool,
     /// `new URL("<script>", import.meta.url)` targets not yet accepted.
     pub(crate) worker_url_candidates: Vec<super::collect_modules::worker_url::WorkerUrlCandidate>,
     /// Accepted URL-literal targets, linked once collection ends.
@@ -970,6 +977,15 @@ pub struct CompilationContext {
     /// intrinsics, so a mention means it may be used as a VALUE).
     pub uses_global_math: bool,
     pub uses_global_json: bool,
+    pub uses_json_format: bool,
+    pub uses_json_engine: bool,
+    /// Native capabilities and computed member keys may occur in different modules.
+    pub uses_computed_member_keys: bool,
+    pub uses_file_handle_capability: bool,
+    pub uses_bun_file_capability: bool,
+    pub uses_turnloop: bool,
+    pub uses_bigint: bool,
+    pub uses_proxy: bool,
     pub uses_global_reflect: bool,
     pub uses_global_atomics: bool,
     /// Per-group `globalThis` web-platform member tables (URL / Text* /
@@ -1038,6 +1054,8 @@ pub struct CompilationContext {
     /// the lowering thread, so direct calls to a patched member lower as
     /// dynamic calls instead of binding the intrinsic.
     pub patched_builtins: perry_hir::PatchedBuiltins,
+    /// Source-only realm reach; emission is unchanged in WRT3a.
+    pub realm_reach: perry_hir::realm_reach::RealmReach,
     /// #10848: modules lowered so far in the current walk.
     pub patched_builtins_lowered_modules: usize,
     /// #10848: a module scanned AFTER others were already lowered added a
@@ -1080,6 +1098,9 @@ pub struct CompilationContext {
     /// cache's keys). The walk writes it once every CommonJS module is known.
     pub cjs_support_path: Option<PathBuf>,
     pub cjs_support_keys: Vec<String>,
+    /// The program's CommonJS closed-world fact (`cjs_link`), decided once
+    /// every module is collected; `false` until then.
+    pub cjs_closed: bool,
     /// Extra perry-stdlib Cargo features the codegen-side FFI registry
     /// (`perry-codegen::ext_registry`) recorded during compilation.
     /// Populated by the drain right before `build_optimized_libs` from
@@ -1348,6 +1369,13 @@ impl CompilationContext {
             native_modules: BTreeMap::new(),
             reexport_pruner: Default::default(),
             uses_worker_threads: false,
+            uses_thread_codec: false,
+            uses_date: false,
+            uses_perf_hooks: false,
+            uses_os: false,
+            uses_messaging: false,
+            uses_event_target: false,
+            uses_typedarray: false,
             worker_url_candidates: Vec::new(),
             worker_url_accepted: Vec::new(),
             worker_url_entries: Vec::new(),
@@ -1414,6 +1442,14 @@ impl CompilationContext {
             uses_intl_namespace: false,
             uses_global_math: false,
             uses_global_json: false,
+            uses_json_format: false,
+            uses_json_engine: false,
+            uses_computed_member_keys: false,
+            uses_file_handle_capability: false,
+            uses_bun_file_capability: false,
+            uses_turnloop: false,
+            uses_bigint: false,
+            uses_proxy: false,
             uses_global_reflect: false,
             uses_global_atomics: false,
             uses_global_url: false,
@@ -1432,6 +1468,7 @@ impl CompilationContext {
             needs_thread: false,
             cross_module_class_field_types: HashMap::new(),
             patched_builtins: Default::default(),
+            realm_reach: Default::default(),
             patched_builtins_lowered_modules: 0,
             patched_builtins_grew_after_lower: false,
             proto_census: Default::default(),
@@ -1441,6 +1478,7 @@ impl CompilationContext {
             entry_canonical: None,
             cjs_support_path: None,
             cjs_support_keys: Vec::new(),
+            cjs_closed: false,
             extra_stdlib_features: BTreeSet::new(),
             // #5263: default-allow dynamic stdlib member access. Dynamic
             // `fs[name]` over the *linked* namespace can only select among

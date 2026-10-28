@@ -8,13 +8,17 @@ use super::{
 pub(super) fn abort_error_for_signal(signal: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let signal = scope.root_nanbox_f64(signal);
-    let cause = crate::url::abort::abort_signal_ptr_from_value(signal.get_nanbox_f64())
-        .map(|signal| {
-            crate::event_target::state::get_slot(signal, crate::event_target::state::SIGNAL_REASON)
-        })
-        .unwrap_or_else(undefined_value);
+    let cause =
+        crate::event_target_hook_slots::abort_signal_ptr_from_value(signal.get_nanbox_f64())
+            .map(|signal| {
+                crate::event_target::state::get_slot(
+                    signal,
+                    crate::event_target::state::SIGNAL_REASON,
+                )
+            })
+            .unwrap_or_else(undefined_value);
     let cause = scope.root_nanbox_f64(cause);
-    let error = scope.root_nanbox_f64(crate::url::js_abort_error_value());
+    let error = scope.root_nanbox_f64(crate::event_target_hook_slots::js_abort_error_value());
     crate::node_submodules::set_error_user_prop(
         (error.get_nanbox_f64().to_bits() & crate::value::POINTER_MASK) as usize,
         "cause",

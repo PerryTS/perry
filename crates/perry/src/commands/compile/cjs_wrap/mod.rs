@@ -66,6 +66,8 @@ mod package_resolution_tests;
 mod parcel_watcher_tests;
 #[cfg(test)]
 mod preamble_canary_tests;
+#[cfg(test)]
+mod static_edge_tests;
 
 // Cross-sibling helpers — siblings reach for these via `use super::*;`.
 use deferred_requires::deferred_require_specs_for_path;

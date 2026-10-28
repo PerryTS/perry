@@ -47,7 +47,7 @@ pub(crate) fn cp_emit(target: f64, event: &str, args: &[f64]) -> bool {
     let async_ids = cp_handle_of(target.get_nanbox_f64())
         .and_then(|handle| reactor::cp_async_scope_for_target(handle, target.get_nanbox_f64()));
     if let Some(ids) = async_ids {
-        crate::async_hooks::enter_resource_scope(ids);
+        crate::async_hook_slots::enter_resource_scope(ids);
     }
 
     let key = cp_listener_key(event);
@@ -91,7 +91,7 @@ pub(crate) fn cp_emit(target: f64, event: &str, args: &[f64]) -> bool {
     }
 
     if let Some(ids) = async_ids {
-        crate::async_hooks::leave_resource_scope(ids.async_id);
+        crate::async_hook_slots::leave_resource_scope(ids.async_id);
     }
     fired
 }
@@ -429,7 +429,10 @@ pub(crate) extern "C" fn cp_method_stdin_write(
 ) -> f64 {
     let this = cp_this(_this, closure);
     let scope = crate::gc::RuntimeHandleScope::new();
-    let callback = cp_stream_callback(arg2, arg3).map(|cb| scope.root_nanbox_f64(cb));
+    let callback = match cp_stream_callback(arg2, arg3) {
+        Some(cb) => Some(scope.root_nanbox_f64(cb)),
+        None => None,
+    };
     let mut result = TAG_TRUE_F64;
     let mut callback_queued = false;
     if let Some(handle) = cp_handle_of(this) {
@@ -629,9 +632,12 @@ pub(crate) extern "C" fn cp_method_stdin_end(
 ) -> f64 {
     let this = cp_this(_this, closure);
     let scope = crate::gc::RuntimeHandleScope::new();
-    let callback = cp_stream_callback(arg2, arg3)
+    let callback = match cp_stream_callback(arg2, arg3)
         .or_else(|| (!crate::fs::extract_closure_ptr(chunk).is_null()).then_some(chunk))
-        .map(|cb| scope.root_nanbox_f64(cb));
+    {
+        Some(cb) => Some(scope.root_nanbox_f64(cb)),
+        None => None,
+    };
     let mut close_pending_on = None;
     if let Some(handle) = cp_handle_of(this) {
         // Optional final data chunk. Skip `undefined`, the `0.0` arg-padding

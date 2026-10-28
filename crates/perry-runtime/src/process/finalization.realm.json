@@ -1,0 +1,170 @@
+{
+  "version": 1,
+  "groups": {
+    "body:process_finalization_register_before_exit_function": [
+      {
+        "name": "process.finalization.registerBeforeExit",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "registerBeforeExit"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "crate::process::finalization::process_finalization_register_before_exit_function",
+        "function_info": {
+          "params": 2,
+          "rest_fixed": 0,
+          "flags": 2056,
+          "length": 2,
+          "declared": 2,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::process::finalization::process_finalization_register_before_exit_function",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_587390dd8ea968fc4ccf",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "body:process_finalization_register_function": [
+      {
+        "name": "process.finalization.register",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "register"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "crate::process::finalization::process_finalization_register_function",
+        "function_info": {
+          "params": 2,
+          "rest_fixed": 0,
+          "flags": 2056,
+          "length": 2,
+          "declared": 2,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::process::finalization::process_finalization_register_function",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_150b2b2c9843cd4b2907",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "body:process_finalization_unregister_function": [
+      {
+        "name": "process.finalization.unregister",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "unregister"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::process::finalization::process_finalization_unregister_function",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2056,
+          "length": 1,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::process::finalization::process_finalization_unregister_function",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_a5a0ba39e7943b80863a",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ]
+  }
+}

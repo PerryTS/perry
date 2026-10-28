@@ -21,6 +21,20 @@ const IMAGE_STRING_HEADER_BYTES: usize = 20;
 pub(super) fn image_pointer(entry: &crate::strings::StringEntry) -> String {
     image::pointer(entry)
 }
+/// The symbol of `entry`'s image string record (`perry_image_literal_*`, one
+/// per spelling program-wide).
+pub(crate) fn image_record_symbol(entry: &crate::strings::StringEntry) -> String {
+    image::name(entry)
+}
+/// Define `entry`'s image string record in `llmod` (WRT step 2): a unit that
+/// emits no pool, such as the static seed unit, still defines the coalesced
+/// record its atoms and key lists name.
+pub(crate) fn emit_image_record(
+    llmod: &mut LlModule,
+    entry: &crate::strings::StringEntry,
+) -> String {
+    image::emit(llmod, entry)
+}
 mod image_handles;
 use image_handles::{
     add_mutable_string_handle, emit_prepare_agent_strings, emit_runtime_boxed_image_handle,

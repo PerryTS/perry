@@ -195,8 +195,18 @@ impl<'a> Gen<'a> {
     }
 
     /// An element store (`o[k] = v`): no construction phase, maybe rooted.
-    fn store_elem(&mut self, fx: &Fx, e: &Expr, recv: NodeId, key: Key, src: NodeId, desc: &str) {
+    fn store_elem(
+        &mut self,
+        fx: &Fx,
+        e: &Expr,
+        recv: NodeId,
+        key: Key,
+        key_value: NodeId,
+        src: NodeId,
+        desc: &str,
+    ) {
         let site = self.store_site(fx.module, fx.f, desc.into(), None, false);
+        self.m.stores[site as usize].key_value = Some(key_value);
         self.mark_rooted(e, site);
         self.m.cons(recv, Cons::Store { key, src, site });
     }
@@ -316,6 +326,7 @@ impl<'a> Gen<'a> {
             proto_members: vec![],
             parent_value: None,
             parent_links: Vec::new(),
+            null_proto: false,
         });
         let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
         (tm, t)
@@ -753,9 +764,21 @@ impl<'a> Gen<'a> {
                     }
                 } else {
                     let key = self.key_of(key);
-                    self.store_phased(fx, e, target, t, key, v, "putvalue".into(), owner);
+                    let site =
+                        self.store_phased(fx, e, target, t, key, v, "putvalue".into(), owner);
+                    self.m.stores[site as usize].key_value = Some(k);
                     // A receiver other than the target gets the own data store.
-                    self.store_phased(fx, e, target, rv, key, v, "putvalue-receiver".into(), owner);
+                    let site = self.store_phased(
+                        fx,
+                        e,
+                        target,
+                        rv,
+                        key,
+                        v,
+                        "putvalue-receiver".into(),
+                        owner,
+                    );
+                    self.m.stores[site as usize].key_value = Some(k);
                 }
                 v
             }
@@ -794,7 +817,20 @@ impl<'a> Gen<'a> {
                 );
                 nv2
             }
-            Expr::IndexGet { object, index } => {
+            Expr::BufferLength(array) | Expr::Uint8ArrayLength(array) => {
+                let o = self.expr(fx, array);
+                let key = self.m.atom("length");
+                self.load(o, Key::Named(key))
+            }
+            Expr::IndexGet { object, index }
+            | Expr::Uint8ArrayGet {
+                array: object,
+                index,
+            }
+            | Expr::BufferIndexGet {
+                buffer: object,
+                index,
+            } => {
                 let o = self.expr(fx, object);
                 let i = self.expr(fx, index);
                 let r = self.m.reason("ToPropertyKey");
@@ -820,6 +856,16 @@ impl<'a> Gen<'a> {
                 object,
                 index,
                 value,
+            }
+            | Expr::Uint8ArraySet {
+                array: object,
+                index,
+                value,
+            }
+            | Expr::BufferIndexSet {
+                buffer: object,
+                index,
+                value,
             } => {
                 let o = self.expr(fx, object);
                 let i = self.expr(fx, index);
@@ -840,7 +886,7 @@ impl<'a> Gen<'a> {
                     self.m.cons(kp, Cons::StoreKeyed { o, src: v, site });
                 } else {
                     let key = self.key_of(index);
-                    self.store_elem(fx, e, o, key, v, "[]=");
+                    self.store_elem(fx, e, o, key, i, v, "[]=");
                 }
                 v
             }
@@ -873,18 +919,34 @@ impl<'a> Gen<'a> {
                         add: false,
                     },
                 );
-                self.store_elem(fx, e, o, key, nv, "[]++");
+                self.store_elem(fx, e, o, key, i, nv, "[]++");
                 nv
             }
             Expr::Delete(target) => {
-                // E7: the receiver of the deleted reference.
-                let r = self.m.reason("E7 delete");
+                // E7: the receiver of the deleted reference (explain: in
+                // which function).
+                let r = if self.m.explain {
+                    let f = self
+                        .m
+                        .funcs
+                        .get(fx.f as usize)
+                        .map_or("(no function)", |f| f.name.as_str());
+                    let why = format!("E7 delete in {f}");
+                    self.m.reason(&why)
+                } else {
+                    self.m.reason("E7 delete")
+                };
                 match target.as_ref() {
-                    Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } => {
+                    Expr::PropertyGet {
+                        object, property, ..
+                    } => {
                         let o = self.expr(fx, object);
-                        if let Expr::IndexGet { index, .. } = target.as_ref() {
-                            let _ = self.expr(fx, index);
-                        }
+                        let key = self.m.atom(property);
+                        self.m.cons(o, Cons::DeleteKey { key, reason: r });
+                    }
+                    Expr::IndexGet { object, index } => {
+                        let o = self.expr(fx, object);
+                        let _ = self.expr(fx, index);
                         self.m.cons(
                             o,
                             Cons::Hard {
@@ -1286,7 +1348,10 @@ impl<'a> Gen<'a> {
                 ..
             } => {
                 let _ = self.expr(fx, key_expr);
-                if let Some(tm) = self.resolve_class_name(mi, class_name) {
+                // Under a constant key it is that key's accessor, installed
+                // with the class (`Gen::named_computed`).
+                let named = !*is_static && self.const_key(mi, key_expr).is_some();
+                if let (false, Some(tm)) = (named, self.resolve_class_name(mi, class_name)) {
                     self.computed_accessor(mi, tm, *is_static, getter_name, setter_name);
                 }
                 self.prim_node(prim::UNDEF)

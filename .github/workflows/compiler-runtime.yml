@@ -220,7 +220,7 @@ jobs:
           PREFIX="$(brew --prefix llvm@22 2>/dev/null || brew --prefix llvm)"
           # llvm-sys 221 requires major 22. If the runner's formula moves on,
           # this must go red, not quietly build something else.
-          "$PREFIX/bin/llvm-config" --version | grep -q '^22\.'
+          "$PREFIX/bin/llvm-config" --version | awk -F. '$1 == 22 && ($2 > 1 || ($2 == 1 && $3+0 >= 5)) { ok=1 } END { exit !ok }'
           echo "LLVM_SYS_221_PREFIX=$PREFIX" >> "$GITHUB_ENV"
       - name: Build with the llvm-inprocess feature
         run: |
@@ -550,7 +550,7 @@ jobs:
           set -euo pipefail
           brew install llvm@22 2>/dev/null || brew install llvm
           cc_llvm_prefix="$(brew --prefix llvm@22 2>/dev/null || brew --prefix llvm)"
-          "$cc_llvm_prefix/bin/llvm-config" --version | grep -q '^22\.'
+          "$cc_llvm_prefix/bin/llvm-config" --version | awk -F. '$1 == 22 && ($2 > 1 || ($2 == 1 && $3+0 >= 5)) { ok=1 } END { exit !ok }'
           echo "LLVM_SYS_221_PREFIX=$cc_llvm_prefix" >> "$GITHUB_ENV"
       - uses: ./.github/actions/perry/Swatinem/rust-cache
         with:
@@ -1693,6 +1693,8 @@ jobs:
         uses: ./.github/actions/perry/actions/setup-node
         with:
           node-version-file: .node-version
+      - name: WASI native EH toolchain and codegen regression
+        run: cargo test --locked --profile perry-dev -p perry-codegen --lib --features target-wasi wasm_eh -- --test-threads=1
       - name: Build perry with the WASI target
         run: cargo build --locked --profile perry-dev -p perry --features target-wasi
       - name: Install timeout for the macOS IR check
@@ -1998,7 +2000,7 @@ jobs:
           sudo rm -rf ~/Library/Developer/CoreSimulator/Caches/* || true
           df -h / | tail -1
       - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal --component rustfmt --component clippy
       - uses: ./.github/actions/setup-llvm22
       - name: Cache cargo registry
         uses: ./.github/actions/perry/actions/cache

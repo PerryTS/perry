@@ -1,0 +1,78 @@
+{
+    "packages": [
+        {
+            "name": "test:foo",
+            "path": "foo.wat"
+        },
+        {
+            "name": "test:bar",
+            "path": "bar.wat"
+        }
+    ],
+    "nodes": [
+        {
+            "type": "import",
+            "name": "my-foo",
+            "package": 0,
+            "export": "f"
+        },
+        {
+            "type": "instantiation",
+            "package": 0
+        },
+        {
+            "type": "alias",
+            "source": 1,
+            "export": "bar"
+        },
+        {
+            "type": "instantiation",
+            "package": 1
+        },
+        {
+            "type": "alias",
+            "source": 3,
+            "export": "e"
+        }
+    ],
+    "arguments": [
+        {
+            "source": 0,
+            "target": 1,
+            "name": "foo"
+        },
+        {
+            "source": 2,
+            "target": 3,
+            "name": "e"
+        }
+    ],
+    "exports": [
+        {
+            "node": 4,
+            "name": "e2"
+        }
+    ],
+    "names": [
+        {
+            "node": 0,
+            "name": "my-foo"
+        },
+        {
+            "node": 1,
+            "name": "foo"
+        },
+        {
+            "node": 2,
+            "name": "e"
+        },
+        {
+            "node": 3,
+            "name": "bar"
+        },
+        {
+            "node": 4,
+            "name": "e2"
+        }
+    ]
+}

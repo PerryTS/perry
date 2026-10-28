@@ -211,7 +211,7 @@ fn scanning_an_empty_cache_is_a_no_op() {
 
 /// …and both must actually be REGISTERED. Either scanner can be called
 /// directly from a test whether or not `gc_init` ever mentions it, so the
-/// wiring is asserted separately: an unregistered scanner is a no-op in
+/// core and installer wiring are asserted separately: an unregistered scanner is a no-op in
 /// production, which is precisely the #7211 bug.
 #[test]
 fn interned_string_cache_scanners_are_registered() {
@@ -231,8 +231,9 @@ fn interned_string_cache_scanners_are_registered() {
          the eight interned `typeof` strings are swept by the first minor and every \
          later `typeof x === \"…\"` compares against from-space (#7211)"
     );
+    crate::feature_hooks::js_runtime_install_json_engine();
     assert!(
         registered(crate::json::raw_json::scan_raw_json_key_root_mut as MutableRootScanner),
-        "scan_raw_json_key_root_mut must be registered in gc_init (#7211)"
+        "scan_raw_json_key_root_mut must be registered by the JSON installer (#7211)"
     );
 }

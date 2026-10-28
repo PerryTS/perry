@@ -30,6 +30,7 @@
 //! errors with an actionable "Phase X not yet supported" message.
 
 pub mod reach_report;
+pub(crate) mod realm_image;
 pub mod source_need;
 
 use std::cell::Cell;
@@ -298,7 +299,8 @@ mod number_exactness_tests;
 mod opts;
 mod program_facts_view;
 pub use program_facts_view::{
-    ElisionFacts, FactsBody, FactsClass, FactsField, FactsRecv, ProgramFactsView,
+    ElisionFacts, FactsBody, FactsClass, FactsField, FactsIndexedOwner, FactsNumericExpr,
+    FactsNumericFunction, FactsRecv, ProgramFactsView,
 };
 #[cfg(test)]
 mod ordinary_param_guard_tests;
@@ -333,6 +335,8 @@ mod string_pool;
 pub(crate) fn string_pool_image_pointer(entry: &crate::strings::StringEntry) -> String {
     string_pool::image_pointer(entry)
 }
+pub(crate) use string_pool::{emit_image_record, image_record_symbol};
+pub(crate) mod numeric_remainder;
 #[cfg(test)]
 mod testing_feature_gate_tests;
 #[cfg(test)]
@@ -2998,6 +3002,10 @@ fn lower_module(
         wpfacts: opts.program_facts.elision.clone(),
         capture_type_proofs: Default::default(),
         program_layouts: Arc::clone(&opts.program_layouts),
+        receiver_families: Arc::new(crate::layout_families::receiver_candidates(
+            hir,
+            &opts.program_layouts,
+        )),
         program_has_worker: opts.program_has_worker,
         program_has_thread_agents: thread_agents,
         class_hierarchy: class_hierarchy::ClassHierarchy::default(),
@@ -3315,6 +3323,7 @@ fn lower_module(
         namespace_entries: opts.namespace_entries.clone(),
         dynamic_import_path_to_prefix: opts.dynamic_import_path_to_prefix.clone(),
         nextjs_path_init_modules: opts.nextjs_path_init_modules.clone(),
+        lazy_path_init_modules: opts.lazy_path_init_modules.clone(),
         deferred_module_prefixes: opts.deferred_module_prefixes.clone(),
         module_init_deps: opts.module_init_deps.clone(),
         is_dynamic_import_target: opts.is_dynamic_import_target,
@@ -4492,6 +4501,7 @@ fn emit_lowered_module(lowered: LoweredModule) -> Result<Vec<u8>> {
     // renderer and the in-process constructor see the same IR; a pass living in
     // one of them would silently not apply to the other.
     // See `crate::root_reload`.
+    numeric_remainder::define_checked_number_remainder_if_used(&mut llmod);
     progress.phase(1, "lowering complete; finalizing generated IR");
     crate::root_reload::apply_to_module(&mut llmod);
 

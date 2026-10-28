@@ -1,166 +1,353 @@
 use super::*;
-use standalone::Standalone;
-use std::{
-    io::{Read, Write},
-    net::{TcpListener, TcpStream, UdpSocket},
-};
-fn ops() -> &'static abi::Ops {
-    standalone::ops()
-}
-fn check(e: abi::Error) {
-    assert_eq!((e.kind, e.os), (0, 0));
-}
-#[cfg(unix)]
-fn raw<T: std::os::fd::IntoRawFd>(socket: T) -> usize {
-    socket.into_raw_fd() as usize
-}
-#[cfg(windows)]
-fn raw<T: std::os::windows::io::IntoRawSocket>(socket: T) -> usize {
-    socket.into_raw_socket() as usize
-}
-unsafe fn adopt_test(socket: usize) -> abi::Opaque {
-    let mut res = ptr::null_mut();
-    let mut op = ptr::null_mut();
-    // SAFETY: transfer the owned socket, writable outputs, no connect destination.
-    check(unsafe { (ops().adopt)(socket, false, ptr::null(), &mut res, &mut op) });
-    assert!(op.is_null());
-    res
-}
-unsafe fn submit_test(
-    res: abi::Opaque,
-    kind: u32,
-    bytes: &[u8],
-    length: usize,
-    address: Option<abi::Address>,
-    delay: u64,
-) -> abi::Opaque {
-    let mut op = ptr::null_mut();
-    let addr = address.as_ref().map_or(ptr::null(), ptr::from_ref);
-    // SAFETY: this test owns res; submit copies bytes or allocates its read buffer.
-    check(unsafe { (ops().submit)(res, kind, bytes.as_ptr(), length, addr, delay, &mut op) });
-    op
-}
-unsafe fn wait(op: abi::Opaque) -> abi::Completion {
-    // SAFETY: timer submission needs no socket resource or input buffer.
-    let deadline = unsafe { submit_test(ptr::null_mut(), abi::TIMER, &[], 0, None, 5_000_000_000) };
-    let selected = [op, deadline];
-    // SAFETY: both operations remain owned throughout this wait.
-    unsafe {
-        while !(ops().ready)(op) {
-            check((ops().poll)(selected.as_ptr(), selected.len(), true));
-            assert!(
-                !(ops().ready)(deadline),
-                "native operation exceeded five seconds"
-            );
-        }
-        (ops().operation_drop)(deadline);
-        let mut complete = abi::Completion::default();
-        check((ops().take)(op, &mut complete));
-        complete
-    }
-}
-fn no_remaining_operations() {
-    assert!(!Standalone::with_driver(|d| Ok(d.alive())).unwrap());
-}
+use futures_lite::future::block_on;
+use futures_util::io::{AsyncReadExt, AsyncWriteExt};
+use std::io::{Read, Write};
+use std::net::TcpListener;
+use std::time::Duration;
+
+const WATCHDOG: Duration = Duration::from_secs(10);
+
 #[test]
-fn timer_poll_selects_only_requested_operations() {
-    // SAFETY: every pointer originates from this table and is consumed once.
-    unsafe {
-        let a = submit_test(ptr::null_mut(), abi::TIMER, &[], 0, None, 0);
-        let b = submit_test(ptr::null_mut(), abi::TIMER, &[], 0, None, 0);
-        let result = wait(b);
-        assert_eq!(result.kind, abi::COMPLETE);
-        (ops().completion_drop)(result);
-        assert!(!(ops().ready)(a), "unselected operation must remain staged");
-        let result = wait(a);
-        (ops().completion_drop)(result);
-    }
-    no_remaining_operations();
-}
-#[test]
-fn tcp_buffers_and_cancel_acknowledgement_round_trip() {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
-    let (mut peer, _) = listener.accept().unwrap();
-    peer.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-    // SAFETY: this scope owns the native socket and each returned operation/result.
-    unsafe {
-        let resource = adopt_test(raw(client));
-        let read = submit_test(resource, abi::READ, &[], 64, None, 0);
-        peer.write_all(b"hello").unwrap();
-        let result = wait(read);
-        check(result.error);
+fn blocking_work_keeps_timers_live_and_preserves_typed_results() {
+    bounded(|| {
+        let driver = Driver::new(2).unwrap();
+        let (started, receive) = mpsc::channel();
+        let (release, wait) = mpsc::channel();
+        let work = driver
+            .submitter()
+            .blocking(move || {
+                started.send(()).unwrap();
+                wait.recv_timeout(WATCHDOG).unwrap();
+                Err::<Vec<u8>, _>(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
+            })
+            .unwrap();
+        receive.recv_timeout(WATCHDOG).unwrap();
+        let timer = driver
+            .submit(|io| async move { io.sleep(Duration::from_millis(5)).await })
+            .unwrap();
+        assert!(matches!(
+            driver.submitter().blocking(|| ()),
+            Err(Error::Capacity)
+        ));
+        block_on(timer).unwrap().unwrap();
+        release.send(()).unwrap();
         assert_eq!(
-            std::slice::from_raw_parts(result.bytes.data, result.bytes.len),
-            b"hello"
+            block_on(work).unwrap().unwrap_err().kind(),
+            std::io::ErrorKind::PermissionDenied
         );
-        (ops().completion_drop)(result);
-        let write = submit_test(resource, abi::WRITE, b"world", 5, None, 0);
-        let result = wait(write);
-        check(result.error);
-        assert_eq!(result.transferred, 5);
-        (ops().completion_drop)(result);
-        let mut bytes = [0; 5];
-        peer.read_exact(&mut bytes).unwrap();
-        assert_eq!(&bytes, b"world");
-        let pending = submit_test(resource, abi::READ, &[], 65536, None, 0);
-        (ops().operation_drop)(pending);
-        (ops().resource_drop)(resource);
-        assert_eq!(peer.read(&mut bytes).unwrap(), 0);
-    }
-    no_remaining_operations();
+        assert_eq!(driver.outstanding(), 0);
+    });
 }
+
 #[test]
-fn udp_retains_datagram_source_and_bound_endpoint() {
-    let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
-    let bound = socket.local_addr().unwrap();
-    let peer = UdpSocket::bind("127.0.0.1:0").unwrap();
-    peer.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-    // SAFETY: transfer socket ownership and consume each operation once.
-    unsafe {
-        let resource = adopt_test(raw(socket));
-        let receive = submit_test(resource, abi::RECEIVE, &[], 65536, None, 0);
-        peer.send_to(b"packet", bound).unwrap();
-        let result = wait(receive);
-        check(result.error);
-        assert_eq!(address(result.address).unwrap(), peer.local_addr().unwrap());
-        assert_eq!(
-            std::slice::from_raw_parts(result.bytes.data, result.bytes.len),
-            b"packet"
-        );
-        (ops().completion_drop)(result);
-        let send = submit_test(
-            resource,
-            abi::SEND,
-            b"reply",
-            5,
-            Some(encode_address(peer.local_addr().unwrap())),
-            0,
-        );
-        let result = wait(send);
-        check(result.error);
-        (ops().completion_drop)(result);
-        let mut bytes = [0; 16];
-        let (n, source) = peer.recv_from(&mut bytes).unwrap();
-        assert_eq!(&bytes[..n], b"reply");
-        assert_eq!(source, bound);
-        (ops().resource_drop)(resource);
-    }
-    no_remaining_operations();
-}
-#[test]
-fn dns_results_are_owned_by_the_producing_table() {
-    // SAFETY: resolution copies the name and returns an owned result array.
-    unsafe {
-        let op = submit_test(ptr::null_mut(), abi::RESOLVE, b"localhost", 9, None, 0);
-        let result = wait(op);
-        check(result.error);
-        assert_eq!(result.kind, abi::RESOLVED);
-        assert!(result.addresses.len > 0);
-        for addr in std::slice::from_raw_parts(result.addresses.data, result.addresses.len) {
-            assert!(address(*addr).unwrap().ip().is_loopback());
+fn cancelled_blocking_work_retains_native_inputs_until_syscall_finishes() {
+    bounded(|| {
+        struct NativeOwner(mpsc::Sender<()>);
+        impl Drop for NativeOwner {
+            fn drop(&mut self) {
+                let _ = self.0.send(());
+            }
         }
-        (ops().completion_drop)(result);
+        let driver = Driver::new(1).unwrap();
+        let endpoint = driver.submitter();
+        let (started, receive) = mpsc::channel();
+        let (release, wait) = mpsc::channel();
+        let (dropped, observe_drop) = mpsc::channel();
+        let native = NativeOwner(dropped);
+        let work = endpoint
+            .blocking(move || {
+                started.send(()).unwrap();
+                wait.recv_timeout(WATCHDOG).unwrap();
+                drop(native);
+            })
+            .unwrap();
+        receive.recv_timeout(WATCHDOG).unwrap();
+        work.cancel();
+        assert_eq!(block_on(work), Err(Error::Cancelled));
+        assert!(observe_drop.try_recv().is_err());
+        assert_eq!(driver.outstanding(), 0);
+        drop(driver);
+        assert!(matches!(endpoint.blocking(|| ()), Err(Error::Stopped)));
+        release.send(()).unwrap();
+        observe_drop.recv_timeout(WATCHDOG).unwrap();
+    });
+}
+
+// Bound every cross-thread wait, including shutdown, so a broken wakeup fails
+// the test instead of leaving a CI worker hung indefinitely.
+pub(super) fn bounded(test: impl FnOnce() + Send + 'static) {
+    let (send, receive) = mpsc::channel();
+    let worker = thread::spawn(move || {
+        let result = std::panic::catch_unwind(AssertUnwindSafe(test));
+        let _ = send.send(result);
+    });
+    let result = receive.recv_timeout(WATCHDOG).expect("I/O driver watchdog");
+    worker.join().unwrap();
+    if let Err(panic) = result {
+        std::panic::resume_unwind(panic);
     }
-    no_remaining_operations();
+}
+
+#[test]
+fn pending_task_does_not_block_other_tasks_or_timer() {
+    bounded(|| {
+        let driver = Driver::new(4).unwrap();
+        let (started, receive) = mpsc::channel();
+        let pending = driver
+            .submit(move |_| async move {
+                started.send(()).unwrap();
+                futures_util::future::pending::<()>().await;
+            })
+            .unwrap();
+        receive.recv_timeout(WATCHDOG).unwrap();
+        let timer = driver
+            .submit(|io| async move {
+                io.sleep(Duration::from_millis(10)).await.unwrap();
+                42
+            })
+            .unwrap();
+        assert_eq!(block_on(timer), Ok(42));
+        pending.cancel();
+        assert_eq!(block_on(pending), Err(Error::Cancelled));
+        assert_eq!(driver.outstanding(), 0);
+    });
+}
+
+#[test]
+fn tcp_roundtrip_flushes_and_half_closes() {
+    bounded(|| {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket.set_read_timeout(Some(WATCHDOG)).unwrap();
+            socket.set_write_timeout(Some(WATCHDOG)).unwrap();
+            let mut data = Vec::new();
+            socket.read_to_end(&mut data).unwrap();
+            assert_eq!(data, b"component-turnloop");
+            socket.write_all(&data).unwrap();
+        });
+        let driver = Driver::new(4).unwrap();
+        let request = driver
+            .submit(move |io| async move {
+                let mut stream = io
+                    .connect(address, turnloop::TcpOpts::default())
+                    .await
+                    .unwrap();
+                stream.write_all(b"component-turnloop").await.unwrap();
+                stream.flush().await.unwrap();
+                futures_util::future::poll_fn(|cx| stream.poll_shutdown(cx))
+                    .await
+                    .unwrap();
+                let mut echoed = Vec::new();
+                stream.read_to_end(&mut echoed).await.unwrap();
+                echoed
+            })
+            .unwrap();
+        assert_eq!(block_on(request).unwrap(), b"component-turnloop");
+        server.join().unwrap();
+        assert_eq!(driver.outstanding(), 0);
+    });
+}
+
+#[test]
+fn cancelling_pending_read_releases_the_socket() {
+    bounded(|| {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (reading, receive) = mpsc::channel();
+        let driver = Driver::new(2).unwrap();
+        let request = driver
+            .submit(move |io| async move {
+                let mut stream = io
+                    .connect(address, turnloop::TcpOpts::default())
+                    .await
+                    .unwrap();
+                let mut data = [0; 1];
+                let mut read = Box::pin(stream.read(&mut data));
+                futures_util::future::poll_fn(|cx| {
+                    assert!(read.as_mut().poll(cx).is_pending());
+                    Poll::Ready(())
+                })
+                .await;
+                reading.send(()).unwrap();
+                read.await.unwrap()
+            })
+            .unwrap();
+        let (mut server, _) = listener.accept().unwrap();
+        server.set_read_timeout(Some(WATCHDOG)).unwrap();
+        receive.recv_timeout(WATCHDOG).unwrap();
+        request.cancel();
+        assert_eq!(block_on(request), Err(Error::Cancelled));
+        assert_eq!(server.read(&mut [0; 1]).unwrap(), 0);
+        assert_eq!(driver.outstanding(), 0);
+    });
+}
+
+struct Dropped(mpsc::Sender<()>);
+impl Drop for Dropped {
+    fn drop(&mut self) {
+        let _ = self.0.send(());
+    }
+}
+
+#[test]
+fn dropping_request_drops_a_polled_local_future() {
+    bounded(|| {
+        let driver = Driver::new(1).unwrap();
+        let (started, start) = mpsc::channel();
+        let (dropped, drop_receive) = mpsc::channel();
+        let request = driver
+            .submit(move |_| async move {
+                let _owner = Dropped(dropped);
+                // A non-Send owner proves the future was built on its I/O thread.
+                let local = std::rc::Rc::new(9);
+                started.send(()).unwrap();
+                futures_util::future::pending::<()>().await;
+                *local
+            })
+            .unwrap();
+        start.recv_timeout(WATCHDOG).unwrap();
+        drop(request);
+        drop_receive.recv_timeout(WATCHDOG).unwrap();
+        drop(driver);
+    });
+}
+
+#[test]
+fn capacity_rejects_without_invoking_factory_and_recovers_after_cancel() {
+    bounded(|| {
+        assert!(matches!(Driver::new(0), Err(Error::Capacity)));
+        let driver = Driver::new(1).unwrap();
+        let request = driver
+            .submit(|_| futures_util::future::pending::<()>())
+            .unwrap();
+        assert_eq!(driver.outstanding(), 1);
+        assert!(matches!(
+            driver.submit(|_| {
+                panic!("rejected factory executed");
+                #[allow(unreachable_code)]
+                async {}
+            }),
+            Err(Error::Capacity)
+        ));
+        request.cancel();
+        assert_eq!(block_on(request), Err(Error::Cancelled));
+        assert_eq!(block_on(driver.submit(|_| async { 7 }).unwrap()), Ok(7));
+    });
+}
+
+#[test]
+fn shutdown_drops_pending_futures_before_returning() {
+    bounded(|| {
+        let driver = Driver::new(1).unwrap();
+        let (started, start) = mpsc::channel();
+        let (dropped, drop_receive) = mpsc::channel();
+        let request = driver
+            .submit(move |_| async move {
+                let _owner = Dropped(dropped);
+                started.send(()).unwrap();
+                futures_util::future::pending::<()>().await;
+            })
+            .unwrap();
+        start.recv_timeout(WATCHDOG).unwrap();
+        drop(driver);
+        drop_receive
+            .try_recv()
+            .expect("shutdown must join native cleanup");
+        assert_eq!(block_on(request), Err(Error::Stopped));
+    });
+}
+
+#[test]
+fn resource_submitter_cannot_keep_a_disposed_context_alive() {
+    bounded(|| {
+        let driver = Driver::new(2).unwrap();
+        let endpoint = driver.submitter();
+        let captured = endpoint.clone();
+        let (started, start) = mpsc::channel();
+        let request = endpoint
+            .submit(move |_| async move {
+                let nested = captured.submit(|_| async { 5 }).unwrap();
+                assert_eq!(nested.await, Ok(5));
+                started.send(()).unwrap();
+                futures_util::future::pending::<()>().await;
+                drop(captured);
+            })
+            .unwrap();
+        start.recv_timeout(WATCHDOG).unwrap();
+        drop(driver);
+        assert_eq!(block_on(request), Err(Error::Stopped));
+        assert!(matches!(endpoint.submit(|_| async {}), Err(Error::Stopped)));
+    });
+}
+
+#[test]
+fn cancelling_before_first_poll_does_not_invoke_factory() {
+    bounded(|| {
+        let driver = Driver::new(2).unwrap();
+        let (started, start) = mpsc::channel();
+        let (release, released) = mpsc::channel();
+        // Only this test deliberately parks the I/O thread, to hold a second
+        // submission in the queue while its caller cancels it.
+        let barrier = driver
+            .submit(move |_| {
+                started.send(()).unwrap();
+                released.recv_timeout(WATCHDOG).unwrap();
+                async {}
+            })
+            .unwrap();
+        start.recv_timeout(WATCHDOG).unwrap();
+        let cancelled = driver
+            .submit(|_| {
+                panic!("a cancelled factory must not execute");
+                #[allow(unreachable_code)]
+                async {}
+            })
+            .unwrap();
+        cancelled.cancel();
+        release.send(()).unwrap();
+        assert_eq!(block_on(barrier), Ok(()));
+        assert_eq!(block_on(cancelled), Err(Error::Cancelled));
+        assert_eq!(driver.outstanding(), 0);
+    });
+}
+
+#[test]
+fn independent_drivers_do_not_share_shutdown_or_capacity() {
+    bounded(|| {
+        let first = Driver::new(1).unwrap();
+        let second = Driver::new(1).unwrap();
+        let pending = first
+            .submit(|_| futures_util::future::pending::<()>())
+            .unwrap();
+        let (release, released) = oneshot::channel();
+        let survivor = second
+            .submit(move |_| async { released.await.unwrap() })
+            .unwrap();
+        drop(first);
+        assert_eq!(block_on(pending), Err(Error::Stopped));
+        release.send(3).unwrap();
+        assert_eq!(block_on(survivor), Ok(3));
+    });
+}
+
+// Shipping Perry uses panic=abort; only unwind builds can recover a Rust panic.
+#[test]
+#[cfg(panic = "unwind")]
+fn factory_and_future_panics_do_not_poison_driver() {
+    bounded(|| {
+        let driver = Driver::new(1).unwrap();
+        let factory = driver
+            .submit(|_| {
+                panic!("factory panic");
+                #[allow(unreachable_code)]
+                async {}
+            })
+            .unwrap();
+        assert_eq!(block_on(factory), Err(Error::Panicked));
+        let future = driver.submit(|_| async { panic!("future panic") }).unwrap();
+        assert_eq!(block_on(future), Err(Error::Panicked));
+        assert_eq!(block_on(driver.submit(|_| async { 9 }).unwrap()), Ok(9));
+    });
 }
