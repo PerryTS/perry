@@ -11,6 +11,9 @@ use crate::gen::{variant_name, Fx, Gen};
 use crate::model::*;
 use perry_hir::{Expr, Stmt};
 
+#[path = "gen/accessor_descriptor.rs"]
+mod accessor_descriptor;
+
 fn kids(e: &Expr) -> Vec<&Expr> {
     let mut v = Vec::new();
     perry_hir::walker::walk_expr_children(e, &mut |c| v.push(c));
@@ -18,36 +21,6 @@ fn kids(e: &Expr) -> Vec<&Expr> {
 }
 
 impl<'a> Gen<'a> {
-    /// FVA 4.3a: `d` is an accessor descriptor literal: a closed literal
-    /// layout whose keys are within get/set/enumerable/configurable and
-    /// name a getter or a setter (no value, no writable).
-    fn accessor_descriptor(&self, mi: u32, d: &Expr) -> bool {
-        let Expr::New { class_name, .. } = d else {
-            return false;
-        };
-        let Some(&tm) = self.mods[mi as usize].classes.get(class_name) else {
-            return false;
-        };
-        let tpl = &self.m.tmpls[tm as usize];
-        if !matches!(
-            tpl.kind,
-            TmplKind::Class {
-                literal_shape: true,
-                ..
-            }
-        ) {
-            return false;
-        }
-        let keys: Vec<&str> = tpl
-            .birth_keys
-            .iter()
-            .map(|a| self.m.atoms[*a as usize].as_str())
-            .collect();
-        keys.iter()
-            .all(|k| matches!(*k, "get" | "set" | "enumerable" | "configurable"))
-            && keys.iter().any(|k| matches!(*k, "get" | "set"))
-    }
-
     /// An accessor descriptor literal (`accessor_descriptor`): its class, its
     /// constructor arguments, and which of them its own `get` and `set` are
     /// (a literal shape's constructor stores parameter i under its key).
