@@ -190,3 +190,34 @@ fn settled_step_observed_hooks_keep_collecting_route() {
         assert!(try_enqueue(boxed(inner), step).is_none());
     });
 }
+
+#[test]
+fn settled_step_notifies_producers_outside_the_job_drain() {
+    fixture(|step, next, inner| {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        unsafe extern "C" fn wake(context: *mut std::ffi::c_void) {
+            (*(context as *const AtomicUsize)).fetch_add(1, Ordering::SeqCst);
+        }
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                unsafe { crate::event_pump::perry_set_wake_callback(None, std::ptr::null_mut()) };
+            }
+        }
+        let count = AtomicUsize::new(0);
+        let _reset = Reset;
+        unsafe {
+            crate::event_pump::perry_set_wake_callback(
+                Some(wake),
+                (&count as *const AtomicUsize).cast_mut().cast(),
+            );
+        }
+        assert!(!super::super::microtasks::microtask_job_drain_active());
+        assert_eq!(try_enqueue(boxed(inner), step), Some(next));
+        assert_eq!(
+            count.load(Ordering::SeqCst),
+            1,
+            "published work wakes the host"
+        );
+    });
+}

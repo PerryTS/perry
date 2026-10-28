@@ -75,6 +75,38 @@ pub(super) fn enqueue(
     } else {
         unsafe { ((*next).async_id, (*next).trigger_async_id) }
     };
+    publish(
+        step, value, next, is_error, context, activation, async_id, trigger_id,
+    );
+    notify_published(next)
+}
+
+/// No raw address crosses a collection point before queue publication.
+/// Once published, a host wake may re-enter; protect and reload the result.
+fn notify_published(next: *mut Promise) -> *mut Promise {
+    if super::microtasks::microtask_job_drain_active() {
+        crate::event_pump::js_notify_promise_progress();
+        return next;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let result = scope.root_raw_mut_ptr(next);
+    crate::event_pump::js_notify_promise_progress();
+    result.get_raw_mut_ptr()
+}
+
+/// The observed and unobserved routes publish the identical scanned Task.
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+pub(super) fn publish(
+    step: ClosurePtr,
+    value: f64,
+    next: *mut Promise,
+    is_error: bool,
+    context: crate::async_context::AsyncContextSnapshot,
+    activation: *mut crate::r#box::AsyncBoxActivation,
+    async_id: u64,
+    trigger_id: u64,
+) {
     crate::gc::runtime_write_barrier_root_nanbox(owner_bits(step));
     crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
     crate::gc::runtime_write_barrier_root_nanbox(owner_bits(next));
@@ -86,7 +118,6 @@ pub(super) fn enqueue(
             step, value, next, is_error, context, activation, async_id, trigger_id,
         ));
     });
-    next
 }
 
 #[cfg(test)]

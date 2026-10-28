@@ -712,21 +712,19 @@ pub extern "C" fn js_async_step_chain(value: f64, step_closure: ClosurePtr) -> *
             crate::value::js_nanbox_get_pointer(value) as *mut Promise
         }
     };
-    crate::r#box::retain_async_box_activation(trap.box_activation);
-    TASK_QUEUE.with(|q| {
-        q.borrow_mut().enqueue_promise_job(Task::AsyncStep(
-            rooted_step(),
-            queued_value_handle.get_nanbox_f64(),
-            next,
-            is_error,
-            context,
-            trap.box_activation,
-            step_async_id,
-            step_trigger_id,
-        ));
-    });
+    super::settled_step::publish(
+        rooted_step(),
+        queued_value_handle.get_nanbox_f64(),
+        next,
+        is_error,
+        context,
+        trap.box_activation,
+        step_async_id,
+        step_trigger_id,
+    );
     crate::event_pump::js_notify_promise_progress();
-    next
+    // A registered native host wake may re-enter before returning.
+    unboxed_promise(&next_handle)
 }
 
 /// Done-case companion to `js_async_step_chain`. Replaces the
