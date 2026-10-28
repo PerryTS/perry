@@ -3,7 +3,7 @@
 //! ```text
 //! perry-p1-host [--env K=V]... [--listen [FD=]IP:PORT]... [--no-announce]
 //!               [--signal MS:BYTE]... [--dns NAME=RESULT[,delay=MS]]...
-//!               [--stats FILE] MODULE [ARG]...
+//!               [--no-discard] [--stats FILE] MODULE [ARG]...
 //! ```
 //!
 //! `--listen` binds a TCP listener in the host and hands it to the guest as
@@ -14,11 +14,17 @@
 //! the last one. `--stats` writes what the host observed as JSON when the guest
 //! exits.
 //!
+//! `--no-discard` makes `perry_host.discard_pages` answer 0 ("did nothing"),
+//! which a guest takes as a host without it. Otherwise the call zero-fills the
+//! range, dropping its pages where the OS allows, and `--stats` counts the
+//! calls and the bytes.
+//!
 //! `--dns` sets what the `perry_net` imports resolve a name to: `notfound`,
 //! `temp`, or addresses joined by `+` (`127.0.0.2+127.0.0.1` is tried in that
 //! order), after an optional delay. A literal address is itself, `localhost` is
 //! 127.0.0.1, and any other name is not found: the host never asks the network.
 
+mod discard;
 mod fdtable;
 mod perry_net;
 mod preview1;
@@ -39,6 +45,7 @@ struct Options {
     announce: bool,
     signals: Vec<(u64, u8)>,
     dns: Dns,
+    discard: bool,
     stats: Option<String>,
 }
 
@@ -51,6 +58,7 @@ fn parse(mut argv: impl Iterator<Item = String>) -> Result<Options, String> {
         announce: true,
         signals: vec![],
         dns: Dns::default(),
+        discard: true,
         stats: None,
     };
     while let Some(arg) = argv.next() {
@@ -59,6 +67,7 @@ fn parse(mut argv: impl Iterator<Item = String>) -> Result<Options, String> {
             "--env" => opts.env.push(value("--env")?),
             "--listen" => opts.listen.push(value("--listen")?),
             "--no-announce" => opts.announce = false,
+            "--no-discard" => opts.discard = false,
             "--dns" => opts.dns.add(&value("--dns")?)?,
             "--stats" => opts.stats = Some(value("--stats")?),
             "--signal" => {
@@ -151,12 +160,15 @@ fn run(opts: Options) -> Result<i32, Box<dyn std::error::Error>> {
     let mut linker = Linker::new(&engine);
     preview1::add(&mut linker)?;
     preview1::add_perry_net(&mut linker)?;
+    preview1::add_perry_host(&mut linker)?;
     // Anything else a module imports traps when called.
     linker.define_unknown_imports_as_traps(&module)?;
 
     let mut args = vec![opts.module.clone()];
     args.extend(opts.args);
-    let mut store = Store::new(&engine, Host::new(args, env, table, opts.dns));
+    let mut host = Host::new(args, env, table, opts.dns);
+    host.discard_answers = opts.discard;
+    let mut store = Store::new(&engine, host);
     let instance = linker.instantiate(&mut store, &module)?;
     let start = instance.get_typed_func::<(), ()>(&mut store, "_start")?;
     // The delays count from the moment the guest starts, not from compilation.
@@ -178,8 +190,8 @@ fn run(opts: Options) -> Result<i32, Box<dyn std::error::Error>> {
         let accepts: Vec<String> = s.accepts.iter().map(u32::to_string).collect();
         let connects: Vec<String> = s.connects.iter().map(u32::to_string).collect();
         std::fs::write(path, format!(
-            "{{\"polls\":{},\"clock_wakeups\":{},\"fd_wakeups\":{},\"max_subs\":{},\"prestat_calls\":{},\"accepts\":[{}],\"connect_attempts\":{},\"connects\":[{}],\"sock_errors\":{}}}\n",
-            s.polls, s.clock_wakeups, s.fd_wakeups, s.max_subs, s.prestat_calls, accepts.join(","), s.connect_attempts, connects.join(","), s.sock_errors))?;
+            "{{\"polls\":{},\"clock_wakeups\":{},\"fd_wakeups\":{},\"max_subs\":{},\"prestat_calls\":{},\"accepts\":[{}],\"connect_attempts\":{},\"connects\":[{}],\"sock_errors\":{},\"discard_calls\":{},\"discard_bytes\":{}}}\n",
+            s.polls, s.clock_wakeups, s.fd_wakeups, s.max_subs, s.prestat_calls, accepts.join(","), s.connect_attempts, connects.join(","), s.sock_errors, s.discard_calls, s.discard_bytes))?;
     }
     Ok(status)
 }

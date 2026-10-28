@@ -65,7 +65,7 @@ pub(super) fn log_collection(
     }
     let why = OLD_RECLAIM_WHY.with(|c| c.replace(""));
     eprintln!(
-        "[gc-log] kind={} trigger={:?} why={} pause_us={} freed={} old={} ext={} handles={} temps={}",
+        "[gc-log] kind={} trigger={:?} why={} pause_us={} freed={} old={} ext={} handles={} temps={}{}",
         if full { "full" } else { "minor" },
         trigger,
         if full && !why.is_empty() { why } else { "-" },
@@ -75,7 +75,20 @@ pub(super) fn log_collection(
         super::policy::external_side_live_bytes(),
         super::runtime_handle_stack_len(),
         temp_root_depth(),
+        memory_suffix(),
     );
+}
+
+/// wasip1 with `wasm-discard`: the linear memory's size and what the host has
+/// been given back.
+#[cfg(wasm_discard)]
+fn memory_suffix() -> String {
+    crate::wasm_discard::log_suffix()
+}
+
+#[cfg(not(wasm_discard))]
+fn memory_suffix() -> &'static str {
+    ""
 }
 
 #[cfg(test)]
