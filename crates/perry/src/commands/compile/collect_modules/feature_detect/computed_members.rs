@@ -30,7 +30,26 @@ pub(super) fn scan(module: &Module) -> Capabilities {
         })
         .flatten()
         .collect();
-    let types = HirTypeEnv::from_module(module);
+    let mut types = HirTypeEnv::from_module(module);
+    // `as const` can leave a declaration typed Any even though its immutable
+    // initializer carries a closed literal shape. Reuse the existing binding
+    // analysis, and only recover that shape when every read is a member read:
+    // passing/storing the object or writing a property keeps it conservative.
+    for (id, init) in perry_hir::dynamic_import::collect_module_const_locals(module) {
+        if !matches!(types.local_type(id), Some(Type::Any | Type::Unknown)) {
+            continue;
+        }
+        if let Expr::New { class_name, .. } = init {
+            if module.classes.iter().any(|class| {
+                class.name == *class_name
+                    && class.is_literal_shape()
+                    && class.fields.iter().all(|field| !api_value_type(&field.ty))
+            }) && only_member_reads(module, id)
+            {
+                types.insert_local(id, Type::Named(class_name.clone()));
+            }
+        }
+    }
     let mut caps = Capabilities::default();
     for_each_expr(module, &mut |expr| {
         if let Expr::IndexGet { index, .. }
@@ -163,6 +182,33 @@ fn opaque_key(key: &Expr, types: &HirTypeEnv) -> bool {
             | Expr::Null
             | Expr::Undefined
     )
+}
+
+fn only_member_reads(module: &Module, id: u32) -> bool {
+    let mut reads = 0;
+    let mut receivers = 0;
+    for_each_expr(module, &mut |expr| {
+        reads += usize::from(matches!(expr, Expr::LocalGet(local) if *local == id));
+        // A method call can mutate its receiver; it is not a passive read.
+        if let Expr::Call { callee, .. } | Expr::CallSpread { callee, .. } = expr {
+            reads += usize::from(matches!(callee.as_ref(),
+                Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. }
+                if matches!(object.as_ref(), Expr::LocalGet(local) if *local == id)));
+        }
+        let object = match expr {
+            Expr::IndexGet { object, .. }
+            | Expr::PropertyGet { object, .. }
+            | Expr::ReflectGet { target: object, .. }
+            | Expr::ReflectGetOwnPropertyDescriptor { target: object, .. }
+            | Expr::ObjectGetOwnPropertyDescriptor(object, _)
+            | Expr::ObjectGetOwnPropertyDescriptors(object)
+            | Expr::ObjectValues(object)
+            | Expr::ObjectEntries(object) => Some(object.as_ref()),
+            _ => None,
+        };
+        receivers += usize::from(matches!(object, Some(Expr::LocalGet(local)) if *local == id));
+    });
+    reads == receivers
 }
 
 // Primitive data cannot supply a native namespace or method. Keep unknown,
@@ -493,6 +539,7 @@ mod tests {
             r#"import * as fs from "fs"; fs[process.argv[2]]();"#,
             r#"const fs = process.getBuiltinModule("fs/promises"); function f(k: string) { return fs[k](); }"#,
             r#"import * as fs from "fs"; fs.readFileSync(pass(fs), "utf8"); function pass(ns) { return Object.values(ns)[0]; }"#,
+            r#"import * as fs from "fs"; const data = { value: "x" } as const; Object.assign(data, fs); console.log(Object.values(data));"#,
         ] {
             let mut ctx = context();
             detect(&mut ctx, source, "escaped.ts");
