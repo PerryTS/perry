@@ -310,7 +310,21 @@ pub fn register_function_name_if_absent(func_ptr: usize, name: &str) {
     // "Absent" means "neither map holds bytes that DECODE" — which is exactly
     // the question the read side answers, so ask it rather than restating it
     // and letting the two drift.
-    if with_registered_name(func_ptr, |_| ()).is_some() {
+    // Existence does not select a name, so the image may be checked first:
+    // a valid image entry proves presence even behind an invalid override.
+    // Reflection keeps owned-name precedence in `with_registered_name`.
+    // This avoids an owned-map lock and hash probe for ordinary static names.
+    let image_present = function_name_registry()
+        .lock()
+        .ok()
+        .is_some_and(|map| decode_registered_with(map.get(&func_ptr).copied(), |_| ()).is_some());
+    if image_present {
+        return;
+    }
+    if function_name_overrides().lock().ok().is_some_and(|map| {
+        map.get(&func_ptr)
+            .is_some_and(|bytes| std::str::from_utf8(bytes).is_ok())
+    }) {
         return;
     }
     if let Ok(mut overrides) = function_name_overrides().lock() {
