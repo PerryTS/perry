@@ -132,13 +132,15 @@ fn function_name_registry(
 /// which INFERS a name at run time (a symbol's description, `get <key>`) from
 /// bytes that exist nowhere in the image.
 fn function_name_overrides(
-) -> &'static std::sync::Mutex<std::collections::HashMap<usize, std::sync::Arc<[u8]>>> {
+) -> &'static std::sync::Mutex<crate::fast_hash::PtrHashMap<usize, std::sync::Arc<[u8]>>> {
     use std::sync::OnceLock;
+    // The canonical keys are function addresses. Use the runtime's pointer
+    // hasher without changing ownership, replacement or lookup precedence.
     static OVERRIDES: OnceLock<
-        std::sync::Mutex<std::collections::HashMap<usize, std::sync::Arc<[u8]>>>,
+        std::sync::Mutex<crate::fast_hash::PtrHashMap<usize, std::sync::Arc<[u8]>>>,
     > = OnceLock::new();
     crate::once_init::get_or_init(&OVERRIDES, || {
-        std::sync::Mutex::new(std::collections::HashMap::new())
+        std::sync::Mutex::new(crate::fast_hash::new_ptr_hash_map())
     })
 }
 
