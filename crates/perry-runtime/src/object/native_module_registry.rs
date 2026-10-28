@@ -480,6 +480,12 @@ pub extern "C" fn js_nm_install_stream() {
         Ordering::Relaxed,
     );
     nm_register_ctor(NmBucket::Stream, nm_ctor_stream);
+    install_stream_constructor_metadata();
+}
+
+/// Explicit-this construction belongs to each stream constructor, including
+/// a statically selected export that has no containing module dispatcher.
+pub(crate) fn install_stream_constructor_metadata() {
     // `black_box` for the reason `js_nm_enable_install_all` gives: this is the
     // only value ever stored to the single-pointer slot, and without it
     // whole-program optimization devirtualizes the load in

@@ -63,7 +63,11 @@ pub fn emit(out: &Path) {
                         property,
                         "Stream" | "Readable" | "Writable" | "Duplex" | "Transform" | "PassThrough"
                     )) {
-                "super::install_nm_ee_ops(); crate::stream_hooks::install();"
+                if bucket == "stream" {
+                    "super::install_nm_ee_ops(); crate::stream_hooks::install(); super::super::native_module_registry::install_stream_constructor_metadata();"
+                } else {
+                    "super::install_nm_ee_ops(); crate::stream_hooks::install();"
+                }
             } else if bucket == "wasi" {
                 "crate::wasi_hook_slots::install();"
             } else {
@@ -154,10 +158,16 @@ pub extern "C" fn {symbol}(observe_writes: i32) -> f64 {{
             "0.0, false"
         };
         let mut children = String::new();
-        for candidate in [
+        let mut child_modules = vec![
             format!("{module}.{property}"),
             format!("{module}/{property}"),
-        ] {
+        ];
+        // WebCrypto owns SubtleCrypto; the latter's declaration uses the
+        // canonical crypto.subtle name, also exposed directly by node:crypto.
+        if (module, property) == ("crypto", "webcrypto") {
+            child_modules.push("crypto.subtle".to_string());
+        }
+        for candidate in child_modules {
             if let Some((_, properties)) = CALLABLE_EXPORT_TABLE
                 .iter()
                 .find(|(name, _)| *name == candidate)

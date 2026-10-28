@@ -172,3 +172,22 @@ fn native_package_reexport_emits_a_value_getter() {
         "getter must load the native export value: {getter}"
     );
 }
+
+#[test]
+fn child_object_export_initializes_its_declaration_before_snapshot() {
+    for module in ["readline", "node:readline", "timers", "node:timers"] {
+        let ir = compile_lookup(module, "promises");
+        let parent = module.strip_prefix("node:").unwrap_or(module);
+        let install = format!("call void @js_node_submod_install_{parent}_promises(");
+        assert!(
+            ir.find(&install).expect("child declaration install")
+                < ir.find("call double @js_native_module_named_esm_export_value(")
+                    .expect("export snapshot"),
+            "{ir}"
+        );
+        assert!(
+            !ir.contains(&format!("call void @js_nm_install_{parent}(")),
+            "{ir}"
+        );
+    }
+}

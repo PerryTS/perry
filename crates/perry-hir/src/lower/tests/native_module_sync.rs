@@ -55,3 +55,33 @@ fn escaped_builtin_import_keeps_its_initial_binding() {
         2
     );
 }
+
+#[test]
+fn native_stream_heritage_keeps_its_import_cell() {
+    let source =
+        r#"import { Readable as Base } from 'node:stream'; class Body extends Base {} new Body();"#;
+    let ast = perry_parser::parse_typescript(source, "heritage.ts").unwrap();
+    let hir = super::super::lower_module(&ast, "heritage", "heritage.ts").unwrap();
+    assert!(hir.classes.iter().any(|c| c
+        .native_extends
+        .as_ref()
+        .is_some_and(|p| p.0 == "node_stream")));
+    let dump = format!("{:?}", hir.init);
+    assert!(
+        dump.contains("js_native_module_named_esm_export_value"),
+        "missing constructor initialization: {dump}"
+    );
+}
+
+#[test]
+fn named_constructor_apply_is_a_value_call() {
+    let source = r#"import { Writable } from 'node:stream'; Writable.apply({}, []);"#;
+    let ast = perry_parser::parse_typescript(source, "apply.ts").unwrap();
+    let hir = super::super::lower_module(&ast, "apply", "apply.ts").unwrap();
+    let dump = format!("{:?}", hir.init);
+    assert!(
+        dump.contains("js_native_module_named_esm_export_value"),
+        "{dump}"
+    );
+    assert!(!dump.contains("stream.apply is not implemented"), "{dump}");
+}

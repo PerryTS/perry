@@ -158,7 +158,16 @@ pub(crate) fn prune_unused_named_cells(module: &mut Module) {
     // of an expression. Its prototype must exist before class registration.
     for class in &module.classes {
         if let Some(parent) = &class.native_extends {
-            *uses.entry(parent.clone()).or_default() += 1;
+            // Native heritage uses the runtime family name for classic streams.
+            // Its import cell is owned by the public module declaration.
+            let source = if parent.0 == "node_stream" {
+                "stream"
+            } else {
+                &parent.0
+            };
+            *uses
+                .entry((source.to_string(), parent.1.clone()))
+                .or_default() += 1;
         }
     }
     let exported: std::collections::HashSet<_> = module

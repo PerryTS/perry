@@ -92,7 +92,11 @@ pub(crate) fn prepare(
     } else {
         format!("{source}/{export}")
     };
-    let submodule = crate::nm_install::native_namespace_submodule_key(&subpath);
+    let subpath = subpath.strip_prefix("node:").unwrap_or(&subpath);
+    let submodule = perry_dispatch::native_submodule_exports::SUBMODULE_EXPORTS
+        .iter()
+        .find(|(module, _, _)| *module == subpath)
+        .map(|(_, key, _)| *key);
     if submodule.is_none()
         && export != "default"
         && perry_api_manifest::is_node_core_module(source)

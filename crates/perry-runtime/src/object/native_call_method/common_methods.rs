@@ -602,13 +602,17 @@ pub(crate) unsafe fn call_function_with_explicit_this(
     args: &[f64],
 ) -> f64 {
     let raw_ptr = (object.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
-    // Constructor-export alias shims only recognize the native bound-method
-    // representation. The callee's own body record decides this once, before
+    // Constructor-export alias shims recognize native export metadata in both
+    // the legacy bound-method and export-specific body representations. The callee's own body record decides this once, before
     // any shim probes its captures. An unknown body keeps the conservative
     // dispatch path.
-    let construction_alias =
-        crate::closure::closure_info(raw_ptr as *const crate::closure::ClosureHeader)
-            .is_none_or(|info| info.code == crate::closure::BOUND_METHOD_FUNC_PTR);
+    let construction_alias = crate::closure::closure_info(
+        raw_ptr as *const crate::closure::ClosureHeader,
+    )
+    .is_none_or(|info| {
+        info.code == crate::closure::BOUND_METHOD_FUNC_PTR
+            || info.flags & crate::codegen_abi::FN_NATIVE_EXPORT != 0
+    });
     // Static bound-method value (`C.m.call(x)`): arm the one-shot static-`this`
     // override so the method body sees `x` instead of the lexical class-ref
     // (static private brand checks). Only a bound-method body can be one.
