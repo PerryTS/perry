@@ -10,7 +10,7 @@ pub(super) fn numeric_order(ctx: &FnCtx<'_>, comparator: &Expr) -> Option<Numeri
         let (id, closure) = match callee {
             Expr::FuncRef(id) => (*id, false),
             Expr::LocalGet(local) => {
-                if ctx.wpfacts_off || ctx.wpfacts.interp_guard {
+                if ctx.wpfacts_off {
                     return None;
                 }
                 let [body] = ctx.wpfacts.local_bodies.get(local)?.as_slice() else {

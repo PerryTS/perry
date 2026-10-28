@@ -4,6 +4,9 @@ use crate::{compile_module, CompileOptions, ElisionFacts, FactsBody, ProgramFact
 use perry_hir::{Expr, Stmt};
 use std::sync::Arc;
 fn ir(source: &str, close: bool) -> String {
+    ir_with_interp(source, close, false)
+}
+fn ir_with_interp(source: &str, close: bool, interp: bool) -> String {
     let source = source.to_string();
     std::thread::Builder::new()
         .stack_size(32 * 1024 * 1024)
@@ -13,6 +16,7 @@ fn ir(source: &str, close: bool) -> String {
                 perry_parser::parse_typescript_with_cache(&source, "sign.ts", &mut cache).unwrap();
             let m = perry_hir::lower_module(&parsed.module, "sign", "sign.ts").unwrap();
             let mut facts = ElisionFacts::default();
+            facts.interp_guard = interp;
             if close {
                 for s in &m.init {
                     if let Stmt::Let {
@@ -108,4 +112,11 @@ fn numeric_sign_source_effects_inconsistency_unknown_and_tdz_keep_callbacks() {
         let output = ir(source,close);
         assert!(!selected(&output),"unsound proof for {source}\n{output}");
     }
+}
+
+#[test]
+fn a_closed_callee_is_not_killed_by_unrelated_interpreted_reach() {
+    let source = "const cmp=(a,b)=>a-b; const xs=[3,1,2]; xs.sort((a,b)=>cmp(a,b));";
+    assert!(selected(&ir_with_interp(source, true, true)));
+    assert!(!selected(&ir_with_interp(source, false, true)));
 }
