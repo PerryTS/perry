@@ -227,9 +227,20 @@ pub(crate) fn remove_internal_process_listener(
         .get()
         .map_or_else(|| (), |run| run(event, callback))
 }
+#[cfg(unix)]
 static SIGNALS_ON_TURNLOOP: Hook<fn() -> usize> = Hook::empty();
 pub(crate) fn signals_on_turnloop() -> usize {
-    SIGNALS_ON_TURNLOOP.get().map_or_else(|| 0, |run| run())
+    #[cfg(unix)]
+    {
+        SIGNALS_ON_TURNLOOP.get().map_or_else(|| 0, |run| run())
+    }
+    #[cfg(not(unix))]
+    {
+        // The non-Unix implementation is a constant-zero leaf. Call it
+        // directly: optimized COFF archives need not retain its own symbol,
+        // so it cannot be the named target of an indirect GC-effects rule.
+        crate::os::signal::signals_on_turnloop()
+    }
 }
 static STDIN_LISTENERS_KEEP_LOOP_ALIVE: Hook<fn() -> bool> = Hook::empty();
 pub(crate) fn stdin_listeners_keep_loop_alive() -> bool {
@@ -316,6 +327,7 @@ pub(crate) fn install() {
         REFRESH_TTY_STREAM_SIZES.set(crate::os::refresh_tty_stream_sizes);
         REMOVE_INTERNAL_PROCESS_LISTENER
             .set(crate::os::os_process_emitter::remove_internal_process_listener);
+        #[cfg(unix)]
         SIGNALS_ON_TURNLOOP.set(crate::os::signal::signals_on_turnloop);
         STDIN_LISTENERS_KEEP_LOOP_ALIVE.set(crate::os::stdin_listeners_keep_loop_alive);
         #[cfg(test)]
