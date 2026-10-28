@@ -215,15 +215,24 @@ pub unsafe extern "C" fn js_register_function_name(
     name_ptr: *const u8,
     name_len: u32,
 ) {
+    let _ = copy_function_name(func_ptr, name_ptr, name_len);
+}
+
+/// Whether the existing owned-name writer actually copied these bytes.
+/// Validity is still established by the ordinary decoder, separately.
+unsafe fn copy_function_name(func_ptr: *const u8, name_ptr: *const u8, name_len: u32) -> bool {
     if func_ptr.is_null() || name_ptr.is_null() || name_len == 0 {
-        return;
+        return false;
     }
     let bytes = std::slice::from_raw_parts(name_ptr, name_len as usize);
     if eager_fn_metadata_validation() && std::str::from_utf8(bytes).is_err() {
-        return;
+        return false;
     }
     if let Ok(mut overrides) = function_name_overrides().lock() {
         overrides.insert(func_ptr as usize, std::sync::Arc::from(bytes));
+        true
+    } else {
+        false
     }
 }
 
@@ -475,32 +484,49 @@ pub(crate) unsafe fn function_name_matches_closure(
     with_function_name_for_closure(closure, |name| name.as_bytes() == expected).unwrap_or(false)
 }
 
-/// Reuse one registered-name read when method construction needs both its
-/// presence and the closure's canonical name. None means no non-empty
-/// registered name; a caller that infers one must query again after writing it.
+/// Infer a missing entry name and compare the closure's canonical name.
+/// Existing non-empty registrations retain their bytes and precedence. A
+/// successful exact copy plus UTF-8 validation establishes the new fallback
+/// name directly; image names still win, including valid empty image names.
 ///
 /// # Safety
 /// The closure is null or live; its info owns the ranges licensed by its flags.
-pub(crate) unsafe fn registered_name_matches_closure(
+/// The code argument is only a registration key, not a proof of that info.
+pub(crate) unsafe fn infer_name_matches_closure(
     closure: *const crate::closure::ClosureHeader,
+    code: usize,
     expected: &[u8],
-) -> Option<bool> {
-    let info = closure.as_ref()?.info.as_ref()?;
-    let code = info.code as usize;
-    if code == 0 {
-        return None;
-    }
-    let registered_match = with_registered_name(code, |name| {
-        (!name.is_empty()).then(|| name.as_bytes() == expected)
-    })
-    .flatten()?;
-    // An image name, including an empty image name, wins over the code-address
-    // registration. This path only reads immutable descriptor bytes.
-    Some(if info.flags & crate::codegen_abi::FN_HAS_NAME != 0 {
-        function_name_matches_closure(closure, expected)
+) -> bool {
+    let Some(info) = closure.as_ref().and_then(|c| c.info.as_ref()) else {
+        return false;
+    };
+    let registered_match = if code == 0 {
+        None
     } else {
-        registered_match
-    })
+        with_registered_name(code, |name| {
+            (!name.is_empty()).then(|| name.as_bytes() == expected)
+        })
+        .flatten()
+    };
+    let copied_len = expected.len() as u32;
+    let copied = registered_match.is_none()
+        && copy_function_name(code as *const u8, expected.as_ptr(), copied_len);
+    // The canonical descriptor may name a different body from the supplied
+    // registration key, and its immutable image name always takes precedence.
+    if info.flags & crate::codegen_abi::FN_HAS_NAME != 0 || info.code as usize != code {
+        return function_name_matches_closure(closure, expected);
+    }
+    if let Some(matches) = registered_match {
+        return matches;
+    }
+    if copied
+        && copied_len as usize == expected.len()
+        && decode_registered_bytes(expected).is_some()
+    {
+        return true;
+    }
+    // Preserve malformed-name, failed-write and width-conversion exits.
+    function_name_matches_closure(closure, expected)
 }
 
 /// Returns the name registered by `js_register_function_name{,_static}` (keyed
@@ -915,8 +941,7 @@ mod descriptor_name_tests {
                 assert!(!unsafe { function_name_matches_closure(&closure, b"other") });
                 let code = 0x9188_0031usize;
                 let mut registered_image = image;
-                registered_image.info.code = code as *const u8; // never called
-                                                                // Moving the descriptor changes its relative name delta.
+                registered_image.info.code = code as *const u8; // metadata only
                 registered_image.tail[slot] = (registered_image.name.as_ptr() as isize
                     - &registered_image.info as *const _ as isize)
                     as i32;
@@ -926,29 +951,19 @@ mod descriptor_name_tests {
                     info: std::ptr::addr_of!(registered_image.info),
                     props: std::ptr::null_mut(),
                 };
-                assert_eq!(
-                    unsafe {
-                        registered_name_matches_closure(&registered_closure, expected.as_bytes())
-                    },
-                    None
-                );
-                unsafe {
-                    js_register_function_name_static(code as *const u8, b"other".as_ptr(), 5)
-                };
-                assert_eq!(
-                    unsafe {
-                        registered_name_matches_closure(&registered_closure, expected.as_bytes())
-                    },
-                    Some(true)
-                );
-                assert_eq!(
-                    unsafe { registered_name_matches_closure(&registered_closure, b"other") },
-                    Some(false)
-                );
-                super::function_name_registry()
-                    .lock()
-                    .unwrap()
-                    .remove(&code);
+                assert!(function_name_for_ptr(code).is_none());
+                // Inferring a differing fallback must retain its registration
+                // side effect even when an empty/non-empty image name wins.
+                assert!(!unsafe {
+                    infer_name_matches_closure(&registered_closure, code, b"other")
+                });
+                assert_eq!(function_name_for_ptr(code).as_deref(), Some("other"));
+                assert!(unsafe {
+                    infer_name_matches_closure(&registered_closure, code, expected.as_bytes())
+                });
+                assert_eq!(function_name_for_ptr(code).as_deref(), Some("other"));
+                function_name_overrides().lock().unwrap().remove(&code);
+                function_name_registry().lock().unwrap().remove(&code);
             }
         }
     }
@@ -996,10 +1011,6 @@ mod tests {
         };
         assert!(!function_has_registered_name(0));
         assert!(!function_has_registered_name(key));
-        assert_eq!(
-            unsafe { registered_name_matches_closure(&closure, b"") },
-            None
-        );
         assert!(!unsafe { function_name_matches_closure(&closure, b"") });
         unsafe {
             js_register_function_name_static(
@@ -1012,20 +1023,8 @@ mod tests {
         }
         assert!(function_has_registered_name(key));
         assert!(unsafe { function_name_matches_closure(&closure, "image世界".as_bytes()) });
-        assert_eq!(
-            unsafe { registered_name_matches_closure(&closure, "image世界".as_bytes()) },
-            Some(true)
-        );
-        assert_eq!(
-            unsafe { registered_name_matches_closure(&closure, b"other") },
-            Some(false)
-        );
         unsafe { js_register_function_name(key as *const u8, b"owned".as_ptr(), 5) };
         assert!(unsafe { function_name_matches_closure(&closure, b"owned") });
-        assert_eq!(
-            unsafe { registered_name_matches_closure(&closure, b"owned") },
-            Some(true)
-        );
         assert!(!unsafe { function_name_matches_closure(&closure, "image世界".as_bytes()) });
         // A valid empty override shadows image bytes but the ordinary ptr
         // reader filters it out. Presence/comparison must keep that rule.
@@ -1035,13 +1034,80 @@ mod tests {
             .insert(key, std::sync::Arc::from(&b""[..]));
         assert!(function_name_for_ptr(key).is_none());
         assert!(!function_has_registered_name(key));
-        assert_eq!(
-            unsafe { registered_name_matches_closure(&closure, b"") },
-            None
-        );
         assert!(!unsafe { function_name_matches_closure(&closure, b"") });
         function_name_overrides().lock().unwrap().remove(&key);
         function_name_registry().lock().unwrap().remove(&key);
+    }
+
+    #[test]
+    fn inferred_method_name_copies_bytes_and_preserves_owner_precedence() {
+        extern "C" fn body(
+            _: *const crate::closure::ClosureHeader,
+            _: crate::closure::JsThis,
+        ) -> f64 {
+            91880032.0
+        }
+        let key = 0x9188_0032usize;
+        let other_key = 0x9188_0033usize;
+        let mut info = crate::closure::JsFunctionInfo::of(
+            body as crate::codegen_abi::JsBody0<crate::closure::ClosureHeader>,
+        );
+        info.code = key as *const u8; // metadata keys only, never called
+        let closure = crate::closure::ClosureHeader {
+            capture_count: 0,
+            shape_id: LayoutWord(crate::codegen_abi::FUNCTION_LAYOUT_WORD),
+            info: &info,
+            props: std::ptr::null_mut(),
+        };
+        assert!(function_name_for_ptr(key).is_none());
+        let mut bytes = b"inferred".to_vec();
+        assert!(unsafe { infer_name_matches_closure(&closure, key, &bytes) });
+        bytes.fill(b'X');
+        drop(bytes);
+        assert_eq!(function_name_for_ptr(key).as_deref(), Some("inferred"));
+        assert!(!unsafe { infer_name_matches_closure(&closure, key, b"other") });
+        assert_eq!(function_name_for_ptr(key).as_deref(), Some("inferred"));
+        function_name_registry()
+            .lock()
+            .unwrap()
+            .insert(key, b"image");
+        function_name_overrides()
+            .lock()
+            .unwrap()
+            .insert(key, std::sync::Arc::from(&b""[..]));
+        assert!(function_name_for_ptr(key).is_none());
+        assert!(unsafe { infer_name_matches_closure(&closure, key, b"fresh") });
+        assert_eq!(function_name_for_ptr(key).as_deref(), Some("fresh"));
+        function_name_overrides()
+            .lock()
+            .unwrap()
+            .insert(key, std::sync::Arc::from(&[0xffu8][..]));
+        assert!(unsafe { infer_name_matches_closure(&closure, key, b"image") });
+        assert_eq!(
+            function_name_overrides()
+                .lock()
+                .unwrap()
+                .get(&key)
+                .unwrap()
+                .as_ref(),
+            &[0xff]
+        );
+        // The registration key alone cannot prove the closure's name.
+        assert!(function_name_for_ptr(other_key).is_none());
+        assert!(!unsafe { infer_name_matches_closure(&closure, other_key, b"separate") });
+        assert_eq!(
+            function_name_for_ptr(other_key).as_deref(),
+            Some("separate")
+        );
+        assert_eq!(
+            unsafe { function_name_for_closure(&closure) }.as_deref(),
+            Some("image")
+        );
+        assert!(!unsafe { infer_name_matches_closure(std::ptr::null(), key, b"image") });
+        for code in [key, other_key] {
+            function_name_overrides().lock().unwrap().remove(&code);
+            function_name_registry().lock().unwrap().remove(&code);
+        }
     }
 
     /// The copying entry point must not be reachable by a caller whose bytes

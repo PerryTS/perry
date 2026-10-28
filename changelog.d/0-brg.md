@@ -2,4 +2,4 @@
 
 - Restrict family-method probes to layouts whose static method index contains the requested name, avoiding guaranteed misses for unrelated class families.
 - Mix fresh symbol identities once at creation to spread their hash bits in mixed symbol/string property tables. Preserve symbol identity, enumeration order, and move stability.
-- Reuse the registered function-name read when method construction needs both presence and canonical-name equality.\n
+- Reuse registered-name reads and successful inferred-name writes during method construction, retaining canonical image-name precedence.

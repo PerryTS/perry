@@ -291,30 +291,6 @@ pub(crate) fn class_method_declaration_value_bytes(
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     let entry_code = unsafe { (*f).code() } as usize;
-    // Only this path needs both queries. The local result comes from the
-    // existing metadata owner; inferred names are still read after registration.
-    let reuse_registered_name = entry != 0 && !computed_name && !name.is_empty();
-    let registered_match = if reuse_registered_name {
-        unsafe { crate::builtins::registered_name_matches_closure(f, name) }
-    } else {
-        None
-    };
-    if entry != 0
-        && !name.is_empty()
-        && !(if reuse_registered_name {
-            registered_match.is_some()
-        } else {
-            crate::builtins::function_has_registered_name(entry_code)
-        })
-    {
-        unsafe {
-            crate::builtins::js_register_function_name(
-                entry_code as *const u8,
-                name.as_ptr(),
-                name.len() as u32,
-            );
-        }
-    }
     // A compiled method whose body already names it (its image name, or the
     // name registered for its entry) answers `name` as the intrinsic of its
     // base Function shape: the same value and attributes (non-writable,
@@ -322,10 +298,28 @@ pub(crate) fn class_method_declaration_value_bytes(
     // and no property bag. The closure then stays on its body's base shape,
     // which every shape-proved function path (bind, call, `.name`) admits.
     // A computed or differing name is defined as an own property.
-    let intrinsic_name = entry != 0
-        && !computed_name
-        && registered_match
-            .unwrap_or_else(|| unsafe { crate::builtins::function_name_matches_closure(f, name) });
+    // The compiled, non-computed path needs both name inference and the
+    // canonical comparison. Share its read, or use the actual inferred write.
+    // Other method-name modes retain their ordinary registration/read path.
+    let intrinsic_name = if entry != 0 && !computed_name && !name.is_empty() {
+        unsafe { crate::builtins::infer_name_matches_closure(f, entry_code, name) }
+    } else {
+        if entry != 0
+            && !name.is_empty()
+            && !crate::builtins::function_has_registered_name(entry_code)
+        {
+            unsafe {
+                crate::builtins::js_register_function_name(
+                    entry_code as *const u8,
+                    name.as_ptr(),
+                    name.len() as u32,
+                );
+            }
+        }
+        entry != 0
+            && !computed_name
+            && unsafe { crate::builtins::function_name_matches_closure(f, name) }
+    };
     let facts = u64::from(params) | (u64::from(synthetic) << 32) | (u64::from(rest) << 33);
     unsafe {
         crate::closure::closure_install_boxed_captures(
