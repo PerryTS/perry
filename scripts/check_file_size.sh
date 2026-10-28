@@ -36,9 +36,9 @@
 #
 # Vendored third-party sources are also allowlisted (currently
 # third_party/windows-winui/*): they are an upstream snapshot, not
-# Perry review surface. Preserve their upstream layout and record any local
-# patches in VENDORED.md so the vendor drop can be re-diffed. Each entry has
-# its own rationale in the ALLOWLIST block below.
+# Perry review surface, and must stay byte-identical so the vendor
+# drop can be re-diffed. Each still carries its own one-line
+# rationale in the ALLOWLIST block below.
 #
 set -euo pipefail
 
@@ -164,19 +164,6 @@ crates/perry-runtime/src/object/shapes.rs
 # Pinned wac-graph snapshot with nominal resource-import registration added.
 # Keep the upstream layout for re-diffing; see third_party/wac-graph/VENDORED.md.
 third_party/wac-graph/src/graph.rs
-# Locked Brotli9 upstream layout: retain these five oversized modules for
-# reproducible vendor re-diffing; see third_party/brotli/VENDORED.md. encode.rs
-# has a documented local prefix patch, NOT a byte-identical upstream claim.
-# Upstream hasher family trunk; keep the verified layout for vendor re-diffing.
-third_party/brotli/src/enc/backward_references/mod.rs
-# Upstream metablock serializer; retain its unmodified library-module layout.
-third_party/brotli/src/enc/brotli_bit_stream.rs
-# Upstream encoder state trunk with the documented local prefix lifetime patch.
-third_party/brotli/src/enc/encode.rs
-# Generated upstream logarithm table; retain the byte-identical generated source.
-third_party/brotli/src/enc/log_table_16.rs
-# Generated upstream static dictionary index; retain the verified lookup table.
-third_party/brotli/src/enc/static_dict_lut.rs
 # Exact qualified Turnloop snapshot; retain upstream layout for comparison.
 # Source hashes and registry provenance: third_party/turnloop/VENDORED.md.
 third_party/turnloop/turnloop/src/driver.rs
