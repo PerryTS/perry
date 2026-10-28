@@ -23,12 +23,15 @@ fn private_async_producer_drives_a_sync_factory_stream_without_another_guest_cal
     )
     .unwrap();
     let (mut driver, client) = host.into_driver().unwrap();
+    eprintln!("SYNC_REACTOR: calling synchronous factory");
     let value = result(&mut driver, &mut client.call("", "make", &[]).unwrap())
         .unwrap()
         .unwrap();
+    eprintln!("SYNC_REACTOR: factory returned its reader");
     // Each read must unblock a distinct write. No exported guest function is
     // invoked between receiving the stream and observing its final EOF.
     for byte in [65, 66] {
+        eprintln!("SYNC_REACTOR: reading byte {byte}");
         let chunk = result(
             &mut driver,
             &mut client.read_async_value(&value, Some(1)).unwrap(),
