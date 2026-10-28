@@ -481,8 +481,8 @@ fn stamp_and_index_block(block: &ArenaBlock, liveness: PromotionLiveness) -> (us
     let mut run_headers: Vec<usize> = Vec::new();
     // Both promotion modes parse every header after its final birth/tenuring
     // writes. A same-safepoint full may adopt these exact start/type/size facts.
-    // Traced marks are cleared below; retaining a premarked summary is only
-    // conservative, as the adoption verifier independently checks. Recording
+    // Traced marks are cleared below; adoption refreshes header-dependent
+    // facts at recorded starts, verified independently in tests. Recording
     // remains armed only for an imminent cohort full, after rollback can occur.
     let mut census = crate::gc::AdoptableBlockBuilder::begin(
         block.data as usize,
