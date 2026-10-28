@@ -30,7 +30,8 @@ pub(crate) fn write_out_kind(ctx: &mut FnCtx<'_>) -> Result<()> {
         return Ok(());
     }
     if ctx.private_async_resume_frame {
-        ctx.block().store(I32, "0", "%frame_out_kind");
+        // Async resumes return the existing driver's Promise, not a sync
+        // yield/done pair. Their statically async adapter consumes no kind.
         return Ok(());
     }
     let owner = current_closure_ptr_value(ctx, "private resume output")?;
@@ -404,7 +405,6 @@ pub(crate) fn async_adapter(llmod: &mut crate::module::LlModule, prefix: &str, f
     let params = super::body_call::js_body_params(["%sent", "%error"]);
     let function = llmod.define_function(&name, DOUBLE, params);
     function.create_block("entry");
-    let out = function.alloca_entry(I32);
     let block = function.block_mut(0).unwrap();
     let bits = block.bitcast_double_to_i64("%error");
     let yes = block.icmp_eq(I64, &bits, crate::nanbox::TAG_TRUE_I64);
@@ -417,7 +417,7 @@ pub(crate) fn async_adapter(llmod: &mut crate::module::LlModule, prefix: &str, f
             (I32, &FRAME_WORD_OFFSET.to_string()),
             (I32, &operation),
             (DOUBLE, "%sent"),
-            (PTR, &out),
+            (PTR, "null"),
         ],
     );
     block.ret(DOUBLE, &value);

@@ -339,44 +339,41 @@ fn cloned_control_descriptors_belong_to_the_fresh_resume_scope() {
     let mut m = fixture(Type::Any);
     super::super::transform_generators(&mut m);
     let mut checked = 0;
-    visit_stmts(&m.init, &mut |e| {
-        if let Expr::NativeMethodCall {
-            module,
-            method,
-            args,
+    let mut check = |e: &Expr| {
+        if let Expr::LinkGeneratorPrototype {
+            obj,
+            i32_controls,
+            i1_controls,
+            fixed_state: true,
             ..
         } = e
         {
-            if module == "__perry_runtime" && method == "privateResumeFrame" {
-                if let Some(Expr::LinkGeneratorPrototype {
-                    obj,
-                    i32_controls,
-                    i1_controls,
-                    ..
-                }) = args.first()
-                {
-                    if let Expr::Closure {
-                        captures, params, ..
-                    } = obj.as_ref()
-                    {
-                        let slots: HashSet<_> = captures
-                            .iter()
-                            .copied()
-                            .chain(params.iter().map(|p| p.id))
-                            .collect();
-                        assert!(!i32_controls.is_empty() && !i1_controls.is_empty());
-                        assert!(
-                            i32_controls
-                                .iter()
-                                .chain(i1_controls)
-                                .all(|id| slots.contains(id)),
-                            "control metadata escaped its cloned scope"
-                        );
-                        checked += 1;
-                    }
-                }
+            if let Expr::Closure {
+                captures, params, ..
+            } = obj.as_ref()
+            {
+                let slots: HashSet<_> = captures
+                    .iter()
+                    .copied()
+                    .chain(params.iter().map(|p| p.id))
+                    .collect();
+                assert!(!i32_controls.is_empty() && !i1_controls.is_empty());
+                assert!(
+                    i32_controls
+                        .iter()
+                        .chain(i1_controls)
+                        .all(|id| slots.contains(id)),
+                    "control metadata escaped its real scope"
+                );
+                assert!(
+                    i32_controls.iter().all(|id| !i1_controls.contains(id)),
+                    "a numeric control aliases a boolean slot"
+                );
+                checked += 1;
             }
         }
-    });
-    assert_eq!(checked, 1);
+    };
+    visit_stmts(&m.functions[0].body, &mut check);
+    visit_stmts(&m.init, &mut check);
+    assert_eq!(checked, 2);
 }

@@ -1632,6 +1632,9 @@ pub fn transform_generator_function_with_extra_captures(
         // literal is hidden inside the wrapper in return position; escape
         // analysis leaves the unanalyzed allocation on the heap (correct — a
         // generator object always escapes via the return).
+        let live_operation = resume_op_id.is_some_and(|operation| {
+            matches!(&iter_obj, Expr::Closure {params,..} if params.iter().any(|p| p.id == operation))
+        });
         let linked = Expr::LinkGeneratorPrototype {
             obj: Box::new(iter_obj),
             is_async: is_async_generator,
@@ -1640,7 +1643,13 @@ pub fn transform_generator_function_with_extra_captures(
                 // The private protocol ABI supplies only 0/1/2 here; an
                 // abrupt continuation writes 0. This parameter is compiler
                 // machinery, not a value justified by a source annotation.
-                let mut ids = vec![state_id, resume_op_id.unwrap(), step_id.unwrap()];
+                let mut ids = vec![state_id, step_id.unwrap()];
+                // A next-only entry has no operation parameter. Retaining its
+                // unused id could collide with a later cloned local and mark
+                // that unrelated slot as numeric control storage.
+                if live_operation {
+                    ids.push(resume_op_id.unwrap());
+                }
                 if has_yielding_finally {
                     ids.push(pending_type_id);
                 }

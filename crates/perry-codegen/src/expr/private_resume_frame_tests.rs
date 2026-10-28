@@ -248,8 +248,11 @@ fn async_adapter_queues_the_allocation_owner_and_keeps_managed_slot_barriers() {
             "{mode}: managed slot barrier"
         );
         assert!(
-            ir.contains("store i32 0, ptr %frame_out_kind"),
-            "{mode}: native async result-kind output"
+            call.contains("ptr null")
+                && !ir
+                    .lines()
+                    .any(|line| line.contains("store") && line.contains("ptr %frame_out_kind")),
+            "{mode}: async adapter needs no native output-kind stack slot"
         );
         assert!(
             ir.contains("js_shadow_slot_bind") || ir.contains("addrspace(1)"),

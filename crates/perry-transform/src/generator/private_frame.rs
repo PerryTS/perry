@@ -658,6 +658,7 @@ fn lower_list(
                     arguments_object: None,
                 },
             );
+            i32_controls.push(op);
             body.insert(
                 0,
                 Stmt::If {
