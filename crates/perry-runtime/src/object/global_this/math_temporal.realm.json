@@ -1,0 +1,4748 @@
+{
+  "version": 1,
+  "groups": {
+    "objects": [
+      {
+        "name": "Temporal",
+        "kind": "namespace",
+        "properties": [
+          {
+            "key": "Duration",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.Duration"
+            }
+          },
+          {
+            "key": "Instant",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.Instant"
+            }
+          },
+          {
+            "key": "Now",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.Now"
+            }
+          },
+          {
+            "key": "PlainDate",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainDate"
+            }
+          },
+          {
+            "key": "PlainDateTime",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainDateTime"
+            }
+          },
+          {
+            "key": "PlainMonthDay",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainMonthDay"
+            }
+          },
+          {
+            "key": "PlainTime",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainTime"
+            }
+          },
+          {
+            "key": "PlainYearMonth",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainYearMonth"
+            }
+          },
+          {
+            "key": "ZonedDateTime",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.ZonedDateTime"
+            }
+          },
+          {
+            "key": "@@toStringTag",
+            "symbol": true,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "Temporal"
+            }
+          }
+        ],
+        "own_key_order": [
+          "Duration",
+          "Instant",
+          "PlainDate",
+          "PlainTime",
+          "PlainDateTime",
+          "PlainYearMonth",
+          "PlainMonthDay",
+          "ZonedDateTime",
+          "Now"
+        ],
+        "own_symbol_order": [
+          "@@toStringTag"
+        ],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2048,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "Array",
+          "BigInt",
+          "Error",
+          "Number",
+          "Object.prototype",
+          "RangeError",
+          "String",
+          "Temporal.Duration",
+          "Temporal.Instant",
+          "Temporal.Now",
+          "Temporal.PlainDate",
+          "Temporal.PlainDateTime",
+          "Temporal.PlainMonthDay",
+          "Temporal.PlainTime",
+          "Temporal.PlainYearMonth",
+          "Temporal.ZonedDateTime",
+          "TypeError"
+        ]
+      },
+      {
+        "name": "Temporal.Now",
+        "kind": "namespace",
+        "properties": [
+          {
+            "key": "instant",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.Now.instant"
+            }
+          },
+          {
+            "key": "plainDateISO",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.Now.plainDateISO"
+            }
+          },
+          {
+            "key": "plainDateTimeISO",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.Now.plainDateTimeISO"
+            }
+          },
+          {
+            "key": "plainTimeISO",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.Now.plainTimeISO"
+            }
+          },
+          {
+            "key": "timeZoneId",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.Now.timeZoneId"
+            }
+          },
+          {
+            "key": "zonedDateTimeISO",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.Now.zonedDateTimeISO"
+            }
+          },
+          {
+            "key": "@@toStringTag",
+            "symbol": true,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "Temporal.Now"
+            }
+          }
+        ],
+        "own_key_order": [
+          "instant",
+          "timeZoneId",
+          "plainDateTimeISO",
+          "plainDateISO",
+          "plainTimeISO",
+          "zonedDateTimeISO"
+        ],
+        "own_symbol_order": [
+          "@@toStringTag"
+        ],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2048,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "Array",
+          "BigInt",
+          "Error",
+          "Number",
+          "Object.prototype",
+          "RangeError",
+          "String",
+          "Temporal",
+          "Temporal.Now.instant",
+          "Temporal.Now.plainDateISO",
+          "Temporal.Now.plainDateTimeISO",
+          "Temporal.Now.plainTimeISO",
+          "Temporal.Now.timeZoneId",
+          "Temporal.Now.zonedDateTimeISO",
+          "TypeError"
+        ]
+      },
+      {
+        "name": "Temporal.Duration.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "abs",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.Duration.prototype.abs"
+            }
+          },
+          {
+            "key": "add",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.Duration.prototype.add"
+            }
+          },
+          {
+            "key": "blank",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.Duration.prototype.blank.<get>"
+          },
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.Duration"
+            }
+          },
+          {
+            "key": "days",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.Duration.prototype.days.<get>"
+          },
+          {
+            "key": "hours",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.Duration.prototype.hours.<get>"
+          },
+          {
+            "key": "microseconds",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.Duration.prototype.microseconds.<get>"
+          },
+          {
+            "key": "milliseconds",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.Duration.prototype.milliseconds.<get>"
+          },
+          {
+            "key": "minutes",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.Duration.prototype.minutes.<get>"
+          },
+          {
+            "key": "months",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.Duration.prototype.months.<get>"
+          },
+          {
+            "key": "nanoseconds",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.Duration.prototype.nanoseconds.<get>"
+          },
+          {
+            "key": "negated",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.Duration.prototype.negated"
+            }
+          },
+          {
+            "key": "round",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.Duration.prototype.round"
+            }
+          },
+          {
+            "key": "seconds",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.Duration.prototype.seconds.<get>"
+          },
+          {
+            "key": "sign",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.Duration.prototype.sign.<get>"
+          },
+          {
+            "key": "subtract",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.Duration.prototype.subtract"
+            }
+          },
+          {
+            "key": "toJSON",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.Duration.prototype.toJSON"
+            }
+          },
+          {
+            "key": "toLocaleString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.Duration.prototype.toLocaleString"
+            }
+          },
+          {
+            "key": "toString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.Duration.prototype.toString"
+            }
+          },
+          {
+            "key": "total",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.Duration.prototype.total"
+            }
+          },
+          {
+            "key": "valueOf",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.Duration.prototype.valueOf"
+            }
+          },
+          {
+            "key": "weeks",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.Duration.prototype.weeks.<get>"
+          },
+          {
+            "key": "with",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.Duration.prototype.with"
+            }
+          },
+          {
+            "key": "years",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.Duration.prototype.years.<get>"
+          },
+          {
+            "key": "@@toStringTag",
+            "symbol": true,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "Temporal.Duration"
+            }
+          }
+        ],
+        "own_key_order": [
+          "years",
+          "months",
+          "weeks",
+          "days",
+          "hours",
+          "minutes",
+          "seconds",
+          "milliseconds",
+          "microseconds",
+          "nanoseconds",
+          "sign",
+          "blank",
+          "with",
+          "negated",
+          "abs",
+          "add",
+          "subtract",
+          "round",
+          "total",
+          "toString",
+          "toJSON",
+          "toLocaleString",
+          "valueOf",
+          "constructor"
+        ],
+        "own_symbol_order": [
+          "@@toStringTag"
+        ],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2048,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "Array",
+          "BigInt",
+          "Error",
+          "Number",
+          "Object.prototype",
+          "RangeError",
+          "String",
+          "Temporal",
+          "Temporal.Duration",
+          "Temporal.Duration.prototype.abs",
+          "Temporal.Duration.prototype.add",
+          "Temporal.Duration.prototype.blank.<get>",
+          "Temporal.Duration.prototype.days.<get>",
+          "Temporal.Duration.prototype.hours.<get>",
+          "Temporal.Duration.prototype.microseconds.<get>",
+          "Temporal.Duration.prototype.milliseconds.<get>",
+          "Temporal.Duration.prototype.minutes.<get>",
+          "Temporal.Duration.prototype.months.<get>",
+          "Temporal.Duration.prototype.nanoseconds.<get>",
+          "Temporal.Duration.prototype.negated",
+          "Temporal.Duration.prototype.round",
+          "Temporal.Duration.prototype.seconds.<get>",
+          "Temporal.Duration.prototype.sign.<get>",
+          "Temporal.Duration.prototype.subtract",
+          "Temporal.Duration.prototype.toJSON",
+          "Temporal.Duration.prototype.toLocaleString",
+          "Temporal.Duration.prototype.toString",
+          "Temporal.Duration.prototype.total",
+          "Temporal.Duration.prototype.valueOf",
+          "Temporal.Duration.prototype.weeks.<get>",
+          "Temporal.Duration.prototype.with",
+          "Temporal.Duration.prototype.years.<get>",
+          "TypeError"
+        ]
+      },
+      {
+        "name": "Temporal.Instant.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "add",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.Instant.prototype.add"
+            }
+          },
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.Instant"
+            }
+          },
+          {
+            "key": "epochMilliseconds",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.Instant.prototype.epochMilliseconds.<get>"
+          },
+          {
+            "key": "epochNanoseconds",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.Instant.prototype.epochNanoseconds.<get>"
+          },
+          {
+            "key": "equals",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.Instant.prototype.equals"
+            }
+          },
+          {
+            "key": "round",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.Instant.prototype.round"
+            }
+          },
+          {
+            "key": "since",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.Instant.prototype.since"
+            }
+          },
+          {
+            "key": "subtract",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.Instant.prototype.subtract"
+            }
+          },
+          {
+            "key": "toJSON",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.Instant.prototype.toJSON"
+            }
+          },
+          {
+            "key": "toLocaleString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.Instant.prototype.toLocaleString"
+            }
+          },
+          {
+            "key": "toString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.Instant.prototype.toString"
+            }
+          },
+          {
+            "key": "toZonedDateTimeISO",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.Instant.prototype.toZonedDateTimeISO"
+            }
+          },
+          {
+            "key": "until",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.Instant.prototype.until"
+            }
+          },
+          {
+            "key": "valueOf",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.Instant.prototype.valueOf"
+            }
+          },
+          {
+            "key": "@@toStringTag",
+            "symbol": true,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "Temporal.Instant"
+            }
+          }
+        ],
+        "own_key_order": [
+          "epochMilliseconds",
+          "epochNanoseconds",
+          "add",
+          "subtract",
+          "until",
+          "since",
+          "round",
+          "equals",
+          "toZonedDateTimeISO",
+          "toString",
+          "toJSON",
+          "toLocaleString",
+          "valueOf",
+          "constructor"
+        ],
+        "own_symbol_order": [
+          "@@toStringTag"
+        ],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2048,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "Array",
+          "BigInt",
+          "Error",
+          "Number",
+          "Object.prototype",
+          "RangeError",
+          "String",
+          "Temporal",
+          "Temporal.Instant",
+          "Temporal.Instant.prototype.add",
+          "Temporal.Instant.prototype.epochMilliseconds.<get>",
+          "Temporal.Instant.prototype.epochNanoseconds.<get>",
+          "Temporal.Instant.prototype.equals",
+          "Temporal.Instant.prototype.round",
+          "Temporal.Instant.prototype.since",
+          "Temporal.Instant.prototype.subtract",
+          "Temporal.Instant.prototype.toJSON",
+          "Temporal.Instant.prototype.toLocaleString",
+          "Temporal.Instant.prototype.toString",
+          "Temporal.Instant.prototype.toZonedDateTimeISO",
+          "Temporal.Instant.prototype.until",
+          "Temporal.Instant.prototype.valueOf",
+          "TypeError"
+        ]
+      },
+      {
+        "name": "Temporal.PlainDate.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "add",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainDate.prototype.add"
+            }
+          },
+          {
+            "key": "calendarId",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainDate.prototype.calendarId.<get>"
+          },
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainDate"
+            }
+          },
+          {
+            "key": "day",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainDate.prototype.day.<get>"
+          },
+          {
+            "key": "dayOfWeek",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainDate.prototype.dayOfWeek.<get>"
+          },
+          {
+            "key": "dayOfYear",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainDate.prototype.dayOfYear.<get>"
+          },
+          {
+            "key": "daysInMonth",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainDate.prototype.daysInMonth.<get>"
+          },
+          {
+            "key": "daysInWeek",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainDate.prototype.daysInWeek.<get>"
+          },
+          {
+            "key": "daysInYear",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainDate.prototype.daysInYear.<get>"
+          },
+          {
+            "key": "equals",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainDate.prototype.equals"
+            }
+          },
+          {
+            "key": "era",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainDate.prototype.era.<get>"
+          },
+          {
+            "key": "eraYear",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainDate.prototype.eraYear.<get>"
+          },
+          {
+            "key": "inLeapYear",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainDate.prototype.inLeapYear.<get>"
+          },
+          {
+            "key": "month",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainDate.prototype.month.<get>"
+          },
+          {
+            "key": "monthCode",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainDate.prototype.monthCode.<get>"
+          },
+          {
+            "key": "monthsInYear",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainDate.prototype.monthsInYear.<get>"
+          },
+          {
+            "key": "since",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainDate.prototype.since"
+            }
+          },
+          {
+            "key": "subtract",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainDate.prototype.subtract"
+            }
+          },
+          {
+            "key": "toJSON",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainDate.prototype.toJSON"
+            }
+          },
+          {
+            "key": "toLocaleString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainDate.prototype.toLocaleString"
+            }
+          },
+          {
+            "key": "toPlainDateTime",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainDate.prototype.toPlainDateTime"
+            }
+          },
+          {
+            "key": "toPlainMonthDay",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainDate.prototype.toPlainMonthDay"
+            }
+          },
+          {
+            "key": "toPlainYearMonth",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainDate.prototype.toPlainYearMonth"
+            }
+          },
+          {
+            "key": "toString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainDate.prototype.toString"
+            }
+          },
+          {
+            "key": "toZonedDateTime",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainDate.prototype.toZonedDateTime"
+            }
+          },
+          {
+            "key": "until",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainDate.prototype.until"
+            }
+          },
+          {
+            "key": "valueOf",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainDate.prototype.valueOf"
+            }
+          },
+          {
+            "key": "weekOfYear",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainDate.prototype.weekOfYear.<get>"
+          },
+          {
+            "key": "with",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainDate.prototype.with"
+            }
+          },
+          {
+            "key": "withCalendar",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainDate.prototype.withCalendar"
+            }
+          },
+          {
+            "key": "year",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainDate.prototype.year.<get>"
+          },
+          {
+            "key": "yearOfWeek",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainDate.prototype.yearOfWeek.<get>"
+          },
+          {
+            "key": "@@toStringTag",
+            "symbol": true,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "Temporal.PlainDate"
+            }
+          }
+        ],
+        "own_key_order": [
+          "calendarId",
+          "era",
+          "eraYear",
+          "year",
+          "month",
+          "monthCode",
+          "day",
+          "dayOfWeek",
+          "dayOfYear",
+          "weekOfYear",
+          "yearOfWeek",
+          "daysInWeek",
+          "daysInMonth",
+          "daysInYear",
+          "monthsInYear",
+          "inLeapYear",
+          "toPlainYearMonth",
+          "toPlainMonthDay",
+          "add",
+          "subtract",
+          "with",
+          "withCalendar",
+          "until",
+          "since",
+          "equals",
+          "toPlainDateTime",
+          "toZonedDateTime",
+          "toString",
+          "toLocaleString",
+          "toJSON",
+          "valueOf",
+          "constructor"
+        ],
+        "own_symbol_order": [
+          "@@toStringTag"
+        ],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2048,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "Array",
+          "BigInt",
+          "Error",
+          "Number",
+          "Object.prototype",
+          "RangeError",
+          "String",
+          "Temporal",
+          "Temporal.PlainDate",
+          "Temporal.PlainDate.prototype.add",
+          "Temporal.PlainDate.prototype.calendarId.<get>",
+          "Temporal.PlainDate.prototype.day.<get>",
+          "Temporal.PlainDate.prototype.dayOfWeek.<get>",
+          "Temporal.PlainDate.prototype.dayOfYear.<get>",
+          "Temporal.PlainDate.prototype.daysInMonth.<get>",
+          "Temporal.PlainDate.prototype.daysInWeek.<get>",
+          "Temporal.PlainDate.prototype.daysInYear.<get>",
+          "Temporal.PlainDate.prototype.equals",
+          "Temporal.PlainDate.prototype.era.<get>",
+          "Temporal.PlainDate.prototype.eraYear.<get>",
+          "Temporal.PlainDate.prototype.inLeapYear.<get>",
+          "Temporal.PlainDate.prototype.month.<get>",
+          "Temporal.PlainDate.prototype.monthCode.<get>",
+          "Temporal.PlainDate.prototype.monthsInYear.<get>",
+          "Temporal.PlainDate.prototype.since",
+          "Temporal.PlainDate.prototype.subtract",
+          "Temporal.PlainDate.prototype.toJSON",
+          "Temporal.PlainDate.prototype.toLocaleString",
+          "Temporal.PlainDate.prototype.toPlainDateTime",
+          "Temporal.PlainDate.prototype.toPlainMonthDay",
+          "Temporal.PlainDate.prototype.toPlainYearMonth",
+          "Temporal.PlainDate.prototype.toString",
+          "Temporal.PlainDate.prototype.toZonedDateTime",
+          "Temporal.PlainDate.prototype.until",
+          "Temporal.PlainDate.prototype.valueOf",
+          "Temporal.PlainDate.prototype.weekOfYear.<get>",
+          "Temporal.PlainDate.prototype.with",
+          "Temporal.PlainDate.prototype.withCalendar",
+          "Temporal.PlainDate.prototype.year.<get>",
+          "Temporal.PlainDate.prototype.yearOfWeek.<get>",
+          "TypeError"
+        ]
+      },
+      {
+        "name": "Temporal.PlainDateTime.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "add",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainDateTime.prototype.add"
+            }
+          },
+          {
+            "key": "calendarId",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainDateTime.prototype.calendarId.<get>"
+          },
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainDateTime"
+            }
+          },
+          {
+            "key": "day",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainDateTime.prototype.day.<get>"
+          },
+          {
+            "key": "dayOfWeek",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainDateTime.prototype.dayOfWeek.<get>"
+          },
+          {
+            "key": "dayOfYear",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainDateTime.prototype.dayOfYear.<get>"
+          },
+          {
+            "key": "daysInMonth",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainDateTime.prototype.daysInMonth.<get>"
+          },
+          {
+            "key": "daysInWeek",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainDateTime.prototype.daysInWeek.<get>"
+          },
+          {
+            "key": "daysInYear",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainDateTime.prototype.daysInYear.<get>"
+          },
+          {
+            "key": "equals",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainDateTime.prototype.equals"
+            }
+          },
+          {
+            "key": "era",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainDateTime.prototype.era.<get>"
+          },
+          {
+            "key": "eraYear",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainDateTime.prototype.eraYear.<get>"
+          },
+          {
+            "key": "hour",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainDateTime.prototype.hour.<get>"
+          },
+          {
+            "key": "inLeapYear",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainDateTime.prototype.inLeapYear.<get>"
+          },
+          {
+            "key": "microsecond",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainDateTime.prototype.microsecond.<get>"
+          },
+          {
+            "key": "millisecond",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainDateTime.prototype.millisecond.<get>"
+          },
+          {
+            "key": "minute",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainDateTime.prototype.minute.<get>"
+          },
+          {
+            "key": "month",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainDateTime.prototype.month.<get>"
+          },
+          {
+            "key": "monthCode",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainDateTime.prototype.monthCode.<get>"
+          },
+          {
+            "key": "monthsInYear",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainDateTime.prototype.monthsInYear.<get>"
+          },
+          {
+            "key": "nanosecond",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainDateTime.prototype.nanosecond.<get>"
+          },
+          {
+            "key": "round",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainDateTime.prototype.round"
+            }
+          },
+          {
+            "key": "second",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainDateTime.prototype.second.<get>"
+          },
+          {
+            "key": "since",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainDateTime.prototype.since"
+            }
+          },
+          {
+            "key": "subtract",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainDateTime.prototype.subtract"
+            }
+          },
+          {
+            "key": "toJSON",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainDateTime.prototype.toJSON"
+            }
+          },
+          {
+            "key": "toLocaleString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainDateTime.prototype.toLocaleString"
+            }
+          },
+          {
+            "key": "toPlainDate",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainDateTime.prototype.toPlainDate"
+            }
+          },
+          {
+            "key": "toPlainTime",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainDateTime.prototype.toPlainTime"
+            }
+          },
+          {
+            "key": "toString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainDateTime.prototype.toString"
+            }
+          },
+          {
+            "key": "toZonedDateTime",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainDateTime.prototype.toZonedDateTime"
+            }
+          },
+          {
+            "key": "until",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainDateTime.prototype.until"
+            }
+          },
+          {
+            "key": "valueOf",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainDateTime.prototype.valueOf"
+            }
+          },
+          {
+            "key": "weekOfYear",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainDateTime.prototype.weekOfYear.<get>"
+          },
+          {
+            "key": "with",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainDateTime.prototype.with"
+            }
+          },
+          {
+            "key": "withCalendar",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainDateTime.prototype.withCalendar"
+            }
+          },
+          {
+            "key": "withPlainTime",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainDateTime.prototype.withPlainTime"
+            }
+          },
+          {
+            "key": "year",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainDateTime.prototype.year.<get>"
+          },
+          {
+            "key": "yearOfWeek",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainDateTime.prototype.yearOfWeek.<get>"
+          },
+          {
+            "key": "@@toStringTag",
+            "symbol": true,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "Temporal.PlainDateTime"
+            }
+          }
+        ],
+        "own_key_order": [
+          "calendarId",
+          "era",
+          "eraYear",
+          "year",
+          "month",
+          "monthCode",
+          "day",
+          "dayOfWeek",
+          "dayOfYear",
+          "weekOfYear",
+          "yearOfWeek",
+          "daysInWeek",
+          "daysInMonth",
+          "daysInYear",
+          "monthsInYear",
+          "inLeapYear",
+          "hour",
+          "minute",
+          "second",
+          "millisecond",
+          "microsecond",
+          "nanosecond",
+          "with",
+          "withPlainTime",
+          "withCalendar",
+          "add",
+          "subtract",
+          "until",
+          "since",
+          "round",
+          "equals",
+          "toString",
+          "toLocaleString",
+          "toJSON",
+          "valueOf",
+          "toZonedDateTime",
+          "toPlainDate",
+          "toPlainTime",
+          "constructor"
+        ],
+        "own_symbol_order": [
+          "@@toStringTag"
+        ],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2048,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "Array",
+          "BigInt",
+          "Error",
+          "Number",
+          "Object.prototype",
+          "RangeError",
+          "String",
+          "Temporal",
+          "Temporal.PlainDateTime",
+          "Temporal.PlainDateTime.prototype.add",
+          "Temporal.PlainDateTime.prototype.calendarId.<get>",
+          "Temporal.PlainDateTime.prototype.day.<get>",
+          "Temporal.PlainDateTime.prototype.dayOfWeek.<get>",
+          "Temporal.PlainDateTime.prototype.dayOfYear.<get>",
+          "Temporal.PlainDateTime.prototype.daysInMonth.<get>",
+          "Temporal.PlainDateTime.prototype.daysInWeek.<get>",
+          "Temporal.PlainDateTime.prototype.daysInYear.<get>",
+          "Temporal.PlainDateTime.prototype.equals",
+          "Temporal.PlainDateTime.prototype.era.<get>",
+          "Temporal.PlainDateTime.prototype.eraYear.<get>",
+          "Temporal.PlainDateTime.prototype.hour.<get>",
+          "Temporal.PlainDateTime.prototype.inLeapYear.<get>",
+          "Temporal.PlainDateTime.prototype.microsecond.<get>",
+          "Temporal.PlainDateTime.prototype.millisecond.<get>",
+          "Temporal.PlainDateTime.prototype.minute.<get>",
+          "Temporal.PlainDateTime.prototype.month.<get>",
+          "Temporal.PlainDateTime.prototype.monthCode.<get>",
+          "Temporal.PlainDateTime.prototype.monthsInYear.<get>",
+          "Temporal.PlainDateTime.prototype.nanosecond.<get>",
+          "Temporal.PlainDateTime.prototype.round",
+          "Temporal.PlainDateTime.prototype.second.<get>",
+          "Temporal.PlainDateTime.prototype.since",
+          "Temporal.PlainDateTime.prototype.subtract",
+          "Temporal.PlainDateTime.prototype.toJSON",
+          "Temporal.PlainDateTime.prototype.toLocaleString",
+          "Temporal.PlainDateTime.prototype.toPlainDate",
+          "Temporal.PlainDateTime.prototype.toPlainTime",
+          "Temporal.PlainDateTime.prototype.toString",
+          "Temporal.PlainDateTime.prototype.toZonedDateTime",
+          "Temporal.PlainDateTime.prototype.until",
+          "Temporal.PlainDateTime.prototype.valueOf",
+          "Temporal.PlainDateTime.prototype.weekOfYear.<get>",
+          "Temporal.PlainDateTime.prototype.with",
+          "Temporal.PlainDateTime.prototype.withCalendar",
+          "Temporal.PlainDateTime.prototype.withPlainTime",
+          "Temporal.PlainDateTime.prototype.year.<get>",
+          "Temporal.PlainDateTime.prototype.yearOfWeek.<get>",
+          "TypeError"
+        ]
+      },
+      {
+        "name": "Temporal.PlainMonthDay.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "calendarId",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainMonthDay.prototype.calendarId.<get>"
+          },
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainMonthDay"
+            }
+          },
+          {
+            "key": "day",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainMonthDay.prototype.day.<get>"
+          },
+          {
+            "key": "equals",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainMonthDay.prototype.equals"
+            }
+          },
+          {
+            "key": "monthCode",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainMonthDay.prototype.monthCode.<get>"
+          },
+          {
+            "key": "toJSON",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainMonthDay.prototype.toJSON"
+            }
+          },
+          {
+            "key": "toLocaleString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainMonthDay.prototype.toLocaleString"
+            }
+          },
+          {
+            "key": "toPlainDate",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainMonthDay.prototype.toPlainDate"
+            }
+          },
+          {
+            "key": "toString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainMonthDay.prototype.toString"
+            }
+          },
+          {
+            "key": "valueOf",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainMonthDay.prototype.valueOf"
+            }
+          },
+          {
+            "key": "with",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainMonthDay.prototype.with"
+            }
+          },
+          {
+            "key": "@@toStringTag",
+            "symbol": true,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "Temporal.PlainMonthDay"
+            }
+          }
+        ],
+        "own_key_order": [
+          "monthCode",
+          "day",
+          "calendarId",
+          "with",
+          "equals",
+          "toPlainDate",
+          "toString",
+          "toJSON",
+          "toLocaleString",
+          "valueOf",
+          "constructor"
+        ],
+        "own_symbol_order": [
+          "@@toStringTag"
+        ],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2048,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "Array",
+          "BigInt",
+          "Error",
+          "Number",
+          "Object.prototype",
+          "RangeError",
+          "String",
+          "Temporal",
+          "Temporal.PlainMonthDay",
+          "Temporal.PlainMonthDay.prototype.calendarId.<get>",
+          "Temporal.PlainMonthDay.prototype.day.<get>",
+          "Temporal.PlainMonthDay.prototype.equals",
+          "Temporal.PlainMonthDay.prototype.monthCode.<get>",
+          "Temporal.PlainMonthDay.prototype.toJSON",
+          "Temporal.PlainMonthDay.prototype.toLocaleString",
+          "Temporal.PlainMonthDay.prototype.toPlainDate",
+          "Temporal.PlainMonthDay.prototype.toString",
+          "Temporal.PlainMonthDay.prototype.valueOf",
+          "Temporal.PlainMonthDay.prototype.with",
+          "TypeError"
+        ]
+      },
+      {
+        "name": "Temporal.PlainTime.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "add",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainTime.prototype.add"
+            }
+          },
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainTime"
+            }
+          },
+          {
+            "key": "equals",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainTime.prototype.equals"
+            }
+          },
+          {
+            "key": "hour",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainTime.prototype.hour.<get>"
+          },
+          {
+            "key": "microsecond",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainTime.prototype.microsecond.<get>"
+          },
+          {
+            "key": "millisecond",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainTime.prototype.millisecond.<get>"
+          },
+          {
+            "key": "minute",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainTime.prototype.minute.<get>"
+          },
+          {
+            "key": "nanosecond",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainTime.prototype.nanosecond.<get>"
+          },
+          {
+            "key": "round",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainTime.prototype.round"
+            }
+          },
+          {
+            "key": "second",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainTime.prototype.second.<get>"
+          },
+          {
+            "key": "since",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainTime.prototype.since"
+            }
+          },
+          {
+            "key": "subtract",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainTime.prototype.subtract"
+            }
+          },
+          {
+            "key": "toJSON",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainTime.prototype.toJSON"
+            }
+          },
+          {
+            "key": "toLocaleString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainTime.prototype.toLocaleString"
+            }
+          },
+          {
+            "key": "toString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainTime.prototype.toString"
+            }
+          },
+          {
+            "key": "until",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainTime.prototype.until"
+            }
+          },
+          {
+            "key": "valueOf",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainTime.prototype.valueOf"
+            }
+          },
+          {
+            "key": "with",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainTime.prototype.with"
+            }
+          },
+          {
+            "key": "@@toStringTag",
+            "symbol": true,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "Temporal.PlainTime"
+            }
+          }
+        ],
+        "own_key_order": [
+          "hour",
+          "minute",
+          "second",
+          "millisecond",
+          "microsecond",
+          "nanosecond",
+          "add",
+          "subtract",
+          "with",
+          "until",
+          "since",
+          "round",
+          "equals",
+          "toString",
+          "toJSON",
+          "toLocaleString",
+          "valueOf",
+          "constructor"
+        ],
+        "own_symbol_order": [
+          "@@toStringTag"
+        ],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2048,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "Array",
+          "BigInt",
+          "Error",
+          "Number",
+          "Object.prototype",
+          "RangeError",
+          "String",
+          "Temporal",
+          "Temporal.PlainTime",
+          "Temporal.PlainTime.prototype.add",
+          "Temporal.PlainTime.prototype.equals",
+          "Temporal.PlainTime.prototype.hour.<get>",
+          "Temporal.PlainTime.prototype.microsecond.<get>",
+          "Temporal.PlainTime.prototype.millisecond.<get>",
+          "Temporal.PlainTime.prototype.minute.<get>",
+          "Temporal.PlainTime.prototype.nanosecond.<get>",
+          "Temporal.PlainTime.prototype.round",
+          "Temporal.PlainTime.prototype.second.<get>",
+          "Temporal.PlainTime.prototype.since",
+          "Temporal.PlainTime.prototype.subtract",
+          "Temporal.PlainTime.prototype.toJSON",
+          "Temporal.PlainTime.prototype.toLocaleString",
+          "Temporal.PlainTime.prototype.toString",
+          "Temporal.PlainTime.prototype.until",
+          "Temporal.PlainTime.prototype.valueOf",
+          "Temporal.PlainTime.prototype.with",
+          "TypeError"
+        ]
+      },
+      {
+        "name": "Temporal.PlainYearMonth.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "add",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainYearMonth.prototype.add"
+            }
+          },
+          {
+            "key": "calendarId",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainYearMonth.prototype.calendarId.<get>"
+          },
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainYearMonth"
+            }
+          },
+          {
+            "key": "daysInMonth",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainYearMonth.prototype.daysInMonth.<get>"
+          },
+          {
+            "key": "daysInYear",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainYearMonth.prototype.daysInYear.<get>"
+          },
+          {
+            "key": "equals",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainYearMonth.prototype.equals"
+            }
+          },
+          {
+            "key": "era",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainYearMonth.prototype.era.<get>"
+          },
+          {
+            "key": "eraYear",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainYearMonth.prototype.eraYear.<get>"
+          },
+          {
+            "key": "inLeapYear",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainYearMonth.prototype.inLeapYear.<get>"
+          },
+          {
+            "key": "month",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainYearMonth.prototype.month.<get>"
+          },
+          {
+            "key": "monthCode",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainYearMonth.prototype.monthCode.<get>"
+          },
+          {
+            "key": "monthsInYear",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainYearMonth.prototype.monthsInYear.<get>"
+          },
+          {
+            "key": "since",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainYearMonth.prototype.since"
+            }
+          },
+          {
+            "key": "subtract",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainYearMonth.prototype.subtract"
+            }
+          },
+          {
+            "key": "toJSON",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainYearMonth.prototype.toJSON"
+            }
+          },
+          {
+            "key": "toLocaleString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainYearMonth.prototype.toLocaleString"
+            }
+          },
+          {
+            "key": "toPlainDate",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainYearMonth.prototype.toPlainDate"
+            }
+          },
+          {
+            "key": "toString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainYearMonth.prototype.toString"
+            }
+          },
+          {
+            "key": "until",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainYearMonth.prototype.until"
+            }
+          },
+          {
+            "key": "valueOf",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainYearMonth.prototype.valueOf"
+            }
+          },
+          {
+            "key": "with",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainYearMonth.prototype.with"
+            }
+          },
+          {
+            "key": "year",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.PlainYearMonth.prototype.year.<get>"
+          },
+          {
+            "key": "@@toStringTag",
+            "symbol": true,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "Temporal.PlainYearMonth"
+            }
+          }
+        ],
+        "own_key_order": [
+          "year",
+          "month",
+          "monthCode",
+          "daysInMonth",
+          "daysInYear",
+          "monthsInYear",
+          "inLeapYear",
+          "calendarId",
+          "era",
+          "eraYear",
+          "with",
+          "add",
+          "subtract",
+          "until",
+          "since",
+          "equals",
+          "toPlainDate",
+          "toString",
+          "toJSON",
+          "toLocaleString",
+          "valueOf",
+          "constructor"
+        ],
+        "own_symbol_order": [
+          "@@toStringTag"
+        ],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2048,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "Array",
+          "BigInt",
+          "Error",
+          "Number",
+          "Object.prototype",
+          "RangeError",
+          "String",
+          "Temporal",
+          "Temporal.PlainYearMonth",
+          "Temporal.PlainYearMonth.prototype.add",
+          "Temporal.PlainYearMonth.prototype.calendarId.<get>",
+          "Temporal.PlainYearMonth.prototype.daysInMonth.<get>",
+          "Temporal.PlainYearMonth.prototype.daysInYear.<get>",
+          "Temporal.PlainYearMonth.prototype.equals",
+          "Temporal.PlainYearMonth.prototype.era.<get>",
+          "Temporal.PlainYearMonth.prototype.eraYear.<get>",
+          "Temporal.PlainYearMonth.prototype.inLeapYear.<get>",
+          "Temporal.PlainYearMonth.prototype.month.<get>",
+          "Temporal.PlainYearMonth.prototype.monthCode.<get>",
+          "Temporal.PlainYearMonth.prototype.monthsInYear.<get>",
+          "Temporal.PlainYearMonth.prototype.since",
+          "Temporal.PlainYearMonth.prototype.subtract",
+          "Temporal.PlainYearMonth.prototype.toJSON",
+          "Temporal.PlainYearMonth.prototype.toLocaleString",
+          "Temporal.PlainYearMonth.prototype.toPlainDate",
+          "Temporal.PlainYearMonth.prototype.toString",
+          "Temporal.PlainYearMonth.prototype.until",
+          "Temporal.PlainYearMonth.prototype.valueOf",
+          "Temporal.PlainYearMonth.prototype.with",
+          "Temporal.PlainYearMonth.prototype.year.<get>",
+          "TypeError"
+        ]
+      },
+      {
+        "name": "Temporal.ZonedDateTime.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "add",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.ZonedDateTime.prototype.add"
+            }
+          },
+          {
+            "key": "calendarId",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.ZonedDateTime.prototype.calendarId.<get>"
+          },
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.ZonedDateTime"
+            }
+          },
+          {
+            "key": "day",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.ZonedDateTime.prototype.day.<get>"
+          },
+          {
+            "key": "dayOfWeek",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.ZonedDateTime.prototype.dayOfWeek.<get>"
+          },
+          {
+            "key": "dayOfYear",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.ZonedDateTime.prototype.dayOfYear.<get>"
+          },
+          {
+            "key": "daysInMonth",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.ZonedDateTime.prototype.daysInMonth.<get>"
+          },
+          {
+            "key": "daysInWeek",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.ZonedDateTime.prototype.daysInWeek.<get>"
+          },
+          {
+            "key": "daysInYear",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.ZonedDateTime.prototype.daysInYear.<get>"
+          },
+          {
+            "key": "epochMilliseconds",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.ZonedDateTime.prototype.epochMilliseconds.<get>"
+          },
+          {
+            "key": "epochNanoseconds",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.ZonedDateTime.prototype.epochNanoseconds.<get>"
+          },
+          {
+            "key": "equals",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.ZonedDateTime.prototype.equals"
+            }
+          },
+          {
+            "key": "era",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.ZonedDateTime.prototype.era.<get>"
+          },
+          {
+            "key": "eraYear",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.ZonedDateTime.prototype.eraYear.<get>"
+          },
+          {
+            "key": "getTimeZoneTransition",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.ZonedDateTime.prototype.getTimeZoneTransition"
+            }
+          },
+          {
+            "key": "hour",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.ZonedDateTime.prototype.hour.<get>"
+          },
+          {
+            "key": "hoursInDay",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.ZonedDateTime.prototype.hoursInDay.<get>"
+          },
+          {
+            "key": "inLeapYear",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.ZonedDateTime.prototype.inLeapYear.<get>"
+          },
+          {
+            "key": "microsecond",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.ZonedDateTime.prototype.microsecond.<get>"
+          },
+          {
+            "key": "millisecond",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.ZonedDateTime.prototype.millisecond.<get>"
+          },
+          {
+            "key": "minute",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.ZonedDateTime.prototype.minute.<get>"
+          },
+          {
+            "key": "month",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.ZonedDateTime.prototype.month.<get>"
+          },
+          {
+            "key": "monthCode",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.ZonedDateTime.prototype.monthCode.<get>"
+          },
+          {
+            "key": "monthsInYear",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.ZonedDateTime.prototype.monthsInYear.<get>"
+          },
+          {
+            "key": "nanosecond",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.ZonedDateTime.prototype.nanosecond.<get>"
+          },
+          {
+            "key": "offset",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.ZonedDateTime.prototype.offset.<get>"
+          },
+          {
+            "key": "offsetNanoseconds",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.ZonedDateTime.prototype.offsetNanoseconds.<get>"
+          },
+          {
+            "key": "round",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.ZonedDateTime.prototype.round"
+            }
+          },
+          {
+            "key": "second",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.ZonedDateTime.prototype.second.<get>"
+          },
+          {
+            "key": "since",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.ZonedDateTime.prototype.since"
+            }
+          },
+          {
+            "key": "startOfDay",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.ZonedDateTime.prototype.startOfDay"
+            }
+          },
+          {
+            "key": "subtract",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.ZonedDateTime.prototype.subtract"
+            }
+          },
+          {
+            "key": "timeZoneId",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.ZonedDateTime.prototype.timeZoneId.<get>"
+          },
+          {
+            "key": "toInstant",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.ZonedDateTime.prototype.toInstant"
+            }
+          },
+          {
+            "key": "toJSON",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.ZonedDateTime.prototype.toJSON"
+            }
+          },
+          {
+            "key": "toLocaleString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.ZonedDateTime.prototype.toLocaleString"
+            }
+          },
+          {
+            "key": "toPlainDate",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.ZonedDateTime.prototype.toPlainDate"
+            }
+          },
+          {
+            "key": "toPlainDateTime",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.ZonedDateTime.prototype.toPlainDateTime"
+            }
+          },
+          {
+            "key": "toPlainTime",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.ZonedDateTime.prototype.toPlainTime"
+            }
+          },
+          {
+            "key": "toString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.ZonedDateTime.prototype.toString"
+            }
+          },
+          {
+            "key": "until",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.ZonedDateTime.prototype.until"
+            }
+          },
+          {
+            "key": "valueOf",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.ZonedDateTime.prototype.valueOf"
+            }
+          },
+          {
+            "key": "weekOfYear",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.ZonedDateTime.prototype.weekOfYear.<get>"
+          },
+          {
+            "key": "with",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.ZonedDateTime.prototype.with"
+            }
+          },
+          {
+            "key": "withCalendar",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.ZonedDateTime.prototype.withCalendar"
+            }
+          },
+          {
+            "key": "withPlainTime",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.ZonedDateTime.prototype.withPlainTime"
+            }
+          },
+          {
+            "key": "withTimeZone",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.ZonedDateTime.prototype.withTimeZone"
+            }
+          },
+          {
+            "key": "year",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.ZonedDateTime.prototype.year.<get>"
+          },
+          {
+            "key": "yearOfWeek",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Temporal.ZonedDateTime.prototype.yearOfWeek.<get>"
+          },
+          {
+            "key": "@@toStringTag",
+            "symbol": true,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "Temporal.ZonedDateTime"
+            }
+          }
+        ],
+        "own_key_order": [
+          "year",
+          "month",
+          "monthCode",
+          "day",
+          "hour",
+          "minute",
+          "second",
+          "millisecond",
+          "microsecond",
+          "nanosecond",
+          "era",
+          "eraYear",
+          "epochMilliseconds",
+          "epochNanoseconds",
+          "dayOfWeek",
+          "dayOfYear",
+          "weekOfYear",
+          "yearOfWeek",
+          "daysInWeek",
+          "daysInMonth",
+          "daysInYear",
+          "monthsInYear",
+          "inLeapYear",
+          "hoursInDay",
+          "offset",
+          "offsetNanoseconds",
+          "timeZoneId",
+          "calendarId",
+          "add",
+          "subtract",
+          "until",
+          "since",
+          "round",
+          "equals",
+          "with",
+          "withCalendar",
+          "withPlainTime",
+          "withTimeZone",
+          "toInstant",
+          "toPlainDate",
+          "toPlainTime",
+          "toPlainDateTime",
+          "toString",
+          "toJSON",
+          "toLocaleString",
+          "valueOf",
+          "startOfDay",
+          "getTimeZoneTransition",
+          "constructor"
+        ],
+        "own_symbol_order": [
+          "@@toStringTag"
+        ],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2048,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "Array",
+          "BigInt",
+          "Error",
+          "Number",
+          "Object.prototype",
+          "RangeError",
+          "String",
+          "Temporal",
+          "Temporal.ZonedDateTime",
+          "Temporal.ZonedDateTime.prototype.add",
+          "Temporal.ZonedDateTime.prototype.calendarId.<get>",
+          "Temporal.ZonedDateTime.prototype.day.<get>",
+          "Temporal.ZonedDateTime.prototype.dayOfWeek.<get>",
+          "Temporal.ZonedDateTime.prototype.dayOfYear.<get>",
+          "Temporal.ZonedDateTime.prototype.daysInMonth.<get>",
+          "Temporal.ZonedDateTime.prototype.daysInWeek.<get>",
+          "Temporal.ZonedDateTime.prototype.daysInYear.<get>",
+          "Temporal.ZonedDateTime.prototype.epochMilliseconds.<get>",
+          "Temporal.ZonedDateTime.prototype.epochNanoseconds.<get>",
+          "Temporal.ZonedDateTime.prototype.equals",
+          "Temporal.ZonedDateTime.prototype.era.<get>",
+          "Temporal.ZonedDateTime.prototype.eraYear.<get>",
+          "Temporal.ZonedDateTime.prototype.getTimeZoneTransition",
+          "Temporal.ZonedDateTime.prototype.hour.<get>",
+          "Temporal.ZonedDateTime.prototype.hoursInDay.<get>",
+          "Temporal.ZonedDateTime.prototype.inLeapYear.<get>",
+          "Temporal.ZonedDateTime.prototype.microsecond.<get>",
+          "Temporal.ZonedDateTime.prototype.millisecond.<get>",
+          "Temporal.ZonedDateTime.prototype.minute.<get>",
+          "Temporal.ZonedDateTime.prototype.month.<get>",
+          "Temporal.ZonedDateTime.prototype.monthCode.<get>",
+          "Temporal.ZonedDateTime.prototype.monthsInYear.<get>",
+          "Temporal.ZonedDateTime.prototype.nanosecond.<get>",
+          "Temporal.ZonedDateTime.prototype.offset.<get>",
+          "Temporal.ZonedDateTime.prototype.offsetNanoseconds.<get>",
+          "Temporal.ZonedDateTime.prototype.round",
+          "Temporal.ZonedDateTime.prototype.second.<get>",
+          "Temporal.ZonedDateTime.prototype.since",
+          "Temporal.ZonedDateTime.prototype.startOfDay",
+          "Temporal.ZonedDateTime.prototype.subtract",
+          "Temporal.ZonedDateTime.prototype.timeZoneId.<get>",
+          "Temporal.ZonedDateTime.prototype.toInstant",
+          "Temporal.ZonedDateTime.prototype.toJSON",
+          "Temporal.ZonedDateTime.prototype.toLocaleString",
+          "Temporal.ZonedDateTime.prototype.toPlainDate",
+          "Temporal.ZonedDateTime.prototype.toPlainDateTime",
+          "Temporal.ZonedDateTime.prototype.toPlainTime",
+          "Temporal.ZonedDateTime.prototype.toString",
+          "Temporal.ZonedDateTime.prototype.until",
+          "Temporal.ZonedDateTime.prototype.valueOf",
+          "Temporal.ZonedDateTime.prototype.weekOfYear.<get>",
+          "Temporal.ZonedDateTime.prototype.with",
+          "Temporal.ZonedDateTime.prototype.withCalendar",
+          "Temporal.ZonedDateTime.prototype.withPlainTime",
+          "Temporal.ZonedDateTime.prototype.withTimeZone",
+          "Temporal.ZonedDateTime.prototype.year.<get>",
+          "Temporal.ZonedDateTime.prototype.yearOfWeek.<get>",
+          "TypeError"
+        ]
+      }
+    ],
+    "body:temporal_duration_ctor_thunk": [
+      {
+        "name": "Temporal.Duration",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "compare",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.Duration.compare"
+            }
+          },
+          {
+            "key": "from",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.Duration.from"
+            }
+          },
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "Duration"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.Duration.prototype"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "from",
+          "compare",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::math_temporal::temporal_duration_ctor_thunk",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 1,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::math_temporal::temporal_duration_ctor_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_81b9eda9c80ece08f3fa",
+        "births": [
+          "Array",
+          "BigInt",
+          "Error",
+          "Function.prototype",
+          "Number",
+          "RangeError",
+          "String",
+          "Temporal",
+          "Temporal.Duration.compare",
+          "Temporal.Duration.from",
+          "Temporal.Duration.prototype",
+          "TypeError"
+        ]
+      }
+    ],
+    "body:temporal_instant_ctor_thunk": [
+      {
+        "name": "Temporal.Instant",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "compare",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.Instant.compare"
+            }
+          },
+          {
+            "key": "from",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.Instant.from"
+            }
+          },
+          {
+            "key": "fromEpochMilliseconds",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.Instant.fromEpochMilliseconds"
+            }
+          },
+          {
+            "key": "fromEpochNanoseconds",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.Instant.fromEpochNanoseconds"
+            }
+          },
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "Instant"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.Instant.prototype"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "from",
+          "compare",
+          "fromEpochMilliseconds",
+          "fromEpochNanoseconds",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::math_temporal::temporal_instant_ctor_thunk",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 1,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::math_temporal::temporal_instant_ctor_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_0c856b65fea2f9026fa0",
+        "births": [
+          "Array",
+          "BigInt",
+          "Error",
+          "Function.prototype",
+          "Number",
+          "RangeError",
+          "String",
+          "Temporal",
+          "Temporal.Instant.compare",
+          "Temporal.Instant.from",
+          "Temporal.Instant.fromEpochMilliseconds",
+          "Temporal.Instant.fromEpochNanoseconds",
+          "Temporal.Instant.prototype",
+          "TypeError"
+        ]
+      }
+    ],
+    "body:temporal_plain_date_ctor_thunk": [
+      {
+        "name": "Temporal.PlainDate",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "compare",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainDate.compare"
+            }
+          },
+          {
+            "key": "from",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainDate.from"
+            }
+          },
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4008000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "PlainDate"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainDate.prototype"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "from",
+          "compare",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 3,
+        "body": "crate::object::global_this::math_temporal::temporal_plain_date_ctor_thunk",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 1,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::math_temporal::temporal_plain_date_ctor_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_606f5ba8ac58d17b785f",
+        "births": [
+          "Array",
+          "BigInt",
+          "Error",
+          "Function.prototype",
+          "Number",
+          "RangeError",
+          "String",
+          "Temporal",
+          "Temporal.PlainDate.compare",
+          "Temporal.PlainDate.from",
+          "Temporal.PlainDate.prototype",
+          "TypeError"
+        ]
+      }
+    ],
+    "body:temporal_plain_date_time_ctor_thunk": [
+      {
+        "name": "Temporal.PlainDateTime",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "compare",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainDateTime.compare"
+            }
+          },
+          {
+            "key": "from",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainDateTime.from"
+            }
+          },
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4008000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "PlainDateTime"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainDateTime.prototype"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "from",
+          "compare",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 3,
+        "body": "crate::object::global_this::math_temporal::temporal_plain_date_time_ctor_thunk",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 1,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::math_temporal::temporal_plain_date_time_ctor_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_0ed9c9f94fc6117bd801",
+        "births": [
+          "Array",
+          "BigInt",
+          "Error",
+          "Function.prototype",
+          "Number",
+          "RangeError",
+          "String",
+          "Temporal",
+          "Temporal.PlainDateTime.compare",
+          "Temporal.PlainDateTime.from",
+          "Temporal.PlainDateTime.prototype",
+          "TypeError"
+        ]
+      }
+    ],
+    "body:temporal_plain_month_day_ctor_thunk": [
+      {
+        "name": "Temporal.PlainMonthDay",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "from",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainMonthDay.from"
+            }
+          },
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "PlainMonthDay"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainMonthDay.prototype"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "from",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "crate::object::global_this::math_temporal::temporal_plain_month_day_ctor_thunk",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 1,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::math_temporal::temporal_plain_month_day_ctor_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_e19cff05ad42bb1fbe3a",
+        "births": [
+          "Array",
+          "BigInt",
+          "Error",
+          "Function.prototype",
+          "Number",
+          "RangeError",
+          "String",
+          "Temporal",
+          "Temporal.PlainMonthDay.from",
+          "Temporal.PlainMonthDay.prototype",
+          "TypeError"
+        ]
+      }
+    ],
+    "body:temporal_plain_time_ctor_thunk": [
+      {
+        "name": "Temporal.PlainTime",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "compare",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainTime.compare"
+            }
+          },
+          {
+            "key": "from",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainTime.from"
+            }
+          },
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "PlainTime"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainTime.prototype"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "from",
+          "compare",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::math_temporal::temporal_plain_time_ctor_thunk",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 1,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::math_temporal::temporal_plain_time_ctor_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_bc0e6f198749a2f69877",
+        "births": [
+          "Array",
+          "BigInt",
+          "Error",
+          "Function.prototype",
+          "Number",
+          "RangeError",
+          "String",
+          "Temporal",
+          "Temporal.PlainTime.compare",
+          "Temporal.PlainTime.from",
+          "Temporal.PlainTime.prototype",
+          "TypeError"
+        ]
+      }
+    ],
+    "body:temporal_plain_year_month_ctor_thunk": [
+      {
+        "name": "Temporal.PlainYearMonth",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "compare",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainYearMonth.compare"
+            }
+          },
+          {
+            "key": "from",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainYearMonth.from"
+            }
+          },
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "PlainYearMonth"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.PlainYearMonth.prototype"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "from",
+          "compare",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "crate::object::global_this::math_temporal::temporal_plain_year_month_ctor_thunk",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 1,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::math_temporal::temporal_plain_year_month_ctor_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_4a085c24742fffddf7e1",
+        "births": [
+          "Array",
+          "BigInt",
+          "Error",
+          "Function.prototype",
+          "Number",
+          "RangeError",
+          "String",
+          "Temporal",
+          "Temporal.PlainYearMonth.compare",
+          "Temporal.PlainYearMonth.from",
+          "Temporal.PlainYearMonth.prototype",
+          "TypeError"
+        ]
+      }
+    ],
+    "body:temporal_zoned_date_time_ctor_thunk": [
+      {
+        "name": "Temporal.ZonedDateTime",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "compare",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.ZonedDateTime.compare"
+            }
+          },
+          {
+            "key": "from",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.ZonedDateTime.from"
+            }
+          },
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "ZonedDateTime"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "Temporal.ZonedDateTime.prototype"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "from",
+          "compare",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "crate::object::global_this::math_temporal::temporal_zoned_date_time_ctor_thunk",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 1,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::math_temporal::temporal_zoned_date_time_ctor_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_a03f3ef6a11b0ee259fd",
+        "births": [
+          "Array",
+          "BigInt",
+          "Error",
+          "Function.prototype",
+          "Number",
+          "RangeError",
+          "String",
+          "Temporal",
+          "Temporal.ZonedDateTime.compare",
+          "Temporal.ZonedDateTime.from",
+          "Temporal.ZonedDateTime.prototype",
+          "TypeError"
+        ]
+      }
+    ],
+    "body:temporal_duration_compare_thunk": [
+      {
+        "name": "Temporal.Duration.compare",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "compare"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "crate::object::global_this::math_temporal::temporal_duration_compare_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 1,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::math_temporal::temporal_duration_compare_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_4c1ce86056baaf9118da",
+        "births": [
+          "Array",
+          "BigInt",
+          "Error",
+          "Function.prototype",
+          "Number",
+          "RangeError",
+          "String",
+          "Temporal",
+          "TypeError"
+        ]
+      }
+    ],
+    "body:temporal_duration_from_thunk": [
+      {
+        "name": "Temporal.Duration.from",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "from"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::math_temporal::temporal_duration_from_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 1,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::math_temporal::temporal_duration_from_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_d92772d9d4b6415b0efe",
+        "births": [
+          "Array",
+          "BigInt",
+          "Error",
+          "Function.prototype",
+          "Number",
+          "RangeError",
+          "String",
+          "Temporal",
+          "TypeError"
+        ]
+      }
+    ],
+    "body:temporal_instant_compare_thunk": [
+      {
+        "name": "Temporal.Instant.compare",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "compare"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "crate::object::global_this::math_temporal::temporal_instant_compare_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 1,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::math_temporal::temporal_instant_compare_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_eeb8e80a981cbdfca3cd",
+        "births": [
+          "Array",
+          "BigInt",
+          "Error",
+          "Function.prototype",
+          "Number",
+          "RangeError",
+          "String",
+          "Temporal",
+          "TypeError"
+        ]
+      }
+    ],
+    "body:temporal_instant_from_thunk": [
+      {
+        "name": "Temporal.Instant.from",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "from"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::math_temporal::temporal_instant_from_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 1,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::math_temporal::temporal_instant_from_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_e82e2c8bc198b1ce3696",
+        "births": [
+          "Array",
+          "BigInt",
+          "Error",
+          "Function.prototype",
+          "Number",
+          "RangeError",
+          "String",
+          "Temporal",
+          "TypeError"
+        ]
+      }
+    ],
+    "body:temporal_instant_from_epoch_ms_thunk": [
+      {
+        "name": "Temporal.Instant.fromEpochMilliseconds",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "fromEpochMilliseconds"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::math_temporal::temporal_instant_from_epoch_ms_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 1,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::math_temporal::temporal_instant_from_epoch_ms_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_c3761e10e1d2fe2e0753",
+        "births": [
+          "Array",
+          "BigInt",
+          "Error",
+          "Function.prototype",
+          "Number",
+          "RangeError",
+          "String",
+          "Temporal",
+          "TypeError"
+        ]
+      }
+    ],
+    "body:temporal_instant_from_epoch_ns_thunk": [
+      {
+        "name": "Temporal.Instant.fromEpochNanoseconds",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "fromEpochNanoseconds"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::math_temporal::temporal_instant_from_epoch_ns_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 1,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::math_temporal::temporal_instant_from_epoch_ns_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_d5462faeb0a7f2daf701",
+        "births": [
+          "Array",
+          "BigInt",
+          "Error",
+          "Function.prototype",
+          "Number",
+          "RangeError",
+          "String",
+          "Temporal",
+          "TypeError"
+        ]
+      }
+    ],
+    "body:temporal_now_instant_thunk": [
+      {
+        "name": "Temporal.Now.instant",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "instant"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::math_temporal::temporal_now_instant_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 1025,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::math_temporal::temporal_now_instant_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_752687c462ee40c81ec9",
+        "births": [
+          "Array",
+          "BigInt",
+          "Error",
+          "Function.prototype",
+          "Number",
+          "RangeError",
+          "String",
+          "Temporal",
+          "TypeError"
+        ]
+      }
+    ],
+    "body:temporal_now_plain_date_iso_thunk": [
+      {
+        "name": "Temporal.Now.plainDateISO",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "plainDateISO"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::math_temporal::temporal_now_plain_date_iso_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 1025,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::math_temporal::temporal_now_plain_date_iso_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_eca3a2b10582ead396ac",
+        "births": [
+          "Array",
+          "BigInt",
+          "Error",
+          "Function.prototype",
+          "Number",
+          "RangeError",
+          "String",
+          "Temporal",
+          "TypeError"
+        ]
+      }
+    ],
+    "body:temporal_now_plain_date_time_iso_thunk": [
+      {
+        "name": "Temporal.Now.plainDateTimeISO",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "plainDateTimeISO"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::math_temporal::temporal_now_plain_date_time_iso_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 1025,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::math_temporal::temporal_now_plain_date_time_iso_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_694e27ff7d1ddd0cb460",
+        "births": [
+          "Array",
+          "BigInt",
+          "Error",
+          "Function.prototype",
+          "Number",
+          "RangeError",
+          "String",
+          "Temporal",
+          "TypeError"
+        ]
+      }
+    ],
+    "body:temporal_now_plain_time_iso_thunk": [
+      {
+        "name": "Temporal.Now.plainTimeISO",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "plainTimeISO"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::math_temporal::temporal_now_plain_time_iso_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 1025,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::math_temporal::temporal_now_plain_time_iso_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_001ee00a0211d9795a08",
+        "births": [
+          "Array",
+          "BigInt",
+          "Error",
+          "Function.prototype",
+          "Number",
+          "RangeError",
+          "String",
+          "Temporal",
+          "TypeError"
+        ]
+      }
+    ],
+    "body:temporal_now_timezone_id_thunk": [
+      {
+        "name": "Temporal.Now.timeZoneId",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "timeZoneId"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::math_temporal::temporal_now_timezone_id_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 1025,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::math_temporal::temporal_now_timezone_id_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_ce0cb1a7dc2dab47ee8d",
+        "births": [
+          "Array",
+          "BigInt",
+          "Error",
+          "Function.prototype",
+          "Number",
+          "RangeError",
+          "String",
+          "Temporal",
+          "TypeError"
+        ]
+      }
+    ],
+    "body:temporal_now_zoned_date_time_iso_thunk": [
+      {
+        "name": "Temporal.Now.zonedDateTimeISO",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "zonedDateTimeISO"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::math_temporal::temporal_now_zoned_date_time_iso_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 1025,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::math_temporal::temporal_now_zoned_date_time_iso_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_fe9f0512f010a633a768",
+        "births": [
+          "Array",
+          "BigInt",
+          "Error",
+          "Function.prototype",
+          "Number",
+          "RangeError",
+          "String",
+          "Temporal",
+          "TypeError"
+        ]
+      }
+    ],
+    "body:temporal_plain_date_compare_thunk": [
+      {
+        "name": "Temporal.PlainDate.compare",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "compare"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "crate::object::global_this::math_temporal::temporal_plain_date_compare_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 1,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::math_temporal::temporal_plain_date_compare_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_e9ba302f103b8780a85d",
+        "births": [
+          "Array",
+          "BigInt",
+          "Error",
+          "Function.prototype",
+          "Number",
+          "RangeError",
+          "String",
+          "Temporal",
+          "TypeError"
+        ]
+      }
+    ],
+    "body:temporal_plain_date_from_thunk": [
+      {
+        "name": "Temporal.PlainDate.from",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "from"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::math_temporal::temporal_plain_date_from_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 1,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::math_temporal::temporal_plain_date_from_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_99f6c8bc15208792d660",
+        "births": [
+          "Array",
+          "BigInt",
+          "Error",
+          "Function.prototype",
+          "Number",
+          "RangeError",
+          "String",
+          "Temporal",
+          "TypeError"
+        ]
+      }
+    ],
+    "body:temporal_plain_date_time_compare_thunk": [
+      {
+        "name": "Temporal.PlainDateTime.compare",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "compare"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "crate::object::global_this::math_temporal::temporal_plain_date_time_compare_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 1,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::math_temporal::temporal_plain_date_time_compare_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_b9091e959f210009850f",
+        "births": [
+          "Array",
+          "BigInt",
+          "Error",
+          "Function.prototype",
+          "Number",
+          "RangeError",
+          "String",
+          "Temporal",
+          "TypeError"
+        ]
+      }
+    ],
+    "body:temporal_plain_date_time_from_thunk": [
+      {
+        "name": "Temporal.PlainDateTime.from",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "from"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::math_temporal::temporal_plain_date_time_from_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 1,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::math_temporal::temporal_plain_date_time_from_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_1b113efc6f5b4bf674f8",
+        "births": [
+          "Array",
+          "BigInt",
+          "Error",
+          "Function.prototype",
+          "Number",
+          "RangeError",
+          "String",
+          "Temporal",
+          "TypeError"
+        ]
+      }
+    ],
+    "body:temporal_plain_month_day_from_thunk": [
+      {
+        "name": "Temporal.PlainMonthDay.from",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "from"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::math_temporal::temporal_plain_month_day_from_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 1,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::math_temporal::temporal_plain_month_day_from_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_5172f430076e818e23bc",
+        "births": [
+          "Array",
+          "BigInt",
+          "Error",
+          "Function.prototype",
+          "Number",
+          "RangeError",
+          "String",
+          "Temporal",
+          "TypeError"
+        ]
+      }
+    ],
+    "body:temporal_plain_time_compare_thunk": [
+      {
+        "name": "Temporal.PlainTime.compare",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "compare"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "crate::object::global_this::math_temporal::temporal_plain_time_compare_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 1,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::math_temporal::temporal_plain_time_compare_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_ef45516b51f6ab95728b",
+        "births": [
+          "Array",
+          "BigInt",
+          "Error",
+          "Function.prototype",
+          "Number",
+          "RangeError",
+          "String",
+          "Temporal",
+          "TypeError"
+        ]
+      }
+    ],
+    "body:temporal_plain_time_from_thunk": [
+      {
+        "name": "Temporal.PlainTime.from",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "from"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::math_temporal::temporal_plain_time_from_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 1,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::math_temporal::temporal_plain_time_from_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_e54f3e80d1d36c1c40d9",
+        "births": [
+          "Array",
+          "BigInt",
+          "Error",
+          "Function.prototype",
+          "Number",
+          "RangeError",
+          "String",
+          "Temporal",
+          "TypeError"
+        ]
+      }
+    ],
+    "body:temporal_plain_year_month_compare_thunk": [
+      {
+        "name": "Temporal.PlainYearMonth.compare",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "compare"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "crate::object::global_this::math_temporal::temporal_plain_year_month_compare_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 1,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::math_temporal::temporal_plain_year_month_compare_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_24efc6dff4afe896967e",
+        "births": [
+          "Array",
+          "BigInt",
+          "Error",
+          "Function.prototype",
+          "Number",
+          "RangeError",
+          "String",
+          "Temporal",
+          "TypeError"
+        ]
+      }
+    ],
+    "body:temporal_plain_year_month_from_thunk": [
+      {
+        "name": "Temporal.PlainYearMonth.from",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "from"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::math_temporal::temporal_plain_year_month_from_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 1,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::math_temporal::temporal_plain_year_month_from_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_7b21b0ae6ad979818f16",
+        "births": [
+          "Array",
+          "BigInt",
+          "Error",
+          "Function.prototype",
+          "Number",
+          "RangeError",
+          "String",
+          "Temporal",
+          "TypeError"
+        ]
+      }
+    ],
+    "body:temporal_zoned_date_time_compare_thunk": [
+      {
+        "name": "Temporal.ZonedDateTime.compare",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "compare"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "crate::object::global_this::math_temporal::temporal_zoned_date_time_compare_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 1,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::math_temporal::temporal_zoned_date_time_compare_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_7ff85c741b2cf19e5509",
+        "births": [
+          "Array",
+          "BigInt",
+          "Error",
+          "Function.prototype",
+          "Number",
+          "RangeError",
+          "String",
+          "Temporal",
+          "TypeError"
+        ]
+      }
+    ],
+    "body:temporal_zoned_date_time_from_thunk": [
+      {
+        "name": "Temporal.ZonedDateTime.from",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "from"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::math_temporal::temporal_zoned_date_time_from_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 1,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::math_temporal::temporal_zoned_date_time_from_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_b92ed04822143923a555",
+        "births": [
+          "Array",
+          "BigInt",
+          "Error",
+          "Function.prototype",
+          "Number",
+          "RangeError",
+          "String",
+          "Temporal",
+          "TypeError"
+        ]
+      }
+    ]
+  }
+}

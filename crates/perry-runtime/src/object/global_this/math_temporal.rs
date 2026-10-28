@@ -1455,3 +1455,5 @@ fn install_temporal_from_compare(
     install_constructor_static(ctor, "from", from_info, 1);
     install_constructor_static(ctor, "compare", compare_info, 2);
 }
+
+crate::realm_decl!("math_temporal.realm.json#*");
