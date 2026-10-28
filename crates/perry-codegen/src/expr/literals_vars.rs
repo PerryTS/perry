@@ -173,8 +173,8 @@ fn load_closure_capture_bits_inline(
     closure_ptr: &str,
     capture_idx: u32,
 ) -> String {
-    let offset =
-        crate::target_layout::closure_header_size_bytes(ctx.target_triple) + 8 * capture_idx as u64;
+    let capture_idx = super::private_resume_frame::slot_index(ctx, capture_idx);
+    let offset = super::private_resume_frame::slot_offset(ctx, &capture_idx);
     let blk = ctx.block();
     let slot_addr = blk.add(I64, closure_ptr, &offset.to_string());
     let slot_ptr = blk.inttoptr(I64, &slot_addr);
@@ -194,8 +194,8 @@ fn store_generator_state_slot(
 ) -> Result<()> {
     let bits = ctx.block().bitcast_double_to_i64(value);
     if pointer_free {
-        let offset = crate::target_layout::closure_header_size_bytes(ctx.target_triple)
-            + 8 * u64::from(capture_idx);
+        let capture_idx = super::private_resume_frame::slot_index(ctx, capture_idx);
+        let offset = super::private_resume_frame::slot_offset(ctx, &capture_idx);
         let address = ctx.block().add(I64, closure_ptr, &offset.to_string());
         let ptr = ctx.block().inttoptr(I64, &address);
         // GC_STORE_AUDIT(POINTER_FREE): the emitted value's construction,
@@ -203,6 +203,7 @@ fn store_generator_state_slot(
         ctx.block().store(I64, &bits, &ptr);
         return Ok(());
     }
+    let capture_idx = super::private_resume_frame::slot_index(ctx, capture_idx);
     ctx.block().call_void(
         "js_generator_set_slot",
         &[
