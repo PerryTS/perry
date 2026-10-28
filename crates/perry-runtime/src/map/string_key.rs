@@ -86,6 +86,35 @@ unsafe fn heap_bytes_eq(a: *const u8, b: *const u8, len: usize) -> bool {
     len <= 16 || std::slice::from_raw_parts(a, len) == std::slice::from_raw_parts(b, len)
 }
 
+/// Map-local content digest. Read only complete words inside the validated
+/// extent; short strings combine overlapping head/tail words. Every byte is
+/// covered, and the length separates padded prefixes. The existing index still
+/// compares authoritative key bytes, including for complete hash collisions.
+#[inline(always)]
+pub(super) unsafe fn map_content_hash(data: *const u8, len: u32) -> u64 {
+    const MIX: u64 = 0x9e37_79b9_7f4a_7c15;
+    let len = len as usize;
+    let mut hash = (len as u64).wrapping_mul(MIX);
+    if len >= 8 {
+        let mut at = 0;
+        while at + 8 < len {
+            hash = (hash ^ data.add(at).cast::<u64>().read_unaligned().to_le())
+                .rotate_left(27)
+                .wrapping_mul(MIX);
+            at += 8;
+        }
+        hash ^= data.add(len - 8).cast::<u64>().read_unaligned().to_le();
+    } else if len >= 4 {
+        let head = data.cast::<u32>().read_unaligned().to_le() as u64;
+        let tail = data.add(len - 4).cast::<u32>().read_unaligned().to_le() as u64;
+        hash ^= head | (tail << 32);
+    } else if len != 0 {
+        hash ^=
+            *data as u64 | ((*data.add(len / 2) as u64) << 8) | ((*data.add(len - 1) as u64) << 16);
+    }
+    hash
+}
+
 impl StrKey {
     /// Decode an inline or `STRING_TAG` key, or `None` for anything else —
     /// the caller keeps the generic path then.
@@ -185,21 +214,16 @@ impl StrKey {
         self.matches(key_bits, entry_bits)
     }
 
-    /// The key's content hash, the same `string_content_hash` computes from
-    /// the NaN-boxed value, without decoding it a second time: a heap key
-    /// that is a property atom reads the hash it was born with
-    /// (`string_key_hash`).
+    /// Map-local digest shared by all supported string representations.
     #[inline(always)]
     pub(super) fn content_hash(self) -> u64 {
         match self {
             StrKey::Short { len, data } => {
                 let bytes = data.to_le_bytes();
                 let len = len.min(SHORT_STRING_MAX_LEN as u32);
-                // SAFETY: `len` is at most the inline capacity, inside `bytes`.
-                unsafe { super::string_key_hash(bytes.as_ptr(), len, false) }
+                unsafe { map_content_hash(bytes.as_ptr(), len) }
             }
-            // SAFETY: `decode` validated a heap string; `ptr` is its payload.
-            StrKey::Heap { ptr, len } => unsafe { super::string_key_hash(ptr, len, true) },
+            StrKey::Heap { ptr, len } => unsafe { map_content_hash(ptr, len) },
         }
     }
 }
@@ -223,19 +247,27 @@ pub(super) unsafe fn find_indexed(map: *const super::MapHeader, key_bits: u64) -
     match key {
         StrKey::Heap { ptr, len } => store
             .strings
-            .find(hash, |i| {
-                i < used
-                    && (StrKey::Heap { ptr, len })
-                        .matches_indexed(key_bits, entries.add(i as usize * 2).read().to_bits())
-            })
+            .find(
+                hash,
+                #[inline(always)]
+                |i| {
+                    i < used
+                        && (StrKey::Heap { ptr, len })
+                            .matches_indexed(key_bits, entries.add(i as usize * 2).read().to_bits())
+                },
+            )
             .map_or(-1, |i| i as i32),
         StrKey::Short { len, data } => store
             .strings
-            .find(hash, |i| {
-                i < used
-                    && (StrKey::Short { len, data })
-                        .matches_indexed(key_bits, entries.add(i as usize * 2).read().to_bits())
-            })
+            .find(
+                hash,
+                #[inline(always)]
+                |i| {
+                    i < used
+                        && (StrKey::Short { len, data })
+                            .matches_indexed(key_bits, entries.add(i as usize * 2).read().to_bits())
+                },
+            )
             .map_or(-1, |i| i as i32),
     }
 }
@@ -253,6 +285,83 @@ mod tests {
 
     fn sso(s: &str) -> f64 {
         f64::from_bits(JSValue::try_short_string(s.as_bytes()).unwrap().bits())
+    }
+
+    #[test]
+    fn map_digest_covers_every_byte_and_matches_all_representations() {
+        for offset in 0..8 {
+            for len in 0..130 {
+                let bytes: Vec<u8> = (0..offset + len + 8)
+                    .map(|i| (i * 37 + 128) as u8)
+                    .collect();
+                let key = &bytes[offset..offset + len];
+                let digest = unsafe { super::map_content_hash(key.as_ptr(), len as u32) };
+                let heap = js_string_from_bytes(key.as_ptr(), len as u32);
+                let boxed = boxed_heap_string_key(heap);
+                assert_eq!(
+                    StrKey::decode(boxed.to_bits()).unwrap().content_hash(),
+                    digest
+                );
+                if let Some(short) = JSValue::try_short_string(key) {
+                    assert_eq!(StrKey::decode(short.bits()).unwrap().content_hash(), digest);
+                }
+                for changed in 0..len {
+                    let mut other = key.to_vec();
+                    other[changed] ^= 0x80;
+                    assert_ne!(
+                        unsafe { super::map_content_hash(other.as_ptr(), len as u32) },
+                        digest,
+                        "offset={offset} len={len} byte={changed}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn map_digest_keeps_atom_and_data_keys_equal_through_mutation() {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let map = scope.root_raw_mut_ptr(js_map_alloc(16));
+        for i in 0..16 {
+            js_map_set(map.get_raw_mut_ptr::<MapHeader>(), i as f64, i as f64);
+        }
+        for name in [
+            "",
+            "a",
+            "abcd",
+            "abcde",
+            "abcdef",
+            "abcdefgh",
+            "abcdefghijklmno",
+            "abcdefghijklmnoP",
+            "abcdefghijklmnoPQ",
+            "abcdefghijklmnoPQR-still-longer",
+            "é-💡-日本語",
+            "nul\0inside",
+        ] {
+            let value = heap(name);
+            let atom = unsafe {
+                crate::string::property_atom(JSValue::from_bits(value.to_bits()).as_string_ptr())
+            };
+            let atom_value = boxed_heap_string_key(atom);
+            let fresh = heap(name);
+            assert_eq!(
+                string_content_hash(atom_value.to_bits()),
+                string_content_hash(fresh.to_bits())
+            );
+            js_map_set(map.get_raw_mut_ptr::<MapHeader>(), atom_value, 91.0);
+            assert_eq!(js_map_get(map.get_raw_mut_ptr::<MapHeader>(), fresh), 91.0);
+            js_map_set(map.get_raw_mut_ptr::<MapHeader>(), fresh, 92.0);
+            assert_eq!(
+                js_map_get(map.get_raw_mut_ptr::<MapHeader>(), atom_value),
+                92.0
+            );
+            assert_eq!(js_map_delete(map.get_raw_mut_ptr::<MapHeader>(), fresh), 1);
+            assert_eq!(
+                js_map_has(map.get_raw_mut_ptr::<MapHeader>(), atom_value),
+                0
+            );
+        }
     }
 
     /// A small map answers a lookup made with the very key value it stored,

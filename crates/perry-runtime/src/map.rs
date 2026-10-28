@@ -705,16 +705,15 @@ fn is_safe_numeric_key(bits: u64) -> bool {
 // Numeric bits and string entry offsets survive moves. Pointer-key bits are
 // refreshed after GC rewrites; no header-address lookup is needed.
 
-/// FNV-1a 64-bit content hash for any string-like JSValue.
-/// Returns `None` for non-strings, `Some(FNV_OFFSET_BASIS)` for the empty
-/// string. SSO and heap STRING_TAG hash into the same space because both
+/// Map-local word digest for any string-like JSValue.
+/// Returns `None` for non-strings. SSO and heap STRING_TAG hash into the same space because both
 /// representations decode through `string_view_from_bits`.
 #[inline]
 fn string_content_hash(value_bits: u64) -> Option<u64> {
     let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     let (ptr, len) = string_view_from_bits(value_bits, &mut scratch)?;
     // SAFETY: a view that is not `scratch` is a validated heap string's payload.
-    Some(unsafe { string_key_hash(ptr, len, ptr != scratch.as_ptr()) })
+    Some(unsafe { string_key::map_content_hash(ptr, len) })
 }
 
 /// The content hash of a string key: FNV-1a over its bytes, the function
@@ -1575,7 +1574,7 @@ unsafe fn find_key_index_cold(map: *const MapHeader, key: f64) -> i32 {
     if is_string_like(key_bits) {
         let entries = entries_ptr(map);
         if let Some(slot) = (*map).store.as_ref().map(|store| &store.strings) {
-            // FNV-1a collisions are rare but possible; validate each
+            // Complete digest collisions are possible; validate each
             // candidate by content.
             if let Some(skey) = StrKey::decode(key_bits) {
                 return slot
