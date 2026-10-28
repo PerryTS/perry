@@ -169,6 +169,8 @@ use pin::{note_preflight_skipped, note_preflight_walked, young_pin_latch_armed};
 pub(crate) mod prefetch;
 
 mod copying;
+mod leaf_service;
+pub(crate) use leaf_service::repair_promoted_leaf_edges;
 mod copying_first_cycle;
 mod copying_object_scan;
 mod copying_parent_facts;

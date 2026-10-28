@@ -90,7 +90,7 @@ pub(crate) fn young_large_in_use_bytes() -> usize {
 /// The nursery budget includes large ownership. The copying/reset quantity
 /// excludes it, so it cannot skew small-object survival or survivor influx.
 pub(crate) fn moving_from_space_in_use_bytes() -> usize {
-    young_in_use_bytes().saturating_sub(young_large_in_use_bytes())
+    super::from_space::copying_from_space_in_use_bytes()
 }
 
 pub(crate) fn is_large_storage(addr: usize) -> bool {
@@ -185,4 +185,25 @@ fn finish(snapshots: Option<&[ArenaBlockSnapshot]>, live: Option<&[bool]>) -> Ar
         }
     });
     stats
+}
+
+/// Capacity of a dedicated whole-cell leaf is not small-copying runway.
+/// Legacy packed old large blocks remain included. Membership and layout,
+/// rather than storage kind alone, prove that one leaf owns the whole block.
+pub(crate) fn copying_capacity_bytes() -> usize {
+    fn dedicated(blocks: &[ArenaBlock]) -> usize {
+        blocks.iter().filter(|b| {
+            if b.data.is_null() || b.extent_kind != Kind::LargeObject || b.offset == 0 {
+                return false;
+            }
+            unsafe {
+                let h = &*b.data.cast::<crate::gc::GcHeader>();
+                h.size as usize == b.offset && crate::gc::gc_type_info(h.obj_type)
+                    .is_some_and(|i| i.pointer_free && i.rewrite_descriptor_kind == crate::gc::GcRewriteDescriptorKind::Leaf)
+            }
+        }).map(|b| b.size).sum()
+    }
+    let leaves = ARENA.with(|a| unsafe { dedicated(&(*a.get()).blocks) })
+        + OLD_ARENA.with(|a| unsafe { dedicated(&(*a.get()).blocks) });
+    arena_total_bytes().saturating_sub(leaves)
 }

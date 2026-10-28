@@ -142,7 +142,7 @@ pub(crate) fn copying_from_space_in_use_bytes_walked() -> usize {
     sync_inline_arena_state();
     let eden = ARENA.with(|arena| {
         let arena = unsafe { &*arena.get() };
-        arena.blocks.iter().map(|b| b.offset).sum::<usize>()
+        arena.blocks.iter().filter(|b| b.extent_kind != super::region::Kind::LargeObject).map(|b| b.offset).sum::<usize>()
     });
     let active = ACTIVE_SURVIVOR.with(|active| active.get());
     let survivor = with_survivor_arena(active, |arena| {

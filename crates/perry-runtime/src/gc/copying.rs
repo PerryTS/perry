@@ -1163,8 +1163,8 @@ pub(super) fn run_copied_minor_attempt(
     // `PromotionLiveness::AssumeAllLive`) and the survival ratio itself, which
     // is what `should_promote_young_untraced`'s budget bounds.
     let instrument_veto = untraced_promotion_instrument_veto();
-    let untraced = young_large_bytes == 0 && promoting_in_place
-        && collector.skip_remembering
+    let untraced = promoting_in_place
+        && collector.ptrs.malloc_registry_empty_at_start
         && !crate::weakref::weak_target_holders_allocated()
         && instrument_veto.is_none()
         && super::should_promote_young_untraced();
@@ -1550,7 +1550,9 @@ pub(super) fn run_copied_minor_attempt(
     // run here, same window as fromspace_scan (after rewrite, before reset).
     super::native_stack_scan::run_native_stack_scan();
 
-    let finalization = finalize_dead_copied_minor_from_space_side_allocations();
+    let finalization = if untraced {
+        super::copying_phase::CopiedMinorFinalizationDiag::default()
+    } else { finalize_dead_copied_minor_from_space_side_allocations() };
     if let Some(diag) = phase_diag.as_mut() {
         diag.add_nanos(Phase::DeadOwnerSideTablePruning, finalization.dead_owner_ns);
         diag.add_nanos(
@@ -1565,7 +1567,9 @@ pub(super) fn run_copied_minor_attempt(
     // walk reads `GC_FLAG_MARKED` to decide which objects to index — and it
     // takes the place of, never runs alongside, the from-space reset: the
     // blocks the reset would recycle are the blocks this keeps.
-    let large_reset = crate::arena::finish_copied_young_large();
+    let large_reset = if untraced {
+        crate::arena::ArenaResetStats::default()
+    } else { crate::arena::finish_copied_young_large() };
     let large_live_bytes = young_large_bytes.saturating_sub(large_reset.reusable_bytes);
     let (reset, promotion_stats) = if promoting_in_place {
         let phase_start = trace_phase_start(trace);
@@ -1625,11 +1629,11 @@ pub(super) fn run_copied_minor_attempt(
     }
     let remembered_restore_phase_start = PhaseDiag::start(&phase_diag);
     let clear_start = trace_phase_start(trace);
-    remembered_set_clear();
+    if !(untraced && young_large_bytes != 0) { remembered_set_clear(); }
     trace_phase_record(trace, "remembered_set_clear", clear_start);
     let restore_start = trace_phase_start(trace);
     collector.sticky.restore();
-    if !collector.skip_remembering {
+    if !untraced && !collector.skip_remembering {
         restore_surviving_dirty_coverage(&snapshot, &dirty_scan_covered, "copying_minor");
         // Per minor, not at exit: the rig SIGKILLs cc. Cumulative counters, so
         // the last line before the kill is the answer.
@@ -1758,7 +1762,7 @@ pub(super) fn run_copied_minor_attempt(
     // one line: the baseline is the base of a GROWTH measurement, not a
     // liveness claim, and withholding it pins that base at 0 on exactly the
     // workloads that reach this path.
-    credit_promoted_bytes_to_old_baseline(collector.stats.promoted_bytes.saturating_add(large_live_bytes));
+    credit_promoted_bytes_to_old_baseline(collector.stats.promoted_bytes.saturating_add(if untraced { 0 } else { large_live_bytes }));
     // #10241: the promoted cohort counts in-place promotions only; bytes this
     // minor tenured by copy survived a minor already (`promoted_cohort`).
     super::promoted_cohort::note_minor_promotion(

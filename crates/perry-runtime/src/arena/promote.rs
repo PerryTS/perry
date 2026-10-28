@@ -486,6 +486,7 @@ fn stamp_and_index_block(block: &ArenaBlock, liveness: PromotionLiveness) -> (us
     } else {
         crate::gc::AdoptableBlockBuilder::begin(block.data as usize, 0, block.size)
     };
+    let repair = describe && super::young_large::young_large_in_use_bytes() != 0;
     let mut stopped_early = false;
 
     let mut offset = 0usize;
@@ -513,6 +514,7 @@ fn stamp_and_index_block(block: &ArenaBlock, liveness: PromotionLiveness) -> (us
         unsafe {
             crate::gc::stamp_header_promoted_in_place(header);
             census.note(header, aligned);
+            if repair { crate::gc::repair_promoted_leaf_edges(header); }
         }
         objects += 1;
 

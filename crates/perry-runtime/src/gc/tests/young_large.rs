@@ -33,7 +33,7 @@ fn large_leaf_has_dedicated_young_storage_and_no_payload_scan() {
         assert!(crate::arena::is_large_storage(p));
         assert_eq!(
             crate::arena::copying_from_space_in_use_bytes(),
-            before + total
+            before
         );
         assert_eq!(crate::arena::moving_from_space_in_use_bytes(), moving);
         let mut collector = CopyingNurseryCollector::new(CopyingPointerSet::new());
