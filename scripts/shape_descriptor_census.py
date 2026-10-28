@@ -607,19 +607,19 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
                 + ", ".join(sorted(scanner_slot_apis))
             )
 
-    # #11549: the walk's ONE body is the generic `_inline` form (the `dyn`
-    # wrapper only forwards to it), and the copying drain's plain-object scan
-    # is a second enumeration of the same object slots. Both must emit the
-    # descriptor's keys edge and neither may read the deleted mirror.
+    # The dispatcher selects either the specialized object walk or the
+    # generic enumeration. The copying drain has a third enumeration. Every
+    # body must emit the descriptor's keys edge without the deleted mirror.
+    dispatch = function_body(layout_visit, "visit_gc_layout_slot_descriptors_inline")
+    for callee in ("visit_object_layout_slots", "visit_gc_layout_slot_descriptors_generic"):
+        require_code(dispatch, rf"\b{callee}\s*\(header,\s*visit\)",
+                     f"layout dispatcher reaches {callee}")
     for body_name, body in (
-        (
-            "visit_gc_layout_slot_descriptors_inline",
-            function_body(layout_visit, "visit_gc_layout_slot_descriptors_inline"),
-        ),
-        (
-            "plain_object_plan",
-            function_body(copying_object_scan, "plain_object_plan"),
-        ),
+        ("visit_gc_layout_slot_descriptors_generic",
+         function_body(layout_visit, "visit_gc_layout_slot_descriptors_generic")),
+        ("visit_object_layout_slots",
+         function_body(layout_visit, "visit_object_layout_slots")),
+        ("plain_object_plan", function_body(copying_object_scan, "plain_object_plan")),
     ):
         require_code(
             body,
@@ -1240,6 +1240,28 @@ def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object])
         "copying plain-object scan reads the header mirror for a fact",
         lambda: assert_authority_surfaces(plan_fact_read),
     )
+
+    for path, name in (
+        ("crates/perry-runtime/src/gc/layout_slot_visit.rs", "visit_gc_layout_slot_descriptors_generic"),
+        ("crates/perry-runtime/src/gc/layout_slot_visit.rs", "visit_object_layout_slots"),
+        ("crates/perry-runtime/src/gc/copying_object_scan.rs", "plain_object_plan"),
+    ):
+        missing_edge = dict(sources)
+        body = function_body(sources[path], name)
+        changed = body.replace("gc_shape_keys_edge_slot", "lost_keys_edge_slot", 1)
+        assert changed != body, f"missing mutation subject: {name}"
+        missing_edge[path] = sources[path].replace(body, changed, 1)
+        expect_rejected(f"{name} loses descriptor keys edge",
+                        lambda: assert_authority_surfaces(missing_edge))
+
+    for name in ("visit_object_layout_slots", "visit_gc_layout_slot_descriptors_generic"):
+        missing_route = dict(sources)
+        path = "crates/perry-runtime/src/gc/layout_slot_visit.rs"
+        call = f"{name}(header, visit);"
+        assert call in sources[path], f"missing mutation subject: {name}"
+        missing_route[path] = sources[path].replace(call, "return;", 1)
+        expect_rejected(f"dispatcher loses {name}",
+                        lambda: assert_authority_surfaces(missing_route))
 
     # Both reverse accelerators must remain downstream of the actual mint,
     # including after a wrapper refactor. Exercise each ordering separately.
