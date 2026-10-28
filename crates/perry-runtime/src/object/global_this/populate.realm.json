@@ -2178,139 +2178,6 @@
         "own_symbol_order": []
       },
       {
-        "name": "navigator",
-        "kind": "namespace",
-        "properties": [
-          {
-            "key": "hardwareConcurrency",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "number_bits",
-              "value": "4048000000000000"
-            }
-          },
-          {
-            "key": "language",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "string",
-              "value": "en-US"
-            }
-          },
-          {
-            "key": "languages",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "navigator.languages"
-            }
-          },
-          {
-            "key": "locks",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "navigator.locks"
-            }
-          },
-          {
-            "key": "platform",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "string",
-              "value": "Linux x86_64"
-            }
-          },
-          {
-            "key": "userAgent",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "string",
-              "value": "Node.js/22"
-            }
-          }
-        ],
-        "own_key_order": [
-          "userAgent",
-          "language",
-          "languages",
-          "hardwareConcurrency",
-          "platform",
-          "locks"
-        ],
-        "own_symbol_order": [],
-        "header": {
-          "gc_type": 2,
-          "reserved": 512,
-          "class_id": 2147483426
-        },
-        "prototype": "Navigator.prototype",
-        "births": [
-          "Navigator.prototype",
-          "navigator.languages",
-          "navigator.locks"
-        ]
-      },
-      {
-        "name": "navigator.languages",
-        "kind": "namespace",
-        "properties": [
-          {
-            "key": "0",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "string",
-              "value": "en-US"
-            }
-          },
-          {
-            "key": "length",
-            "symbol": false,
-            "attributes": 1,
-            "value": {
-              "kind": "number_bits",
-              "value": "3ff0000000000000"
-            }
-          }
-        ],
-        "own_key_order": [
-          "0",
-          "length"
-        ],
-        "own_symbol_order": [],
-        "header": {
-          "gc_type": 1,
-          "reserved": 40960
-        },
-        "prototype": "Array.prototype",
-        "births": [
-          "Array.prototype"
-        ]
-      },
-      {
-        "name": "navigator.locks",
-        "kind": "namespace",
-        "properties": [],
-        "own_key_order": [],
-        "own_symbol_order": [],
-        "header": {
-          "gc_type": 2,
-          "reserved": 0,
-          "class_id": 0
-        },
-        "prototype": "Object.prototype",
-        "births": [
-          "Object.prototype"
-        ]
-      },
-      {
         "name": "node:assert",
         "kind": "namespace",
         "properties": [
@@ -27004,51 +26871,9 @@
       },
       {
         "name": "node:module.globalPaths",
-        "kind": "namespace",
-        "properties": [
-          {
-            "key": "0",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "string",
-              "value": "/root/.node_modules"
-            }
-          },
-          {
-            "key": "1",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "string",
-              "value": "/root/.node_libraries"
-            }
-          },
-          {
-            "key": "2",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "string",
-              "value": "/root/WRT/realm-dumps/lib/node"
-            }
-          },
-          {
-            "key": "length",
-            "symbol": false,
-            "attributes": 1,
-            "value": {
-              "kind": "number_bits",
-              "value": "4008000000000000"
-            }
-          }
-        ],
-        "own_key_order": [
-          "0",
-          "1",
-          "2",
-          "length"
-        ],
+        "kind": "exotic",
+        "properties": [],
+        "own_key_order": [],
         "own_symbol_order": [],
         "header": {
           "gc_type": 1,
@@ -27057,7 +26882,11 @@
         "prototype": "Array.prototype",
         "births": [
           "Array.prototype"
-        ]
+        ],
+        "value": {
+          "kind": "dynamic",
+          "value": "node:module.globalPaths"
+        }
       },
       {
         "name": "node:net",
@@ -29891,8 +29720,8 @@
             "symbol": false,
             "attributes": 3,
             "value": {
-              "kind": "string",
-              "value": "x64"
+              "kind": "dynamic",
+              "value": "target.process.arch"
             }
           },
           {
@@ -29909,8 +29738,8 @@
             "symbol": false,
             "attributes": 3,
             "value": {
-              "kind": "string",
-              "value": "/root/WRT/realm-dumps/work-metadata-expanded/realm-dump"
+              "kind": "dynamic",
+              "value": "process.argv0"
             }
           },
           {
@@ -29972,7 +29801,7 @@
             "symbol": false,
             "attributes": 3,
             "value": {
-              "kind": "dynamic",
+              "kind": "reference",
               "value": "process.cwd"
             }
           },
@@ -30248,8 +30077,8 @@
             "symbol": false,
             "attributes": 3,
             "value": {
-              "kind": "string",
-              "value": "linux"
+              "kind": "dynamic",
+              "value": "target.process.platform"
             }
           },
           {
@@ -30419,8 +30248,8 @@
             "symbol": false,
             "attributes": 3,
             "value": {
-              "kind": "string",
-              "value": "/root/WRT/realm-dumps/work-metadata-expanded/realm-dump"
+              "kind": "dynamic",
+              "value": "process.title"
             }
           },
           {
@@ -30625,6 +30454,7 @@
           "process.binding",
           "process.chdir",
           "process.cpuUsage",
+          "process.cwd",
           "process.dlopen",
           "process.execve",
           "process.finalization",
@@ -30707,41 +30537,9 @@
       },
       {
         "name": "node:process.argv",
-        "kind": "namespace",
-        "properties": [
-          {
-            "key": "0",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "string",
-              "value": "/root/WRT/realm-dumps/work-metadata-expanded/realm-dump"
-            }
-          },
-          {
-            "key": "1",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "string",
-              "value": "/root/WRT/tmp/wrt3a/realm_dump.ts"
-            }
-          },
-          {
-            "key": "length",
-            "symbol": false,
-            "attributes": 1,
-            "value": {
-              "kind": "number_bits",
-              "value": "4000000000000000"
-            }
-          }
-        ],
-        "own_key_order": [
-          "0",
-          "1",
-          "length"
-        ],
+        "kind": "exotic",
+        "properties": [],
+        "own_key_order": [],
         "own_symbol_order": [],
         "header": {
           "gc_type": 1,
@@ -30750,7 +30548,11 @@
         "prototype": "Array.prototype",
         "births": [
           "Array.prototype"
-        ]
+        ],
+        "value": {
+          "kind": "dynamic",
+          "value": "process.argv"
+        }
       },
       {
         "name": "node:process.config",
@@ -31186,21 +30988,9 @@
       },
       {
         "name": "node:process.execArgv",
-        "kind": "namespace",
-        "properties": [
-          {
-            "key": "length",
-            "symbol": false,
-            "attributes": 1,
-            "value": {
-              "kind": "number_bits",
-              "value": "0000000000000000"
-            }
-          }
-        ],
-        "own_key_order": [
-          "length"
-        ],
+        "kind": "exotic",
+        "properties": [],
+        "own_key_order": [],
         "own_symbol_order": [],
         "header": {
           "gc_type": 1,
@@ -31209,7 +30999,11 @@
         "prototype": "Array.prototype",
         "births": [
           "Array.prototype"
-        ]
+        ],
+        "value": {
+          "kind": "dynamic",
+          "value": "process.execArgv"
+        }
       },
       {
         "name": "node:process.features",

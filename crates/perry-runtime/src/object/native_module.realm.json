@@ -1771,8 +1771,8 @@
             "symbol": false,
             "attributes": 7,
             "value": {
-              "kind": "string",
-              "value": "x64"
+              "kind": "dynamic",
+              "value": "target.process.arch"
             }
           },
           {
@@ -1789,8 +1789,8 @@
             "symbol": false,
             "attributes": 7,
             "value": {
-              "kind": "string",
-              "value": "/root/WRT/realm-dumps/work-metadata-expanded/realm-dump"
+              "kind": "dynamic",
+              "value": "process.argv0"
             }
           },
           {
@@ -1850,7 +1850,7 @@
             "symbol": false,
             "attributes": 7,
             "value": {
-              "kind": "dynamic",
+              "kind": "reference",
               "value": "process.cwd"
             }
           },
@@ -2091,8 +2091,8 @@
             "symbol": false,
             "attributes": 7,
             "value": {
-              "kind": "string",
-              "value": "linux"
+              "kind": "dynamic",
+              "value": "target.process.platform"
             }
           },
           {
@@ -2261,8 +2261,8 @@
             "symbol": false,
             "attributes": 7,
             "value": {
-              "kind": "string",
-              "value": "/root/WRT/realm-dumps/work-metadata-expanded/realm-dump"
+              "kind": "dynamic",
+              "value": "process.title"
             }
           },
           {
@@ -2419,6 +2419,7 @@
           "process.chdir",
           "process.config",
           "process.cpuUsage",
+          "process.cwd",
           "process.dlopen",
           "process.eventNames",
           "process.execve",
@@ -2518,41 +2519,9 @@
       },
       {
         "name": "process.argv",
-        "kind": "namespace",
-        "properties": [
-          {
-            "key": "0",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "string",
-              "value": "/root/WRT/realm-dumps/work-metadata-expanded/realm-dump"
-            }
-          },
-          {
-            "key": "1",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "string",
-              "value": "/root/WRT/tmp/wrt3a/realm_dump.ts"
-            }
-          },
-          {
-            "key": "length",
-            "symbol": false,
-            "attributes": 1,
-            "value": {
-              "kind": "number_bits",
-              "value": "4000000000000000"
-            }
-          }
-        ],
-        "own_key_order": [
-          "0",
-          "1",
-          "length"
-        ],
+        "kind": "exotic",
+        "properties": [],
+        "own_key_order": [],
         "own_symbol_order": [],
         "header": {
           "gc_type": 1,
@@ -2561,7 +2530,11 @@
         "prototype": "Array.prototype",
         "births": [
           "Array.prototype"
-        ]
+        ],
+        "value": {
+          "kind": "dynamic",
+          "value": "process.argv"
+        }
       },
       {
         "name": "process.config",
@@ -3017,21 +2990,9 @@
       },
       {
         "name": "process.execArgv",
-        "kind": "namespace",
-        "properties": [
-          {
-            "key": "length",
-            "symbol": false,
-            "attributes": 1,
-            "value": {
-              "kind": "number_bits",
-              "value": "0000000000000000"
-            }
-          }
-        ],
-        "own_key_order": [
-          "length"
-        ],
+        "kind": "exotic",
+        "properties": [],
+        "own_key_order": [],
         "own_symbol_order": [],
         "header": {
           "gc_type": 1,
@@ -3040,7 +3001,11 @@
         "prototype": "Array.prototype",
         "births": [
           "Array.prototype"
-        ]
+        ],
+        "value": {
+          "kind": "dynamic",
+          "value": "process.execArgv"
+        }
       },
       {
         "name": "process.features",

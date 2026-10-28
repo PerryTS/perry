@@ -46,6 +46,15 @@ import * as realm_native_44 from "node:vm";
 import * as realm_native_45 from "node:wasi";
 import * as realm_native_46 from "node:worker_threads";
 import * as realm_native_47 from "node:zlib";
+import * as realm_native_48 from "node:diagnostics_channel";
+import * as realm_native_49 from "node:fs/promises";
+import * as realm_native_50 from "node:stream/promises";
+import * as realm_native_51 from "node:stream/consumers";
+import * as realm_native_52 from "node:stream/web";
+import * as realm_native_53 from "node:readline/promises";
+import * as realm_native_54 from "node:sys";
+import * as realm_native_55 from "node:test/reporters";
+import * as realm_native_56 from "node:trace_events";
 // Reflection oracle for the compiled realm. The descriptor walk never invokes
 // accessors; the explicit pristine intrinsic seeds below use known builtins.
 // An ES module keeps the dumper's own declarations off the global object.
@@ -190,6 +199,15 @@ const nativeRoots: any[] = [
     ["node:wasi", realm_native_45],
     ["node:worker_threads", realm_native_46],
     ["node:zlib", realm_native_47],
+    ["node:diagnostics_channel", realm_native_48],
+    ["node:fs/promises", realm_native_49],
+    ["node:stream/promises", realm_native_50],
+    ["node:stream/consumers", realm_native_51],
+    ["node:stream/web", realm_native_52],
+    ["node:readline/promises", realm_native_53],
+    ["node:sys", realm_native_54],
+    ["node:test/reporters", realm_native_55],
+    ["node:trace_events", realm_native_56],
 ];
 for (let i = 0; i < nativeRoots.length; i++) intrinsic(nativeRoots[i][0], nativeRoots[i][1]);
 for (let cursor = 0; cursor < seen.length; cursor++) {

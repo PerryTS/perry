@@ -299,3 +299,18 @@ fn chained_global_aliases_escape_only_when_the_object_value_is_read() {
         assert!(!reach(source).is_full(), "{source}");
     }
 }
+
+#[test]
+fn global_patch_fixture_reaches_top_through_the_program_patch_signal() {
+    let fixture: Vec<(String, String)> =
+        serde_json::from_str(include_str!("realm_fixtures/top_global_any_member.json")).unwrap();
+    let mut patched = crate::PatchedBuiltins::default();
+    for patch in fixture {
+        patched.insert(patch);
+    }
+    let mut r = RealmReach::default();
+    r.program_signals(&patched);
+    r.close(CATALOG);
+    assert_eq!(r.top, BTreeSet::from([RealmTop::GlobalAnyMember]));
+    assert_eq!(r.names.len(), CATALOG.len());
+}

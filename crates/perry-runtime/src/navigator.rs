@@ -216,3 +216,5 @@ mod tests {
         assert_eq!(normalize_navigator_locale("C.UTF-8"), None);
     }
 }
+
+crate::realm_decl!("navigator.realm.json#objects");

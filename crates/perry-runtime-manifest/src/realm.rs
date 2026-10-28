@@ -209,6 +209,16 @@ impl RealmManifest {
                     }
                 }
             }
+            if matches!(d.value, Some(RealmValue::Dynamic(_)))
+                && (!d.properties.is_empty()
+                    || !d.own_key_order.is_empty()
+                    || !d.own_symbol_order.is_empty())
+            {
+                return Err(format!(
+                    "dynamic provider has sampled storage on {}",
+                    d.name
+                ));
+            }
             let mut keys = BTreeSet::new();
             for property in &d.properties {
                 if !keys.insert((&property.key, property.symbol)) || property.attributes & !7 != 0 {
@@ -255,6 +265,14 @@ mod schema_tests {
 
     fn manifest(declarations: &str) -> RealmManifest {
         serde_json::from_str(&format!(r#"{{"version":1,"declarations":{declarations}}}"#)).unwrap()
+    }
+
+    #[test]
+    fn dynamic_providers_cannot_freeze_sampled_storage() {
+        let empty = r#"[{"name":"argv","kind":"exotic","value":{"kind":"dynamic","value":"process.argv"}}]"#;
+        assert!(manifest(empty).validate().is_ok());
+        let sampled = r#"[{"name":"argv","kind":"exotic","value":{"kind":"dynamic","value":"process.argv"},"properties":[{"key":"0","symbol":false,"attributes":7,"value":{"kind":"string","value":"/qualification-machine/app"}}]}]"#;
+        assert!(manifest(sampled).validate().is_err());
     }
 
     #[test]
