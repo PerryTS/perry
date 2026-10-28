@@ -97,10 +97,10 @@ JOBS: dict[str, tuple[str, ...]] = {
     "binary_size": ("full",),  # ELF/Mach-O link absence + macOS linked-size budget; full-tier required gate
     "parity": ("full",),
     # The per-module node-compatibility corpus (test-parity/node-suite/**), scored
-    # against test-parity/node_suite_baseline.json. It also runs on its own daily
-    # schedule in compiler-runtime.yml, but that workflow's jobs cannot be
-    # `needs:`-ed by `full-suite-gate` -- and a corpus no release waits for is a
-    # corpus nobody reads. See the job comment in test.yml.
+    # against test-parity/node_suite_baseline.json. compiler-runtime.yml still
+    # runs it on the merge queue, but that workflow's jobs cannot be `needs:`-ed
+    # by `full-suite-gate` -- and a corpus no release waits for is a corpus
+    # nobody reads. See the job comment in test.yml.
     "node_suite_guard": ("full",),
     "compile_smoke": ("full",),
     "native_abi_evidence_packet": ("full",),

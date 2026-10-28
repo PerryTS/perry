@@ -5,8 +5,8 @@ Two parity runners ask this question today:
 
   * `run_parity_tests.sh` — the `all` / `node-suite` sweep that the release
     gate and the per-PR gap suite both drive;
-  * `scripts/node_suite_run.py` — the per-module table the scheduled
-    `node-suite-guard` job scores against `test-parity/node_suite_baseline.json`.
+  * `scripts/node_suite_run.py` — the per-module table the `node-suite-guard`
+    job scores against `test-parity/node_suite_baseline.json`.
 
 They asked it with two separate implementations, one written in a ~30-stage
 `sed` chain and one in Python, and each carried rules the other did not. Two
@@ -36,11 +36,11 @@ fixtures captured from the implementations this module replaced.
 
 Usage (stdin is the captured output, exactly as the shell caller holds it):
 
-    parity_normalize.py output  [--profile parity|node_suite]
-    parity_normalize.py failure
+    parity_normalize.py output|failure
 
-`failure` exists only for the `parity` profile: `node_suite_run.py` compares
-raw stdout and never runs a failure-signature pass.
+The CLI serves only `run_parity_tests.sh`, so it applies the `parity` profile.
+`node_suite_run.py` imports `normalize_node_suite_output` directly and never
+runs a failure-signature pass.
 """
 
 from __future__ import annotations
@@ -295,60 +295,12 @@ def normalize_node_suite_output(text: str) -> str:
     return "\n".join(out)
 
 
-PROFILES = {
-    "parity": normalize_parity_output,
-    "node_suite": normalize_node_suite_output,
-}
-
-
-def normalize_output(text: str, profile: str = "parity") -> str:
-    try:
-        normalizer = PROFILES[profile]
-    except KeyError:
-        raise ValueError(
-            "unknown normalize profile %r (want one of %s)"
-            % (profile, ", ".join(sorted(PROFILES)))
-        ) from None
-    return normalizer(text)
-
-
 def main(argv: list[str]) -> int:
-    profile = "parity"
-    positional = []
-    i = 0
-    while i < len(argv):
-        arg = argv[i]
-        if arg == "--profile":
-            if i + 1 >= len(argv):
-                sys.stderr.write("--profile needs a value\n")
-                return 2
-            profile = argv[i + 1]
-            i += 2
-            continue
-        if arg.startswith("--profile="):
-            profile = arg[len("--profile="):]
-            i += 1
-            continue
-        positional.append(arg)
-        i += 1
-
-    if len(positional) != 1 or positional[0] not in ("output", "failure"):
-        sys.stderr.write("usage: parity_normalize.py output|failure [--profile NAME]\n")
+    modes = {"output": normalize_parity_output, "failure": normalize_parity_failure}
+    if len(argv) != 1 or argv[0] not in modes:
+        sys.stderr.write("usage: parity_normalize.py output|failure\n")
         return 2
-    mode = positional[0]
-
-    text = sys.stdin.read()
-    if mode == "failure":
-        if profile != "parity":
-            sys.stderr.write("failure normalization is only defined for the parity profile\n")
-            return 2
-        sys.stdout.write(normalize_parity_failure(text))
-        return 0
-    try:
-        sys.stdout.write(normalize_output(text, profile))
-    except ValueError as exc:
-        sys.stderr.write("%s\n" % exc)
-        return 2
+    sys.stdout.write(modes[argv[0]](sys.stdin.read()))
     return 0
 
 

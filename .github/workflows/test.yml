@@ -3999,7 +3999,7 @@ jobs:
           CHECKOUT_REF: ${{ github.sha }}
           CHECKOUT_DEPTH: "1"
           CHECKOUT_TOKEN: ${{ github.token }}
-          CHECKOUT_PERSIST_CREDENTIALS: "true"
+          CHECKOUT_PERSIST_CREDENTIALS: "false"
         run: |
           set -euo pipefail
           git init
@@ -4025,8 +4025,8 @@ jobs:
       - name: Setup Node.js
         uses: ./.github/actions/perry/actions/setup-node # v7
         with:
-          # The oracle is the pinned dist, exactly as in the scheduled guard: a
-          # different Node is a different correctness input, not a detail.
+          # The oracle is the pinned dist, exactly as in the merge-queue guard:
+          # a different Node is a different correctness input, not a detail.
           node-version-file: .node-version
       - name: Build Perry release binary
         run: |

@@ -93,14 +93,7 @@ class NodeSuiteProfileTest(unittest.TestCase):
                 )
 
 
-class DispatchTest(unittest.TestCase):
-    def test_default_profile_is_parity(self):
-        text = "true\n"
-        self.assertEqual(
-            parity_normalize.normalize_output(text),
-            parity_normalize.normalize_parity_output(text),
-        )
-
+class ProfileTest(unittest.TestCase):
     def test_profiles_select_different_rules(self):
         # `true` folds to `1` only in the parity profile, and the node:test
         # reporter line is masked only in the node_suite profile. The parity
@@ -110,16 +103,12 @@ class DispatchTest(unittest.TestCase):
         # lane, which is why the profiles are declared separately instead of
         # merged.
         text = "true\n    test at /x/a.test.ts:1:1\n"
-        parity = parity_normalize.normalize_output(text, "parity")
-        node_suite = parity_normalize.normalize_output(text, "node_suite")
+        parity = parity_normalize.normalize_parity_output(text)
+        node_suite = parity_normalize.normalize_node_suite_output(text)
         self.assertIn("1", parity)
         self.assertIn("test at /x/a.test.ts:1:1", parity)
         self.assertIn("test at <location>", node_suite)
         self.assertIn("true", node_suite)
-
-    def test_unknown_profile_is_an_error(self):
-        with self.assertRaises(ValueError):
-            parity_normalize.normalize_output("x", "nope")
 
 
 class CliTest(unittest.TestCase):
@@ -136,24 +125,13 @@ class CliTest(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(proc.stdout, "1\n")
 
-    def test_output_mode_honours_profile(self):
-        # `node_suite_run.py` hands this profile `stdout.rstrip("\n")`, so the
-        # production shape has no trailing newline and neither does the result.
-        proc = self._run("output", "--profile", "node_suite", stdin="ℹ duration_ms 12")
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual(proc.stdout, "ℹ duration_ms <test-duration>")
-
     def test_failure_mode(self):
         proc = self._run("failure", stdin="node:internal/x:1\nError: boom\n    at f (/x:1)\n")
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(proc.stdout, "Error: boom")
 
-    def test_failure_mode_rejects_other_profiles(self):
-        proc = self._run("failure", "--profile", "node_suite", stdin="x\n")
-        self.assertEqual(proc.returncode, 2)
-
     def test_usage_errors(self):
-        for args in ((), ("nonsense",), ("output", "--profile")):
+        for args in ((), ("nonsense",), ("output", "failure")):
             with self.subTest(args=args):
                 self.assertEqual(self._run(*args).returncode, 2)
 
