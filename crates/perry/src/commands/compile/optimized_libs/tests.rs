@@ -863,6 +863,11 @@ fn the_instrumented_variant_names_its_archives_with_an_instr_suffix() {
 
 #[test]
 fn deserializers_install_regex_without_a_regex_literal() {
+    // This fixture begins a plain compilation. Earlier lowering tests may
+    // leave process-global dynamic-code reach set, which independently and
+    // correctly retains regex. Drain it at the simulated compile boundary.
+    let _ = perry_hir::take_deferred_eval_sites();
+    assert!(!perry_hir::has_deferred_dynamic_code_sites());
     let dir = tempfile::tempdir().unwrap();
     let features = BTreeSet::new();
     let plain = CompilationContext::new(dir.path().to_path_buf());
