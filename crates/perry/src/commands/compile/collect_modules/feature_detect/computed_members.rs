@@ -179,9 +179,7 @@ fn refine_array_index_types(module: &Module, types: &mut HirTypeEnv) {
             _ => return,
         };
         let Expr::Closure {
-            params,
-            is_arrow,
-            ..
+            params, is_arrow, ..
         } = callback
         else {
             return;
@@ -329,11 +327,35 @@ fn api_receiver(
         // evidence that its dynamic members are only primitive data.
         if let Some(shape) = module.classes.iter().find(|class| class.name == *name) {
             if shape.is_literal_shape() {
-                return shape.fields.iter().any(|field| api_value_type(&field.ty));
+                let closed = matches!(object, Expr::New { .. })
+                    || matches!(object, Expr::LocalGet(id) if only_member_reads(module, *id));
+                return !closed || shape.fields.iter().any(|field| api_value_type(&field.ty));
             }
         }
     }
-    api_value_type(&ty)
+    if api_value_type(&ty) {
+        return true;
+    }
+    match ty {
+        Type::Number
+        | Type::Int32
+        | Type::BigInt
+        | Type::Boolean
+        | Type::String
+        | Type::StringLiteral(_)
+        | Type::Symbol
+        | Type::Null
+        | Type::Void
+        | Type::Never => false,
+        // Structural data types describe the initial fields, not later
+        // Object.assign/defineProperty writes or mutations through an alias.
+        // Only passive reads or an immediate literal preserve this proof.
+        _ => match object {
+            Expr::LocalGet(id) => !only_member_reads(module, *id),
+            Expr::Object(_) | Expr::Array(_, _) | Expr::New { .. } => false,
+            _ => true,
+        },
+    }
 }
 
 fn is_fs_namespace(expr: &Expr) -> bool {
@@ -568,6 +590,7 @@ mod tests {
             "function f(a, i: number) { return Object.getOwnPropertyDescriptor(a, i); }",
             "const f = (a, i: number) => a[i];",
             "class C { f(a, i: number) { return a[i]; } }",
+            "class C { *[Symbol.iterator]() { const a: unknown[] = []; for (let i = a.length - 1; i >= 0; i--) yield a[i]; } }",
             "function f(k: string) { const order: Record<string, number> = { high: 0, low: 1 }; return order[k]; }",
             "function f(k: string) { const marks = { true: '[x]', false: '[ ]' } as const; return marks[k]; }",
             "function f(k: string) { const names = ['a', 'b']; return names[k]; }",
@@ -618,6 +641,7 @@ mod tests {
             r#"const fs = process.getBuiltinModule("fs/promises"); function f(k: string) { return fs[k](); }"#,
             r#"import * as fs from "fs"; fs.readFileSync(pass(fs), "utf8"); function pass(ns) { return Object.values(ns)[0]; }"#,
             r#"import * as fs from "fs"; const data = { value: "x" } as const; Object.assign(data, fs); console.log(Object.values(data));"#,
+            r#"import * as fs from "fs"; const data = { value: "x" }; Object.assign(data, fs); console.log(Object.values(data));"#,
         ] {
             let mut ctx = context();
             detect(&mut ctx, source, "escaped.ts");
