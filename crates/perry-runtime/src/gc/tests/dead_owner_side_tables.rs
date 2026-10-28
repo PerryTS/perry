@@ -97,7 +97,7 @@ pub(super) unsafe fn alloc_malloc_test_object() -> *mut crate::object::ObjectHea
 ///
 /// "The entry is gone" only says something about the death prune when the owner
 /// was genuinely DEAD. Arena block reset is all-or-nothing, so
-/// `gc::trace::mark_block_persisting_arena_objects` force-MARKS every object in
+/// `gc::mark::mark_block_persisting_arena_objects` force-MARKS every object in
 /// a block that still holds one reachable object — and a force-marked owner is
 /// *correctly* left registered, because a block that persists cannot recycle
 /// its address, so the entry is not stale. A case whose block picked up an
@@ -839,9 +839,12 @@ fn error_meta_edge_is_enumerated_by_the_trace_visitor() {
         let header = (err as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
 
         let mut visited: Vec<*mut u64> = Vec::new();
-        crate::gc::layout_slot_visit::visit_gc_rewrite_slot_descriptors(header, |descriptor| {
-            descriptor.visit_slots(&mut |slot| visited.push(slot.slot));
-        });
+        crate::gc::layout_slot_visit::visit_gc_rewrite_slot_descriptors::<{ cfg!(test) }>(
+            header,
+            |descriptor| {
+                descriptor.visit_slots(&mut |slot| visited.push(slot.slot));
+            },
+        );
 
         assert!(
             visited.contains(&meta_slot),
@@ -885,7 +888,7 @@ fn object_meta_expando_edge_is_enumerated_by_the_trace_visitor() {
         let spill_slot = &mut (*meta).spill as *mut u64;
 
         let mut visited: Vec<*mut u64> = Vec::new();
-        crate::gc::layout_slot_visit::visit_gc_rewrite_slot_descriptors(
+        crate::gc::layout_slot_visit::visit_gc_rewrite_slot_descriptors::<{ cfg!(test) }>(
             meta_header,
             |descriptor| {
                 descriptor.visit_slots(&mut |slot| visited.push(slot.slot));

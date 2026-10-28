@@ -597,7 +597,7 @@ fn test_forwarded_keys_capacity_cannot_disturb_the_descriptor_rewrite() {
         .expect("a table-resident descriptor exposes its keys word");
     let mut rewritten = 0usize;
     unsafe {
-        visit_gc_layout_slot_descriptors(owner_header, &mut |descriptor| {
+        visit_gc_layout_slot_descriptors::<{ cfg!(test) }>(owner_header, &mut |descriptor| {
             descriptor.visit_slots(&mut |slot| {
                 if slot.slot == descriptor_keys_slot {
                     *slot.slot = live_keys as u64;

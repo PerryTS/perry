@@ -720,7 +720,7 @@ fn test_copied_minor_eligibility_falls_back_for_conservative_stack_scan() {
     let _isolation = copying_nursery_isolation_lock();
     let _barrier_guard = GeneratedWriteBarrierTestGuard::active();
 
-    let eligibility = CopiedMinorEligibility::evaluate_with_stack_decision(
+    let eligibility = CopiedMinorEligibility::evaluate_with_stack_decision::<{ cfg!(test) }>(
         GcTriggerKind::Direct,
         ConservativeStackScanDecision::Scan,
     );
@@ -859,7 +859,7 @@ fn test_copied_minor_eligibility_rejects_copy_only_without_scanning_roots() {
     let child = young_leaf();
     let _copy_only_root_guard = TemporaryCopyOnlyRootScanner::rust_bits(&[ptr_bits(child)]);
 
-    let eligibility = CopiedMinorEligibility::evaluate(GcTriggerKind::Direct);
+    let eligibility = CopiedMinorEligibility::evaluate::<{ cfg!(test) }>(GcTriggerKind::Direct);
 
     assert!(!eligibility.eligible);
     assert_eq!(

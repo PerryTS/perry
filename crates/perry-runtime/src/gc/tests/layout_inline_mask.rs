@@ -84,7 +84,7 @@ fn iterated_indices(bits: u64, slots: &mut [u64]) -> Vec<usize> {
 /// order `trailing_zeros` + `word &= word - 1` produces.
 fn walked_indices(bits: u64, slots: &mut [u64]) -> Vec<usize> {
     let mut word = iterator_for(bits, slots)
-        .take_inline_mask_word()
+        .take_inline_mask_word::<{ cfg!(test) }>()
         .expect("an inline mask must take the walk");
     let mut out = Vec::new();
     while word != 0 {
@@ -191,7 +191,7 @@ fn top_masked_slot_child_survives(sabotaged: bool) -> bool {
             slots.take_prefix_child_slot();
             slots.take_meta_child_slot();
             slots.take_meta_child_slot2();
-            slots.take_inline_mask_word()
+            slots.take_inline_mask_word::<{ cfg!(test) }>()
         };
         assert_eq!(
             word,

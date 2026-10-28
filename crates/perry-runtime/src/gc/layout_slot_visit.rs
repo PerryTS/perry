@@ -40,7 +40,7 @@ impl HeapChildSlotIterator {
     /// with `take_prefix_child_slot` / `take_meta_child_slot{,2}` before it
     /// reaches the payload, so they are already `None` here. The debug
     /// assertion below is what keeps that true.
-    pub(super) fn take_inline_mask_word(&mut self) -> Option<u64> {
+    pub(super) fn take_inline_mask_word<const DIAGNOSTICS: bool>(&mut self) -> Option<u64> {
         // Silent loss of a prefix/meta edge is the one way this can go wrong
         // without disagreeing with `next` on any payload index, so it is
         // asserted rather than argued.
@@ -62,7 +62,9 @@ impl HeapChildSlotIterator {
         if !*raw_numeric_recorded {
             *raw_numeric_recorded = true;
             if *raw_numeric_object_slots != 0 {
-                record_layout_raw_numeric_object_field_range_skipped(*raw_numeric_object_slots);
+                if DIAGNOSTICS {
+                    record_layout_raw_numeric_object_field_range_skipped(*raw_numeric_object_slots)
+                };
             }
         }
         let bits = *bits;
@@ -80,11 +82,11 @@ impl HeapChildSlotIterator {
     }
 }
 
-pub(super) unsafe fn visit_gc_layout_slot_descriptors(
+pub(super) unsafe fn visit_gc_layout_slot_descriptors<const DIAGNOSTICS: bool>(
     header: *mut GcHeader,
     visit: &mut dyn FnMut(GcMutableSlotDescriptor),
 ) {
-    visit_gc_layout_slot_descriptors_inline(header, visit);
+    visit_gc_layout_slot_descriptors_inline::<DIAGNOSTICS, _>(header, visit);
 }
 
 /// The ONE body of [`visit_gc_layout_slot_descriptors`], generic over the
@@ -93,7 +95,7 @@ pub(super) unsafe fn visit_gc_layout_slot_descriptors(
 /// two walks increased TS instructions in both isolated application modes
 /// without reducing peak RSS. Enumeration remains one body in either case.
 #[inline(always)]
-pub(super) unsafe fn visit_gc_layout_slot_descriptors_inline<F>(
+pub(super) unsafe fn visit_gc_layout_slot_descriptors_inline<const DIAGNOSTICS: bool, F>(
     header: *mut GcHeader,
     visit: &mut F,
 ) where
@@ -110,15 +112,15 @@ pub(super) unsafe fn visit_gc_layout_slot_descriptors_inline<F>(
         && (*header).gc_flags & GC_FLAG_FORWARDED == 0
         && gc_type_layout_slot_kind(GC_TYPE_OBJECT) == GcLayoutSlotKind::ObjectFields
     {
-        visit_object_layout_slots(header, visit);
+        visit_object_layout_slots::<DIAGNOSTICS, _>(header, visit);
         return;
     }
-    visit_gc_layout_slot_descriptors_generic(header, visit);
+    visit_gc_layout_slot_descriptors_generic::<DIAGNOSTICS, _>(header, visit);
 }
 
 /// Reference enumeration also used by the differential descriptor tests.
 #[inline(always)]
-pub(super) unsafe fn visit_gc_layout_slot_descriptors_generic<F>(
+pub(super) unsafe fn visit_gc_layout_slot_descriptors_generic<const DIAGNOSTICS: bool, F>(
     header: *mut GcHeader,
     visit: &mut F,
 ) where
@@ -233,12 +235,18 @@ pub(super) unsafe fn visit_gc_layout_slot_descriptors_generic<F>(
             raw_numeric_object_slots,
         } => {
             let range = child_slots.payload;
-            record_layout_pointer_free_range_skipped(range.slot_count());
+            if DIAGNOSTICS {
+                record_layout_pointer_free_range_skipped(range.slot_count())
+            };
             if raw_numeric_array {
-                record_layout_raw_numeric_array_range_skipped(range.slot_count());
+                if DIAGNOSTICS {
+                    record_layout_raw_numeric_array_range_skipped(range.slot_count())
+                };
             }
             if raw_numeric_object_slots != 0 {
-                record_layout_raw_numeric_object_field_range_skipped(raw_numeric_object_slots);
+                if DIAGNOSTICS {
+                    record_layout_raw_numeric_object_field_range_skipped(raw_numeric_object_slots)
+                };
             }
             visit(GcMutableSlotDescriptor::PointerFreeRange(range));
         }
@@ -246,7 +254,9 @@ pub(super) unsafe fn visit_gc_layout_slot_descriptors_generic<F>(
             raw_numeric_object_slots,
         } => {
             if raw_numeric_object_slots != 0 {
-                record_layout_raw_numeric_object_field_range_skipped(raw_numeric_object_slots);
+                if DIAGNOSTICS {
+                    record_layout_raw_numeric_object_field_range_skipped(raw_numeric_object_slots)
+                };
             }
             // Same slot set the `Masked` arm below would emit one-at-a-time
             // (`AllPointers` yields every index in `0..slot_count`), handed over
@@ -263,7 +273,7 @@ pub(super) unsafe fn visit_gc_layout_slot_descriptors_generic<F>(
             // `next` per slot to re-dispatch the selection and rebuild the
             // same two masks. Every other mask — `Heap`, i.e. more than 64
             // payload slots — keeps the iterator.
-            if let Some(mut word) = child_slots.take_inline_mask_word() {
+            if let Some(mut word) = child_slots.take_inline_mask_word::<DIAGNOSTICS>() {
                 let payload = child_slots.payload;
                 while word != 0 {
                     let index = word.trailing_zeros() as usize;
@@ -276,7 +286,7 @@ pub(super) unsafe fn visit_gc_layout_slot_descriptors_generic<F>(
             } else {
                 // Iterate by reference: `for .. in child_slots` moves the
                 // iterator into the loop, a copy per traced object (#10362).
-                for child_slot in &mut child_slots {
+                while let Some(child_slot) = child_slots.next_with::<DIAGNOSTICS>() {
                     if let HeapChildSlot::Child(slot, layout_kind) = child_slot {
                         visit(GcMutableSlotDescriptor::Slot(GcMutableSlot::new(
                             slot,
@@ -306,7 +316,7 @@ impl GcMutableSlotDescriptor {
     }
 }
 
-pub(super) unsafe fn visit_gc_rewrite_slot_descriptors(
+pub(super) unsafe fn visit_gc_rewrite_slot_descriptors<const DIAGNOSTICS: bool>(
     header: *mut GcHeader,
     visit: impl FnMut(GcMutableSlotDescriptor),
 ) {
@@ -316,23 +326,26 @@ pub(super) unsafe fn visit_gc_rewrite_slot_descriptors(
     {
         return;
     }
-    visit_gc_rewrite_slot_descriptors_with::<false>(header, visit);
+    visit_gc_rewrite_slot_descriptors_with::<DIAGNOSTICS, false>(header, visit);
 }
 
 /// The one body of [`visit_gc_rewrite_slot_descriptors`]. `INLINE_LAYOUT`
 /// selects only HOW the layout-descriptor walk is called — through the shared
 /// `dyn` copy, or instantiated for this visitor — never what it enumerates.
 #[inline(always)]
-unsafe fn visit_gc_rewrite_slot_descriptors_with<const INLINE_LAYOUT: bool>(
+unsafe fn visit_gc_rewrite_slot_descriptors_with<
+    const DIAGNOSTICS: bool,
+    const INLINE_LAYOUT: bool,
+>(
     header: *mut GcHeader,
     mut visit: impl FnMut(GcMutableSlotDescriptor),
 ) {
     macro_rules! layout_descriptors {
         () => {
             if INLINE_LAYOUT {
-                visit_gc_layout_slot_descriptors_inline(header, &mut visit)
+                visit_gc_layout_slot_descriptors_inline::<DIAGNOSTICS, _>(header, &mut visit)
             } else {
-                visit_gc_layout_slot_descriptors(header, &mut visit)
+                visit_gc_layout_slot_descriptors::<DIAGNOSTICS>(header, &mut visit)
             }
         };
     }
@@ -669,7 +682,7 @@ unsafe fn visit_gc_rewrite_slot_descriptors_with<const INLINE_LAYOUT: bool>(
     }
 }
 
-pub(super) unsafe fn visit_gc_rewrite_slots(
+pub(super) unsafe fn visit_gc_rewrite_slots<const DIAGNOSTICS: bool>(
     header: *mut GcHeader,
     mut visit: impl FnMut(GcMutableSlot),
 ) {
@@ -679,7 +692,7 @@ pub(super) unsafe fn visit_gc_rewrite_slots(
     {
         return;
     }
-    visit_gc_rewrite_slot_descriptors(header, |descriptor| unsafe {
+    visit_gc_rewrite_slot_descriptors::<DIAGNOSTICS>(header, |descriptor| unsafe {
         descriptor.visit_slots(&mut visit);
     });
 }
@@ -689,7 +702,7 @@ pub(super) unsafe fn visit_gc_rewrite_slots(
 /// were a measured share of that path's per-object
 /// trace cost. Enumerates exactly the same slots, in the same order.
 #[inline(always)]
-pub(super) unsafe fn visit_gc_rewrite_slots_inline(
+pub(super) unsafe fn visit_gc_rewrite_slots_inline<const DIAGNOSTICS: bool>(
     header: *mut GcHeader,
     mut visit: impl FnMut(GcMutableSlot),
 ) {
@@ -699,7 +712,7 @@ pub(super) unsafe fn visit_gc_rewrite_slots_inline(
     {
         return;
     }
-    visit_gc_rewrite_slot_descriptors_with::<true>(header, |descriptor| unsafe {
+    visit_gc_rewrite_slot_descriptors_with::<DIAGNOSTICS, true>(header, |descriptor| unsafe {
         descriptor.visit_slots_inline(&mut visit);
     });
 }
@@ -751,8 +764,10 @@ pub(crate) mod inline_mask_sabotage {
 /// it again at every prefix/payload boundary. Slot custody, ordering, full
 /// trace notes, pointer widths and layout telemetry are the generic walk's.
 #[inline(always)]
-unsafe fn visit_object_layout_slots<F>(header: *mut GcHeader, visit: &mut F)
-where
+unsafe fn visit_object_layout_slots<const DIAGNOSTICS: bool, F>(
+    header: *mut GcHeader,
+    visit: &mut F,
+) where
     F: FnMut(GcMutableSlotDescriptor) + ?Sized,
 {
     let obj = (header as *mut u8).add(GC_HEADER_SIZE) as *mut crate::object::ObjectHeader;
@@ -803,9 +818,13 @@ where
             raw_numeric_object_slots,
             ..
         } => {
-            record_layout_pointer_free_range_skipped(payload.slot_count());
+            if DIAGNOSTICS {
+                record_layout_pointer_free_range_skipped(payload.slot_count())
+            };
             if raw_numeric_object_slots != 0 {
-                record_layout_raw_numeric_object_field_range_skipped(raw_numeric_object_slots);
+                if DIAGNOSTICS {
+                    record_layout_raw_numeric_object_field_range_skipped(raw_numeric_object_slots)
+                };
             }
             visit(GcMutableSlotDescriptor::PointerFreeRange(payload));
         }
@@ -815,7 +834,9 @@ where
             ..
         } => {
             if raw_numeric_object_slots != 0 {
-                record_layout_raw_numeric_object_field_range_skipped(raw_numeric_object_slots);
+                if DIAGNOSTICS {
+                    record_layout_raw_numeric_object_field_range_skipped(raw_numeric_object_slots)
+                };
             }
             match mask {
                 LayoutSlotMask::Inline(bits) => {

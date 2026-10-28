@@ -22,7 +22,7 @@ pub(crate) fn test_gc_rewrite_slot_count(user_ptr: usize) -> Option<usize> {
     let header = unsafe { header_from_user_ptr(user_ptr as *const u8) };
     let mut count = 0usize;
     unsafe {
-        visit_gc_rewrite_slot_descriptors(header, |descriptor| {
+        visit_gc_rewrite_slot_descriptors::<{ cfg!(test) }>(header, |descriptor| {
             let mut visit_slot = |_| {
                 count += 1;
             };
@@ -39,7 +39,7 @@ pub(crate) fn test_gc_rewrite_slot_addresses(user_ptr: usize) -> Option<Vec<usiz
     let header = unsafe { header_from_user_ptr(user_ptr as *const u8) };
     let mut slots = Vec::new();
     unsafe {
-        visit_gc_rewrite_slot_descriptors(header, |descriptor| {
+        visit_gc_rewrite_slot_descriptors::<{ cfg!(test) }>(header, |descriptor| {
             descriptor.visit_slots(&mut |slot| slots.push(slot.slot as usize));
         });
     }

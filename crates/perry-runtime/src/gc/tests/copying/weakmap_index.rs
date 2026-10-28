@@ -378,7 +378,7 @@ fn born_old_weak_storage_recovers_unarmed_weak_slot_coverage() {
     );
     // Taking the first snapshot itself arms and reconstructs the barrier.
     // Assert the skipped weak entry's exact page was recovered before copy.
-    let _ = remembered_dirty_snapshot();
+    let _ = remembered_dirty_snapshot::<{ cfg!(test) }>();
     assert!(old_page_dirty_for(slot_page));
     assert_eq!(
         crate::gc::barrier_arming::remembered_reconstruct_census().reconstructs,

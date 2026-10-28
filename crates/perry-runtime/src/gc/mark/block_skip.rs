@@ -351,26 +351,20 @@ pub(crate) fn type_needs_per_object_sweep(obj_type: u8) -> bool {
     }
 }
 
-crate::perry_thread_local! {
-    static HOLE_REBUILD_BLOCKS_SKIPPED: Cell<u64> = const { Cell::new(0) };
-}
-
 /// Record live old blocks one sweep's hole-list rebuild did not parse because
 /// they provably hold no invalidated header (live-subject counter).
 pub(crate) fn note_hole_rebuild_blocks_skipped(blocks: u64) {
-    HOLE_REBUILD_BLOCKS_SKIPPED.with(|c| c.set(c.get().saturating_add(blocks)));
+    GC_STATS.with(|stats| {
+        let mut stats = stats.borrow_mut();
+        stats.hole_rebuild_blocks_skipped =
+            stats.hole_rebuild_blocks_skipped.saturating_add(blocks);
+    });
 }
 
 /// Live old blocks this thread's hole-list rebuilds skipped, since thread start.
 #[cfg(test)]
 pub(crate) fn hole_rebuild_blocks_skipped() -> u64 {
-    HOLE_REBUILD_BLOCKS_SKIPPED.with(Cell::get)
-}
-
-crate::perry_thread_local! {
-    static BLOCK_SKIP_RECLAIMED_BLOCKS: Cell<u64> = const { Cell::new(0) };
-    static BLOCK_SKIP_RECLAIMED_OBJECTS: Cell<u64> = const { Cell::new(0) };
-    static BLOCK_SKIP_RECLAIMED_BYTES: Cell<u64> = const { Cell::new(0) };
+    GC_STATS.with(|stats| stats.borrow().hole_rebuild_blocks_skipped)
 }
 
 /// Record one sweep's block-skip reclamation (live-subject counters).
@@ -378,9 +372,20 @@ pub(crate) fn note_block_skip_reclaimed(blocks: u64, objects: u64, bytes: u64) {
     if blocks == 0 {
         return;
     }
-    BLOCK_SKIP_RECLAIMED_BLOCKS.with(|c| c.set(c.get().saturating_add(blocks)));
-    BLOCK_SKIP_RECLAIMED_OBJECTS.with(|c| c.set(c.get().saturating_add(objects)));
-    BLOCK_SKIP_RECLAIMED_BYTES.with(|c| c.set(c.get().saturating_add(bytes)));
+    GC_STATS.with(|stats| {
+        let mut stats = stats.borrow_mut();
+        stats.block_skip_reclaimed_blocks =
+            stats.block_skip_reclaimed_blocks.saturating_add(blocks);
+    });
+    GC_STATS.with(|stats| {
+        let mut stats = stats.borrow_mut();
+        stats.block_skip_reclaimed_objects =
+            stats.block_skip_reclaimed_objects.saturating_add(objects);
+    });
+    GC_STATS.with(|stats| {
+        let mut stats = stats.borrow_mut();
+        stats.block_skip_reclaimed_bytes = stats.block_skip_reclaimed_bytes.saturating_add(bytes);
+    });
 }
 
 /// `(blocks, objects, bytes)` this thread's full sweeps reclaimed without
@@ -388,8 +393,8 @@ pub(crate) fn note_block_skip_reclaimed(blocks: u64, objects: u64, bytes: u64) {
 #[cfg(test)]
 pub(crate) fn block_skip_reclaimed_totals() -> (u64, u64, u64) {
     (
-        BLOCK_SKIP_RECLAIMED_BLOCKS.with(Cell::get),
-        BLOCK_SKIP_RECLAIMED_OBJECTS.with(Cell::get),
-        BLOCK_SKIP_RECLAIMED_BYTES.with(Cell::get),
+        GC_STATS.with(|stats| stats.borrow().block_skip_reclaimed_blocks),
+        GC_STATS.with(|stats| stats.borrow().block_skip_reclaimed_objects),
+        GC_STATS.with(|stats| stats.borrow().block_skip_reclaimed_bytes),
     )
 }

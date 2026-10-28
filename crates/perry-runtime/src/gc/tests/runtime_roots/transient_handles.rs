@@ -137,7 +137,10 @@ fn test_set_gc_field_rewrite_reindexes_elements() {
     let valid_ptrs = build_valid_pointer_set();
     unsafe {
         let store = crate::set::test_set_store_word(set);
-        rewrite_heap_object_fields(header_from_user_ptr(store as *const u8), &valid_ptrs);
+        rewrite_heap_object_fields::<{ cfg!(test) }>(
+            header_from_user_ptr(store as *const u8),
+            &valid_ptrs,
+        );
     }
 
     assert_eq!(crate::set::js_set_value_at(set, 0).to_bits(), old_bits);

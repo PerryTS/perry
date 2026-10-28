@@ -161,7 +161,7 @@ pub(super) fn finish_full(live: usize, freed: usize) {
     ACCOUNT.with(|account| {
         let previous = account.0.get();
         let mature_reclaimed = previous.mature_at_full_start.saturating_sub(mature_live);
-        if super::gc_diag_enabled() {
+        if super::diagnostic_hooks::enabled() {
             eprintln!("[gc-byte-pacing] thread={:?} allocated={} large={} process_debt={} live={} freed={} mature_live={} mature_reclaimed={} backoff={}",
                 std::thread::current().id(), previous.allocated, previous.large,
                 PROCESS_DEBT.load(Ordering::Relaxed), live, freed, mature_live, mature_reclaimed, previous.backoff);
@@ -223,15 +223,8 @@ pub(crate) fn burst_boundary() -> bool {
             None => return false,
         }
     }
-    super::telemetry::note_old_reclaim_why(arm);
-    if super::telemetry::gc_log_enabled() {
-        let debt = ACCOUNT.with(|account| account.0.get());
-        eprintln!(
-            "[gc-log] owed arm={arm} pressure={} allocated={} large={} burst={} live_after_full={} unpaid={} backoff={} burst_backoff={}",
-            pressure(), debt.allocated, debt.large, debt.burst, debt.live_after_full,
-            debt.burst_unpaid_at_full, debt.backoff, debt.burst_backoff
-        );
-    }
+    super::diagnostic_hooks::note_reclaim_reason(arm);
+    super::diagnostic_hooks::log_burst_boundary(arm);
     super::policy::GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(true));
     // A native producer may return to a compiled loop rather than the pump
     // that explicitly invokes a precise poll. Arm the same existing handoff
@@ -472,4 +465,16 @@ pub(crate) fn arm_young_after_large_birth() {
 pub(crate) fn moving_young_generation_holds_a_nursery() -> bool {
     super::policy::young_generation_holds_a_nursery()
         && crate::arena::moving_from_space_in_use_bytes() >= super::gc_scavenge_nursery_cap_bytes()
+}
+
+/// Installed reporting arm; the collector calls the coarse optional slot.
+pub(super) fn report_burst_boundary(arm: &'static str) {
+    if super::telemetry::gc_log_enabled() {
+        let debt = ACCOUNT.with(|account| account.0.get());
+        eprintln!(
+            "[gc-log] owed arm={arm} pressure={} allocated={} large={} burst={} live_after_full={} unpaid={} backoff={} burst_backoff={}",
+            super::policy::old_gen_reclaimable_pressure_bytes().saturating_add(super::policy::external_side_live_bytes()), debt.allocated, debt.large, debt.burst, debt.live_after_full,
+            debt.burst_unpaid_at_full, debt.backoff, debt.burst_backoff
+        );
+    }
 }
