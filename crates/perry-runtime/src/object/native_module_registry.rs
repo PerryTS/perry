@@ -1,7 +1,7 @@
 //! Per-module native-module method-dispatch registry (devirtualization).
 //! GENERATED scaffolding (native-module devirtualization, #5256). Each `js_nm_install_<m>()` is
-//! the SOLE static reference to its `nm_dispatch_<m>` bucket fn; codegen emits a
-//! call per statically-imported native module so the linker dead-strips the rest.
+//! dynamic dispatch owner of its `nm_dispatch_<m>` bucket fn. Statically selected
+//! exports instead reference their own specialized bodies, so unused exports strip.
 //! NOTHING here names all buckets together (that would re-pin everything).
 use super::native_module_dispatch::{
     nm_dispatch_assert, nm_dispatch_async_hooks, nm_dispatch_bigint, nm_dispatch_buffer,
@@ -30,9 +30,6 @@ const _: () = assert!((NmBucket::WorkerThreads as usize) < NM_BUCKET_COUNT);
 
 static NM_DISPATCH_REGISTRY: [AtomicPtr<()>; NM_BUCKET_COUNT] =
     [const { AtomicPtr::new(std::ptr::null_mut()) }; NM_BUCKET_COUNT];
-
-/// Map a (normalized) module tag to its bucket. Pure string match — references
-/// no bucket fn, so it pins nothing.
 
 per_test_global! {
     /// Test-only: suppress the `cfg(test)` lazy `js_nm_install_all()` fallback in
