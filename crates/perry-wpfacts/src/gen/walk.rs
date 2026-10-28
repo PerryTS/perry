@@ -465,6 +465,7 @@ impl<'a> Gen<'a> {
             ctor_fn: None,
             rooted: false,
             deep: false,
+            key_value: None,
         });
         id
     }

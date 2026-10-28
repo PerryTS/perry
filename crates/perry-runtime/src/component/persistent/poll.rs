@@ -2,7 +2,7 @@
 use super::*;
 use crate::native_payload::OwnerLink;
 use std::cell::{Cell, RefCell};
-thread_local! {
+crate::perry_thread_local! {
     static DRIVERS: RefCell<Vec<OwnerLink>> = const { RefCell::new(Vec::new()) };
     static RUNNING: Cell<bool> = const { Cell::new(false) };
 }

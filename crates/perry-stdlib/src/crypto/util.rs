@@ -19,7 +19,7 @@ pub(super) use hkdf::Hkdf;
 pub(super) use md5::{Digest as Md5Digest, Md5};
 pub(super) use p256::ecdh::diffie_hellman as p256_diffie_hellman;
 pub(super) use p256::ecdsa::SigningKey as P256EcdsaSigningKey;
-pub(super) use p256::elliptic_curve::sec1::ToEncodedPoint;
+pub(super) use p256::elliptic_curve::sec1::ToSec1Point;
 pub(super) use p256::pkcs8::{
     EncodePrivateKey as P256EncodePrivateKey, EncodePublicKey as P256EncodePublicKey,
 };
@@ -637,7 +637,7 @@ pub(super) unsafe fn rsa_private_jwk_object(
 pub(super) unsafe fn ec_p256_public_jwk_object(
     public_key: &P256PublicKey,
 ) -> Option<*mut ObjectHeader> {
-    let point = public_key.to_encoded_point(false);
+    let point = public_key.to_sec1_point(false);
     let bytes = point.as_bytes();
     if bytes.len() != 65 || bytes[0] != 0x04 {
         return None;
@@ -783,7 +783,9 @@ pub(super) unsafe fn crypto_key_input_to_public_pem(value_bits: u64) -> Option<S
                 }
                 if let Some(private_pem) = jwk_ec_private_to_pem(key_bits) {
                     if let Some(v) = parse_p256_verifying_key_pem(&private_pem) {
-                        return v.to_public_key_pem(Default::default()).ok();
+                        return P256PublicKey::from(&v)
+                            .to_public_key_pem(Default::default())
+                            .ok();
                     }
                 }
             }
@@ -799,7 +801,9 @@ pub(super) unsafe fn crypto_key_input_to_public_pem(value_bits: u64) -> Option<S
             }
             if let Some(private_pem) = jwk_ec_private_to_pem(value_bits) {
                 if let Some(v) = parse_p256_verifying_key_pem(&private_pem) {
-                    return v.to_public_key_pem(Default::default()).ok();
+                    return P256PublicKey::from(&v)
+                        .to_public_key_pem(Default::default())
+                        .ok();
                 }
             }
         }

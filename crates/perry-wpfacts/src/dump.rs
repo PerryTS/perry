@@ -114,6 +114,17 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
             pf.rounds, pf.round_work, pf.broken
         ));
     }
+    for (mi, bindings) in pf.bindings.iter().enumerate() {
+        for (id, b) in &bindings.locals {
+            if let Some(o) = &b.indexed_owner {
+                out.push_str(&format!("# indexed_owner module={mi} local={id} kind={} min_len={} exact_len={:?} allocations={:?}\n", o.kind, o.min_len, o.exact_len, o.allocations));
+            }
+        }
+    }
+    out.push_str(&format!(
+        "# indexed_metadata_pristine {}\n",
+        pf.indexed_metadata_pristine()
+    ));
     for (path, u) in &pf.units {
         out.push_str(&format!(
             "# unit {path} nodes={} constraints={} tokens={} pts_entries={} instances={} gen_ms={:.1} solve_ms={:.1} derive_ms={:.1} pops={} work={} aborted={}\n",

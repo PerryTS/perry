@@ -26,6 +26,9 @@ fn let_(id: u32, init: Expr, mutable: bool) -> Stmt {
     }
 }
 fn ir(kind: &str, body: Vec<Stmt>) -> String {
+    ir_with_facts(kind, body, Default::default())
+}
+fn ir_with_facts(kind: &str, body: Vec<Stmt>, facts: crate::codegen::ElisionFacts) -> String {
     let mut m = Module::new("indexed_owner_contract");
     let param = |id, name: &str, ty| Param {
         id,
@@ -72,11 +75,27 @@ fn ir(kind: &str, body: Vec<Stmt>) -> String {
         was_plain_async: false,
         was_unrolled: false,
     });
+    for (id, f) in &facts.numeric_functions {
+        let mut def = m.functions[0].clone();
+        def.id = *id;
+        def.name = format!("numeric_leaf_{id}");
+        def.params = f
+            .params
+            .iter()
+            .map(|id| param(*id, &format!("p{id}"), Type::Number))
+            .collect();
+        def.body = vec![Stmt::Return(Some(f.expression.to_hir()))];
+        m.functions.push(def);
+    }
     String::from_utf8(
         crate::compile_module(
             &m,
             crate::CompileOptions {
                 emit_ir_only: true,
+                program_facts: crate::codegen::ProgramFactsView {
+                    elision: std::sync::Arc::new(facts),
+                    ..Default::default()
+                },
                 ..Default::default()
             },
         )
@@ -214,4 +233,129 @@ fn disjoint_owner_scopes_have_dynamic_single_scope_declarations_and_verify() {
         .create_module_from_ir(buffer)
         .expect("owner-region LLVM parses");
     module.verify().expect("dynamic owner-region scopes verify");
+}
+
+#[test]
+fn static_allocation_range_and_numeric_proofs_remove_all_admission_checks() {
+    let mut facts = crate::codegen::ElisionFacts::default();
+    facts.indexed_owners.insert(
+        1,
+        crate::codegen::FactsIndexedOwner {
+            kind: 7,
+            min_len: 4,
+            exact_len: Some(4),
+            allocations: vec!["birth:a".into()],
+        },
+    );
+    facts.number_inputs.insert(2);
+    let text = ir_with_facts("Float64Array", rmw(), facts);
+    assert!(text.contains("indexed.owner.fast"));
+    assert!(
+        !text.contains("indexed.owner.admitted"),
+        "static proof must remove the guards themselves"
+    );
+    assert!(
+        ir("Float64Array", rmw()).contains("indexed.owner.admitted"),
+        "unproven annotations still need guards"
+    );
+}
+#[test]
+fn nested_numeric_loops_keep_scalar_recurrences_in_native_slots() {
+    let inner = Stmt::For {
+        init: Some(Box::new(let_(8, Expr::Integer(0), true))),
+        condition: Some(Expr::Compare {
+            op: CompareOp::Lt,
+            left: Box::new(get(8)),
+            right: Box::new(Expr::Integer(4)),
+        }),
+        update: Some(Expr::Update {
+            id: 8,
+            op: UpdateOp::Increment,
+            prefix: false,
+        }),
+        body: vec![Stmt::Expr(Expr::LocalSet(
+            9,
+            Box::new(bin(BinaryOp::Add, get(9), index(1, get(8)))),
+        ))],
+    };
+    let text = ir(
+        "Float64Array",
+        vec![
+            let_(9, Expr::Integer(0), true),
+            inner,
+            Stmt::Expr(Expr::IndexSet {
+                object: Box::new(get(7)),
+                index: Box::new(get(3)),
+                value: Box::new(get(9)),
+            }),
+        ],
+    );
+    assert!(text.contains("indexed.owner.nested."));
+    let context = inkwell::context::Context::create();
+    let buffer = inkwell::memory_buffer::MemoryBuffer::create_from_memory_range_copy(
+        text.as_bytes(),
+        "nested-owner",
+    );
+    context
+        .create_module_from_ir(buffer)
+        .unwrap()
+        .verify()
+        .unwrap();
+}
+
+#[test]
+fn certified_numeric_leaf_calls_are_emitted_without_a_call_in_the_region() {
+    let mut facts = crate::codegen::ElisionFacts::default();
+    facts.numeric_functions.insert(
+        90,
+        crate::codegen::FactsNumericFunction {
+            params: vec![10, 11],
+            expression: crate::codegen::FactsNumericExpr::from_hir(&bin(
+                BinaryOp::Div,
+                Expr::Number(1.0),
+                bin(BinaryOp::Add, get(10), get(11)),
+            ))
+            .unwrap(),
+        },
+    );
+    let text = ir_with_facts(
+        "Float64Array",
+        vec![Stmt::Expr(Expr::IndexSet {
+            object: Box::new(get(1)),
+            index: Box::new(get(3)),
+            value: Box::new(Expr::Call {
+                callee: Box::new(Expr::FuncRef(90)),
+                args: vec![get(3), get(2)],
+                type_args: vec![],
+                byte_offset: 0,
+            }),
+        })],
+        facts,
+    );
+    let fast = text
+        .split("\nindexed.owner.fast.")
+        .nth(1)
+        .expect("pure call admitted")
+        .split("\nindexed.owner.exit.")
+        .next()
+        .unwrap();
+    assert!(fast.contains("fdiv double"));
+    assert!(!fast.contains("call "));
+}
+
+#[test]
+fn specialized_byte_stores_inside_transparent_hir_blocks_use_the_same_region() {
+    let text = ir(
+        "Uint8Array",
+        vec![Stmt::If {
+            condition: Expr::Bool(true),
+            then_branch: vec![Stmt::Expr(Expr::Uint8ArraySet {
+                array: Box::new(get(1)),
+                index: Box::new(get(3)),
+                value: Box::new(bin(BinaryOp::BitAnd, get(2), Expr::Integer(255))),
+            })],
+            else_branch: None,
+        }],
+    );
+    assert!(text.contains("indexed.owner.fast"));
 }

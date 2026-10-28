@@ -230,3 +230,55 @@ fn growth_preserves_the_custom_prototype_record_when_its_header_bit_is_set() {
         "the header ownership bit must carry the actual prototype edge"
     );
 }
+
+#[test]
+fn retired_growth_payload_pages_are_dead_but_alias_and_gc_reachability_survive() {
+    crate::gc::initialize_runtime_fixture();
+    let _global = crate::gc::global_side_table_test_lock();
+    let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let capacity = 8192;
+    let original = js_array_alloc(capacity);
+    let alias = scope.root_raw_mut_ptr(original);
+    let mut head = original;
+    for i in 0..capacity {
+        head = js_array_push_f64(head, i as f64 + 0.25);
+    }
+    let grown = js_array_grow(head, capacity + 1);
+    assert_ne!(grown, original);
+    assert_eq!(clean_arr_ptr_mut(original), grown);
+    assert_eq!(
+        js_array_get_f64(original, capacity - 1),
+        capacity as f64 - 0.75
+    );
+    #[cfg(target_os = "linux")]
+    unsafe {
+        let page = libc::sysconf(libc::_SC_PAGESIZE) as usize;
+        let dead_start = original as usize + std::mem::size_of::<u64>();
+        let first = dead_start.div_ceil(page) * page;
+        let end = (original as usize + array_byte_size(capacity as usize)) / page * page;
+        assert!(end > first, "fixture contains complete dead payload pages");
+        let mut resident = vec![0u8; (end - first) / page];
+        assert_eq!(
+            libc::mincore(
+                first as *mut libc::c_void,
+                end - first,
+                resident.as_mut_ptr()
+            ),
+            0
+        );
+        assert!(
+            resident.iter().all(|v| v & 1 == 0),
+            "the kernel must release the actual retired payload pages"
+        );
+    }
+    crate::gc::test_collect_synchronous_full_trace();
+    let live = clean_arr_ptr_mut(alias.get_raw_mut_ptr());
+    for i in 0..capacity {
+        assert_eq!(js_array_get_f64(live, i), i as f64 + 0.25);
+    }
+    // A second growth keeps a multi-hop alias usable, with all slot values.
+    let newer = js_array_grow(live, unsafe { (*live).capacity + 1 });
+    assert_eq!(clean_arr_ptr_mut(live), newer);
+    assert_eq!(js_array_get_f64(live, capacity - 1), capacity as f64 - 0.75);
+}

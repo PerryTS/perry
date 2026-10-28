@@ -330,6 +330,7 @@ pub(crate) struct ValueContract {
     /// hold, by name as `arrays`: their elements are cell `arr:<name>`; a
     /// reader's stand-in is a container of its own kind.
     pub boxes: Vec<String>,
+    pub indexed_owners: Vec<crate::bindings::IndexedOwner>,
 }
 
 /// Keeps the prefix `a` and `b` share.
@@ -708,6 +709,8 @@ impl ValueContract {
         union_into(&mut self.builtins, &o.builtins);
         union_into(&mut self.arrays, &o.arrays);
         union_into(&mut self.boxes, &o.boxes);
+        union_into(&mut self.indexed_owners, &o.indexed_owners);
+        self.indexed_owners.sort();
         self.builtins.sort();
         self.arrays.sort();
         self.boxes.sort();

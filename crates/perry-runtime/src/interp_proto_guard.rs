@@ -41,7 +41,7 @@ pub(crate) fn note_proto_write() {
     }
 }
 
-std::thread_local! {
+crate::perry_thread_local! {
     /// Entries into interpreted code now on this thread's stack
     /// (`dyn_eval::interp_entry`): non-zero while interpreted code, or
     /// anything it called, runs.

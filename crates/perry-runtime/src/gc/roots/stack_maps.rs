@@ -1320,6 +1320,8 @@ fn sve_vector_length_bytes() -> Option<usize> {
     None
 }
 
+// The GC-effects sidecar seeds this collector entry by name on every target.
+#[inline(never)]
 pub(super) fn visit_stack_map_root_slots(
     visit: &mut impl FnMut(MutableRootSlot),
 ) -> NativeStackWalkStats {
