@@ -18,7 +18,7 @@ use super::*;
 ///
 /// Inline byte comparison — no allocation, no heap materialization of
 /// the SSO operand. Safe on the hot path.
-#[inline]
+#[inline(always)]
 pub(crate) unsafe fn js_string_key_matches(
     stored: crate::JSValue,
     incoming: *const StringHeader,
@@ -51,7 +51,7 @@ pub(crate) unsafe fn js_string_key_matches(
 /// without the round-trip through a heap `StringHeader` for the
 /// incoming side. Returns `true` iff the stored value is some kind of
 /// string and its bytes equal `incoming_bytes`.
-#[inline]
+#[inline(always)]
 pub(crate) unsafe fn js_string_key_matches_bytes(
     stored: crate::JSValue,
     incoming_bytes: &[u8],
@@ -69,7 +69,7 @@ pub(crate) unsafe fn js_string_key_matches_bytes(
         }
         let stored_data = (stored_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
         let stored_slice = std::slice::from_raw_parts(stored_data, stored_len);
-        return stored_slice == incoming_bytes;
+        return byte_eq::equal(stored_slice, incoming_bytes);
     }
     if stored.is_short_string() {
         let sso_len = stored.short_string_len();
@@ -85,10 +85,13 @@ pub(crate) unsafe fn js_string_key_matches_bytes(
 /// order. Borrow that word instead of unpacking it a byte at a time into a
 /// second scratch buffer. Both callers have checked the exact byte length;
 /// equality reads only that prefix, including embedded NUL and UTF-8 bytes.
-#[inline]
+#[inline(always)]
 fn short_key_matches_bytes(stored: crate::JSValue, incoming: &[u8]) -> bool {
     let word = stored.bits().to_le_bytes();
-    &word[..crate::value::SHORT_STRING_MAX_LEN][..incoming.len()] == incoming
+    byte_eq::equal(
+        &word[..crate::value::SHORT_STRING_MAX_LEN][..incoming.len()],
+        incoming,
+    )
 }
 
 /// Extract the bytes of a stored-key JSValue (STRING_TAG or SHORT_STRING_TAG)
