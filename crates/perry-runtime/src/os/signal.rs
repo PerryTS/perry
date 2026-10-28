@@ -17,8 +17,6 @@ per_test_global! {
         LazyLock::new(|| Mutex::new(HashMap::new()));
 }
 
-pub(crate) use crate::process_startup::ignore_sigpipe_at_startup;
-
 fn signal_number_by_name(name: &str) -> Option<i32> {
     #[cfg(unix)]
     {

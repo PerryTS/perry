@@ -4,8 +4,8 @@
 //! no behavior change.
 
 use super::{
-    call_trap, entry, handler_trap, invariants, is_callable, is_non_configurable_exotic_own,
-    lookup, nanbox_bool, pin_proxy_for_native_call, revoked_return, TAG_FALSE, TAG_UNDEFINED,
+    call_trap, entry, handler_trap, invariants, is_callable, lookup, nanbox_bool,
+    pin_proxy_for_native_call, revoked_return, TAG_FALSE, TAG_UNDEFINED,
 };
 
 /// `key in proxy` — if `handler.has` exists, call it; else forward to the
@@ -110,6 +110,4 @@ pub extern "C" fn js_proxy_delete(proxy_boxed: f64, key: f64) -> f64 {
     reflect_ordinary_delete(target, key)
 }
 
-pub(crate) use crate::object::property_ops::delete::{
-    reflect_ordinary_delete, reflect_ordinary_delete_property_key,
-};
+pub(crate) use crate::object::property_ops::delete::reflect_ordinary_delete;

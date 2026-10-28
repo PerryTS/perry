@@ -843,7 +843,6 @@ pub use chdir::js_process_chdir;
 // `pub(crate)` since turnloop P2: `turnloop_proc::registry` routes a signal
 // completion straight into `signal::on_signal_completion`.
 pub(crate) mod signal;
-pub(crate) use signal::ignore_sigpipe_at_startup;
 pub use signal::{js_process_kill, js_util_convert_process_signal_to_exit_code};
 
 #[path = "os_process_stream_write.rs"]
