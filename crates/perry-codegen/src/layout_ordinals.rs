@@ -142,17 +142,24 @@ impl ProgramLayoutOrdinals {
             .map(OrdinalEntry::word)
     }
 
-    /// A compiler-owned descriptor's immutable template word. The plan is
-    /// the same whole-image authority that writes its initializer. Imported
-    /// symbols may be found too, but an ambiguous spelling supplies no proof.
-    /// Opaque/runtime descriptors retain their checked load at the operation.
+    /// A carried family descriptor's immutable template word. Family emission
+    /// always carries its word; OtherStatic inputs can also describe static
+    /// metadata whose initializer is zero, so their presence alone is no proof.
+    /// Imported symbols are eligible, but ambiguous spellings stay checked.
     pub(crate) fn descriptor_template_word(&self, symbol: &str) -> Option<u32> {
-        let mut words = self.entries.iter().filter_map(|entry| match &entry.key {
-            LayoutKey::Descriptor { symbol: name, .. } if name == symbol => Some(entry.word()),
-            _ => None,
+        let mut entries = self.entries.iter().filter(|entry| {
+            matches!(
+                &entry.key, LayoutKey::Descriptor { symbol: name, .. } if name == symbol
+            )
         });
-        let word = words.next()?;
-        words.all(|other| other == word).then_some(word)
+        let first = entries.next()?;
+        if first.role != LayoutRole::ClassFamily {
+            return None;
+        }
+        let word = first.word();
+        entries
+            .all(|other| other.role == LayoutRole::ClassFamily && other.word() == word)
+            .then_some(word)
     }
 
     /// Exact stable cache input, including full keys (not just content hashes),
@@ -507,7 +514,7 @@ mod template_word_tests {
 
     #[test]
     fn only_a_unique_compiler_descriptor_supplies_a_template() {
-        let plan = ProgramLayoutOrdinals::assign(
+        let mut plan = ProgramLayoutOrdinals::assign(
             [],
             [
                 descriptor("a", "unique"),
@@ -516,6 +523,15 @@ mod template_word_tests {
             ],
         )
         .unwrap();
+        let mut metadata = plan.entries[0].clone();
+        metadata.key = LayoutKey::Descriptor {
+            module: "a".into(),
+            symbol: "metadata".into(),
+            content: vec![],
+        };
+        metadata.role = LayoutRole::OtherStatic;
+        plan.entries.push(metadata);
+        assert_eq!(plan.descriptor_template_word("metadata"), None);
         let entry = plan
             .entries
             .iter()
