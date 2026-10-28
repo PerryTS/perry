@@ -189,6 +189,27 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
             v
         ));
     }
+    let mut verdicts: std::collections::BTreeMap<&str, Vec<&crate::SiteFacts>> = Default::default();
+    for site in &pf.sites {
+        if let Some(unit) = &site.diagnostic_unit {
+            verdicts.entry(unit).or_default().push(site);
+        }
+    }
+    for (unit, lines) in &pf.diagnostics {
+        for site in verdicts.get(unit.as_str()).into_iter().flatten() {
+            out.push_str(&format!(
+                "D {{\"record\":\"verdict\",\"unit\":{},\"file\":{},\"start\":{},\"key\":{},\"call\":{},\"verdict\":{}}}\n",
+                crate::diagnostics::quote(unit), crate::diagnostics::quote(&pf.module_paths[site.module as usize]),
+                site.byte_offset, crate::diagnostics::quote(&site.key), site.is_call,
+                crate::diagnostics::quote(&format!("{:?}", site.verdict))));
+        }
+        for line in lines {
+            out.push_str("D {");
+            out.push_str(&format!("\"unit\":{},", crate::diagnostics::quote(unit)));
+            out.push_str(&line[1..]);
+            out.push('\n');
+        }
+    }
     out
 }
 

@@ -169,6 +169,7 @@ fn length_plus_one(object: Expr) -> Expr {
     Expr::Binary {
         op: BinaryOp::Add,
         left: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(object),
             property: "length".to_string(),
             byte_offset: 0,
@@ -670,7 +671,9 @@ fn typed_param(id: u32, name: &str, ty: Type) -> Param {
 /// `recv.charCodeAt(index)`
 fn char_code_at(recv: Expr, index: Expr) -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(recv),
             property: "charCodeAt".to_string(),
             byte_offset: 0,
@@ -920,6 +923,8 @@ mod symbol_keyed_element_reads {
                     ty: Type::Any,
                     mutable: false,
                     init: Some(Expr::IndexGet {
+                        byte_offset: 0,
+                        byte_end: 0,
                         object: Box::new(Expr::LocalGet(1)),
                         index: Box::new(Expr::LocalGet(2)),
                     }),
@@ -978,6 +983,8 @@ mod symbol_keyed_element_reads {
                     ty: Type::Any,
                     mutable: false,
                     init: Some(Expr::IndexGet {
+                        byte_offset: 0,
+                        byte_end: 0,
                         object: Box::new(Expr::LocalGet(1)),
                         index: Box::new(Expr::LocalGet(2)),
                     }),

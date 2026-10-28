@@ -383,6 +383,7 @@ pub(crate) fn try_const_fold_function_construct_kind(
         ctx.closure_source_text.insert(
             *func_id,
             crate::ir::FunctionSourceMetadata {
+                source_span: None,
                 text: assembled.into(),
                 is_non_strict_ordinary: !is_arrow && !is_async && !is_generator && !is_strict,
             },
@@ -1236,6 +1237,7 @@ fn try_indirect_eval_factory_call(
     let lowered = lowered?;
     if construct {
         Ok(Some(Expr::NewDynamic {
+            byte_end: 0,
             callee: Box::new(lowered),
             args: Vec::new(),
             byte_offset: 0,
@@ -1684,6 +1686,7 @@ fn build_eval_completion_iife(
         Err(_) => return synth_function_syntax_error(ctx, EvalSurface::Eval, span).map(Some),
     };
     Ok(Some(Expr::Call {
+        byte_end: 0,
         callee: Box::new(closure),
         args: vec![],
         type_args: vec![],

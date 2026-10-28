@@ -72,6 +72,7 @@ pub(crate) fn lower_rhs_with_assignment_name(
 
 pub(crate) fn throw_type_error_const_assignment(name: &str) -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::ExternFuncRef {
             name: "js_throw_type_error_const_assignment".to_string(),
             param_types: vec![Type::String],
@@ -85,6 +86,7 @@ pub(crate) fn throw_type_error_const_assignment(name: &str) -> Expr {
 
 fn throw_restricted_function_property_assignment() -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::ExternFuncRef {
             name: "js_throw_restricted_function_property_assignment".to_string(),
             param_types: vec![],
@@ -98,6 +100,7 @@ fn throw_restricted_function_property_assignment() -> Expr {
 
 fn throw_reference_error_unresolvable_assignment(name: &str) -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::ExternFuncRef {
             name: "js_throw_reference_error_unresolvable_assignment".to_string(),
             param_types: vec![Type::String],
@@ -509,6 +512,7 @@ pub(crate) fn lower_ident_assignment(
         // a sloppy global, a property of the global object. The reference is
         // resolved before the value is evaluated, as in the spec.
         let global = Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(Expr::GlobalGet(0)),
             property: "globalThis".to_string(),
@@ -598,6 +602,7 @@ pub(crate) fn lower_ident_assignment(
     } else if ctx.lookup_class(&name).is_some() || ctx.forward_class_shadows_local(&name) {
         let class_name = ctx.resolve_class_name(&name);
         Ok(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::ExternFuncRef {
                 name: "js_class_lexical_binding_set".to_string(),
                 param_types: vec![crate::types::Type::Any, crate::types::Type::Any],
@@ -649,6 +654,7 @@ pub(crate) fn lower_ident_assignment(
         // "globalThis" }` shape resolves to the real global object.
         Ok(Expr::PropertySet {
             object: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::GlobalGet(0)),
                 property: "globalThis".to_string(),
@@ -779,6 +785,7 @@ fn lower_assignment_target(
                     if let ast::MemberProp::Ident(prop_ident) = &member.prop {
                         if prop_ident.sym.as_ref() == "exitCode" {
                             return Ok(Expr::Call {
+                                byte_end: 0,
                                 callee: Box::new(Expr::ExternFuncRef {
                                     name: "js_process_exit_code_set".to_string(),
                                     param_types: vec![crate::types::Type::Number],
@@ -1257,11 +1264,14 @@ fn compound_member_assign_once(
     let key_id = key.as_ref().map(|(id, _)| *id);
     let read = match (&prop, key_id) {
         (Some(p), _) => Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(Expr::LocalGet(base_id)),
             property: p.clone(),
         },
         (None, Some(k)) => Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(base_id)),
             index: Box::new(Expr::LocalGet(k)),
         },
@@ -1458,11 +1468,14 @@ pub(crate) fn hoist_compound_member_assign(
 
     let read = match (&prop, key_id) {
         (Some(p), _) => Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(Expr::LocalGet(base_id)),
             property: p.clone(),
         },
         (None, Some(k)) => Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(base_id)),
             index: Box::new(Expr::LocalGet(k)),
         },

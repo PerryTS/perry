@@ -101,7 +101,9 @@ pub fn make_iter_result(value: Expr, done: bool) -> Expr {
 /// already recognizes and lowers via `js_promise_resolved`.
 pub fn wrap_in_promise_resolve(value: Expr) -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(Expr::GlobalGet(0)),
             property: "resolve".to_string(),

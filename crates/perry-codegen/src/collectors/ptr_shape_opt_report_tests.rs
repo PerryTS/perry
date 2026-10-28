@@ -63,6 +63,7 @@ fn class_with_fields(name: &str, fields: &[&str]) -> Class {
 
 fn new_c() -> Expr {
     Expr::New {
+        byte_end: 0,
         class_name: "C".to_string(),
         args: Vec::new(),
         type_args: Vec::new(),
@@ -213,6 +214,7 @@ fn escape_kinds_are_discriminated() {
     let passed = vec![
         let_c(2, "passed"),
         Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::LocalGet(50)),
             args: vec![Expr::LocalGet(2)],
             type_args: Vec::new(),
@@ -251,6 +253,7 @@ fn module_barrier_still_enumerates_the_candidates_it_killed() {
     // A module with a §5.2 barrier: `delete o.x` anywhere.
     let mut barrier_module = perry_hir::Module::new("barrier");
     barrier_module.init = vec![Stmt::Expr(Expr::Delete(Box::new(Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(7)),
         property: "x".to_string(),
         byte_offset: 0,
@@ -411,6 +414,7 @@ fn nothing_is_recorded_when_the_report_is_off() {
 
 fn anon_shape(args: Vec<Expr>) -> Expr {
     Expr::New {
+        byte_end: 0,
         class_name: "__AnonShape_1f2e".to_string(),
         args,
         type_args: Vec::new(),
@@ -472,6 +476,7 @@ fn a_real_constructor_argument_keeps_its_own_bucket() {
         ty: Type::Any,
         mutable: false,
         init: Some(Expr::New {
+            byte_end: 0,
             class_name: "Box".to_string(),
             args: vec![new_c()],
             type_args: Vec::new(),
@@ -655,6 +660,7 @@ fn only_the_return_position_is_marked_served() {
     classes.insert("C".to_string(), &c);
     // `return new C(new C())` — outer is the return, inner is an argument.
     let stmts = vec![Stmt::Return(Some(Expr::New {
+        byte_end: 0,
         class_name: "C".to_string(),
         args: vec![new_c()],
         type_args: Vec::new(),
@@ -685,6 +691,7 @@ fn only_the_return_position_is_marked_served() {
     // deadlocks. `entries()` has already drained the sink, so the second phase
     // starts clean.
     let called = vec![Stmt::Return(Some(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(9)),
         args: vec![new_c()],
         type_args: Vec::new(),
@@ -901,6 +908,7 @@ fn a_consumed_logical_operand_is_not_a_return_shape_source() {
     classes.insert("C".to_string(), &c);
     classes.insert("D".to_string(), &d);
     let new_d = Expr::New {
+        byte_end: 0,
         class_name: "D".to_string(),
         args: Vec::new(),
         type_args: Vec::new(),
@@ -954,6 +962,7 @@ fn a_member_base_under_a_return_is_not_a_return_position() {
     let mut classes = HashMap::new();
     classes.insert("C".to_string(), &c);
     let stmts = vec![Stmt::Return(Some(Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(new_c()),
         property: "x".to_string(),
         byte_offset: 0,

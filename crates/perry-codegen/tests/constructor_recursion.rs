@@ -97,6 +97,7 @@ fn module_with_recursive_constructor_return() -> Module {
         body: vec![Stmt::If {
             condition: Expr::Bool(false),
             then_branch: vec![Stmt::Return(Some(Expr::New {
+                byte_end: 0,
                 class_name: "RecursiveCtor".to_string(),
                 args: vec![Expr::Bool(false), Expr::LocalGet(11)],
                 type_args: Vec::new(),
@@ -155,6 +156,7 @@ fn module_with_recursive_constructor_return() -> Module {
         annexb_global_undefined_names: Vec::new(),
         init_is_strict: false,
         init: vec![Stmt::Expr(Expr::New {
+            byte_end: 0,
             class_name: "RecursiveCtor".to_string(),
             args: vec![Expr::Bool(true), Expr::Undefined],
             type_args: Vec::new(),

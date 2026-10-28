@@ -115,7 +115,7 @@ pub(crate) fn collect_module_prototype_facts(module: &Module) -> ModulePrototype
             } if property == "prototype" || property == "__proto__" => {
                 note_holder(object, facts);
             }
-            Expr::IndexGet { object, index } | Expr::IndexSet { object, index, .. } if matches!(index.as_ref(), Expr::String(key) if key == "prototype" || key == "__proto__") =>
+            Expr::IndexGet { object, index, .. } | Expr::IndexSet { object, index, .. } if matches!(index.as_ref(), Expr::String(key) if key == "prototype" || key == "__proto__") =>
             {
                 note_holder(object, facts);
             }

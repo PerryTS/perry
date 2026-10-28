@@ -38,6 +38,7 @@ pub(super) fn try_process_module_methods(
                 // property so an ordinary process still throws TypeError.
                 "send" | "disconnect" => {
                     return Ok(Ok(Expr::Call {
+                        byte_end: 0,
                         callee: Box::new(crate::lower::expr_member::process_native_property(
                             method_name,
                         )),

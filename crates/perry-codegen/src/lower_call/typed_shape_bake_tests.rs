@@ -230,6 +230,7 @@ pub(super) fn loop_new_module(name: &str, f1_ty: Type, second: Expr) -> Module {
                 ty: Type::Named(name.to_string()),
                 mutable: false,
                 init: Some(Expr::New {
+                    byte_end: 0,
                     class_name: name.to_string(),
                     args: vec![
                         Expr::Binary {
@@ -250,6 +251,7 @@ pub(super) fn loop_new_module(name: &str, f1_ty: Type, second: Expr) -> Module {
             // the bake does nothing. (`collectors/escape_news.rs`; the same trap
             // is called out in the campaign's measurement protocol.)
             Stmt::Expr(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::FuncRef(10)),
                 args: vec![Expr::LocalGet(20)],
                 type_args: Vec::new(),
@@ -272,6 +274,7 @@ pub(super) fn loop_new_module(name: &str, f1_ty: Type, second: Expr) -> Module {
         }],
         return_type: Type::Number,
         body: vec![Stmt::Return(Some(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(30)),
             property: "a".to_string(),
             byte_offset: 0,
@@ -301,6 +304,7 @@ pub(super) fn outlined_new_module(name: &str, f1_ty: Type, second: Expr) -> Modu
             ty: Type::Named(name.to_string()),
             mutable: false,
             init: Some(Expr::New {
+                byte_end: 0,
                 class_name: name.to_string(),
                 args: vec![Expr::Integer(1), second],
                 type_args: Vec::new(),
@@ -309,6 +313,7 @@ pub(super) fn outlined_new_module(name: &str, f1_ty: Type, second: Expr) -> Modu
             }),
         },
         Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::FuncRef(10)),
             args: vec![Expr::LocalGet(20)],
             type_args: Vec::new(),
@@ -484,6 +489,7 @@ fn imported_pointer_layout_does_not_invent_a_consumer_typed_shape_id() {
         ty: Type::Named("Remote".to_string()),
         mutable: false,
         init: Some(Expr::New {
+            byte_end: 0,
             class_name: "Remote".to_string(),
             args: vec![Expr::Null],
             type_args: Vec::new(),
@@ -517,6 +523,7 @@ fn imported_length_only_arguments_capability_uses_scalar_direct_abi() {
             ty: Type::Named("Remote".to_string()),
             mutable: false,
             init: Some(Expr::New {
+                byte_end: 0,
                 class_name: "Remote".to_string(),
                 args: vec![Expr::Null],
                 type_args: Vec::new(),
@@ -525,7 +532,9 @@ fn imported_length_only_arguments_capability_uses_scalar_direct_abi() {
             }),
         },
         Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(20)),
                 property: "read".to_string(),
                 byte_offset: 0,
@@ -579,6 +588,7 @@ fn imported_stub_mints_with_the_drivers_static_id_and_registers_no_slots() {
             ty: Type::Named("Remote".to_string()),
             mutable: false,
             init: Some(Expr::New {
+                byte_end: 0,
                 class_name: "Remote".to_string(),
                 args: vec![Expr::Null],
                 type_args: Vec::new(),

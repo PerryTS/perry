@@ -175,6 +175,7 @@ fn lengths_and_math_are_numeric_keys() {
 #[test]
 fn an_unenumerated_key_kind_is_rejected() {
     assert!(!structural(&Expr::PropertyGet {
+        byte_end: 0,
         byte_offset: 0,
         object: Box::new(Expr::LocalGet(0)),
         property: "k".to_string(),

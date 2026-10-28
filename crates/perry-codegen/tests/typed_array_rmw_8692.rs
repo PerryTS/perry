@@ -25,6 +25,8 @@ fn param(id: u32, name: &str) -> Param {
 
 fn rmw_function(rhs: Expr) -> Function {
     let read = Expr::IndexGet {
+        byte_offset: 0,
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(BASE_TMP)),
         index: Box::new(Expr::LocalGet(KEY_TMP)),
     };
@@ -103,10 +105,13 @@ fn rmw_module(name: &str, rhs: Expr) -> Module {
             }),
         },
         Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::FuncRef(7)),
             args: vec![
                 Expr::LocalGet(1),
                 Expr::IndexGet {
+                    byte_offset: 0,
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(2)),
                     index: Box::new(Expr::Integer(0)),
                 },

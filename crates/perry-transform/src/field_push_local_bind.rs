@@ -132,6 +132,7 @@ fn process_stmts(stmts: &mut Vec<Stmt>, fields: &[(String, Type)], next_local_id
                 ty: ty.clone(),
                 mutable: true,
                 init: Some(Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(Expr::This),
                     property: field.clone(),
                     byte_offset: 0,
@@ -197,6 +198,7 @@ mod tests {
             module: "array".to_string(),
             class_name: None,
             object: Some(Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::This),
                 property: field.to_string(),
                 byte_offset: 0,

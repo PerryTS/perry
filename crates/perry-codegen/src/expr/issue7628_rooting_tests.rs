@@ -142,6 +142,7 @@ fn with_object_local(tail: Stmt) -> Vec<Stmt> {
 
 fn field_of_o(property: &str) -> Expr {
     Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(0)),
         property: property.to_string(),
         byte_offset: 0,

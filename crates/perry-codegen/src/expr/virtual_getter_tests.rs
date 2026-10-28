@@ -25,6 +25,7 @@ fn function(id: u32, name: &str, value: Expr) -> Function {
 #[test]
 fn getter_read_uses_live_receiver_instead_of_enclosing_class() {
     let read = Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::This),
         property: "value".to_string(),
         byte_offset: 0,

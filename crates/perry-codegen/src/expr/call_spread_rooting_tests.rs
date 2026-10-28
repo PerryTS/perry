@@ -148,6 +148,8 @@ fn an_interleaved_spread_bundle_rereads_its_accumulator_below_the_array_conversi
     let ir = compile_body(
         "interleaved_spread",
         vec![Stmt::Expr(Expr::CallSpread {
+            byte_offset: 0,
+            byte_end: 0,
             callee: Box::new(allocating("cb")),
             args: vec![
                 CallArg::Spread(allocating("a")),
@@ -167,6 +169,8 @@ fn a_multi_spread_bundle_rereads_its_accumulator_below_the_array_conversion() {
     let ir = compile_body(
         "multi_spread",
         vec![Stmt::Expr(Expr::CallSpread {
+            byte_offset: 0,
+            byte_end: 0,
             callee: Box::new(allocating("cb")),
             args: vec![
                 CallArg::Spread(allocating("a")),
@@ -190,6 +194,7 @@ fn a_spread_new_bundle_rereads_its_accumulator_below_the_array_conversion() {
     let ir = compile_body(
         "spread_new",
         vec![Stmt::Expr(Expr::NewDynamicSpread {
+            byte_end: 0,
             callee: Box::new(allocating("f")),
             args: vec![
                 CallArg::Spread(allocating("xs")),
@@ -218,6 +223,7 @@ fn a_spread_new_rereads_its_callee_below_the_bundle() {
     let ir = compile_body(
         "spread_new_callee",
         vec![Stmt::Expr(Expr::NewDynamicSpread {
+            byte_end: 0,
             callee: Box::new(allocating("f")),
             args: vec![
                 CallArg::Spread(allocating("xs")),
@@ -262,6 +268,8 @@ fn an_all_inert_spread_bundle_still_roots_its_accumulator() {
     let ir = compile_body(
         "inert_spread",
         vec![Stmt::Expr(Expr::CallSpread {
+            byte_offset: 0,
+            byte_end: 0,
             callee: Box::new(allocating("cb")),
             args: vec![
                 CallArg::Spread(Expr::Array(

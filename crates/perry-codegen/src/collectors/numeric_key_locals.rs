@@ -64,7 +64,7 @@ pub(crate) fn expr_is_numeric_key(e: &Expr, leaves: &KeyLeaves<'_>) -> bool {
     match e {
         Expr::Integer(_) | Expr::Number(_) | Expr::Undefined => true,
         Expr::LocalGet(id) => (leaves.key_local)(*id),
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             matches!(object.as_ref(), Expr::LocalGet(id) if (leaves.owned_view)(*id))
                 && expr_is_number_or_bigint(index, leaves)
         }
@@ -171,6 +171,8 @@ mod tests {
 
     fn read(view: u32, index: Expr) -> Expr {
         Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(view)),
             index: Box::new(index),
         }

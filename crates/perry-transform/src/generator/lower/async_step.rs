@@ -64,7 +64,9 @@ pub fn build_async_step_driver_direct(
     // #854: paired resolve-builder kept alongside the used promise_reject for
     // symmetry of the async-step driver; not emitted on the current path.
     let _promise_resolve = |arg: Expr| Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(promise_global()),
             property: "resolve".to_string(),
@@ -74,7 +76,9 @@ pub fn build_async_step_driver_direct(
         byte_offset: 0,
     };
     let promise_reject = |arg: Expr| Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(promise_global()),
             property: "reject".to_string(),
@@ -232,6 +236,7 @@ pub fn build_async_step_driver_direct(
                     // calls cannot disturb the TLS self-reference before
                     // the error re-entry path runs.
                     Stmt::Return(Some(Expr::Call {
+                        byte_end: 0,
                         callee: Box::new(Expr::LocalGet(step_self_id)),
                         args: vec![Expr::LocalGet(catch_e_id), Expr::Bool(true)],
                         type_args: vec![],

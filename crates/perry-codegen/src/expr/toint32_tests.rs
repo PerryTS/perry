@@ -38,6 +38,7 @@ fn number_param() -> Param {
 fn converting_bodies(target: Option<&str>, body: Vec<Stmt>) -> Vec<String> {
     let mut module = Module::new("toint32_fast_path");
     module.init.push(Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(1)),
         args: vec![Expr::Number(1.5)],
         type_args: Vec::new(),

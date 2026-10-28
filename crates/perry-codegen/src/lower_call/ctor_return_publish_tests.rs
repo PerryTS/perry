@@ -124,6 +124,7 @@ fn module(classes: Vec<Class>, construct: &str) -> Module {
         ty: Type::Named(construct.to_string()),
         mutable: false,
         init: Some(Expr::New {
+            byte_end: 0,
             class_name: construct.to_string(),
             args: vec![Expr::Integer(1)],
             type_args: Vec::new(),

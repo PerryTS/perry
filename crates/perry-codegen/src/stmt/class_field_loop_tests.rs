@@ -185,6 +185,7 @@ fn bump_stmt(recv_id: u32, strict: bool) -> Stmt {
         value: Box::new(Expr::Binary {
             op: BinaryOp::Add,
             left: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(recv_id)),
                 property: "value".to_string(),
                 byte_offset: 0,
@@ -209,6 +210,7 @@ fn method_calls_module(bound: Expr, extra_init: Vec<Stmt>, strict: bool) -> Modu
         ty: Type::Named("Counter".to_string()),
         mutable: false,
         init: Some(Expr::New {
+            byte_end: 0,
             class_name: "Counter".to_string(),
             args: Vec::new(),
             type_args: Vec::new(),
@@ -355,6 +357,7 @@ fn class_loop_replacement_restores_straight_line_receiver_proof() {
     module.init.push(Stmt::Expr(Expr::Binary {
         op: BinaryOp::Mul,
         left: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(1)),
             property: "value".to_string(),
             byte_offset: 0,

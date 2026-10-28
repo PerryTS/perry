@@ -1158,7 +1158,7 @@ pub fn inline_calls_in_expr(
             }
             exact_receiver_facts.clear();
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             let mut earlier = EarlierOperands::default();
             hoisted.extend(ordered!(object, &mut earlier));
             hoisted.extend(ordered!(index, &mut earlier));
@@ -2447,6 +2447,7 @@ mod tests {
 
     fn call(callee: Expr, args: Vec<Expr>) -> Expr {
         Expr::Call {
+            byte_end: 0,
             callee: Box::new(callee),
             args,
             type_args: Vec::new(),

@@ -483,7 +483,7 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         args: &[NA_F64, NA_F64],
         ret: NR_F64,
     },
-    // `zlib.brotli{Compress,Decompress}Sync(data)` — one-shot Brotli via the
+    // `zlib.brotli{Compress,Decompress}Sync(data, options?)` — one-shot Brotli via the
     // `brotli` crate (already a `compression`-feature dep). Pass data as raw
     // NaN-box bits so shared codec validation sees the original JS value.
     NativeModSig {
@@ -492,7 +492,7 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         method: "brotliCompressSync",
         class_filter: None,
         runtime: "js_zlib_brotli_compress_sync",
-        args: &[NA_JSV],
+        args: &[NA_JSV, NA_F64],
         ret: NR_F64,
     },
     NativeModSig {

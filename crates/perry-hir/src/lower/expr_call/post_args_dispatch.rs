@@ -166,6 +166,7 @@ pub(super) fn try_object_has_own_call(
                                 };
                                 if let Some(runtime_fn) = runtime_fn {
                                     return Ok(Expr::Call {
+                                        byte_end: 0,
                                         callee: Box::new(Expr::ExternFuncRef {
                                             name: runtime_fn.to_string(),
                                             param_types: Vec::new(),
@@ -236,6 +237,7 @@ pub(super) fn try_object_prototype_call(
                                         && inner_prop.sym.as_ref() == "prototype"
                                     {
                                         return Ok(Expr::Call {
+                                            byte_end: 0,
                                             callee: Box::new(Expr::ExternFuncRef {
                                                 name: runtime_fn.to_string(),
                                                 param_types: Vec::new(),
