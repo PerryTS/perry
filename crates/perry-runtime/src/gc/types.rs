@@ -1243,11 +1243,19 @@ pub(crate) fn gc_type_is_arena_walkable(obj_type: u8) -> bool {
     gc_type_info(obj_type).is_some_and(|info| info.arena_walkable)
 }
 
-#[inline]
+#[inline(always)]
 pub(crate) fn gc_type_rewrite_descriptor_kind(obj_type: u8) -> GcRewriteDescriptorKind {
-    gc_type_info(obj_type).map_or(GcRewriteDescriptorKind::Leaf, |info| {
-        info.rewrite_descriptor_kind
-    })
+    // These exact canonical layouts dominate tracing. Constant descriptor
+    // projections avoid the sparse-table address calculation and known-type
+    // admission for each string/object, without another table or hard-coded
+    // descriptor answer. Unknown and remaining types keep normal admission.
+    match obj_type {
+        GC_TYPE_OBJECT => GC_TYPE_INFO_BY_ID[GC_TYPE_OBJECT as usize].rewrite_descriptor_kind,
+        GC_TYPE_STRING => GC_TYPE_INFO_BY_ID[GC_TYPE_STRING as usize].rewrite_descriptor_kind,
+        _ => gc_type_info(obj_type).map_or(GcRewriteDescriptorKind::Leaf, |info| {
+            info.rewrite_descriptor_kind
+        }),
+    }
 }
 
 #[inline]
