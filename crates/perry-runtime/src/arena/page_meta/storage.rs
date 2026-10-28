@@ -143,22 +143,23 @@ impl<T: Default, const N: usize> PageMap<T, N> {
 
     #[inline]
     fn remove_mask(&mut self, key: usize, mask: u64) {
-        use std::collections::hash_map::Entry;
-        if let Entry::Occupied(mut entry) = self.chunks.entry(key) {
-            let chunk = entry.get_mut();
-            let mut removed = chunk.present & mask;
-            self.len -= removed.count_ones() as usize;
-            if removed == chunk.present {
-                // Drop each owned payload with its chunk, avoiding default
-                // writes immediately before destruction and a second lookup.
-                entry.remove();
-            } else {
-                chunk.present &= !removed;
-                while removed != 0 {
-                    let slot = removed.trailing_zeros() as usize;
-                    removed &= removed - 1;
-                    chunk.pages[slot] = T::default();
-                }
+        // Entry APIs may reserve on a vacant lookup. Retirement must not
+        // allocate or grow a directory when the requested chunk is absent.
+        let Some(chunk) = self.chunks.get_mut(&key) else {
+            return;
+        };
+        let mut removed = chunk.present & mask;
+        self.len -= removed.count_ones() as usize;
+        if removed == chunk.present {
+            // Drop owned payloads with the chunk instead of writing defaults
+            // into every slot just before freeing the same allocation.
+            self.chunks.remove(&key);
+        } else {
+            chunk.present &= !removed;
+            while removed != 0 {
+                let slot = removed.trailing_zeros() as usize;
+                removed &= removed - 1;
+                chunk.pages[slot] = T::default();
             }
         }
     }
@@ -491,6 +492,25 @@ mod range_removal_tests {
     use super::*;
     use std::collections::BTreeMap;
     use std::sync::Arc;
+
+    #[test]
+    fn absent_retirement_never_allocates_or_grows_the_directory() {
+        let mut map = PageMetaMap::new();
+        map.remove_range(0, 64);
+        map.remove_pages(&[0, usize::MAX]);
+        assert_eq!(map.chunks.capacity(), 0);
+        map.get_or_insert(0);
+        let capacity = map.chunks.capacity();
+        for key in 1..capacity {
+            map.get_or_insert(key * 64);
+        }
+        assert_eq!(map.chunks.len(), capacity);
+        map.remove_range(usize::MAX - 63, usize::MAX);
+        map.remove_pages(&[usize::MAX, usize::MAX]);
+        assert_eq!(map.chunks.len(), capacity);
+        assert_eq!(map.chunks.capacity(), capacity);
+        assert_eq!(map.len(), capacity);
+    }
 
     #[test]
     fn range_retirement_matches_owned_payload_oracle_for_both_chunk_widths() {

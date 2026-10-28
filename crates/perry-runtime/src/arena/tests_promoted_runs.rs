@@ -158,7 +158,7 @@ fn a_full_cycle_expands_every_pending_run_before_it_can_sweep() {
 #[test]
 fn dropping_a_block_discards_its_run_instead_of_parsing_freed_pages() {
     for range in [false, true] {
-        super::tests::run_with_fresh_arenas(|| {
+        super::tests::run_with_fresh_arenas(move || {
             let region = promoted_region(200);
             let pages = register_region_runs(&region);
             let page_list: Vec<usize> = pages.iter().copied().collect();
