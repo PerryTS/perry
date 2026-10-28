@@ -508,3 +508,5 @@ pub(crate) use super::metadata_values::{
     process_allowed_flags_value, process_config_value, process_features_value,
     process_release_value,
 };
+
+crate::realm_decl!("report.realm.json#*");

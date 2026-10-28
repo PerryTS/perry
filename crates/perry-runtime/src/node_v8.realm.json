@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "groups": {
+    "body:gc_profiler_dispose_body": [
+      {
+        "name": "node:v8.GCProfiler.prototype[\"@@dispose\"]",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "[Symbol.dispose]"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::node_v8::gc_profiler_dispose_body",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::node_v8::gc_profiler_dispose_body",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_0a7678f2d8d5c730c92e",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ]
+  }
+}

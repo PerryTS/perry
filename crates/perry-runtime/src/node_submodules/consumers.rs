@@ -666,3 +666,5 @@ pub(crate) extern "C" fn thunk_consumers_blob(
 ) -> f64 {
     consume_stream(ConsumerKind::Blob, stream)
 }
+
+crate::realm_decl!("consumers.realm.json#*");

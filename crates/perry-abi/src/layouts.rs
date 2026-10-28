@@ -11,7 +11,7 @@ pub const LAYOUT_ORDINARY_END: u32 = 0x9000_0000;
 pub const LAYOUT_SHADOWED_BASE: u32 = 0xc000_0000;
 pub const LAYOUT_SHADOWED_END: u32 = 0xd000_0000;
 pub const LAYOUT_PROBE_INDEX_MASK: u32 = 0xb3ff_ffff;
-pub const LAYOUT_WORD_ABI_VERSION: u32 = 1;
+pub const LAYOUT_WORD_ABI_VERSION: u32 = 3;
 pub const LAYOUT_KIND_PLAIN: u32 = 0;
 pub const LAYOUT_KIND_WORD: u32 = 1;
 pub const LAYOUT_KIND_NULL: u32 = 2;
@@ -98,13 +98,20 @@ pub struct PerryLayoutImageV1 {
     pub static_rows: u32,
     pub family_first: u32,
     pub family_count: u32,
+    /// The program's static literal seeds as image data (WRT step 2,
+    /// [`PerryStaticSeedTableV1`]); null in the runtime's own image.
+    pub seeds: *const PerryStaticSeedTableV1,
 }
+// The seed table is immutable program data every agent reads.
+unsafe impl Send for PerryLayoutImageV1 {}
+unsafe impl Sync for PerryLayoutImageV1 {}
 impl PerryLayoutImageV1 {
     pub const RUNTIME: Self = Self {
         abi_version: LAYOUT_WORD_ABI_VERSION,
         static_rows: NATIVE_LAYOUT_ROWS,
         family_first: NATIVE_LAYOUT_ROWS,
         family_count: 0,
+        seeds: core::ptr::null(),
     };
     pub const fn valid(self) -> bool {
         self.abi_version == LAYOUT_WORD_ABI_VERSION
@@ -114,6 +121,51 @@ impl PerryLayoutImageV1 {
             && self.family_count <= self.static_rows - self.family_first
     }
 }
+
+/// One static literal seed of the program (WRT step 2): the facts
+/// `js_layout_seed_plain` used to take, plus the seed's canonical key list
+/// as image data. When every key is an image atom, `keys` names the atoms
+/// (`PerryLayoutKey` records of the runtime, `key_count` of them) and `list`
+/// is the user address of a canonical key list cell in `perry_realm` holding
+/// their strings; the runtime links that cell into the agent's key-list trie
+/// and publishes the record without allocating. Otherwise both are null and
+/// the runtime mints the seed from its packed names.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct PerryStaticSeedV1 {
+    pub rep: u64,
+    pub request: *mut PerryStaticLayoutRequestV1,
+    /// NUL-terminated key names, `packed_len` bytes.
+    pub packed: *const u8,
+    pub keys: *const u8,
+    pub list: *const u8,
+    pub constfn: *const ConstFnStaticEntry,
+    pub packed_len: u32,
+    pub key_count: u32,
+    pub live: u32,
+    pub constfn_count: u32,
+}
+#[cfg(target_pointer_width = "64")]
+const _: () = assert!(core::mem::size_of::<PerryStaticSeedV1>() == 64);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(core::mem::size_of::<PerryStaticSeedV1>() == 48);
+
+/// The program's seed table, named by [`PerryLayoutImageV1::seeds`]: `count`
+/// seeds follow the header.
+#[repr(C)]
+pub struct PerryStaticSeedTableV1 {
+    pub count: u32,
+    pub _pad: u32,
+    pub seeds: [PerryStaticSeedV1; 0],
+}
+impl PerryStaticSeedTableV1 {
+    /// # Safety
+    /// `self` is the program's table: `count` seeds follow the header.
+    pub unsafe fn seeds(&self) -> &[PerryStaticSeedV1] {
+        core::slice::from_raw_parts(self.seeds.as_ptr(), self.count as usize)
+    }
+}
+
 pub const SHAPE_RECORD_ID_OFFSET: usize = 120;
 pub const SHAPE_RECORD_LAYOUT_WORD_OFFSET: usize = 124;
 pub const SHAPE_RECORD_FAMILY_DESC_OFFSET: usize = 76;
@@ -143,24 +195,6 @@ pub mod ffi {
             class_id: u32,
             request: *mut PerryStaticLayoutRequestV1,
             rep: u64,
-        ) -> u32;
-        pub fn js_layout_seed_plain(
-            request: *mut PerryStaticLayoutRequestV1,
-            packed: *const u8,
-            packed_len: u32,
-            count: u32,
-            live: u32,
-            rep: u64,
-        ) -> u32;
-        pub fn js_layout_seed_plain_constfn(
-            request: *mut PerryStaticLayoutRequestV1,
-            packed: *const u8,
-            packed_len: u32,
-            count: u32,
-            live: u32,
-            rep: u64,
-            entries: *const ConstFnStaticEntry,
-            entry_count: u32,
         ) -> u32;
         pub fn js_object_final_layout_for_class_keys_static_private(
             keys: u64,
@@ -353,7 +387,10 @@ const _: () = {
     assert!(size_of::<PerryStaticLayoutRequestV1>() == 8);
     assert!(align_of::<PerryStaticLayoutRequestV1>() == 4);
     assert!(offset_of!(PerryStaticLayoutRequestV1, layout_word) == 4);
-    assert!(size_of::<PerryLayoutImageV1>() == 16 && align_of::<PerryLayoutImageV1>() == 4);
+    assert!(
+        size_of::<PerryLayoutImageV1>() == 16 + size_of::<usize>()
+            && align_of::<PerryLayoutImageV1>() == size_of::<usize>()
+    );
     assert!(offset_of!(PerryLayoutImageV1, static_rows) == 4);
     assert!(offset_of!(PerryLayoutImageV1, family_first) == 8);
     assert!(offset_of!(PerryLayoutImageV1, family_count) == 12);

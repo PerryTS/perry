@@ -863,8 +863,8 @@ fn the_instrumented_variant_names_its_archives_with_an_instr_suffix() {
 
 #[test]
 fn deserializers_install_regex_without_a_regex_literal() {
-    // The compiler's deferred eval/Function sites are process-wide. Other
-    // lowering tests can leave them set; this fixture requires a fresh compile.
+    // Other lowering tests share dynamic-code reach. A child keeps this
+    // plain-program negative check independent without draining their state.
     const CHILD: &str = "PERRY_TEST_DESERIALIZER_FEATURES_CHILD";
     if std::env::var_os(CHILD).is_none() {
         let module = module_path!().split_once("::").unwrap().1;
@@ -882,6 +882,7 @@ fn deserializers_install_regex_without_a_regex_literal() {
         );
         return;
     }
+    assert!(!perry_hir::has_deferred_dynamic_code_sites());
     let dir = tempfile::tempdir().unwrap();
     let features = BTreeSet::new();
     let plain = CompilationContext::new(dir.path().to_path_buf());

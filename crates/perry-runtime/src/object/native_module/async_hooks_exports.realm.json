@@ -1,0 +1,317 @@
+{
+  "version": 1,
+  "groups": {
+    "body:async_hooks_prototype_method_thunk": [
+      {
+        "name": "node:async_hooks.AsyncLocalStorage.prototype.disable",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "disable"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::native_module::async_hooks_exports::async_hooks_prototype_method_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 1,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::native_module::async_hooks_exports::async_hooks_prototype_method_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b84c26"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0x7"
+          }
+        ],
+        "info_symbol": "perry_realm_info_910ef4f527750aaf715e",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:async_hooks.AsyncLocalStorage.prototype.enterWith",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "enterWith"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::native_module::async_hooks_exports::async_hooks_prototype_method_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 1,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::native_module::async_hooks_exports::async_hooks_prototype_method_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2ba9b04"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0x9"
+          }
+        ],
+        "info_symbol": "perry_realm_info_910ef4f527750aaf715e",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:async_hooks.AsyncLocalStorage.prototype.exit",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "exit"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::native_module::async_hooks_exports::async_hooks_prototype_method_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 1,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::native_module::async_hooks_exports::async_hooks_prototype_method_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2a1517c"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0x4"
+          }
+        ],
+        "info_symbol": "perry_realm_info_910ef4f527750aaf715e",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:async_hooks.AsyncLocalStorage.prototype.getStore",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "getStore"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::native_module::async_hooks_exports::async_hooks_prototype_method_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 1,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::native_module::async_hooks_exports::async_hooks_prototype_method_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x29b6bc0"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0x8"
+          }
+        ],
+        "info_symbol": "perry_realm_info_910ef4f527750aaf715e",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:async_hooks.AsyncLocalStorage.prototype.run",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "run"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "crate::object::native_module::async_hooks_exports::async_hooks_prototype_method_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 1,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::native_module::async_hooks_exports::async_hooks_prototype_method_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "raw_word",
+            "value": "0x2b88436"
+          },
+          {
+            "kind": "raw_word",
+            "value": "0x3"
+          }
+        ],
+        "info_symbol": "perry_realm_info_910ef4f527750aaf715e",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ]
+  }
+}

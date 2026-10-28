@@ -839,3 +839,5 @@ fn throw_constructor_call_error() -> f64 {
     let err = crate::error::js_typeerror_new(msg);
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
+
+crate::realm_decl!("messaging.realm.json#*");

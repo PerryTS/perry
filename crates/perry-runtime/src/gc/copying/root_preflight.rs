@@ -60,6 +60,7 @@ impl CopiedMinorEligibility {
             },
         );
         unsafe {
+            super::image_cells::preflight_image_roots(&mut dirty_checker);
             dirty_checker.drain();
         }
         dirty_checker.fallback_reason

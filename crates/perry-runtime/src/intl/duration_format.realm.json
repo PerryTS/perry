@@ -1,0 +1,244 @@
+{
+  "version": 1,
+  "groups": {
+    "body:format_thunk": [
+      {
+        "name": "Intl.DurationFormat.prototype.format",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "format"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::intl::duration_format::format_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::intl::duration_format::format_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_30a4ca9022fad2af14df",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "body:resolved_options_thunk": [
+      {
+        "name": "Intl.DurationFormat.prototype.resolvedOptions",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "resolvedOptions"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::intl::duration_format::resolved_options_thunk",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::intl::duration_format::resolved_options_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_f802d814a7b97b288d6d",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "body:to_parts_thunk": [
+      {
+        "name": "Intl.DurationFormat.prototype.formatToParts",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "formatToParts"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::intl::duration_format::to_parts_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::intl::duration_format::to_parts_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_ce79e1032e78f6f973b1",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "objects": [
+      {
+        "name": "Intl.DurationFormat",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "DurationFormat"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "Intl.DurationFormat.prototype"
+            }
+          },
+          {
+            "key": "supportedLocalesOf",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Intl.DurationFormat.supportedLocalesOf"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype",
+          "supportedLocalesOf"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::intl::duration_format::constructor_thunk",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 1,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::intl::duration_format::constructor_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_542910e0a8de2a51e00f",
+        "births": [
+          "Function.prototype",
+          "Intl.DurationFormat.prototype",
+          "Intl.DurationFormat.supportedLocalesOf"
+        ]
+      }
+    ]
+  }
+}

@@ -6452,6 +6452,32 @@ pub fn run_with_parse_cache(
         module_births.iter().flat_map(|(_, b)| b),
         &static_shape_ids,
     );
+    let mut realm_reach = ctx.realm_reach.clone();
+    for module in ctx.native_modules.values() {
+        perry_hir::realm_reach::scan_lowered(
+            module,
+            perry_codegen::realm_manifest::REALM,
+            &mut realm_reach,
+        );
+    }
+    realm_reach.program_signals(&ctx.patched_builtins);
+    realm_reach.close(perry_codegen::realm_manifest::REALM);
+    if std::env::var("PERRY_REALM_REACH").is_ok_and(|v| v == "1") {
+        let reasons: Vec<_> = realm_reach.top.iter().map(|r| r.reason()).collect();
+        eprintln!(
+            "[realm-reach] {}/{} top={:?}",
+            realm_reach.names.len(),
+            perry_codegen::realm_manifest::REALM.len(),
+            reasons
+        );
+        eprintln!(
+            "[realm-reach-json] {}",
+            serde_json::json!({
+                "names": realm_reach.names, "top": reasons,
+                "full": perry_codegen::realm_manifest::REALM.len()
+            })
+        );
+    }
     let reach_report = super::reach_report::start(&ctx, args.output_type != "executable")?;
     let source_need = super::source_need::start(need, &dropped_source, source_need_seconds)?;
     // fninfer (decision 140): per-function inferred signatures over the
@@ -6602,7 +6628,7 @@ pub fn run_with_parse_cache(
         class_canonical_path,
         exported_object_literals,
         program_facts,
-        program_layouts,
+        std::sync::Arc::clone(&program_layouts),
         constructor_contracts,
         static_shape_ids,
         short_spread_method_candidates,
@@ -7305,6 +7331,30 @@ pub fn run_with_parse_cache(
         eprintln!("{rendered}");
     }
 
+    // Design step 4, WRT step 2: the static shape seed unit (see
+    // `perry_codegen::stubs::static_shape_seed_ll`), the seed table the
+    // entry's layout image names; empty when the program has no seedable id.
+    let program_static_seeds: Vec<(u32, perry_codegen::BirthShape)> = program_static_seeds
+        .into_inner()
+        .unwrap_or_else(|e| e.into_inner())
+        .into_iter()
+        .collect();
+    let seed_path = {
+        if matches!(format, OutputFormat::Text) && verbose > 0 {
+            eprintln!("  static shape seeds: {}", program_static_seeds.len());
+        }
+        let seed_bytes = perry_codegen::stubs::generate_static_shape_seed_object_with_plan(
+            &program_static_seeds,
+            &program_layout_ordinals,
+            target.as_deref(),
+            &args.output_type,
+            &program_layouts,
+        )?;
+        let seed_path = object_output_dir.join("_perry_static_shape_seeds.o");
+        fs::write(&seed_path, &seed_bytes)?;
+        seed_path
+    };
+
     // Standalone WASI (#11379): link the wasm32 objects against the runtime
     // built for wasm32-wasip2 (`wasi`) or wasm32-wasip1 (`wasip1`) and stop;
     // none of the native link machinery below (auto-optimize, stdlib, stubs,
@@ -7348,6 +7398,8 @@ pub fn run_with_parse_cache(
             )?;
             obj_cleanup_paths.push(installer.clone());
             obj_paths.push(installer);
+            obj_cleanup_paths.push(seed_path.clone());
+            obj_paths.push(seed_path);
             if is_staticlib {
                 super::link::wasi::archive_library(&obj_paths, &runtime_lib, &exe_path, verbose)?;
             } else {
@@ -7431,29 +7483,11 @@ pub fn run_with_parse_cache(
         obj_fingerprints.push(None);
     }
 
-    // Design step 4: the static shape seed unit (see
-    // `perry_codegen::stubs::static_shape_seed_ll`). No seedable id = no unit;
-    // the runtime's seed hook then does nothing.
-    let program_static_seeds: Vec<(u32, perry_codegen::BirthShape)> = program_static_seeds
-        .into_inner()
-        .unwrap_or_else(|e| e.into_inner())
-        .into_iter()
-        .collect();
-    if !program_static_seeds.is_empty() {
-        if matches!(format, OutputFormat::Text) && verbose > 0 {
-            eprintln!("  static shape seeds: {}", program_static_seeds.len());
-        }
-        let seed_bytes = perry_codegen::stubs::generate_static_shape_seed_object_with_plan(
-            &program_static_seeds,
-            &program_layout_ordinals,
-            target.as_deref(),
-        )?;
-        let seed_path = object_output_dir.join("_perry_static_shape_seeds.o");
-        fs::write(&seed_path, &seed_bytes)?;
-        obj_cleanup_paths.push(seed_path.clone());
-        obj_paths.push(seed_path);
-        obj_fingerprints.push(None);
-    }
+    // Keep the native object order unchanged; WASI appended this same seed
+    // object before its early return above.
+    obj_cleanup_paths.push(seed_path.clone());
+    obj_paths.push(seed_path);
+    obj_fingerprints.push(None);
 
     // Generate stubs for missing symbols from unresolved imports (npm packages etc.)
     {

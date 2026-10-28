@@ -1990,8 +1990,6 @@ js_jsx_render_stream_from_value	f64	f64
 js_jsxs	f64	f64,f64
 js_keccak256_native	ptr	i64
 js_keccak256_native_bytes	ptr	i64
-js_layout_seed_plain	i32u	ptr,ptr,i32u,i32u,i32u,i64
-js_layout_seed_plain_constfn	i32u	ptr,ptr,i32u,i32u,i32u,i64,ptr,i32u
 js_lazy_array_index_probe	f64	i64,i64
 js_le	i64	i64,i64
 js_leave_finally	void	
@@ -3485,6 +3483,7 @@ js_readline_stdin_unref	f64
 js_readline_terminal	f64	i64
 js_readline_write	f64	i64,f64
 js_readonly_set_has	f64	f64,f64
+js_realm_test_fixture_publish	void	f64
 js_receiver_may_own_named_method	i32s	f64,f64
 js_recv_route_note	void	i32u
 js_referenceerror_new	ptr	ptr
@@ -3820,7 +3819,6 @@ js_shadow_slot_get	i64	i32u
 js_shadow_slot_set	void	i32u,i64
 js_shadow_state_addr	ptr	
 js_shape_ordinary_inline_slot_for_key	i32s	i32u,i64
-js_shape_register_static_seed	void	ptr
 js_shape_run_static_seed	void	
 js_shared_array_buffer_new	ptr	i32s
 js_shared_array_buffer_new_value	ptr	f64

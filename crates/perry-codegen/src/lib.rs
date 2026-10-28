@@ -332,3 +332,8 @@ mod lower_array_record_length;
 
 /// Canonical linker symbol constructors for JavaScript names.
 pub mod symbol_names;
+
+/// Build-time runtime facts; WRT3a does not use them in emission.
+pub mod realm_manifest {
+    include!(concat!(env!("OUT_DIR"), "/realm_table.rs"));
+}

@@ -54,6 +54,7 @@ mod tests {
         link_section = "perry_layouts"
     )]
     static mut LAYOUT: PerryLayoutDesc = PerryLayoutDesc {
+        image_keys: std::ptr::null_mut(),
         shape_id: 0,
         _layout_pad: 0,
         family: 0x41574201,
@@ -128,6 +129,7 @@ mod evaluation_layout_tests {
         link_section = "perry_layouts"
     )]
     static mut LAYOUT: PerryLayoutDesc = PerryLayoutDesc {
+        image_keys: std::ptr::null_mut(),
         shape_id: 0,
         _layout_pad: 0,
         family: 0x41574202,

@@ -278,6 +278,12 @@ pub const OBJ_FLAGS_REFUSE_FAMILY_RUN: u16 = 0x0407;
 /// Creation-time [[Call]] on OBJECT and PROXY only. This bit has no other
 /// meaning; closures are callable by their type byte.
 pub const GC_OBJECT_CALLABLE: u16 = 0x0020;
+/// Heap-birth facts shared by runtime allocation and realm-cell emission.
+/// These are existing meanings in GcHeader::_reserved, never image markers.
+pub const OBJ_FLAG_PLAIN_ORDINARY: u16 = 0x0200;
+pub const GC_LAYOUT_POINTER_FREE: u16 = 0x4000;
+pub const GC_LAYOUT_SIDE_MASK: u16 = 0x8000;
+pub const GC_LAYOUT_ALL_POINTERS: u16 = 0x2000;
 pub const GC_TYPE_PROXY: u8 = 37;
 pub const GC_TYPE_SYMBOL: u8 = 32;
 pub const GC_TYPE_STRING: u8 = 3;
@@ -1117,4 +1123,56 @@ pub struct WasmEhCheckpoint {
     pub derived_super_binding: u64,
     pub private_member_access_hints: u64,
     pub namespace_override: u64,
+}
+
+/// One canonical key's immutable attribute word, including cumulative prefix
+/// summaries/Bloom filters and an optional descriptor storage slot. Shared by
+/// heap writers and image-cell emitters; no key spelling is repeated here.
+pub const fn canonical_key_attribute_word(
+    previous: u64,
+    entry: u8,
+    bloom: u16,
+    slot: Option<u32>,
+) -> u64 {
+    let mut summary = (previous >> 8) as u8;
+    let mut entries = (previous >> 16) as u16;
+    let mut accessors = (previous >> 32) as u16;
+    if summary & 0x80 != 0 {
+        summary &= !0x80;
+        entries = u16::MAX;
+        accessors = u16::MAX;
+    }
+    if entry & 8 != 0 {
+        summary |= 1;
+    } else if entry & 1 != 0 {
+        summary |= 2;
+    }
+    if entry & 2 != 0 {
+        summary |= 4;
+    }
+    if entry & 4 != 0 {
+        summary |= 8;
+    }
+    if entry & 0x40 != 0 {
+        summary |= 0x10;
+    }
+    if entry & 0x80 != 0 {
+        summary |= 0x20;
+    }
+    if entry != 0 {
+        entries |= bloom;
+        if entry & 8 != 0 {
+            accessors |= bloom;
+        }
+    }
+    if let Some(slot) = slot {
+        summary |= 0xc0;
+        entries = slot as u16;
+        accessors = (slot >> 16) as u16;
+    }
+    0x7ffe_0000_0000_0000
+        | entry as u64
+        | (summary as u64) << 8
+        | (entries as u64) << 16
+        | (accessors as u64) << 32
 }

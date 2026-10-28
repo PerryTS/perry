@@ -114,6 +114,26 @@ class RunnerTests(CaseFixture):
         self.assertEqual(command[4], str(self.output / "fixture.wasm"))
         self.assertEqual(command[5:], ["argument with spaces", "--flag"])
 
+    def test_stdin_from_the_case_config_is_piped_to_the_program(self):
+        self.source.with_suffix(".json").write_text('{"stdin": "line one\\nline two\\n"}')
+        def execute(command, **kwargs):
+            return (
+                subprocess.CompletedProcess(command, 3, b"ok\n", b"")
+                if command[0] == "wasmtime" else self.compile_ok(command, **kwargs))
+        with patch("wasi_run.subprocess.run", side_effect=execute) as run:
+            self.assertTrue(self.run_case()["passed"])
+        self.assertNotIn("input", run.call_args_list[0].kwargs)
+        self.assertEqual(run.call_args_list[1].kwargs["input"], b"line one\nline two\n")
+
+    def test_without_stdin_in_the_config_the_runner_passes_no_input(self):
+        def execute(command, **kwargs):
+            return (
+                subprocess.CompletedProcess(command, 3, b"ok\n", b"")
+                if command[0] == "wasmtime" else self.compile_ok(command, **kwargs))
+        with patch("wasi_run.subprocess.run", side_effect=execute) as run:
+            self.assertTrue(self.run_case()["passed"])
+        self.assertNotIn("input", run.call_args_list[1].kwargs)
+
 
 class FlavourTests(CaseFixture):
     def run_p1(self):

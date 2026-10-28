@@ -287,7 +287,7 @@ pub(crate) fn emit(
             false,
             0,
         );
-        llmod.add_raw_global(format!("@{desc} = global {DESC_TY} {{ i32 {}, i16 {}, i8 {}, i8 0, i32 {count}, i32 {}, i64 0, ptr inttoptr (i64 2 to ptr), ptr @{desc}$keys, i32 {count}, i32 {}, ptr @{desc}$index, i32 0, i32 0, ptr null, i32 0, i32 0 }}, align 8", super::fnv1a(desc.as_bytes()) as u32 & 0x7fff_ffff, crate::runtime_abi::LAYOUT_VARIANT_FUNCTION_CONSTRUCTOR, 0u8, word as i32, cap - 1));
+        llmod.add_raw_global(format!("@{desc} = global {DESC_TY} {{ i32 {}, i16 {}, i8 {}, i8 0, i32 {count}, i32 {}, i64 0, ptr inttoptr (i64 2 to ptr), ptr @{desc}$keys, i32 {count}, i32 {}, ptr @{desc}$index, i32 0, i32 0, ptr null, i32 0, i32 0, ptr null }}, align 8", super::fnv1a(desc.as_bytes()) as u32 & 0x7fff_ffff, crate::runtime_abi::LAYOUT_VARIANT_FUNCTION_CONSTRUCTOR, 0u8, word as i32, cap - 1));
         let n = operands.len();
         llmod.add_raw_global(format!(
             "@{desc}$operands = private constant [{n} x {{ ptr, i32, i16, i16 }}] [{}]",
@@ -306,6 +306,32 @@ pub(crate) fn emit(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "llvm-inprocess")]
+    #[test]
+    fn a_bound_constructor_descriptor_parses_with_the_current_layout_abi() {
+        let old = PLANS.with(|p| {
+            p.replace(vec![Plan {
+                body: "ctor".into(),
+                keys: vec![Key::Binding(7)],
+                operands: HashMap::from([(
+                    7,
+                    Operand {
+                        global: None,
+                        capture: 0,
+                        kind: 1,
+                        slot: 0,
+                    },
+                )]),
+            }])
+        });
+        let mut module = LlModule::new("x86_64-unknown-linux-gnu");
+        emit(&mut module, &mut StringPool::new(), &mut BTreeMap::new());
+        PLANS.with(|p| p.replace(old));
+        let context = inkwell::context::Context::create();
+        crate::inprocess::parse_ir_text(&context, &module.to_ir(), "constructor_layout")
+            .expect("a per-evaluation constructor descriptor must have every ABI field");
+    }
+
     #[test]
     fn only_straight_line_this_stores_form_the_prefix() {
         let set = |k: &str| {

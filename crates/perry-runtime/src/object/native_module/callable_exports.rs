@@ -1631,3 +1631,5 @@ pub(crate) unsafe fn nm_attach_util(
     }
     value
 }
+
+crate::realm_decl!("callable_exports.realm.json#*");

@@ -798,8 +798,10 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
                         "readdirSync" => {
                             return Some(HirType::Array(Box::new(HirType::String)));
                         }
-                        "realpathSync" | "mkdtempSync" | "readlinkSync"
-                        | "readFileSync" => {
+                        "readFileSync" if matches!(args.get(1), Some(Expr::String(enc)) if !enc.is_empty()) => {
+                            return Some(HirType::String);
+                        }
+                        "realpathSync" | "mkdtempSync" | "readlinkSync" => {
                             return Some(HirType::String);
                         }
                         _ => {}

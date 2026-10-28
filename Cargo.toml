@@ -98,6 +98,7 @@ exclude = [
     "third_party/windows-winui",
     "third_party/wac-graph",
     "third_party/turnloop",
+    "test-wasi/p1-host",
 ]
 
 # Build only the host-independent product set by default: the compiler and
