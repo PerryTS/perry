@@ -641,6 +641,8 @@ jobs:
           set -euo pipefail
           export PERRY_RUNTIME_DIR="$PWD/target/perry-dev"
           export PERRY_NO_AUTO_OPTIMIZE=1
+          # The runtime runs below require verifier and trace instruments.
+          export PERRY_GC_INSTRUMENTS=1
 
           # `opt` and `clang` MUST come from the same LLVM install. RS4GC pipes
           # each module through `opt` and hands the result to `clang`, so a
@@ -912,6 +914,8 @@ jobs:
           set -euo pipefail
           export PERRY_RUNTIME_DIR="$PWD/target/perry-dev"
           export PERRY_NO_AUTO_OPTIMIZE=1
+          # The runtime runs below require verifier and trace instruments.
+          export PERRY_GC_INSTRUMENTS=1
           unset PERRY_LLVM_OPT PERRY_LLVM_CLANG
           # Keep LLVM_SYS_221_PREFIX from setup-llvm22. The stock-toolchain
           # assertion removes the external opt/clang overrides; the in-process
