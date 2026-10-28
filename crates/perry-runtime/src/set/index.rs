@@ -111,9 +111,6 @@ fn hash_value(value: f64, insert: bool) -> Option<u32> {
     #[cfg(test)]
     TEST_HASH_CALLS.with(|count| count.set(count.get() + 1));
     let bits = value.to_bits();
-    if is_plain_numeric_key(bits) {
-        return Some(number_hash(bits));
-    }
     let mut hasher = crate::fast_hash::PtrHasher.build_hasher();
     if unsafe { crate::symbol::js_is_symbol(value) != 0 } {
         let addr = (bits & crate::value::POINTER_MASK) as *const crate::symbol::SymbolHeader;
@@ -164,6 +161,12 @@ fn hash_value(value: f64, insert: bool) -> Option<u32> {
             }
             return Some(hasher.finish() as u32);
         }
+    }
+    // String/symbol/identity paths return above. Only the remaining numeric
+    // domain needs an avalanche; ordinary string startup probes pay no new
+    // numeric admission work.
+    if is_plain_numeric_key(bits) {
+        return Some(number_hash(bits));
     }
     bits.hash(&mut hasher);
     Some(hasher.finish() as u32)
