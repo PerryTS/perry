@@ -16,3 +16,7 @@ console.log("public key header:", Certificate.exportPublicKey(valid).toString("u
 console.log("invalid public key length:", Certificate.exportPublicKey(invalid).length);
 console.log("instance verify valid:", certificateInstance.verifySpkac(valid));
 console.log("instance challenge:", certificateInstance.exportChallenge(valid).toString("utf8"));
+// #13322: Certificate is the legacy constructor, reachable with or without
+// `new` through the namespace and as a named import.
+console.log("typeof Certificate:", typeof Certificate, Certificate.length);
+console.log("call instance verify valid:", (crypto as any).Certificate().verifySpkac(valid));

@@ -1,0 +1,1 @@
+Lower closed, nonescaping synchronous generator consumers through a private owner-plus-offset resume frame. Keep the canonical standalone path whenever escape, lifetime, callback or protocol effects are unproven, and preserve moving-GC tracing, parent barriers, exceptions and iterator close.

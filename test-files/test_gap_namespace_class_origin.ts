@@ -1,7 +1,7 @@
-import { helper } from "./test_import_namespace_class_origin_a.ts";
-import { A } from "./test_import_namespace_class_origin_a.ts";
-import { B } from "./test_import_namespace_class_origin_b.ts";
-import { Service } from "./test_import_namespace_class_origin_b.ts";
+import { helper } from "./fixtures/import_namespace_class_origin_a.ts";
+import { A } from "./fixtures/import_namespace_class_origin_a.ts";
+import { B } from "./fixtures/import_namespace_class_origin_b.ts";
+import { Service } from "./fixtures/import_namespace_class_origin_b.ts";
 
 const a = new A.Service();
 const b = new B.Service();

@@ -1,5 +1,6 @@
 use super::*;
 use perry_hir::types::Type;
+use perry_hir::Param;
 
 fn function(body: Vec<Stmt>, is_async: bool) -> Function {
     Function {

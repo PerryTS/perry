@@ -450,6 +450,14 @@
       "reason": "A falsy-local fold consumes only the private method clone's proof: its public wrapper bit-compares the live argument with TAG_UNDEFINED, candidate discovery rejects user writes and closure capture, and the proof API rejects every remaining reassigned binding."
     },
     {
+      "path": "crates/perry-codegen/src/stmt/indexed_owner_loop.rs",
+      "function": "receiver",
+      "access": "local_type_hint",
+      "count": 1,
+      "classification": "runtime-validated",
+      "reason": "The declaration only selects an element-width candidate. admit_owner requires a matching whole-program owner proof or the live byte-cell brand guard, then rejects views, shared/resizable owners and frozen writes before the numeric loop; every failed guard enters the original loop."
+    },
+    {
       "path": "crates/perry-codegen/src/stmt/loops.rs",
       "function": "local_array_binding_element_type_is_erased",
       "access": "local_type_hint",

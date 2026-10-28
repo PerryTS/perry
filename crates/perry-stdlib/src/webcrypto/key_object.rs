@@ -76,7 +76,7 @@ unsafe fn key_material(value: &str, kind: KeyKind, asym_type: u8) -> Vec<u8> {
             parse_p256_signing_key_pem(value).map(|key| key.to_bytes().as_slice().to_vec())
         }
         (2, KeyKind::Public) => parse_p256_verifying_key_pem(value)
-            .map(|key| key.to_encoded_point(false).as_bytes().to_vec()),
+            .map(|key| key.to_sec1_point(false).as_bytes().to_vec()),
         (3, KeyKind::Private) => {
             parse_ed25519_private_surrogate(value).map(|key| key.to_bytes().to_vec())
         }

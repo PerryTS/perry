@@ -1388,7 +1388,7 @@ pub(super) fn p256_public_bytes(private_key: &P256SecretKey, format: &str) -> Ve
     let compressed = format.eq_ignore_ascii_case("compressed");
     private_key
         .public_key()
-        .to_encoded_point(compressed)
+        .to_sec1_point(compressed)
         .as_bytes()
         .to_vec()
 }

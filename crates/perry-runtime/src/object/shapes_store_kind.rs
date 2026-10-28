@@ -183,6 +183,13 @@ pub(crate) unsafe fn check_store_facts(obj: *const ObjectHeader) {
     }
 }
 
+/// Exercise the same audit body in negative fixtures even when the optional
+/// mutator hook is disabled in a release build.
+#[cfg(test)]
+pub(crate) unsafe fn audit_store_facts_for_test(obj: *const ObjectHeader) {
+    audit_check(obj);
+}
+
 #[cold]
 #[inline(never)]
 unsafe fn audit_check(obj: *const ObjectHeader) {

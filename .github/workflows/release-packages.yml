@@ -725,6 +725,7 @@ jobs:
       # It is intentionally a repository variable (not fetched at runtime).
       PERRY_CLI_UPDATE_PUBLIC_KEYS: ${{ vars.PERRY_CLI_UPDATE_PUBLIC_KEYS }}
       PERRY_RELEASE_WASI: ${{ matrix.wasi && needs.build-wasi.outputs.enabled == 'true' && '1' || '0' }}
+      PERRY_RELEASE_WASIP1: ${{ matrix.wasi && needs.build-wasi.outputs.wasip1 == 'true' && '1' || '0' }}
       # Pin the macOS deployment target so bottle object files carry a
       # stable LC_VERSION_MIN / LC_BUILD_VERSION tag regardless of which
       # GitHub runner OS built them. Otherwise users linking against the
@@ -1309,6 +1310,12 @@ jobs:
         with:
           name: perry-cross-wasm32-wasip2
           path: wasi-release
+      - name: Download the matching wasip1 runtime
+        if: env.PERRY_RELEASE_WASIP1 == '1'
+        uses: ./.github/actions/perry/actions/download-artifact
+        with:
+          name: perry-cross-wasm32-wasip1
+          path: wasip1-release
       - name: Install the pinned Node oracle for WASI qualification
         if: env.PERRY_RELEASE_WASI == '1'
         uses: ./.github/actions/perry/actions/setup-node
@@ -1347,12 +1354,34 @@ jobs:
           python scripts/wasi_release.py install --revision "$EXPECTED_SHA" \
             --bundle wasi-release/perry-cross-wasm32-wasip2.tar.gz \
             --output "target/${{ matrix.target }}/prod/wasm32-wasip2/release"
+      - name: Qualify the release compiler with its packaged wasip1 runtime
+        if: env.PERRY_RELEASE_WASIP1 == '1'
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ needs.preflight.outputs.checkout-sha }}
+        run: |
+          set -euo pipefail
+          compiler="target/${{ matrix.target }}/prod/perry"
+          if [[ "$RUNNER_OS" == Windows ]]; then compiler="$compiler.exe"; fi
+          python scripts/wasi_release_check.py --compiler "$compiler" --target wasm32-wasip1 \
+            --bundle wasip1-release/perry-cross-wasm32-wasip1.tar.gz --revision "$EXPECTED_SHA" \
+            --output "$RUNNER_TEMP/perry-wasip1-release-validation"
+          python scripts/wasi_release.py install --target wasm32-wasip1 --revision "$EXPECTED_SHA" \
+            --bundle wasip1-release/perry-cross-wasm32-wasip1.tar.gz \
+            --output "target/${{ matrix.target }}/prod/wasm32-wasip1/release"
       - name: Upload packaged WASI qualification evidence
         if: always() && env.PERRY_RELEASE_WASI == '1'
         uses: ./.github/actions/perry/actions/upload-artifact
         with:
           name: wasi-release-validation-${{ matrix.target }}
           path: ${{ runner.temp }}/perry-wasi-release-validation
+          if-no-files-found: warn
+      - name: Upload packaged wasip1 qualification evidence
+        if: always() && env.PERRY_RELEASE_WASIP1 == '1'
+        uses: ./.github/actions/perry/actions/upload-artifact
+        with:
+          name: wasip1-release-validation-${{ matrix.target }}
+          path: ${{ runner.temp }}/perry-wasip1-release-validation
           if-no-files-found: warn
 
       - name: Package release archive (Unix)
@@ -1362,6 +1391,9 @@ jobs:
           cp target/${{ matrix.target }}/prod/perry staging/
           if [[ "$PERRY_RELEASE_WASI" == 1 ]]; then
             cp -R target/${{ matrix.target }}/prod/wasm32-wasip2 staging/
+          fi
+          if [[ "$PERRY_RELEASE_WASIP1" == 1 ]]; then
+            cp -R target/${{ matrix.target }}/prod/wasm32-wasip1 staging/
           fi
           # Include static libraries for linking (runtime, stdlib, UI)
           for lib in libperry_runtime.a libperry_runtime_abort.a libperry_stdlib.a libperry_wasm_host.a libperry_ui_macos.a libperry_ui_gtk4.a; do
@@ -1515,6 +1547,9 @@ jobs:
           Copy-Item $binary staging/
           if ($env:PERRY_RELEASE_WASI -eq "1") {
             Copy-Item -Recurse "target/${{ matrix.target }}/prod/wasm32-wasip2" staging/
+          }
+          if ($env:PERRY_RELEASE_WASIP1 -eq "1") {
+            Copy-Item -Recurse "target/${{ matrix.target }}/prod/wasm32-wasip1" staging/
           }
           Copy-Item $llvmRuntime staging/
           Copy-Item "xwin-install/bin/xwin.exe" staging/
@@ -2398,6 +2433,13 @@ jobs:
         uses: ./.github/actions/perry/actions/download-artifact
         with:
           name: perry-cross-wasm32-wasip2
+          path: assets/
+
+      - name: Download the wasip1 runtime bundle
+        if: needs.build-wasi.outputs.wasip1 == 'true'
+        uses: ./.github/actions/perry/actions/download-artifact
+        with:
+          name: perry-cross-wasm32-wasip1
           path: assets/
 
       - name: Download cross bundles

@@ -235,6 +235,7 @@ pub(crate) mod class_hierarchy;
 mod clone_suffix_tests;
 mod closure;
 mod closure_capture_cells;
+mod closure_captures;
 mod closure_collect;
 mod constructor_contracts;
 #[cfg(test)]
@@ -245,6 +246,7 @@ mod ctor_arity;
 pub use ctor_arity::{
     context_free_ctor_abi, context_free_ctor_param_count, CtorAbi, UNRESOLVED_PARENT_FWD_ARITY,
 };
+mod checked_integer;
 #[cfg(test)]
 mod declared_string_add_tests;
 #[cfg(test)]
@@ -268,6 +270,7 @@ mod imported_global_order_tests;
 #[cfg(test)]
 mod index_method_clone_tests;
 mod indexed_method_artifacts;
+mod integer_contract;
 #[cfg(test)]
 mod literal_method_this_tests;
 mod ordinary_method_artifacts;
@@ -299,7 +302,8 @@ mod number_exactness_tests;
 mod opts;
 mod program_facts_view;
 pub use program_facts_view::{
-    ElisionFacts, FactsBody, FactsClass, FactsField, FactsRecv, ProgramFactsView,
+    ElisionFacts, FactsBody, FactsClass, FactsField, FactsIndexedOwner, FactsNumericExpr,
+    FactsNumericFunction, FactsRecv, ProgramFactsView,
 };
 #[cfg(test)]
 mod ordinary_param_guard_tests;

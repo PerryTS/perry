@@ -353,9 +353,9 @@ md-5 = { version = "0.11", optional = true }
 perry-hex = { workspace = true, optional = true }
 hmac = { version = "0.13", optional = true }
 bcrypt = { version = "0.19", optional = true }
-p256 = { version = "0.13", optional = true, default-features = false, features = ["pkcs8", "pem", "ecdsa", "ecdh"] }
-p384 = { version = "0.13", optional = true, default-features = false, features = ["pkcs8", "pem", "ecdsa", "ecdh"] }
-p521 = { version = "0.13", optional = true, default-features = false, features = ["pkcs8", "pem", "ecdsa", "ecdh"] }
+p256 = { version = "0.14", optional = true, default-features = false, features = ["pkcs8", "pem", "ecdsa", "ecdh"] }
+p384 = { version = "0.14", optional = true, default-features = false, features = ["pkcs8", "pem", "ecdsa", "ecdh"] }
+p521 = { version = "0.14", optional = true, default-features = false, features = ["pkcs8", "pem", "ecdsa", "ecdh"] }
 rsa = { version = "0.9", optional = true, default-features = false, features = ["pem", "pkcs5", "sha2"] }
 # #1367 node:crypto X509Certificate — DER/PEM cert parsing. x509-cert 0.3 and
 # the direct dependency use DER/SPKI 0.8; jsonwebtoken's current RSA and
@@ -389,7 +389,7 @@ flate2 = { version = "1.0", optional = true }
 # Brotli decompression — feature-checked by axios at module init.
 brotli = { version = "9.0", optional = true }
 # Zstd codecs — exposed by modern Node alongside gzip/deflate/Brotli.
-zstd = { version = "0.13.3", optional = true }
+zstd = { version = "0.14.3", optional = true }
 
 # Email: no direct lettre edge. The MIME builder comes through
 # `turnloop_smtp::message`, which re-exports lettre's `Message` and

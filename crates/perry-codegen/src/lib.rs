@@ -114,8 +114,9 @@ pub use codegen::{
     resolve_target_triple, short_spread_method_capabilities, take_module_static_seeds,
     target_os_of, user_function_symbol, AppMetadata, BirthProto, BirthShape, ClassAccessorNames,
     CompileOptions, ConstFnBirth, ConstructorContracts, CtorAbi, DefinedClassShape, ElisionFacts,
-    ExportedObjectLiteralCapability, FactsBody, FactsClass, FactsField, FactsRecv, FpContractMode,
-    ImportedClass, ImportedObjectLiteral, ImportedObjectLiteralMethod, ModuleBirth, NamespaceEntry,
+    ExportedObjectLiteralCapability, FactsBody, FactsClass, FactsField, FactsIndexedOwner,
+    FactsNumericExpr, FactsNumericFunction, FactsRecv, FpContractMode, ImportedClass,
+    ImportedObjectLiteral, ImportedObjectLiteralMethod, ModuleBirth, NamespaceEntry,
     NamespaceEntryKind, ObjectLiteralMethodCandidate, ProgramClassShapeIds, ProgramFactsView,
     ResolvedConstructorContracts, ShortSpreadMethodCandidate, TypedMasks, STATIC_SEED_FORMAT,
     TARGET_NAMES,
@@ -336,4 +337,20 @@ pub mod symbol_names;
 /// Build-time runtime facts; WRT3a does not use them in emission.
 pub mod realm_manifest {
     include!(concat!(env!("OUT_DIR"), "/realm_table.rs"));
+
+    #[test]
+    fn temporal_reach_closes_the_generated_family_without_selecting_top() {
+        let mut reach = perry_hir::realm_reach::RealmReach::default();
+        reach.names.insert("Temporal".into());
+        reach.close(REALM);
+        assert!(!reach.is_full());
+        for name in [
+            "Temporal.Duration.prototype.years.<get>",
+            "Temporal.ZonedDateTime.prototype.toString",
+            "Temporal.Now.instant",
+        ] {
+            assert!(reach.names.contains(name), "missing {name}");
+        }
+        assert!(reach.names.len() < REALM.len());
+    }
 }

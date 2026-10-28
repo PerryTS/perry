@@ -509,9 +509,10 @@ them.
   otherwise-idle machine. Behavior under co-located-tenant pressure
   is not measured.
 - **Compile time / binary size.** Perry compiles slower than Go (Go
-  is famously fast at compile-time). Binary size is ~1 MB for hello
-  world; comparable to Go but bigger than Rust release binaries with
-  panic=abort + strip.
+  is famously fast at compile-time). Hello world is ~34 KB (no
+  runtime linked); small programs that use the runtime are ~5.5 MB
+  stripped on macOS arm64, tracked per program by
+  `scripts/runtime_size_budget.py`.
 
 ---
 

@@ -33,6 +33,7 @@ impl ConstInit {
             | Expr::Undefined
             | Expr::Null
             | Expr::TypeOf(_)
+            | Expr::Binary { .. }
             | Expr::Unary { .. }
             | Expr::Compare { .. }
             | Expr::Logical { .. }
@@ -45,6 +46,72 @@ impl ConstInit {
 }
 
 impl<'a> Gen<'a> {
+    /// Only immutable numeric definitions may establish an allocation extent.
+    pub(crate) fn owner_extent(&self, mi: u32, e: &Expr) -> Option<u32> {
+        fn num(g: &Gen<'_>, mi: u32, e: &Expr, seen: &mut Vec<Binding>) -> Option<f64> {
+            Some(match e {
+                Expr::Integer(n) => *n as f64,
+                Expr::Number(n) => *n,
+                Expr::LocalGet(id) | Expr::GlobalGet(id) => {
+                    let b = (mi, matches!(e, Expr::GlobalGet(_)), *id);
+                    if seen.contains(&b) {
+                        return None;
+                    }
+                    seen.push(b);
+                    let fallback;
+                    let v = if let Some(ConstInit::Value(v)) = g.const_inits.get(&b) {
+                        v
+                    } else {
+                        // Declaration units share the immutable literal interface
+                        // of their source module. No other unit's solved values
+                        // or mutable storage are inspected here.
+                        let m = g.modules[mi as usize].1;
+                        fallback = if b.1 {
+                            m.globals
+                                .iter()
+                                .find(|x| x.id == *id && !x.mutable)?
+                                .init
+                                .clone()?
+                        } else {
+                            let mut found = None;
+                            for_each_stmt_deep(&m.init, &mut |s| {
+                                if let Stmt::Let {
+                                    id: j,
+                                    mutable: false,
+                                    init: Some(e),
+                                    ..
+                                } = s
+                                {
+                                    if j == id {
+                                        found = Some(e.clone());
+                                    }
+                                }
+                            });
+                            found?
+                        };
+                        &fallback
+                    };
+                    let n = num(g, mi, v, seen)?;
+                    seen.pop();
+                    n
+                }
+                Expr::Binary { op, left, right } => {
+                    let l = num(g, mi, left, seen)?;
+                    let r = num(g, mi, right, seen)?;
+                    match op {
+                        perry_hir::BinaryOp::Add => l + r,
+                        perry_hir::BinaryOp::Sub => l - r,
+                        perry_hir::BinaryOp::Mul => l * r,
+                        _ => return None,
+                    }
+                }
+                _ => return None,
+            })
+        }
+        let n = num(self, mi, e, &mut Vec::new())?;
+        (n >= 0.0 && n <= i32::MAX as f64 && n.fract() == 0.0).then_some(n as u32)
+    }
+
     /// The constant string `e` evaluates to: a constant expression
     /// (`const_eval`), or a constant binding whose initializer is one.
     pub(crate) fn const_key(&mut self, mi: u32, e: &Expr) -> Option<String> {

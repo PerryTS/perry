@@ -1,6 +1,7 @@
 //! A numeric indexed-operation region. Declarations select element widths;
 //! live owner headers, scalar guards and interval guards prove semantics.
-//! The fast region has no calls, allocations or polls, hence cannot detach,
+//! The fast region has only numeric operations/intrinsics, no user calls or
+//! allocations/polls, hence cannot detach,
 //! resize, rebind or relocate its storage. No validity state survives it.
 //! Misses enter the original loop before any body effect. Aliases are allowed:
 //! operations retain source order. Distinct receivers must have disjoint live
@@ -19,6 +20,11 @@ struct Plan {
     defs: BTreeMap<u32, Expr>,
     inputs: BTreeSet<u32>,
     writes: BTreeSet<u32>,
+    stores: BTreeSet<u32>,
+    i32_writes: BTreeMap<u32, bool>,
+    nested: BTreeMap<u32, i64>,
+    carried: BTreeSet<u32>,
+    depth: u32,
     indices: Vec<(u32, Expr)>,
     locals: BTreeSet<u32>,
     body_bindings: BTreeSet<u32>,
@@ -78,6 +84,11 @@ impl Plan {
             return true;
         }
         match e {
+            Expr::MathSqrt(v) => self.numeric(ctx, v),
+            Expr::Call { callee, args, .. } => {
+                numeric_function(ctx, callee).is_some_and(|f| args.len() == f.params.len())
+                    && args.iter().all(|a| self.numeric(ctx, a))
+            }
             Expr::Integer(_) | Expr::Number(_) => true,
             Expr::LocalGet(id) if *id == self.counter || self.locals.contains(id) => {
                 !self.aliases.contains_key(id)
@@ -103,14 +114,31 @@ impl Plan {
                 if *id != self.counter
                     && !self.aliases.contains_key(id)
                     && !self.defs.contains_key(id)
-                    && !ctx.numeric_accumulator_f64_slots.contains_key(id)
                     && (self.locals.contains(id)
                         || (plain_binding(ctx, *id)
                             && (ctx.locals.contains_key(id)
                                 || ctx.local_slot_reps.contains_key(id)))) =>
             {
-                if !self.numeric(ctx, value) {
+                if self.nested.contains_key(id) || !self.numeric(ctx, value) {
                     return false;
+                }
+                let signed = matches!(
+                    value.as_ref(),
+                    Expr::Binary {
+                        op: BinaryOp::BitAnd
+                            | BinaryOp::BitOr
+                            | BinaryOp::BitXor
+                            | BinaryOp::Shl
+                            | BinaryOp::Shr,
+                        ..
+                    }
+                );
+                self.i32_writes
+                    .entry(*id)
+                    .and_modify(|v| *v &= signed)
+                    .or_insert(signed);
+                if self.depth != 0 {
+                    self.carried.insert(*id);
                 }
                 if !self.locals.contains(id) {
                     self.inputs.insert(*id);
@@ -139,6 +167,18 @@ impl Plan {
                     },
                 )
             }
+            Expr::Uint8ArraySet {
+                array,
+                index,
+                value,
+            } => self.expression(
+                ctx,
+                &Expr::IndexSet {
+                    object: array.clone(),
+                    index: index.clone(),
+                    value: value.clone(),
+                },
+            ),
             Expr::IndexSet {
                 object,
                 index,
@@ -154,6 +194,7 @@ impl Plan {
                 if !self.numeric(ctx, index) || !self.numeric(ctx, value) {
                     return false;
                 }
+                self.stores.insert(root);
                 self.indices.push((root, *index.clone()));
                 true
             }
@@ -193,11 +234,67 @@ impl Plan {
                     }
                     self.locals.insert(*id);
                 }
+                Stmt::If {
+                    condition: Expr::Bool(true),
+                    then_branch,
+                    else_branch: None,
+                } => {
+                    if !self.body(ctx, then_branch) {
+                        return false;
+                    }
+                }
+                Stmt::For {
+                    init: Some(init),
+                    condition:
+                        Some(Expr::Compare {
+                            op: CompareOp::Lt,
+                            left,
+                            right,
+                        }),
+                    update:
+                        Some(Expr::Update {
+                            id: updated,
+                            op: UpdateOp::Increment,
+                            ..
+                        }),
+                    body,
+                } => {
+                    let Stmt::Let {
+                        id,
+                        init: Some(Expr::Integer(0)),
+                        ..
+                    } = init.as_ref()
+                    else {
+                        return false;
+                    };
+                    if id != updated
+                        || !matches!(left.as_ref(), Expr::LocalGet(i) if i == id)
+                        || self.locals.contains(id)
+                        || ctx.boxed_vars.contains(id)
+                        || ctx.closure_captures.contains_key(id)
+                    {
+                        return false;
+                    }
+                    let Some((lo, hi)) = static_interval(ctx, self, right, 0) else {
+                        return false;
+                    };
+                    if lo != hi || lo < 0 || hi > i32::MAX as i64 {
+                        return false;
+                    }
+                    self.nested.insert(*id, hi);
+                    self.locals.insert(*id);
+                    self.depth += 1;
+                    let accepted = self.body(ctx, body);
+                    self.depth -= 1;
+                    if !accepted {
+                        return false;
+                    }
+                }
                 Stmt::Expr(e) if self.expression(ctx, e) => {}
                 _ => return false,
             }
         }
-        !self.indices.is_empty()
+        true
     }
 
     fn expand(&self, e: &Expr) -> Expr {
@@ -238,7 +335,7 @@ impl Plan {
             return true;
         }
         match e {
-            Expr::LocalGet(id) => *id == self.counter,
+            Expr::LocalGet(id) => *id == self.counter || self.nested.contains_key(id),
             Expr::Binary {
                 op: BinaryOp::Add | BinaryOp::Sub,
                 left,
@@ -249,17 +346,120 @@ impl Plan {
     }
 }
 
+fn numeric_function<'a>(
+    ctx: &'a FnCtx<'_>,
+    callee: &Expr,
+) -> Option<&'a crate::codegen::FactsNumericFunction> {
+    if ctx.wpfacts_off || ctx.wpfacts.interp_guard {
+        return None;
+    }
+    let id = match callee {
+        Expr::FuncRef(id) => *id,
+        Expr::LocalGet(id) => {
+            let bodies = ctx.wpfacts.local_bodies.get(id)?;
+            if bodies.len() != 1 || bodies[0].closure {
+                return None;
+            }
+            bodies[0].func_id
+        }
+        _ => return None,
+    };
+    ctx.wpfacts.numeric_functions.get(&id)
+}
+
+fn owner_proof<'a>(
+    ctx: &'a FnCtx<'_>,
+    id: u32,
+    kind: u8,
+) -> Option<&'a crate::codegen::FactsIndexedOwner> {
+    if ctx.wpfacts_off || ctx.wpfacts.interp_guard {
+        return None;
+    }
+    ctx.wpfacts
+        .indexed_owners
+        .get(&id)
+        .filter(|p| p.kind == kind)
+}
+
+fn static_interval(ctx: &FnCtx<'_>, p: &Plan, e: &Expr, bound: i64) -> Option<(i64, i64)> {
+    if let Some(w) = crate::collectors::static_index_window(e) {
+        return Some(w);
+    }
+    if let Expr::LocalGet(id) = e {
+        if *id == p.counter {
+            return Some((0, bound.saturating_sub(1)));
+        }
+        if let Some(n) = p.nested.get(id) {
+            return Some((0, n.saturating_sub(1)));
+        }
+        if let Some(n) = ctx
+            .compile_time_constants
+            .get(id)
+            .or_else(|| ctx.const_number_locals.get(id))
+        {
+            if *n >= 0.0 && *n <= i32::MAX as f64 && n.fract() == 0.0 {
+                return Some((*n as i64, *n as i64));
+            }
+        }
+    }
+    if let Expr::Binary { op, left, right } = e {
+        let (a, b) = static_interval(ctx, p, left, bound)?;
+        let (c, d) = static_interval(ctx, p, right, bound)?;
+        let r = match op {
+            BinaryOp::Add => (a.checked_add(c)?, b.checked_add(d)?),
+            BinaryOp::Sub => (a.checked_sub(d)?, b.checked_sub(c)?),
+            BinaryOp::Mul if a >= 0 && c >= 0 => (a.checked_mul(c)?, b.checked_mul(d)?),
+            _ => return None,
+        };
+        return (r.0 >= 0 && r.1 <= i32::MAX as i64).then_some(r);
+    }
+    let r = crate::expr::int_range_expr(ctx, e)?;
+    Some((r.min, r.max))
+}
+
 #[derive(Clone)]
 enum Number {
     F(String),
+    /// Finite Number interval entirely representable by signed i64 truncation.
+    Ranged {
+        value: String,
+        min: f64,
+        max: f64,
+    },
     I(String),
     U(String),
-    Index { wide: String, boxed: Box<Number> },
+    Index {
+        wide: String,
+        boxed: Box<Number>,
+    },
 }
 impl Number {
+    fn range(&self) -> Option<(f64, f64)> {
+        match self {
+            Self::Ranged { min, max, .. } => Some((*min, *max)),
+            Self::I(_) => Some((i32::MIN as f64, i32::MAX as f64)),
+            Self::U(_) => Some((0.0, u32::MAX as f64)),
+            Self::Index { boxed, .. } => boxed.range(),
+            Self::F(_) => None,
+        }
+    }
+    fn bounded(value: String, range: Option<(f64, f64)>) -> Self {
+        if let Some((min, max)) = range {
+            // i64::MAX rounds UP to 2^63 as f64: the upper bound is strict.
+            if min.is_finite()
+                && max.is_finite()
+                && min >= i64::MIN as f64
+                && max < -(i64::MIN as f64)
+            {
+                return Self::Ranged { value, min, max };
+            }
+        }
+        Self::F(value)
+    }
+
     fn f64(&self, ctx: &mut FnCtx<'_>) -> String {
         match self {
-            Self::F(v) => v.clone(),
+            Self::F(v) | Self::Ranged { value: v, .. } => v.clone(),
             Self::Index { boxed, .. } => boxed.f64(ctx),
             Self::I(v) => ctx.block().sitofp(I32, v, DOUBLE),
             Self::U(v) => ctx.block().uitofp(I32, v, DOUBLE),
@@ -268,6 +468,10 @@ impl Number {
     fn i32(&self, ctx: &mut FnCtx<'_>) -> String {
         match self {
             Self::F(v) => ctx.toint32_wrap(v),
+            Self::Ranged { value, .. } => {
+                let wide = ctx.block().fptosi(DOUBLE, value, I64);
+                ctx.block().trunc(I64, &wide, I32)
+            }
             Self::I(v) | Self::U(v) => v.clone(),
             Self::Index { wide, .. } => ctx.block().trunc(I64, wide, I32),
         }
@@ -327,12 +531,22 @@ struct Storage {
 
 fn admit_owner(ctx: &mut FnCtx<'_>, id: u32, kind: u8, slow: &str) -> Storage {
     let boxed = boxed_binding(ctx, id);
-    let (raw, ok) = crate::expr::byte_cell::owner_guard(
-        ctx,
-        &boxed,
-        crate::expr::byte_cell::brand_for_kind(kind),
-    );
-    branch_guard(ctx, &ok, slow);
+    let proven = owner_proof(ctx, id, kind).is_some();
+    let (raw, ok) = if proven {
+        (
+            crate::expr::unbox_to_i64(ctx.block(), &boxed),
+            "true".to_owned(),
+        )
+    } else {
+        crate::expr::byte_cell::owner_guard(
+            ctx,
+            &boxed,
+            crate::expr::byte_cell::brand_for_kind(kind),
+        )
+    };
+    if !proven {
+        branch_guard(ctx, &ok, slow);
+    }
     let word = crate::expr::byte_cell::header_word(ctx.block(), &raw);
     // Admit only an ordinary owner, never a view, resizable/shared owner or
     // native arena. Detachment also clears its length. Preserve frozen writes.
@@ -342,9 +556,14 @@ fn admit_owner(ctx: &mut FnCtx<'_>, id: u32, kind: u8, slow: &str) -> Storage {
         &((1u64 << 16) | (1 << 24) | (1 << 30)).to_string(),
     );
     let plain = ctx.block().icmp_eq(I64, &disallowed, "0");
-    branch_guard(ctx, &plain, slow);
+    if !proven {
+        branch_guard(ctx, &plain, slow);
+    }
     let ptr = ctx.block().inttoptr(I64, &raw);
-    let len = ctx.block().load(I32, &ptr);
+    let len = owner_proof(ctx, id, kind)
+        .and_then(|o| o.exact_len)
+        .map(|n| n.to_string())
+        .unwrap_or_else(|| ctx.block().load(I32, &ptr));
     let data = crate::expr::byte_cell::owner_data(ctx, &raw, &word, "indexed.owner.data");
     Storage {
         raw,
@@ -395,8 +614,18 @@ fn disjoint_storage(ctx: &mut FnCtx<'_>, storage: &mut BTreeMap<u32, Storage>, s
         let end = ctx.block().add(I64, &s.data, &bytes);
         spans.push((*id, s.data.clone(), end));
     }
-    for (i, (_, start, end)) in spans.iter().enumerate() {
-        for (_, other_start, other_end) in &spans[..i] {
+    for (i, (id, start, end)) in spans.iter().enumerate() {
+        for (other, other_start, other_end) in &spans[..i] {
+            let separate = owner_proof(ctx, *id, storage[id].kind)
+                .zip(owner_proof(ctx, *other, storage[other].kind))
+                .is_some_and(|(a, b)| {
+                    !a.allocations.is_empty()
+                        && !b.allocations.is_empty()
+                        && a.allocations.iter().all(|x| !b.allocations.contains(x))
+                });
+            if separate {
+                continue;
+            }
             let before = ctx.block().icmp_ule(I64, end, other_start);
             let after = ctx.block().icmp_ule(I64, other_end, start);
             let disjoint = ctx.block().or(I1, &before, &after);
@@ -467,7 +696,13 @@ fn interval(
         return (n.clone(), n);
     }
     match e {
-        Expr::LocalGet(_) => {
+        Expr::LocalGet(id) => {
+            if let Some(n) = p.nested.get(id) {
+                return (
+                    "0.0".into(),
+                    crate::nanbox::double_literal(n.saturating_sub(1) as f64),
+                );
+            }
             let max = ctx.block().fsub(bound, "1.0");
             ("0.0".into(), max)
         }
@@ -503,7 +738,7 @@ fn index_value(
                 let v = v.clone();
                 ctx.block().zext(I32, &v, I64)
             }
-            Number::F(v) => {
+            Number::F(v) | Number::Ranged { value: v, .. } => {
                 let v = v.clone();
                 ctx.block().fptosi(DOUBLE, &v, I64)
             }
@@ -534,7 +769,9 @@ fn index_value(
             match value {
                 Number::I(v) | Number::U(v) => ctx.block().zext(I32, &v, I64),
                 Number::Index { wide, .. } => wide,
-                Number::F(v) => ctx.block().fptosi(DOUBLE, &v, I64),
+                Number::F(v) | Number::Ranged { value: v, .. } => {
+                    ctx.block().fptosi(DOUBLE, &v, I64)
+                }
             }
         }
     }
@@ -625,9 +862,42 @@ fn numeric(
         };
     }
     match e {
+        Expr::MathSqrt(v) => {
+            let v = numeric(ctx, p, v, values, storage).f64(ctx);
+            Number::F(ctx.block().call(DOUBLE, "llvm.sqrt.f64", &[(DOUBLE, &v)]))
+        }
+        Expr::Call { callee, args, .. } => {
+            let f = numeric_function(ctx, callee)
+                .expect("proved pure numeric leaf")
+                .clone();
+            // Evaluate each actual once, left to right, before binding any
+            // formal. Repeated formal uses cannot repeat an indexed read.
+            let actual: Vec<_> = args
+                .iter()
+                .map(|e| numeric(ctx, p, e, values, storage))
+                .collect();
+            let saved: Vec<_> = f
+                .params
+                .iter()
+                .zip(actual)
+                .map(|(id, v)| (*id, values.insert(*id, v)))
+                .collect();
+            let result = numeric(ctx, p, &f.expression.to_hir(), values, storage);
+            for (id, old) in saved {
+                if let Some(v) = old {
+                    values.insert(id, v);
+                } else {
+                    values.remove(&id);
+                }
+            }
+            result
+        }
         Expr::Integer(n) if i32::try_from(*n).is_ok() => Number::I(n.to_string()),
-        Expr::Integer(n) => Number::F(crate::nanbox::double_literal(*n as f64)),
-        Expr::Number(n) => Number::F(crate::nanbox::double_literal(*n)),
+        Expr::Integer(n) => Number::bounded(
+            crate::nanbox::double_literal(*n as f64),
+            Some((*n as f64, *n as f64)),
+        ),
+        Expr::Number(n) => Number::bounded(crate::nanbox::double_literal(*n), Some((*n, *n))),
         Expr::LocalGet(id) => values[id].clone(),
         Expr::Binary { op, left, right } => {
             let l = numeric(ctx, p, left, values, storage);
@@ -661,16 +931,34 @@ fn numeric(
                     Number::I(v)
                 };
             }
+            let range = l.range().zip(r.range()).and_then(|((a, b), (c, d))| {
+                Some(match op {
+                    BinaryOp::Add => (a + c, b + d),
+                    BinaryOp::Sub => (a - d, b - c),
+                    BinaryOp::Mul => {
+                        let v = [a * c, a * d, b * c, b * d];
+                        if v.iter().any(|v| !v.is_finite()) {
+                            return None;
+                        }
+                        (
+                            v.iter().copied().fold(f64::INFINITY, f64::min),
+                            v.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+                        )
+                    }
+                    _ => return None,
+                })
+            });
             let l = l.f64(ctx);
             let r = r.f64(ctx);
-            Number::F(match op {
+            let value = match op {
                 BinaryOp::Add => ctx.block().fadd(&l, &r),
                 BinaryOp::Sub => ctx.block().fsub(&l, &r),
                 BinaryOp::Mul => ctx.block().fmul(&l, &r),
                 BinaryOp::Div => ctx.block().fdiv(&l, &r),
                 BinaryOp::Mod => ctx.block().frem(&l, &r),
                 _ => unreachable!(),
-            })
+            };
+            Number::bounded(value, range)
         }
         Expr::Unary { op, operand } => {
             let v = numeric(ctx, p, operand, values, storage);
@@ -712,6 +1000,21 @@ fn expression(
             &Expr::IndexSet {
                 object: target.clone(),
                 index: key.clone(),
+                value: value.clone(),
+            },
+            values,
+            storage,
+        ),
+        Expr::Uint8ArraySet {
+            array,
+            index,
+            value,
+        } => expression(
+            ctx,
+            p,
+            &Expr::IndexSet {
+                object: array.clone(),
+                index: index.clone(),
                 value: value.clone(),
             },
             values,
@@ -768,7 +1071,107 @@ fn expression(
     }
 }
 
-/// First slice: linear numeric bodies, any numeric typed-array width, exact
+fn emit_body(
+    ctx: &mut FnCtx<'_>,
+    p: &Plan,
+    body: &[Stmt],
+    values: &mut BTreeMap<u32, Number>,
+    storage: &BTreeMap<u32, Storage>,
+    slots: &BTreeMap<u32, (String, bool)>,
+    native_indices: &BTreeSet<u32>,
+) {
+    for stmt in body {
+        match stmt {
+            Stmt::Let {
+                id, init: Some(e), ..
+            } if !p.aliases.contains_key(id) => {
+                let boxed = numeric(ctx, p, e, values, storage);
+                let value = if native_indices.contains(id) {
+                    let wide = index_value(ctx, p, e, values, storage);
+                    Number::Index {
+                        wide,
+                        boxed: Box::new(boxed),
+                    }
+                } else {
+                    boxed
+                };
+                values.insert(*id, value);
+                if let Some((slot, int)) = slots.get(id) {
+                    let v = if *int {
+                        values[id].i32(ctx)
+                    } else {
+                        values[id].f64(ctx)
+                    };
+                    ctx.block().store(if *int { I32 } else { DOUBLE }, &v, slot);
+                }
+            }
+            Stmt::Let { .. } => {}
+            Stmt::Expr(e) => {
+                expression(ctx, p, e, values, storage);
+                if let Expr::LocalSet(id, _) = e {
+                    if let Some((slot, int)) = slots.get(id) {
+                        let v = if *int {
+                            values[id].i32(ctx)
+                        } else {
+                            values[id].f64(ctx)
+                        };
+                        ctx.block().store(if *int { I32 } else { DOUBLE }, &v, slot);
+                    }
+                }
+            }
+            Stmt::If {
+                condition: Expr::Bool(true),
+                then_branch,
+                else_branch: None,
+            } => {
+                emit_body(ctx, p, then_branch, values, storage, slots, native_indices);
+            }
+            Stmt::For {
+                init: Some(init),
+                body,
+                ..
+            } => {
+                let Stmt::Let { id, .. } = init.as_ref() else {
+                    unreachable!()
+                };
+                let bound = p.nested[id];
+                let ctr_slot = ctx.func.alloca_entry(I32);
+                ctx.block().store(I32, "0", &ctr_slot);
+                let head = ctx.new_block("indexed.owner.nested");
+                let head_l = ctx.block_label(head);
+                let exit = ctx.new_block("indexed.owner.nested.exit");
+                let exit_l = ctx.block_label(exit);
+                ctx.block().br(if bound == 0 { &exit_l } else { &head_l });
+                let before = values.clone();
+                ctx.current_block = head;
+                let ctr = ctx.block().load(I32, &ctr_slot);
+                let mut inner = before.clone();
+                inner.insert(*id, Number::I(ctr.clone()));
+                for (key, (slot, int)) in slots {
+                    if inner.contains_key(key) {
+                        let v = ctx.block().load(if *int { I32 } else { DOUBLE }, slot);
+                        inner.insert(*key, if *int { Number::I(v) } else { Number::F(v) });
+                    }
+                }
+                emit_body(ctx, p, body, &mut inner, storage, slots, native_indices);
+                let next = ctx.block().add(I32, &ctr, "1");
+                ctx.block().store(I32, &next, &ctr_slot);
+                let more = ctx.block().icmp_slt(I32, &next, &bound.to_string());
+                ctx.block().cond_br(&more, &head_l, &exit_l);
+                ctx.current_block = exit;
+                for (key, (slot, int)) in slots {
+                    if before.contains_key(key) {
+                        let v = ctx.block().load(if *int { I32 } else { DOUBLE }, slot);
+                        values.insert(*key, if *int { Number::I(v) } else { Number::F(v) });
+                    }
+                }
+            }
+            _ => unreachable!("validated nested numeric region"),
+        }
+    }
+}
+
+/// Numeric bodies and fixed-bound nested loops, numeric typed-array widths,
 /// unit-stride counters, affine or mask-bounded indices. Unsupported effects
 /// and index expressions keep the original lowering.
 pub(super) fn lower(
@@ -781,17 +1184,10 @@ pub(super) fn lower(
     if ctx.is_async_fn || ctx.disable_buffer_fast_path || !ctx.pending_labels.is_empty() {
         return Ok(false);
     }
-    let counter = match init {
+    let (counter, start_expr) = match init {
         Some(Stmt::Let {
-            id,
-            init: Some(Expr::Integer(0)),
-            ..
-        }) => *id,
-        Some(Stmt::Let {
-            id,
-            init: Some(Expr::Number(n)),
-            ..
-        }) if n.to_bits() == 0 => *id,
+            id, init: Some(e), ..
+        }) => (*id, e),
         _ => return Ok(false),
     };
     if !plain_binding(ctx, counter)
@@ -810,16 +1206,21 @@ pub(super) fn lower(
     };
     let mut p = Plan {
         counter,
-        body_bindings: body
-            .iter()
-            .filter_map(|s| match s {
-                Stmt::Let { id, .. } => Some(*id),
-                _ => None,
-            })
-            .collect(),
+        body_bindings: {
+            let mut ids = BTreeSet::new();
+            perry_hir::tdz_check::for_each_stmt_deep(body, &mut |s| {
+                if let Stmt::Let { id, .. } = s {
+                    ids.insert(*id);
+                }
+            });
+            ids
+        },
         ..Default::default()
     };
-    if !p.body(ctx, body) {
+    if !p.body(ctx, body) || p.indices.is_empty() {
+        return Ok(false);
+    }
+    if !p.numeric(ctx, start_expr) || !p.invariant(start_expr) {
         return Ok(false);
     }
     let length_receiver = match bound_expr {
@@ -840,10 +1241,11 @@ pub(super) fn lower(
     if indices.iter().any(|(_, e)| !p.window(e)) {
         return Ok(false);
     }
-    if p.arrays.keys().all(|id| {
-        (ctx.known_noalias_buffer_locals.contains(id) && ctx.sealed_buffer_locals.contains(id))
-            || crate::expr::proven_view_receiver(ctx, &Expr::LocalGet(*id)).is_some()
-    }) {
+    if !matches!(start_expr, Expr::Integer(0))
+        && !matches!(start_expr, Expr::Number(n) if n.to_bits() == 0)
+        && !crate::expr::int_range_expr(ctx, start_expr)
+            .is_some_and(|r| r.min > 0 && r.max <= i32::MAX as i64)
+    {
         return Ok(false);
     }
     // A mutable local cannot be used as a let-expansion proof.
@@ -858,20 +1260,34 @@ pub(super) fn lower(
     let slow_l = ctx.block_label(slow_idx);
     let done_idx = ctx.new_block("indexed.owner.done");
     let done_l = ctx.block_label(done_idx);
+    let entry_blocks_start = ctx.func.num_blocks();
     let mut values = BTreeMap::new();
     for id in &p.inputs {
         let v = boxed_binding(ctx, *id);
         let bits = ctx.block().bitcast_double_to_i64(&v);
         let number = crate::codegen::emit_plain_number_bits_test(ctx.block(), &bits);
-        branch_guard(ctx, &number, &slow_l);
+        let native_number = matches!(
+            ctx.local_slot_reps.get(id),
+            Some(crate::expr::SlotRep::I32 | crate::expr::SlotRep::U32)
+        ) || ctx.numeric_accumulator_f64_slots.contains_key(id);
+        if !native_number && (ctx.wpfacts_off || !ctx.wpfacts.number_inputs.contains(id)) {
+            branch_guard(ctx, &number, &slow_l);
+        }
         values.insert(*id, Number::F(v));
     }
     let mut storage = BTreeMap::new();
     for (id, kind) in &p.arrays {
         storage.insert(*id, admit_owner(ctx, *id, *kind, &slow_l));
     }
-    disjoint_storage(ctx, &mut storage, &slow_l);
-    if let Some(id) = length_receiver {
+    // Read-only regions require no alias separation. For writes, allocation
+    // identities can prove separation before falling back to live spans.
+    if !p.stores.is_empty() {
+        disjoint_storage(ctx, &mut storage, &slow_l);
+    }
+    if let Some(id) = length_receiver.filter(|id| {
+        !(ctx.wpfacts.indexed_metadata_pristine
+            && owner_proof(ctx, *id, storage[id].kind).is_some())
+    }) {
         // Reuse the ordinary typed metadata-accessor contract. An owner
         // brand alone does not prove an observable `.length` property read:
         // its bag may shadow it or install a custom prototype, and a builtin
@@ -895,15 +1311,51 @@ pub(super) fn lower(
     } else {
         invariant_value(ctx, bound_expr, &values)
     };
-    let bound_int = integer_extent(ctx, &bound, &slow_l);
+    let static_bound = length_receiver
+        .and_then(|id| {
+            owner_proof(ctx, id, storage[&id].kind)?
+                .exact_len
+                .map(i64::from)
+        })
+        .or_else(|| {
+            static_interval(ctx, &p, bound_expr, 0)
+                .filter(|(a, b)| a == b && *a >= 0 && *a <= i32::MAX as i64)
+                .map(|r| r.0)
+        });
+    let bound_int = if let Some(n) = static_bound {
+        n.to_string()
+    } else {
+        integer_extent(ctx, &bound, &slow_l)
+    };
+    let start = invariant_value(ctx, start_expr, &values);
+    let start_int = if let Some((a, b)) = static_interval(ctx, &p, start_expr, 0)
+        .filter(|(a, b)| a == b && *a >= 0 && *b <= i32::MAX as i64)
+    {
+        let _ = b;
+        a.to_string()
+    } else {
+        integer_extent(ctx, &start, &slow_l)
+    };
     // Empty loops still evaluate the original condition once. The admitted
     // length/numeric condition is effect-free, so they may exit immediately.
     let nonempty_idx = ctx.new_block("indexed.owner.nonempty");
     let nonempty_l = ctx.block_label(nonempty_idx);
-    let nonempty = ctx.block().icmp_ne(I32, &bound_int, "0");
+    let nonempty = ctx.block().icmp_slt(I32, &start_int, &bound_int);
     ctx.block().cond_br(&nonempty, &nonempty_l, &done_l);
     ctx.current_block = nonempty_idx;
+    let mut static_windows = 0;
     for (id, index) in &indices {
+        let proved = static_bound
+            .and_then(|n| static_interval(ctx, &p, index, n))
+            .is_some_and(|(lo, hi)| {
+                lo >= 0
+                    && owner_proof(ctx, *id, storage[id].kind)
+                        .is_some_and(|o| hi < i64::from(o.min_len))
+            });
+        if proved {
+            static_windows += 1;
+            continue;
+        }
         let (lo, hi) = interval(ctx, &p, index, &bound, &values, &slow_l);
         let low = ctx.block().fcmp("oge", &lo, "0.0");
         let length = ctx.block().uitofp(I32, &storage[id].len, DOUBLE);
@@ -919,13 +1371,7 @@ pub(super) fn lower(
     // it. Preserve integer bitwise results as i32 across iterations.
     let mut slots = BTreeMap::new();
     for id in &p.writes {
-        let integer = body.iter().any(|s| matches!(s,
-            Stmt::Expr(Expr::LocalSet(w, e)) if w == id && matches!(e.as_ref(),
-                Expr::Binary { op: BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor | BinaryOp::Shl | BinaryOp::Shr, .. })));
-        // Admit integer slot only when EVERY write is an i32 operation.
-        let integer = integer && body.iter().all(|s| !matches!(s,
-            Stmt::Expr(Expr::LocalSet(w, e)) if w == id && !matches!(e.as_ref(),
-                Expr::Binary { op: BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor | BinaryOp::Shl | BinaryOp::Shr, .. }))) ;
+        let integer = p.i32_writes.get(id).copied().unwrap_or(false);
         let slot = ctx.func.alloca_entry(if integer { I32 } else { DOUBLE });
         let v = if integer {
             values[id].i32(ctx)
@@ -936,10 +1382,15 @@ pub(super) fn lower(
             .store(if integer { I32 } else { DOUBLE }, &v, &slot);
         slots.insert(*id, (slot, integer));
     }
+    for id in &p.carried {
+        if !slots.contains_key(id) {
+            slots.insert(*id, (ctx.func.alloca_entry(DOUBLE), false));
+        }
+    }
     // Integer slots require that the INITIAL value is an exact i32 too:
     // ToInt32 on entry alone would change an addition/read before first write.
     for (id, (_, integer)) in &slots {
-        if *integer {
+        if *integer && !matches!(ctx.local_slot_reps.get(id), Some(crate::expr::SlotRep::I32)) {
             let f = values[id].f64(ctx);
             let i = values[id].i32(ctx);
             let back = ctx.block().sitofp(I32, &i, DOUBLE);
@@ -950,45 +1401,39 @@ pub(super) fn lower(
         }
     }
     let ctr_slot = ctx.func.alloca_entry(I32);
-    ctx.block().store(I32, "0", &ctr_slot);
+    ctx.block().store(I32, &start_int, &ctr_slot);
     let admission_idx = ctx.current_block;
+    let dynamic_entry_guards = ctx.func.blocks()[entry_blocks_start..]
+        .iter()
+        .filter(|b| b.label.starts_with("indexed.owner.admitted"))
+        .count();
     let scan_start = ctx.func.num_blocks();
     ctx.current_block = fast_idx;
     let ctr = ctx.block().load(I32, &ctr_slot);
     values.insert(counter, Number::I(ctr.clone()));
     for (id, (slot, int)) in &slots {
-        let v = ctx.block().load(if *int { I32 } else { DOUBLE }, slot);
-        values.insert(*id, if *int { Number::I(v) } else { Number::F(v) });
+        if p.writes.contains(id) {
+            let v = ctx.block().load(if *int { I32 } else { DOUBLE }, slot);
+            values.insert(*id, if *int { Number::I(v) } else { Number::F(v) });
+        }
     }
     let mut native_indices = BTreeSet::new();
     for (_, e) in &p.indices {
         index_locals(e, &mut native_indices);
     }
-    for stmt in body {
-        match stmt {
-            Stmt::Let {
-                id, init: Some(e), ..
-            } if !p.aliases.contains_key(id) => {
-                let boxed = numeric(ctx, &p, e, &mut values, &storage);
-                let value = if native_indices.contains(id) {
-                    let wide = index_value(ctx, &p, e, &mut values, &storage);
-                    Number::Index {
-                        wide,
-                        boxed: Box::new(boxed),
-                    }
-                } else {
-                    boxed
-                };
-                values.insert(*id, value);
-            }
-            Stmt::Let { .. } => {}
-            Stmt::Expr(e) => {
-                expression(ctx, &p, e, &mut values, &storage);
-            }
-            _ => unreachable!(),
-        }
-    }
+    emit_body(
+        ctx,
+        &p,
+        body,
+        &mut values,
+        &storage,
+        &slots,
+        &native_indices,
+    );
     for (id, (slot, int)) in &slots {
+        if !values.contains_key(id) {
+            continue;
+        }
         let v = if *int {
             values[id].i32(ctx)
         } else {
@@ -1013,6 +1458,10 @@ pub(super) fn lower(
                 v
             }
         };
+        if let Some(slot) = ctx.numeric_accumulator_f64_slots.get(id).cloned() {
+            ctx.block().store(DOUBLE, &v, &slot);
+            continue;
+        }
         let v = crate::expr::nanbox_inline::canonicalize_lane_f64(ctx.block(), &v);
         if !crate::expr::store_canonical_local_from_double(ctx, *id, &v, None) {
             let slot = ctx.locals[id].clone();
@@ -1033,6 +1482,7 @@ pub(super) fn lower(
     ctx.current_block = admission_idx;
     ctx.block().br(if safe { &fast_l } else { &slow_l });
     if safe {
+        ctx.func.has_indexed_owner_region = true;
         let marker = crate::native_value::LoweredValue::js_value("0.0");
         ctx.record_lowered_value(
             "IndexedOwnerLoop",
@@ -1047,6 +1497,17 @@ pub(super) fn lower(
             vec![
                 format!("owners={:?}", p.arrays),
                 format!("index_windows={}", indices.len()),
+                format!(
+                    "dynamic_entry_guards={dynamic_entry_guards};nested_loops={}",
+                    p.nested.len()
+                ),
+                format!(
+                    "static_index_windows={static_windows};static_owners={}",
+                    p.arrays
+                        .iter()
+                        .filter(|(id, k)| owner_proof(ctx, **id, **k).is_some())
+                        .count()
+                ),
                 "proof=live_owner_header+exact_integer_intervals+number_inputs".into(),
                 "effects=emitted_call_free;aliases=disjoint_live_byte_spans;exit=original_loop"
                     .into(),

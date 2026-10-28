@@ -1,0 +1,5 @@
+before
+Warning: Detected unsettled top-level await at file:///x/test.ts:3:1
+    at async file:///x/test.ts:3:1
+after-unsettled
+after

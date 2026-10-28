@@ -384,5 +384,3 @@ pub use crate::temporal_layout::{
     is_temporal_cell_addr, is_temporal_value, temporal_kind, temporal_value_matches_class_id,
     temporal_value_ref,
 };
-
-crate::realm_decl!("mod.realm.json#*");
