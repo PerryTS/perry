@@ -5,6 +5,7 @@ use std::sync::Arc;
 fn compile(body: &str, facts: bool) -> String {
     let source = format!(
         r#"
+        function observe(x: any) {{ return x; }}
         function make(n: number) {{ return (x: number): number => x + n; }}
         function run(f: (x: number) => number, count: number, start: number) {{
             let value = start;
@@ -110,4 +111,10 @@ fn callback_argument_arity_and_all_carried_writes_are_part_of_the_induction() {
             "{body}"
         );
     }
+}
+
+#[test]
+fn unrelated_user_call_keeps_the_original_loop() {
+    let ir = compile("value = f(value); observe(value);", true);
+    assert!(!run_body(&ir).contains("for.number_locals.fast.preheader"));
 }

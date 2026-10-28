@@ -164,3 +164,97 @@ pub(crate) fn try_lower(
     let value = ctx.block().call_gc_leaf(DOUBLE, &admission.symbol, &actual);
     Ok(Some(value))
 }
+
+pub(super) fn plain_local(ctx: &FnCtx<'_>, id: u32) -> bool {
+    ctx.locals.contains_key(&id)
+        && !ctx.boxed_vars.contains(&id)
+        && !ctx.closure_captures.contains_key(&id)
+        && !ctx.module_globals.contains_key(&id)
+        && !ctx.repsel_closure_ref_locals.contains(&id)
+        && !ctx.tdz_boxes.contains(&id)
+        && !ctx.strings.tdz_binding_names.contains_key(&id)
+}
+
+/// A private loop owns only scalar state. User calls, property access,
+/// coercions of unknown inputs, allocations and suspension stay in the
+/// original loop. Invariant unknown locals join the live entry Number tests.
+pub(super) fn scalar_loop(
+    ctx: &FnCtx<'_>,
+    init: Option<&perry_hir::Stmt>,
+    condition: Option<&Expr>,
+    update: Option<&Expr>,
+    body: &[perry_hir::Stmt],
+    numbers: &std::collections::BTreeSet<u32>,
+) -> bool {
+    fn expr(ctx: &FnCtx<'_>, e: &Expr, n: &std::collections::BTreeSet<u32>) -> bool {
+        match e {
+            Expr::Integer(_) | Expr::Number(_) | Expr::Bool(_) => true,
+            Expr::LocalGet(id) => {
+                plain_local(ctx, *id)
+                    && (n.contains(id) || crate::type_analysis::is_numeric_expr(ctx, e))
+            }
+            Expr::LocalSet(id, value) => plain_local(ctx, *id) && expr(ctx, value, n),
+            Expr::Update { id, .. } => {
+                plain_local(ctx, *id)
+                    && (n.contains(id)
+                        || crate::type_analysis::is_numeric_expr(ctx, &Expr::LocalGet(*id)))
+            }
+            Expr::Binary { left, right, .. }
+            | Expr::Compare { left, right, .. }
+            | Expr::Logical { left, right, .. } => expr(ctx, left, n) && expr(ctx, right, n),
+            Expr::Unary { operand, .. } | Expr::NumberCoerce(operand) | Expr::MathSqrt(operand) => {
+                expr(ctx, operand, n)
+            }
+            Expr::Conditional {
+                condition,
+                then_expr,
+                else_expr,
+            } => expr(ctx, condition, n) && expr(ctx, then_expr, n) && expr(ctx, else_expr, n),
+            Expr::Call { callee, args, .. } => {
+                candidate(ctx, callee, args.len()).is_some() && args.iter().all(|a| expr(ctx, a, n))
+            }
+            _ => false,
+        }
+    }
+    fn stmts(ctx: &FnCtx<'_>, ss: &[perry_hir::Stmt], n: &std::collections::BTreeSet<u32>) -> bool {
+        ss.iter().all(|s| stmt(ctx, s, n))
+    }
+    fn stmt(ctx: &FnCtx<'_>, s: &perry_hir::Stmt, n: &std::collections::BTreeSet<u32>) -> bool {
+        use perry_hir::Stmt;
+        match s {
+            Stmt::Expr(e) | Stmt::Throw(e) => expr(ctx, e, n),
+            Stmt::Let { init, .. } | Stmt::Return(init) => {
+                init.as_ref().is_none_or(|e| expr(ctx, e, n))
+            }
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                expr(ctx, condition, n)
+                    && stmts(ctx, then_branch, n)
+                    && else_branch.as_ref().is_none_or(|b| stmts(ctx, b, n))
+            }
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
+                init.as_deref().is_none_or(|s| stmt(ctx, s, n))
+                    && condition.as_ref().is_none_or(|e| expr(ctx, e, n))
+                    && update.as_ref().is_none_or(|e| expr(ctx, e, n))
+                    && stmts(ctx, body, n)
+            }
+            Stmt::While { condition, body } | Stmt::DoWhile { condition, body } => {
+                expr(ctx, condition, n) && stmts(ctx, body, n)
+            }
+            Stmt::Break | Stmt::Continue => true,
+            _ => false,
+        }
+    }
+    init.is_none_or(|s| stmt(ctx, s, numbers))
+        && condition.is_none_or(|e| expr(ctx, e, numbers))
+        && update.is_none_or(|e| expr(ctx, e, numbers))
+        && stmts(ctx, body, numbers)
+}

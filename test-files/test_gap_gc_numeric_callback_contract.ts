@@ -47,3 +47,7 @@ function runMutable(f: (x: number) => number, change: () => void): number {
 }
 const mutable = makeMutable(1);
 console.log(runMutable(mutable.call, () => mutable.set('s')));
+
+let controlReads = 0;
+const countObject: any = { valueOf() { ++controlReads; return 2; } };
+console.log(run(make(1), countObject, 3), controlReads);
