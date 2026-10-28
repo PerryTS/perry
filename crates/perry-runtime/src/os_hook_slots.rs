@@ -192,7 +192,9 @@ pub(crate) fn js_util_convert_process_signal_to_exit_code(signal_code: f64) -> f
             |run| run(signal_code),
         )
 }
+#[cfg(all(unix, not(target_arch = "wasm32")))]
 static ON_SIGNAL_COMPLETION: Hook<fn(i32, crate::turnloop_proc::StreamEvent) -> ()> = Hook::empty();
+#[cfg(all(unix, not(target_arch = "wasm32")))]
 pub(crate) fn on_signal_completion(signum: i32, event: crate::turnloop_proc::StreamEvent) -> () {
     ON_SIGNAL_COMPLETION
         .get()
