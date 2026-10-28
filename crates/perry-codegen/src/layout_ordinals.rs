@@ -142,6 +142,19 @@ impl ProgramLayoutOrdinals {
             .map(OrdinalEntry::word)
     }
 
+    /// A compiler-owned descriptor's immutable template word. The plan is
+    /// the same whole-image authority that writes its initializer. Imported
+    /// symbols may be found too, but an ambiguous spelling supplies no proof.
+    /// Opaque/runtime descriptors retain their checked load at the operation.
+    pub(crate) fn descriptor_template_word(&self, symbol: &str) -> Option<u32> {
+        let mut words = self.entries.iter().filter_map(|entry| match &entry.key {
+            LayoutKey::Descriptor { symbol: name, .. } if name == symbol => Some(entry.word()),
+            _ => None,
+        });
+        let word = words.next()?;
+        words.all(|other| other == word).then_some(word)
+    }
+
     /// Exact stable cache input, including full keys (not just content hashes),
     /// header bounds, ABI version and the entire native catalog.
     pub fn cache_key(&self) -> String {
@@ -472,4 +485,47 @@ pub(crate) fn deferred_word(birth: &crate::BirthShape, live: u32) -> (u32, u32) 
         })
         .expect("deferred width has a static ordinal");
     (entry.requested_shape_id, entry.word())
+}
+
+#[cfg(test)]
+mod template_word_tests {
+    use super::*;
+
+    fn descriptor(module: &str, symbol: &str) -> OrdinalInput {
+        OrdinalInput {
+            key: LayoutKey::Descriptor {
+                module: module.into(),
+                symbol: symbol.into(),
+                content: vec![1, 2, 3],
+            },
+            requested_shape_id: 0,
+            band: 0,
+            proto_kind: 0,
+            role: LayoutRole::ClassFamily,
+        }
+    }
+
+    #[test]
+    fn only_a_unique_compiler_descriptor_supplies_a_template() {
+        let plan = ProgramLayoutOrdinals::assign(
+            [],
+            [
+                descriptor("a", "unique"),
+                descriptor("a", "ambiguous"),
+                descriptor("b", "ambiguous"),
+            ],
+        )
+        .unwrap();
+        let entry = plan
+            .entries
+            .iter()
+            .find(|e| match &e.key {
+                LayoutKey::Descriptor { symbol, .. } => symbol == "unique",
+                _ => false,
+            })
+            .unwrap();
+        assert_eq!(plan.descriptor_template_word("unique"), Some(entry.word()));
+        assert_eq!(plan.descriptor_template_word("ambiguous"), None);
+        assert_eq!(plan.descriptor_template_word("opaque"), None);
+    }
 }

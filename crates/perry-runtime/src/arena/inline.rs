@@ -207,10 +207,12 @@ pub(crate) fn allocation_limit(offset: usize, block_size: usize) -> usize {
 /// Update the existing bump bound at a birth-color transition. Never
 /// initialize an unused arena here, allocate, or synchronize a stale offset.
 pub(crate) fn refresh_inline_allocation_limit() {
-    INLINE_STATE.with(|s| unsafe {
+    // A dropped incremental cycle can run during TLS teardown, after the
+    // arena has gone. There is no mutator then and no bound to reopen.
+    let _ = INLINE_STATE.try_with(|s| unsafe {
         let state = &mut *s.get();
         if !state.data.is_null() {
-            ARENA.with(|a| {
+            let _ = ARENA.try_with(|a| {
                 let arena = &*(*a).get();
                 state.size = allocation_limit(state.offset, arena.blocks[arena.current].size);
             });

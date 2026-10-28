@@ -136,7 +136,24 @@ fn layout_birth_initializes_exact_capacity_and_checks_registration() {
         assert!(ir.contains("call ptr @perry_alloc_layout"));
         let header = 2u64 | (2 << 8) | (0x200 << 16) | ((24 + u64::from(slots) * 8) << 32);
         assert!(ir.contains(&format!("store i64 {header},")), "{ir}");
-        assert!(ir.contains("icmp ne i32") && ir.contains(", -1"));
+        let plan = crate::layout_ordinals::current_plan();
+        let words: Vec<_> = plan
+            .entries
+            .iter()
+            .filter_map(|entry| match &entry.key {
+                crate::layout_ordinals::LayoutKey::Descriptor { symbol, .. } => {
+                    Some((symbol, entry.word()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(!words.is_empty(), "fixture must exercise a proven template");
+        assert!(
+            words
+                .iter()
+                .any(|(_, word)| ir.contains(&format!("store i32 {},", *word as i32))),
+            "a fixed birth must initialize its canonical template directly"
+        );
         assert_eq!(ir.contains("fixed_birth.holes"), slots > 8);
     }
 }
