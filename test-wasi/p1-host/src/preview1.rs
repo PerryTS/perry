@@ -77,6 +77,10 @@ pub struct Stats {
     /// Every `perry_net.sock_error` call: a guest that spins on a pending
     /// connection makes many.
     pub sock_errors: u64,
+    /// Every `perry_host.discard_pages` call, whatever the answer.
+    pub discard_calls: u64,
+    /// Bytes of the ranges `discard_pages` answered 1 for.
+    pub discard_bytes: u64,
 }
 
 pub struct Host {
@@ -86,6 +90,8 @@ pub struct Host {
     pub stats: Stats,
     /// The names `perry_net` can resolve.
     pub dns: Arc<Dns>,
+    /// Whether `perry_host.discard_pages` discards (`--no-discard` answers 0).
+    pub discard_answers: bool,
     random: Option<std::fs::File>,
 }
 
@@ -97,6 +103,7 @@ impl Host {
             table,
             stats: Stats::default(),
             dns: Arc::new(dns),
+            discard_answers: true,
             random: None,
         }
     }
@@ -755,6 +762,19 @@ pub fn add_perry_net(linker: &mut Linker<Host>) -> wasmtime::Result<()> {
         "resolve",
         |mut c: Caller<'_, Host>, name: u32, len: u32, family: u32, out: u32| {
             code(perry_net::resolve(&mut c, name, len, family, out))
+        },
+    )?;
+    Ok(())
+}
+
+/// Define the opt-in `perry_host` import on `linker`. A module that was not
+/// built with `PERRY_WASM_DISCARD=1` does not import it, so it stays unused.
+pub fn add_perry_host(linker: &mut Linker<Host>) -> wasmtime::Result<()> {
+    linker.func_wrap(
+        "perry_host",
+        "discard_pages",
+        |mut c: Caller<'_, Host>, ptr: u32, len: u32| {
+            crate::discard::discard_pages(&mut c, ptr, len)
         },
     )?;
     Ok(())

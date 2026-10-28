@@ -334,6 +334,10 @@ impl HirTypeEnv {
                 );
                 env.collect_function_declarations(method);
             }
+            for member in &class.computed_members {
+                env.collect_expr_declarations(&member.key_expr);
+                env.collect_function_declarations(&member.function);
+            }
             if let Some(extends_expr) = &class.extends_expr {
                 env.collect_expr_declarations(extends_expr);
             }
