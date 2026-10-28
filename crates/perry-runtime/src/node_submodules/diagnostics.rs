@@ -1581,7 +1581,14 @@ pub(crate) fn ensure_diag_noop_closure() -> *mut ClosureHeader {
         if let Some(ptr) = *slot.borrow() {
             return ptr;
         }
-        let allocated = js_closure_alloc(crate::fn_info!(thunk_diag_noop, 1), 0);
+        let allocated = js_closure_alloc(
+            crate::fn_info!(
+                #[realm("diagnostics.realm.json#body:thunk_diag_noop")]
+                thunk_diag_noop,
+                1
+            ),
+            0,
+        );
         *slot.borrow_mut() = Some(allocated);
         ANY_SINGLETON_ALLOCATED.store(1, Ordering::Release);
         allocated
@@ -1598,3 +1605,6 @@ pub(crate) use diagnostics_trace::{
     call_fn_value, channel_from_object_property, diag_trace_callback, diag_trace_promise,
     diag_trace_subscribe, diag_trace_sync, diag_trace_unsubscribe, tracing_event_name,
 };
+
+// Realm facts owned here; this marker emits no runtime code or data.
+crate::realm_decl!("diagnostics.realm.json#objects");

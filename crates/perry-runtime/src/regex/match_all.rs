@@ -296,5 +296,5 @@ pub(crate) unsafe fn dispatch_regexp_string_iterator_method_builtin(
     }
 }
 
-// Realm facts owned here; source-only until image emission.
+// Realm facts owned here; this marker emits no runtime code or data.
 crate::realm_decl!("match_all.realm.json#objects");

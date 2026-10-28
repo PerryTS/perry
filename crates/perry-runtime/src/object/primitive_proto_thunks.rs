@@ -518,5 +518,5 @@ pub(super) extern "C" fn string_proto_value_of_thunk(
     string_receiver_or_throw(this, "valueOf")
 }
 
-// Realm facts owned here; source-only until image emission.
+// Realm facts owned here; this marker emits no runtime code or data.
 crate::realm_decl!("primitive_proto_thunks.realm.json#objects");

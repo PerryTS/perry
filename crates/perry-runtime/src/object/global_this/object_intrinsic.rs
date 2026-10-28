@@ -250,5 +250,5 @@ mod tests {
     }
 }
 
-// Realm facts owned here; source-only until image emission.
+// Realm facts owned here; this marker emits no runtime code or data.
 crate::realm_decl!("object_intrinsic.realm.json#objects");

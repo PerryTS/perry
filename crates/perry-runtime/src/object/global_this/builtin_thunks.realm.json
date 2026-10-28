@@ -3375,7 +3375,9 @@
         "info_symbol": "perry_realm_info_06fd2c902afbd63daa8b",
         "births": [
           "%StringIteratorPrototype%",
+          "Array",
           "Function.prototype",
+          "RegExp",
           "String.fromCharCode",
           "String.fromCodePoint",
           "String.prototype",
@@ -3997,7 +3999,7 @@
             "attributes": 0,
             "value": {
               "kind": "symbol",
-              "value": "Symbol(Symbol.asyncIterator)"
+              "value": "@@asyncIterator"
             }
           },
           {
@@ -4015,7 +4017,7 @@
             "attributes": 0,
             "value": {
               "kind": "symbol",
-              "value": "Symbol(Symbol.iterator)"
+              "value": "@@iterator"
             }
           },
           {
@@ -4214,6 +4216,7 @@
         "captures": [],
         "info_symbol": "perry_realm_info_5f512a807d6b4a4f1c1e",
         "births": [
+          "DOMException",
           "Function.prototype"
         ]
       },
@@ -4266,6 +4269,7 @@
         "captures": [],
         "info_symbol": "perry_realm_info_0da1b1f39bda95131c4e",
         "births": [
+          "DOMException",
           "Function.prototype"
         ]
       },
@@ -4838,7 +4842,10 @@
         "captures": [],
         "info_symbol": "perry_realm_info_e1e02244255d51e38b60",
         "births": [
-          "Function.prototype"
+          "ArrayBuffer",
+          "DOMException",
+          "Function.prototype",
+          "Uint8Array"
         ]
       },
       {

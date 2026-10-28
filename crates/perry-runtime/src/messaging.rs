@@ -615,17 +615,12 @@ fn install_port_methods(obj: *mut ObjectHeader) {
         crate::fn_info!(port_close, 0; with_declared(0)),
         0,
     );
-    install_method(
-        obj,
-        "ref",
-        crate::fn_info!(#[realm("messaging.realm.json#body:noop0")] noop0, 0; with_declared(0)),
-        0,
-    );
+    install_method(obj, "ref", crate::fn_info!(noop0, 0; with_declared(0)), 0);
     install_method(obj, "unref", crate::fn_info!(noop0, 0; with_declared(0)), 0);
     install_method(
         obj,
         "hasRef",
-        crate::fn_info!(#[realm("messaging.realm.json#body:has_ref")] has_ref, 0; with_declared(0)),
+        crate::fn_info!(has_ref, 0; with_declared(0)),
         0,
     );
     install_method(
@@ -678,7 +673,7 @@ pub fn populate_messaging_prototype(builtin_name: &str, proto: *mut ObjectHeader
             install_method(
                 proto,
                 "postMessage",
-                crate::fn_info!(#[realm("messaging.realm.json#body:noop2")] noop2, 2; with_declared(2)),
+                crate::fn_info!(noop2, 2; with_declared(2)),
                 2,
             );
             install_method(
@@ -721,7 +716,7 @@ pub fn populate_messaging_prototype(builtin_name: &str, proto: *mut ObjectHeader
             install_method(
                 proto,
                 "postMessage",
-                crate::fn_info!(#[realm("messaging.realm.json#body:noop1")] noop1, 1; with_declared(1)),
+                crate::fn_info!(noop1, 1; with_declared(1)),
                 1,
             );
             install_method(proto, "ref", crate::fn_info!(noop0, 0; with_declared(0)), 0);
@@ -845,5 +840,5 @@ fn throw_constructor_call_error() -> f64 {
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
-// Realm facts owned here; source-only until image emission.
-crate::realm_decl!("messaging.realm.json#objects");
+// Group facts preserve existing runtime source locations.
+crate::realm_decl!("messaging.realm.json#*");

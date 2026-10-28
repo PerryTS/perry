@@ -1814,6 +1814,271 @@
         "births": [
           "Function.prototype"
         ]
+      },
+      {
+        "name": "node:test/reporters.default.dot",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::node_submodules::test::reporters::thunk_reporter_dot",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::node_submodules::test::reporters::thunk_reporter_dot",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_7433058c7c7a909b8709",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:test/reporters.default.junit",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::node_submodules::test::reporters::thunk_reporter_junit",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::node_submodules::test::reporters::thunk_reporter_junit",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_f51e4041c5bfdb828ef8",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:test/reporters.default.lcov",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::node_submodules::test::reporters::thunk_reporter_lcov",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::node_submodules::test::reporters::thunk_reporter_lcov",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_1d60037a332fb2920604",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:test/reporters.default.spec",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::node_submodules::test::reporters::thunk_reporter_spec",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::node_submodules::test::reporters::thunk_reporter_spec",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_c94db4a2bcb82d56910d",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:test/reporters.default.tap",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::node_submodules::test::reporters::thunk_reporter_tap",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::node_submodules::test::reporters::thunk_reporter_tap",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_b5eedb5feea0819fff33",
+        "births": [
+          "Function.prototype"
+        ]
       }
     ]
   }

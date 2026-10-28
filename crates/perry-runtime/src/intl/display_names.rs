@@ -387,5 +387,5 @@ pub(super) extern "C" fn constructor_thunk(
     )
 }
 
-// Realm facts owned here; source-only until image emission.
+// Realm facts owned here; this marker emits no runtime code or data.
 crate::realm_decl!("display_names.realm.json#objects");

@@ -709,5 +709,5 @@ mod redirect_mode_tests {
     }
 }
 
-// Realm facts owned here; source-only until image emission.
+// Realm facts owned here; this marker emits no runtime code or data.
 crate::realm_decl!("global_fetch.realm.json#objects");

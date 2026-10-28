@@ -203,7 +203,8 @@
           "%AsyncGeneratorPrototype%.next",
           "%AsyncGeneratorPrototype%.return",
           "%AsyncGeneratorPrototype%.throw",
-          "%AsyncIteratorPrototype%"
+          "%AsyncIteratorPrototype%",
+          "Promise"
         ]
       },
       {
@@ -232,7 +233,8 @@
         "prototype": "Object.prototype",
         "births": [
           "%AsyncIteratorPrototype%[\"@@asyncIterator\"]",
-          "Object.prototype"
+          "Object.prototype",
+          "Promise"
         ]
       },
       {
@@ -2089,6 +2091,7 @@
         },
         "prototype": "Object.prototype",
         "births": [
+          "ArrayBuffer",
           "Atomics.add",
           "Atomics.and",
           "Atomics.compareExchange",
@@ -2102,7 +2105,9 @@
           "Atomics.wait",
           "Atomics.waitAsync",
           "Atomics.xor",
-          "Object.prototype"
+          "Int32Array",
+          "Object.prototype",
+          "Promise"
         ]
       },
       {
@@ -2113,7 +2118,8 @@
           "kind": "number_bits",
           "value": "7ff0000000000000"
         },
-        "births": []
+        "births": [],
+        "own_symbol_order": []
       },
       {
         "name": "NaN",
@@ -2123,7 +2129,8 @@
           "kind": "number_bits",
           "value": "7ff8000000000000"
         },
-        "births": []
+        "births": [],
+        "own_symbol_order": []
       },
       {
         "name": "crypto",
@@ -2137,7 +2144,8 @@
           "Promise",
           "SubtleCrypto",
           "crypto.<get>"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "global",
@@ -2145,7 +2153,8 @@
         "attributes": 7,
         "births": [
           "%Global%"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "globalThis",
@@ -2153,7 +2162,8 @@
         "attributes": 5,
         "births": [
           "%Global%"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "localStorage",
@@ -2164,7 +2174,8 @@
         "births": [
           "localStorage.<get>",
           "localStorage.<set>"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "navigator",
@@ -4174,6 +4185,7 @@
         "module": "buffer",
         "births": [
           "Array",
+          "ArrayBuffer",
           "Blob",
           "Buffer",
           "Error",
@@ -4181,6 +4193,7 @@
           "Function",
           "Object",
           "Promise",
+          "Uint8Array",
           "node:buffer.atob",
           "node:buffer.btoa",
           "node:buffer.constants",
@@ -11174,11 +11187,16 @@
         "module": "crypto",
         "births": [
           "Array",
+          "ArrayBuffer",
           "Buffer",
+          "Crypto",
+          "CryptoKey",
           "Error",
           "Function",
           "Object",
           "Promise",
+          "SubtleCrypto",
+          "Uint8Array",
           "node:crypto.Certificate",
           "node:crypto.Cipheriv",
           "node:crypto.Decipheriv",
@@ -12309,6 +12327,112 @@
           "Object.prototype",
           "node:dgram.Socket",
           "node:dgram.createSocket"
+        ]
+      },
+      {
+        "name": "node:diagnostics_channel.default",
+        "kind": "namespace",
+        "properties": [
+          {
+            "key": "BoundedChannel",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:diagnostics_channel.BoundedChannel"
+            }
+          },
+          {
+            "key": "Channel",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:diagnostics_channel.Channel"
+            }
+          },
+          {
+            "key": "boundedChannel",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:diagnostics_channel.boundedChannel"
+            }
+          },
+          {
+            "key": "channel",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:diagnostics_channel.channel"
+            }
+          },
+          {
+            "key": "hasSubscribers",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:diagnostics_channel.hasSubscribers"
+            }
+          },
+          {
+            "key": "subscribe",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:diagnostics_channel.subscribe"
+            }
+          },
+          {
+            "key": "tracingChannel",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:diagnostics_channel.tracingChannel"
+            }
+          },
+          {
+            "key": "unsubscribe",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:diagnostics_channel.unsubscribe"
+            }
+          }
+        ],
+        "own_key_order": [
+          "tracingChannel",
+          "boundedChannel",
+          "channel",
+          "subscribe",
+          "unsubscribe",
+          "hasSubscribers",
+          "Channel",
+          "BoundedChannel"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 2,
+          "reserved": 0,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "Object.prototype",
+          "node:diagnostics_channel.BoundedChannel",
+          "node:diagnostics_channel.Channel",
+          "node:diagnostics_channel.boundedChannel",
+          "node:diagnostics_channel.channel",
+          "node:diagnostics_channel.hasSubscribers",
+          "node:diagnostics_channel.subscribe",
+          "node:diagnostics_channel.tracingChannel",
+          "node:diagnostics_channel.unsubscribe"
         ]
       },
       {
@@ -14708,7 +14832,7 @@
             "attributes": 3,
             "value": {
               "kind": "symbol",
-              "value": "Symbol(nodejs.rejection)"
+              "value": "@for:nodejs.rejection"
             }
           },
           {
@@ -14744,7 +14868,7 @@
             "attributes": 3,
             "value": {
               "kind": "symbol",
-              "value": "Symbol(events.errorMonitor)"
+              "value": "@for:events.errorMonitor"
             }
           },
           {
@@ -14857,10 +14981,14 @@
         },
         "module": "events",
         "births": [
+          "%AsyncIteratorPrototype%",
           "Array",
           "Error",
+          "Event",
+          "EventTarget",
           "Function",
           "Object",
+          "Promise",
           "node:events.EventEmitter",
           "node:events.EventEmitterAsyncResource",
           "node:events.addAbortListener",
@@ -17244,7 +17372,7 @@
             "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:fs.promises.access"
+              "value": "node:fs/promises.access"
             }
           },
           {
@@ -17253,7 +17381,7 @@
             "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:fs.promises.appendFile"
+              "value": "node:fs/promises.appendFile"
             }
           },
           {
@@ -17262,7 +17390,7 @@
             "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:fs.promises.chmod"
+              "value": "node:fs/promises.chmod"
             }
           },
           {
@@ -17271,7 +17399,7 @@
             "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:fs.promises.chown"
+              "value": "node:fs/promises.chown"
             }
           },
           {
@@ -17289,7 +17417,7 @@
             "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:fs.promises.copyFile"
+              "value": "node:fs/promises.copyFile"
             }
           },
           {
@@ -17298,7 +17426,7 @@
             "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:fs.promises.cp"
+              "value": "node:fs/promises.cp"
             }
           },
           {
@@ -17307,7 +17435,7 @@
             "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:fs.promises.glob"
+              "value": "node:fs/promises.glob"
             }
           },
           {
@@ -17316,7 +17444,7 @@
             "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:fs.promises.lchmod"
+              "value": "node:fs/promises.lchmod"
             }
           },
           {
@@ -17325,7 +17453,7 @@
             "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:fs.promises.lchown"
+              "value": "node:fs/promises.lchown"
             }
           },
           {
@@ -17334,7 +17462,7 @@
             "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:fs.promises.link"
+              "value": "node:fs/promises.link"
             }
           },
           {
@@ -17343,7 +17471,7 @@
             "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:fs.promises.lstat"
+              "value": "node:fs/promises.lstat"
             }
           },
           {
@@ -17352,7 +17480,7 @@
             "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:fs.promises.lutimes"
+              "value": "node:fs/promises.lutimes"
             }
           },
           {
@@ -17361,7 +17489,7 @@
             "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:fs.promises.mkdir"
+              "value": "node:fs/promises.mkdir"
             }
           },
           {
@@ -17370,7 +17498,7 @@
             "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:fs.promises.mkdtemp"
+              "value": "node:fs/promises.mkdtemp"
             }
           },
           {
@@ -17379,7 +17507,7 @@
             "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:fs.promises.mkdtempDisposable"
+              "value": "node:fs/promises.mkdtempDisposable"
             }
           },
           {
@@ -17388,7 +17516,7 @@
             "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:fs.promises.open"
+              "value": "node:fs/promises.open"
             }
           },
           {
@@ -17397,7 +17525,7 @@
             "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:fs.promises.opendir"
+              "value": "node:fs/promises.opendir"
             }
           },
           {
@@ -17406,7 +17534,7 @@
             "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:fs.promises.readFile"
+              "value": "node:fs/promises.readFile"
             }
           },
           {
@@ -17415,7 +17543,7 @@
             "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:fs.promises.readdir"
+              "value": "node:fs/promises.readdir"
             }
           },
           {
@@ -17424,7 +17552,7 @@
             "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:fs.promises.readlink"
+              "value": "node:fs/promises.readlink"
             }
           },
           {
@@ -17433,7 +17561,7 @@
             "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:fs.promises.realpath"
+              "value": "node:fs/promises.realpath"
             }
           },
           {
@@ -17442,7 +17570,7 @@
             "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:fs.promises.rename"
+              "value": "node:fs/promises.rename"
             }
           },
           {
@@ -17451,7 +17579,7 @@
             "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:fs.promises.rm"
+              "value": "node:fs/promises.rm"
             }
           },
           {
@@ -17460,7 +17588,7 @@
             "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:fs.promises.rmdir"
+              "value": "node:fs/promises.rmdir"
             }
           },
           {
@@ -17469,7 +17597,7 @@
             "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:fs.promises.stat"
+              "value": "node:fs/promises.stat"
             }
           },
           {
@@ -17478,7 +17606,7 @@
             "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:fs.promises.statfs"
+              "value": "node:fs/promises.statfs"
             }
           },
           {
@@ -17487,7 +17615,7 @@
             "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:fs.promises.symlink"
+              "value": "node:fs/promises.symlink"
             }
           },
           {
@@ -17496,7 +17624,7 @@
             "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:fs.promises.truncate"
+              "value": "node:fs/promises.truncate"
             }
           },
           {
@@ -17505,7 +17633,7 @@
             "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:fs.promises.unlink"
+              "value": "node:fs/promises.unlink"
             }
           },
           {
@@ -17514,7 +17642,7 @@
             "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:fs.promises.utimes"
+              "value": "node:fs/promises.utimes"
             }
           },
           {
@@ -17523,7 +17651,7 @@
             "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:fs.promises.watch"
+              "value": "node:fs/promises.watch"
             }
           },
           {
@@ -17532,7 +17660,7 @@
             "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:fs.promises.writeFile"
+              "value": "node:fs/promises.writeFile"
             }
           }
         ],
@@ -17581,38 +17709,38 @@
         "births": [
           "Object.prototype",
           "node:fs.constants",
-          "node:fs.promises.access",
-          "node:fs.promises.appendFile",
-          "node:fs.promises.chmod",
-          "node:fs.promises.chown",
-          "node:fs.promises.copyFile",
-          "node:fs.promises.cp",
-          "node:fs.promises.glob",
-          "node:fs.promises.lchmod",
-          "node:fs.promises.lchown",
-          "node:fs.promises.link",
-          "node:fs.promises.lstat",
-          "node:fs.promises.lutimes",
-          "node:fs.promises.mkdir",
-          "node:fs.promises.mkdtemp",
-          "node:fs.promises.mkdtempDisposable",
-          "node:fs.promises.open",
-          "node:fs.promises.opendir",
-          "node:fs.promises.readFile",
-          "node:fs.promises.readdir",
-          "node:fs.promises.readlink",
-          "node:fs.promises.realpath",
-          "node:fs.promises.rename",
-          "node:fs.promises.rm",
-          "node:fs.promises.rmdir",
-          "node:fs.promises.stat",
-          "node:fs.promises.statfs",
-          "node:fs.promises.symlink",
-          "node:fs.promises.truncate",
-          "node:fs.promises.unlink",
-          "node:fs.promises.utimes",
-          "node:fs.promises.watch",
-          "node:fs.promises.writeFile"
+          "node:fs/promises.access",
+          "node:fs/promises.appendFile",
+          "node:fs/promises.chmod",
+          "node:fs/promises.chown",
+          "node:fs/promises.copyFile",
+          "node:fs/promises.cp",
+          "node:fs/promises.glob",
+          "node:fs/promises.lchmod",
+          "node:fs/promises.lchown",
+          "node:fs/promises.link",
+          "node:fs/promises.lstat",
+          "node:fs/promises.lutimes",
+          "node:fs/promises.mkdir",
+          "node:fs/promises.mkdtemp",
+          "node:fs/promises.mkdtempDisposable",
+          "node:fs/promises.open",
+          "node:fs/promises.opendir",
+          "node:fs/promises.readFile",
+          "node:fs/promises.readdir",
+          "node:fs/promises.readlink",
+          "node:fs/promises.realpath",
+          "node:fs/promises.rename",
+          "node:fs/promises.rm",
+          "node:fs/promises.rmdir",
+          "node:fs/promises.stat",
+          "node:fs/promises.statfs",
+          "node:fs/promises.symlink",
+          "node:fs/promises.truncate",
+          "node:fs/promises.unlink",
+          "node:fs/promises.utimes",
+          "node:fs/promises.watch",
+          "node:fs/promises.writeFile"
         ]
       },
       {
@@ -17857,6 +17985,7 @@
           "Function",
           "Object",
           "Promise",
+          "URL",
           "WebSocket",
           "node:http.Agent",
           "node:http.ClientRequest",
@@ -19484,7 +19613,7 @@
             "attributes": 3,
             "value": {
               "kind": "symbol",
-              "value": "Symbol(sensitiveHeaders)"
+              "value": "@runtime:sensitiveHeaders"
             }
           },
           {
@@ -19527,6 +19656,7 @@
           "Function",
           "Object",
           "Promise",
+          "URL",
           "node:http2.Http2ServerRequest",
           "node:http2.Http2ServerResponse",
           "node:http2.connect",
@@ -22058,7 +22188,7 @@
             "attributes": 7,
             "value": {
               "kind": "symbol",
-              "value": "Symbol(sensitiveHeaders)"
+              "value": "@runtime:sensitiveHeaders"
             }
           }
         ],
@@ -24618,6 +24748,7 @@
           "Function",
           "Object",
           "Promise",
+          "URL",
           "node:https.Agent",
           "node:https.Server",
           "node:https.createServer",
@@ -29415,6 +29546,7 @@
         "births": [
           "Array",
           "Error",
+          "EventTarget",
           "Function",
           "Object",
           "Performance",
@@ -29424,6 +29556,7 @@
           "PerformanceObserver",
           "PerformanceObserverEntryList",
           "PerformanceResourceTiming",
+          "Promise",
           "node:perf_hooks.constants",
           "performance",
           "performance.createHistogram",
@@ -29777,7 +29910,7 @@
             "attributes": 3,
             "value": {
               "kind": "string",
-              "value": "/root/WRT/realm-dumps/work-metadata/realm-dump"
+              "value": "/root/WRT/realm-dumps/work-metadata-expanded/realm-dump"
             }
           },
           {
@@ -30287,7 +30420,7 @@
             "attributes": 3,
             "value": {
               "kind": "string",
-              "value": "/root/WRT/realm-dumps/work-metadata/realm-dump"
+              "value": "/root/WRT/realm-dumps/work-metadata-expanded/realm-dump"
             }
           },
           {
@@ -30443,9 +30576,11 @@
         "module": "process",
         "births": [
           "Array",
+          "Buffer",
           "Error",
           "Function",
           "Object",
+          "Promise",
           "node:process._events",
           "node:process._preload_modules",
           "node:process.allowedNodeEnvironmentFlags",
@@ -30580,7 +30715,7 @@
             "attributes": 7,
             "value": {
               "kind": "string",
-              "value": "/root/WRT/realm-dumps/work-metadata/realm-dump"
+              "value": "/root/WRT/realm-dumps/work-metadata-expanded/realm-dump"
             }
           },
           {
@@ -31826,7 +31961,7 @@
             "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:readline.promises.Interface"
+              "value": "node:readline/promises.Interface"
             }
           },
           {
@@ -31835,7 +31970,7 @@
             "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:readline.promises.Readline"
+              "value": "node:readline/promises.Readline"
             }
           },
           {
@@ -31844,7 +31979,7 @@
             "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:readline.promises.createInterface"
+              "value": "node:readline/promises.createInterface"
             }
           }
         ],
@@ -31862,9 +31997,9 @@
         "prototype": "Object.prototype",
         "births": [
           "Object.prototype",
-          "node:readline.promises.Interface",
-          "node:readline.promises.Readline",
-          "node:readline.promises.createInterface"
+          "node:readline/promises.Interface",
+          "node:readline/promises.Readline",
+          "node:readline/promises.createInterface"
         ]
       },
       {
@@ -31886,7 +32021,7 @@
             "attributes": 3,
             "value": {
               "kind": "symbol",
-              "value": "Symbol(nodejs.repl.mode.sloppy)"
+              "value": "@for:nodejs.repl.mode.sloppy"
             }
           },
           {
@@ -31895,7 +32030,7 @@
             "attributes": 3,
             "value": {
               "kind": "symbol",
-              "value": "Symbol(nodejs.repl.mode.strict)"
+              "value": "@for:nodejs.repl.mode.strict"
             }
           },
           {
@@ -31993,7 +32128,7 @@
             "attributes": 7,
             "value": {
               "kind": "symbol",
-              "value": "Symbol(nodejs.repl.mode.sloppy)"
+              "value": "@for:nodejs.repl.mode.sloppy"
             }
           },
           {
@@ -32002,7 +32137,7 @@
             "attributes": 7,
             "value": {
               "kind": "symbol",
-              "value": "Symbol(nodejs.repl.mode.strict)"
+              "value": "@for:nodejs.repl.mode.strict"
             }
           },
           {
@@ -32484,11 +32619,14 @@
         "module": "stream",
         "births": [
           "Array",
+          "ArrayBuffer",
           "Buffer",
           "Error",
           "Function",
           "Object",
           "Promise",
+          "ReadableStream",
+          "WritableStream",
           "node:stream.Duplex",
           "node:stream.PassThrough",
           "node:stream.Readable",
@@ -32532,7 +32670,7 @@
             "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:stream.finished[\"@runtime:nodejs.util.promisify.custom\"]"
+              "value": "node:stream/promises.finished"
             }
           },
           {
@@ -32541,7 +32679,7 @@
             "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:stream.pipeline[\"@runtime:nodejs.util.promisify.custom\"]"
+              "value": "node:stream/promises.pipeline"
             }
           }
         ],
@@ -32559,8 +32697,297 @@
         "prototype": "Object.prototype",
         "births": [
           "Object.prototype",
-          "node:stream.finished[\"@runtime:nodejs.util.promisify.custom\"]",
-          "node:stream.pipeline[\"@runtime:nodejs.util.promisify.custom\"]"
+          "node:stream/promises.finished",
+          "node:stream/promises.pipeline"
+        ]
+      },
+      {
+        "name": "node:stream/consumers.default",
+        "kind": "namespace",
+        "properties": [
+          {
+            "key": "arrayBuffer",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:stream/consumers.arrayBuffer"
+            }
+          },
+          {
+            "key": "blob",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:stream/consumers.blob"
+            }
+          },
+          {
+            "key": "buffer",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:stream/consumers.buffer"
+            }
+          },
+          {
+            "key": "bytes",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:stream/consumers.bytes"
+            }
+          },
+          {
+            "key": "json",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:stream/consumers.json"
+            }
+          },
+          {
+            "key": "text",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:stream/consumers.text"
+            }
+          }
+        ],
+        "own_key_order": [
+          "text",
+          "json",
+          "buffer",
+          "arrayBuffer",
+          "bytes",
+          "blob"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 2,
+          "reserved": 0,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "Object.prototype",
+          "node:stream/consumers.arrayBuffer",
+          "node:stream/consumers.blob",
+          "node:stream/consumers.buffer",
+          "node:stream/consumers.bytes",
+          "node:stream/consumers.json",
+          "node:stream/consumers.text"
+        ]
+      },
+      {
+        "name": "node:stream/web.default",
+        "kind": "namespace",
+        "properties": [
+          {
+            "key": "ByteLengthQueuingStrategy",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:stream/web.ByteLengthQueuingStrategy"
+            }
+          },
+          {
+            "key": "CompressionStream",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "CompressionStream"
+            }
+          },
+          {
+            "key": "CountQueuingStrategy",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:stream/web.CountQueuingStrategy"
+            }
+          },
+          {
+            "key": "DecompressionStream",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "DecompressionStream"
+            }
+          },
+          {
+            "key": "ReadableByteStreamController",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:stream/web.ReadableByteStreamController"
+            }
+          },
+          {
+            "key": "ReadableStream",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "ReadableStream"
+            }
+          },
+          {
+            "key": "ReadableStreamBYOBReader",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:stream/web.ReadableStreamBYOBReader"
+            }
+          },
+          {
+            "key": "ReadableStreamBYOBRequest",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:stream/web.ReadableStreamBYOBRequest"
+            }
+          },
+          {
+            "key": "ReadableStreamDefaultController",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:stream/web.ReadableStreamDefaultController"
+            }
+          },
+          {
+            "key": "ReadableStreamDefaultReader",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:stream/web.ReadableStreamDefaultReader"
+            }
+          },
+          {
+            "key": "TextDecoderStream",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "TextDecoderStream"
+            }
+          },
+          {
+            "key": "TextEncoderStream",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "TextEncoderStream"
+            }
+          },
+          {
+            "key": "TransformStream",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "TransformStream"
+            }
+          },
+          {
+            "key": "TransformStreamDefaultController",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:stream/web.TransformStreamDefaultController"
+            }
+          },
+          {
+            "key": "WritableStream",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "WritableStream"
+            }
+          },
+          {
+            "key": "WritableStreamDefaultController",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:stream/web.WritableStreamDefaultController"
+            }
+          },
+          {
+            "key": "WritableStreamDefaultWriter",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:stream/web.WritableStreamDefaultWriter"
+            }
+          }
+        ],
+        "own_key_order": [
+          "ReadableStream",
+          "ReadableStreamDefaultReader",
+          "ReadableStreamBYOBReader",
+          "ReadableStreamDefaultController",
+          "ReadableByteStreamController",
+          "ReadableStreamBYOBRequest",
+          "WritableStream",
+          "WritableStreamDefaultWriter",
+          "WritableStreamDefaultController",
+          "TransformStream",
+          "TransformStreamDefaultController",
+          "ByteLengthQueuingStrategy",
+          "CountQueuingStrategy",
+          "TextEncoderStream",
+          "TextDecoderStream",
+          "CompressionStream",
+          "DecompressionStream"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 2,
+          "reserved": 0,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "CompressionStream",
+          "DecompressionStream",
+          "Object.prototype",
+          "ReadableStream",
+          "TextDecoderStream",
+          "TextEncoderStream",
+          "TransformStream",
+          "WritableStream",
+          "node:stream/web.ByteLengthQueuingStrategy",
+          "node:stream/web.CountQueuingStrategy",
+          "node:stream/web.ReadableByteStreamController",
+          "node:stream/web.ReadableStreamBYOBReader",
+          "node:stream/web.ReadableStreamBYOBRequest",
+          "node:stream/web.ReadableStreamDefaultController",
+          "node:stream/web.ReadableStreamDefaultReader",
+          "node:stream/web.TransformStreamDefaultController",
+          "node:stream/web.WritableStreamDefaultController",
+          "node:stream/web.WritableStreamDefaultWriter"
         ]
       },
       {
@@ -32679,219 +33106,822 @@
         ]
       },
       {
-        "name": "node:test",
+        "name": "node:sys.default",
         "kind": "namespace",
         "properties": [
           {
-            "key": "after",
+            "key": "TextDecoder",
             "symbol": false,
-            "attributes": 3,
+            "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:test.after"
+              "value": "TextDecoder"
             }
           },
           {
-            "key": "afterEach",
+            "key": "TextEncoder",
             "symbol": false,
-            "attributes": 3,
+            "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:test.afterEach"
+              "value": "TextEncoder"
             }
           },
           {
-            "key": "assert",
+            "key": "aborted",
             "symbol": false,
-            "attributes": 3,
+            "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:test.assert"
+              "value": "node:sys.aborted"
             }
           },
           {
-            "key": "before",
+            "key": "callbackify",
             "symbol": false,
-            "attributes": 3,
+            "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:test.before"
+              "value": "node:sys.callbackify"
             }
           },
           {
-            "key": "beforeEach",
+            "key": "convertProcessSignalToExitCode",
             "symbol": false,
-            "attributes": 3,
+            "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:test.beforeEach"
+              "value": "node:sys.convertProcessSignalToExitCode"
             }
           },
           {
-            "key": "default",
+            "key": "debug",
             "symbol": false,
-            "attributes": 3,
+            "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:test.default"
+              "value": "node:sys.default.debug"
             }
           },
           {
-            "key": "describe",
+            "key": "debuglog",
             "symbol": false,
-            "attributes": 3,
+            "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:test.describe"
+              "value": "node:sys.debug"
             }
           },
           {
-            "key": "expectFailure",
+            "key": "deprecate",
             "symbol": false,
-            "attributes": 3,
+            "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:test.expectFailure"
+              "value": "node:sys.deprecate"
             }
           },
           {
-            "key": "it",
+            "key": "diff",
             "symbol": false,
-            "attributes": 3,
+            "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:test.default"
+              "value": "node:sys.diff"
             }
           },
           {
-            "key": "mock",
+            "key": "format",
             "symbol": false,
-            "attributes": 3,
+            "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:test.mock"
+              "value": "node:sys.format"
             }
           },
           {
-            "key": "only",
+            "key": "formatWithOptions",
             "symbol": false,
-            "attributes": 3,
+            "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:test.only"
+              "value": "node:sys.formatWithOptions"
             }
           },
           {
-            "key": "run",
+            "key": "getCallSites",
             "symbol": false,
-            "attributes": 3,
+            "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:test.run"
+              "value": "node:sys.getCallSites"
             }
           },
           {
-            "key": "skip",
+            "key": "getSystemErrorMap",
             "symbol": false,
-            "attributes": 3,
+            "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:test.skip"
+              "value": "node:sys.getSystemErrorMap"
             }
           },
           {
-            "key": "snapshot",
+            "key": "getSystemErrorMessage",
             "symbol": false,
-            "attributes": 3,
+            "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:test.snapshot"
+              "value": "node:sys.getSystemErrorMessage"
             }
           },
           {
-            "key": "suite",
+            "key": "getSystemErrorName",
             "symbol": false,
-            "attributes": 3,
+            "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:test.describe"
+              "value": "node:sys.getSystemErrorName"
             }
           },
           {
-            "key": "test",
+            "key": "inherits",
             "symbol": false,
-            "attributes": 3,
+            "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:test.default"
+              "value": "node:sys.inherits"
             }
           },
           {
-            "key": "todo",
+            "key": "inspect",
             "symbol": false,
-            "attributes": 3,
+            "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:test.todo"
+              "value": "node:sys.inspect"
             }
           },
           {
-            "key": "@@toStringTag",
-            "symbol": true,
-            "attributes": 0,
+            "key": "isArray",
+            "symbol": false,
+            "attributes": 7,
             "value": {
-              "kind": "string",
-              "value": "Module"
+              "kind": "reference",
+              "value": "node:sys.isArray"
+            }
+          },
+          {
+            "key": "isDeepStrictEqual",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:sys.isDeepStrictEqual"
+            }
+          },
+          {
+            "key": "parseArgs",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:sys.parseArgs"
+            }
+          },
+          {
+            "key": "promisify",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:sys.promisify"
+            }
+          },
+          {
+            "key": "setTraceSigInt",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:sys.setTraceSigInt"
+            }
+          },
+          {
+            "key": "stripVTControlCharacters",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:sys.stripVTControlCharacters"
+            }
+          },
+          {
+            "key": "styleText",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:sys.styleText"
+            }
+          },
+          {
+            "key": "toUSVString",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:sys.toUSVString"
+            }
+          },
+          {
+            "key": "transferableAbortController",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:sys.transferableAbortController"
+            }
+          },
+          {
+            "key": "transferableAbortSignal",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:sys.transferableAbortSignal"
+            }
+          },
+          {
+            "key": "types",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:sys.types"
             }
           }
         ],
         "own_key_order": [
-          "after",
-          "afterEach",
-          "assert",
-          "before",
-          "beforeEach",
-          "default",
-          "describe",
-          "expectFailure",
-          "it",
-          "mock",
-          "only",
-          "run",
-          "skip",
-          "snapshot",
-          "suite",
-          "test",
-          "todo"
+          "aborted",
+          "callbackify",
+          "convertProcessSignalToExitCode",
+          "debug",
+          "debuglog",
+          "deprecate",
+          "diff",
+          "format",
+          "formatWithOptions",
+          "getCallSites",
+          "getSystemErrorMap",
+          "getSystemErrorName",
+          "getSystemErrorMessage",
+          "inherits",
+          "inspect",
+          "isArray",
+          "isDeepStrictEqual",
+          "promisify",
+          "stripVTControlCharacters",
+          "styleText",
+          "toUSVString",
+          "setTraceSigInt",
+          "types",
+          "parseArgs",
+          "TextDecoder",
+          "TextEncoder",
+          "transferableAbortController",
+          "transferableAbortSignal"
         ],
-        "own_symbol_order": [
-          "@@toStringTag"
-        ],
+        "own_symbol_order": [],
         "header": {
           "gc_type": 2,
-          "reserved": 2628,
-          "class_id": 4294921811
+          "reserved": 0,
+          "class_id": 4294967294
         },
-        "module": "test",
+        "prototype": "Object.prototype",
         "births": [
-          "Array",
-          "Error",
-          "Function",
-          "Object",
-          "node:test.after",
-          "node:test.afterEach",
-          "node:test.assert",
-          "node:test.before",
-          "node:test.beforeEach",
-          "node:test.default",
-          "node:test.describe",
-          "node:test.expectFailure",
-          "node:test.mock",
-          "node:test.only",
-          "node:test.run",
-          "node:test.skip",
-          "node:test.snapshot",
-          "node:test.todo"
+          "Object.prototype",
+          "TextDecoder",
+          "TextEncoder",
+          "node:sys.aborted",
+          "node:sys.callbackify",
+          "node:sys.convertProcessSignalToExitCode",
+          "node:sys.debug",
+          "node:sys.default.debug",
+          "node:sys.deprecate",
+          "node:sys.diff",
+          "node:sys.format",
+          "node:sys.formatWithOptions",
+          "node:sys.getCallSites",
+          "node:sys.getSystemErrorMap",
+          "node:sys.getSystemErrorMessage",
+          "node:sys.getSystemErrorName",
+          "node:sys.inherits",
+          "node:sys.inspect",
+          "node:sys.isArray",
+          "node:sys.isDeepStrictEqual",
+          "node:sys.parseArgs",
+          "node:sys.promisify",
+          "node:sys.setTraceSigInt",
+          "node:sys.stripVTControlCharacters",
+          "node:sys.styleText",
+          "node:sys.toUSVString",
+          "node:sys.transferableAbortController",
+          "node:sys.transferableAbortSignal",
+          "node:sys.types"
+        ]
+      },
+      {
+        "name": "node:sys.types",
+        "kind": "namespace",
+        "properties": [
+          {
+            "key": "isAnyArrayBuffer",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:util/types.isAnyArrayBuffer"
+            }
+          },
+          {
+            "key": "isArgumentsObject",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:util/types.isArgumentsObject"
+            }
+          },
+          {
+            "key": "isArrayBuffer",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:util/types.isArrayBuffer"
+            }
+          },
+          {
+            "key": "isArrayBufferView",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:util/types.isArrayBufferView"
+            }
+          },
+          {
+            "key": "isAsyncFunction",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:util/types.isAsyncFunction"
+            }
+          },
+          {
+            "key": "isBigInt64Array",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:util/types.isBigInt64Array"
+            }
+          },
+          {
+            "key": "isBigIntObject",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:util/types.isBigIntObject"
+            }
+          },
+          {
+            "key": "isBigUint64Array",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:util/types.isBigUint64Array"
+            }
+          },
+          {
+            "key": "isBooleanObject",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:util/types.isBooleanObject"
+            }
+          },
+          {
+            "key": "isBoxedPrimitive",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:util/types.isBoxedPrimitive"
+            }
+          },
+          {
+            "key": "isCryptoKey",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:util/types.isCryptoKey"
+            }
+          },
+          {
+            "key": "isDataView",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:util/types.isDataView"
+            }
+          },
+          {
+            "key": "isDate",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:util/types.isDate"
+            }
+          },
+          {
+            "key": "isExternal",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:util/types.isExternal"
+            }
+          },
+          {
+            "key": "isFloat16Array",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:util/types.isFloat16Array"
+            }
+          },
+          {
+            "key": "isFloat32Array",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:util/types.isFloat32Array"
+            }
+          },
+          {
+            "key": "isFloat64Array",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:util/types.isFloat64Array"
+            }
+          },
+          {
+            "key": "isGeneratorFunction",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:util/types.isGeneratorFunction"
+            }
+          },
+          {
+            "key": "isGeneratorObject",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:util/types.isGeneratorObject"
+            }
+          },
+          {
+            "key": "isInt16Array",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:util/types.isInt16Array"
+            }
+          },
+          {
+            "key": "isInt32Array",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:util/types.isInt32Array"
+            }
+          },
+          {
+            "key": "isInt8Array",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:util/types.isInt8Array"
+            }
+          },
+          {
+            "key": "isKeyObject",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:util/types.isKeyObject"
+            }
+          },
+          {
+            "key": "isMap",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:util/types.isMap"
+            }
+          },
+          {
+            "key": "isMapIterator",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:util/types.isMapIterator"
+            }
+          },
+          {
+            "key": "isModuleNamespaceObject",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:util/types.isModuleNamespaceObject"
+            }
+          },
+          {
+            "key": "isNativeError",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:util/types.isNativeError"
+            }
+          },
+          {
+            "key": "isNumberObject",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:util/types.isNumberObject"
+            }
+          },
+          {
+            "key": "isPromise",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:util/types.isPromise"
+            }
+          },
+          {
+            "key": "isProxy",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:util/types.isProxy"
+            }
+          },
+          {
+            "key": "isRegExp",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:util/types.isRegExp"
+            }
+          },
+          {
+            "key": "isSet",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:util/types.isSet"
+            }
+          },
+          {
+            "key": "isSetIterator",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:util/types.isSetIterator"
+            }
+          },
+          {
+            "key": "isSharedArrayBuffer",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:util/types.isSharedArrayBuffer"
+            }
+          },
+          {
+            "key": "isStringObject",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:util/types.isStringObject"
+            }
+          },
+          {
+            "key": "isSymbolObject",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:util/types.isSymbolObject"
+            }
+          },
+          {
+            "key": "isTypedArray",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:util/types.isTypedArray"
+            }
+          },
+          {
+            "key": "isUint16Array",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:util/types.isUint16Array"
+            }
+          },
+          {
+            "key": "isUint32Array",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:util/types.isUint32Array"
+            }
+          },
+          {
+            "key": "isUint8Array",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:util/types.isUint8Array"
+            }
+          },
+          {
+            "key": "isUint8ClampedArray",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:util/types.isUint8ClampedArray"
+            }
+          },
+          {
+            "key": "isWeakMap",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:util/types.isWeakMap"
+            }
+          },
+          {
+            "key": "isWeakSet",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:util/types.isWeakSet"
+            }
+          }
+        ],
+        "own_key_order": [
+          "isArgumentsObject",
+          "isArrayBuffer",
+          "isAsyncFunction",
+          "isBigIntObject",
+          "isBooleanObject",
+          "isDate",
+          "isExternal",
+          "isGeneratorFunction",
+          "isGeneratorObject",
+          "isMap",
+          "isMapIterator",
+          "isModuleNamespaceObject",
+          "isNativeError",
+          "isNumberObject",
+          "isPromise",
+          "isProxy",
+          "isRegExp",
+          "isSet",
+          "isSetIterator",
+          "isSharedArrayBuffer",
+          "isStringObject",
+          "isSymbolObject",
+          "isWeakMap",
+          "isWeakSet",
+          "isAnyArrayBuffer",
+          "isBoxedPrimitive",
+          "isArrayBufferView",
+          "isDataView",
+          "isTypedArray",
+          "isUint8Array",
+          "isUint8ClampedArray",
+          "isUint16Array",
+          "isUint32Array",
+          "isInt8Array",
+          "isInt16Array",
+          "isInt32Array",
+          "isFloat16Array",
+          "isFloat32Array",
+          "isFloat64Array",
+          "isBigInt64Array",
+          "isBigUint64Array",
+          "isKeyObject",
+          "isCryptoKey"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 2,
+          "reserved": 0,
+          "class_id": 4294967294
+        },
+        "prototype": "Object.prototype",
+        "native_namespace": "util.types",
+        "exotic_vtable": "crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL",
+        "births": [
+          "Object.prototype",
+          "node:util/types.isAnyArrayBuffer",
+          "node:util/types.isArgumentsObject",
+          "node:util/types.isArrayBuffer",
+          "node:util/types.isArrayBufferView",
+          "node:util/types.isAsyncFunction",
+          "node:util/types.isBigInt64Array",
+          "node:util/types.isBigIntObject",
+          "node:util/types.isBigUint64Array",
+          "node:util/types.isBooleanObject",
+          "node:util/types.isBoxedPrimitive",
+          "node:util/types.isCryptoKey",
+          "node:util/types.isDataView",
+          "node:util/types.isDate",
+          "node:util/types.isExternal",
+          "node:util/types.isFloat16Array",
+          "node:util/types.isFloat32Array",
+          "node:util/types.isFloat64Array",
+          "node:util/types.isGeneratorFunction",
+          "node:util/types.isGeneratorObject",
+          "node:util/types.isInt16Array",
+          "node:util/types.isInt32Array",
+          "node:util/types.isInt8Array",
+          "node:util/types.isKeyObject",
+          "node:util/types.isMap",
+          "node:util/types.isMapIterator",
+          "node:util/types.isModuleNamespaceObject",
+          "node:util/types.isNativeError",
+          "node:util/types.isNumberObject",
+          "node:util/types.isPromise",
+          "node:util/types.isProxy",
+          "node:util/types.isRegExp",
+          "node:util/types.isSet",
+          "node:util/types.isSetIterator",
+          "node:util/types.isSharedArrayBuffer",
+          "node:util/types.isStringObject",
+          "node:util/types.isSymbolObject",
+          "node:util/types.isTypedArray",
+          "node:util/types.isUint16Array",
+          "node:util/types.isUint32Array",
+          "node:util/types.isUint8Array",
+          "node:util/types.isUint8ClampedArray",
+          "node:util/types.isWeakMap",
+          "node:util/types.isWeakSet"
         ]
       },
       {
@@ -33155,123 +34185,76 @@
         ]
       },
       {
-        "name": "node:timers",
+        "name": "node:test/reporters.default",
         "kind": "namespace",
         "properties": [
           {
-            "key": "clearImmediate",
+            "key": "dot",
             "symbol": false,
-            "attributes": 3,
+            "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:timers.clearImmediate"
+              "value": "node:test/reporters.default.dot"
             }
           },
           {
-            "key": "clearInterval",
+            "key": "junit",
             "symbol": false,
-            "attributes": 3,
+            "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:timers.clearInterval"
+              "value": "node:test/reporters.default.junit"
             }
           },
           {
-            "key": "clearTimeout",
+            "key": "lcov",
             "symbol": false,
-            "attributes": 3,
+            "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:timers.clearTimeout"
+              "value": "node:test/reporters.default.lcov"
             }
           },
           {
-            "key": "default",
+            "key": "spec",
             "symbol": false,
-            "attributes": 3,
+            "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:timers.default"
+              "value": "node:test/reporters.default.spec"
             }
           },
           {
-            "key": "promises",
+            "key": "tap",
             "symbol": false,
-            "attributes": 3,
+            "attributes": 7,
             "value": {
               "kind": "reference",
-              "value": "node:timers.promises"
-            }
-          },
-          {
-            "key": "setImmediate",
-            "symbol": false,
-            "attributes": 3,
-            "value": {
-              "kind": "reference",
-              "value": "node:timers.setImmediate"
-            }
-          },
-          {
-            "key": "setInterval",
-            "symbol": false,
-            "attributes": 3,
-            "value": {
-              "kind": "reference",
-              "value": "node:timers.setInterval"
-            }
-          },
-          {
-            "key": "setTimeout",
-            "symbol": false,
-            "attributes": 3,
-            "value": {
-              "kind": "reference",
-              "value": "node:timers.setTimeout"
-            }
-          },
-          {
-            "key": "@@toStringTag",
-            "symbol": true,
-            "attributes": 0,
-            "value": {
-              "kind": "string",
-              "value": "Module"
+              "value": "node:test/reporters.default.tap"
             }
           }
         ],
         "own_key_order": [
-          "clearImmediate",
-          "clearInterval",
-          "clearTimeout",
-          "default",
-          "promises",
-          "setImmediate",
-          "setInterval",
-          "setTimeout"
+          "spec",
+          "tap",
+          "dot",
+          "junit",
+          "lcov"
         ],
-        "own_symbol_order": [
-          "@@toStringTag"
-        ],
+        "own_symbol_order": [],
         "header": {
           "gc_type": 2,
-          "reserved": 2628,
-          "class_id": 4294921811
+          "reserved": 0,
+          "class_id": 0
         },
-        "module": "timers",
+        "prototype": "Object.prototype",
         "births": [
-          "Array",
-          "Error",
-          "Function",
-          "Object",
-          "node:timers.clearImmediate",
-          "node:timers.clearInterval",
-          "node:timers.clearTimeout",
-          "node:timers.default",
-          "node:timers.promises",
-          "node:timers.setImmediate",
-          "node:timers.setInterval",
-          "node:timers.setTimeout"
+          "Object.prototype",
+          "node:test/reporters.default.dot",
+          "node:test/reporters.default.junit",
+          "node:test/reporters.default.lcov",
+          "node:test/reporters.default.spec",
+          "node:test/reporters.default.tap"
         ]
       },
       {
@@ -33414,88 +34397,6 @@
         "prototype": "Object.prototype",
         "births": [
           "Object.prototype",
-          "node:timers/promises.scheduler",
-          "node:timers/promises.setImmediate",
-          "node:timers/promises.setInterval",
-          "node:timers/promises.setTimeout"
-        ]
-      },
-      {
-        "name": "node:timers/promises",
-        "kind": "namespace",
-        "properties": [
-          {
-            "key": "default",
-            "symbol": false,
-            "attributes": 3,
-            "value": {
-              "kind": "reference",
-              "value": "node:timers.promises"
-            }
-          },
-          {
-            "key": "scheduler",
-            "symbol": false,
-            "attributes": 3,
-            "value": {
-              "kind": "reference",
-              "value": "node:timers/promises.scheduler"
-            }
-          },
-          {
-            "key": "setImmediate",
-            "symbol": false,
-            "attributes": 3,
-            "value": {
-              "kind": "reference",
-              "value": "node:timers/promises.setImmediate"
-            }
-          },
-          {
-            "key": "setInterval",
-            "symbol": false,
-            "attributes": 3,
-            "value": {
-              "kind": "reference",
-              "value": "node:timers/promises.setInterval"
-            }
-          },
-          {
-            "key": "setTimeout",
-            "symbol": false,
-            "attributes": 3,
-            "value": {
-              "kind": "reference",
-              "value": "node:timers/promises.setTimeout"
-            }
-          },
-          {
-            "key": "@@toStringTag",
-            "symbol": true,
-            "attributes": 0,
-            "value": {
-              "kind": "string",
-              "value": "Module"
-            }
-          }
-        ],
-        "own_key_order": [
-          "default",
-          "scheduler",
-          "setImmediate",
-          "setInterval",
-          "setTimeout"
-        ],
-        "own_symbol_order": [
-          "@@toStringTag"
-        ],
-        "header": {
-          "gc_type": 2,
-          "reserved": 2628,
-          "class_id": 4294921811
-        },
-        "births": [
-          "node:timers.promises",
           "node:timers/promises.scheduler",
           "node:timers/promises.setImmediate",
           "node:timers/promises.setInterval",
@@ -35239,6 +36140,46 @@
         ]
       },
       {
+        "name": "node:trace_events.default",
+        "kind": "namespace",
+        "properties": [
+          {
+            "key": "createTracing",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:trace_events.default.createTracing"
+            }
+          },
+          {
+            "key": "getEnabledCategories",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "node:trace_events.default.getEnabledCategories"
+            }
+          }
+        ],
+        "own_key_order": [
+          "createTracing",
+          "getEnabledCategories"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 2,
+          "reserved": 0,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "Object.prototype",
+          "node:trace_events.default.createTracing",
+          "node:trace_events.default.getEnabledCategories"
+        ]
+      },
+      {
         "name": "node:tty",
         "kind": "namespace",
         "properties": [
@@ -35744,7 +36685,7 @@
             "attributes": 3,
             "value": {
               "kind": "reference",
-              "value": "node:util.MIMEParams"
+              "value": "node:sys.MIMEParams"
             }
           },
           {
@@ -35753,7 +36694,7 @@
             "attributes": 3,
             "value": {
               "kind": "reference",
-              "value": "node:util.MIMEType"
+              "value": "node:sys.MIMEType"
             }
           },
           {
@@ -35780,7 +36721,7 @@
             "attributes": 3,
             "value": {
               "kind": "reference",
-              "value": "node:util._errnoException"
+              "value": "node:sys._errnoException"
             }
           },
           {
@@ -35789,7 +36730,7 @@
             "attributes": 3,
             "value": {
               "kind": "reference",
-              "value": "node:util._exceptionWithHostPort"
+              "value": "node:sys._exceptionWithHostPort"
             }
           },
           {
@@ -35798,7 +36739,7 @@
             "attributes": 3,
             "value": {
               "kind": "reference",
-              "value": "node:util._extend"
+              "value": "node:sys._extend"
             }
           },
           {
@@ -35807,7 +36748,7 @@
             "attributes": 3,
             "value": {
               "kind": "reference",
-              "value": "node:util.aborted"
+              "value": "node:sys.aborted"
             }
           },
           {
@@ -35816,7 +36757,7 @@
             "attributes": 3,
             "value": {
               "kind": "reference",
-              "value": "node:util.callbackify"
+              "value": "node:sys.callbackify"
             }
           },
           {
@@ -35825,7 +36766,7 @@
             "attributes": 3,
             "value": {
               "kind": "reference",
-              "value": "node:util.convertProcessSignalToExitCode"
+              "value": "node:sys.convertProcessSignalToExitCode"
             }
           },
           {
@@ -35834,7 +36775,7 @@
             "attributes": 3,
             "value": {
               "kind": "reference",
-              "value": "node:util.debug"
+              "value": "node:sys.debug"
             }
           },
           {
@@ -35843,7 +36784,7 @@
             "attributes": 3,
             "value": {
               "kind": "reference",
-              "value": "node:util.debug"
+              "value": "node:sys.debug"
             }
           },
           {
@@ -35852,7 +36793,7 @@
             "attributes": 3,
             "value": {
               "kind": "reference",
-              "value": "node:util.default"
+              "value": "node:sys.default"
             }
           },
           {
@@ -35861,7 +36802,7 @@
             "attributes": 3,
             "value": {
               "kind": "reference",
-              "value": "node:util.deprecate"
+              "value": "node:sys.deprecate"
             }
           },
           {
@@ -35870,7 +36811,7 @@
             "attributes": 3,
             "value": {
               "kind": "reference",
-              "value": "node:util.diff"
+              "value": "node:sys.diff"
             }
           },
           {
@@ -35879,7 +36820,7 @@
             "attributes": 3,
             "value": {
               "kind": "reference",
-              "value": "node:util.format"
+              "value": "node:sys.format"
             }
           },
           {
@@ -35888,7 +36829,7 @@
             "attributes": 3,
             "value": {
               "kind": "reference",
-              "value": "node:util.formatWithOptions"
+              "value": "node:sys.formatWithOptions"
             }
           },
           {
@@ -35897,7 +36838,7 @@
             "attributes": 3,
             "value": {
               "kind": "reference",
-              "value": "node:util.getCallSites"
+              "value": "node:sys.getCallSites"
             }
           },
           {
@@ -35906,7 +36847,7 @@
             "attributes": 3,
             "value": {
               "kind": "reference",
-              "value": "node:util.getSystemErrorMap"
+              "value": "node:sys.getSystemErrorMap"
             }
           },
           {
@@ -35915,7 +36856,7 @@
             "attributes": 3,
             "value": {
               "kind": "reference",
-              "value": "node:util.getSystemErrorMessage"
+              "value": "node:sys.getSystemErrorMessage"
             }
           },
           {
@@ -35924,7 +36865,7 @@
             "attributes": 3,
             "value": {
               "kind": "reference",
-              "value": "node:util.getSystemErrorName"
+              "value": "node:sys.getSystemErrorName"
             }
           },
           {
@@ -35933,7 +36874,7 @@
             "attributes": 3,
             "value": {
               "kind": "reference",
-              "value": "node:util.inherits"
+              "value": "node:sys.inherits"
             }
           },
           {
@@ -35942,7 +36883,7 @@
             "attributes": 3,
             "value": {
               "kind": "reference",
-              "value": "node:util.inspect"
+              "value": "node:sys.inspect"
             }
           },
           {
@@ -35951,7 +36892,7 @@
             "attributes": 3,
             "value": {
               "kind": "reference",
-              "value": "node:util.isArray"
+              "value": "node:sys.isArray"
             }
           },
           {
@@ -35960,7 +36901,7 @@
             "attributes": 3,
             "value": {
               "kind": "reference",
-              "value": "node:util.isDeepStrictEqual"
+              "value": "node:sys.isDeepStrictEqual"
             }
           },
           {
@@ -35969,7 +36910,7 @@
             "attributes": 3,
             "value": {
               "kind": "reference",
-              "value": "node:util.parseArgs"
+              "value": "node:sys.parseArgs"
             }
           },
           {
@@ -35978,7 +36919,7 @@
             "attributes": 3,
             "value": {
               "kind": "reference",
-              "value": "node:util.parseEnv"
+              "value": "node:sys.parseEnv"
             }
           },
           {
@@ -35987,7 +36928,7 @@
             "attributes": 3,
             "value": {
               "kind": "reference",
-              "value": "node:util.promisify"
+              "value": "node:sys.promisify"
             }
           },
           {
@@ -35996,7 +36937,7 @@
             "attributes": 3,
             "value": {
               "kind": "reference",
-              "value": "node:util.setTraceSigInt"
+              "value": "node:sys.setTraceSigInt"
             }
           },
           {
@@ -36005,7 +36946,7 @@
             "attributes": 3,
             "value": {
               "kind": "reference",
-              "value": "node:util.stripVTControlCharacters"
+              "value": "node:sys.stripVTControlCharacters"
             }
           },
           {
@@ -36014,7 +36955,7 @@
             "attributes": 3,
             "value": {
               "kind": "reference",
-              "value": "node:util.styleText"
+              "value": "node:sys.styleText"
             }
           },
           {
@@ -36023,7 +36964,7 @@
             "attributes": 3,
             "value": {
               "kind": "reference",
-              "value": "node:util.toUSVString"
+              "value": "node:sys.toUSVString"
             }
           },
           {
@@ -36032,7 +36973,7 @@
             "attributes": 3,
             "value": {
               "kind": "reference",
-              "value": "node:util.transferableAbortController"
+              "value": "node:sys.transferableAbortController"
             }
           },
           {
@@ -36041,7 +36982,7 @@
             "attributes": 3,
             "value": {
               "kind": "reference",
-              "value": "node:util.transferableAbortSignal"
+              "value": "node:sys.transferableAbortSignal"
             }
           },
           {
@@ -36050,7 +36991,7 @@
             "attributes": 3,
             "value": {
               "kind": "reference",
-              "value": "node:util.types"
+              "value": "node:sys.types"
             }
           },
           {
@@ -36114,864 +37055,41 @@
           "Error",
           "Function",
           "Object",
+          "Promise",
           "TextDecoder",
           "TextEncoder",
-          "node:util.MIMEParams",
-          "node:util.MIMEType",
-          "node:util._errnoException",
-          "node:util._exceptionWithHostPort",
-          "node:util._extend",
-          "node:util.aborted",
-          "node:util.callbackify",
-          "node:util.convertProcessSignalToExitCode",
-          "node:util.debug",
-          "node:util.default",
-          "node:util.deprecate",
-          "node:util.diff",
-          "node:util.format",
-          "node:util.formatWithOptions",
-          "node:util.getCallSites",
-          "node:util.getSystemErrorMap",
-          "node:util.getSystemErrorMessage",
-          "node:util.getSystemErrorName",
-          "node:util.inherits",
-          "node:util.inspect",
-          "node:util.isArray",
-          "node:util.isDeepStrictEqual",
-          "node:util.parseArgs",
-          "node:util.parseEnv",
-          "node:util.promisify",
-          "node:util.setTraceSigInt",
-          "node:util.stripVTControlCharacters",
-          "node:util.styleText",
-          "node:util.toUSVString",
-          "node:util.transferableAbortController",
-          "node:util.transferableAbortSignal",
-          "node:util.types"
-        ]
-      },
-      {
-        "name": "node:util.default",
-        "kind": "namespace",
-        "properties": [
-          {
-            "key": "TextDecoder",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "TextDecoder"
-            }
-          },
-          {
-            "key": "TextEncoder",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "TextEncoder"
-            }
-          },
-          {
-            "key": "aborted",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util.aborted"
-            }
-          },
-          {
-            "key": "callbackify",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util.callbackify"
-            }
-          },
-          {
-            "key": "convertProcessSignalToExitCode",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util.convertProcessSignalToExitCode"
-            }
-          },
-          {
-            "key": "debug",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util.default.debug"
-            }
-          },
-          {
-            "key": "debuglog",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util.debug"
-            }
-          },
-          {
-            "key": "deprecate",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util.deprecate"
-            }
-          },
-          {
-            "key": "diff",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util.diff"
-            }
-          },
-          {
-            "key": "format",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util.format"
-            }
-          },
-          {
-            "key": "formatWithOptions",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util.formatWithOptions"
-            }
-          },
-          {
-            "key": "getCallSites",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util.getCallSites"
-            }
-          },
-          {
-            "key": "getSystemErrorMap",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util.getSystemErrorMap"
-            }
-          },
-          {
-            "key": "getSystemErrorMessage",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util.getSystemErrorMessage"
-            }
-          },
-          {
-            "key": "getSystemErrorName",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util.getSystemErrorName"
-            }
-          },
-          {
-            "key": "inherits",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util.inherits"
-            }
-          },
-          {
-            "key": "inspect",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util.inspect"
-            }
-          },
-          {
-            "key": "isArray",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util.isArray"
-            }
-          },
-          {
-            "key": "isDeepStrictEqual",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util.isDeepStrictEqual"
-            }
-          },
-          {
-            "key": "parseArgs",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util.parseArgs"
-            }
-          },
-          {
-            "key": "promisify",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util.promisify"
-            }
-          },
-          {
-            "key": "setTraceSigInt",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util.setTraceSigInt"
-            }
-          },
-          {
-            "key": "stripVTControlCharacters",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util.stripVTControlCharacters"
-            }
-          },
-          {
-            "key": "styleText",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util.styleText"
-            }
-          },
-          {
-            "key": "toUSVString",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util.toUSVString"
-            }
-          },
-          {
-            "key": "transferableAbortController",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util.transferableAbortController"
-            }
-          },
-          {
-            "key": "transferableAbortSignal",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util.transferableAbortSignal"
-            }
-          },
-          {
-            "key": "types",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util.types"
-            }
-          }
-        ],
-        "own_key_order": [
-          "aborted",
-          "callbackify",
-          "convertProcessSignalToExitCode",
-          "debug",
-          "debuglog",
-          "deprecate",
-          "diff",
-          "format",
-          "formatWithOptions",
-          "getCallSites",
-          "getSystemErrorMap",
-          "getSystemErrorName",
-          "getSystemErrorMessage",
-          "inherits",
-          "inspect",
-          "isArray",
-          "isDeepStrictEqual",
-          "promisify",
-          "stripVTControlCharacters",
-          "styleText",
-          "toUSVString",
-          "setTraceSigInt",
-          "types",
-          "parseArgs",
-          "TextDecoder",
-          "TextEncoder",
-          "transferableAbortController",
-          "transferableAbortSignal"
-        ],
-        "own_symbol_order": [],
-        "header": {
-          "gc_type": 2,
-          "reserved": 0,
-          "class_id": 4294967294
-        },
-        "prototype": "Object.prototype",
-        "births": [
-          "Object.prototype",
-          "TextDecoder",
-          "TextEncoder",
-          "node:util.aborted",
-          "node:util.callbackify",
-          "node:util.convertProcessSignalToExitCode",
-          "node:util.debug",
-          "node:util.default.debug",
-          "node:util.deprecate",
-          "node:util.diff",
-          "node:util.format",
-          "node:util.formatWithOptions",
-          "node:util.getCallSites",
-          "node:util.getSystemErrorMap",
-          "node:util.getSystemErrorMessage",
-          "node:util.getSystemErrorName",
-          "node:util.inherits",
-          "node:util.inspect",
-          "node:util.isArray",
-          "node:util.isDeepStrictEqual",
-          "node:util.parseArgs",
-          "node:util.promisify",
-          "node:util.setTraceSigInt",
-          "node:util.stripVTControlCharacters",
-          "node:util.styleText",
-          "node:util.toUSVString",
-          "node:util.transferableAbortController",
-          "node:util.transferableAbortSignal",
-          "node:util.types"
-        ]
-      },
-      {
-        "name": "node:util.types",
-        "kind": "namespace",
-        "properties": [
-          {
-            "key": "isAnyArrayBuffer",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util/types.isAnyArrayBuffer"
-            }
-          },
-          {
-            "key": "isArgumentsObject",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util/types.isArgumentsObject"
-            }
-          },
-          {
-            "key": "isArrayBuffer",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util/types.isArrayBuffer"
-            }
-          },
-          {
-            "key": "isArrayBufferView",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util/types.isArrayBufferView"
-            }
-          },
-          {
-            "key": "isAsyncFunction",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util/types.isAsyncFunction"
-            }
-          },
-          {
-            "key": "isBigInt64Array",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util/types.isBigInt64Array"
-            }
-          },
-          {
-            "key": "isBigIntObject",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util/types.isBigIntObject"
-            }
-          },
-          {
-            "key": "isBigUint64Array",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util/types.isBigUint64Array"
-            }
-          },
-          {
-            "key": "isBooleanObject",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util/types.isBooleanObject"
-            }
-          },
-          {
-            "key": "isBoxedPrimitive",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util/types.isBoxedPrimitive"
-            }
-          },
-          {
-            "key": "isCryptoKey",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util/types.isCryptoKey"
-            }
-          },
-          {
-            "key": "isDataView",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util/types.isDataView"
-            }
-          },
-          {
-            "key": "isDate",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util/types.isDate"
-            }
-          },
-          {
-            "key": "isExternal",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util/types.isExternal"
-            }
-          },
-          {
-            "key": "isFloat16Array",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util/types.isFloat16Array"
-            }
-          },
-          {
-            "key": "isFloat32Array",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util/types.isFloat32Array"
-            }
-          },
-          {
-            "key": "isFloat64Array",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util/types.isFloat64Array"
-            }
-          },
-          {
-            "key": "isGeneratorFunction",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util/types.isGeneratorFunction"
-            }
-          },
-          {
-            "key": "isGeneratorObject",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util/types.isGeneratorObject"
-            }
-          },
-          {
-            "key": "isInt16Array",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util/types.isInt16Array"
-            }
-          },
-          {
-            "key": "isInt32Array",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util/types.isInt32Array"
-            }
-          },
-          {
-            "key": "isInt8Array",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util/types.isInt8Array"
-            }
-          },
-          {
-            "key": "isKeyObject",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util/types.isKeyObject"
-            }
-          },
-          {
-            "key": "isMap",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util/types.isMap"
-            }
-          },
-          {
-            "key": "isMapIterator",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util/types.isMapIterator"
-            }
-          },
-          {
-            "key": "isModuleNamespaceObject",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util/types.isModuleNamespaceObject"
-            }
-          },
-          {
-            "key": "isNativeError",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util/types.isNativeError"
-            }
-          },
-          {
-            "key": "isNumberObject",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util/types.isNumberObject"
-            }
-          },
-          {
-            "key": "isPromise",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util/types.isPromise"
-            }
-          },
-          {
-            "key": "isProxy",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util/types.isProxy"
-            }
-          },
-          {
-            "key": "isRegExp",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util/types.isRegExp"
-            }
-          },
-          {
-            "key": "isSet",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util/types.isSet"
-            }
-          },
-          {
-            "key": "isSetIterator",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util/types.isSetIterator"
-            }
-          },
-          {
-            "key": "isSharedArrayBuffer",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util/types.isSharedArrayBuffer"
-            }
-          },
-          {
-            "key": "isStringObject",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util/types.isStringObject"
-            }
-          },
-          {
-            "key": "isSymbolObject",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util/types.isSymbolObject"
-            }
-          },
-          {
-            "key": "isTypedArray",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util/types.isTypedArray"
-            }
-          },
-          {
-            "key": "isUint16Array",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util/types.isUint16Array"
-            }
-          },
-          {
-            "key": "isUint32Array",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util/types.isUint32Array"
-            }
-          },
-          {
-            "key": "isUint8Array",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util/types.isUint8Array"
-            }
-          },
-          {
-            "key": "isUint8ClampedArray",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util/types.isUint8ClampedArray"
-            }
-          },
-          {
-            "key": "isWeakMap",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util/types.isWeakMap"
-            }
-          },
-          {
-            "key": "isWeakSet",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "node:util/types.isWeakSet"
-            }
-          }
-        ],
-        "own_key_order": [
-          "isArgumentsObject",
-          "isArrayBuffer",
-          "isAsyncFunction",
-          "isBigIntObject",
-          "isBooleanObject",
-          "isDate",
-          "isExternal",
-          "isGeneratorFunction",
-          "isGeneratorObject",
-          "isMap",
-          "isMapIterator",
-          "isModuleNamespaceObject",
-          "isNativeError",
-          "isNumberObject",
-          "isPromise",
-          "isProxy",
-          "isRegExp",
-          "isSet",
-          "isSetIterator",
-          "isSharedArrayBuffer",
-          "isStringObject",
-          "isSymbolObject",
-          "isWeakMap",
-          "isWeakSet",
-          "isAnyArrayBuffer",
-          "isBoxedPrimitive",
-          "isArrayBufferView",
-          "isDataView",
-          "isTypedArray",
-          "isUint8Array",
-          "isUint8ClampedArray",
-          "isUint16Array",
-          "isUint32Array",
-          "isInt8Array",
-          "isInt16Array",
-          "isInt32Array",
-          "isFloat16Array",
-          "isFloat32Array",
-          "isFloat64Array",
-          "isBigInt64Array",
-          "isBigUint64Array",
-          "isKeyObject",
-          "isCryptoKey"
-        ],
-        "own_symbol_order": [],
-        "header": {
-          "gc_type": 2,
-          "reserved": 0,
-          "class_id": 4294967294
-        },
-        "prototype": "Object.prototype",
-        "native_namespace": "util.types",
-        "exotic_vtable": "crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL",
-        "module": "util.types",
-        "births": [
-          "Array",
-          "Error",
-          "Function",
-          "Object",
-          "Object.prototype",
-          "node:util/types.isAnyArrayBuffer",
-          "node:util/types.isArgumentsObject",
-          "node:util/types.isArrayBuffer",
-          "node:util/types.isArrayBufferView",
-          "node:util/types.isAsyncFunction",
-          "node:util/types.isBigInt64Array",
-          "node:util/types.isBigIntObject",
-          "node:util/types.isBigUint64Array",
-          "node:util/types.isBooleanObject",
-          "node:util/types.isBoxedPrimitive",
-          "node:util/types.isCryptoKey",
-          "node:util/types.isDataView",
-          "node:util/types.isDate",
-          "node:util/types.isExternal",
-          "node:util/types.isFloat16Array",
-          "node:util/types.isFloat32Array",
-          "node:util/types.isFloat64Array",
-          "node:util/types.isGeneratorFunction",
-          "node:util/types.isGeneratorObject",
-          "node:util/types.isInt16Array",
-          "node:util/types.isInt32Array",
-          "node:util/types.isInt8Array",
-          "node:util/types.isKeyObject",
-          "node:util/types.isMap",
-          "node:util/types.isMapIterator",
-          "node:util/types.isModuleNamespaceObject",
-          "node:util/types.isNativeError",
-          "node:util/types.isNumberObject",
-          "node:util/types.isPromise",
-          "node:util/types.isProxy",
-          "node:util/types.isRegExp",
-          "node:util/types.isSet",
-          "node:util/types.isSetIterator",
-          "node:util/types.isSharedArrayBuffer",
-          "node:util/types.isStringObject",
-          "node:util/types.isSymbolObject",
-          "node:util/types.isTypedArray",
-          "node:util/types.isUint16Array",
-          "node:util/types.isUint32Array",
-          "node:util/types.isUint8Array",
-          "node:util/types.isUint8ClampedArray",
-          "node:util/types.isWeakMap",
-          "node:util/types.isWeakSet"
+          "node:sys.MIMEParams",
+          "node:sys.MIMEType",
+          "node:sys._errnoException",
+          "node:sys._exceptionWithHostPort",
+          "node:sys._extend",
+          "node:sys.aborted",
+          "node:sys.callbackify",
+          "node:sys.convertProcessSignalToExitCode",
+          "node:sys.debug",
+          "node:sys.default",
+          "node:sys.deprecate",
+          "node:sys.diff",
+          "node:sys.format",
+          "node:sys.formatWithOptions",
+          "node:sys.getCallSites",
+          "node:sys.getSystemErrorMap",
+          "node:sys.getSystemErrorMessage",
+          "node:sys.getSystemErrorName",
+          "node:sys.inherits",
+          "node:sys.inspect",
+          "node:sys.isArray",
+          "node:sys.isDeepStrictEqual",
+          "node:sys.parseArgs",
+          "node:sys.parseEnv",
+          "node:sys.promisify",
+          "node:sys.setTraceSigInt",
+          "node:sys.stripVTControlCharacters",
+          "node:sys.styleText",
+          "node:sys.toUSVString",
+          "node:sys.transferableAbortController",
+          "node:sys.transferableAbortSignal",
+          "node:sys.types"
         ]
       },
       {
@@ -36984,7 +37102,7 @@
             "attributes": 3,
             "value": {
               "kind": "reference",
-              "value": "node:util.types"
+              "value": "node:sys.types"
             }
           },
           {
@@ -37444,7 +37562,7 @@
           "Error",
           "Function",
           "Object",
-          "node:util.types",
+          "node:sys.types",
           "node:util/types.isAnyArrayBuffer",
           "node:util/types.isArgumentsObject",
           "node:util/types.isArrayBuffer",
@@ -37757,9 +37875,27 @@
         "module": "v8",
         "births": [
           "Array",
+          "ArrayBuffer",
+          "BigInt64Array",
+          "BigUint64Array",
+          "Buffer",
+          "DataView",
+          "Date",
           "Error",
+          "Float32Array",
+          "Float64Array",
           "Function",
+          "Int16Array",
+          "Int32Array",
+          "Int8Array",
+          "Map",
           "Object",
+          "RegExp",
+          "Set",
+          "Uint16Array",
+          "Uint32Array",
+          "Uint8Array",
+          "Uint8ClampedArray",
           "node:v8.DefaultDeserializer",
           "node:v8.DefaultSerializer",
           "node:v8.Deserializer",
@@ -38288,7 +38424,7 @@
             "attributes": 2,
             "value": {
               "kind": "symbol",
-              "value": "Symbol(vm_context_no_contextify)"
+              "value": "@for:vm_context_no_contextify"
             }
           },
           {
@@ -38297,7 +38433,7 @@
             "attributes": 2,
             "value": {
               "kind": "symbol",
-              "value": "Symbol(vm_dynamic_import_main_context_default)"
+              "value": "@for:vm_dynamic_import_main_context_default"
             }
           }
         ],
@@ -38572,7 +38708,7 @@
             "attributes": 3,
             "value": {
               "kind": "symbol",
-              "value": "Symbol(nodejs.worker_threads.SHARE_ENV)"
+              "value": "@for:nodejs.worker_threads.SHARE_ENV"
             }
           },
           {
@@ -38780,6 +38916,7 @@
         "module": "worker_threads",
         "births": [
           "Array",
+          "ArrayBuffer",
           "BroadcastChannel",
           "Buffer",
           "Error",
@@ -38788,6 +38925,7 @@
           "MessagePort",
           "Object",
           "Promise",
+          "SharedArrayBuffer",
           "node:worker_threads.Worker",
           "node:worker_threads.default",
           "node:worker_threads.getEnvironmentData",
@@ -38839,7 +38977,7 @@
             "attributes": 7,
             "value": {
               "kind": "symbol",
-              "value": "Symbol(nodejs.worker_threads.SHARE_ENV)"
+              "value": "@for:nodejs.worker_threads.SHARE_ENV"
             }
           },
           {
@@ -42162,7 +42300,8 @@
         "births": [
           "sessionStorage.<get>",
           "sessionStorage.<set>"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "undefined",
@@ -42171,7 +42310,8 @@
         "value": {
           "kind": "undefined"
         },
-        "births": []
+        "births": [],
+        "own_symbol_order": []
       }
     ]
   }

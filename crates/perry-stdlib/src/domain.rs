@@ -651,7 +651,7 @@ pub unsafe extern "C" fn js_domain_native_dispatch(
     }
 }
 
-// Realm facts owned here; source-only until image emission.
+// Realm facts owned here; this marker emits no runtime code or data.
 macro_rules! realm_decl {
     ($facts:literal) => {};
 }

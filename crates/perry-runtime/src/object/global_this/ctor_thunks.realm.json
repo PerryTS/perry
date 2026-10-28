@@ -1178,8 +1178,14 @@
         ],
         "info_symbol": "perry_realm_info_f0eadbad4b4c17eb4523",
         "births": [
+          "ArrayBuffer",
           "Crypto.prototype",
-          "Function.prototype"
+          "CryptoKey",
+          "DOMException",
+          "Function.prototype",
+          "Promise",
+          "SubtleCrypto",
+          "Uint8Array"
         ],
         "constructor": {
           "identity": 57,
@@ -1755,6 +1761,7 @@
         ],
         "info_symbol": "perry_realm_info_2ac8830b891fcb322e89",
         "births": [
+          "ArrayBuffer",
           "DataView.prototype",
           "Function.prototype"
         ],
@@ -4923,9 +4930,14 @@
         ],
         "info_symbol": "perry_realm_info_f0eadbad4b4c17eb4523",
         "births": [
+          "ArrayBuffer",
+          "CryptoKey",
+          "DOMException",
           "Function.prototype",
+          "Promise",
           "SubtleCrypto.prototype",
-          "SubtleCrypto.supports"
+          "SubtleCrypto.supports",
+          "Uint8Array"
         ],
         "constructor": {
           "identity": 59,

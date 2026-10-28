@@ -1977,3 +1977,6 @@ pub unsafe extern "C" fn js_install_readable_stream_from(info: *const JsFunction
         crate::object::PropertyAttrs::new(true, true, true),
     );
 }
+
+// Realm facts owned here; this marker emits no runtime code or data.
+crate::realm_decl!("mod.realm.json#objects");

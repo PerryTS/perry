@@ -610,5 +610,5 @@ pub extern "C" fn js_string_split_js(receiver: f64, separator: f64, limit: f64) 
     api::finish(string(receiver, separator, limit))
 }
 
-// Realm facts owned here; source-only until image emission.
+// Realm facts owned here; this marker emits no runtime code or data.
 crate::realm_decl!("perex_split.realm.json#objects");

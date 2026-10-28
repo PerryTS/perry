@@ -3,7 +3,7 @@
   "groups": {
     "objects": [
       {
-        "name": "node:stream.finished[\"@runtime:nodejs.util.promisify.custom\"]",
+        "name": "node:stream/promises.finished",
         "kind": "method",
         "properties": [
           {
@@ -56,7 +56,7 @@
         ]
       },
       {
-        "name": "node:stream.pipeline[\"@runtime:nodejs.util.promisify.custom\"]",
+        "name": "node:stream/promises.pipeline",
         "kind": "method",
         "properties": [
           {

@@ -755,3 +755,6 @@ mod tests {
         assert!(output.categories.is_empty());
     }
 }
+
+// Realm facts owned here; this marker emits no runtime code or data.
+crate::realm_decl!("trace_events.realm.json#objects");

@@ -137,6 +137,7 @@
         },
         "prototype": "Object.prototype",
         "births": [
+          "Array",
           "Intl.Collator",
           "Intl.DateTimeFormat",
           "Intl.DisplayNames",
@@ -149,7 +150,8 @@
           "Intl.Segmenter",
           "Intl.getCanonicalLocales",
           "Intl.supportedValuesOf",
-          "Object.prototype"
+          "Object.prototype",
+          "String"
         ]
       },
       {

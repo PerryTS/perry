@@ -175,7 +175,7 @@ fn method_info(name: &str) -> *const crate::closure::JsFunctionInfo {
             return info as *const crate::closure::JsFunctionInfo;
         }
     }
-    crate::fn_info!(#[realm("node_http_prototypes.realm.json#body:js_node_http_method_fallback")] js_node_http_method_fallback, 3; with_declared(3))
+    crate::fn_info!(js_node_http_method_fallback, 3; with_declared(3))
 }
 
 /// Build `kind`'s prototype for `constructor`: born on its layout, every slot
@@ -201,29 +201,10 @@ fn build_http_prototype(constructor: f64, kind: HttpProto) -> f64 {
         fill(name, value);
     };
     let accessor = |name: &'static str, setter: bool| {
-        let get = named_closure(
-            &scope,
-            crate::fn_info!(
-                #[realm("node_http_prototypes.realm.json#body:http_getter_thunk")]
-                http_getter_thunk,
-                0
-            ),
-            name,
-            0,
-        );
+        let get = named_closure(&scope, crate::fn_info!(http_getter_thunk, 0), name, 0);
         let get = scope.root_nanbox_f64(get);
         let set = if setter {
-            named_closure(
-                &scope,
-                crate::fn_info!(
-                    #[realm("node_http_prototypes.realm.json#body:http_setter_thunk")]
-                    http_setter_thunk,
-                    1
-                ),
-                name,
-                1,
-            )
-            .to_bits()
+            named_closure(&scope, crate::fn_info!(http_setter_thunk, 1), name, 1).to_bits()
         } else {
             0
         };
@@ -1062,3 +1043,6 @@ mod incoming_init_tests {
         }
     }
 }
+
+// Group facts preserve existing runtime source locations.
+crate::realm_decl!("node_http_prototypes.realm.json#*");

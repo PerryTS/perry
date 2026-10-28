@@ -149,11 +149,23 @@ fn scan_resolved(module: &ast::Module, entries: &[RealmEntry], out: &mut RealmRe
                 break;
             }
         }
+        let mut aliases = RequireAliases {
+            unresolved,
+            names: BTreeSet::new(),
+        };
+        loop {
+            let before = aliases.names.len();
+            resolved.visit_with(&mut aliases);
+            if aliases.names.len() == before {
+                break;
+            }
+        }
         resolved.visit_with(&mut Scan {
             entries,
             out,
             unresolved,
             constants: &constants.0,
+            require_aliases: &aliases.names,
         });
     });
 }
@@ -245,11 +257,35 @@ pub fn scan_lowered(module: &crate::Module, entries: &[RealmEntry], out: &mut Re
     out.close(entries);
 }
 
+struct RequireAliases {
+    unresolved: Mark,
+    names: BTreeSet<ast::Id>,
+}
+impl Visit for RequireAliases {
+    fn visit_var_decl(&mut self, declaration: &ast::VarDecl) {
+        if declaration.kind == ast::VarDeclKind::Const {
+            for binding in &declaration.decls {
+                if let (ast::Pat::Ident(target), Some(init)) = (&binding.name, &binding.init) {
+                    if let ast::Expr::Ident(value) = crate::patched_builtins::peel(init) {
+                        if (value.sym == "require" && value.ctxt.has_mark(self.unresolved))
+                            || self.names.contains(&value.to_id())
+                        {
+                            self.names.insert(target.id.to_id());
+                        }
+                    }
+                }
+            }
+        }
+        declaration.visit_children_with(self);
+    }
+}
+
 struct Scan<'a> {
     entries: &'a [RealmEntry],
     out: &'a mut RealmReach,
     unresolved: Mark,
     constants: &'a BTreeMap<ast::Id, String>,
+    require_aliases: &'a BTreeSet<ast::Id>,
 }
 
 impl Scan<'_> {
@@ -410,7 +446,7 @@ impl Visit for Scan<'_> {
         let module_call = match &call.callee {
             ast::Callee::Import(_) => true,
             ast::Callee::Expr(e) => {
-                matches!(crate::patched_builtins::peel(e), ast::Expr::Ident(i) if self.free(i) && i.sym == "require")
+                matches!(crate::patched_builtins::peel(e), ast::Expr::Ident(i) if (self.free(i) && i.sym == "require") || self.require_aliases.contains(&i.to_id()))
             }
             _ => false,
         };
@@ -519,6 +555,22 @@ impl Visit for Scan<'_> {
         self.primitive_prototypes();
         pat.visit_children_with(self);
     }
+
+    fn visit_tagged_tpl(&mut self, tagged: &ast::TaggedTpl) {
+        tagged.tag.visit_with(self);
+        // Quasis are the template object's strings, not an extra builtin.
+        for expression in &tagged.tpl.exprs {
+            expression.visit_with(self);
+        }
+    }
+
+    fn visit_new_expr(&mut self, expression: &ast::NewExpr) {
+        self.primitive_prototypes();
+        expression.visit_children_with(self);
+    }
+
+    fn visit_ts_interface_decl(&mut self, _: &ast::TsInterfaceDecl) {}
+    fn visit_ts_type_alias_decl(&mut self, _: &ast::TsTypeAliasDecl) {}
 
     fn visit_tpl(&mut self, tpl: &ast::Tpl) {
         self.add("String");

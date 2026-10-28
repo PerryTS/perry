@@ -9,7 +9,8 @@
         "exotic_vtable": "crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL",
         "births": [
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "%NativeNamespace:async_hooks%",
@@ -18,7 +19,8 @@
         "exotic_vtable": "crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL",
         "births": [
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "%NativeNamespace:buffer%",
@@ -27,7 +29,8 @@
         "exotic_vtable": "crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL",
         "births": [
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "%NativeNamespace:buffer.Buffer%",
@@ -36,7 +39,8 @@
         "exotic_vtable": "crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL",
         "births": [
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "%NativeNamespace:child_process%",
@@ -45,7 +49,8 @@
         "exotic_vtable": "crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL",
         "births": [
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "%NativeNamespace:cluster%",
@@ -54,7 +59,8 @@
         "exotic_vtable": "crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL",
         "births": [
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "%NativeNamespace:console%",
@@ -63,7 +69,8 @@
         "exotic_vtable": "crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL",
         "births": [
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "%NativeNamespace:crypto%",
@@ -72,7 +79,8 @@
         "exotic_vtable": "crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL",
         "births": [
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "%NativeNamespace:crypto.KeyObject%",
@@ -81,7 +89,8 @@
         "exotic_vtable": "crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL",
         "births": [
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "%NativeNamespace:dgram%",
@@ -90,7 +99,8 @@
         "exotic_vtable": "crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL",
         "births": [
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "%NativeNamespace:dns%",
@@ -99,7 +109,8 @@
         "exotic_vtable": "crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL",
         "births": [
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "%NativeNamespace:dns/promises%",
@@ -108,7 +119,8 @@
         "exotic_vtable": "crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL",
         "births": [
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "%NativeNamespace:domain%",
@@ -117,7 +129,8 @@
         "exotic_vtable": "crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL",
         "births": [
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "%NativeNamespace:events%",
@@ -126,7 +139,8 @@
         "exotic_vtable": "crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL",
         "births": [
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "%NativeNamespace:inspector%",
@@ -135,7 +149,8 @@
         "exotic_vtable": "crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL",
         "births": [
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "%NativeNamespace:inspector.DOMStorage%",
@@ -144,7 +159,8 @@
         "exotic_vtable": "crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL",
         "births": [
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "%NativeNamespace:inspector.NetworkResources%",
@@ -153,7 +169,8 @@
         "exotic_vtable": "crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL",
         "births": [
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "%NativeNamespace:inspector/promises%",
@@ -162,7 +179,8 @@
         "exotic_vtable": "crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL",
         "births": [
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "%NativeNamespace:module%",
@@ -171,7 +189,8 @@
         "exotic_vtable": "crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL",
         "births": [
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "%NativeNamespace:os%",
@@ -180,7 +199,8 @@
         "exotic_vtable": "crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL",
         "births": [
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "%NativeNamespace:path%",
@@ -189,7 +209,8 @@
         "exotic_vtable": "crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL",
         "births": [
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "%NativeNamespace:path.posix%",
@@ -198,7 +219,8 @@
         "exotic_vtable": "crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL",
         "births": [
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "%NativeNamespace:path.win32%",
@@ -207,7 +229,8 @@
         "exotic_vtable": "crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL",
         "births": [
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "%NativeNamespace:perf_hooks%",
@@ -216,7 +239,8 @@
         "exotic_vtable": "crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL",
         "births": [
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "%NativeNamespace:querystring%",
@@ -225,7 +249,8 @@
         "exotic_vtable": "crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL",
         "births": [
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "%NativeNamespace:readline%",
@@ -234,7 +259,8 @@
         "exotic_vtable": "crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL",
         "births": [
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "%NativeNamespace:repl%",
@@ -243,7 +269,8 @@
         "exotic_vtable": "crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL",
         "births": [
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "%NativeNamespace:sea%",
@@ -252,7 +279,8 @@
         "exotic_vtable": "crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL",
         "births": [
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "%NativeNamespace:stream%",
@@ -261,7 +289,8 @@
         "exotic_vtable": "crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL",
         "births": [
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "%NativeNamespace:string_decoder%",
@@ -270,7 +299,8 @@
         "exotic_vtable": "crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL",
         "births": [
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "%NativeNamespace:timers%",
@@ -279,7 +309,8 @@
         "exotic_vtable": "crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL",
         "births": [
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "%NativeNamespace:tls%",
@@ -288,7 +319,8 @@
         "exotic_vtable": "crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL",
         "births": [
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "%NativeNamespace:tty%",
@@ -297,7 +329,8 @@
         "exotic_vtable": "crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL",
         "births": [
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "%NativeNamespace:url%",
@@ -306,7 +339,8 @@
         "exotic_vtable": "crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL",
         "births": [
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "%NativeNamespace:util%",
@@ -315,7 +349,8 @@
         "exotic_vtable": "crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL",
         "births": [
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "%NativeNamespace:v8%",
@@ -324,7 +359,8 @@
         "exotic_vtable": "crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL",
         "births": [
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "%NativeNamespace:wasi%",
@@ -333,7 +369,8 @@
         "exotic_vtable": "crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL",
         "births": [
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "%NativeNamespace:worker_threads%",
@@ -342,7 +379,8 @@
         "exotic_vtable": "crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL",
         "births": [
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "%NativeNamespace:zlib%",
@@ -351,7 +389,8 @@
         "exotic_vtable": "crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL",
         "births": [
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "console",
@@ -658,7 +697,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:@parcel/watcher",
@@ -672,7 +712,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:@parcel/watcher-darwin-arm64",
@@ -686,7 +727,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:@parcel/watcher-darwin-x64",
@@ -700,7 +742,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:@parcel/watcher-linux-arm64-glibc",
@@ -714,7 +757,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:@parcel/watcher-linux-arm64-musl",
@@ -728,7 +772,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:@parcel/watcher-linux-x64-glibc",
@@ -742,7 +787,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:@parcel/watcher-linux-x64-musl",
@@ -756,7 +802,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:@parcel/watcher-win32-arm64",
@@ -770,7 +817,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:@parcel/watcher-win32-x64",
@@ -784,7 +832,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:@perryts/pdf",
@@ -798,7 +847,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:__disposable__",
@@ -812,7 +862,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:argon2",
@@ -826,7 +877,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:bcrypt",
@@ -840,7 +892,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:better-sqlite3",
@@ -854,7 +907,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:buffer.Buffer",
@@ -868,7 +922,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:bun",
@@ -884,7 +939,8 @@
           "Function",
           "Object",
           "Promise"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:bun-pty",
@@ -898,7 +954,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:bun:ffi",
@@ -912,7 +969,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:bun:jsc",
@@ -926,7 +984,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:bun:sqlite",
@@ -940,7 +999,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:cheerio",
@@ -954,7 +1014,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:ethers",
@@ -968,7 +1029,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:ffi",
@@ -982,7 +1044,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:inspector.DOMStorage",
@@ -996,7 +1059,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:inspector.NetworkResources",
@@ -1010,7 +1074,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:lodash",
@@ -1024,7 +1089,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:node-fetch",
@@ -1037,8 +1103,14 @@
           "Array",
           "Error",
           "Function",
-          "Object"
-        ]
+          "Headers",
+          "Object",
+          "Promise",
+          "Request",
+          "Response",
+          "fetch"
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:node-pty",
@@ -1052,7 +1124,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:nodemailer",
@@ -1066,7 +1139,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:perry",
@@ -1080,7 +1154,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:perry/ads",
@@ -1094,7 +1169,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:perry/audio",
@@ -1108,7 +1184,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:perry/background",
@@ -1122,7 +1199,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:perry/component",
@@ -1136,7 +1214,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:perry/compose",
@@ -1150,7 +1229,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:perry/container",
@@ -1164,7 +1244,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:perry/container-compose",
@@ -1178,7 +1259,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:perry/gc",
@@ -1192,7 +1274,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:perry/i18n",
@@ -1206,7 +1289,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:perry/ios",
@@ -1220,7 +1304,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:perry/media",
@@ -1234,7 +1319,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:perry/native",
@@ -1248,7 +1334,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:perry/plugin",
@@ -1262,7 +1349,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:perry/system",
@@ -1276,7 +1364,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:perry/thread",
@@ -1290,7 +1379,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:perry/tui",
@@ -1304,7 +1394,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:perry/ui",
@@ -1318,7 +1409,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:perry/updater",
@@ -1332,7 +1424,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:perry/widget",
@@ -1346,7 +1439,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:perry/workloads",
@@ -1360,7 +1454,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:perry/yoga",
@@ -1374,7 +1469,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:punycode",
@@ -1388,7 +1484,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:sharp",
@@ -1402,7 +1499,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:sqlite",
@@ -1416,7 +1514,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:typescript",
@@ -1430,7 +1529,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:undici",
@@ -1441,10 +1541,32 @@
         "exotic_vtable": "crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL",
         "births": [
           "Array",
+          "ArrayBuffer",
+          "Error",
+          "Function",
+          "Headers",
+          "Object",
+          "Promise",
+          "Request",
+          "Response",
+          "fetch"
+        ],
+        "own_symbol_order": []
+      },
+      {
+        "name": "node:util.types",
+        "kind": "namespace",
+        "module": "util.types",
+        "native_namespace": "util.types",
+        "body": "crate::object::native_module::js_create_native_module_namespace",
+        "exotic_vtable": "crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL",
+        "births": [
+          "Array",
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "node:ws",
@@ -1458,7 +1580,8 @@
           "Error",
           "Function",
           "Object"
-        ]
+        ],
+        "own_symbol_order": []
       },
       {
         "name": "process",
@@ -1667,7 +1790,7 @@
             "attributes": 7,
             "value": {
               "kind": "string",
-              "value": "/root/WRT/realm-dumps/work-metadata/realm-dump"
+              "value": "/root/WRT/realm-dumps/work-metadata-expanded/realm-dump"
             }
           },
           {
@@ -2139,7 +2262,7 @@
             "attributes": 7,
             "value": {
               "kind": "string",
-              "value": "/root/WRT/realm-dumps/work-metadata/realm-dump"
+              "value": "/root/WRT/realm-dumps/work-metadata-expanded/realm-dump"
             }
           },
           {
@@ -2271,7 +2394,10 @@
         "native_namespace": "process",
         "exotic_vtable": "crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL",
         "births": [
+          "Array",
+          "Buffer",
           "Object.prototype",
+          "Promise",
           "process._debugEnd",
           "process._debugProcess",
           "process._events",
@@ -2400,7 +2526,7 @@
             "attributes": 7,
             "value": {
               "kind": "string",
-              "value": "/root/WRT/realm-dumps/work-metadata/realm-dump"
+              "value": "/root/WRT/realm-dumps/work-metadata-expanded/realm-dump"
             }
           },
           {

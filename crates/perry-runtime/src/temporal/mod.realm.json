@@ -15,7 +15,10 @@
         },
         "prototype": "Object.prototype",
         "births": [
-          "Object.prototype"
+          "Array",
+          "Date",
+          "Object.prototype",
+          "String"
         ]
       }
     ]

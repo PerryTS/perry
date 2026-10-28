@@ -437,5 +437,5 @@ pub(crate) extern "C" fn timers_promises_scheduler(
     crate::exception::js_throw(boxed_ptr(err as *const u8))
 }
 
-// Realm facts owned here; source-only until image emission.
+// Realm facts owned here; this marker emits no runtime code or data.
 crate::realm_decl!("timers.realm.json#objects");

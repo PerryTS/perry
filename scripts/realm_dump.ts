@@ -52,13 +52,22 @@ import * as realm_native_47 from "node:zlib";
 export {};
 
 const symbolValues: any[] = [];
+// Use static accesses: a compiler may expose a well-known symbol intrinsically
+// even when the legacy Symbol constructor omits its reflective own property.
+const wellKnownSymbols: any[] = [
+    ["iterator", Symbol.iterator], ["asyncIterator", Symbol.asyncIterator],
+    ["toStringTag", Symbol.toStringTag], ["species", Symbol.species],
+    ["hasInstance", Symbol.hasInstance], ["toPrimitive", Symbol.toPrimitive],
+    ["match", Symbol.match], ["matchAll", Symbol.matchAll], ["replace", Symbol.replace],
+    ["search", Symbol.search], ["split", Symbol.split], ["isConcatSpreadable", Symbol.isConcatSpreadable],
+    ["unscopables", Symbol.unscopables], ["dispose", Symbol.dispose], ["asyncDispose", Symbol.asyncDispose],
+];
 function symbolIdentity(symbol: any): string {
+    for (let i = 0; i < wellKnownSymbols.length; i++) {
+        if (wellKnownSymbols[i][1] === symbol) return "well-known:" + wellKnownSymbols[i][0];
+    }
     const registered = Symbol.keyFor(symbol);
     if (registered !== undefined) return "for:" + registered;
-    const names = Object.getOwnPropertyNames(Symbol);
-    for (let i = 0; i < names.length; i++) {
-        if (typeof Symbol[names[i]] === "symbol" && Symbol[names[i]] === symbol) return "well-known:" + names[i];
-    }
     for (let i = 0; i < symbolValues.length; i++) if (symbolValues[i] === symbol) return "unique:" + i;
     const identity = "unique:" + symbolValues.length;
     symbolValues.push(symbol);

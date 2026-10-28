@@ -260,6 +260,8 @@
         "info_symbol": "perry_realm_info_58de3aa8285cc9ddb2c9",
         "births": [
           "AbortController.prototype",
+          "AbortSignal",
+          "Event",
           "Function.prototype"
         ],
         "constructor": {
@@ -425,7 +427,11 @@
           "AbortSignal.any",
           "AbortSignal.prototype",
           "AbortSignal.timeout",
-          "EventTarget"
+          "Array",
+          "DOMException",
+          "Event",
+          "EventTarget",
+          "Promise"
         ],
         "constructor": {
           "identity": 55,
@@ -575,6 +581,7 @@
         "info_symbol": "perry_realm_info_58de3aa8285cc9ddb2c9",
         "births": [
           "AggregateError.prototype",
+          "Array",
           "Error"
         ],
         "constructor": {
@@ -1222,8 +1229,12 @@
         ],
         "info_symbol": "perry_realm_info_f5081b095718b24db5fd",
         "births": [
+          "ArrayBuffer",
           "Blob.prototype",
-          "Function.prototype"
+          "Function.prototype",
+          "Promise",
+          "ReadableStream",
+          "Uint8Array"
         ],
         "constructor": {
           "identity": 64,
@@ -1777,8 +1788,11 @@
         ],
         "info_symbol": "perry_realm_info_58de3aa8285cc9ddb2c9",
         "births": [
+          "ArrayBuffer",
           "CompressionStream.prototype",
-          "Function.prototype"
+          "Function.prototype",
+          "TransformStream",
+          "Uint8Array"
         ],
         "constructor": {
           "identity": 45,
@@ -3575,8 +3589,11 @@
         ],
         "info_symbol": "perry_realm_info_58de3aa8285cc9ddb2c9",
         "births": [
+          "ArrayBuffer",
           "DecompressionStream.prototype",
-          "Function.prototype"
+          "Function.prototype",
+          "TransformStream",
+          "Uint8Array"
         ],
         "constructor": {
           "identity": 46,
@@ -4327,7 +4344,7 @@
             }
           },
           {
-            "key": "@runtime:nodejs.event_target",
+            "key": "@for:nodejs.event_target",
             "symbol": true,
             "attributes": 7,
             "value": {
@@ -4342,7 +4359,7 @@
           "prototype"
         ],
         "own_symbol_order": [
-          "@runtime:nodejs.event_target"
+          "@for:nodejs.event_target"
         ],
         "header": {
           "gc_type": 4,
@@ -4371,6 +4388,7 @@
         ],
         "info_symbol": "perry_realm_info_58de3aa8285cc9ddb2c9",
         "births": [
+          "Event",
           "EventTarget.prototype",
           "Function.prototype"
         ],
@@ -5222,6 +5240,10 @@
         ],
         "info_symbol": "perry_realm_info_58de3aa8285cc9ddb2c9",
         "births": [
+          "%IteratorPrototype%",
+          "Array",
+          "Blob",
+          "File",
           "FormData.prototype",
           "Function.prototype"
         ],
@@ -6039,6 +6061,8 @@
         ],
         "info_symbol": "perry_realm_info_bd2bd9af8ffc098434a5",
         "births": [
+          "%IteratorPrototype%",
+          "Array",
           "Function.prototype",
           "Headers.prototype"
         ],
@@ -7198,10 +7222,12 @@
         "info_symbol": "perry_realm_info_58de3aa8285cc9ddb2c9",
         "births": [
           "%AsyncIteratorPrototype%",
+          "ArrayBuffer",
           "Function.prototype",
           "Promise",
           "ReadableStream.from",
-          "ReadableStream.prototype"
+          "ReadableStream.prototype",
+          "Uint8Array"
         ],
         "constructor": {
           "identity": 47,
@@ -7410,10 +7436,13 @@
           "AbortSignal",
           "ArrayBuffer",
           "Blob",
+          "FormData",
           "Function.prototype",
           "Headers",
           "Promise",
-          "Request.prototype"
+          "ReadableStream",
+          "Request.prototype",
+          "URL"
         ],
         "constructor": {
           "identity": 67,
@@ -8201,9 +8230,11 @@
         "births": [
           "ArrayBuffer",
           "Blob",
+          "FormData",
           "Function.prototype",
           "Headers",
           "Promise",
+          "ReadableStream",
           "Response.error",
           "Response.json",
           "Response.prototype",
@@ -9446,7 +9477,8 @@
         "info_symbol": "perry_realm_info_58de3aa8285cc9ddb2c9",
         "births": [
           "Function.prototype",
-          "TextDecoder.prototype"
+          "TextDecoder.prototype",
+          "Uint8Array"
         ],
         "constructor": {
           "identity": 42,
@@ -9668,7 +9700,10 @@
         "info_symbol": "perry_realm_info_58de3aa8285cc9ddb2c9",
         "births": [
           "Function.prototype",
-          "TextDecoderStream.prototype"
+          "TextDecoder",
+          "TextDecoderStream.prototype",
+          "TransformStream",
+          "Uint8Array"
         ],
         "constructor": {
           "identity": 44,
@@ -9771,7 +9806,8 @@
         "info_symbol": "perry_realm_info_58de3aa8285cc9ddb2c9",
         "births": [
           "Function.prototype",
-          "TextEncoder.prototype"
+          "TextEncoder.prototype",
+          "Uint8Array"
         ],
         "constructor": {
           "identity": 41,
@@ -9988,7 +10024,10 @@
         "info_symbol": "perry_realm_info_58de3aa8285cc9ddb2c9",
         "births": [
           "Function.prototype",
-          "TextEncoderStream.prototype"
+          "TextEncoder",
+          "TextEncoderStream.prototype",
+          "TransformStream",
+          "Uint8Array"
         ],
         "constructor": {
           "identity": 43,
@@ -10575,6 +10614,8 @@
         ],
         "info_symbol": "perry_realm_info_58de3aa8285cc9ddb2c9",
         "births": [
+          "%IteratorPrototype%",
+          "Array",
           "Function.prototype",
           "URLSearchParams.prototype"
         ],
@@ -11673,8 +11714,10 @@
         ],
         "info_symbol": "perry_realm_info_58de3aa8285cc9ddb2c9",
         "births": [
+          "ArrayBuffer",
           "Function.prototype",
           "Promise",
+          "Uint8Array",
           "WritableStream.prototype"
         ],
         "constructor": {

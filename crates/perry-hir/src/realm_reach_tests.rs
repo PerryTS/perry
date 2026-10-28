@@ -260,3 +260,21 @@ fn non_top_fixture_remains_partial_after_hir_lowering() {
         .join()
         .unwrap();
 }
+
+#[test]
+fn require_aliases_keep_static_imports_partial_and_dynamic_calls_top() {
+    let partial = reach("const load=require; const next=load; next('node:fs');");
+    assert!(!partial.is_full(), "{partial:?}");
+    assert!(partial.names.contains("node:fs"));
+    let dynamic = reach("const load=require; load(name);");
+    assert!(dynamic.top.contains(&RealmTop::DynamicModule));
+    assert!(!reach("function f(require) { const load=require; load(name); }").is_full());
+}
+
+#[test]
+fn type_only_bases_and_tagged_template_quasis_add_no_builtin() {
+    let r = reach("interface X extends Map {} tag`literal`; ");
+    assert!(!r.names.contains("Map"));
+    assert!(!r.names.contains("String"));
+    assert!(!r.is_full());
+}

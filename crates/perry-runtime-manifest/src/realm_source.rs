@@ -191,10 +191,71 @@ fn declarations(
             if data.get("version") != Some(&Value::Number(REALM_MANIFEST_VERSION.to_string())) {
                 return Err(format!("{path}: unsupported realm group version"));
             }
-            data.get("groups")
-                .and_then(|g| g.get(group))
-                .cloned()
-                .ok_or_else(|| format!("{path}: missing realm group {literal}"))?
+            if group == "*" {
+                let Some(Value::Object(groups)) = data.get("groups") else {
+                    return Err(format!("{path}: missing realm groups"));
+                };
+                let mut bodies = BTreeSet::new();
+                for (i, t) in ts.iter().enumerate() {
+                    if t.text != "fn_info"
+                        || ts.get(i + 1).is_none_or(|t| t.text != "!")
+                        || ts.get(i + 2).is_none_or(|t| t.text != "(")
+                    {
+                        continue;
+                    }
+                    let mut begin = i + 3;
+                    while ts.get(begin).is_some_and(|t| t.text == "#") {
+                        begin += 1;
+                        let mut depth = 0;
+                        loop {
+                            let t = ts.get(begin).ok_or("unterminated fn_info attribute")?;
+                            if t.text == "[" {
+                                depth += 1;
+                            } else if t.text == "]" {
+                                depth -= 1;
+                            }
+                            begin += 1;
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                    }
+                    if ts.get(begin).is_some_and(|t| {
+                        matches!(t.text, "native_args" | "unwind" | "unwind_in_tests")
+                    }) {
+                        begin += 1;
+                    }
+                    if let Some(end) = ts[begin..].iter().position(|t| t.text == ",") {
+                        if end > 0 {
+                            bodies.insert(ts[begin + end - 1].text);
+                        }
+                    }
+                }
+                let mut all = Vec::new();
+                for (group, values) in groups {
+                    let values = values.array().ok_or("realm group is not an array")?;
+                    if let Some(body) = group.strip_prefix("body:") {
+                        if !bodies.contains(body)
+                            || values.iter().any(|v| {
+                                v.get("body")
+                                    .and_then(Value::string)
+                                    .is_none_or(|b| b.rsplit("::").next() != Some(body))
+                            })
+                        {
+                            return Err(format!(
+                                "{path}: realm group {group} disagrees with fn_info bodies"
+                            ));
+                        }
+                    }
+                    all.extend_from_slice(values);
+                }
+                Value::Array(all)
+            } else {
+                data.get("groups")
+                    .and_then(|g| g.get(group))
+                    .cloned()
+                    .ok_or_else(|| format!("{path}: missing realm group {literal}"))?
+            }
         };
         let mut ds = match data {
             Value::Array(ds) => ds,
@@ -391,5 +452,18 @@ mod tests {
         let ds=declarations(source,"array.rs",|file|{assert_eq!(file,"array.realm.json");Ok(r#"{"version":1,"groups":{"slice":[{"name":"Array.slice","kind":"method","body":"crate::array::slice"}]}}"#.into())}).unwrap();
         assert_eq!(ds.len(), 1);
         assert_eq!(ds[0].get("line"), Some(&Value::Number("3".into())));
+    }
+    #[test]
+    fn group_markers_validate_existing_body_ownership() {
+        let data = r#"{"version":1,"groups":{"body:slice":[{"name":"A.slice","kind":"method","body":"crate::array::slice"}],"objects":[{"name":"A","kind":"prototype"}]}}"#;
+        let source = "fn_info!(slice,2); realm_decl!(\"array.realm.json#*\");";
+        let declarations = declarations(source, "array.rs", |_| Ok(data.into())).unwrap();
+        assert_eq!(declarations.len(), 2);
+        assert!(
+            super::declarations(&source.replace("slice,", "other,"), "array.rs", |_| Ok(
+                data.into()
+            ))
+            .is_err()
+        );
     }
 }

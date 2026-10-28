@@ -12,7 +12,7 @@ extern "C" fn module_cjs_extension_noop_thunk(
 
 fn module_cjs_extension_function(name: &str) -> f64 {
     let closure = crate::closure::js_closure_alloc(
-        crate::fn_info!(#[realm("module_cjs.realm.json#body:module_cjs_extension_noop_thunk")] module_cjs_extension_noop_thunk, 2; with_declared(2), with_length(2)),
+        crate::fn_info!(module_cjs_extension_noop_thunk, 2; with_declared(2), with_length(2)),
         0,
     );
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -241,7 +241,7 @@ extern "C" fn module_wrap_thunk(
 
 fn module_wrap_value() -> f64 {
     let closure = crate::closure::js_closure_alloc(
-        crate::fn_info!(#[realm("module_cjs.realm.json#body:module_wrap_thunk")] module_wrap_thunk, 1; with_declared(1), with_length(1)),
+        crate::fn_info!(module_wrap_thunk, 1; with_declared(1), with_length(1)),
         0,
     );
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -313,15 +313,9 @@ extern "C" fn module_prototype_require_thunk(
 
 fn module_prototype_method(name: &str, length: u32) -> f64 {
     let info = match name {
-        "load" => {
-            crate::fn_info!(#[realm("module_cjs.realm.json#body:module_prototype_load_thunk")] module_prototype_load_thunk, 3; with_declared(3))
-        }
-        "require" => {
-            crate::fn_info!(#[realm("module_cjs.realm.json#body:module_prototype_require_thunk")] module_prototype_require_thunk, 3; with_declared(3))
-        }
-        _ => {
-            crate::fn_info!(#[realm("module_cjs.realm.json#body:module_prototype_method_thunk")] module_prototype_method_thunk, 3; with_declared(3))
-        }
+        "load" => crate::fn_info!(module_prototype_load_thunk, 3; with_declared(3)),
+        "require" => crate::fn_info!(module_prototype_require_thunk, 3; with_declared(3)),
+        _ => crate::fn_info!(module_prototype_method_thunk, 3; with_declared(3)),
     };
     let closure = crate::closure::js_closure_alloc(info, 0);
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -460,7 +454,7 @@ fn module_cjs_prototype_value(_module_value: f64) -> f64 {
         install_accessor(
             "constructor",
             module_accessor(
-                crate::fn_info!(#[realm("module_cjs.realm.json#body:module_prototype_constructor_getter")] module_prototype_constructor_getter, 0; with_declared(0)),
+                crate::fn_info!(module_prototype_constructor_getter, 0; with_declared(0)),
                 None,
                 None,
             ),
@@ -468,7 +462,7 @@ fn module_cjs_prototype_value(_module_value: f64) -> f64 {
         install_accessor(
             "isPreloading",
             module_accessor(
-                crate::fn_info!(#[realm("module_cjs.realm.json#body:module_prototype_false_getter")] module_prototype_false_getter, 0; with_declared(0)),
+                crate::fn_info!(module_prototype_false_getter, 0; with_declared(0)),
                 None,
                 None,
             ),
@@ -476,8 +470,8 @@ fn module_cjs_prototype_value(_module_value: f64) -> f64 {
         install_accessor(
             "parent",
             module_accessor(
-                crate::fn_info!(#[realm("module_cjs.realm.json#body:module_prototype_parent_getter")] module_prototype_parent_getter, 0; with_declared(0)),
-                Some(crate::fn_info!(#[realm("module_cjs.realm.json#body:module_prototype_parent_setter")] module_prototype_parent_setter, 1; with_declared(1))),
+                crate::fn_info!(module_prototype_parent_getter, 0; with_declared(0)),
+                Some(crate::fn_info!(module_prototype_parent_setter, 1; with_declared(1))),
                 None,
             ),
         );
@@ -561,3 +555,6 @@ pub(super) fn attach_module_cjs_constructor_statics(module_value: f64) -> f64 {
     );
     module.get_nanbox_f64()
 }
+
+// Group facts preserve existing runtime source locations.
+crate::realm_decl!("module_cjs.realm.json#*");

@@ -538,7 +538,7 @@ fn install_typed_array_to_string_tag(proto_obj: *mut ObjectHeader) {
         return;
     }
     unsafe {
-        let f = crate::fn_info!(#[realm("typed_array.realm.json#body:typed_array_to_string_tag_getter_thunk")] typed_array_to_string_tag_getter_thunk, 0; with_declared(0));
+        let f = crate::fn_info!(typed_array_to_string_tag_getter_thunk, 0; with_declared(0));
         let c = crate::closure::js_closure_alloc(f, 0);
         if c.is_null() {
             return;
@@ -575,30 +575,22 @@ fn install_typed_array_proto_accessors(proto_obj: *mut ObjectHeader) {
         install_builtin_getter(
             proto_obj,
             "length",
-            mk(
-                crate::fn_info!(#[realm("typed_array.realm.json#body:typed_array_length_getter_thunk")] typed_array_length_getter_thunk, 0; with_declared(0)),
-            ),
+            mk(crate::fn_info!(typed_array_length_getter_thunk, 0; with_declared(0))),
         );
         install_builtin_getter(
             proto_obj,
             "byteLength",
-            mk(
-                crate::fn_info!(#[realm("typed_array.realm.json#body:typed_array_byte_length_getter_thunk")] typed_array_byte_length_getter_thunk, 0; with_declared(0)),
-            ),
+            mk(crate::fn_info!(typed_array_byte_length_getter_thunk, 0; with_declared(0))),
         );
         install_builtin_getter(
             proto_obj,
             "byteOffset",
-            mk(
-                crate::fn_info!(#[realm("typed_array.realm.json#body:typed_array_byte_offset_getter_thunk")] typed_array_byte_offset_getter_thunk, 0; with_declared(0)),
-            ),
+            mk(crate::fn_info!(typed_array_byte_offset_getter_thunk, 0; with_declared(0))),
         );
         install_builtin_getter(
             proto_obj,
             "buffer",
-            mk(
-                crate::fn_info!(#[realm("typed_array.realm.json#body:typed_array_buffer_getter_thunk")] typed_array_buffer_getter_thunk, 0; with_declared(0)),
-            ),
+            mk(crate::fn_info!(typed_array_buffer_getter_thunk, 0; with_declared(0))),
         );
     }
 }
@@ -821,5 +813,5 @@ pub(crate) fn typed_array_uint8_intrinsic_prototype_value() -> f64 {
     crate::closure::js_closure_get_capture_f64(ctor, 0)
 }
 
-// Realm facts owned here; source-only until image emission.
-crate::realm_decl!("typed_array.realm.json#objects");
+// Group facts preserve existing runtime source locations.
+crate::realm_decl!("typed_array.realm.json#*");

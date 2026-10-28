@@ -142,5 +142,5 @@ pub extern "C" fn js_async_local_storage_static_snapshot_direct(_rest: i64) -> f
     async_local_storage_static_snapshot_value()
 }
 
-// Realm facts owned here; source-only until image emission.
+// Realm facts owned here; this marker emits no runtime code or data.
 crate::realm_decl!("context_snapshots.realm.json#objects");

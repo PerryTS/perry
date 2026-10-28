@@ -947,38 +947,17 @@ pub(crate) fn promise_static_function_info(
 ) -> Option<(*const crate::closure::JsFunctionInfo, u32)> {
     use crate::fn_info;
     Some(match name {
-        "resolve" => (
-            fn_info!(#[realm("bigint_promise.realm.json#body:promise_resolve_static")] promise_resolve_static, 1; with_declared(1)),
-            1,
-        ),
-        "reject" => (
-            fn_info!(#[realm("bigint_promise.realm.json#body:promise_reject_static")] promise_reject_static, 1; with_declared(1)),
-            1,
-        ),
-        "all" => (
-            fn_info!(#[realm("bigint_promise.realm.json#body:promise_all_static")] promise_all_static, 1; with_declared(1)),
-            1,
-        ),
-        "race" => (
-            fn_info!(#[realm("bigint_promise.realm.json#body:promise_race_static")] promise_race_static, 1; with_declared(1)),
-            1,
-        ),
-        "allSettled" => (
-            fn_info!(#[realm("bigint_promise.realm.json#body:promise_all_settled_static")] promise_all_settled_static, 1; with_declared(1)),
-            1,
-        ),
-        "any" => (
-            fn_info!(#[realm("bigint_promise.realm.json#body:promise_any_static")] promise_any_static, 1; with_declared(1)),
-            1,
-        ),
+        "resolve" => (fn_info!(promise_resolve_static, 1; with_declared(1)), 1),
+        "reject" => (fn_info!(promise_reject_static, 1; with_declared(1)), 1),
+        "all" => (fn_info!(promise_all_static, 1; with_declared(1)), 1),
+        "race" => (fn_info!(promise_race_static, 1; with_declared(1)), 1),
+        "allSettled" => (fn_info!(promise_all_settled_static, 1; with_declared(1)), 1),
+        "any" => (fn_info!(promise_any_static, 1; with_declared(1)), 1),
         "withResolvers" => (
-            fn_info!(#[realm("bigint_promise.realm.json#body:promise_with_resolvers_static")] promise_with_resolvers_static, 0; with_declared(0)),
+            fn_info!(promise_with_resolvers_static, 0; with_declared(0)),
             0,
         ),
-        "try" => (
-            fn_info!(#[realm("bigint_promise.realm.json#body:promise_try_static")] promise_try_static, 2; with_rest(1)),
-            1,
-        ),
+        "try" => (fn_info!(promise_try_static, 2; with_rest(1)), 1),
         _ => return None,
     })
 }
@@ -1002,5 +981,5 @@ pub(crate) fn promise_static_function_spec(name: &str) -> Option<(*const u8, u32
     }
 }
 
-// Realm facts owned here; source-only until image emission.
-crate::realm_decl!("bigint_promise.realm.json#objects");
+// Group facts preserve existing runtime source locations.
+crate::realm_decl!("bigint_promise.realm.json#*");

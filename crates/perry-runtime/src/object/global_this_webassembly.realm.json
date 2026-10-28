@@ -187,7 +187,10 @@
         },
         "prototype": "Object.prototype",
         "births": [
+          "ArrayBuffer",
           "Object.prototype",
+          "Promise",
+          "Uint8Array",
           "WebAssembly.CompileError",
           "WebAssembly.Exception",
           "WebAssembly.Global",

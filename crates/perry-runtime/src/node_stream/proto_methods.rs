@@ -998,24 +998,11 @@ extern "C" fn stream_property_set(
 fn install_prop(layout: &layouts::NodePrototype, proto: *mut ObjectHeader, name: &str, prop: Prop) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let proto = scope.root_raw_mut_ptr(proto);
-    let get = scope.root_raw_mut_ptr(js_closure_alloc(
-        crate::fn_info!(
-            #[realm("proto_methods.realm.json#body:stream_property_get")]
-            stream_property_get,
-            0
-        ),
-        1,
-    ));
+    let get = scope.root_raw_mut_ptr(js_closure_alloc(crate::fn_info!(stream_property_get, 0), 1));
     get.with_mut_ptr::<ClosureHeader, _>(|c| js_closure_set_capture_f64(c, 0, prop as u8 as f64));
     let set_bits = if prop.settable().is_some() {
-        let set = scope.root_raw_mut_ptr(js_closure_alloc(
-            crate::fn_info!(
-                #[realm("proto_methods.realm.json#body:stream_property_set")]
-                stream_property_set,
-                1
-            ),
-            1,
-        ));
+        let set =
+            scope.root_raw_mut_ptr(js_closure_alloc(crate::fn_info!(stream_property_set, 1), 1));
         set.with_mut_ptr::<ClosureHeader, _>(|c| {
             js_closure_set_capture_f64(c, 0, prop as u8 as f64)
         });
@@ -1364,5 +1351,5 @@ extern "C" fn ns_legacy_pipe2(
     dest.get_nanbox_f64()
 }
 
-// Realm facts owned here; source-only until image emission.
-crate::realm_decl!("proto_methods.realm.json#objects");
+// Group facts preserve existing runtime source locations.
+crate::realm_decl!("proto_methods.realm.json#*");

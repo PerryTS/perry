@@ -1214,5 +1214,5 @@ pub(super) fn web_webcrypto_statics(name: &str, s: &mut ConstructorStatics) {
     }
 }
 
-// Realm facts owned here; source-only until image emission.
+// Realm facts owned here; this marker emits no runtime code or data.
 crate::realm_decl!("install_static.realm.json#objects");

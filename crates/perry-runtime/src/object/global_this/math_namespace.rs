@@ -202,5 +202,5 @@ pub(crate) fn create_math_namespace() -> *mut ObjectHeader {
     builtin_namespace::create(MEMBERS)
 }
 
-// Realm facts owned here; source-only until image emission.
+// Realm facts owned here; this marker emits no runtime code or data.
 crate::realm_decl!("math_namespace.realm.json#objects");

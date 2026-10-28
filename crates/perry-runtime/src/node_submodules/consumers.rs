@@ -666,3 +666,6 @@ pub(crate) extern "C" fn thunk_consumers_blob(
 ) -> f64 {
     consume_stream(ConsumerKind::Blob, stream)
 }
+
+// Realm facts owned here; this marker emits no runtime code or data.
+crate::realm_decl!("consumers.realm.json#objects");

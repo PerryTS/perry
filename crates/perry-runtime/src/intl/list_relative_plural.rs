@@ -1136,5 +1136,5 @@ pub(crate) extern "C" fn plural_rules_bound_resolved_options_thunk(
     plural_rules_resolved_options_object(obj)
 }
 
-// Realm facts owned here; source-only until image emission.
+// Realm facts owned here; this marker emits no runtime code or data.
 crate::realm_decl!("list_relative_plural.realm.json#objects");

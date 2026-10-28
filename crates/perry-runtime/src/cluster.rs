@@ -1664,5 +1664,5 @@ fn value_to_string(value: f64) -> Option<String> {
     }
 }
 
-// Realm facts owned here; source-only until image emission.
+// Realm facts owned here; this marker emits no runtime code or data.
 crate::realm_decl!("cluster.realm.json#objects");

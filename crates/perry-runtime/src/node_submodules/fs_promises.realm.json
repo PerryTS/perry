@@ -3,7 +3,7 @@
   "groups": {
     "objects": [
       {
-        "name": "node:fs.promises.access",
+        "name": "node:fs/promises.access",
         "kind": "method",
         "properties": [
           {
@@ -56,7 +56,7 @@
         ]
       },
       {
-        "name": "node:fs.promises.appendFile",
+        "name": "node:fs/promises.appendFile",
         "kind": "method",
         "properties": [
           {
@@ -109,7 +109,7 @@
         ]
       },
       {
-        "name": "node:fs.promises.chmod",
+        "name": "node:fs/promises.chmod",
         "kind": "method",
         "properties": [
           {
@@ -162,7 +162,7 @@
         ]
       },
       {
-        "name": "node:fs.promises.chown",
+        "name": "node:fs/promises.chown",
         "kind": "method",
         "properties": [
           {
@@ -215,7 +215,7 @@
         ]
       },
       {
-        "name": "node:fs.promises.copyFile",
+        "name": "node:fs/promises.copyFile",
         "kind": "method",
         "properties": [
           {
@@ -268,7 +268,7 @@
         ]
       },
       {
-        "name": "node:fs.promises.cp",
+        "name": "node:fs/promises.cp",
         "kind": "method",
         "properties": [
           {
@@ -321,7 +321,7 @@
         ]
       },
       {
-        "name": "node:fs.promises.glob",
+        "name": "node:fs/promises.glob",
         "kind": "method",
         "properties": [
           {
@@ -374,7 +374,7 @@
         ]
       },
       {
-        "name": "node:fs.promises.lchmod",
+        "name": "node:fs/promises.lchmod",
         "kind": "method",
         "properties": [
           {
@@ -427,7 +427,7 @@
         ]
       },
       {
-        "name": "node:fs.promises.lchown",
+        "name": "node:fs/promises.lchown",
         "kind": "method",
         "properties": [
           {
@@ -480,7 +480,7 @@
         ]
       },
       {
-        "name": "node:fs.promises.link",
+        "name": "node:fs/promises.link",
         "kind": "method",
         "properties": [
           {
@@ -533,7 +533,7 @@
         ]
       },
       {
-        "name": "node:fs.promises.lstat",
+        "name": "node:fs/promises.lstat",
         "kind": "method",
         "properties": [
           {
@@ -586,7 +586,7 @@
         ]
       },
       {
-        "name": "node:fs.promises.lutimes",
+        "name": "node:fs/promises.lutimes",
         "kind": "method",
         "properties": [
           {
@@ -639,7 +639,7 @@
         ]
       },
       {
-        "name": "node:fs.promises.mkdir",
+        "name": "node:fs/promises.mkdir",
         "kind": "method",
         "properties": [
           {
@@ -692,7 +692,7 @@
         ]
       },
       {
-        "name": "node:fs.promises.mkdtemp",
+        "name": "node:fs/promises.mkdtemp",
         "kind": "method",
         "properties": [
           {
@@ -745,7 +745,7 @@
         ]
       },
       {
-        "name": "node:fs.promises.mkdtempDisposable",
+        "name": "node:fs/promises.mkdtempDisposable",
         "kind": "method",
         "properties": [
           {
@@ -798,7 +798,7 @@
         ]
       },
       {
-        "name": "node:fs.promises.open",
+        "name": "node:fs/promises.open",
         "kind": "method",
         "properties": [
           {
@@ -851,7 +851,7 @@
         ]
       },
       {
-        "name": "node:fs.promises.opendir",
+        "name": "node:fs/promises.opendir",
         "kind": "method",
         "properties": [
           {
@@ -904,7 +904,7 @@
         ]
       },
       {
-        "name": "node:fs.promises.readFile",
+        "name": "node:fs/promises.readFile",
         "kind": "method",
         "properties": [
           {
@@ -957,7 +957,7 @@
         ]
       },
       {
-        "name": "node:fs.promises.readdir",
+        "name": "node:fs/promises.readdir",
         "kind": "method",
         "properties": [
           {
@@ -1010,7 +1010,7 @@
         ]
       },
       {
-        "name": "node:fs.promises.readlink",
+        "name": "node:fs/promises.readlink",
         "kind": "method",
         "properties": [
           {
@@ -1063,7 +1063,7 @@
         ]
       },
       {
-        "name": "node:fs.promises.realpath",
+        "name": "node:fs/promises.realpath",
         "kind": "method",
         "properties": [
           {
@@ -1116,7 +1116,7 @@
         ]
       },
       {
-        "name": "node:fs.promises.rename",
+        "name": "node:fs/promises.rename",
         "kind": "method",
         "properties": [
           {
@@ -1169,7 +1169,7 @@
         ]
       },
       {
-        "name": "node:fs.promises.rm",
+        "name": "node:fs/promises.rm",
         "kind": "method",
         "properties": [
           {
@@ -1222,7 +1222,7 @@
         ]
       },
       {
-        "name": "node:fs.promises.rmdir",
+        "name": "node:fs/promises.rmdir",
         "kind": "method",
         "properties": [
           {
@@ -1275,7 +1275,7 @@
         ]
       },
       {
-        "name": "node:fs.promises.stat",
+        "name": "node:fs/promises.stat",
         "kind": "method",
         "properties": [
           {
@@ -1328,7 +1328,7 @@
         ]
       },
       {
-        "name": "node:fs.promises.statfs",
+        "name": "node:fs/promises.statfs",
         "kind": "method",
         "properties": [
           {
@@ -1381,7 +1381,7 @@
         ]
       },
       {
-        "name": "node:fs.promises.symlink",
+        "name": "node:fs/promises.symlink",
         "kind": "method",
         "properties": [
           {
@@ -1434,7 +1434,7 @@
         ]
       },
       {
-        "name": "node:fs.promises.truncate",
+        "name": "node:fs/promises.truncate",
         "kind": "method",
         "properties": [
           {
@@ -1487,7 +1487,7 @@
         ]
       },
       {
-        "name": "node:fs.promises.unlink",
+        "name": "node:fs/promises.unlink",
         "kind": "method",
         "properties": [
           {
@@ -1540,7 +1540,7 @@
         ]
       },
       {
-        "name": "node:fs.promises.utimes",
+        "name": "node:fs/promises.utimes",
         "kind": "method",
         "properties": [
           {
@@ -1593,7 +1593,7 @@
         ]
       },
       {
-        "name": "node:fs.promises.watch",
+        "name": "node:fs/promises.watch",
         "kind": "method",
         "properties": [
           {
@@ -1646,7 +1646,7 @@
         ]
       },
       {
-        "name": "node:fs.promises.writeFile",
+        "name": "node:fs/promises.writeFile",
         "kind": "method",
         "properties": [
           {
@@ -1699,7 +1699,7 @@
         ]
       },
       {
-        "name": "node:readline.promises.Interface",
+        "name": "node:readline/promises.Interface",
         "kind": "constructor",
         "properties": [
           {
@@ -1726,7 +1726,7 @@
             "attributes": 1,
             "value": {
               "kind": "reference",
-              "value": "node:readline.promises.Interface.prototype"
+              "value": "node:readline/promises.Interface.prototype"
             }
           }
         ],
@@ -1741,7 +1741,7 @@
           "reserved": 0,
           "capture_flags": 0
         },
-        "prototype": "node:readline.promises.Interface.<prototype>",
+        "prototype": "node:readline/promises.Interface.<prototype>",
         "length": 1,
         "body": "crate::node_submodules::fs_promises::thunk_readline_Interface",
         "construct": "crate::object::js_new_function_construct",
@@ -1758,12 +1758,12 @@
         "captures": [],
         "info_symbol": "perry_realm_info_751d9bd52b943bccc11b",
         "births": [
-          "node:readline.promises.Interface.<prototype>",
-          "node:readline.promises.Interface.prototype"
+          "node:readline/promises.Interface.<prototype>",
+          "node:readline/promises.Interface.prototype"
         ]
       },
       {
-        "name": "node:readline.promises.Interface.prototype",
+        "name": "node:readline/promises.Interface.prototype",
         "kind": "prototype",
         "properties": [
           {
@@ -1772,7 +1772,7 @@
             "attributes": 5,
             "value": {
               "kind": "reference",
-              "value": "node:readline.promises.Interface"
+              "value": "node:readline/promises.Interface"
             }
           }
         ],
@@ -1785,14 +1785,14 @@
           "reserved": 2176,
           "class_id": 0
         },
-        "prototype": "node:readline.promises.Interface.prototype.<prototype>",
+        "prototype": "node:readline/promises.Interface.prototype.<prototype>",
         "births": [
-          "node:readline.promises.Interface",
-          "node:readline.promises.Interface.prototype.<prototype>"
+          "node:readline/promises.Interface",
+          "node:readline/promises.Interface.prototype.<prototype>"
         ]
       },
       {
-        "name": "node:readline.promises.Interface.prototype.<prototype>",
+        "name": "node:readline/promises.Interface.prototype.<prototype>",
         "kind": "prototype",
         "properties": [
           {
@@ -1801,7 +1801,7 @@
             "attributes": 5,
             "value": {
               "kind": "reference",
-              "value": "node:readline.promises.Interface.<prototype>"
+              "value": "node:readline/promises.Interface.<prototype>"
             }
           }
         ],
@@ -1814,14 +1814,14 @@
           "reserved": 2688,
           "class_id": 0
         },
-        "prototype": "node:readline.promises.Interface.prototype.<prototype>.<prototype>",
+        "prototype": "node:readline/promises.Interface.prototype.<prototype>.<prototype>",
         "births": [
-          "node:readline.promises.Interface.<prototype>",
-          "node:readline.promises.Interface.prototype.<prototype>.<prototype>"
+          "node:readline/promises.Interface.<prototype>",
+          "node:readline/promises.Interface.prototype.<prototype>.<prototype>"
         ]
       },
       {
-        "name": "node:readline.promises.Interface.prototype.<prototype>.<prototype>",
+        "name": "node:readline/promises.Interface.prototype.<prototype>.<prototype>",
         "kind": "prototype",
         "properties": [
           {
@@ -1830,7 +1830,7 @@
             "attributes": 5,
             "value": {
               "kind": "reference",
-              "value": "node:readline.promises.Interface.<prototype>.<prototype>"
+              "value": "node:readline/promises.Interface.<prototype>.<prototype>"
             }
           }
         ],
@@ -1846,11 +1846,11 @@
         "prototype": "node:events.EventEmitter.prototype",
         "births": [
           "node:events.EventEmitter.prototype",
-          "node:readline.promises.Interface.<prototype>.<prototype>"
+          "node:readline/promises.Interface.<prototype>.<prototype>"
         ]
       },
       {
-        "name": "node:readline.promises.Readline",
+        "name": "node:readline/promises.Readline",
         "kind": "method",
         "properties": [
           {
@@ -1903,7 +1903,7 @@
         ]
       },
       {
-        "name": "node:readline.promises.createInterface",
+        "name": "node:readline/promises.createInterface",
         "kind": "method",
         "properties": [
           {

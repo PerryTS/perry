@@ -326,19 +326,22 @@ DISPATCH_CHECKS = (
      r"class_holder::try_class_holder_fast_dispatch\(object,\s*&key,\s*args_ptr,\s*args_len\)",
      "method tower delegates to the shape-based holder walk"),
     ("crates/perry-runtime/src/object/native_call_method/class_holder.rs", "chain_method",
+     r"chain_method_admitting\(start,\s*key,\s*\|_\|\s*true\)",
+     "method wrapper delegates to the descriptor walk"),
+    ("crates/perry-runtime/src/object/native_call_method/class_holder.rs", "chain_method_admitting",
      r"crate::object::shapes::object_shape_record\(holder\)",
      "method holder resolves its current descriptor"),
-    ("crates/perry-runtime/src/object/native_call_method/class_holder.rs", "chain_method",
+    ("crates/perry-runtime/src/object/native_call_method/class_holder.rs", "chain_method_admitting",
      r"key_position\(keys,\s*record\.logical_key_count\(\),\s*key\)",
      "method key lookup is bounded by descriptor count"),
     ("crates/perry-runtime/src/object/layout_probe.rs", "probe_get_at",
-     r"let\s+word\s*=\s*\(\*obj\)\.parent_class_id;\s*let\s+r\s*=\s*record_of\(dir,\s*word\);",
+     r"let\s+word\s*=\s*\(\*obj\)\.parent_class_id;\s*let\s+r\s*=\s*record_of\(dir,\s*LayoutWord\(word\)\);",
      "read probe resolves the receiver's current layout word"),
     ("crates/perry-runtime/src/object/layout_probe.rs", "probe_get_at",
      r"if\s+r\.is_null\(\)\s*\{\s*return\s+array_named_get::<ABSENT>\(\s*dir,\s*obj,\s*key_bits,\s*site_key_hash::<LAZY_HASH>\(key_bits,\s*hash\),\s*\);",
      "nonordinary read routes to the checked array path"),
     ("crates/perry-runtime/src/object/layout_probe.rs", "perry_probe_set",
-     r"let\s+r\s*=\s*record_of\(dir,\s*\(\*obj\)\.parent_class_id\);\s*if\s+r\.is_null\(\)\s*\|\|\s*\(\*r\)\.object_kind\(\)\s*!=\s*super::ShapeObjectKind::Ordinary\s*\{\s*return\s+0;",
+     r"let\s+word\s*=\s*\(\*obj\)\.parent_class_id;\s*let\s+r\s*=\s*record_of\(dir,\s*LayoutWord\(word\)\);\s*if\s+r\.is_null\(\)\s*\|\|\s*\(\*r\)\.object_kind\(\)\s*!=\s*super::ShapeObjectKind::Ordinary\s*\{\s*return\s+0;",
      "store probe rejects a missing or nonordinary receiver record"),
     ("crates/perry-runtime/src/object/layout_probe.rs", "perry_probe_set",
      r"key_storage_slot\(keys,\s*pos\)",
@@ -347,7 +350,7 @@ DISPATCH_CHECKS = (
      r"let\s+id\s*=\s*super::layout_desc::layout_id_of_word\(\(\*obj\)\.parent_class_id\);",
      "dynamic store derives identity from the receiver"),
     ("crates/perry-runtime/src/object/shape_store.rs", "dynamic_store_receiver",
-     r"let\s+record\s*=\s*shapes::shape_record_by_id\(id\)\?;",
+     r"let\s+record\s*=\s*shapes::shape_record_of_receiver\(id\)\?;",
      "dynamic store resolves its receiver's shape record"),
     ("crates/perry-runtime/src/object/shape_store.rs", "try_dynamic_store",
      r"let\s+record\s*=\s*dynamic_store_receiver\(obj\)\?;",
@@ -796,7 +799,7 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
             raise CensusError(f"{name} reintroduced a legacy header guard fact")
         require_code(
             body,
-            r"object_shape(?:_(?:id|descriptor))?\s*\(",
+            r"object_(?:shape(?:_(?:id|descriptor))?|layout_stamp)\s*\(",
             f"{name} ShapeId authority",
         )
 
@@ -868,7 +871,7 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
         (instance_slow, r"object_alloc_plain_born\s*\(\s*2\s*,\s*shape\s*\)", "slow ordinary birth"),
         (instance, r"arena_alloc_gc_no_collect\(size,\s*8,\s*crate::gc::GC_TYPE_OBJECT\)", "noncollecting ordinary birth"),
         (instance, r"\(\*receiver\)\.parent_class_id\s*=\s*shape", "birth uses the prepared shape"),
-        (instance, r"new_slow\(shape,\s*data\)", "declined nursery birth reaches slow birth"),
+        (instance, r"new_slow\(LayoutWord\(shape\),\s*data\)", "declined nursery birth reaches slow birth"),
         (instance_slow, r"prepare_shape\s*\(\s*receiver\s*\)", "canonical birth on miss"),
         (prepare, r"MATCHER_READ\.birth_key\(\)", "qualified intrinsic matcher key"),
         (prepare, r"extend_key_with_entry\s*\(\s*&proof,\s*CanonicalKeys::EMPTY,\s*private_key,\s*PRIVATE_FIELD_ENTRY", "intrinsic private matcher entry"),
@@ -1013,7 +1016,7 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     class_probe = function_body(object_mod, "object_is_regular")
     require_code(
         class_probe,
-        r"shape_object_kind_by_id\([\s\S]*?\)\s*\.is_some_and\(\|kind\| kind\.is_ordinary_layout\(\)\)",
+        r"shape_object_kind_of_receiver\([\s\S]*?\)\s*\.is_some_and\(\|kind\| kind\.is_ordinary_layout\(\)\)",
         "ordinary-object descriptor kind authority",
     )
 
@@ -1172,6 +1175,16 @@ def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object])
 
     shapes_path = "crates/perry-runtime/src/object/shapes.rs"
     store_path = "crates/perry-runtime/src/object/shapes_store.rs"
+    region_path = "crates/perry-runtime/src/object/shapes_store/flat.rs"
+    changed_region = dict(sources)
+    old = "base: *mut ShapeRecord"
+    if changed_region[region_path].count(old) != 1:
+        raise CensusError("Region stability sabotage subject missing")
+    changed_region[region_path] = changed_region[region_path].replace(old, "base: Vec<ShapeRecord>", 1)
+    expect_rejected("Region records replaced by a moving vector", lambda: assert_authority_surfaces(changed_region))
+    reallocating_region = dict(sources)
+    reallocating_region[region_path] += "\nfn census_bad_realloc() { realloc(); }\n"
+    expect_rejected("Region reallocation", lambda: assert_authority_surfaces(reallocating_region))
     flat_slab = dict(sources)
     flat_slab[store_path] = flat_slab[store_path].replace(
         "type ChunkCells = [UnsafeCell<*mut ShapeRecord>; CHUNK_LEN];",
