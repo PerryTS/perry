@@ -77,6 +77,7 @@ pub(crate) fn hoist_loop_invariant_property_array(
     ctx.immutable_locals.insert(hoist_id);
 
     let init = Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(recv_id)),
         property: property.clone(),
         byte_offset: 0,
@@ -250,7 +251,7 @@ fn expr_is_hoist_safe(expr: &Expr, recv_id: u32) -> bool {
         | Expr::Null
         | Expr::Undefined => true,
         Expr::PropertyGet { object, .. } => expr_is_hoist_safe(object, recv_id),
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             expr_is_hoist_safe(object, recv_id) && expr_is_hoist_safe(index, recv_id)
         }
         Expr::Binary { left, right, .. } | Expr::Logical { left, right, .. } => {
@@ -336,7 +337,7 @@ fn expr_reads_property(expr: &Expr, recv_id: u32, property: &str) -> bool {
     }
     match expr {
         Expr::PropertyGet { object, .. } => expr_reads_property(object, recv_id, property),
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             expr_reads_property(object, recv_id, property)
                 || expr_reads_property(index, recv_id, property)
         }
@@ -464,12 +465,23 @@ fn rewrite_expr(expr: &Expr, recv_id: u32, property: &str, hoist_id: u32) -> Exp
             object,
             property: prop,
             byte_offset,
+            byte_end,
+            ..
         } => Expr::PropertyGet {
+            byte_end: *byte_end,
             object: rec(object),
             property: prop.clone(),
             byte_offset: *byte_offset,
         },
-        Expr::IndexGet { object, index } => Expr::IndexGet {
+        Expr::IndexGet {
+            object,
+            index,
+            byte_end,
+            byte_offset,
+            ..
+        } => Expr::IndexGet {
+            byte_offset: *byte_offset,
+            byte_end: *byte_end,
             object: rec(object),
             index: rec(index),
         },

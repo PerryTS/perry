@@ -107,6 +107,7 @@ fn restore_builtin_spread_receiver(
         object,
         property,
         byte_offset,
+        ..
     } = callee
     else {
         return callee;
@@ -127,6 +128,7 @@ fn restore_builtin_spread_receiver(
                 && ctx.lookup_local(name).is_none() =>
         {
             Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 object,
                 property: name.to_string(),
                 byte_offset: 0,
@@ -135,6 +137,7 @@ fn restore_builtin_spread_receiver(
         _ => object,
     };
     Expr::PropertyGet {
+        byte_end: 0,
         object,
         property,
         byte_offset,
@@ -522,6 +525,8 @@ fn lower_call_inner(
                         ast::SuperProp::Computed(c) => lower_expr(ctx, &c.expr)?,
                     };
                     return Ok(Expr::CallSpread {
+                        byte_offset: 0,
+                        byte_end: 0,
                         callee: Box::new(Expr::ObjectSuperPropertyGet {
                             home: Box::new(Expr::LocalGet(home_id)),
                             key: Box::new(key),
@@ -606,6 +611,7 @@ fn lower_call_inner(
                                 Expr::ClassRef(class_name)
                             } else {
                                 Expr::PropertyGet {
+                                    byte_end: 0,
                                     object: Box::new(Expr::ClassRef(class_name)),
                                     property: "prototype".to_string(),
                                     byte_offset: 0,
@@ -642,6 +648,7 @@ fn lower_call_inner(
                         unreachable!("named-import ESM binding guard requires an identifier")
                     };
                     return Ok(Expr::Call {
+                        byte_end: 0,
                         callee: Box::new(super::lower_expr::native_module_binding_value(
                             ctx,
                             ident.sym.as_ref(),
@@ -855,12 +862,15 @@ fn lower_call_inner(
             if let Some(spread_args) = spread_args {
                 let callee = Box::new(restore_builtin_spread_receiver(ctx, expr, *callee));
                 Ok(Expr::CallSpread {
+                    byte_offset: 0,
+                    byte_end: 0,
                     callee,
                     args: spread_args,
                     type_args,
                 })
             } else {
                 Ok(Expr::Call {
+                    byte_end: 0,
                     callee,
                     args,
                     type_args,

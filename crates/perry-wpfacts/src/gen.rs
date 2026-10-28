@@ -92,6 +92,7 @@ pub(crate) struct ModInfo {
 
 pub struct Gen<'a> {
     pub m: Model,
+    pub(crate) diagnostic: Option<crate::diagnostics::Capture>,
     pub modules: Vec<(&'a str, &'a Module)>,
     pub(crate) mods: Vec<ModInfo>,
     pub path_index: FxHashMap<String, u32>,
@@ -371,6 +372,7 @@ impl<'a> Gen<'a> {
         }
         Gen {
             m,
+            diagnostic: None,
             modules,
             mods: Vec::new(),
             path_index,

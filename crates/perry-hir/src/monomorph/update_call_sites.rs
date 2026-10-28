@@ -230,7 +230,7 @@ fn update_call_sites_in_expr(
         Expr::PropertyUpdate { object, .. } => {
             update_call_sites_in_expr(object, ctx, lookup);
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             update_call_sites_in_expr(object, ctx, lookup);
             update_call_sites_in_expr(index, ctx, lookup);
         }

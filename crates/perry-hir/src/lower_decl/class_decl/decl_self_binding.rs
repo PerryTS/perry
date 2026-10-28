@@ -86,6 +86,7 @@ pub(crate) fn guard_shared_first_new(ctx: &LoweringContext, expr: Expr) -> Expr 
         callee,
         args,
         byte_offset,
+        ..
     } = &expr
     else {
         return expr;
@@ -108,6 +109,7 @@ pub(crate) fn guard_shared_first_new(ctx: &LoweringContext, expr: Expr) -> Expr 
     let cap_args_appended = captures.len() as u32;
     static_args.extend(captures.into_iter().map(Expr::LocalGet));
     let construct = Expr::New {
+        byte_end: 0,
         class_name: template.clone(),
         args: static_args,
         type_args: Vec::new(),

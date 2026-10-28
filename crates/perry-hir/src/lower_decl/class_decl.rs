@@ -673,25 +673,31 @@ pub fn lower_class_decl(
     // `let m = new Map<K,V>()`, so the two shapes now agree.
     let mut early_field_types: Vec<(String, Type)> = Vec::new();
     for member in &class_decl.class.body {
-        if let ast::ClassMember::ClassProp(prop) = member {
-            if prop.is_static {
-                continue;
+        let (field_name, annotation, initializer) = match member {
+            ast::ClassMember::ClassProp(prop) if !prop.is_static => {
+                let name = match &prop.key {
+                    ast::PropName::Ident(i) => i.sym.to_string(),
+                    ast::PropName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
+                    _ => continue,
+                };
+                (name, prop.type_ann.as_deref(), prop.value.as_deref())
             }
-            let field_name = match &prop.key {
-                ast::PropName::Ident(i) => i.sym.to_string(),
-                ast::PropName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
-                _ => continue,
-            };
-            let ty = match prop.type_ann.as_ref() {
-                Some(ann) => extract_ts_type_with_ctx(&ann.type_ann, Some(ctx)),
-                None => prop
-                    .value
-                    .as_ref()
-                    .map(|v| infer_type_from_expr(v, ctx))
-                    .unwrap_or(Type::Any),
-            };
-            early_field_types.push((field_name, ty));
-        }
+            // A generator's this.#items.length - 1 needs the field type
+            // while its body is lowered, before the final field registration.
+            ast::ClassMember::PrivateProp(prop) if !prop.is_static => (
+                format!("#{}", prop.key.name),
+                prop.type_ann.as_deref(),
+                prop.value.as_deref(),
+            ),
+            _ => continue,
+        };
+        let ty = match annotation {
+            Some(ann) => extract_ts_type_with_ctx(&ann.type_ann, Some(ctx)),
+            None => initializer
+                .map(|v| infer_type_from_expr(v, ctx))
+                .unwrap_or(Type::Any),
+        };
+        early_field_types.push((field_name, ty));
     }
     // TypeScript constructor parameter properties (`constructor(readonly
     // stack: Node[])`) are class fields too, but they live on the

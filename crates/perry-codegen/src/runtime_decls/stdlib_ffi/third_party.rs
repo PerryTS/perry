@@ -201,7 +201,7 @@ pub(crate) fn declare_third_party(module: &mut LlModule) {
     module.declare_function("js_zlib_crc32", DOUBLE, &[DOUBLE, DOUBLE]);
     // Brotli sync one-shots take data as raw NaN-box bits for the same
     // shared validation path as gzipSync/deflateSync.
-    module.declare_function("js_zlib_brotli_compress_sync", DOUBLE, &[I64]);
+    module.declare_function("js_zlib_brotli_compress_sync", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_zlib_brotli_decompress_sync", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_zlib_brotli_compress", VOID, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_brotli_decompress", VOID, &[DOUBLE, DOUBLE, DOUBLE]);

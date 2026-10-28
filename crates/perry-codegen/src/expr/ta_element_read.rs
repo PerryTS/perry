@@ -81,7 +81,7 @@ pub(crate) fn byte_read_is_numeric(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
     let (object, index) = match expr {
         Expr::Uint8ArrayGet { array, index } => (array, index),
         Expr::BufferIndexGet { buffer, index } => (buffer, index),
-        Expr::IndexGet { object, index } if receiver_kind(ctx, object) == Some(1) => {
+        Expr::IndexGet { object, index, .. } if receiver_kind(ctx, object) == Some(1) => {
             (object, index)
         }
         _ => return false,
@@ -440,6 +440,8 @@ mod tests {
                 body: vec![Stmt::While {
                     condition: Expr::LocalGet(2),
                     body: vec![Stmt::Return(Some(Expr::IndexGet {
+                        byte_offset: 0,
+                        byte_end: 0,
                         object: Box::new(Expr::LocalGet(1)),
                         index: Box::new(Expr::LocalGet(2)),
                     }))],

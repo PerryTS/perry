@@ -214,6 +214,7 @@ pub(crate) fn lower_new_non_ident(
             })
             .unwrap_or_default();
         let construct = Expr::New {
+            byte_end: 0,
             class_name: synthetic_name.clone(),
             args,
             type_args,
@@ -273,6 +274,7 @@ pub(crate) fn lower_new_non_ident(
                 return Ok(global_property_new_dynamic(property, args, new_byte_offset));
             }
             return Ok(Expr::New {
+                byte_end: 0,
                 class_name: property.clone(),
                 args,
                 type_args: Vec::new(),
@@ -286,6 +288,7 @@ pub(crate) fn lower_new_non_ident(
         {
             ctx.uses_fetch = true;
             return Ok(Expr::New {
+                byte_end: 0,
                 class_name: property.clone(),
                 args,
                 type_args: Vec::new(),
@@ -295,6 +298,7 @@ pub(crate) fn lower_new_non_ident(
         }
     }
     Ok(Expr::NewDynamic {
+        byte_end: 0,
         callee,
         args,
         byte_offset: new_byte_offset,

@@ -19,7 +19,7 @@ pub fn body_contains_super_call(stmts: &[Stmt]) -> bool {
             } => check_expr(condition) || check_expr(then_expr) || check_expr(else_expr),
             Expr::Call { callee, args, .. } => check_expr(callee) || args.iter().any(check_expr),
             Expr::Array(elements, _) => elements.iter().any(check_expr),
-            Expr::IndexGet { object, index } => check_expr(object) || check_expr(index),
+            Expr::IndexGet { object, index, .. } => check_expr(object) || check_expr(index),
             Expr::IndexSet {
                 object,
                 index,
@@ -532,7 +532,7 @@ pub fn is_pure_function(func: &Function) -> bool {
                 expr_is_pure(callee, known) && args.iter().all(|a| expr_is_pure(a, known))
             }
             Expr::Array(elems, _) => elems.iter().all(|e| expr_is_pure(e, known)),
-            Expr::IndexGet { object, index } => {
+            Expr::IndexGet { object, index, .. } => {
                 expr_is_pure(object, known) && expr_is_pure(index, known)
             }
             Expr::IndexSet {
@@ -919,6 +919,7 @@ mod tests {
     #[test]
     fn detects_capture_inside_plain_call_arg() {
         let body = vec![Stmt::Return(Some(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::LocalGet(50)),
             args: vec![capturing_closure(7, 1, 2)],
             type_args: Vec::new(),

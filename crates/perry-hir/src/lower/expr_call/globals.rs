@@ -30,6 +30,8 @@ fn first_expanded_arg(call: &ast::CallExpr, args: Vec<Expr>) -> Expr {
         })
         .collect();
     Expr::IndexGet {
+        byte_offset: 0,
+        byte_end: 0,
         object: Box::new(Expr::ArraySpread(elements)),
         index: Box::new(Expr::Integer(0)),
     }
@@ -174,6 +176,7 @@ pub(super) fn try_global_builtins(
                 // handles it. Shadow-safe: only fires when no local
                 // / user fn / imported fn named `Array` is in scope.
                 return Ok(Ok(Expr::New {
+                    byte_end: 0,
                     class_name: "Array".to_string(),
                     args,
                     type_args: Vec::new(),
@@ -345,6 +348,7 @@ pub(super) fn try_global_builtins(
                 let class_name =
                     ctx.synthesize_declared_keys_class(&keys, func_name == "__perry_declared_keys");
                 return Ok(Ok(Expr::New {
+                    byte_end: 0,
                     class_name,
                     args: Vec::new(),
                     type_args: Vec::new(),
@@ -550,7 +554,9 @@ pub(super) fn try_global_builtins(
                     return Ok(Err(args));
                 }
                 return Ok(Ok(Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: 0,
                         object: Box::new(Expr::GlobalGet(0)),
                         property: "fetch".to_string(),
@@ -908,7 +914,9 @@ pub(super) fn try_global_builtins(
                             new_args.push(enc);
                         }
                         return Ok(Ok(Expr::Call {
+                            byte_end: 0,
                             callee: Box::new(Expr::PropertyGet {
+                                byte_end: 0,
                                 byte_offset: 0,
                                 object: Box::new(Expr::NativeModuleRef("crypto".to_string())),
                                 property: "createSecretKey".to_string(),
@@ -929,7 +937,9 @@ pub(super) fn try_global_builtins(
                         let alg_arg = iter.next().unwrap();
                         let options_arg = iter.next().unwrap();
                         return Ok(Ok(Expr::Call {
+                            byte_end: 0,
                             callee: Box::new(Expr::PropertyGet {
+                                byte_end: 0,
                                 byte_offset: 0,
                                 object: Box::new(Expr::NativeModuleRef("crypto".to_string())),
                                 property: "generateKeySync".to_string(),

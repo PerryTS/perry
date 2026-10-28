@@ -755,7 +755,7 @@ fn note_prototype_effect(
         } if is_prototype_key(property) => {
             note_prototype_holder(object, facts);
         }
-        Expr::IndexGet { object, index } | Expr::IndexSet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::IndexSet { object, index, .. } => {
             if matches!(index.as_ref(), Expr::String(key) if is_prototype_key(key)) {
                 note_prototype_holder(object, facts);
             }
@@ -1019,6 +1019,7 @@ mod tests {
                 params: Vec::new(),
                 return_type: Type::Number,
                 body: vec![Stmt::Return(Some(Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 0,
                     object: Box::new(Expr::This),
                     property: "value".to_string(),
@@ -1055,6 +1056,7 @@ mod tests {
             ty: Type::Named(class_name.to_string()),
             mutable: false,
             init: Some(Expr::New {
+                byte_end: 0,
                 class_name: class_name.to_string(),
                 args: Vec::new(),
                 type_args: Vec::new(),
@@ -1066,7 +1068,9 @@ mod tests {
 
     fn call_method_stmt(method: &str) -> Stmt {
         Stmt::Return(Some(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(RECEIVER)),
                 property: method.to_string(),
@@ -1211,6 +1215,7 @@ mod tests {
         let mut module = Module::new("m.ts");
         module.init.push(Stmt::Expr(Expr::ObjectDefineProperty(
             Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::ClassRef("C".to_string())),
                 property: "prototype".to_string(),
@@ -1234,6 +1239,7 @@ mod tests {
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 77,
                     object: Box::new(Expr::ClassRef("C".to_string())),
                     property: "prototype".to_string(),
@@ -1243,13 +1249,19 @@ mod tests {
                 PROTO,
             )))),
             Stmt::Expr(Expr::TypeOf(Box::new(Expr::IndexGet {
+                byte_offset: 0,
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(PROTO)),
                 index: Box::new(Expr::String("getValue".to_string())),
             }))),
             Stmt::Expr(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 78,
                     object: Box::new(Expr::IndexGet {
+                        byte_offset: 0,
+                        byte_end: 0,
                         object: Box::new(Expr::LocalGet(PROTO)),
                         index: Box::new(Expr::String("getValue".to_string())),
                     }),
@@ -1304,6 +1316,7 @@ mod tests {
             ty: Type::Any,
             mutable: false,
             init: Some(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(6)),
                 property: "prototype".to_string(),

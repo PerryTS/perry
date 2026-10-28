@@ -197,7 +197,7 @@ pub fn collect_localsets_in_expr_for_propagate<'a>(
                 collect_localsets_in_expr_for_propagate(a, out);
             }
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             collect_localsets_in_expr_for_propagate(object, out);
             collect_localsets_in_expr_for_propagate(index, out);
         }
@@ -314,7 +314,7 @@ pub fn walk_index_uses_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
 
     match e {
         // --- index-using variants: mark locals in `index` subtree ---
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             collect_index_refs(index, out);
             walk_index_uses_in_expr(object, out);
             walk_index_uses_in_expr(index, out);

@@ -301,6 +301,8 @@ fn persistent_index_alias_shadow_module() -> Module {
                     ty: Type::Any,
                     mutable: false,
                     init: Some(Expr::IndexGet {
+                        byte_offset: 0,
+                        byte_end: 0,
                         object: Box::new(Expr::LocalGet(21)),
                         index: Box::new(Expr::Integer(0)),
                     }),
@@ -347,6 +349,8 @@ fn flat_const_row_alias_shadow_module() -> Module {
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::IndexGet {
+                    byte_offset: 0,
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(30)),
                     index: Box::new(Expr::Integer(0)),
                 }),
@@ -357,6 +361,8 @@ fn flat_const_row_alias_shadow_module() -> Module {
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::IndexGet {
+                    byte_offset: 0,
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(31)),
                     index: Box::new(Expr::Integer(1)),
                 }),
@@ -1194,6 +1200,7 @@ fn canonical_str_shadow_module() -> Module {
                 },
                 // src.length — the canonical `.length` tag dispatch.
                 Stmt::Return(Some(Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(2)),
                     property: "length".to_string(),
                     byte_offset: 0,

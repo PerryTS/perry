@@ -806,7 +806,7 @@ fn lower_arithmetic_operand(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<(String,
             return Ok((canonical, true));
         }
     }
-    if let Expr::IndexGet { object, index } = expr {
+    if let Expr::IndexGet { object, index, .. } = expr {
         if let Some(value) = super::ta_element_read::try_lower(ctx, object, index, true)? {
             return Ok((value, true));
         }

@@ -244,6 +244,7 @@ pub(crate) fn enter_expr(ctx: &crate::expr::FnCtx<'_>, expr: &Expr) -> Option<Ex
                 object,
                 property,
                 byte_offset,
+                ..
             } => (
                 Some(object.as_ref()),
                 property.as_str(),

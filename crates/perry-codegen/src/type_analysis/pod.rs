@@ -125,7 +125,7 @@ fn collect_pod_numeric_field_read_locals(ctx: &FnCtx<'_>, expr: &Expr, out: &mut
             collect_pod_numeric_field_read_locals(ctx, object, out);
             collect_pod_numeric_field_read_locals(ctx, value, out);
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             collect_pod_numeric_field_read_locals(ctx, object, out);
             collect_pod_numeric_field_read_locals(ctx, index, out);
         }
@@ -239,7 +239,7 @@ fn expr_may_materialize_pod_local(ctx: &FnCtx<'_>, expr: &Expr, target_id: u32) 
                     .iter()
                     .any(|arg| expr_may_materialize_pod_local(ctx, arg, target_id))
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             expr_may_materialize_pod_local(ctx, object, target_id)
                 || expr_may_materialize_pod_local(ctx, index, target_id)
         }
@@ -604,7 +604,7 @@ pub(crate) fn numeric_proof_is_declared_only(ctx: &FnCtx<'_>, expr: &Expr) -> bo
                 .unwrap_or(false);
             !ptr_shape_numeric
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             if crate::stmt::stable_packed_loop::has_numeric_index_fact(ctx, expr) {
                 return false;
             }

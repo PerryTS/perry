@@ -466,7 +466,9 @@ pub(super) fn try_local_array_methods(
                                 // N indexed Sets, and one final length Set.
                                 // Splitting it into N pushes changes Proxy traps.
                                 return Ok(Ok(Expr::Call {
+                                    byte_end: 0,
                                     callee: Box::new(Expr::PropertyGet {
+                                        byte_end: 0,
                                         object: Box::new(Expr::LocalGet(array_id)),
                                         property: "push".to_string(),
                                         byte_offset: call.span.lo.0,

@@ -22,6 +22,7 @@ fn param(id: u32, name: &str) -> Param {
 
 fn default_get() -> Expr {
     Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::This),
         property: "DEFAULT_DEFER".to_string(),
         byte_offset: 0,
@@ -49,6 +50,8 @@ fn candidate_method() -> Function {
             },
             // Nominates the existing nonnegative-index family.
             Stmt::Expr(Expr::IndexGet {
+                byte_offset: 0,
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(ROWS)),
                 index: Box::new(Expr::LocalGet(INDEX)),
             }),

@@ -81,11 +81,13 @@ fn keyed_sort_certificate_selects_a_rooted_property_operation() {
     if let Expr::Closure { body, .. } = &mut cmp {
         if let Stmt::Return(Some(Expr::Binary { left, right, .. })) = &mut body[0] {
             *left = Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(17)),
                 property: "rank".into(),
             });
             *right = Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(23)),
                 property: "rank".into(),

@@ -132,6 +132,7 @@ fn split_module() -> Module {
                 24,
                 "r",
                 Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::LocalGet(102)),
                     args: vec![Expr::LocalGet(22)],
                     type_args: Vec::new(),
@@ -277,6 +278,8 @@ fn read_site_memos_preserve_leaf_and_collecting_root_contracts() {
                 25,
                 "keyed",
                 Expr::IndexGet {
+                    byte_offset: 0,
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(100)),
                     index: Box::new(Expr::LocalGet(104)),
                 },

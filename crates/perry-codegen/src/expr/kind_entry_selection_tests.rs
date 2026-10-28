@@ -23,6 +23,7 @@ fn local(id: u32, mutable: bool, init: Expr) -> Stmt {
 
 fn size_of(id: u32) -> Expr {
     Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(id)),
         property: "size".to_string(),
         byte_offset: 0,

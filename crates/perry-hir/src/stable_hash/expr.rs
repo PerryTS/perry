@@ -54,7 +54,7 @@ impl SH for Expr {
             // so source whitespace edits that shift offsets don't bust the object
             // cache.
             Expr::Call { callee, args, type_args, .. } => { tag(h, 18); callee.as_ref().hash(h); args.hash(h); type_args.hash(h); }
-            Expr::CallSpread { callee, args, type_args, } => { tag(h, 19); callee.as_ref().hash(h); args.hash(h); type_args.hash(h); }
+            Expr::CallSpread { callee, args, type_args,  .. } => { tag(h, 19); callee.as_ref().hash(h); args.hash(h); type_args.hash(h); }
             Expr::SuperCallSpread(args) => { tag(h, 12240); for a in args { match a { CallArg::Expr(e) | CallArg::Spread(e) => e.hash(h), } } }
             Expr::PodLayoutSizeOf { ty } => { tag(h, 12001); ty.hash(h); }
             Expr::PodLayoutAlignOf { ty } => { tag(h, 12002); ty.hash(h); }
@@ -66,7 +66,7 @@ impl SH for Expr {
             Expr::PropertyGet { object, property, .. } => { tag(h, 24); object.as_ref().hash(h); property.hash(h); }
             Expr::PropertySet { object, property, value, } => { tag(h, 25); object.as_ref().hash(h); property.hash(h); value.as_ref().hash(h); }
             Expr::PropertyUpdate { object, property, op, prefix, strict, } => { tag(h, 26); object.as_ref().hash(h); property.hash(h); op.hash(h); prefix.hash(h); strict.hash(h); }
-            Expr::IndexGet { object, index } => { tag(h, 27); object.as_ref().hash(h); index.as_ref().hash(h); }
+            Expr::IndexGet { object, index , .. } => { tag(h, 27); object.as_ref().hash(h); index.as_ref().hash(h); }
             Expr::IndexSet { object, index, value, } => { tag(h, 28); object.as_ref().hash(h); index.as_ref().hash(h); value.as_ref().hash(h); }
             Expr::IndexUpdate { object, index, op, prefix, strict, } => { tag(h, 29); object.as_ref().hash(h); index.as_ref().hash(h); op.hash(h); prefix.hash(h); strict.hash(h); }
             Expr::Object(fields) => { tag(h, 30); fields.hash(h); }

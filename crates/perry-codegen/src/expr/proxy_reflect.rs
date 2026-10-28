@@ -631,10 +631,12 @@ fn same_put_value_receiver_expr(target: &Expr, receiver: &Expr) -> bool {
             Expr::IndexGet {
                 object: a_object,
                 index: a_index,
+                ..
             },
             Expr::IndexGet {
                 object: b_object,
                 index: b_index,
+                ..
             },
         ) => {
             same_put_value_receiver_expr(a_object, b_object)

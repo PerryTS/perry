@@ -113,6 +113,7 @@ fn import_from(source: &str, name: &str, kind: ModuleKind) -> Import {
 
 fn call_extern(name: &str, args: Vec<Expr>) -> Stmt {
     Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::ExternFuncRef {
             name: name.to_string(),
             param_types: Vec::new(),

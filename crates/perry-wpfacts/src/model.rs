@@ -1084,6 +1084,7 @@ impl WorkProfile {
 
 #[derive(Default)]
 pub struct Model {
+    pub(crate) diagnostic: Option<crate::diagnostics::Trace>,
     pub toks: Vec<TokKind>,
     pub tok_index: FxHashMap<TokKind, Tok>,
     /// Template -> its birth-site tokens (`Obj(tm, ctx)`, ctx != NO_CTX).

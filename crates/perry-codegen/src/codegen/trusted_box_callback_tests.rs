@@ -73,6 +73,7 @@ fn outer_function(direct_literal: bool) -> Function {
         Expr::LocalGet(CALLBACK)
     };
     body.push(Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(1)),
         args: vec![call_arg],
         type_args: Vec::new(),
@@ -131,6 +132,7 @@ fn versioned_callback(func_id: u32) -> Expr {
     const POS: u32 = 30;
     const VEL: u32 = 31;
     let property = |id, name: &str| Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(id)),
         property: name.to_string(),
         byte_offset: 0,
@@ -213,6 +215,7 @@ fn emit_with_tdz(direct_literal: bool, tdz: bool) -> String {
             .insert(0, Stmt::PreallocateTdzBoxes(vec![COUNT]));
     }
     module.init.push(Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(3)),
         args: Vec::new(),
         type_args: Vec::new(),
@@ -241,6 +244,7 @@ fn emit_versioned_callback_with(callback: Expr) -> String {
     module.init_kind = ModuleInitKind::Eager;
     module.functions = vec![consume_function(), outer];
     module.init.push(Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(3)),
         args: Vec::new(),
         type_args: Vec::new(),
@@ -294,6 +298,7 @@ fn erased_captured_closure_ir(reassigned: bool, under_applied: bool) -> String {
         CALLBACK_FUNC,
         Vec::new(),
         vec![Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::LocalGet(CALLBACK)),
             args: Vec::new(),
             type_args: Vec::new(),
@@ -587,6 +592,7 @@ fn versioned_callback_selector_rejects_calls_and_heap_writes() {
 
     for rejected_body in [
         vec![Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::LocalGet(30)),
             args: Vec::new(),
             type_args: Vec::new(),
@@ -724,6 +730,7 @@ fn captured_scope_callee_resolution_uses_a_decoded_base() {
                 },
                 body: vec![
                     Stmt::Expr(Expr::Call {
+                        byte_end: 0,
                         callee: Box::new(Expr::LocalGet(CALLBACK)),
                         args: Vec::new(),
                         type_args: Vec::new(),

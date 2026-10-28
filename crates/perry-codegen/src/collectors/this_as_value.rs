@@ -465,7 +465,7 @@ pub fn expr_uses_this_as_value(e: &perry_hir::Expr, fields: &HashSet<String>) ->
                 .is_some_and(|o| expr_uses_this_as_value(o, fields))
                 || args.iter().any(|a| expr_uses_this_as_value(a, fields))
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             expr_uses_this_as_value(object, fields) || expr_uses_this_as_value(index, fields)
         }
         Expr::IndexSet {
@@ -608,6 +608,7 @@ mod tests {
         child.constructor = Some(function(
             "constructor",
             vec![Stmt::Return(Some(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::This),
                 property: "value".to_string(),
@@ -634,9 +635,12 @@ mod tests {
                 object: Box::new(Expr::This),
                 property: "parse".to_string(),
                 value: Box::new(Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: 0,
                         object: Box::new(Expr::PropertyGet {
+                            byte_end: 0,
                             byte_offset: 0,
                             object: Box::new(Expr::This),
                             property: "parse".to_string(),
