@@ -58,6 +58,7 @@ must still establish the new margin.
 | `harmonyos-smoke` |  | yes | yes |
 | `binary-size` |  |  | yes |
 | `parity` |  |  | yes |
+| `node-suite-guard` |  |  | yes |
 | `compile-smoke` |  |  | yes |
 | `native-abi-evidence-packet` |  |  | yes |
 | `drizzle-mysql-smoke` |  |  | yes |

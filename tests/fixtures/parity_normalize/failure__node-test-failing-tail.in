@@ -1,0 +1,4 @@
+✔ passing thing
+✖ failing tests:
+test at /x/a.test.ts:1:1
+  Error: boom

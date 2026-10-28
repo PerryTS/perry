@@ -74,7 +74,9 @@ pub(crate) fn park(budget: Duration) -> bool {
     STATE.with(|s| {
         for h in s.borrow().handles.values() {
             let mut kind = 0u8;
-            if !h.writes.is_empty() {
+            // A pending connect wakes the loop when the host settles it; the
+            // host reports a connecting descriptor writable only then.
+            if !h.writes.is_empty() || h.connecting {
                 kind |= WRITE;
             }
             if h.reading || (h.listener && h.accepting) {
