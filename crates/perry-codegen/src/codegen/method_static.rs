@@ -245,6 +245,9 @@ pub(in crate::codegen) fn compile_static_method(
     };
 
     let mut ctx = FnCtx {
+        numeric_order_functions: cross_module.numeric_order_functions,
+        numeric_order_closures: cross_module.numeric_order_closures,
+        numeric_order_ready: Default::default(),
         program_has_worker: cross_module.program_has_worker,
         program_has_thread_agents: cross_module.program_has_thread_agents,
         program_class_accessor_names: cross_module.program_class_accessor_names.clone(),
@@ -353,6 +356,7 @@ pub(in crate::codegen) fn compile_static_method(
         resolved_versioned_loop_callback_targets: HashMap::new(),
         trusted_box_captures: false,
         fixed_generator_state: false,
+        private_resume_frame: false,
         versioned_loop_deopt_context: None,
         trusted_box_capture_ptrs: HashMap::new(),
         ready_cell_roots: crate::stmt::binding_cell::ReadyCellRoots::with_entry_cells(
@@ -552,6 +556,7 @@ pub(in crate::codegen) fn compile_static_method(
         crate::codegen::arguments::ArgumentsCallee::Undefined,
     );
     // #10812: throw a catchable RangeError before the native stack runs out.
+    crate::expr::numeric_order::parameters_ready(&mut ctx, &f.params);
     crate::expr::stack_guard::emit_stack_guard(&mut ctx);
     if f.is_async {
         stmt::lower_async_rejecting_stmts(&mut ctx, &f.body).with_context(|| {

@@ -187,6 +187,7 @@ pub(super) static CALLABLE_EXPORT_TABLE: &[(&str, &[&str])] = &[
     (
         "crypto",
         &[
+            "Certificate",
             "Cipheriv",
             "Decipheriv",
             "DiffieHellman",

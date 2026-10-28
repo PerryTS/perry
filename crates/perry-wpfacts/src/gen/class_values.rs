@@ -64,6 +64,7 @@ impl<'a> Gen<'a> {
                 && vc.builtins.is_empty()
                 && vc.arrays.is_empty()
                 && vc.boxes.is_empty()
+                && vc.indexed_owners.is_empty()
                 && vc.layouts.iter().all(|c| !unit_in.broken(&c.display));
             if !described {
                 continue;
@@ -360,6 +361,43 @@ impl<'a> Gen<'a> {
         for &ns in &c.builtins {
             let t = self.m.tok(TokKind::Builtin(ns));
             self.m.add_tok(n, t);
+        }
+        for o in &c.indexed_owners {
+            for d in &o.allocations {
+                let report = format!("owner:{d}");
+                if broken(self, &report) {
+                    self.m.add_top(n, |_| "broken native owner contract".into());
+                    continue;
+                }
+                let t = if let Some((_, t)) = self.stand_in_tas.iter().find(|(r, _)| r == &report) {
+                    *t
+                } else {
+                    let (t, _) = self.bobj(mi, "TypedArray");
+                    let tm = self.m.tmpl_of(t).unwrap();
+                    self.m.tmpls[tm as usize].display = d.clone();
+                    self.m.ta_elem.insert(tm, o.kind);
+                    self.m.ta_min_len.insert(tm, o.min_len);
+                    if let Some(len) = o.exact_len {
+                        self.m.ta_exact_len.insert(tm, len);
+                    }
+                    self.stand_in_tas.push((report, t));
+                    t
+                };
+                let tm = self.m.tmpl_of(t).unwrap();
+                if self.m.ta_elem.get(&tm).copied() != Some(o.kind) {
+                    self.m
+                        .add_top(n, |_| "conflicting native owner brands".into());
+                    continue;
+                }
+                self.m
+                    .ta_min_len
+                    .entry(tm)
+                    .and_modify(|n| *n = (*n).min(o.min_len));
+                if self.m.ta_exact_len.get(&tm).copied() != o.exact_len {
+                    self.m.ta_exact_len.remove(&tm);
+                }
+                self.m.add_tok(n, t);
+            }
         }
         // DECISIONS 94: another unit's array.
         for d in &c.arrays {

@@ -235,6 +235,7 @@ pub(crate) mod class_hierarchy;
 mod clone_suffix_tests;
 mod closure;
 mod closure_capture_cells;
+mod closure_captures;
 mod closure_collect;
 mod constructor_contracts;
 #[cfg(test)]
@@ -245,6 +246,7 @@ mod ctor_arity;
 pub use ctor_arity::{
     context_free_ctor_abi, context_free_ctor_param_count, CtorAbi, UNRESOLVED_PARENT_FWD_ARITY,
 };
+mod checked_integer;
 #[cfg(test)]
 mod declared_string_add_tests;
 #[cfg(test)]
@@ -268,6 +270,7 @@ mod imported_global_order_tests;
 #[cfg(test)]
 mod index_method_clone_tests;
 mod indexed_method_artifacts;
+mod integer_contract;
 #[cfg(test)]
 mod literal_method_this_tests;
 mod ordinary_method_artifacts;
@@ -299,7 +302,8 @@ mod number_exactness_tests;
 mod opts;
 mod program_facts_view;
 pub use program_facts_view::{
-    ElisionFacts, FactsBody, FactsClass, FactsField, FactsRecv, ProgramFactsView,
+    ElisionFacts, FactsBody, FactsClass, FactsField, FactsIndexedOwner, FactsNumericExpr,
+    FactsNumericFunction, FactsRecv, ProgramFactsView,
 };
 #[cfg(test)]
 mod ordinary_param_guard_tests;
@@ -2991,7 +2995,21 @@ fn lower_module(
             .into_iter()
             .filter(|id| !funcs_reading_dynamic_this.contains(id))
             .collect();
+    // Closure collection + derived per-closure dispatch maps. See
+    // `closure_collect::collect_module_closures`.
+    let closure_collect::ModuleClosures {
+        closures,
+        direct_call_closures,
+        closure_rest_params,
+        closure_synthetic_arguments,
+        closure_rest_and_arguments,
+        closure_arities,
+        closure_lengths,
+        closure_arrow_functions,
+    } = closure_collect::collect_module_closures(hir);
     let mut cross_module = CrossModuleCtx {
+        numeric_order_functions: &hir.functions,
+        numeric_order_closures: &closures,
         region_closures: hir
             .closure_display_names
             .iter()
@@ -3478,18 +3496,6 @@ fn lower_module(
     // inside an arrow callback. Lazy emission tracks declares at the
     // actual emission point so any path the lowering reaches is covered.
 
-    // Closure collection + derived per-closure dispatch maps. See
-    // `closure_collect::collect_module_closures`.
-    let closure_collect::ModuleClosures {
-        closures,
-        direct_call_closures,
-        closure_rest_params,
-        closure_synthetic_arguments,
-        closure_rest_and_arguments,
-        closure_arities,
-        closure_lengths,
-        closure_arrow_functions,
-    } = closure_collect::collect_module_closures(hir);
     crate::layout_desc::function_families::collect(
         hir,
         &module_prefix,

@@ -622,11 +622,6 @@
           "id": "node-suite-guard",
           "file": "node-suite-guard.yml",
           "original_events": {
-            "schedule": [
-              {
-                "cron": "37 4 * * *"
-              }
-            ],
             "merge_group": null
           },
           "inputs": {},

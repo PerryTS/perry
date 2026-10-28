@@ -36,7 +36,7 @@
     {
       "path": "crates/perry-runtime/src/object/global_this/generator_state.rs",
       "function": "resume_fixed_step",
-      "body_sha256": "87d9ffce310900938c77e63b91d7e1dda484b370ab9fcca9fa8434c6e0766431",
+      "body_sha256": "aae199f6fff6a9f2ae0ba08f39a89f4b4e27ef0855599bbbe2cf24a5a9691155",
       "claim": "The result is returned unchanged for all values; the heap-only branch solely demotes an aliased StringHeader refcount.",
       "rule": "mask-cast",
       "support_files": []
@@ -44,7 +44,7 @@
     {
       "path": "crates/perry-runtime/src/object/global_this/generator_state.rs",
       "function": "resume_fixed_step",
-      "body_sha256": "87d9ffce310900938c77e63b91d7e1dda484b370ab9fcca9fa8434c6e0766431",
+      "body_sha256": "aae199f6fff6a9f2ae0ba08f39a89f4b4e27ef0855599bbbe2cf24a5a9691155",
       "claim": "The result is returned unchanged for all values; the heap-only branch solely demotes an aliased StringHeader refcount.",
       "rule": "heap-tag-only",
       "support_files": []
@@ -161,20 +161,20 @@
       "path": "crates/perry-runtime/src/object/store_key.rs",
       "function": "interned_heap_key",
       "body_sha256": "635a6c7363c1d17da86425103ea6a59da3a292ef5ae071e1b3fcd409e4a672c2",
-      "claim": "The sole production caller own_overwrite_first routes is_short_string keys to interned_key_for_store first; failed probes return Err(key) to normal Set.",
+      "claim": "The production caller own_overwrite_first in object/property_ops/put_value.rs routes is_short_string keys to interned_key_for_store first; failed probes return Err(key) to normal Set.",
       "rule": "mask-cast",
       "support_files": [
-        "crates/perry-runtime/src/proxy/put_value.rs"
+        "crates/perry-runtime/src/object/property_ops/put_value.rs"
       ]
     },
     {
       "path": "crates/perry-runtime/src/object/store_key.rs",
       "function": "interned_heap_key",
       "body_sha256": "635a6c7363c1d17da86425103ea6a59da3a292ef5ae071e1b3fcd409e4a672c2",
-      "claim": "The sole production caller own_overwrite_first routes is_short_string keys to interned_key_for_store first; failed probes return Err(key) to normal Set.",
+      "claim": "The production caller own_overwrite_first in object/property_ops/put_value.rs routes is_short_string keys to interned_key_for_store first; failed probes return Err(key) to normal Set.",
       "rule": "heap-tag-only",
       "support_files": [
-        "crates/perry-runtime/src/proxy/put_value.rs"
+        "crates/perry-runtime/src/object/property_ops/put_value.rs"
       ]
     },
     {
@@ -215,13 +215,24 @@
       "rule": "heap-tag-only",
       "support_files": [
         "crates/perry-runtime/src/node_stream_event_emitter.rs"
+      ]
+    },
+    {
+      "path": "crates/perry-runtime/src/array/join.rs",
+      "function": "direct_string",
+      "body_sha256": "4296c7d6019e966ddce720e9cb2bae11d4c65ab5b8e32a0fb567a1548f5f3634",
+      "claim": "Both well_formed_join_size and its proven copy pass handle is_short_string first, counting or writing inline payload bytes. direct_string handles only the remaining heap-string case; pointer_tagged_string rejects non-pointer tags before checking allocator ownership. A declined size proof takes the ordinary join path.",
+      "rule": "heap-tag-only",
+      "support_files": [
+        "crates/perry-runtime/src/array/join.rs"
       ]
     }
   ],
   "support_files": {
-    "crates/perry-runtime/src/proxy/put_value.rs": "ffa11d3a1ffef66a3f77b97079cb1cc6dca60d503995897c19a50b36c3105c5f",
-    "crates/perry-runtime/src/node_stream_event_emitter.rs": "db7daa423e8fe604d228fe0e118c7ae8c1504753e86e4cff6735e48b6550962e",
+    "crates/perry-runtime/src/node_stream_event_emitter.rs": "8d6a9d72d9cf1111db024b271c51e32a7f937942d7d1ac75da12a69b803d2e92",
     "crates/perry-runtime/src/string/concat.rs": "aff51a40e1cf03321ddec88547a7baf0666391598b7289fa8d662f0c19596ed0",
-    "crates/perry-runtime/src/object/builtin_proto_entries.rs": "b69d6e00705c719d0e03a410bc7c9167f45cf578441a71a73805dba18df7f90f"
+    "crates/perry-runtime/src/object/builtin_proto_entries.rs": "7a042517091eb0dd104d97acb44dbb8dbcb8c97c1051a9ab8af3359f7db28626",
+    "crates/perry-runtime/src/object/property_ops/put_value.rs": "ae738e2022442a63e7057c81623798e4d081983c4c3bc9085439d8133643d477",
+    "crates/perry-runtime/src/array/join.rs": "2d787ac0b51390f859464b0b88a133e573980c082e2f9d648d041ee11614e2be"
   }
 }

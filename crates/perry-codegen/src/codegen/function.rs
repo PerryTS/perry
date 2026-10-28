@@ -666,6 +666,21 @@ pub(super) fn compile_function(
     } else {
         public_llvm_name.clone()
     };
+    // A separate raw return ABI is admitted only for a closed pure body.
+    // The full IEEE body remains below, including its public entry guards.
+    let integer_contract = if spec_entry.is_some_and(|plan| {
+        plan.reps
+            .iter()
+            .all(|r| matches!(r, crate::collectors::SpecParamRep::Boxed))
+    }) && super::checked_integer::eligible(f, &llmod.target_triple)
+    {
+        super::integer_contract::prove(f)
+    } else {
+        None
+    };
+    if let Some(contract) = integer_contract {
+        super::checked_integer::emit(llmod, f, &llvm_name, contract);
+    }
     // This-as-a-parameter: a body that reads its dynamic `this` binds it at
     // entry into a rooted `this` slot. The ordinary public body becomes a
     // receiver-taking body (`perry_fn_*$this`, leading `i64 %js_this`) behind
@@ -1274,6 +1289,9 @@ pub(super) fn compile_function(
     };
 
     let mut ctx = FnCtx {
+        numeric_order_functions: cross_module.numeric_order_functions,
+        numeric_order_closures: cross_module.numeric_order_closures,
+        numeric_order_ready: Default::default(),
         program_has_worker: cross_module.program_has_worker,
         program_has_thread_agents: cross_module.program_has_thread_agents,
         program_class_accessor_names: cross_module.program_class_accessor_names.clone(),
@@ -1378,6 +1396,7 @@ pub(super) fn compile_function(
         resolved_versioned_loop_callback_targets: HashMap::new(),
         trusted_box_captures: false,
         fixed_generator_state: false,
+        private_resume_frame: false,
         versioned_loop_deopt_context: None,
         trusted_box_capture_ptrs: HashMap::new(),
         ready_cell_roots: crate::stmt::binding_cell::ReadyCellRoots::with_entry_cells(
@@ -1757,7 +1776,12 @@ pub(super) fn compile_function(
         }
     }
 
+    if let Some(contract) = integer_contract {
+        super::checked_integer::dispatch(&mut ctx, f, &llvm_name, contract)?;
+    }
+
     // #10812: throw a catchable RangeError before the native stack runs out.
+    crate::expr::numeric_order::parameters_ready(&mut ctx, &f.params);
     crate::expr::stack_guard::emit_stack_guard(&mut ctx);
     if f.is_async {
         stmt::lower_async_rejecting_top_level_stmts(&mut ctx, &f.body)

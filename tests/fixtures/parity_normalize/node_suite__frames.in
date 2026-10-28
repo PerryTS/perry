@@ -1,0 +1,5 @@
+    at Object.<anonymous> (/x/test.ts:1:1)
+      3: native frame
+        (… 4 more identical frames)
+  at two-space-indent
+  … 9 more identical frames keep

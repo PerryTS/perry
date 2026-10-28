@@ -6,16 +6,30 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+import wasi_imports_check
 import wasi_run
 
 
-def core_module(*imports):
-    """A core wasm module whose import section lists (module, name) pairs."""
+def core_module(*imports, signatures=None):
+    """A core wasm module whose import section lists (module, name) pairs.
+
+    A preview 1 function is declared with its standard signature, anything else
+    as `() -> ()`; `signatures` overrides either, keyed by name, as the check's
+    `params-results` text (`i` is i32, `l` is i64).
+    """
+    signatures = {**wasi_imports_check._PREVIEW1, **(signatures or {})}
+    code = {"i": b"\x7f", "l": b"\x7e"}
+    types = []
+    for _, field in imports:
+        params, results = signatures.get(field, "-").split("-")
+        types.append(b"\x60" + bytes([len(params)]) + b"".join(code[c] for c in params)
+                     + bytes([len(results)]) + b"".join(code[c] for c in results))
     def name(text):
         return bytes([len(text)]) + text.encode()
-    body = bytes([len(imports)]) + b"".join(name(m) + name(n) + b"\0\0" for m, n in imports)
-    types = b"\x01\x60\x00\x00"
-    return (b"\0asm\x01\0\0\0" + b"\x01" + bytes([len(types)]) + types
+    body = bytes([len(imports)]) + b"".join(
+        name(m) + name(n) + b"\0" + bytes([i]) for i, (m, n) in enumerate(imports))
+    type_section = bytes([len(types)]) + b"".join(types)
+    return (b"\0asm\x01\0\0\0" + b"\x01" + bytes([len(type_section)]) + type_section
             + b"\x02" + bytes([len(body)]) + body)
 
 
@@ -175,6 +189,25 @@ class FlavourTests(CaseFixture):
 
     def test_p1_module_with_another_import_fails_before_running(self):
         module = core_module(("wasi_snapshot_preview1", "fd_write"), ("env", "leftover"))
+        with patch("wasi_run.subprocess.run", side_effect=self.execute_with(module)) as run:
+            result = self.run_p1()
+        self.assertFalse(result["passed"])
+        self.assertEqual(result["stage"], "imports")
+        self.assertEqual(run.call_count, 1)
+
+    def test_p1_preview1_import_with_a_non_standard_signature_fails_before_running(self):
+        module = core_module(("wasi_snapshot_preview1", "fd_write"),
+                             signatures={"fd_write": "iii-i"})
+        with patch("wasi_run.subprocess.run", side_effect=self.execute_with(module)) as run:
+            result = self.run_p1()
+        self.assertFalse(result["passed"])
+        self.assertEqual(result["stage"], "imports")
+        self.assertIn("signature", result["detail"])
+        self.assertEqual(run.call_count, 1)
+
+    def test_p1_perry_net_import_is_not_part_of_the_default_surface(self):
+        module = core_module(("wasi_snapshot_preview1", "fd_write"), ("perry_net", "resolve"),
+                             signatures={"resolve": "iiii-i"})
         with patch("wasi_run.subprocess.run", side_effect=self.execute_with(module)) as run:
             result = self.run_p1()
         self.assertFalse(result["passed"])

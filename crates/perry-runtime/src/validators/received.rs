@@ -284,10 +284,7 @@ pub(crate) fn received_has_null_prototype(addr: usize) -> bool {
 
 /// Inspect link authority, not properties: no constructor Get, descriptor
 /// accessor execution or Proxy trap belongs in negative-depth fallback.
-pub(crate) fn received_native_prototype_shape(
-    prototype: f64,
-    intrinsic: f64,
-) -> ReceivedNativePrototype {
+fn received_native_prototype_shape(prototype: f64, intrinsic: f64) -> ReceivedNativePrototype {
     let scope = crate::gc::RuntimeHandleScope::new();
     let current = scope.root_nanbox_f64(prototype);
     let intrinsic = scope.root_nanbox_f64(intrinsic);

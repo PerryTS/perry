@@ -6,7 +6,7 @@ use std::cell::{Cell, RefCell};
 #[cfg(test)]
 mod tests;
 
-thread_local! {
+crate::perry_thread_local! {
     // Stable native cells, never JS addresses. Their pinned owner back-edges
     // are traced and rewritten by the ordinary payload descriptor.
     static PENDING: RefCell<Vec<OwnerLink>> = const { RefCell::new(Vec::new()) };

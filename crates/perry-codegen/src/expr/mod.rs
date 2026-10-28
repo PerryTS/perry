@@ -126,6 +126,7 @@ mod index;
 pub(crate) mod nanbox_inline;
 mod native_memory;
 mod native_record;
+pub(crate) mod numeric_order;
 mod object_literal;
 mod pod_layout_constants;
 mod pod_record;
@@ -364,6 +365,10 @@ pub enum HeaderImageSource {
 }
 
 pub(crate) struct FnCtx<'a> {
+    pub numeric_order_functions: &'a [perry_hir::Function],
+    pub numeric_order_closures: &'a [(u32, Expr)],
+    /// Lexical initialization dominance for closed callee reads.
+    pub numeric_order_ready: crate::stmt::binding_cell::ReadyCellRoots,
     /// wpfacts slice 2: this module's elision facts (`expr/wpfacts_access.rs`).
     pub wpfacts: std::sync::Arc<crate::codegen::ElisionFacts>,
     /// Object model step 5 (case 2c): the program's key colouring
@@ -843,6 +848,8 @@ pub(crate) struct FnCtx<'a> {
     pub trusted_box_captures: bool,
     /// Only the transformed synchronous resume body owns direct mutable state captures.
     pub fixed_generator_state: bool,
+    /// The owner stays rooted; only capture addressing adds the frame offset.
+    pub private_resume_frame: bool,
     /// Stack context supplied only to a compiler-private versioned-loop
     /// callback clone. Its cold arms record the exact resume index and poison
     /// the caller's private counter before executing observable fallback code.
@@ -3249,6 +3256,8 @@ pub(crate) mod class_env;
 pub(crate) mod class_field_push;
 pub(crate) mod class_first_evaluation;
 mod closure;
+#[cfg(test)]
+mod sort_numeric_codegen_tests;
 pub(crate) use closure::{plain_async_step_release_ids, push_capture_word};
 mod compare;
 pub(crate) use compare::ordinary_object_allocation;
@@ -3320,6 +3329,7 @@ mod generator_control_slots;
 pub(crate) mod ic_fast_split;
 mod js_runtime;
 mod literals_vars;
+pub(crate) mod private_resume_frame;
 pub(crate) use literals_vars::{bind_lowered_value_to_local, note_born_local_write};
 mod logical_collections;
 mod math_simple;
@@ -4825,3 +4835,6 @@ mod byte_prepass_tests;
 
 #[cfg(test)]
 mod array_layout_loop_tests;
+
+#[cfg(test)]
+mod sort_numeric_source_tests;

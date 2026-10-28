@@ -1,5 +1,5 @@
 //! Shared boxed string and object-field conversions.
-use crate::{js_string_from_bytes, ObjectHeader, StringHeader};
+use crate::{js_string_from_bytes, ObjectHeader};
 
 // ---------------------------------------------------------------------------
 // Shared helpers used across the URL sub-modules. Promoted to `pub(crate)` so

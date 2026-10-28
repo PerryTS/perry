@@ -459,7 +459,7 @@ pub use clone_read::deserialize_nanbox_on_current_thread;
 use clone_write::serialize_capture_for_thread;
 pub use clone_write::{serialize_message, serialize_nanbox_for_thread};
 
-pub(crate) use crate::thread_hook_slots::{arm_fs_thread_codec, fs_thread_codec, FsThreadCodec};
+pub(crate) use crate::thread_hook_slots::fs_thread_codec;
 
 /// Human-readable name for a GC object type that cannot cross a thread
 /// boundary. Used only to build the TypeError message (#6185).

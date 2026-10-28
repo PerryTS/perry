@@ -174,12 +174,6 @@
       "why": "Byte offset of the next free slot inside the current pool owner, a plain u32. The pool owner pointer itself (POOL_OWNER) is the rooted holder; this cell never stores a heap address. B3 routed pool placement through store_alloc, which made the file an allocating context for rule T."
     },
     {
-      "file": "crates/perry-runtime/src/bun_compat/self_global.rs",
-      "name": "INSTALLED",
-      "verdict": "not_a_gc_pointer",
-      "why": "Per-thread Cell<bool> recording whether Bun realm bootstrap installed its replaceable self accessor. Only false/true are stored; the actual global and accessor closures live in the existing traced global object and descriptor storage."
-    },
-    {
       "file": "crates/perry-runtime/src/child_process/reactor.rs",
       "name": "CP_LIVE_COUNT",
       "verdict": "not_a_gc_pointer",
@@ -223,18 +217,6 @@
       "why": "Per-agent (keyed Function ShapeId u32, verdict bits u8) pairs for the Function.prototype bind/call/apply arm. Ids and flag bits, never an address; ShapeIds are never reused, so an entry can go unused but not stale."
     },
     {
-      "file": "crates/perry-runtime/src/dyn_eval/function_owner.rs",
-      "name": "ACTIVE_FUNCTIONS",
-      "verdict": "not_a_gc_pointer",
-      "why": "Rust-owned Rc<InterpFn> AST pins and numeric root-stack indices; ASTs contain no runtime JSValues or GC heap pointers. roots_truncate releases pins on normal return and exception savepoint restoration, avoiding skipped-destructor Rc leaks."
-    },
-    {
-      "file": "crates/perry-runtime/src/dyn_eval/function_owner.rs",
-      "name": "PIN_TOP",
-      "verdict": "not_a_gc_pointer",
-      "why": "Plain root-stack index (one past the newest AST pin); an integer, not an address."
-    },
-    {
       "file": "crates/perry-runtime/src/event_pump/agent_loop.rs",
       "name": "AGENT_LOOP",
       "verdict": "not_a_gc_pointer",
@@ -251,18 +233,6 @@
       "name": "PENDING_PATH_WRITES",
       "verdict": "not_a_gc_pointer",
       "why": "#9541: parked-write counts keyed by decoded path. `String` keys are Rust-owned heap, not GC heap, and the values are counts. No field can hold a managed pointer."
-    },
-    {
-      "file": "crates/perry-runtime/src/fs/dir_glob_watch/watch_backend.rs",
-      "name": "QUEUE",
-      "verdict": "not_a_gc_pointer",
-      "why": "#9613: per-JS-thread Arc<EventQueue> of fs.watch RawEvents \u2014 PathBufs, EventClass tags and WatchError strings from the OS backends. Pure Rust data; no NaN-boxed values or heap object pointers ever enter the queue (events are converted to JS values only in the pump drain, under a fresh handle scope)."
-    },
-    {
-      "file": "crates/perry-runtime/src/fs/dir_glob_watch/watch_backend.rs",
-      "name": "SHARED",
-      "verdict": "not_a_gc_pointer",
-      "why": "#9613: RefCell<Option<Option<SharedInstance>>> caching the notify watcher instance (OS watcher handles + channel). Holds no JS-heap pointers; watch registrations are keyed by usize ids, targets are PathBufs."
     },
     {
       "file": "crates/perry-runtime/src/fs/filehandle.rs",
@@ -286,7 +256,7 @@
       "file": "crates/perry-runtime/src/gc/census.rs",
       "name": "PASS1_MARKED",
       "verdict": "non_moving_snapshot",
-      "why": "Re-audited 2026-10-23 against the pinned-source diffs and current collection phases. Raw header-address snapshot exists only in a synchronous full run_to_completion: step_mark_propagation records it after tracing, then block persistence and weak/ephemeron processing only mark or clear existing edges. Full finalization skips the relocating minor prelude. step_sweep consumes the snapshot before census reporting and before reclamation; budgeted cycles and minors skip its creation and consumption. No JS callback, object relocation, or mutator window occurs between the boundaries. The added full-sweep honest-pointer verifier only reads heap slots and allocator metadata; it neither calls JS nor relocates. Scanner registration and optional feature installation occur in gc_init before this window. Trigger-watermark admission, promotion-policy estimates and test-only throw sabotage do not change the synchronous mark-to-sweep sequence; the production throw check aborts rather than calling JS or unwinding. Native Rust allocations do not collect. Removing the retired PIC census row changes reporting only. Re-audited b7f3d56fed: policy.rs adds old_gen_growth_since_last_full_bytes, a read-only query of existing pressure and post-full baseline counters for idle-reducer admission. It does not call JS, collect or relocate, and neither snapshot boundary nor the synchronous mark-to-sweep sequence changes. Re-audited DPA-R: js_gc_init_with_layouts binds immutable image metadata before runtime initialization; the compatibility wrapper and linker keepalive anchor do not touch collection, either snapshot boundary, or the synchronous mark-to-sweep sequence. Re-audited WRT2b: the added image-root scan precedes mark propagation and snapshot creation; image cells are immortal MARKED|PINNED and do not enter the moving arena set. The honest-pointer verifier enumerates those immutable image addresses read-only. The new module declarations change no snapshot boundary, JS callback, relocation, or synchronous mark-to-sweep window. WRT3a re-audit: these source files equal e6e7cc419 and the parent; the synchronous census_pass1_if_armed to census_take_if_armed_at_full_sweep_start window remains inside run_to_completion, before reclamation, with no mutator resumption or relocation. Full runtime tests exercise this current source.",
+      "why": "Re-audited 2026-10-23 against the pinned-source diffs and current collection phases. Raw header-address snapshot exists only in a synchronous full run_to_completion: step_mark_propagation records it after tracing, then block persistence and weak/ephemeron processing only mark or clear existing edges. Full finalization skips the relocating minor prelude. step_sweep consumes the snapshot before census reporting and before reclamation; budgeted cycles and minors skip its creation and consumption. No JS callback, object relocation, or mutator window occurs between the boundaries. The added full-sweep honest-pointer verifier only reads heap slots and allocator metadata; it neither calls JS nor relocates. Scanner registration and optional feature installation occur in gc_init before this window. Trigger-watermark admission, promotion-policy estimates and test-only throw sabotage do not change the synchronous mark-to-sweep sequence; the production throw check aborts rather than calling JS or unwinding. Native Rust allocations do not collect. Removing the retired PIC census row changes reporting only. Re-audited b7f3d56fed: policy.rs adds old_gen_growth_since_last_full_bytes, a read-only query of existing pressure and post-full baseline counters for idle-reducer admission. It does not call JS, collect or relocate, and neither snapshot boundary nor the synchronous mark-to-sweep sequence changes. Re-audited DPA-R: js_gc_init_with_layouts binds immutable image metadata before runtime initialization; the compatibility wrapper and linker keepalive anchor do not touch collection, either snapshot boundary, or the synchronous mark-to-sweep sequence. Re-audited WRT2b: the added image-root scan precedes mark propagation and snapshot creation; image cells are immortal MARKED|PINNED and do not enter the moving arena set. The honest-pointer verifier enumerates those immutable image addresses read-only. The new module declarations change no snapshot boundary, JS callback, relocation, or synchronous mark-to-sweep window. WRT3a re-audit: these source files equal e6e7cc419 and the parent; the synchronous census_pass1_if_armed to census_take_if_armed_at_full_sweep_start window remains inside run_to_completion, before reclamation, with no mutator resumption or relocation. Full runtime tests exercise this current source. Release-readiness re-audit 2026-10-28: census.rs only narrows the proc_pid_rusage reporter to macOS. Current gc_init installs roots and intrinsic layouts before collection; js_gc_init_with_layouts binds image metadata before gc_init. The unchanged run_to_completion, mark-completion capture, and pre-reclamation step_sweep consumption still provide the synchronous non-moving window. Re-audited release CI head: burst_boundary now arms the existing precise-poll flag and records the arena baseline. It does not collect or call JavaScript; collection remains deferred until a later precise poll outside the synchronous mark-to-sweep snapshot window.",
       "window": {
         "start": {
           "file": "crates/perry-runtime/src/gc/census.rs",
@@ -301,12 +271,12 @@
           "function": "run_to_completion"
         },
         "sources": {
-          "crates/perry-runtime/src/gc/census.rs": "0d47dc622e58bc437906c3060244fb8f05815884c0b05c221c0eec4e15132125",
+          "crates/perry-runtime/src/gc/census.rs": "1dbb9bc008c7cfc0849d2727d5d6238f719bdd7338723337cc8c487134dd78cb",
           "crates/perry-runtime/src/gc/cycle.rs": "596af3b41a5c9923f0baa26b60d194ba3b770d30c3b38811a3261cd7657c7d77",
-          "crates/perry-runtime/src/gc/mod.rs": "8ecf4be0ab96e470031e5337d694bee87326cf79937d4d756b678b20d25827d0",
+          "crates/perry-runtime/src/gc/mod.rs": "25403919040986ab242bebbd4e9a6a4db38f1b4928803da4c06f69d61ce6579c",
           "crates/perry-runtime/src/gc/policy.rs": "ca0026e4c24890e3f2f7a00c4526a1c3f34e0968dbb850cfbc9b7fda27f06959",
           "crates/perry-runtime/src/gc/progress.rs": "acb439ba3c6a100f08ea4aa0ba4b96c30afb8cb5d84264436948524144b9342b",
-          "crates/perry-runtime/src/gc/allocation_pacing.rs": "0b370e62f458bf75faa64d1bd0b511866985ad40d9f2a20856541c3e59eee522",
+          "crates/perry-runtime/src/gc/allocation_pacing.rs": "465e5fe1d00152e36cc7f1be3b4edccf30305aba80b69f9aa5c66240d5000bcf",
           "crates/perry-runtime/src/gc/ephemeron.rs": "b6a62662078caf02e5fa716e6bd8089f20e67efca8c9bb55ea234567e81adc06",
           "crates/perry-runtime/src/gc/cycle/weak_ephemerons.rs": "4c2183d3f5bff96acd2df6fbc1b0ad4d47eec23317ef378781e220b4700cf1f4",
           "crates/perry-runtime/src/gc/verify_honest.rs": "81074a8f84874abdd395c09e8d5029930ec8bce1342dd8812721435061d408fb"
@@ -695,18 +665,6 @@
       "reason": "Holds Set/Map header ADDRESSES as identity keys for in-flight forEach walks (#9082); the values are only ever compared (`contains`, `pop` equality) and truncated, never dereferenced, so no collector edge originates here. Correctness across evacuation is maintained by set_header_moved_for_gc / map_header_moved_for_gc, which rewrite every matching entry when a header moves \u2014 see the SET_FOREACH_STACK/MAP_FOREACH_STACK rewrite loops there."
     },
     {
-      "file": "crates/perry-runtime/src/node_api_host/loader.rs",
-      "name": "LEGACY_CAPTURE",
-      "verdict": "not_a_gc_pointer",
-      "why": "Temporary legacy-addon registration state: a canonical Rust PathBuf, a pointer to the addon's static napi_module descriptor in the loaded native library, and counters/flags. It never stores a Perry GC-heap address."
-    },
-    {
-      "file": "crates/perry-runtime/src/node_api_host/metadata.rs",
-      "name": "PENDING_FINALIZERS",
-      "verdict": "not_a_gc_pointer",
-      "why": "Queue entries contain a native addon function pointer plus the addon's opaque data and hint pointers. Node-API defines those as embedder-owned native pointers; no field is a Perry GC-heap address."
-    },
-    {
       "file": "crates/perry-runtime/src/node_stream_constructors/birth.rs",
       "name": "SITE",
       "verdict": "not_a_gc_pointer",
@@ -912,12 +870,6 @@
       "name": "TEST_LAYOUT_NOTE_SLOT_CALLS",
       "verdict": "test_only",
       "why": "#[cfg(test)] Cell<usize> counter for asserting spill overwrites skip the full layout-note path when the pointer kind is unchanged. It stores only a call count and is absent from shipped binaries."
-    },
-    {
-      "file": "crates/perry-runtime/src/os/os_process_emitter.rs",
-      "name": "PROCESS_EXIT_EVENT_EMITTED",
-      "verdict": "not_a_gc_pointer",
-      "why": "#9403 re-entrancy latch: a bool recording that the process 'exit' event has already been emitted, so a listener that itself calls process.exit() or throws cannot re-run the listeners that already ran (node skips straight out instead). Holds a flag, never a JSValue or heap pointer."
     },
     {
       "file": "crates/perry-runtime/src/perf_hooks.rs",
@@ -2814,12 +2766,6 @@
       "why": "Test-only closure allocation count; note_closure_alloc increments this u64 once per birth, and tests compare numeric deltas. No object address is stored."
     },
     {
-      "file": "crates/perry-runtime/src/dyn_eval_hooks.rs",
-      "name": "INTERP_ACTIVE",
-      "verdict": "not_a_gc_pointer",
-      "why": "Interpreter entry depth. interp_active_enter increments and interp_active_leave decrements this u32; note_proto_write tests it against zero. It never stores a JS value or address."
-    },
-    {
       "file": "crates/perry-runtime/src/exception.rs",
       "name": "IN_WORKER_BASE",
       "verdict": "not_a_gc_pointer",
@@ -3064,6 +3010,18 @@
       "name": "FLAG_ACCESSORS",
       "verdict": "not_a_gc_pointer",
       "why": "Memoized regex flag-accessor proof: (semantic epoch u64, prototype LayoutWord stamp u32, verdict bool). flag_accessors_are_builtin stores only these numeric identities and its proof result, never the prototype or getter closure address."
+    },
+    {
+      "file": "crates/perry-runtime/src/interp_proto_guard.rs",
+      "name": "INTERP_ACTIVE",
+      "verdict": "not_a_gc_pointer",
+      "why": "Interpreter entry depth. interp_active_enter increments and interp_active_leave decrements this u32; note_proto_write tests it against zero. It never stores a JS value or address."
+    },
+    {
+      "file": "crates/perry-runtime/src/module_require/path_registry.rs",
+      "name": "PENDING_PATH_INITS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Deferred generated extern C registrar function pointers, consumed by register_pending_path_inits. These are executable-image code addresses; the functions register initializer addresses, and the queue never stores JS values or heap pointers."
     }
   ],
   "_FRONTIER_README": "Identity-pinned debt ratchet over new perry-ui* candidates and otherwise-unclassified core raw/Perry TLS declarations (see the census docstring, \u201cThe identity-pinned frontier\u201d). A new uncovered holder fails until it is scanned, receives a researched holders verdict, or is deliberately pinned as debt. Moving a researched false positive to holders graduates it from this list. A fixed or classified holder makes its old frontier pin stale, so the receipt must be deleted.",
@@ -3686,10 +3644,6 @@
     },
     {
       "file": "crates/perry-runtime/src/media_playback.rs",
-      "name": "GC_SCANNER_REGISTERED"
-    },
-    {
-      "file": "crates/perry-runtime/src/messaging.rs",
       "name": "GC_SCANNER_REGISTERED"
     },
     {

@@ -784,6 +784,11 @@ pub(crate) unsafe fn nm_dispatch_crypto(ctx: &NmCtx, module_name: &str, method_n
             "Class constructor X509Certificate cannot be invoked without 'new'",
             "ERR_CONSTRUCT_CALL_REQUIRED",
         ),
+        // Node's legacy `Certificate` returns an instance with or without
+        // `new`; its instances are the same stateless SPKAC namespace.
+        ("crypto", "Certificate") => {
+            crate::object::native_module::create_sub_namespace("crypto.Certificate")
+        }
         ("crypto.KeyObject", "from") => {
             super::native_module_crypto_key_object::key_object_from(arg(0))
         }

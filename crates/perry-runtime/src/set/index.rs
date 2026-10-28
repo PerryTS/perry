@@ -97,8 +97,8 @@ fn is_plain_numeric_key(bits: u64) -> bool {
 
 /// Fold all IEEE bits into the bucket hash before truncating to 32 bits.
 /// Integer doubles have long zero mantissa tails: the pointer multiply/xor
-/// drops enough entropy that different numbers can share the entire hash,
-/// forcing an equality walk on every probe. This avalanche belongs only to
+/// leaves low bucket bits clustered, forcing long probe walks even when
+/// the complete hashes differ. This avalanche belongs only to
 /// the numeric key domain; movable keys keep their relocation-stable identity.
 #[inline(always)]
 fn number_hash(mut bits: u64) -> u32 {

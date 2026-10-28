@@ -1,0 +1,6 @@
+▶ suite
+    test at /x/a.test.ts:1:1
+  ✔ case one (1.234ms)
+  ✖ case two (2s)
+ℹ duration_ms 42.4242
+plain output

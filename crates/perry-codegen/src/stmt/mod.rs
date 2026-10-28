@@ -204,10 +204,12 @@ fn lower_stmts_from(
     // The list's frame of cell roots its direct statements initialize
     // (`binding_cell::ReadyCellRoots`).
     ctx.ready_cell_roots.push_list();
+    ctx.numeric_order_ready.push_list();
     let lowered = lower_stmts_list(ctx, stmts, emit_shadow_clears, version_tails);
     // A class-guard run never outlives its statement list.
     crate::expr::class_guard_memo::close(ctx);
     ctx.ready_cell_roots.pop_list();
+    ctx.numeric_order_ready.pop_list();
     lowered
 }
 
@@ -335,6 +337,13 @@ fn lower_stmts_list(
         }
         let declared = binding_cell::declared_cell_roots(ctx, &stmts[i]);
         ctx.ready_cell_roots.settle(declared);
+        if let Stmt::Let {
+            id, init: Some(_), ..
+        } = &stmts[i]
+        {
+            ctx.numeric_order_ready.note_stored(*id);
+            ctx.numeric_order_ready.settle([*id]);
+        }
         region_loop::after_stmt(ctx, &stmts[i]);
         // Representation-selection Phase 2: a TOP-LEVEL `Stmt::Let` of a
         // pre-pass-proven typed-array binding makes the binding "ready" — the
@@ -529,6 +538,7 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
             if ctx.shared_super_scope_active {
                 ctx.block().call_void("js_derived_super_scope_pop", &[]);
             }
+            crate::expr::private_resume_frame::write_out_kind(ctx)?;
             ctx.block().ret(DOUBLE, &final_v);
             Ok(())
         }
