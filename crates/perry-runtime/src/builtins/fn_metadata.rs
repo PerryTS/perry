@@ -67,6 +67,7 @@ fn decode_registered(slot: Option<&[u8]>) -> Option<String> {
 
 /// Consume a validated view while its registry owner is locked. The caller
 /// chooses whether the result needs owned bytes; presence checks do not.
+#[inline(always)]
 fn decode_registered_with<R>(slot: Option<&[u8]>, read: impl FnOnce(&str) -> R) -> Option<R> {
     decode_registered_bytes(slot?).map(read)
 }
@@ -177,6 +178,7 @@ pub(super) fn registered_name_string(func_ptr: usize) -> Option<String> {
 
 /// Read the canonical metadata under its owner lock. Presence checks need the
 /// same UTF-8/precedence rules as reflection, but do not need an owned String.
+#[inline(always)]
 fn with_registered_name<T>(func_ptr: usize, read: impl FnOnce(&str) -> T) -> Option<T> {
     if let Ok(overrides) = function_name_overrides().lock() {
         if let Some(name) = overrides
