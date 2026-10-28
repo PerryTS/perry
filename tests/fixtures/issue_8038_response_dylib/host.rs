@@ -86,8 +86,10 @@ fn main() -> Result<(), String> {
     let module_init: ModuleInit = unsafe { symbol(app, "perry_module_init")? };
     let entry: Entry = unsafe { symbol(app, &arguments[4])? };
     unsafe {
-        gc_init();
+        // Let the generated prologue bind the app's layout image before any
+        // GC initialization commits the agent to the runtime-only prefix.
         module_init();
+        gc_init();
     }
 
     let promise = unsafe { entry(0) };

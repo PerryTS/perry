@@ -196,8 +196,11 @@ fn executor(
     retained: Handler,
 ) {
     unsafe {
-        (api.gc_init)();
+        // The app initializer binds its layout image before creating the
+        // agent's shape slab. Initializing GC first would freeze the smaller
+        // runtime-only prefix and reject this later-loaded app.
         module_init();
+        (api.gc_init)();
     }
     let mut stats = RunStats {
         calls: 0,
