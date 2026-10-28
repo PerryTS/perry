@@ -11,6 +11,7 @@ Review that diff: it is never used by CI. Removing the last leak requires removi
 its exception, so subsequent regressions fail. New symbols fail even within an
 already leaking subsystem. Existing exceptions are names, never byte budgets.
 """
+import fnmatch
 import argparse
 import json
 import os
@@ -56,7 +57,7 @@ NEGATIVES = {
     "without_segmenter": ["intl_segmenter"],
     "without_node_api_host": ["node_api_host"],
     "without_normalize": ["string_normalize"],
-    "without_diagnostics": ["diagnostics"],
+    "without_diagnostics": ["diagnostics", "gc_diagnostics"],
     "without_dyn_eval": ["dyn_eval"],
     "without_messaging": ["messaging"],
     "without_async_hooks": ["async_hooks"],
@@ -181,12 +182,15 @@ def inventory():
         hook = hook[1]
         assert hook in hooks | stdlib_hooks | native_hooks or hook == "none (no hook yet)", f"{path}: unknown hook {hook}"
         prefixes = rule[1].split("|")
+        implementation_rule = re.search(r"^// HWS implementations: (.+)$", source, re.M)
+        implementations = implementation_rule[1].split("|") if implementation_rule else []
+        assert all(implementations), f"{path}: empty implementation matcher"
         assert all(prefixes), f"{path}: empty prefix matches every symbol"
         if hook in hooks | stdlib_hooks | native_hooks:
             prefixes.append(hook)
         options = witness_options(path)
         companion = re.search(r"^// HWS companion: (.+)$", source, re.M)
-        fixtures[path.stem] = {"hook": hook, "prefixes": prefixes,
+        fixtures[path.stem] = {"hook": hook, "prefixes": prefixes, "implementations": implementations,
                                "companion": companion[1] if companion else None,
                                "native_hook": hook in native_hooks, "argv": options["argv"]}
     for name, fixture in fixtures.items():
@@ -266,7 +270,17 @@ def symbols(binary, nm, demangler):
 def matches(symbol, fixture):
     # Rust trait impl names start with '<'; their defining module still counts.
     name = symbol["name"].lstrip("<")
-    return any(name.startswith(prefix) for prefix in fixture["prefixes"])
+    if any(name.startswith(prefix) for prefix in fixture["prefixes"]):
+        return True
+    # A diagnostic does not stop being diagnostic when moved into a collector
+    # module. Match implementation identifiers independently of that module.
+    # Restrict this extra rule to runtime GC, not unrelated libraries' verifiers.
+    if not name.startswith("perry_runtime::gc::"):
+        return False
+    identifiers = re.findall(r"[A-Za-z_][A-Za-z_0-9]*", name)
+    return any(fnmatch.fnmatchcase(identifier, pattern)
+               for identifier in identifiers
+               for pattern in fixture.get("implementations", []))
 
 
 def compile_witness(args, name, env, extra=""):

@@ -1218,7 +1218,7 @@ fn test_rewrite_remembered_dirty_range_updates_set_external_entry_span() {
         );
     }
 
-    rewrite_remembered_dirty_ranges(&valid_ptrs);
+    rewrite_remembered_dirty_ranges::<{ cfg!(test) }>(&valid_ptrs);
 
     unsafe {
         assert_eq!(*dirty_slot, POINTER_TAG | new_dirty_child as u64);
@@ -1402,7 +1402,7 @@ fn test_rewrite_remembered_dirty_range_updates_unmarked_old_parent_slot() {
         );
     }
 
-    rewrite_remembered_dirty_ranges(&valid_ptrs);
+    rewrite_remembered_dirty_ranges::<{ cfg!(test) }>(&valid_ptrs);
 
     unsafe {
         assert_eq!(
@@ -1452,7 +1452,7 @@ fn test_rewrite_remembered_dirty_range_updates_map_external_entry_span() {
         );
     }
 
-    rewrite_remembered_dirty_ranges(&valid_ptrs);
+    rewrite_remembered_dirty_ranges::<{ cfg!(test) }>(&valid_ptrs);
 
     unsafe {
         assert_eq!(*dirty_slot, POINTER_TAG | new_dirty_child as u64);
@@ -1488,7 +1488,7 @@ fn test_rewrite_remembered_fallback_header_updates_fields() {
         );
     }
 
-    rewrite_remembered_dirty_ranges(&valid_ptrs);
+    rewrite_remembered_dirty_ranges::<{ cfg!(test) }>(&valid_ptrs);
 
     unsafe {
         assert_eq!(*fields, POINTER_TAG | new_child as u64);

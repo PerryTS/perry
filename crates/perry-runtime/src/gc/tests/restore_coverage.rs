@@ -34,7 +34,11 @@ fn restore_coverage_keeps_an_untraced_malloc_parents_uncovered_page() {
             fallback_headers: Vec::new(),
         };
         remembered_set_clear();
-        restore_surviving_dirty_coverage(&snapshot, &Default::default(), "malloc_uncovered");
+        restore_surviving_dirty_coverage::<{ cfg!(test) }>(
+            &snapshot,
+            &Default::default(),
+            "malloc_uncovered",
+        );
         assert!(
             EXTERNAL_DIRTY_SLOT_PAGES.with(|s| {
                 s.borrow()
@@ -86,13 +90,13 @@ fn exercise_restore() {
             .into_iter()
             .collect();
         remembered_set_clear();
-        restore_surviving_dirty_coverage(&snapshot, &covered, "first");
+        restore_surviving_dirty_coverage::<{ cfg!(test) }>(&snapshot, &covered, "first");
         assert!(
             barrier::DIRTY_OLD_PAGES.with(|s| s.borrow().contains(&page)),
             "repair must restore the page containing the young edges"
         );
         // Productivity counts edges, even when their page is already dirty.
-        restore_surviving_dirty_coverage(&snapshot, &covered, "repeat");
+        restore_surviving_dirty_coverage::<{ cfg!(test) }>(&snapshot, &covered, "repeat");
         assert_eq!(barrier::DIRTY_OLD_PAGES.with(|s| s.borrow().len()), 1);
     }
     remembered_set_clear();

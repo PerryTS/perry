@@ -3,7 +3,7 @@
 
 use super::super::*;
 use super::support::*;
-use crate::gc::trace::full_mark_decode_sabotage;
+use crate::gc::mark::full_mark_decode_sabotage;
 use crate::value::{TAG_NULL, TAG_UNDEFINED};
 use std::cell::Cell;
 use std::ffi::c_void;
@@ -71,8 +71,8 @@ fn active_classifier_differential_accepts_fold_and_rejects_census_disagreement()
         let (parent, _) = old_parent(string_bits(child));
         let child_header = header_from_user_ptr(child as *const u8);
         (*child_header).gc_flags |= GC_FLAG_MARKED;
-        assert!(trace::classifier_valid_object_start(child));
-        assert!(trace::classifier_valid_object_start(
+        assert!(mark::classifier_valid_object_start(child));
+        assert!(mark::classifier_valid_object_start(
             parent as usize + GC_HEADER_SIZE
         ));
 
@@ -84,7 +84,7 @@ fn active_classifier_differential_accepts_fold_and_rejects_census_disagreement()
         }
         let _restore =
             RestoreSuppression(CLASSIFIER_VERIFY_SUPPRESSED.with(|flag| flag.replace(false)));
-        assert!(trace::classifier_verify_enabled());
+        assert!(mark::classifier_verify_enabled());
         let valid = build_valid_pointer_set();
         assert!(valid.built_by_census);
         assert!(valid.contains(&child));
@@ -96,7 +96,7 @@ fn active_classifier_differential_accepts_fold_and_rejects_census_disagreement()
         assert_eq!((*child_header).gc_flags & GC_FLAG_FORWARDED, 0);
         let size = (*child_header).size;
         (*child_header).size = 0;
-        let classifier_rejected = !trace::classifier_valid_object_start(child);
+        let classifier_rejected = !mark::classifier_valid_object_start(child);
         // The armed census owns a drop-restoration guard and therefore is
         // not RefUnwindSafe. This query only reads it; the deliberately
         // modified header is restored immediately after the caught panic.
@@ -110,7 +110,7 @@ fn active_classifier_differential_accepts_fold_and_rejects_census_disagreement()
             .or_else(|| error.downcast_ref::<&str>().copied())
             .unwrap_or("");
         assert!(message.contains("classifier rejected censused object"));
-        assert!(trace::classifier_verify_enabled());
+        assert!(mark::classifier_verify_enabled());
         assert!(valid.contains(&child));
     });
 }
@@ -157,7 +157,7 @@ fn malloc_coverage(drop_entry: bool) {
             let child = young_leaf();
             let (parent, _) = malloc_parent(string_bits(child));
             let valid = valid_set(classifier);
-            let _drop = drop_entry.then(trace::remembered_mark_sabotage::Guard::arm);
+            let _drop = drop_entry.then(mark::remembered_mark_sabotage::Guard::arm);
             let sticky = fold(parent, &valid);
             assert_ne!(
                 (*header_from_user_ptr(child as *const u8)).gc_flags & GC_FLAG_MARKED,
@@ -210,7 +210,12 @@ fn malloc_ephemeron_words_are_not_unconditional_remembered_edges() {
 unsafe fn fold(header: *mut GcHeader, valid: &ValidPointerSet) -> StickyRememberedSet {
     let mut sticky = StickyRememberedSet::default();
     let mut worklist = Vec::new();
-    trace::trace_heap_rewrite_slots_remembering(header, valid, &mut worklist, Some(&mut sticky));
+    mark::trace_heap_rewrite_slots_remembering::<{ cfg!(test) }>(
+        header,
+        valid,
+        &mut worklist,
+        Some(&mut sticky),
+    );
     sticky
 }
 
@@ -258,7 +263,7 @@ fn remembered_inline_ranges_still_mark_children_and_cover_later_pages() {
                     }
                     let valid = valid_set(classifier);
                     let mut worklist = Vec::new();
-                    trace::trace_heap_rewrite_slots_remembering(
+                    mark::trace_heap_rewrite_slots_remembering::<{ cfg!(test) }>(
                         header,
                         &valid,
                         &mut worklist,
@@ -297,7 +302,7 @@ fn already_marked_children_are_remembered_in_census_and_classifier_modes() {
                     (*child_header).gc_flags |= GC_FLAG_MARKED;
                     let valid = valid_set(classifier);
                     assert!(valid.contains(&child));
-                    assert!(!trace::mark_field_into_worklist(
+                    assert!(!mark::mark_field_into_worklist(
                         tag | child as u64,
                         &valid,
                         &mut Vec::new(),
@@ -684,10 +689,10 @@ fn string_decode_keeps_the_child_descriptor_observer_gate() {
             );
             let _scope = ObserverScope;
             crate::gc::full_trace::begin_full_trace();
-            let _control = negative.then(trace::zero_slot_skip_sabotage::Guard::arm);
+            let _control = negative.then(mark::zero_slot_skip_sabotage::Guard::arm);
             let mut sticky = StickyRememberedSet::default();
             let mut worklist = Vec::new();
-            trace::trace_heap_rewrite_slots_remembering(
+            mark::trace_heap_rewrite_slots_remembering::<{ cfg!(test) }>(
                 parent,
                 &valid_set(false),
                 &mut worklist,
@@ -732,7 +737,7 @@ fn shared_scalar_storage_skips_handle_words_but_ordinary_arrays_keep_observers()
             let valid = valid_set(false);
             let mut sticky = StickyRememberedSet::default();
             let mut worklist = Vec::new();
-            trace::trace_heap_rewrite_slots_remembering(
+            mark::trace_heap_rewrite_slots_remembering::<{ cfg!(test) }>(
                 parent,
                 &valid,
                 &mut worklist,
@@ -742,7 +747,7 @@ fn shared_scalar_storage_skips_handle_words_but_ordinary_arrays_keep_observers()
             assert_ne!((*header).gc_flags & GC_FLAG_MARKED, 0);
             assert_eq!(worklist.contains(&header), !shared);
             if !shared {
-                trace::trace_heap_rewrite_slots_remembering(
+                mark::trace_heap_rewrite_slots_remembering::<{ cfg!(test) }>(
                     header,
                     &valid,
                     &mut Vec::new(),

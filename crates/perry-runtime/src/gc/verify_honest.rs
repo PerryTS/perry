@@ -116,7 +116,7 @@ pub(super) fn verify_honest_pointers(phase: &str) -> HonestPointerStats {
         }
         stats.objects += 1;
         let parent = (header as *mut u8).add(GC_HEADER_SIZE) as usize;
-        visit_gc_rewrite_slots(header, |slot| {
+        visit_gc_rewrite_slots::<true>(header, |slot| {
             let bits = slot.read();
             if bits & TAG_MASK == POINTER_TAG {
                 stats.record(parent, bits);
