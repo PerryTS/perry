@@ -115,6 +115,13 @@ impl<'a> Gen<'a> {
         self.call_value(cb, ThisArg::Undef, args, vec![])
     }
 
+    /// These operations read numeric elements. The solved receiver decides
+    /// whether this is an array-like; other receivers retain full lookup.
+    fn elem_load(&mut self, recv: NodeId) -> NodeId {
+        let key = self.m.elem_key();
+        self.load(recv, key)
+    }
+
     fn array_cb(&mut self, fx: &Fx, array: &Expr, callback: &Expr) -> (NodeId, NodeId, NodeId) {
         let a = self.expr(fx, array);
         let cb = self.expr(fx, callback);
@@ -1305,7 +1312,7 @@ impl<'a> Gen<'a> {
             }
             Expr::ArrayPop(id) | Expr::ArrayShift(id) => {
                 let a = self.local(mi, *id);
-                let out = self.load(a, Key::Any);
+                let out = self.elem_load(a);
                 self.m.add_prim(out, prim::UNDEF);
                 out
             }
@@ -1323,7 +1330,7 @@ impl<'a> Gen<'a> {
                 if let Some(x) = end {
                     let _ = self.prim_op(fx, &[x], prim::NUM, "slice index", Protocol::ToPrimitive);
                 }
-                let el = self.load(a, Key::Any);
+                let el = self.elem_load(a);
                 self.new_arr_from(mi, "slice", &[el])
             }
             Expr::ArraySplice {
@@ -1348,7 +1355,7 @@ impl<'a> Gen<'a> {
                     let v = self.expr(fx, it);
                     self.elem_store(fx, a, v, "splice");
                 }
-                let el = self.load(a, Key::Any);
+                let el = self.elem_load(a);
                 self.new_arr_from(mi, "splice", &[el])
             }
             Expr::ArrayForEach { array, callback } => {
@@ -1361,7 +1368,7 @@ impl<'a> Gen<'a> {
             }
             Expr::ArrayFlatMap { array, callback } => {
                 let (_, _, ret) = self.array_cb(fx, array, callback);
-                let inner = self.load(ret, Key::Any);
+                let inner = self.elem_load(ret);
                 self.new_arr_from(mi, "flatMap", &[ret, inner])
             }
             Expr::ArrayFilter { array, callback } => {
@@ -1387,7 +1394,7 @@ impl<'a> Gen<'a> {
             Expr::ArraySort { array, comparator } => {
                 let a = self.expr(fx, array);
                 let c = self.expr(fx, comparator);
-                let el = self.load(a, Key::Any);
+                let el = self.elem_load(a);
                 let r = self.callback(c, vec![el, el]);
                 let why = self.m.reason("sort comparator result");
                 self.m.cons(
@@ -1401,7 +1408,7 @@ impl<'a> Gen<'a> {
             }
             Expr::ArrayToSorted { array, comparator } => {
                 let a = self.expr(fx, array);
-                let el = self.load(a, Key::Any);
+                let el = self.elem_load(a);
                 if let Some(c) = comparator {
                     let cn = self.expr(fx, c);
                     let _ = self.callback(cn, vec![el, el]);
@@ -1420,7 +1427,7 @@ impl<'a> Gen<'a> {
             } => {
                 let a = self.expr(fx, array);
                 let cb = self.expr(fx, callback);
-                let el = self.load(a, Key::Any);
+                let el = self.elem_load(a);
                 let acc = self.tmp("acc");
                 match initial {
                     Some(i) => {
@@ -1436,13 +1443,13 @@ impl<'a> Gen<'a> {
             }
             Expr::ArrayFlat { array } => {
                 let a = self.expr(fx, array);
-                let el = self.load(a, Key::Any);
-                let inner = self.load(el, Key::Any);
+                let el = self.elem_load(a);
+                let inner = self.elem_load(el);
                 self.new_arr_from(mi, "flat", &[el, inner])
             }
             Expr::ArrayToReversed { array } => {
                 let a = self.expr(fx, array);
-                let el = self.load(a, Key::Any);
+                let el = self.elem_load(a);
                 self.new_arr_from(mi, "copy", &[el])
             }
             Expr::ArrayValues(array) => {
@@ -1465,7 +1472,7 @@ impl<'a> Gen<'a> {
                     "toSpliced index",
                     Protocol::ToPrimitive,
                 );
-                let el = self.load(a, Key::Any);
+                let el = self.elem_load(a);
                 let mut parts = vec![el];
                 for it in items {
                     parts.push(self.expr(fx, it));
@@ -1480,13 +1487,13 @@ impl<'a> Gen<'a> {
                 let a = self.expr(fx, array);
                 let _ = self.prim_op(fx, &[index], prim::NUM, "with index", Protocol::ToPrimitive);
                 let v = self.expr(fx, value);
-                let el = self.load(a, Key::Any);
+                let el = self.elem_load(a);
                 self.new_arr_from(mi, "with", &[el, v])
             }
             Expr::ArrayAt { array, index } => {
                 let a = self.expr(fx, array);
                 let _ = self.prim_op(fx, &[index], prim::NUM, "at index", Protocol::ToPrimitive);
-                let out = self.load(a, Key::Any);
+                let out = self.elem_load(a);
                 self.m.add_prim(out, prim::UNDEF);
                 out
             }

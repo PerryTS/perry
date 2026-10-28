@@ -627,7 +627,22 @@ fn seeds_contextual_class_and_enum_facts_from_module() {
             was_plain_async: false,
             was_unrolled: false,
         }],
-        computed_members: Vec::new(),
+        computed_members: vec![crate::ClassComputedMember {
+            key_expr: Expr::String("values".into()),
+            function: Function {
+                body: vec![Stmt::Let {
+                    id: 99,
+                    name: "index".into(),
+                    ty: Type::Number,
+                    mutable: true,
+                    init: Some(Expr::Integer(0)),
+                }],
+                ..function_decl(3, "values", Type::Void)
+            },
+            is_static: false,
+            kind: crate::ClassComputedMemberKind::Method,
+            source_order: 0,
+        }],
         decorators: Vec::new(),
         is_exported: false,
         is_nested: false,
@@ -637,6 +652,7 @@ fn seeds_contextual_class_and_enum_facts_from_module() {
     });
 
     let env = HirTypeEnv::from_module(&module);
+    assert_eq!(env.local_type(99), Some(&Type::Number));
     assert_eq!(
         infer_expr_type(
             &Expr::EnumMember {

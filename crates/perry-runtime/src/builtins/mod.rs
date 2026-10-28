@@ -151,8 +151,8 @@ pub(crate) use console::{
 
 pub(crate) use fn_metadata::with_bundle_function_names;
 pub(crate) use fn_metadata::{
-    function_name_for_closure, function_name_image, function_name_matches_closure,
-    has_nonempty_function_name,
+    function_has_registered_name, function_name_for_closure, function_name_image,
+    function_name_matches_closure,
 };
 
 pub use fn_metadata::{

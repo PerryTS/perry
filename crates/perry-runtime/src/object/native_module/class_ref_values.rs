@@ -291,7 +291,8 @@ pub(crate) fn class_method_declaration_value_bytes(
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     let entry_code = unsafe { (*f).code() } as usize;
-    if entry != 0 && !name.is_empty() && !crate::builtins::has_nonempty_function_name(entry_code) {
+    if entry != 0 && !name.is_empty() && !crate::builtins::function_has_registered_name(entry_code)
+    {
         unsafe {
             crate::builtins::js_register_function_name(
                 entry_code as *const u8,

@@ -62,8 +62,25 @@ fn eager_fn_metadata_validation() -> bool {
 /// for metadata something actually reads. Invalid bytes yield `None`, which is
 /// what the caller saw before when registration rejected them up front.
 fn decode_registered(slot: Option<&[u8]>) -> Option<String> {
-    let bytes = slot?;
-    std::str::from_utf8(bytes).ok().map(str::to_owned)
+    decode_registered_with(slot, str::to_owned)
+}
+
+/// Consume a validated view while its registry owner is locked. The caller
+/// chooses whether the result needs owned bytes; presence checks do not.
+fn decode_registered_with<R>(slot: Option<&[u8]>, read: impl FnOnce(&str) -> R) -> Option<R> {
+    decode_registered_bytes(slot?).map(read)
+}
+
+/// ASCII is already a UTF-8 proof. Consume that byte view without entering
+/// the general decoder; non-ASCII and malformed input keep its exact exits.
+#[inline]
+fn decode_registered_bytes(bytes: &[u8]) -> Option<&str> {
+    if bytes.is_ascii() {
+        // SAFETY: every byte is below 0x80, including embedded NULs.
+        Some(unsafe { std::str::from_utf8_unchecked(bytes) })
+    } else {
+        std::str::from_utf8(bytes).ok()
+    }
 }
 
 /// Link-time-relative descriptor emitted by codegen. Keeping offsets instead
@@ -158,27 +175,21 @@ pub(super) fn registered_name_string(func_ptr: usize) -> Option<String> {
     with_registered_name(func_ptr, str::to_owned)
 }
 
-/// Whether the ordinary name reader would return a non-empty name, without
-/// making an owned copy just to test its presence.
-pub(crate) fn has_nonempty_function_name(func_ptr: usize) -> bool {
-    func_ptr != 0 && with_registered_name(func_ptr, |name| !name.is_empty()).unwrap_or(false)
-}
-
 /// Read the canonical metadata under its owner lock. Presence checks need the
 /// same UTF-8/precedence rules as reflection, but do not need an owned String.
 fn with_registered_name<T>(func_ptr: usize, read: impl FnOnce(&str) -> T) -> Option<T> {
     if let Ok(overrides) = function_name_overrides().lock() {
         if let Some(name) = overrides
             .get(&func_ptr)
-            .and_then(|bytes| std::str::from_utf8(bytes).ok())
+            .and_then(|bytes| decode_registered_bytes(bytes))
         {
             return Some(read(name));
         }
     }
-    function_name_registry().lock().ok().and_then(|map| {
-        let name = std::str::from_utf8(map.get(&func_ptr).copied()?).ok()?;
-        Some(read(name))
-    })
+    function_name_registry()
+        .lock()
+        .ok()
+        .and_then(|map| decode_registered_with(map.get(&func_ptr).copied(), read))
 }
 
 /// Register `func_ptr` as the compiled address of a JS function called
@@ -311,6 +322,8 @@ pub fn register_function_name_if_absent(func_ptr: usize, name: &str) {
     // "Absent" means "neither map holds bytes that DECODE" — which is exactly
     // the question the read side answers, so ask it rather than restating it
     // and letting the two drift.
+    // Presence and reflection share decoded-byte semantics and owned-first
+    // lookup; presence consumes only a validated view and never copies a name.
     if with_registered_name(func_ptr, |_| ()).is_some() {
         return;
     }
@@ -421,19 +434,12 @@ pub(crate) unsafe fn function_name_for_closure(
     with_function_name_for_closure(closure, str::to_owned)
 }
 
-/// Compare the same canonical name as reflection, without a temporary String.
-/// The closure must be live, as for function_name_for_closure.
-pub(crate) unsafe fn function_name_matches_closure(
+/// Share image-range and registered-name precedence with reflection. The
+/// reader runs while any metadata owner is borrowed and must not register.
+unsafe fn with_function_name_for_closure<R>(
     closure: *const crate::closure::ClosureHeader,
-    expected: &[u8],
-) -> bool {
-    with_function_name_for_closure(closure, |name| name.as_bytes() == expected).unwrap_or(false)
-}
-
-unsafe fn with_function_name_for_closure<T>(
-    closure: *const crate::closure::ClosureHeader,
-    read: impl FnOnce(&str) -> T,
-) -> Option<T> {
+    read: impl FnOnce(&str) -> R,
+) -> Option<R> {
     let closure = closure.as_ref()?;
     let info = closure.info.as_ref()?;
     if info.flags & crate::codegen_abi::FN_HAS_NAME != 0 {
@@ -442,24 +448,31 @@ unsafe fn with_function_name_for_closure<T>(
         let tail = base.add(std::mem::size_of::<crate::closure::JsFunctionInfo>() + source_tail);
         let delta = tail.cast::<i32>().read_unaligned();
         let len = tail.add(4).cast::<u32>().read_unaligned() as usize;
-        // Compiler names originate as UTF-8 strings in immutable image bytes.
+        // Compiler-owned names originate as UTF-8; empty image names are
+        // valid too, exactly as in the String-returning reflection reader.
         let bytes = std::slice::from_raw_parts(descriptor_pointer(base, delta), len);
         return Some(read(std::str::from_utf8_unchecked(bytes)));
     }
-    let code = info.code as usize;
-    if code == 0 {
+    let ptr = info.code as usize;
+    if ptr == 0 {
         return None;
     }
-    // Preserve the ptr reader's non-empty filter after canonical lookup:
-    // a valid empty override still shadows a usable image registration.
-    with_registered_name(code, |name| {
-        if name.is_empty() {
-            None
-        } else {
-            Some(read(name))
-        }
-    })
-    .flatten()
+    with_registered_name(ptr, |name| (!name.is_empty()).then(|| read(name))).flatten()
+}
+
+/// Non-allocating presence with the same UTF-8 and override precedence as
+/// `function_name_for_ptr`.
+pub(crate) fn function_has_registered_name(func_ptr: usize) -> bool {
+    func_ptr != 0 && with_registered_name(func_ptr, |name| !name.is_empty()).unwrap_or(false)
+}
+
+/// # Safety
+/// `closure` is null or live; its info owns the ranges licensed by its flags.
+pub(crate) unsafe fn function_name_matches_closure(
+    closure: *const crate::closure::ClosureHeader,
+    expected: &[u8],
+) -> bool {
+    with_function_name_for_closure(closure, |name| name.as_bytes() == expected).unwrap_or(false)
 }
 
 /// Returns the name registered by `js_register_function_name{,_static}` (keyed
@@ -917,8 +930,8 @@ mod tests {
             info: &info,
             props: std::ptr::null_mut(),
         };
-        assert!(!has_nonempty_function_name(0));
-        assert!(!has_nonempty_function_name(key));
+        assert!(!function_has_registered_name(0));
+        assert!(!function_has_registered_name(key));
         assert!(!unsafe { function_name_matches_closure(&closure, b"") });
         unsafe {
             js_register_function_name_static(
@@ -929,7 +942,7 @@ mod tests {
             // An invalid override falls through to the usable image name.
             js_register_function_name(key as *const u8, [0xffu8].as_ptr(), 1);
         }
-        assert!(has_nonempty_function_name(key));
+        assert!(function_has_registered_name(key));
         assert!(unsafe { function_name_matches_closure(&closure, "image世界".as_bytes()) });
         unsafe { js_register_function_name(key as *const u8, b"owned".as_ptr(), 5) };
         assert!(unsafe { function_name_matches_closure(&closure, b"owned") });
@@ -941,7 +954,7 @@ mod tests {
             .unwrap()
             .insert(key, std::sync::Arc::from(&b""[..]));
         assert!(function_name_for_ptr(key).is_none());
-        assert!(!has_nonempty_function_name(key));
+        assert!(!function_has_registered_name(key));
         assert!(!unsafe { function_name_matches_closure(&closure, b"") });
         function_name_overrides().lock().unwrap().remove(&key);
         function_name_registry().lock().unwrap().remove(&key);
@@ -1194,6 +1207,101 @@ mod tests {
             function_name_for_ptr(KEY_NAME_IF_ABSENT as usize).as_deref(),
             Some("inferred")
         );
+    }
+
+    #[test]
+    fn metadata_ascii_views_match_utf8_validation_at_every_exit() {
+        for len in 0..128 {
+            let bytes: Vec<_> = (0..len).map(|i| ((i * 37) % 128) as u8).collect();
+            assert_eq!(
+                decode_registered_bytes(&bytes),
+                std::str::from_utf8(&bytes).ok()
+            );
+        }
+        for bytes in [
+            "é".as_bytes(),
+            "界😀".as_bytes(),
+            b"a\0z",
+            b"\xff",
+            b"a\xc2",
+            b"\x80",
+            b"\xed\xa0\x80",
+            b"\xf4\x90\x80\x80",
+        ] {
+            assert_eq!(
+                decode_registered_bytes(bytes),
+                std::str::from_utf8(bytes).ok()
+            );
+        }
+    }
+
+    #[test]
+    fn if_absent_preserves_valid_name_behind_invalid_override() {
+        let key = 0x9188_0171usize;
+        function_name_registry()
+            .lock()
+            .unwrap()
+            .insert(key, b"imageName");
+        function_name_overrides()
+            .lock()
+            .unwrap()
+            .insert(key, std::sync::Arc::from(&b"\xff"[..]));
+        register_function_name_if_absent(key, "inferred");
+        assert_eq!(function_name_for_ptr(key).as_deref(), Some("imageName"));
+        assert_eq!(
+            &**function_name_overrides().lock().unwrap().get(&key).unwrap(),
+            b"\xff"
+        );
+
+        function_name_registry()
+            .lock()
+            .unwrap()
+            .insert(key, b"\xff");
+        function_name_overrides()
+            .lock()
+            .unwrap()
+            .insert(key, std::sync::Arc::from(&b"ownedName"[..]));
+        register_function_name_if_absent(key, "inferred");
+        assert_eq!(function_name_for_ptr(key).as_deref(), Some("ownedName"));
+    }
+
+    #[test]
+    fn borrowed_name_queries_preserve_utf8_empty_and_override_rules() {
+        extern "C" fn body(
+            _: *const crate::closure::ClosureHeader,
+            _: crate::closure::JsThis,
+        ) -> f64 {
+            0.0
+        }
+        let info = crate::closure::JsFunctionInfo::of(
+            body as crate::codegen_abi::JsBody0<crate::closure::ClosureHeader>,
+        );
+        let key = info.code as *const u8;
+        let closure = crate::closure::ClosureHeader {
+            capture_count: 0,
+            shape_id: LayoutWord(crate::codegen_abi::FUNCTION_LAYOUT_WORD),
+            info: &info,
+            props: std::ptr::null_mut(),
+        };
+        unsafe { js_register_function_name_static(key, b"image".as_ptr(), 5) };
+        for bytes in [&b"owned"[..], &[0xff][..], &b""[..]] {
+            // Direct owner insertion includes the empty-entry edge which the
+            // public registration API intentionally ignores.
+            function_name_overrides()
+                .lock()
+                .unwrap()
+                .insert(key as usize, std::sync::Arc::from(bytes));
+            let oracle = function_name_for_ptr(key as usize);
+            assert_eq!(function_has_registered_name(key as usize), oracle.is_some());
+            for expected in [b"owned".as_slice(), b"image".as_slice(), b"".as_slice()] {
+                assert_eq!(
+                    unsafe { function_name_matches_closure(&closure, expected) },
+                    oracle.as_ref().is_some_and(|s| s.as_bytes() == expected)
+                );
+            }
+        }
+        assert!(!function_has_registered_name(0));
+        assert!(!unsafe { function_name_matches_closure(std::ptr::null(), b"") });
     }
 
     #[test]
