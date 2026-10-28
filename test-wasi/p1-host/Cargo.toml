@@ -12,7 +12,7 @@ description = "Reference WASI preview 1 host used to qualify wasm32-wasip1 progr
 [dependencies]
 # Pinned to the version in the root lockfile. Only the pieces needed to run a
 # core module with the exception-handling proposal.
-wasmtime = { version = "=48.0.6", default-features = false, features = ["runtime", "cranelift", "gc", "gc-drc", "wat", "std"] }
+wasmtime = { version = "=48.0.7", default-features = false, features = ["runtime", "cranelift", "gc", "gc-drc", "wat", "std"] }
 libc = "0.2"
 
 # The suite compiles multi-megabyte modules with the debug build; unoptimised
