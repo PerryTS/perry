@@ -263,9 +263,9 @@ js_array_slice_values	ptr	ptr,f64,f64
 js_array_some	f64	ptr,ptr
 js_array_some_captureless	f64	ptr,ptr
 js_array_sort_default	ptr	ptr
+js_array_sort_key_order	ptr	ptr,ptr,i32s,f64
+js_array_sort_numeric_order	ptr	ptr,ptr,i32s
 js_array_sort_with_comparator	ptr	ptr,ptr
-js_array_sort_numeric_order	ptr	ptr,ptr,i32
-js_array_sort_key_order	ptr	ptr,ptr,i32,f64
 js_array_splice	ptr	ptr,i32s,i32s,ptr,i32u,ptr
 js_array_splice_delete_count	i32s	f64
 js_array_spread_append	ptr	ptr,f64
@@ -3514,9 +3514,9 @@ js_regexp_construct_call	ptr	f64,f64
 js_regexp_empty_source	ptr	
 js_regexp_escape	f64	f64
 js_regexp_exec	ptr	ptr,ptr
-js_regexp_exec_projected	f64	f64,f64,f64,f64
 js_regexp_exec_get_groups	i64	
 js_regexp_exec_get_index	f64	
+js_regexp_exec_projected	f64	f64,f64,f64,f64
 js_regexp_get_flags	ptr	ptr
 js_regexp_get_source	ptr	ptr
 js_regexp_literal	ptr	i64
@@ -3678,10 +3678,14 @@ js_run_stdlib_pump	void
 js_runtime_component_io_ops	ptr	
 js_runtime_describe_received	f64	f64
 js_runtime_init	void	
+js_runtime_install_async_hooks	void	
+js_runtime_install_bigint	void	
 js_runtime_install_bun_cli_utils	void	
 js_runtime_install_compiled	void	
+js_runtime_install_date	void	
 js_runtime_install_diagnostics	void	
 js_runtime_install_dyn_eval	void	
+js_runtime_install_event_target	void	
 js_runtime_install_global_atomics	void	
 js_runtime_install_global_json	void	
 js_runtime_install_global_math	void	
@@ -3695,14 +3699,23 @@ js_runtime_install_intl_datetime	void
 js_runtime_install_intl_locale	void	
 js_runtime_install_intl_namespace	void	
 js_runtime_install_intl_segmenter	void	
+js_runtime_install_json_engine	void	
+js_runtime_install_json_format	void	
+js_runtime_install_messaging	void	
 js_runtime_install_mod_dgram	void	
 js_runtime_install_mod_http2_constants	void	
 js_runtime_install_mod_node_test	void	
 js_runtime_install_node_api_host	void	
+js_runtime_install_os	void	
+js_runtime_install_perf_hooks	void	
 js_runtime_install_proc_ipc	void	
+js_runtime_install_proxy	void	
 js_runtime_install_regex_engine	void	
 js_runtime_install_string_normalize	void	
 js_runtime_install_temporal	void	
+js_runtime_install_thread	void	
+js_runtime_install_turnloop	void	
+js_runtime_install_typedarray	void	
 js_runtime_install_url_engine	void	
 js_runtime_install_wasm_host	void	
 js_runtime_register_feature_installer	void	ptr
