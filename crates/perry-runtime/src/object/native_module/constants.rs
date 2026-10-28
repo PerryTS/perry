@@ -181,6 +181,7 @@ fn dns_error_alias(property: &str) -> Option<&'static str> {
 
 /// Return constant (non-method) property values for native modules.
 /// Returns None for method names, which should create bound closures instead.
+#[inline(always)]
 pub(crate) unsafe fn get_native_module_constant(
     module_name: &str,
     property: &str,
@@ -1129,6 +1130,7 @@ fn fs_const_tail_reference(prop: &str) -> Option<f64> {
 /// `process` metadata properties — registered by `js_nm_install_process()`,
 /// which codegen emits at every site that yields `process` as a value or
 /// reads one of its members by name.
+#[inline(always)]
 pub(crate) unsafe fn nm_const_process(
     _module_name: &str,
     property: &str,
@@ -1140,6 +1142,7 @@ pub(crate) unsafe fn nm_const_process(
 
 /// `node:inspector` constants/value exports — registered by `js_nm_install_inspector()` and
 /// reached only through [`get_native_module_constant`]'s registry arm.
+#[inline(always)]
 pub(crate) unsafe fn nm_const_inspector(
     module_name: &str,
     property: &str,
@@ -1200,6 +1203,7 @@ pub(crate) unsafe fn nm_const_inspector(
 
 /// `node:tls` constants/value exports — registered by `js_nm_install_tls()` and
 /// reached only through [`get_native_module_constant`]'s registry arm.
+#[inline(always)]
 pub(crate) unsafe fn nm_const_tls(
     module_name: &str,
     property: &str,
@@ -1228,6 +1232,7 @@ pub(crate) unsafe fn nm_const_tls(
 
 /// `node:zlib` constants/value exports — registered by `js_nm_install_zlib()` and
 /// reached only through [`get_native_module_constant`]'s registry arm.
+#[inline(always)]
 pub(crate) unsafe fn nm_const_zlib(
     module_name: &str,
     property: &str,
@@ -1254,6 +1259,7 @@ pub(crate) unsafe fn nm_const_zlib(
 
 /// `node:http / node:https` constants/value exports — registered by `js_nm_install_http()` and
 /// reached only through [`get_native_module_constant`]'s registry arm.
+#[inline(always)]
 pub(crate) unsafe fn nm_const_http(
     module_name: &str,
     property: &str,
@@ -1313,6 +1319,7 @@ pub(crate) unsafe fn nm_const_http(
 
 /// `node:cluster` constants/value exports — registered by `js_nm_install_cluster()` and
 /// reached only through [`get_native_module_constant`]'s registry arm.
+#[inline(always)]
 pub(crate) unsafe fn nm_const_cluster(
     module_name: &str,
     property: &str,

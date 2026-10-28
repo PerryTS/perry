@@ -341,6 +341,29 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
             }
         }
     }
+    for entry in perry_api_manifest::API_MANIFEST {
+        if entry.name != "default"
+            && perry_api_manifest::is_node_core_module(entry.module)
+            && perry_api_manifest::module_has_public_named_export(entry.module, entry.name)
+            && perry_dispatch::native_callable_exports::export_bucket(entry.module).is_some()
+            && perry_dispatch::native_callable_exports::export_value_symbol(
+                entry.module,
+                entry.name,
+            )
+            .is_none()
+        {
+            let symbol = perry_dispatch::native_callable_exports::constant_value_symbol(
+                entry.module,
+                entry.name,
+            );
+            module.declare_function(&symbol, DOUBLE, &[I32]);
+        }
+    }
+    for (_, _, exports) in perry_dispatch::native_submodule_exports::SUBMODULE_EXPORTS {
+        for (_, symbol) in *exports {
+            module.declare_function(symbol, DOUBLE, &[I32]);
+        }
+    }
     // Issue #894: materialize a NATIVE_MODULE_CLASS_ID-tagged namespace
     // object for `Expr::NativeModuleRef` when it reaches the value-form
     // fallback path (the require-call-result-then-member-access shape

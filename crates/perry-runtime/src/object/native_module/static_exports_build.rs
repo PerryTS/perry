@@ -34,7 +34,10 @@ pub fn emit(out: &Path) {
                 _ => "None".to_string(),
             };
             let invoke = if bucket == "worker_threads" {
-                format!("super::super::native_module_dispatch::dispatch_native_module_method(ctx.obj, {property:?}, args, len)")
+                format!(
+                    "crate::collection_iter::throw_type_error({:?})",
+                    format!("{module}.{property} is not supported")
+                )
             } else {
                 format!("super::super::native_module_dispatch::nm_dispatch_{bucket}(&ctx, {module:?}, {property:?})")
             };
@@ -82,6 +85,91 @@ pub extern "C" fn {symbol}(observe_writes: i32) -> f64 {{
             )
             .unwrap();
         }
+    }
+    // A stream constructor's actual prototype chain reaches Stream, whose
+    // own function properties expose the whole stream surface in Node.
+    writeln!(
+        source,
+        "#[inline(always)]\npub(crate) fn stream_export_value(name: &str) -> f64 {{ match name {{"
+    )
+    .unwrap();
+    let (_, properties) = CALLABLE_EXPORT_TABLE
+        .iter()
+        .find(|(module, _)| *module == "stream")
+        .unwrap();
+    for property in *properties {
+        let getter = export_value_symbol("stream", property).unwrap();
+        writeln!(source, "{property:?} => {getter}(0),").unwrap();
+    }
+    writeln!(
+        source,
+        "_ => f64::from_bits(crate::value::TAG_UNDEFINED), }} }}"
+    )
+    .unwrap();
+    let mut emitted = std::collections::BTreeSet::new();
+    for entry in perry_api_manifest::API_MANIFEST {
+        let (module, property) = (entry.module, entry.name);
+        if property == "default"
+            || !perry_api_manifest::is_node_core_module(module)
+            || !perry_api_manifest::module_has_public_named_export(module, property)
+            || export_bucket(module).is_none()
+            || export_value_symbol(module, property).is_some()
+            || !emitted.insert((module, property))
+        {
+            continue;
+        }
+        let symbol =
+            perry_dispatch::native_callable_exports::constant_value_symbol(module, property);
+        // These resolvers normally sit behind the whole-module install hook.
+        // A statically named declaration calls its owner directly instead.
+        let owner = match module {
+            "process" => "constants::nm_const_process",
+            "inspector" | "inspector/promises" => "constants::nm_const_inspector",
+            "tls" => "constants::nm_const_tls",
+            "zlib" => "constants::nm_const_zlib",
+            "http" | "https" => "constants::nm_const_http",
+            "cluster" => "constants::nm_const_cluster",
+            _ => "constants::get_native_module_constant",
+        };
+        let args = if owner.ends_with("get_native_module_constant") {
+            "0.0"
+        } else {
+            "0.0, false"
+        };
+        let mut children = String::new();
+        for candidate in [
+            format!("{module}.{property}"),
+            format!("{module}/{property}"),
+        ] {
+            if let Some((_, properties)) = CALLABLE_EXPORT_TABLE
+                .iter()
+                .find(|(name, _)| *name == candidate)
+            {
+                for child in *properties {
+                    if let Some(getter) = export_value_symbol(&candidate, child) {
+                        writeln!(children, "{getter}(0);").unwrap();
+                    }
+                }
+            }
+        }
+        writeln!(
+            source,
+            r#"
+#[no_mangle]
+pub extern "C" fn {symbol}(observe_writes: i32) -> f64 {{
+    selected_value({module:?}, {property:?}, observe_writes != 0, || unsafe {{
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let value = scope.root_nanbox_f64(super::{owner}({module:?}, {property:?}, {args})
+            .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED)));
+        // An object-valued declaration owns its callable members. Mint their
+        // existing identity cells from their own bodies, without a dispatcher.
+        {children}
+        value.get_nanbox_f64()
+    }})
+}}
+"#
+        )
+        .unwrap();
     }
     std::fs::write(out.join("native_export_values.rs"), source).unwrap();
 }

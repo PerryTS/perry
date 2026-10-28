@@ -64,6 +64,8 @@ const RUNTIME_BUILD_INPUTS: &[&str] = &[
     "Cargo.lock",
     "crates/perry-abi/Cargo.toml",
     "crates/perry-abi/src",
+    "crates/perry-api-manifest/Cargo.toml",
+    "crates/perry-api-manifest/src",
     "crates/perry-base64/Cargo.toml",
     "crates/perry-base64/src",
     "crates/perry-diagnostics/Cargo.toml",

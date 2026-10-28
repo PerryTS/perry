@@ -1193,3 +1193,11 @@ pub fn export_value_symbol(module: &str, property: &str) -> Option<String> {
         encode(property)
     ))
 }
+
+/// Stable linker name for a public constant or object-valued declaration.
+/// Callers validate membership against the API manifest before using it.
+pub fn constant_value_symbol(module: &str, property: &str) -> String {
+    let module = module.strip_prefix("node:").unwrap_or(module);
+    let encode = |text: &str| text.bytes().map(|b| format!("{b:02x}")).collect::<String>();
+    format!("js_native_value_{}_{}", encode(module), encode(property))
+}

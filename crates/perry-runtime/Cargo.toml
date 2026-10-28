@@ -462,6 +462,7 @@ mach2 = "0.6"
 # build (cfg(feature = "ohos-napi")) by reading the dispatch tables here.
 # See `build.rs` and issue #395 for the rationale.
 [build-dependencies]
+perry-api-manifest = { path = "../perry-api-manifest" }
 perry-abi.workspace = true
 perry-dispatch = { path = "../perry-dispatch" }
 # The stub list and the Node-API host export inventory, shared with the

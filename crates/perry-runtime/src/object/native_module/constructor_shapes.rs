@@ -102,9 +102,7 @@ fn native_parent(module: &str, name: &str) -> Option<fn() -> f64> {
             || private_parent_value("readline", "#Interface")
         }
         ("readline", "#Interface") => || private_parent_value("readline", "#InterfaceConstructor"),
-        ("repl", "REPLServer") => {
-            || super::static_exports::js_native_export_726561646c696e65_496e74657266616365(0)
-        }
+        ("repl", "REPLServer") => || private_parent_value("readline", "Interface"),
         (
             "zlib",
             "Deflate" | "Inflate" | "Gzip" | "Gunzip" | "DeflateRaw" | "InflateRaw" | "Unzip"

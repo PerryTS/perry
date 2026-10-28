@@ -146,3 +146,61 @@ fn intrinsic_export(module: &str, property: &str) -> Option<f64> {
     }
     None
 }
+
+/// The same existing ESM cell owns primitive and object-valued declarations.
+/// The initializer is statically selected, so reading a member cannot acquire
+/// a reference to every export in its containing module.
+#[inline(always)]
+pub(crate) fn selected_value(
+    module: &'static str,
+    property: &'static str,
+    observe_writes: bool,
+    initialize: impl FnOnce() -> f64,
+) -> f64 {
+    install_native_module_vtable();
+    if observe_writes {
+        if let Some(value) = native_namespace_user_value(module, property) {
+            return value;
+        }
+    }
+    let live = native_module_constant_is_live(module, property);
+    let key = format!("{module}\0{property}");
+    if !live {
+        if let Some(bits) = NATIVE_ESM_EXPORT_VALUES.with(|v| v.borrow().get(&key).copied()) {
+            return f64::from_bits(bits);
+        }
+    }
+    let value = initialize();
+    if !live && value.to_bits() != crate::value::TAG_UNDEFINED {
+        NATIVE_ESM_EXPORT_VALUES.with(|v| {
+            v.borrow_mut().insert(key, value.to_bits());
+        });
+        crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
+    }
+    value
+}
+
+/// The descriptor's layout tag proves this value has its own native body.
+/// Legacy bound-method values still go through their installed dispatch bucket.
+pub(crate) unsafe fn call_minted(
+    module: &str,
+    property: &str,
+    args: *const f64,
+    len: usize,
+) -> Option<f64> {
+    let property = canonical_native_callable_property(module, property);
+    let value = callable_exports::minted_native_callable_export(&format!("{module}\0{property}"))?;
+    let closure =
+        crate::value::js_nanbox_get_pointer(value) as *const crate::closure::ClosureHeader;
+    if !crate::closure::is_closure_ptr(closure as usize)
+        || (*(*closure).info).flags & crate::codegen_abi::FN_NATIVE_EXPORT == 0
+    {
+        return None;
+    }
+    Some(crate::closure::js_native_call_value(
+        value,
+        crate::closure::plain_call_receiver(),
+        args,
+        len,
+    ))
+}

@@ -25,6 +25,12 @@ mod perf_instance_bind;
 mod static_exports;
 pub(crate) use perf_instance_bind::{instance_bound_perf_method, performance_namespace_method};
 pub(crate) use static_exports::construct as static_export_construct;
+pub(crate) use static_exports::selected_value as selected_native_export_value;
+pub(crate) use static_exports::{
+    call_minted as call_minted_native_export,
+    js_native_export_6576656e7473_4576656e74456d6974746572 as event_emitter_export_value,
+    stream_export_value,
+};
 pub(crate) mod constants;
 mod constants_tables;
 mod constructor_exports;

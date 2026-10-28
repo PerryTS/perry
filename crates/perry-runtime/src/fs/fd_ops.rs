@@ -162,6 +162,7 @@ pub(crate) unsafe fn fs_open_sync_result(
 
 /// Register an opened file under a fresh synthetic fd.
 fn register_opened_file(file: fs::File, path_str: &str, append_mode: bool) -> i32 {
+    crate::fs_hook_slots::install_fd();
     let fd = allocate_synthetic_fd();
     FD_REGISTRY.with(|r| {
         r.borrow_mut().insert(fd, file);
@@ -852,6 +853,7 @@ pub extern "C" fn js_fs_statfs_sync_options(path_value: f64, options_value: f64)
 }
 
 pub(crate) fn alloc_dir_state(entries: Vec<f64>) -> usize {
+    crate::fs::install_handle_roots();
     let id = NEXT_DIR_ID.with(|n| {
         let mut n = n.borrow_mut();
         let id = *n;

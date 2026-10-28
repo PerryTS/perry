@@ -3,6 +3,7 @@
 //! one object per module. Split out of `object/native_module.rs` to stay under
 //! the 2,000-line cap (#10750).
 
+#[inline(always)]
 pub(crate) fn canonical_native_callable_property<'a>(
     module_name: &str,
     property_name: &'a str,

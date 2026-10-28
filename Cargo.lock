@@ -5787,6 +5787,7 @@ dependencies = [
  "num-traits",
  "perex",
  "perry-abi",
+ "perry-api-manifest",
  "perry-base64",
  "perry-component-io",
  "perry-diagnostics",
