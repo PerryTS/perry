@@ -206,6 +206,7 @@ pub(crate) use side_table_roots::{
 mod class_birth_rep_tests;
 #[cfg(test)]
 mod field_rep_store_tests;
+pub(crate) mod iterator_ctor;
 pub(crate) mod iterator_prototypes;
 pub(crate) mod map_set_subclass;
 pub mod method_call;
@@ -251,7 +252,8 @@ mod own_override_builtin_install_tests;
 #[cfg(test)]
 mod own_override_push_tests;
 pub(crate) use object_ops::{
-    ensure_key_in_keys_array, install_builtin_getter, install_own_builtin_accessor,
+    ensure_key_in_keys_array, install_builtin_accessor, install_builtin_getter,
+    install_own_builtin_accessor,
 };
 mod object_ops_frozen;
 mod polymorphic_index;

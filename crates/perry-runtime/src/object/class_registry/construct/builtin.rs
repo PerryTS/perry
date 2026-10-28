@@ -51,6 +51,9 @@ pub(super) unsafe fn construct(
         BuiltinConstructorIdentity::Navigator => {
             return Some(crate::error::js_throw_illegal_constructor_type_error());
         }
+        BuiltinConstructorIdentity::Iterator => {
+            return Some(crate::object::iterator_ctor::throw_abstract_iterator());
+        }
         BuiltinConstructorIdentity::Date => {
             if args.is_empty() {
                 return Some(crate::date_hook_slots::js_date_new());

@@ -357,7 +357,7 @@ fn build_iterator_prototypes() {
     // `Iterator.prototype[Symbol.toStringTag]` is "Iterator": an iterator
     // whose own prototype carries no tag (node:sqlite's
     // StatementSyncIterator) prints as `[object Iterator]`.
-    set_to_string_tag(shared, "Iterator");
+    super::iterator_ctor::install_prototype_accessors(shared);
 
     let array_proto = build_family_proto(
         crate::fn_info!(#[realm("%ArrayIteratorPrototype%.next")] export crate::object::iterator_prototypes::array_iterator_next_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::codegen_abi::FN_PERMANENT_IMAGE)),
@@ -397,6 +397,7 @@ fn build_iterator_prototypes() {
     STRING_ITERATOR_PROTOTYPE_PTR.store(string_proto as i64, Ordering::Release);
     REGEXP_STRING_ITERATOR_PROTOTYPE_PTR.store(regexp_string_proto as i64, Ordering::Release);
     ITERATOR_HELPER_PROTOTYPE_PTR.store(iterator_helper_proto as i64, Ordering::Release);
+    super::iterator_ctor::note_birth_keys(shared);
 }
 
 /// Install `[Symbol.iterator]` on the shared parent as a real method whose
@@ -1113,17 +1114,10 @@ unsafe fn iterator_step_builtin_info(obj: *const ObjectHeader) -> Option<u64> {
     let Some(shared) = super::shapes::object_shape_record(parent) else {
         return None;
     };
-    // The shared parent may carry symbols, but no named protocol methods.
-    let symbol_keys_only = if shared.logical_key_count() == 0 {
-        true
-    } else {
-        let keys = shared.keys() as *const crate::array::ArrayHeader;
-        let slots = crate::array::array_elements_ptr(keys);
-        (0..shared.logical_key_count())
-            .all(|i| JSValue::from_bits(*slots.add(i as usize)).is_pointer())
-    };
-    (shared.summary() & super::key_attrs::SUMMARY_ACCESSOR == 0
-        && symbol_keys_only
+    // The shared parent (`Iterator.prototype`) carries the helper methods and
+    // its spec accessors, none of which a step reads; only a protocol method
+    // (`next` shadowed by the family, `return`, `throw`) changes the step.
+    (super::iterator_ctor::protocol_free(shared)
         && super::shapes::object_prototype_word(parent) == 0)
         .then_some(info)
 }
@@ -1860,6 +1854,8 @@ pub(crate) unsafe fn iterator_step_method_is_builtin(
 
 #[cfg(test)]
 mod array_record_tests;
+#[cfg(test)]
+mod shared_parent_tests;
 
 /// Shape-only absence proof for the optional close method. A named addition,
 /// dictionary conversion or non-ordinary ancestor declines to ordinary Get.
