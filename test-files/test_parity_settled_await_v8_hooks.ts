@@ -6,13 +6,13 @@ let trash: any;
 const stopBefore = promiseHooks.onBefore(() => {
   before++;
   const items: any[] = [];
-  for (let j = 0; j < 8; j++) items.push({ value: before + j });
+  for (let j = 0; j < before + 16; j++) items.push([j, before + j]);
   trash = { phase: "before", items };
 });
 const stopAfter = promiseHooks.onAfter(() => {
   after++;
   const items: any[] = [];
-  for (let j = 0; j < 8; j++) items.push({ value: after + j });
+  for (let j = 0; j < after + 16; j++) items.push([j, after + j]);
   trash = { phase: "after", items };
 });
 
@@ -22,7 +22,7 @@ async function run(): Promise<void> {
   let total = 0;
   for (let i = 0; i < 32; i++) {
     const value = await Promise.resolve(owner);
-    if (value !== owner) throw new Error("lost pointer identity");
+    if (value !== owner || value.key !== "object") throw new Error("lost pointer identity");
     total += value.callback(i);
   }
   stopBefore();

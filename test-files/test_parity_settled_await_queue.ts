@@ -10,14 +10,19 @@ async function run(): Promise<void> {
   events.push("start");
   await 0;
   events.push("first");
-  queueMicrotask(() => events.push("prior-job"));
+  queueMicrotask(() => {
+    const noise: object[] = [];
+    for (let i = 0; i < 2000; i++) noise.push([i, i + 1]);
+    if (noise.length !== 2000) throw new Error("lost queue data");
+    events.push("prior-job");
+  });
   const received = await Promise.resolve(value);
   const scratch: any[] = [];
   for (let j = 0; j < 8; j++) scratch.push({ value: j });
   if (scratch[7].value !== 7) throw new Error("lost loop data");
-  events.push(received === value && received.callback(4) === 5 ? "pointer" : "BAD");
+  events.push(received === value && received.key === "pointer" && received.callback(4) === 5 ? "pointer" : "BAD");
   const bounced = await bounce(value);
-  events.push(bounced === value ? "owned" : "BAD");
+  events.push(bounced === value && bounced.key === "pointer" ? "owned" : "BAD");
   try {
     await Promise.reject(value);
   } catch (error) {
@@ -44,7 +49,7 @@ async function run(): Promise<void> {
   const waiting = wait();
   queueMicrotask(() => gate.resolve(value));
   const pending = await waiting;
-  events.push(pending === value ? "pending" : "BAD");
+  events.push(pending === value && pending.key === "pointer" ? "pending" : "BAD");
   console.log(events.join(","));
 }
 run();
