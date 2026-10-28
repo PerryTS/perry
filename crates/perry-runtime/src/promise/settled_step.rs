@@ -59,7 +59,9 @@ pub(super) fn try_enqueue(value: f64, step: ClosurePtr) -> Option<*mut Promise> 
 /// Called only after the no-async-hook effect check. Native context/token
 /// operations cannot move any of these values. The existing queue owns every
 /// published edge before the producer returns; no interior pointer is retained.
-#[inline]
+// Both admission routes share the same barrier/context/queue operation.
+// Keep one body rather than duplicating its TLS and publication scaffold.
+#[inline(never)]
 pub(super) fn enqueue(
     step: ClosurePtr,
     value: f64,
