@@ -195,6 +195,7 @@ class Meta:
     includes: list[str] = field(default_factory=list)
     negative: bool = False
     self_validate: bool = False  # judge Perry-only (oracle lacks the feature)
+    excluded: str = ""  # --full-corpus: why the case cannot run as a plain script
 
 
 def parse_frontmatter(src: str) -> Meta | None:
@@ -276,7 +277,8 @@ def assemble(src: str, meta: Meta, harness: Path, preamble_text: str) -> str:
 
 
 def discover(root: Path, dirs: list[str], applicable: set[str],
-             all_features: bool, self_validate: set[str]):
+             all_features: bool, self_validate: set[str],
+             full_corpus: bool = False):
     """Yield (relpath, src, meta) for every applicable, runnable case.
 
     `self_validate` is the set of feature tags the Node oracle can't run; a case
@@ -297,7 +299,7 @@ def discover(root: Path, dirs: list[str], applicable: set[str],
             rel = path.relative_to(test_root).as_posix()
             if path.name.endswith("_FIXTURE.js") or "_FIXTURE" in path.name:
                 continue
-            if not dir_opt_in and _PATH_SKIP.search(rel):
+            if not full_corpus and not dir_opt_in and _PATH_SKIP.search(rel):
                 continue
             try:
                 src = path.read_text(encoding="utf-8", errors="replace")
@@ -306,6 +308,15 @@ def discover(root: Path, dirs: list[str], applicable: set[str],
             meta = parse_frontmatter(src)
             if meta is None:
                 continue  # not a Test262 case
+            if full_corpus:
+                # Every case counts; one that cannot run here counts as failed.
+                meta.self_validate = True
+                if meta.flags & _SKIP_FLAGS:
+                    meta.excluded = "flag: " + ",".join(sorted(meta.flags & _SKIP_FLAGS))
+                elif _HOST_DEP.search(src):
+                    meta.excluded = "needs a $262 host API"
+                yield rel, src, meta
+                continue
             if meta.flags & _SKIP_FLAGS:
                 continue
             if _HOST_DEP.search(src):
@@ -387,6 +398,10 @@ def main() -> int:
                     help=f"subtrees under test/ to walk (default: {' '.join(DEFAULT_DIRS)})")
     ap.add_argument("--max", type=int, default=0,
                     help="cap total cases run (0 = no cap)")
+    ap.add_argument("--full-corpus", action="store_true",
+                    help="every case under test/, judged by Perry alone (exit "
+                         "status and async completion, no Node oracle); cases "
+                         "that cannot run count as failed")
     ap.add_argument("--all-features", action="store_true",
                     help="ignore features-applicable.txt (run every discovered case)")
     ap.add_argument("--timeout", type=int, default=20, help="per-test timeout (s)")
@@ -450,8 +465,10 @@ def main() -> int:
     # Materialize the case list so we can shard / cap deterministically. The
     # shard is strided over the sorted list so each shard spans the whole
     # alphabet (avoids one shard getting all of the slow `built-ins/...`).
+    if args.full_corpus:
+        args.dir = sorted(p.name for p in (root / "test").iterdir() if p.is_dir())
     cases = list(discover(root, args.dir, applicable, args.all_features,
-                          self_validate))
+                          self_validate, args.full_corpus))
     if shard_n:
         cases = cases[shard_i::shard_n]
     if args.max:
@@ -462,6 +479,8 @@ def main() -> int:
         and return (rel, cat, bucket_key, reason, is_negative, is_self_validate)."""
         rel, src, meta = case
         cat = top_dir(rel)
+        if meta.excluded:
+            return (rel, cat, "skip", meta.excluded, False, True)
         try:
             program = assemble(src, meta, harness, preamble_text)
         except OSError as e:
@@ -470,21 +489,32 @@ def main() -> int:
         staged = workdir / "case.js"
         try:
             staged.write_text(program)
+            # `import('./x_FIXTURE.js')` resolves next to the case.
+            for fixture in (root / "test" / rel).parent.glob("*_FIXTURE*"):
+                shutil.copy(fixture, workdir / fixture.name)
             if meta.self_validate:
                 # Oracle (Node) can't run this feature — judge Perry alone on
                 # the case's own `assert.*` self-checks (#4792).
                 out_bin = workdir / "case.out"
                 c_env = dict(base_env, PERRY_ALLOW_UNIMPLEMENTED="1",
-                             PERRY_NO_AUTO_OPTIMIZE="1",
+                             PERRY_NO_AUTO_OPTIMIZE="1", PERRY_ALLOW_EVAL="1",
                              PERRY_GLOBAL_SCRIPT_THIS="1")
                 c_exit, c_out = run(
                     [str(args.perry_bin), "compile", str(staged), "-o",
                      str(out_bin)], c_env, args.timeout, cwd=str(workdir))
                 if c_exit != 0:
+                    if meta.negative:
+                        return (rel, cat, "pass", "", True, True)
                     return (rel, cat, "compile-fail", error_line(c_out),
                             False, True)
                 p_exit, p_out = run([str(out_bin)], base_env, args.timeout)
-                ran_clean = p_exit == 0
+                if _AOT_DEFER.search(p_out):
+                    return (rel, cat, "skip",
+                            "AOT-deferred runtime eval/import (#5593)", False, True)
+                # An async case reports failure through $DONE and still exits 0.
+                ran_clean = p_exit == 0 and (
+                    "async" not in meta.flags
+                    or "Test262:AsyncTestComplete" in p_out)
                 # Positive: pass iff it ran clean. Negative: pass iff it threw
                 # the (unverified) expected error, i.e. exited non-zero.
                 if ran_clean != meta.negative:
@@ -552,7 +582,8 @@ def main() -> int:
                     self_judged += 1
                     if key == "pass":
                         self_pass += 1
-                if key in ("diff", "runtime-fail", "compile-fail"):
+                if key in ("diff", "runtime-fail", "compile-fail") or (
+                        args.full_corpus and key == "skip"):
                     all_failures.append({"test": rel, "bucket": key,
                                          "reason": reason})
     finally:
@@ -583,6 +614,7 @@ def main() -> int:
         "node_runtime": run(["node", "--version"], base_env, 10)[1].strip(),
         "dirs": args.dir,
         "all_features": args.all_features,
+        "full_corpus": args.full_corpus,
         "totals": totals,
         "judged": judged,
         "negative_agreements": neg_pass,
@@ -594,6 +626,9 @@ def main() -> int:
                          if self_judged else 0.0),
         },
         "parity_pct": parity_pct,
+        # Porffor-comparable: pass over every case, skips included.
+        "corpus_pass_pct": (round(100 * totals["pass"] / (judged + totals["skip"]), 2)
+                            if judged + totals["skip"] else 0.0),
         "per_dir": per_dir,
         "samples": {
             k: [s.__dict__ for s in buckets[k].samples]
@@ -624,6 +659,9 @@ def main() -> int:
         print(f"  {'self-validated':<14} {self_pass}/{self_judged} = {sv_pct}%"
               f"   (Perry-only; oracle lacks: {feats})")
     print(f"  parity:        {parity_pct}%")
+    if args.full_corpus:
+        print(f"  full corpus:   {report['corpus_pass_pct']}%   "
+              f"(pass / every case, skips counted as failed)")
     print(f"  report:        {args.report}")
     return 0
 

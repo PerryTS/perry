@@ -2,7 +2,7 @@
 #
 # Pre-existing sites for the two rules that CANNOT be fixed in one pass:
 #
-#   handle-floor        a hand-rolled address floor BELOW HANDLE_BAND_MAX
+#   handle-floor        a hand-rolled handle-band address floor
 #                       (0x1000 / 0x10000). Does not reject the fetch, zlib
 #                       or proxy handle bands, so it can deref a handle and
 #                       segfault on Linux. macOS hides it behind a 2 TB floor.
@@ -147,7 +147,7 @@ handle-floor | crates/perry-runtime/src/process.rs | 2
 handle-floor | crates/perry-runtime/src/process/env_misc.rs | 1
 handle-floor | crates/perry-runtime/src/process/node_module.rs | 2
 handle-floor | crates/perry-runtime/src/promise/combinators.rs | 1
-handle-floor | crates/perry-runtime/src/proxy.rs | 4
+handle-floor | crates/perry-runtime/src/proxy.rs | 2
 handle-floor | crates/perry-runtime/src/readline_helpers.rs | 1
 handle-floor | crates/perry-runtime/src/regex.rs | 1
 handle-floor | crates/perry-runtime/src/set.rs | 3
@@ -166,7 +166,7 @@ handle-floor | crates/perry-runtime/src/typed_feedback.rs | 3
 handle-floor | crates/perry-runtime/src/typed_feedback/guards.rs | 1
 handle-floor | crates/perry-runtime/src/typedarray/access.rs | 5
 handle-floor | crates/perry-runtime/src/typedarray/construct.rs | 4
-handle-floor | crates/perry-runtime/src/typedarray/mod.rs | 4
+handle-floor | crates/perry-runtime/src/typedarray/mod.rs | 1
 handle-floor | crates/perry-runtime/src/typedarray_props.rs | 2
 handle-floor | crates/perry-runtime/src/url/search_params.rs | 1
 handle-floor | crates/perry-runtime/src/util_call_sites.rs | 1
@@ -226,12 +226,10 @@ lone-valid-obj-ptr | crates/perry-runtime/src/object/object_ops/keys_array.rs | 
 lone-valid-obj-ptr | crates/perry-runtime/src/object/polymorphic_index.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/object/util_types.rs | 3
 lone-valid-obj-ptr | crates/perry-runtime/src/process/env_misc.rs | 1
-lone-valid-obj-ptr | crates/perry-runtime/src/proxy.rs | 2
 lone-valid-obj-ptr | crates/perry-runtime/src/symbol/get.rs | 2
 lone-valid-obj-ptr | crates/perry-runtime/src/symbol/properties.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/typed_feedback.rs | 6
 lone-valid-obj-ptr | crates/perry-runtime/src/typedarray/access.rs | 1
-lone-valid-obj-ptr | crates/perry-runtime/src/url/url_class.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/util_call_sites.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/util_inherits.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/util_mime.rs | 1

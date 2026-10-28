@@ -164,7 +164,7 @@ pub(crate) fn raw_ptr_from_value(value: f64) -> Option<usize> {
     let top16 = bits >> 48;
     let raw = if top16 == (POINTER_TAG >> 48) {
         bits & POINTER_MASK
-    } else if top16 == 0 && bits > 0x10000 {
+    } else if top16 == 0 && crate::value::addr_class::is_above_handle_band(bits as usize) {
         bits
     } else {
         return None;
@@ -194,7 +194,7 @@ pub(crate) fn array_ptr_from_value(value: f64) -> Option<*mut crate::array::Arra
         return None;
     }
     unsafe {
-        let gc = (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        let gc = crate::value::addr_class::try_read_gc_header(raw)?;
         if (*gc).obj_type == crate::gc::GC_TYPE_ARRAY
             || (*gc).obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
         {
@@ -660,7 +660,7 @@ pub(crate) fn prototype_of_for_set(value: f64) -> Option<f64> {
                 return Some(f64::from_bits(proto_bits));
             }
             let obj = raw as *const crate::ObjectHeader;
-            if crate::object::is_valid_obj_ptr(obj as *const u8) {
+            if crate::value::addr_class::is_plausible_heap_addr(raw) {
                 unsafe {
                     let class_id = (*obj).class_id;
                     if class_id != 0 {

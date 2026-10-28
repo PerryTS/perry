@@ -364,6 +364,22 @@ jobs:
       - name: Parity harness compile-budget regression
         run: ./tests/test_parity_compile_budget.sh
 
+      # The parity normalizer is the ONE definition of "Perry printed what Node
+      # printed" shared by run_parity_tests.sh and scripts/node_suite_run.py.
+      # These fixtures were captured from the two implementations it replaced,
+      # so this step is what proves the unification stayed verdict-preserving.
+      # It runs in `lint` rather than beside the parity job because `parity` is
+      # full-tier only: a normalizer regression would otherwise reach `main` and
+      # only surface in the nightly run whose verdict it decides.
+      - name: Parity output normalizer golden fixtures
+        run: python3 -m unittest tests.test_parity_normalize
+
+      # The normalizer probe is what stops the harness from comparing empty
+      # output against empty output and reporting the whole suite green. It is
+      # invisible in any green run, so it gets its own gate.
+      - name: Parity harness normalizer guard
+        run: ./tests/test_parity_normalize_guard.sh
+
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-10-04 --profile minimal --component rustfmt --component clippy
       - name: Check formatting
@@ -3981,6 +3997,197 @@ jobs:
 
 
   # ---------------------------------------------------------------------------
+  # node-suite: the per-module node-compatibility corpus
+  # (test-parity/node-suite/**), scored against
+  # test-parity/node_suite_baseline.json by
+  # scripts/node_suite_regression_check.py.
+  #
+  # It also runs from compiler-runtime.yml's compatibility routing on the merge
+  # queue and on demand (`workflow_dispatch`), but a workflow cannot `needs:` a
+  # job from another workflow, and `full-suite-gate` is the gate
+  # release-packages.yml's await-tests keys on. A 4442-case corpus that no
+  # release waits for is a corpus nobody reads: node:dns once went 83% -> 0%
+  # behind a green build (the checker's own docstring records it), and that is
+  # the failure mode this job exists to close. The merge-queue arm is coverage
+  # this file does not provide; this job is the blocking half.
+  #
+  # The baseline is a FLOOR per module (pass >= floor.pass and
+  # total >= floor.total), not a 100% demand: it blocks a regression at today's
+  # measured level without asking the corpus for a number it does not reach.
+  # Raising a floor after a fix is a separate, deliberate edit to that file.
+  # ---------------------------------------------------------------------------
+  node-suite-guard:
+    name: node-suite-guard
+    needs: [plan, check]
+    if: fromJSON(needs.plan.outputs.plan).jobs.node_suite_guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "false"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Install Rust toolchain
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+      - uses: ./.github/actions/setup-llvm22
+      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
+        with:
+          shared-key: "${{ runner.os }}-perry"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Setup Node.js
+        uses: ./.github/actions/perry/actions/setup-node # v7
+        with:
+          # The oracle is the pinned dist, exactly as in the merge-queue guard:
+          # a different Node is a different correctness input, not a detail.
+          node-version-file: .node-version
+      - name: Build Perry release binary
+        run: |
+          cargo build-perry --release
+          scripts/gc_call_effects/sidecars.sh target/release
+      - name: Node-suite regression guard (floor baseline)
+        run: |
+          set -euo pipefail
+          echo '### Node-suite regression guard' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          python3 scripts/node_suite_regression_check.py target/release/perry . \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+
+  # ---------------------------------------------------------------------------
+  # test262: every Test262 case, judged by Perry alone like other engines'
+  # published figures (test-compat/test262/README.md), sharded.
+  # `test262-aggregate` merges the shards into one pass rate and ratchets it
+  # against test-compat/test262/baseline.json.
+  # ---------------------------------------------------------------------------
+  test262:
+    needs: [plan, check]
+    if: fromJSON(needs.plan.outputs.plan).jobs.test262
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.plan.outputs.plan).test262.shards }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "false"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Install Rust toolchain
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+      - uses: ./.github/actions/setup-llvm22
+      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
+        with:
+          shared-key: "${{ runner.os }}-perry"
+          save-if: false
+      - name: Setup Node.js
+        uses: ./.github/actions/perry/actions/setup-node # v7
+        with:
+          # The oracle: never pin it inline (see .node-version).
+          node-version-file: .node-version
+      - name: Fetch Test262 at the pinned SHA
+        run: |
+          set -euo pipefail
+          git init -q vendor/test262
+          git -C vendor/test262 fetch -q --depth 1 https://github.com/tc39/test262 "$(cat test-compat/test262/pinned-sha.txt)"
+          git -C vendor/test262 checkout -q FETCH_HEAD
+      - name: Build compiler
+        run: cargo build --release
+      - name: Run Test262 subset (shard ${{ matrix.shard }}/${{ fromJSON(needs.plan.outputs.plan).test262.total }})
+        run: >-
+          python3 scripts/test262_subset.py --full-corpus --quiet --jobs "$(nproc)"
+          --shard ${{ matrix.shard }}/${{ fromJSON(needs.plan.outputs.plan).test262.total }}
+          --report test262-shard.json
+      - name: Upload shard report
+        if: always()
+        uses: ./.github/actions/perry/actions/upload-artifact # v7
+        with:
+          name: test262-shard-${{ matrix.shard }}
+          path: test262-shard.json
+          if-no-files-found: error
+
+  test262-aggregate:
+    needs: [plan, test262]
+    if: >-
+      ${{ !cancelled()
+          && fromJSON(needs.plan.outputs.plan).jobs.test262
+          && contains(fromJSON('["success", "failure"]'), needs.test262.result) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "false"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Download shard reports
+        uses: ./.github/actions/perry/actions/download-artifact # v8
+        with:
+          pattern: test262-shard-*
+          path: test262-shards
+      - name: Ratchet against the baseline
+        env:
+          EXPECT: ${{ fromJSON(needs.plan.outputs.plan).test262.total }}
+        run: |
+          set -euo pipefail
+          python3 tests/test_test262_ratchet.py
+          python3 scripts/test262_ratchet.py --expect "$EXPECT" test262-shards/*/test262-shard.json
+
+  # ---------------------------------------------------------------------------
   # Compile smoke test (all top-level test files must compile)
   # ---------------------------------------------------------------------------
   compile-smoke:
@@ -5271,12 +5478,14 @@ jobs:
       run: python scripts/wasi_build_runtime.py
     - name: Image classifier checks as a wasm program
       run: python scripts/wasi_image_selftest.py target/perry-dev/perry
-    - name: Build the bundled runtime for wasm32-wasip1 and check it imports only preview 1
+    - name: Build the bundled runtime for wasm32-wasip1 and check its imports
       shell: bash
       run: |
         python scripts/wasi_imports_check.py --self-test
         archive="$(python scripts/wasi_build_runtime.py wasm32-wasip1 | sed -n 's/^WASI archive: //p' | tail -n 1)"
-        python scripts/wasi_imports_check.py "$archive"
+        # The archive carries the opt-in perry_net imports in their own member; a
+        # linked module has them only when built with PERRY_WASM_NET=1.
+        python scripts/wasi_imports_check.py "$archive" --allow-perry-net
     - name: Image classifier checks as a wasip1 program
       run: python scripts/wasi_image_selftest.py target/perry-dev/perry --flavour p1
     - name: WASI smoke and complete issue 11375 acceptance
@@ -5307,10 +5516,10 @@ jobs:
         cargo build --locked --manifest-path "$manifest"
         cargo test --locked --manifest-path "$manifest" 2>&1 | tee target/wasi-validation/p1-host-unit.log
         ran=$(awk '/^test result: ok\./ { n += $4 } END { print n + 0 }' target/wasi-validation/p1-host-unit.log)
-        test "$ran" -ge 8 || { echo "the host crate ran $ran tests, expected at least 8"; exit 1; }
+        test "$ran" -ge 17 || { echo "the host crate ran $ran tests, expected at least 17"; exit 1; }
         python test-wasi/p1-host/suite.py target/perry-dev/perry \
           --host test-wasi/p1-host/target/debug/perry-p1-host \
-          --output target/wasi-validation/p1-host --min-cases 12
+          --output target/wasi-validation/p1-host --min-cases 22
     - name: Typed components, resources, moving GC and cross-language composition
       run: ./scripts/component_check.sh
     - name: Retain WASI and component execution evidence
@@ -5349,6 +5558,7 @@ jobs:
       - gc-call-effects
       - parity
       - parity-aggregate
+      - node-suite-guard
       - compile-smoke
       - harmonyos-smoke
       - drizzle-mysql-smoke

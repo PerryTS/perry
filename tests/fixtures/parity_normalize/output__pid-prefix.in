@@ -1,0 +1,3 @@
+(node:1) first
+(node:999999) second
+(node:12)DeprecationWarning-kept-shape

@@ -223,7 +223,11 @@ fn linking_a_parent_reads_no_registry_writes() {
         .iter()
         .filter(|l| l.starts_with("# uread") && l.ends_with("cell:cjs:*"))
         .collect();
-    assert!(writes > 0, "the records are registry writes: {:?}", pf.unit_io);
+    assert!(
+        writes > 0,
+        "the records are registry writes: {:?}",
+        pf.unit_io
+    );
     assert!(reads.is_empty(), "read through the parent link: {reads:?}");
 }
 
@@ -262,8 +266,15 @@ fn a_computed_require_reads_no_registry_writes() {
         .iter()
         .filter(|l| l.starts_with("# uread") && l.ends_with("cell:cjs:*"))
         .collect();
-    assert!(writes > 0, "the records are registry writes: {:?}", pf.unit_io);
-    assert!(reads.is_empty(), "read through a computed require: {reads:?}");
+    assert!(
+        writes > 0,
+        "the records are registry writes: {:?}",
+        pf.unit_io
+    );
+    assert!(
+        reads.is_empty(),
+        "read through a computed require: {reads:?}"
+    );
 }
 
 /// DECISIONS 114: the driver compares what a unit read with what is

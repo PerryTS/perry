@@ -112,7 +112,8 @@ pub(crate) fn create_list_from_array_like(value: f64) -> Vec<f64> {
     // Fast path: a real Array.
     let bits = value.to_bits();
     let top16 = bits >> 48;
-    let is_pointer = top16 == 0x7FFD || (top16 == 0 && bits > 0x10000);
+    let is_pointer = top16 == 0x7FFD
+        || (top16 == 0 && crate::value::addr_class::is_above_handle_band(bits as usize));
     if is_pointer {
         let ptr = (bits & POINTER_MASK) as usize;
         // `arguments` is an ordinary ObjectHeader backed by the arguments
@@ -134,20 +135,16 @@ pub(crate) fn create_list_from_array_like(value: f64) -> Vec<f64> {
         // (`GC_HEADER_SIZE + 0x1000`) sits below every handle band and had
         // no other guard before the deref below -- a handle reached
         // `addr - GC_HEADER_SIZE` unconditionally.
-        if crate::value::addr_class::is_plausible_heap_addr(ptr) {
-            unsafe {
-                let gc =
-                    (ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-                if (*gc).obj_type == crate::gc::GC_TYPE_ARRAY {
-                    let arr = ptr as *const crate::array::ArrayHeader;
-                    let len = crate::array::js_array_length(arr) as usize;
-                    let mut out = Vec::with_capacity(len);
-                    for i in 0..len {
-                        let v = crate::array::js_array_get(arr, i as u32);
-                        out.push(f64::from_bits(v.bits()));
-                    }
-                    return out;
+        if let Some(gc) = unsafe { crate::value::addr_class::try_read_gc_header(ptr) } {
+            if gc.obj_type == crate::gc::GC_TYPE_ARRAY {
+                let arr = ptr as *const crate::array::ArrayHeader;
+                let len = crate::array::js_array_length(arr) as usize;
+                let mut out = Vec::with_capacity(len);
+                for i in 0..len {
+                    let v = crate::array::js_array_get(arr, i as u32);
+                    out.push(f64::from_bits(v.bits()));
                 }
+                return out;
             }
         }
     }

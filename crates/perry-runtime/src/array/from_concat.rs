@@ -721,14 +721,18 @@ unsafe fn populate_from_iterable(
             let snapshot = scope.root_raw_mut_ptr(js_array_clone(
                 crate::value::js_nanbox_get_pointer(items.get_nanbox_f64()) as *const ArrayHeader,
             ));
-            let current = || clean_arr_ptr(snapshot.get_raw_mut_ptr::<ArrayHeader>());
-            let len = if current().is_null() {
-                0
-            } else {
-                (*current()).length as usize
-            };
+            let len = snapshot.with_const_ptr::<ArrayHeader, _>(|array| {
+                let array = clean_arr_ptr(array);
+                if array.is_null() {
+                    0
+                } else {
+                    (*array).length as usize
+                }
+            });
             for k in 0..len {
-                let value = crate::array::js_array_get_f64(current(), k as u32);
+                let value = snapshot.with_const_ptr::<ArrayHeader, _>(|array| {
+                    crate::array::js_array_get_f64(clean_arr_ptr(array), k as u32)
+                });
                 let mapped = map(value, k);
                 if !define_index(result, k, mapped, array_result) {
                     throw_cannot_define_property(k);

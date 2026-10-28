@@ -92,23 +92,27 @@ Wasmtime 48.0.0 with exceptions enabled is the tested execution host.
 ## Release artifacts
 
 The release pipeline builds a separate `perry-cross-wasm32-wasip2.tar.gz`
-runtime bundle from the same pinned source revision as its compilers. Its
-manifest records the Perry version, source commit, target triple, archive
-size and SHA256. It contains no native stdlib or UI archives.
+runtime bundle from the same pinned source revision as its compilers, and
+a `perry-cross-wasm32-wasip1.tar.gz` bundle beside it for `--target wasip1`.
+Each manifest records the Perry version, source commit, target triple, archive
+size and SHA256. Neither contains native stdlib or UI archives.
 
 Release packaging enables WASI on three source-qualified host profiles:
 Linux x86_64 GNU, macOS ARM64 and Windows x64. Their compiler builds enable
 `perry/target-wasi`, including later
 extension-library builds that can relink the compiler. Their release archives
-place the WASI runtime under `wasm32-wasip2/release/` beside the executable,
-where the compiler discovers it automatically. Other release host profiles
+place the WASI runtimes under `wasm32-wasip2/release/` and
+`wasm32-wasip1/release/` beside the executable, where the compiler discovers
+them automatically. Other release host profiles
 are not enabled by this packaging change. Ordinary Cargo builds still require
 the explicit `target-wasi` feature.
 
 Before packaging those host archives, the workflow copies the release compiler
 outside the source checkout, verifies that a missing runtime is rejected,
 installs the source-matched bundle, and runs all smoke, acceptance and
-pinned-Node comparison suites. This checks the archive installation and runtime
+pinned-Node comparison suites. The same check runs for the wasip1 bundle with
+`--target wasip1`, and also verifies that every module it builds imports only
+`wasi_snapshot_preview1`. This checks the archive installation and runtime
 discovery path in addition to source-tree compilation. Republishing a tag
 that predates this release profile does not retroactively claim WASI support.
 
@@ -126,6 +130,9 @@ mkdir -p "$HOME/.perry/wasi-runtime"
 tar -xzf perry-cross-wasm32-wasip2.tar.gz -C "$HOME/.perry/wasi-runtime"
 PERRY_RUNTIME_DIR="$HOME/.perry/wasi-runtime" perry compile app.ts --target wasi -o app.wasm
 ```
+
+The wasip1 bundle is extracted the same way, into its own directory, and used
+with `--target wasip1`.
 
 The [staging run](https://github.com/PerryTS/perry/actions/runs/39607165661)
 qualified source `9ed1d5a0164fa711cc404571b3fd8355e23a9c89` on Linux x86_64 GNU,

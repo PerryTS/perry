@@ -24,6 +24,8 @@ pub(crate) enum RegionOwnership {
     Current,
     /// A live region of another thread's heap. Every native thread owns its
     /// heap and its collector; this collector never marks or moves it.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    // Linux reservation ownership only.
     OtherHeap,
     /// Not in any live arena region this thread can attribute.
     Outside,

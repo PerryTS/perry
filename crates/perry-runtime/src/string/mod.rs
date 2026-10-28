@@ -380,7 +380,8 @@ pub extern "C" fn js_get_empty_string() -> *const StringHeader {
 /// 48-bit AND yields 1, which passes is_null() but crashes on dereference.
 #[inline]
 pub fn is_valid_string_ptr(p: *const StringHeader) -> bool {
-    !p.is_null() && (p as usize) >= 0x1000
+    // The lower bound already excludes null and every NaN-unboxed sentinel.
+    (p as usize) >= 0x1000
 }
 
 /// Borrowed byte view for a Perry string-like dispatch key.

@@ -36,8 +36,10 @@ TARGETS = {"p2": "wasi", "p1": "wasip1"}
 WASMTIME_FLAGS = {"p2": [], "p1": ["-W", "exceptions=y"]}
 
 
-def check_imports(wasm: Path) -> tuple[bool, str]:
-    """A linked P1 module may import nothing but `wasi_snapshot_preview1`.
+def check_imports(wasm: Path, allow_perry_net: bool = False) -> tuple[bool, str]:
+    """A linked P1 module may import nothing but the functions of
+    `wasi_snapshot_preview1`, each with its standard signature; a module built
+    with `PERRY_WASM_NET=1` may also import the `perry_net` functions.
 
     A component (or anything that is not a core module) is rejected, so a
     wrongly wrapped output cannot pass.
@@ -45,7 +47,7 @@ def check_imports(wasm: Path) -> tuple[bool, str]:
     report = io.StringIO()
     with contextlib.redirect_stdout(report):
         try:
-            ok = wasi_imports_check.check(wasm, {wasi_imports_check.PREVIEW1}) == 0
+            ok = wasi_imports_check.check(wasm, allow_perry_net) == 0
         except ValueError as exc:
             print(f"{wasm}: {exc}")
             ok = False

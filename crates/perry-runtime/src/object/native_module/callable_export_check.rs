@@ -939,6 +939,7 @@ pub(crate) fn is_native_module_callable_export_reference(module: &str, prop: &st
             | ("crypto", "Cipheriv")
             | ("crypto", "Decipheriv")
             | ("crypto", "X509Certificate")
+            | ("crypto", "Certificate")
             // #2565: public KeyObject constructor shape plus the supported
             // secret-key `KeyObject.from(CryptoKey)` static helper.
             | ("crypto", "KeyObject")

@@ -16,7 +16,7 @@ use super::*;
 
 /// Append `value` to the rooted result array, keeping the root current.
 fn push_rooted(result: &crate::gc::RuntimeHandle<'_>, value: f64) {
-    let grown = js_array_push_f64(result.get_raw_mut_ptr::<ArrayHeader>(), value);
+    let grown = result.with_mut_ptr(|array| js_array_push_f64(array, value));
     result.set_raw_mut_ptr(grown);
 }
 
@@ -61,9 +61,9 @@ pub extern "C" fn js_arraylike_toSorted(recv: f64, comparator: f64) -> f64 {
     let sorted = if has_cmp {
         let cmp = crate::value::JSValue::from_bits(cmp_h.get_nanbox_u64())
             .as_pointer::<crate::closure::ClosureHeader>();
-        js_array_to_sorted_with_comparator(items.get_raw_mut_ptr::<ArrayHeader>(), cmp)
+        items.with_mut_ptr(|array| js_array_to_sorted_with_comparator(array, cmp))
     } else {
-        js_array_to_sorted_default(items.get_raw_mut_ptr::<ArrayHeader>())
+        items.with_mut_ptr(|array| js_array_to_sorted_default(array))
     };
     nanbox_arr(sorted)
 }
@@ -111,19 +111,24 @@ pub(super) fn proxy_holey_snapshot(recv: f64) -> *mut ArrayHeader {
     if len > u32::MAX as i64 {
         crate::array::array_length_range_error();
     }
-    let result = scope.root_raw_mut_ptr(js_array_alloc_with_length(len as u32));
+    let mut current = js_array_alloc_with_length(len as u32);
+    let result = scope.root_raw_mut_ptr(current);
     for k in 0..len {
-        if !al_has(recv_h.get_nanbox_f64(), k) {
+        // Both proxy operations may collect, including a missing property.
+        // Refresh the result after them before touching its dense slots.
+        let (value, array) = result.across_mut::<ArrayHeader, _>(|| {
+            al_has(recv_h.get_nanbox_f64(), k).then(|| al_get(recv_h.get_nanbox_f64(), k))
+        });
+        current = array;
+        let Some(v) = value else {
             continue;
-        }
-        let v = al_get(recv_h.get_nanbox_f64(), k);
-        let arr = result.get_raw_mut_ptr::<ArrayHeader>();
+        };
         unsafe {
-            let elems = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut f64;
+            let elems = crate::array::array_elements_ptr(array as *const ArrayHeader) as *mut f64;
             // GC_STORE_AUDIT(BARRIERED): note_array_slot below re-stores this slot with the barrier.
             std::ptr::write(elems.add(k as usize), v);
-            note_array_slot(arr, k as usize, v.to_bits());
+            note_array_slot(array, k as usize, v.to_bits());
         }
     }
-    result.get_raw_mut_ptr::<ArrayHeader>()
+    current
 }

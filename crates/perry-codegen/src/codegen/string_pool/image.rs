@@ -251,8 +251,14 @@ mod tests {
                     .count(),
                 1
             );
+            // Every target's IR ownership is checked above. Emission needs
+            // its optional backend to be linked into this test executable.
             #[cfg(feature = "llvm-inprocess")]
-            for (index, ir) in units.iter().enumerate() {
+            for (index, ir) in units
+                .iter()
+                .enumerate()
+                .filter(|_| !target.starts_with("wasm32") || cfg!(feature = "target-wasi"))
+            {
                 crate::inprocess::compile_ll_to_object_inprocess(
                     ir,
                     target,

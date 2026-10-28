@@ -666,11 +666,18 @@ fn main() {
             );
         let source = out.join("perry_wasm_trap.ll");
         std::fs::write(&source, trap).unwrap();
-        cc::Build::new()
-            .file(source)
+        let mut eh = cc::Build::new();
+        eh.file(source)
             .file("src/ffi/perry_wasm_throw.c")
-            .file("src/ffi/perry_wasi_net.c")
-            .flag("-mexception-handling")
+            .file("src/ffi/perry_wasi_net.c");
+        // The `perry_net` imports live in their own archive member, which a
+        // link loads only on request (`-u perry_net_host`). WASIp2 has sockets
+        // of its own and gets no such member.
+        println!("cargo:rerun-if-changed=src/ffi/perry_net_import.c");
+        if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("p1") {
+            eh.file("src/ffi/perry_net_import.c");
+        }
+        eh.flag("-mexception-handling")
             .flag("-mllvm")
             .flag("-wasm-enable-eh")
             .flag("-mllvm")

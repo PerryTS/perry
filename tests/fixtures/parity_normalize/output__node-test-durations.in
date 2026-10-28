@@ -1,0 +1,6 @@
+▶ suite
+  ✔ case one (1.234ms)
+  ✖ case two (12ms) trailing
+  ﹣ skipped (0.5ms)
+ℹ duration_ms 42.4242
+ℹ duration_ms 7

@@ -547,7 +547,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // is a synthetic "default" marker we'd want js_array_sort_default;
         // for now we always use the user-comparator path.
         Expr::ArraySort { array, comparator } => {
-            let ordering = perry_hir::analysis::pure_numeric_order(comparator);
+            let ordering = super::numeric_order::numeric_order(ctx, comparator);
             let key = match &ordering {
                 Some(perry_hir::analysis::NumericOrder::Keyed { property, .. }) => {
                     Some(Expr::String(property.clone()))
