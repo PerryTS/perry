@@ -126,6 +126,16 @@ fn drop_unused_loader_preloads(module: &mut Module) {
         .filter(|(_, local)| !used.contains(local))
         .map(|(imported, _)| imported)
         .collect();
+    module.imports.retain_mut(|import| {
+        if builtin(&import.source) {
+            import.specifiers.retain(|specifier| {
+                !matches!(specifier, perry_hir::ImportSpecifier::Named { imported, local }
+                    if local.starts_with("__perry_cjs") && unused.contains(&imported))
+            });
+            return !import.specifiers.is_empty();
+        }
+        true
+    });
     module.init.retain(|s| {
         !matches!(s, Stmt::Expr(Expr::Call { callee, args, .. })
             if matches!(callee.as_ref(), Expr::ExternFuncRef { name, .. } if name == "js_native_module_named_esm_export_value")
@@ -300,6 +310,49 @@ mod tests {
                 })
                 .collect();
             assert_eq!(got, vec![0.0, kept, 3.0], "closed={closed}");
+        }
+    }
+
+    #[test]
+    fn closed_wrappers_keep_literal_builtin_bindings_without_loader_imports() {
+        for source in [
+            "console.log(require('fs').readFileSync);",
+            "const fs = require('node:fs'); console.log(fs.readFileSync);",
+            "const { readFileSync } = require('fs'); console.log(readFileSync);",
+        ] {
+            let (wrapped, _) = super::super::cjs_wrap::wrap_commonjs_with_addon_paths(
+                source,
+                std::path::Path::new("/p/main.cjs"),
+                None,
+                false,
+                None,
+                None,
+                &mut Vec::new(),
+                None,
+            );
+            let ast = perry_parser::parse_typescript(&wrapped, "main.cjs").unwrap();
+            for closed in [false, true] {
+                let mut module = perry_hir::lower_module(&ast, "main", "/p/main.cjs").unwrap();
+                resolve_open_sites(&mut module, closed).unwrap();
+                let has_import = |name| {
+                    module
+                        .imports
+                        .iter()
+                        .any(|i| i.source.strip_prefix("node:").unwrap_or(&i.source) == name)
+                };
+                assert!(
+                    has_import("fs"),
+                    "literal require lost its static binding: {source}"
+                );
+                assert_eq!(has_import("module"), !closed, "closed={closed}: {source}");
+                assert!(module.is_commonjs_wrap());
+                let mut has_loader = false;
+                perry_hir::tdz_check::for_each_module_expr(&module, &mut |e| {
+                    has_loader |= matches!(e, Expr::NativeMethodCall { module, method, .. }
+                        if module == "module" && method == "createRequire");
+                });
+                assert_eq!(has_loader, !closed, "closed={closed}: {source}");
+            }
         }
     }
 
