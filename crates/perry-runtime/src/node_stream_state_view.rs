@@ -61,7 +61,10 @@ const WRITABLE_FIELDS: &[&str] = &[
 
 crate::perry_thread_local! {
     /// NaN-boxed `ReadableState` / `WritableState` prototypes (0 = not built).
+    // Keep stream TLS resolver records separate from unrelated merged globals.
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_streams")]
     static STATE_PROTOS: RefCell<[u64; 2]> = const { RefCell::new([0, 0]) };
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_streams")]
     static STATE_PROTO_SCANNER_REGISTERED: Cell<bool> = const { Cell::new(false) };
 }
 

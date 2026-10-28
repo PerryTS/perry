@@ -267,3 +267,44 @@ run_response_fixture forced \
   PERRY_GC_VERIFY_EVACUATION=1 \
   PERRY_GC_SCHEDULE_SEED=8038 \
   PERRY_GC_SCHEDULE_RATE=1
+
+# WASI guests use ALS from the runtime alone. Its native relocation must also
+# preserve the process-wide context when applications and stdlib are separate
+# images: overlap calls and cross a module boundary, Promise suspension and
+# runtime-owned snapshot/bind callbacks before checking caller restoration.
+als_app="$provider_dir/wasi-als.$library_extension"
+env \
+  PATH="$app_link_dir:$PATH" \
+  PERRY_ISSUE_8075_REAL_CC="$real_cc" \
+  PERRY_ISSUE_8075_RUNTIME_LIBRARY="$runtime_library" \
+  PERRY_ISSUE_8075_STDLIB_LIBRARY="$stdlib_library" \
+  PERRY_RUNTIME_DIR="$target_dir/$profile" \
+  "$perry" compile \
+    --no-codegen --no-auto-optimize --march generic \
+    --output-type dylib -o "$als_app" \
+    "$repo_root/tests/fixtures/wasi_als_provider/entry.ts"
+if [[ "$host_os" == Darwin ]]; then
+  als_symbols=$(nm -gU "$als_app" | awk 'NF >= 3 { symbol=$3; sub(/^_/, "", symbol); print symbol }')
+else
+  als_symbols=$(nm -D --defined-only "$als_app" | awk 'NF >= 3 { print $3 }')
+fi
+als_entry=$(awk '/^__perry_wrap_perry_fn_.*__runWasiAlsProvider$/ { print; count++ } END { if (count != 1) exit 1 }' <<<"$als_symbols")
+for mode in normal forced; do
+  als_env=()
+  if [[ "$mode" == forced ]]; then
+    als_env=(PERRY_GC_DIAG=1 PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1
+      PERRY_GC_SCHEDULE_SEED=300 PERRY_GC_SCHEDULE_RATE=1)
+  fi
+  if [[ "$host_os" == Darwin ]]; then
+    als_env+=("DYLD_LIBRARY_PATH=$provider_dir")
+  else
+    als_env+=("LD_LIBRARY_PATH=$provider_dir")
+  fi
+  env "${als_env[@]}" "$response_host" "$runtime_library" "$stdlib_library" \
+    "$als_app" "$als_entry" >"$scratch/wasi-als-$mode.out" 2>"$scratch/wasi-als-$mode.err"
+  diff -u "$repo_root/tests/fixtures/wasi_als_provider/expected.txt" "$scratch/wasi-als-$mode.out"
+  if [[ "$mode" == forced ]]; then
+    python3 "$repo_root/scripts/gc_evacuation_liveness_assert.py" \
+      "$scratch/wasi-als-$mode.err" --probe "WASI ALS provider-dylib"
+  fi
+done

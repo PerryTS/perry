@@ -16,6 +16,7 @@ mod attributes;
 mod credentials;
 mod env_misc;
 mod exec_env;
+mod metadata_values;
 pub(crate) use env_misc::{
     exit_after_current_thread_collection_teardown, format_out_of_range_number,
     process_env_delete_field, process_env_get_field, process_env_has_field, process_env_set_field,
@@ -23,6 +24,9 @@ pub(crate) use env_misc::{
 };
 mod finalization;
 pub(crate) mod ipc;
+mod ipc_bootstrap;
+mod ipc_hooks;
+pub use ipc_hooks::{js_process_ipc_drain, js_process_ipc_has_active};
 mod node_module;
 mod permission;
 pub(crate) mod report;
@@ -767,9 +771,9 @@ static PROCESS_STDIO_HOOK: std::sync::atomic::AtomicPtr<()> =
 
 fn process_stdio_value(property: &str) -> f64 {
     match property {
-        "stdin" => crate::os::js_process_stdin(),
-        "stdout" => crate::os::js_process_stdout(),
-        _ => crate::os::js_process_stderr(),
+        "stdin" => crate::os_hook_slots::js_process_stdin(),
+        "stdout" => crate::os_hook_slots::js_process_stdout(),
+        _ => crate::os_hook_slots::js_process_stderr(),
     }
 }
 
@@ -845,7 +849,7 @@ pub fn process_metadata_property(property: &str) -> Option<f64> {
         "finalization" => finalization::process_finalization_value(),
         "permission" => permission::process_permission_value()?,
         "release" => report::process_release_value(),
-        "report" => report::process_report_value(),
+        "report" => crate::diagnostic_report_roots::report_value(),
         "sourceMapsEnabled" => js_process_source_maps_enabled(),
         "title" => js_process_title(),
         "_eval" => undefined_value(),
@@ -988,3 +992,5 @@ mod builtin_module_list_tests {
         }
     }
 }
+
+pub(crate) mod tick_args;

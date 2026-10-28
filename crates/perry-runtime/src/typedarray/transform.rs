@@ -124,9 +124,11 @@ unsafe fn bigint_lane_compare(
     let scope = crate::gc::RuntimeHandleScope::new();
     let box_lane = |bits: u64| -> f64 {
         if signed {
-            crate::value::js_nanbox_bigint(crate::bigint::js_bigint_from_i64(bits as i64) as i64)
+            crate::value::js_nanbox_bigint(
+                crate::bigint_hooks::js_bigint_from_i64(bits as i64) as i64
+            )
         } else {
-            crate::value::js_nanbox_bigint(crate::bigint::js_bigint_from_u64(bits) as i64)
+            crate::value::js_nanbox_bigint(crate::bigint_hooks::js_bigint_from_u64(bits) as i64)
         }
     };
     let a_handle = scope.root_nanbox_f64(box_lane(a_bits));

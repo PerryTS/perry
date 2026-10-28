@@ -15,10 +15,11 @@
 //! never reached behind a guard in practice; each forwarder still answers what
 //! a build without the feature answers.
 
-use super::{TemporalCell, TemporalKind, TemporalValue};
 use crate::feature_hooks::Hook;
 use crate::object::ObjectHeader;
+use crate::temporal::{TemporalCell, TemporalKind, TemporalValue};
 
+static FROM_EPOCH_MS: Hook<fn(&[f64]) -> f64> = Hook::empty();
 static CALL_METHOD: Hook<fn(f64, &str, &[f64]) -> f64> = Hook::empty();
 static ISO_STRING: Hook<fn(f64) -> Option<String>> = Hook::empty();
 static DURATION_UNIT_VALUES: Hook<fn(f64) -> Option<[f64; 10]>> = Hook::empty();
@@ -94,7 +95,7 @@ pub fn install_namespace(ns_obj: *mut ObjectHeader) -> bool {
 }
 
 /// # Safety
-/// As `super::finalize_temporal_cell_for_gc`.
+/// As `crate::temporal::finalize_temporal_cell_for_gc`.
 pub unsafe fn finalize_cell(cell: *mut TemporalCell) {
     if let Some(f) = FINALIZE_CELL.get() {
         f(cell);
@@ -120,18 +121,25 @@ pub fn ctor_kind(code: *const u8) -> Option<TemporalKind> {
 /// The `temporal` install.
 #[cfg(feature = "temporal")]
 pub(crate) fn install() {
-    CALL_METHOD.set(super::dispatch::call_method);
-    ISO_STRING.set(super::temporal_iso_string);
-    DURATION_UNIT_VALUES.set(super::duration_unit_values);
-    GET_PROPERTY.set(super::dispatch::get_property);
-    HAS_METHOD.set(super::dispatch::has_method);
+    FROM_EPOCH_MS.set(crate::temporal::instant::from_epoch_milliseconds_static);
+    CALL_METHOD.set(crate::temporal::dispatch::call_method);
+    ISO_STRING.set(crate::temporal::temporal_iso_string);
+    DURATION_UNIT_VALUES.set(crate::temporal::duration_unit_values);
+    GET_PROPERTY.set(crate::temporal::dispatch::get_property);
+    HAS_METHOD.set(crate::temporal::dispatch::has_method);
     SUBCLASS_CELL.set(crate::object::temporal_subclass_cell);
     SUBCLASS_SUPER.set(crate::object::global_this_temporal_subclass_super);
     KIND_PROTOTYPE.set(crate::object::global_this_temporal_kind_prototype);
     INSTALL_NAMESPACE.set(crate::object::global_this_install_temporal_namespace);
-    FINALIZE_CELL.set(super::finalize_temporal_cell_impl);
-    TO_EPOCH_MS.set(super::temporal_to_epoch_ms_impl);
-    CALENDAR_ID.set(super::temporal_calendar_id_impl);
-    INSPECT_STRING.set(super::temporal_inspect_string);
+    FINALIZE_CELL.set(crate::temporal::finalize_temporal_cell_impl);
+    TO_EPOCH_MS.set(crate::temporal::temporal_to_epoch_ms_impl);
+    CALENDAR_ID.set(crate::temporal::temporal_calendar_id_impl);
+    INSPECT_STRING.set(crate::temporal::temporal_inspect_string);
     CTOR_KIND.set(crate::object::global_this_temporal_ctor_kind);
+}
+
+pub fn from_epoch_milliseconds(args: &[f64]) -> f64 {
+    FROM_EPOCH_MS
+        .get()
+        .map_or(f64::from_bits(crate::value::TAG_UNDEFINED), |run| run(args))
 }

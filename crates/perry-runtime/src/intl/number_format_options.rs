@@ -9,10 +9,10 @@ pub(crate) fn configure_number_format(obj: *mut ObjectHeader, locale: &str, opti
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj_handle = scope.root_raw_mut_ptr(obj);
     let options_handle = scope.root_nanbox_f64(options);
-    let current_options = || options_handle.get_nanbox_f64();
+    let current_options = &options_handle;
     // CoerceOptionsToObject: `null` throws; `undefined` behaves as an empty
     // null-prototype object (our readers already treat non-objects as empty).
-    if JSValue::from_bits(current_options().to_bits()).is_null() {
+    if JSValue::from_bits((current_options.get_nanbox_f64()).to_bits()).is_null() {
         throw_type_error("Cannot convert undefined or null to object");
     }
 
@@ -22,7 +22,7 @@ pub(crate) fn configure_number_format(obj: *mut ObjectHeader, locale: &str, opti
     // constructor-option-read-order.js asserts (localeMatcher before
     // numberingSystem) and propagates a throwing localeMatcher getter.
     let _ = get_string_option_enum(
-        current_options(),
+        (current_options.get_nanbox_f64()),
         "localeMatcher",
         &["lookup", "best fit"],
         "best fit",
@@ -32,7 +32,7 @@ pub(crate) fn configure_number_format(obj: *mut ObjectHeader, locale: &str, opti
     // then run ResolveLocale for the `nu` key — reconciling the option with the
     // requested locale's `-u-nu-` keyword and updating the resolved locale so
     // `resolvedOptions().locale` reflects only the supported value actually used.
-    let opt_ns = match get_option_string(current_options(), "numberingSystem") {
+    let opt_ns = match get_option_string((current_options.get_nanbox_f64()), "numberingSystem") {
         Some(value) => {
             let lower = value.to_ascii_lowercase();
             if !is_well_formed_numbering_system(&lower) {
@@ -50,14 +50,14 @@ pub(crate) fn configure_number_format(obj: *mut ObjectHeader, locale: &str, opti
 
     // SetNumberFormatUnitOptions.
     let style = get_string_option_enum(
-        current_options(),
+        (current_options.get_nanbox_f64()),
         "style",
         &["decimal", "percent", "currency", "unit"],
         "decimal",
     );
     set_internal_field_from_raw_handle(&obj_handle, KEY_STYLE, string_value(&style));
 
-    let currency = get_option_string(current_options(), "currency");
+    let currency = get_option_string((current_options.get_nanbox_f64()), "currency");
     if let Some(code) = &currency {
         if !is_well_formed_currency_code(code) {
             throw_range_error(&format!("Invalid currency code : {code}"));
@@ -75,13 +75,13 @@ pub(crate) fn configure_number_format(obj: *mut ObjectHeader, locale: &str, opti
         throw_type_error("Currency code is required with currency style.");
     }
     let currency_display = get_string_option_enum(
-        current_options(),
+        (current_options.get_nanbox_f64()),
         "currencyDisplay",
         &["code", "symbol", "narrowSymbol", "name"],
         "symbol",
     );
     let currency_sign = get_string_option_enum(
-        current_options(),
+        (current_options.get_nanbox_f64()),
         "currencySign",
         &["standard", "accounting"],
         "standard",
@@ -97,7 +97,7 @@ pub(crate) fn configure_number_format(obj: *mut ObjectHeader, locale: &str, opti
         string_value(&currency_sign),
     );
 
-    let unit = get_option_string(current_options(), "unit");
+    let unit = get_option_string((current_options.get_nanbox_f64()), "unit");
     if let Some(u) = &unit {
         if !is_well_formed_unit_identifier(u) {
             throw_range_error(&format!(
@@ -107,7 +107,7 @@ pub(crate) fn configure_number_format(obj: *mut ObjectHeader, locale: &str, opti
         set_internal_field_from_raw_handle(&obj_handle, KEY_NF_UNIT, string_value(u));
     }
     let unit_display = get_string_option_enum(
-        current_options(),
+        (current_options.get_nanbox_f64()),
         "unitDisplay",
         &["short", "narrow", "long"],
         "short",
@@ -124,7 +124,7 @@ pub(crate) fn configure_number_format(obj: *mut ObjectHeader, locale: &str, opti
 
     // notation (read before the digit options per the spec order).
     let notation = get_string_option_enum(
-        current_options(),
+        (current_options.get_nanbox_f64()),
         "notation",
         &["standard", "scientific", "engineering", "compact"],
         "standard",
@@ -136,25 +136,46 @@ pub(crate) fn configure_number_format(obj: *mut ObjectHeader, locale: &str, opti
     // minimumIntegerDigits, minimumFractionDigits, maximumFractionDigits,
     // minimumSignificantDigits, maximumSignificantDigits, roundingIncrement,
     // roundingMode, roundingPriority, trailingZeroDisplay.
-    let min_int = get_int_option_in_range(current_options(), "minimumIntegerDigits", 1.0, 21.0)
-        .unwrap_or(1.0);
-    let min_frac_opt =
-        get_int_option_in_range(current_options(), "minimumFractionDigits", 0.0, 100.0);
-    let max_frac_opt =
-        get_int_option_in_range(current_options(), "maximumFractionDigits", 0.0, 100.0);
-    let min_sig_opt =
-        get_int_option_in_range(current_options(), "minimumSignificantDigits", 1.0, 21.0);
-    let max_sig_opt =
-        get_int_option_in_range(current_options(), "maximumSignificantDigits", 1.0, 21.0);
+    let min_int = get_int_option_in_range(
+        (current_options.get_nanbox_f64()),
+        "minimumIntegerDigits",
+        1.0,
+        21.0,
+    )
+    .unwrap_or(1.0);
+    let min_frac_opt = get_int_option_in_range(
+        (current_options.get_nanbox_f64()),
+        "minimumFractionDigits",
+        0.0,
+        100.0,
+    );
+    let max_frac_opt = get_int_option_in_range(
+        (current_options.get_nanbox_f64()),
+        "maximumFractionDigits",
+        0.0,
+        100.0,
+    );
+    let min_sig_opt = get_int_option_in_range(
+        (current_options.get_nanbox_f64()),
+        "minimumSignificantDigits",
+        1.0,
+        21.0,
+    );
+    let max_sig_opt = get_int_option_in_range(
+        (current_options.get_nanbox_f64()),
+        "maximumSignificantDigits",
+        1.0,
+        21.0,
+    );
 
     // roundingIncrement is read before roundingMode/roundingPriority and is
     // ToNumber-coerced (so `{ valueOf }` objects work) then checked against the
     // sanctioned increment set — a [1, 5000] range alone would wrongly admit
     // values like 3 or 5000.1.
-    let rounding_increment = read_rounding_increment(current_options());
+    let rounding_increment = read_rounding_increment((current_options.get_nanbox_f64()));
 
     let rounding_mode = enum_option_strict(
-        current_options(),
+        (current_options.get_nanbox_f64()),
         "roundingMode",
         &[
             "ceil",
@@ -170,13 +191,13 @@ pub(crate) fn configure_number_format(obj: *mut ObjectHeader, locale: &str, opti
         "halfExpand",
     );
     let mut rounding_priority = get_string_option_enum(
-        current_options(),
+        (current_options.get_nanbox_f64()),
         "roundingPriority",
         &["auto", "morePrecision", "lessPrecision"],
         "auto",
     );
     let trailing_zero = get_string_option_enum(
-        current_options(),
+        (current_options.get_nanbox_f64()),
         "trailingZeroDisplay",
         &["auto", "stripIfInteger"],
         "auto",
@@ -326,7 +347,7 @@ pub(crate) fn configure_number_format(obj: *mut ObjectHeader, locale: &str, opti
 
     // compactDisplay, useGrouping, signDisplay.
     let compact_display = get_string_option_enum(
-        current_options(),
+        (current_options.get_nanbox_f64()),
         "compactDisplay",
         &["short", "long"],
         "short",
@@ -342,7 +363,8 @@ pub(crate) fn configure_number_format(obj: *mut ObjectHeader, locale: &str, opti
     } else {
         "auto"
     };
-    let use_grouping = get_use_grouping_option(current_options(), default_grouping);
+    let use_grouping =
+        get_use_grouping_option((current_options.get_nanbox_f64()), default_grouping);
     set_internal_field_from_raw_handle(
         &obj_handle,
         KEY_NF_USE_GROUPING,
@@ -350,7 +372,7 @@ pub(crate) fn configure_number_format(obj: *mut ObjectHeader, locale: &str, opti
     );
 
     let sign_display = get_string_option_enum(
-        current_options(),
+        (current_options.get_nanbox_f64()),
         "signDisplay",
         &["auto", "never", "always", "exceptZero", "negative"],
         "auto",

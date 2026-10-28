@@ -10,7 +10,7 @@
 //! touching the network.
 
 use std::collections::HashMap;
-use std::sync::{LazyLock, Mutex};
+use std::sync::Mutex;
 
 use crate::array::ArrayHeader;
 use crate::closure::{
@@ -292,18 +292,12 @@ pub(crate) struct DgramRegistry {
     pub(crate) bound: HashMap<SocketKey, f64>,
 }
 
-pub(crate) static DGRAM_REGISTRY: LazyLock<Mutex<DgramRegistry>> = LazyLock::new(|| {
-    // #11541: register the thread-exit hook when the registry is first
-    // touched (before any binding can exist) instead of naming it in
-    // `arena::thread_exit`'s dispatcher.
+pub(crate) use crate::dgram_registry_owner::DGRAM_REGISTRY;
+pub(crate) fn register_thread_exit_hook() {
     crate::arena::thread_exit::register_thread_exit_range_hook(
         release_dgram_bindings_in_freed_ranges,
     );
-    Mutex::new(DgramRegistry {
-        next_port: 49152,
-        bound: HashMap::new(),
-    })
-});
+}
 
 /// #11471: forget every deterministic-mode binding whose socket object lives
 /// in a thread's arena that is being freed.
@@ -596,7 +590,7 @@ pub(crate) fn socket_object(socket_type: &str) -> f64 {
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let socket = scope.root_nanbox_f64(socket);
-    let ids = crate::async_hooks::init_resource("UDPWRAP", socket.get_nanbox_f64(), true);
+    let ids = crate::async_hook_slots::init_resource("UDPWRAP", socket.get_nanbox_f64(), true);
     set_hidden_value(socket.get_nanbox_f64(), KEY_ASYNC_ID, ids.async_id as f64);
     set_hidden_value(
         socket.get_nanbox_f64(),
@@ -606,8 +600,8 @@ pub(crate) fn socket_object(socket_type: &str) -> f64 {
     socket.get_nanbox_f64()
 }
 
-pub(crate) fn socket_async_ids(socket: f64) -> crate::async_hooks::AsyncResourceIds {
-    crate::async_hooks::AsyncResourceIds {
+pub(crate) fn socket_async_ids(socket: f64) -> crate::async_hook_slots::AsyncResourceIds {
+    crate::async_hook_slots::AsyncResourceIds {
         async_id: get_hidden_value(socket, KEY_ASYNC_ID).unwrap_or(0.0) as u64,
         trigger_async_id: get_hidden_value(socket, KEY_TRIGGER_ASYNC_ID).unwrap_or(0.0) as u64,
     }

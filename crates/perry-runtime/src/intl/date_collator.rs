@@ -40,7 +40,7 @@ fn date_arg_to_clipped_ms(value: f64) -> f64 {
     }
     let js = JSValue::from_bits(value.to_bits());
     let ms = if js.is_undefined() {
-        crate::date::js_date_now()
+        crate::clock::wall_millis()
     } else {
         // Date cells fast-path to their stored timestamp (identical to
         // ToNumber(date)); `date_cell_timestamp` returns its argument unchanged
@@ -1634,8 +1634,8 @@ fn collator_enum_option(options: f64, key: &str, allowed: &[&str]) {
 pub(super) fn resolve_collator_options(options: &crate::gc::RuntimeHandle<'_>) -> bool {
     // Every GetOption can run a getter that moves the options object: re-read
     // the rooted value for each read.
-    let options = || options.get_nanbox_f64();
-    let js = JSValue::from_bits(options().to_bits());
+    let options = &options;
+    let js = JSValue::from_bits((options.get_nanbox_f64()).to_bits());
     if js.is_undefined() {
         return false;
     }
@@ -1645,22 +1645,31 @@ pub(super) fn resolve_collator_options(options: &crate::gc::RuntimeHandle<'_>) -
     if js.is_null() {
         throw_type_error("Cannot convert undefined or null to object");
     }
-    collator_enum_option(options(), "usage", &["sort", "search"]);
-    collator_enum_option(options(), "localeMatcher", &["lookup", "best fit"]);
+    collator_enum_option((options.get_nanbox_f64()), "usage", &["sort", "search"]);
+    collator_enum_option(
+        (options.get_nanbox_f64()),
+        "localeMatcher",
+        &["lookup", "best fit"],
+    );
     // `collation` (string, no enum), `numeric` / `ignorePunctuation` (boolean via
     // ToBoolean) never throw for an in-range value; read them so the GetOption
     // getter sequence still matches, but coerce a Symbol `collation` per ToString.
-    let _ = get_option_string(options(), "collation");
+    let _ = get_option_string((options.get_nanbox_f64()), "collation");
     // GetOption(options, "numeric", boolean): read once here and handed back, so
     // the comparison never re-reads the getter.
-    let numeric = crate::value::js_is_truthy(get_option_value(options(), "numeric")) != 0;
-    collator_enum_option(options(), "caseFirst", &["upper", "lower", "false"]);
+    let numeric =
+        crate::value::js_is_truthy(get_option_value((options.get_nanbox_f64()), "numeric")) != 0;
     collator_enum_option(
-        options(),
+        (options.get_nanbox_f64()),
+        "caseFirst",
+        &["upper", "lower", "false"],
+    );
+    collator_enum_option(
+        (options.get_nanbox_f64()),
         "sensitivity",
         &["base", "accent", "case", "variant"],
     );
-    let _ = get_option_value(options(), "ignorePunctuation");
+    let _ = get_option_value((options.get_nanbox_f64()), "ignorePunctuation");
     numeric
 }
 

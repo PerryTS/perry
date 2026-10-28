@@ -1370,7 +1370,7 @@ fn resolver_object(initial_servers: Vec<String>, options: f64) -> *mut ObjectHea
     }
     let (_, obj_ptr) = obj.across_mut::<ObjectHeader, _>(|| {
         obj.with_mut_ptr::<ObjectHeader, _>(|obj_ptr| {
-            let _ = crate::async_hooks::init_resource(
+            let _ = crate::async_hook_slots::init_resource(
                 "DNSCHANNEL",
                 js_nanbox_pointer(obj_ptr as i64),
                 true,

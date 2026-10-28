@@ -74,7 +74,7 @@ thread_local! {
 fn blob_reader_promise_value(value: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let value = scope.root_nanbox_f64(value);
-    crate::async_hooks::run_provider_completion("BLOBREADER", || {
+    crate::async_hook_slots::run_provider_completion("BLOBREADER", || {
         promise_value(value.get_nanbox_f64())
     })
 }
@@ -82,7 +82,7 @@ fn blob_reader_promise_value(value: f64) -> f64 {
 fn blob_reader_promise_rejected(reason: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let reason = scope.root_nanbox_f64(reason);
-    crate::async_hooks::run_provider_completion("BLOBREADER", || {
+    crate::async_hook_slots::run_provider_completion("BLOBREADER", || {
         promise_rejected(reason.get_nanbox_f64())
     })
 }

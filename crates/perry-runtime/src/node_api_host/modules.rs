@@ -54,7 +54,7 @@ pub(crate) fn register_module(env: NapiEnv, path: &Path, api_version: i32) -> Op
     // A canonical Windows path carries the verbatim prefix, which is not part
     // of the file URL Node reports.
     let text = text.strip_prefix(r"\\?\").unwrap_or(&text);
-    let url = crate::url::node_compat::path_to_file_url_string(text, cfg!(windows));
+    let url = crate::module_require::file_url_text::path_to_file_url_string(text, cfg!(windows));
     let file_url = CString::new(url).ok()?;
     with_env_mut(env, |env| {
         let index = u32::try_from(env.modules.len()).ok()?;
@@ -129,7 +129,7 @@ fn report_uncaught_exception(mut error: f64) {
     // and is delivered again, as the timer and watcher pumps do.
     loop {
         match crate::exception::js_call_catching(|| {
-            crate::os::emit_process_uncaught_exception(error);
+            crate::os_hook_slots::emit_process_uncaught_exception(error);
             f64::from_bits(crate::value::TAG_UNDEFINED)
         }) {
             Ok(_) => return,

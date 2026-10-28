@@ -132,7 +132,7 @@ fn is_callable(value: f64) -> bool {
     if crate::value::addr_class::is_handle_band(raw) || (raw as u64) >= HEAP_ADDR_CEILING {
         return false;
     }
-    crate::closure::is_closure_ptr(raw) || crate::proxy::js_proxy_is_proxy(value) == 1
+    crate::closure::is_closure_ptr(raw) || crate::proxy_hooks::proxy_is_proxy(value) == 1
 }
 
 // ---------------------------------------------------------------------------
@@ -610,7 +610,7 @@ fn is_intrinsic_promise_resolve(resolve_fn: f64) -> bool {
 /// elements and `v8.promiseHooks` can be armed from it.
 #[inline]
 fn promise_lifecycle_observed() -> bool {
-    crate::v8::promise_hooks_active() || crate::async_hooks::promise_hooks_active()
+    crate::v8::promise_hooks_active() || crate::async_hook_slots::promise_hooks_active()
 }
 
 /// The element's resolved promise, when it is a plain native `Promise` whose

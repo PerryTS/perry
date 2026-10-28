@@ -99,20 +99,29 @@ pub(super) fn maybe_read_more(stream: f64, answered: bool) {
 extern "C" fn maybe_read_more_tick(c: *const ClosureHeader, _: crate::closure::JsThis) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let stream = scope.root_nanbox_f64(js_closure_get_capture_f64(c, 0));
-    let s = || stream.get_nanbox_f64();
+    let s = &stream;
     // `_read` is user code: re-read every state word after it.
-    while !read_in_flight(s()) && !stream_hidden_ended(s()) && !stream_destroyed(s()) {
-        let length = buffered(s());
-        if !(length < high_water_mark(s()) || (readable_is_flowing(s()) && length == 0.0)) {
+    while !read_in_flight((s.get_nanbox_f64()))
+        && !stream_hidden_ended((s.get_nanbox_f64()))
+        && !stream_destroyed((s.get_nanbox_f64()))
+    {
+        let length = buffered((s.get_nanbox_f64()));
+        if !(length < high_water_mark((s.get_nanbox_f64()))
+            || (readable_is_flowing((s.get_nanbox_f64())) && length == 0.0))
+        {
             break;
         }
         // `read(0)`.
-        invoke_read_once(s());
-        if buffered(s()) == length {
+        invoke_read_once((s.get_nanbox_f64()));
+        if buffered((s.get_nanbox_f64())) == length {
             break;
         }
     }
-    set_hidden_value(s(), Slot::ReadableReadingMore, f64::from_bits(TAG_FALSE));
+    set_hidden_value(
+        (s.get_nanbox_f64()),
+        Slot::ReadableReadingMore,
+        f64::from_bits(TAG_FALSE),
+    );
     f64::from_bits(TAG_UNDEFINED)
 }
 

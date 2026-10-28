@@ -268,7 +268,7 @@ pub(crate) unsafe fn object_get_to_json(ptr: *const u8) -> Option<f64> {
     // the existing `gc_obj_type == GC_TYPE_OBJECT && !is_registered_buffer`
     // guard the replacer path already applies before calling this helper.
     let recv = f64::from_bits(make_pointer_bits(ptr));
-    let is_proxy = crate::proxy::js_proxy_is_proxy(recv) != 0;
+    let is_proxy = crate::proxy_hooks::proxy_is_proxy(recv) != 0;
     if !is_proxy
         && (gc_obj_type(ptr) != crate::gc::GC_TYPE_OBJECT
             || crate::buffer::is_registered_buffer(ptr as usize))
@@ -401,7 +401,7 @@ pub(crate) unsafe fn array_get_to_json(arr: *const crate::ArrayHeader) -> Option
 /// can't leak the flag onto an unrelated later object/array.
 #[inline]
 pub(crate) unsafe fn arm_to_json_result_guard(result: f64) {
-    if crate::proxy::js_proxy_is_proxy(result) != 0 {
+    if crate::proxy_hooks::proxy_is_proxy(result) != 0 {
         SUPPRESS_NEXT_TO_JSON.with(|c| c.set(true));
         return;
     }
@@ -612,7 +612,7 @@ pub(crate) unsafe fn stringify_value(value: f64, type_hint: u32, buf: &mut Strin
         }
         // Issue #5111: TypedArray (no GcHeader on small ones) detection BEFORE
         // gc_obj_type, same rationale as the buffer check above.
-        if crate::typedarray::lookup_typed_array_kind(ptr as usize).is_some() {
+        if crate::typedarray_hook_slots::lookup_typed_array_kind(ptr as usize).is_some() {
             stringify_typed_array(ptr, buf);
             return;
         }
@@ -903,7 +903,7 @@ pub(crate) unsafe fn stringify_value_depth(
             return;
         }
         // Issue #5111: TypedArray detection BEFORE gc_obj_type (see above).
-        if crate::typedarray::lookup_typed_array_kind(ptr as usize).is_some() {
+        if crate::typedarray_hook_slots::lookup_typed_array_kind(ptr as usize).is_some() {
             stringify_typed_array(ptr, buf);
             return;
         }
@@ -1006,12 +1006,12 @@ pub(crate) unsafe fn stringify_object(ptr: *const u8, buf: &mut String) {
 /// `searchParams` field points back at the URL, so the generic object walk trips
 /// the circular-structure detector; every stringify walker (compact, pretty, and
 /// replacer, in both `stringify.rs` and `replacer.rs`) short-circuits URL objects
-/// through here. Callers must have confirmed `crate::url::is_url_object_shape`.
+/// through here. Callers must have confirmed `crate::object::url_layout::is_url_object_shape`.
 /// `href` is a string by construction, so this never recurses into an object and
 /// is depth-independent (emitting it just escapes + quotes the string).
 #[inline]
 pub(crate) unsafe fn write_url_href_json(url: *mut crate::ObjectHeader, buf: &mut String) {
-    let href = crate::url::url_class::js_url_get_href(url);
+    let href = crate::url_hooks::url_get_href(url);
     stringify_value(href, TYPE_UNKNOWN, buf);
 }
 
@@ -1289,7 +1289,7 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
                 continue;
             }
             // Issue #5111: TypedArray element detection BEFORE gc_obj_type.
-            if crate::typedarray::lookup_typed_array_kind(elem_ptr as usize).is_some() {
+            if crate::typedarray_hook_slots::lookup_typed_array_kind(elem_ptr as usize).is_some() {
                 stringify_typed_array(elem_ptr, buf);
                 continue;
             }

@@ -65,3 +65,5 @@ pub(crate) fn is_nullish(value: f64) -> bool {
 pub(crate) fn is_callable(value: f64) -> bool {
     !extract_closure_ptr(value).is_null()
 }
+
+pub(super) use watch_backend::install_tls_resolvers;

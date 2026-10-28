@@ -1,7 +1,7 @@
 use crate::instructions::{rx, Format};
 use crate::rules::Rule;
 use crate::table::{native_stems, perry_member, Class, Entry, Table};
-use anyhow::Result;
+use anyhow::{bail, Result};
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     path::Path,
@@ -422,6 +422,14 @@ pub fn classify(g: &Graph, rules: &[Rule], root: Option<&Path>) -> Result<Classi
         .collect();
     for (&i, rule) in &ordered {
         if let Some(targets) = target_matches.get(&rule.line) {
+            if targets.is_empty() {
+                bail!(
+                    "seeds.txt:{}: delegated callback pattern matched no functions for {}: {}",
+                    rule.line,
+                    g.label(i),
+                    rule.targets.as_ref().unwrap().pattern
+                );
+            }
             for &t in targets {
                 if t != i {
                     extra_pred[t].push(i);

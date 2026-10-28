@@ -36,7 +36,7 @@ use std::ptr;
 
 /// `Set(O, ToString(k), v, true)` for an array-like object receiver.
 fn al_set(recv: f64, k: i64, v: f64) {
-    if crate::proxy::js_proxy_is_proxy(recv) != 0 {
+    if crate::proxy_hooks::proxy_is_proxy(recv) != 0 {
         unsafe { super::push_pop::proxy_set_str_key(recv, k.to_string().as_bytes(), v) };
         return;
     }
@@ -45,7 +45,7 @@ fn al_set(recv: f64, k: i64, v: f64) {
 
 /// `DeletePropertyOrThrow(O, ToString(k))` for an array-like object receiver.
 fn al_delete(recv: f64, k: i64) {
-    if crate::proxy::js_proxy_is_proxy(recv) != 0 {
+    if crate::proxy_hooks::proxy_is_proxy(recv) != 0 {
         unsafe { super::push_pop::proxy_delete_str_key_or_throw(recv, k.to_string().as_bytes()) };
         return;
     }
@@ -479,7 +479,7 @@ pub extern "C" fn js_arraylike_splice(recv: f64, args_ptr: *const f64, count: i3
     // `al_set_length` tail reads the masked handle id as a raw ObjectHeader
     // address, and its proxy deletes don't throw on a refusing trap
     // (DeletePropertyOrThrow).
-    if crate::proxy::js_proxy_is_proxy(o) != 0 {
+    if crate::proxy_hooks::proxy_is_proxy(o) != 0 {
         if let Some(r) = super::push_pop::proxy_array_mutator(o, "splice", args_ptr, count) {
             return r;
         }

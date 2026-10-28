@@ -31,6 +31,7 @@ mod parent_value;
 mod prim_result;
 mod protocol_calls;
 mod proof_receivers;
+mod proto_value;
 mod protocol_keys;
 mod receiver_this;
 mod rest_element;

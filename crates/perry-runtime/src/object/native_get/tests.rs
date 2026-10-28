@@ -271,7 +271,7 @@ fn unsupported_receivers_and_private_names_decline_and_preserve_results() {
     let _no_gc = crate::gc::GcSuppressScope::new();
     let target = object("value", 59.0);
     let handler = js_object_alloc(0, 0);
-    let proxy = crate::proxy::js_proxy_new(boxed(target), boxed(handler));
+    let proxy = crate::proxy_hooks::proxy_new(boxed(target), boxed(handler));
     let array = crate::array::js_array_alloc(4);
     let array_value = crate::value::js_nanbox_pointer(array as i64);
     js_object_set_field_by_name(array as *mut ObjectHeader, key("value"), 59.0);

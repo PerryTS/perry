@@ -1057,7 +1057,7 @@ pub fn gc_init() {
     }
     // Publish this agent's intrinsic function layouts before any JS birth.
     let _ = crate::state::state();
-    crate::perf_hooks::init_time_origin();
+    crate::perf_clock::init_time_origin();
     #[cfg(not(perry_gc_instruments))]
     instruments::refuse_instrument_knobs_without_instruments();
     crate::entry_contracts::require_check_build_if_requested();
@@ -1120,7 +1120,7 @@ pub fn gc_init() {
     // Object/string-valued `err.<prop> = v` user props live as raw bits in
     reg_scanner!(exception_mutable_root_scanner);
     reg_scanner!(async_context_mutable_root_scanner);
-    reg_scanner!(async_hooks_mutable_root_scanner);
+    crate::async_hook_slots::register_installed_roots();
     reg_scanner!(shape_cache_mutable_root_scanner);
     reg_scanner!(crate::regex::scan_last_exec_groups_root_mut);
     // #7211: the eight interned `typeof` result strings, and JSON.rawJSON's
@@ -1134,7 +1134,6 @@ pub fn gc_init() {
     // intermittently, and why the from-space reporter blamed
     // `retired_by_minor=#0`.
     reg_scanner!(crate::builtins::arithmetic::scan_typeof_string_roots_mut);
-    reg_scanner!(crate::json::raw_json::scan_raw_json_key_root_mut);
     reg_scanner!(crate::array::scan_template_raw_roots_mut);
     // #6981: the memoized `Array.prototype` / `Object.prototype` addresses in
     // `array::indexing`. Raw addresses of movable objects — a relocating cycle
@@ -1146,8 +1145,7 @@ pub fn gc_init() {
     // or Proxy trap can re-enter after moving GC. Rewrite that temporary
     // identity so malformed prototype cycles remain bounded.
     reg_scanner!(crate::object::prototype_chain::scan_prototype_resolution_stack_roots_mut,);
-    reg_scanner!(crate::perf_hooks::scan_perf_entries_roots_mut);
-    reg_scanner!(crate::perf_histogram::scan_histogram_roots_mut);
+
     reg_scanner!(crate::v8::scan_v8_promise_hook_roots_mut);
     reg_scanner!(transition_cache_mutable_root_scanner);
     reg_scanner!(crate::object::scan_object_cache_roots_mut);
@@ -1225,7 +1223,6 @@ pub fn gc_init() {
     // #4911: a bound node:dgram socket is reachable only from the dgram
     // reactor's registry while its recv thread runs; scan + rewrite it so a GC
     // between ticks doesn't reclaim the object whose `message` handlers fire.
-    reg_scanner!(json_parse_mutable_root_scanner);
     reg_scanner!(crate::string::scan_utf16_index_roots_mut);
     // #7564: the per-thread `{ value, done }` / `{ done, value }` keys arrays
     // shared by every iterator result the runtime builds. Nothing else in the
@@ -1236,7 +1233,7 @@ pub fn gc_init() {
     // the thread-local slot is the only place the new address can be recorded.
     // Same shape as the line above: the shared keys arrays behind
     // `Intl.Segmenter`'s segment records are referenced only by this cache.
-    reg_scanner!(crate::intl::segmenter::scan_segment_record_keys_roots_mut);
+    crate::segmenter_hook_roots::register_installed_roots();
     reg_scanner!(small_int_cache_mutable_root_scanner);
     reg_scanner!(concat_memo_mutable_root_scanner);
     // A pinned object is a root: its holder is an external reference the
@@ -1249,7 +1246,8 @@ pub fn gc_init() {
     // #8282/#8294: process EventEmitter listener closures live as raw
     // `*const ClosureHeader` in a TLS map. The scanner existed but was never
     // called, so the table stayed invisible to the collector.
-    crate::os::os_process_emitter::register_process_emitter_root_scanner();
+    crate::os_hook_slots::register_installed_roots();
+    crate::event_target_hook_slots::register_installed_roots();
     reg_scanner!(crate::weakref::scan_pending_finalization_jobs_roots_mut);
     // #6182: keep the weak-holder registry's stored holder ADDRESSES current
     // across evacuation. Metadata-only (non-rooting) — it rewrites forwarded
@@ -1293,7 +1291,7 @@ pub fn gc_init() {
     // from inside interpreted code.
     // Registered unconditionally; it scans once the `dyn-eval` install has
     // connected the interpreter (see `crate::dyn_eval_hooks`).
-    reg_scanner!(crate::dyn_eval_hooks::scan_dyn_eval_roots_mut);
+    crate::dyn_eval_hook_roots::register_installed_roots();
     reg_scanner!(crate::tls::scan_tls_roots_mut);
     reg_scanner!(crate::process::scan_process_finalization_roots_mut);
     reg_scanner!(crate::process::scan_process_module_loader_roots_mut);
@@ -1308,12 +1306,12 @@ pub fn gc_init() {
     // collection wrote through a dangling pointer.
     reg_scanner!(crate::process::scan_process_env_cache_roots_mut);
     reg_scanner!(crate::process::scan_permission_cache_roots_mut);
-    reg_scanner!(crate::process::scan_report_cache_roots_mut);
+    crate::diagnostic_report_roots::register_installed_roots();
     // #8220: process EventEmitter listener closures are held as raw
     // `*const ClosureHeader` in a TLS `HashMap` — invisible to the precise
     // root map. Without this scanner a copying minor that evacuates a
     // listener closure leaves the raw pointer stale.
-    reg_scanner!(crate::os::process_emitter_root_scanner);
+
     // #7231: the raw `Error` constructor address behind
     // `Error.prepareStackTrace`. The closure is reachable through `globalThis`
     // so it is not swept, but this duplicate lives outside the object graph
@@ -1337,14 +1335,16 @@ pub fn gc_init() {
     reg_scanner!(crate::object::scan_current_new_target_root_mut);
     reg_scanner!(crate::object::scan_accessor_receiver_override_root_mut);
     reg_scanner!(crate::object::scan_pending_fetch_signal_root_mut);
-    reg_scanner!(crate::os::scan_process_event_listener_roots_mut);
+
     // #6077: keep promises tracked for an unhandled rejection alive + address-
     // stable until reported, so the program-end report is not a stale/UAF read.
     reg_scanner!(crate::promise::scan_unhandled_rejection_roots_mut);
-    reg_scanner!(crate::os::scan_process_stream_singleton_roots_mut);
-    reg_scanner!(crate::fs::scan_fs_handle_roots_mut);
-    reg_scanner!(crate::fs::scan_fs_stream_roots_mut);
-    reg_scanner!(crate::fs::scan_fs_watcher_roots_mut);
+
+    crate::perf_hook_slots::register_installed_roots();
+    if let Some(register) = crate::feature_hooks::FS_REGISTER_ROOTS.peek() {
+        register();
+    }
+
     #[cfg(feature = "full")]
     reg_scanner!(crate::plugin::scan_plugin_roots_mut);
     reg_scanner!(crate::geisterhand_registry::scan_geisterhand_roots_mut);
@@ -1425,7 +1425,7 @@ pub unsafe extern "C" fn js_gc_init_with_layouts(
     // any truncating consumer (`| head`, `| grep -q`, a closed socket) kills
     // the writer mid-write. Node ignores the signal and surfaces `EPIPE` to
     // the writer instead; do the same before a single byte can be written.
-    crate::os::ignore_sigpipe_at_startup();
+    crate::process_startup::ignore_sigpipe_at_startup();
     // Prime the process wall-clock epoch NOW: it lazily initializes on first
     // read, and the first read is otherwise whatever GC event happens to
     // consult it — which would make the exit-time GC-share denominator start

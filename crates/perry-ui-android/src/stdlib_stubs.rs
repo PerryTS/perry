@@ -12,6 +12,7 @@
 // js_await_any_promise (perry-runtime/promise.rs)
 // js_ws_* (perry-runtime/stdlib_stubs.rs)
 // js_json_* (perry-runtime/json.rs)
+// js_async_local_storage_* (perry-runtime/async_local_storage.rs)
 
 #[no_mangle]
 pub extern "C" fn js_argon2_hash() -> i64 {
@@ -26,30 +27,6 @@ pub extern "C" fn js_argon2_verify() -> i64 {
     0
 }
 // js_array_unshift_jsvalue — now provided by perry-runtime
-#[no_mangle]
-pub extern "C" fn js_async_local_storage_disable() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_async_local_storage_enter_with() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_async_local_storage_exit() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_async_local_storage_get_store() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_async_local_storage_new() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_async_local_storage_run() -> i64 {
-    0
-}
 // js_await_any_promise — now provided by perry-runtime
 #[no_mangle]
 pub extern "C" fn js_await_js_promise() -> i64 {

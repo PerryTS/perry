@@ -217,9 +217,9 @@ macro_rules! nm_general_closures {
         let $typed_kind = |v: f64| -> Option<u8> {
             let addr = $ptr_addr(v);
             if crate::buffer::is_uint8array_buffer(addr) {
-                Some(crate::typedarray::KIND_UINT8)
+                Some(crate::typedarray_hook_slots::KIND_UINT8)
             } else {
-                crate::typedarray::lookup_typed_array_kind(addr)
+                crate::typedarray_hook_slots::lookup_typed_array_kind(addr)
             }
         };
         let _ = (

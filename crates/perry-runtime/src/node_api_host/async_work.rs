@@ -31,8 +31,16 @@ pub(crate) struct AsyncWorkRecord {
     pub inner: Arc<AsyncWorkInner>,
 }
 
-static COMPLETIONS: LazyLock<Mutex<VecDeque<Arc<AsyncWorkInner>>>> =
-    LazyLock::new(|| Mutex::new(VecDeque::new()));
+pub(crate) type AsyncCompletionQueue = Mutex<VecDeque<Arc<AsyncWorkInner>>>;
+static COMPLETIONS: LazyLock<AsyncCompletionQueue> =
+    LazyLock::new(crate::native_finalizer_hook::new_completion_queue);
+pub(crate) fn new_completion_queue() -> AsyncCompletionQueue {
+    Mutex::new(VecDeque::new())
+}
+pub(super) fn install_completion_queue() {
+    crate::native_finalizer_hook::set_completion_queue(new_completion_queue);
+}
+
 static ACTIVE_WORK: AtomicUsize = AtomicUsize::new(0);
 
 fn work(env: NapiEnv, handle: NapiAsyncWork) -> Option<Arc<AsyncWorkInner>> {

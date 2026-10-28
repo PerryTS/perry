@@ -1,0 +1,53 @@
+package test:async-compound-resources@1.0.0;
+interface foreign {
+    resource item { constructor(value: u32); read: func() -> u32; }
+    type owners = list<own<item>>;
+    record leaf { first: own<item>, second: own<item>, label: string }
+    record request { owners: list<leaf>, fallback: option<own<item>>, choice: u32 }
+    variant reply { nothing, held(tuple<own<item>, option<owners>>), text(string) }
+    type response = result<reply, own<item>>;
+    exchange: async func(id: u32, value: request) -> response;
+    block: func();
+    unblock: func();
+    complete-on-cancel: func();
+}
+world plugin {
+    import foreign;
+    use foreign.{item, request, response};
+    import wait: async func(id: u32);
+    import submitted: func(id: u32);
+    import rejected: func(id: u32);
+    export cancel-exchange: async func(id: u32, value: request) -> response;
+    export loan: async func(id: u32, value: borrow<item>) -> u32;
+    export cancel-loan: async func(id: u32, value: borrow<item>) -> u32;
+    export cancelled-expired: func() -> bool;
+    export published: func() -> u32;
+}
+world provider {
+    import gate: async func(id: u32);
+    import entered: func(id: u32);
+    import ready: func(id: u32);
+    import prepared: func(id: u32);
+    import dropped: func(id: u32);
+    export foreign;
+}
+world supervisor {
+    import foreign;
+    use foreign.{item, request, response};
+    import cancel-exchange: async func(id: u32, value: request) -> response;
+    import loan: async func(id: u32, value: borrow<item>) -> u32;
+    import cancel-loan: async func(id: u32, value: borrow<item>) -> u32;
+    import cancelled-expired: func() -> bool;
+    import published: func() -> u32;
+    import wait: async func(id: u32);
+    import submitted: func(id: u32);
+    import rejected: func(id: u32);
+    import gate: async func(id: u32);
+    import entered: func(id: u32);
+    import ready: func(id: u32);
+    import prepared: func(id: u32);
+    import dropped: func(id: u32);
+    import proceed: async func(mode: u32, base: u32) -> u32;
+    import acknowledged: func(mode: u32, base: u32, state: u32);
+    export exercise: async func(mode: u32, base: u32) -> u32;
+}

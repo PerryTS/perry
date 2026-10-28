@@ -259,7 +259,7 @@ fn test_residual_prototype_owners_of_every_movable_kind_survive_a_copying_minor(
         ),
         (
             "Date",
-            Box::new(|| (crate::date::js_date_new().to_bits() & POINTER_MASK) as usize),
+            Box::new(|| (crate::date_hook_slots::js_date_new().to_bits() & POINTER_MASK) as usize),
         ),
     ];
     #[cfg(feature = "regex-engine")]

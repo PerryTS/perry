@@ -1041,7 +1041,7 @@ unsafe fn gc_pointer_and_type_from_value(value: f64) -> Option<(*const u8, u8)> 
     if crate::buffer::is_registered_buffer(addr) {
         return Some((ptr, crate::gc::GC_TYPE_BUFFER));
     }
-    if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
+    if crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some() {
         return Some((ptr, crate::gc::GC_TYPE_TYPED_ARRAY));
     }
     if !is_valid_obj_ptr(ptr as *const u8) {
@@ -1295,7 +1295,7 @@ pub(crate) unsafe fn native_call_method_tower(
         // unrelated 16-byte method (for example TLSSocket#getSharedSigalgs)
         // must not be dereferenced as a PerformanceObserverEntryList.
         if matches!(name, b"getEntriesByName" | b"getEntriesByType")
-            && crate::perf_hooks::is_perf_observer_list_value(object)
+            && crate::perf_hook_slots::is_perf_observer_list_value(object)
         {
             let arg0 = if args_len > 0 && !args_ptr.is_null() {
                 *args_ptr
@@ -1303,9 +1303,9 @@ pub(crate) unsafe fn native_call_method_tower(
                 f64::from_bits(crate::value::TAG_UNDEFINED)
             };
             if name == b"getEntriesByName" {
-                crate::perf_hooks::validate_perf_list_filter_arg(arg0, "name", args_len == 0);
+                crate::perf_hook_slots::validate_perf_list_filter_arg(arg0, "name", args_len == 0);
             } else {
-                crate::perf_hooks::validate_perf_list_filter_arg(arg0, "type", args_len == 0);
+                crate::perf_hook_slots::validate_perf_list_filter_arg(arg0, "type", args_len == 0);
             }
         }
     }
@@ -1589,7 +1589,7 @@ pub(crate) unsafe fn native_call_method_tower(
     // call on a type-erased receiver lands here — dispatch the covered surface
     // to the natives (shape-probed for the native form, hidden backing for the
     // subclass) before the generic field-scan misses.
-    if let Some(result) = crate::url::search_params::try_url_search_params_dynamic_dispatch(
+    if let Some(result) = crate::url_hooks::try_url_search_params_dynamic_dispatch(
         object(),
         method_name,
         args_ptr,
@@ -1756,7 +1756,7 @@ pub(crate) unsafe fn native_call_method_tower(
                 // non-callable own value. The prototype-object probe may
                 // allocate, so keep the resolved method in a mutable root.
                 if own_override
-                    && !crate::proxy::proxy_wraps_callable(dyn_val.get_nanbox_f64())
+                    && !crate::proxy_hooks::proxy_wraps_callable(dyn_val.get_nanbox_f64())
                     && !crate::object::is_function_prototype_object_value(dyn_val.get_nanbox_f64())
                 {
                     crate::error::js_throw_type_error_not_a_function(
@@ -1782,8 +1782,8 @@ pub(crate) unsafe fn native_call_method_tower(
                 // introduced `refreshed_args` and reached ten sites but not
                 // this one.
                 let call_args = refreshed_args();
-                let result = if crate::proxy::js_proxy_is_proxy(f64::from_bits(bound)) == 1 {
-                    crate::proxy::call_proxy_value_with_this(
+                let result = if crate::proxy_hooks::proxy_is_proxy(f64::from_bits(bound)) == 1 {
+                    crate::proxy_hooks::call_proxy_value_with_this(
                         f64::from_bits(bound),
                         object(),
                         &call_args,
@@ -1916,15 +1916,17 @@ pub(crate) unsafe fn native_call_method_tower(
     // Mirror the spec: `Get(proxy, "method")` (honors the get trap / forwards
     // through the target's prototype chain) then `Call(method, proxy, args)`
     // with `this` bound to the proxy itself.
-    if crate::proxy::js_proxy_is_proxy(object()) == 1 {
+    if crate::proxy_hooks::proxy_is_proxy(object()) == 1 {
         let key = crate::string::js_string_from_bytes(
             method_name_ptr as *const u8,
             method_name_len as u32,
         );
         let key_box = f64::from_bits(JSValue::string_ptr(key).bits());
         let key_handle = root_scope.root_nanbox_f64(key_box);
-        let method_value =
-            crate::proxy::js_proxy_get(object_handle.get_nanbox_f64(), key_handle.get_nanbox_f64());
+        let method_value = crate::proxy_hooks::proxy_get(
+            object_handle.get_nanbox_f64(),
+            key_handle.get_nanbox_f64(),
+        );
         let method_handle = root_scope.root_nanbox_f64(method_value);
         // First Get the method through the trap. Only the actual Array
         // builtin may enter the generic engine; a trap's replacement must
@@ -1950,7 +1952,8 @@ pub(crate) unsafe fn native_call_method_tower(
         // of a normal `obj.method(args)` invocation. A canonical class-method
         // value takes it via `canonical_bound_method_receiver` (#6699 routes a
         // proxy receiver through there).
-        let proxy_class_id = crate::proxy::proxy_target_class_id(object_handle.get_nanbox_f64());
+        let proxy_class_id =
+            crate::proxy_hooks::proxy_target_class_id(object_handle.get_nanbox_f64());
         let is_static_class_method = proxy_class_id.is_some_and(|class_id| {
             crate::object::class_registry::lookup_static_method_in_chain(class_id, method_name)
                 .is_some()
@@ -2186,9 +2189,9 @@ pub(crate) unsafe fn native_call_method_tower(
         // `obj` is a validated heap object (gc_type read above).
         if method_name == "toJSON"
             && gc_type == crate::gc::GC_TYPE_OBJECT
-            && crate::perf_hooks::is_perf_entry_object(obj)
+            && crate::perf_hook_slots::is_perf_entry_object(obj)
         {
-            return crate::perf_hooks::perf_entry_to_json(object());
+            return crate::perf_hook_slots::perf_entry_to_json(object());
         }
 
         // Same shape of synthesis for `performance.nodeTiming.toJSON()`: the
@@ -2197,9 +2200,9 @@ pub(crate) unsafe fn native_call_method_tower(
         // key here (`Object.keys(nodeTiming)` is pinned at the 12 milestones).
         if method_name == "toJSON"
             && gc_type == crate::gc::GC_TYPE_OBJECT
-            && crate::perf_hooks::is_node_timing_object(obj)
+            && crate::perf_hook_slots::is_node_timing_object(obj)
         {
-            return crate::perf_hooks::node_timing_to_json(object());
+            return crate::perf_hook_slots::node_timing_to_json(object());
         }
 
         // WeakMap/WeakSet dynamic method dispatch (issue #1757/#1758): these
