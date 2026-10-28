@@ -1146,11 +1146,22 @@ const INERT_TYPE_INFO: GcTypeInfo = gc_type_info_entry(
     GcFinalizeHookKind::None,
 );
 
-// Direct descriptor projection must preserve unknown-kind admission semantics.
-const _: () = assert!(matches!(
-    INERT_TYPE_INFO.rewrite_descriptor_kind,
-    GcRewriteDescriptorKind::Leaf
-));
+// Direct descriptor projection must preserve unknown-kind semantics for
+// EVERY unused row, including any future catalog changes.
+const _: () = {
+    let rows = byte_type_infos();
+    let mut kind = 0;
+    while kind < rows.len() {
+        assert!(
+            rows[kind].type_id != 0
+                || matches!(
+                    rows[kind].rewrite_descriptor_kind,
+                    GcRewriteDescriptorKind::Leaf
+                )
+        );
+        kind += 1;
+    }
+};
 
 const fn byte_type_infos() -> [GcTypeInfo; MALLOC_KIND_BUCKET_COUNT] {
     // Unused ids have fully initialized inert fields. A layout note can read
