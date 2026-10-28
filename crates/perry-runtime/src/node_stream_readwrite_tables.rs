@@ -23,7 +23,7 @@ unsafe extern "C" fn ns_remove_all_listeners_args(
     args: *const f64,
     len: usize,
 ) -> f64 {
-    let stream = this_value(closure, this);
+    let stream = emitter_this_value(closure, this);
     if len == 0 {
         crate::node_stream::event_emitter::remove_all_stream_listeners(
             stream,

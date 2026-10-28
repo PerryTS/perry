@@ -87,6 +87,8 @@ pub(crate) fn ensure_lazy_stream(value: f64) -> f64 {
 /// Emitter construction owns only emitter initialization. Stream probes are
 /// installed by stream births, whose layouts make those probes meaningful.
 pub(crate) fn install_emitter() {
+    // Emitter subclasses also retain shape words in the existing birth sites.
+    NOTE_BIRTH_CARRIERS.set(crate::node_stream::note_birth_carriers);
     JS_EVENT_EMITTER_SUBCLASS_INIT.set(crate::node_stream::js_event_emitter_subclass_init);
     JS_EVENT_EMITTER_ASYNC_RESOURCE_SUBCLASS_INIT
         .set(crate::node_stream::js_event_emitter_async_resource_subclass_init);
@@ -103,6 +105,5 @@ pub(crate) fn install() {
     STORE_RECORD_PAYLOAD_CELL.set(crate::node_stream::store_record_payload_cell);
     RECORD_ALIAS_WORD.set(crate::node_stream::record_alias_word);
     STORE_RECORD_ALIAS_WORD.set(crate::node_stream::store_record_alias_word);
-    NOTE_BIRTH_CARRIERS.set(crate::node_stream::note_birth_carriers);
     ENSURE_LAZY_STREAM.set(crate::node_stream::ensure_lazy_stream);
 }
