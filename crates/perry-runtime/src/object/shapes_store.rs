@@ -689,7 +689,9 @@ impl ShapeRecord {
             && crate::object::field_rep::identity_with_special(self.rep)
                 == crate::object::field_rep::identity_with_special(rep)
             && self.special_constfn_mask == mask
-            && self.constfn_infos() == infos
+            // Both masks came from validated immutable lists: zero iff empty.
+            // There is no body identity to fetch from the cold extension then.
+            && (mask == 0 || self.constfn_infos() == infos)
             && brand_lists_equal(self.brands(), brands)
             && self.facts_match(
                 keys,

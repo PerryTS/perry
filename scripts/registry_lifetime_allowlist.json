@@ -58,34 +58,6 @@
       "why": "Keyed by the address of a PEM-string KeyObject per createPublic/PrivateKey; finalize_collected_dead_buffer clears the other crypto tables but not this one"
     },
     {
-      "file": "crates/perry-runtime/src/builtins/fn_metadata.rs",
-      "name": "OVERRIDES",
-      "fn": "function_name_overrides",
-      "verdict": "bounded_by_program",
-      "why": "Keyed by closure func_ptr (a code address, not a closure instance): at most one entry per compiled function"
-    },
-    {
-      "file": "crates/perry-runtime/src/builtins/fn_metadata.rs",
-      "name": "OVERRIDES",
-      "fn": "function_source_overrides",
-      "verdict": "bounded_by_program",
-      "why": "Keyed by func_ptr code address via js_register_function_source; last write wins, one slot per compiled function"
-    },
-    {
-      "file": "crates/perry-runtime/src/builtins/fn_metadata.rs",
-      "name": "REGISTRY",
-      "fn": "function_name_registry",
-      "verdict": "bounded_by_program",
-      "why": "Keyed by compiled function code pointer, written by codegen module init via js_register_function_name_static once per function"
-    },
-    {
-      "file": "crates/perry-runtime/src/builtins/fn_metadata.rs",
-      "name": "REGISTRY",
-      "fn": "function_source_registry",
-      "verdict": "bounded_by_program",
-      "why": "Keyed by compiled func_ptr for raw method/accessor bodies and other callables without an ordinary per-body JsFunctionInfo source record; last write wins"
-    },
-    {
       "file": "crates/perry-runtime/src/bun_ffi/dlopen.rs",
       "name": "MATERIALIZED",
       "fn": "materialize_virtual_library",

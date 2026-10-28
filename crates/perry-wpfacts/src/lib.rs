@@ -703,6 +703,7 @@ pub(crate) fn compute_in<'a>(
                     // No constructor code: the field initializers store the
                     // class's own keys into the receiver, nothing else.
                     None => Some(units::FnContract {
+                        compiled_body: None,
                         method: false,
                         this_class: None,
                         name: format!("{name}.constructor"),

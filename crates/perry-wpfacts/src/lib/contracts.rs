@@ -354,6 +354,21 @@ pub(super) fn atoms_of(g: &gen::Gen, ks: &[model::Atom]) -> Vec<String> {
     ks.iter().map(|&a| g.m.atoms[a as usize].clone()).collect()
 }
 
+fn compiled_body_of(g: &gen::Gen, f: model::FnIdx) -> Option<(String, u32, bool)> {
+    let fi = &g.m.funcs[f as usize];
+    if fi.func_id == u32::MAX {
+        return g.stand_in_fc.get(&fi.token)?.compiled_body.clone();
+    }
+    let closure = g.m.closures.contains(&f);
+    (closure || g.m.decls.contains(&f)).then(|| {
+        (
+            g.modules[fi.module as usize].0.to_owned(),
+            fi.func_id,
+            closure,
+        )
+    })
+}
+
 pub(super) fn fn_contract_of(
     g: &gen::Gen,
     templates: &[TemplateFacts],
@@ -618,6 +633,7 @@ pub(super) fn fn_contract_of(
         .map(|(_, i, k)| (*i, k.clone()))
         .collect();
     units::FnContract {
+        compiled_body: compiled_body_of(g, f),
         method: g.m.published_this.contains_key(&f),
         this_class: this_class(g, f),
         this_use,
@@ -698,6 +714,7 @@ pub(super) fn fn_named(g: &gen::Gen, f: model::FnIdx) -> units::FnContract {
     let n = fi.params.len();
     let (name, closed) = fn_contract_name(g, f);
     units::FnContract {
+        compiled_body: compiled_body_of(g, f),
         method: g.m.published_this.contains_key(&f),
         this_class: this_class(g, f),
         name,

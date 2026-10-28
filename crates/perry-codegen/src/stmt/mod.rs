@@ -46,8 +46,11 @@ mod let_stmt_var_redeclare_tests;
 mod loops;
 mod masked_window_region;
 mod number_local_loop;
+pub(crate) use number_local_loop::numeric_callbacks;
 #[cfg(test)]
 mod number_local_loop_tests;
+#[cfg(test)]
+mod numeric_callback_contract_tests;
 #[cfg(test)]
 mod packed_range_global_cache_rooting_tests;
 #[cfg(test)]

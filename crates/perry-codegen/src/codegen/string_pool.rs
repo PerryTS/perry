@@ -414,101 +414,27 @@ pub(super) fn emit_string_pool(
         ops_per_chunk,
     );
 
-    // Unloadable images must copy metadata; permanent executable images
-    // borrow it. The source planner preserves the same ownership split.
-    let register_name_fn = if strings_outlive_registry {
-        "js_register_function_name_static"
-    } else {
-        "js_register_function_name"
-    };
     let register_class_source_fn = if strings_outlive_registry {
         "js_register_class_source_static"
     } else {
         "js_register_class_source"
     };
-
-    // Register display names for top-level user functions so
-    // `console.log(myFn)` prints `[Function: myFn]` instead of
-    // `[Function (anonymous)]`. The runtime registry is keyed on the
-    // wrapper's compiled address (`__perry_wrap_<name>`), which is
-    // what `js_closure_alloc_singleton` stamps into ClosureHeader.
-    // See #1202.
-    if strings_outlive_registry {
-        let name_table = super::function_metadata_descriptors::emit_name_table(
-            chunker.module(),
-            module_prefix,
-            user_fn_name_constants
-                .iter()
-                .map(|(wrapper, name, len)| (wrapper.as_str(), name.as_str(), *len)),
-        );
-        if let Some(table) = name_table {
-            chunker.roll_if_full();
-            chunker.current_block().call_void(
-                "js_register_function_names_static",
-                &[
-                    (PTR, &format!("@{}", table.global)),
-                    (I32, &table.len.to_string()),
-                ],
-            );
-        }
-    } else {
-        for (wrapper_sym, name_const, name_len) in &user_fn_name_constants {
-            chunker.roll_if_full();
-            chunker.current_block().call_void(
-                register_name_fn,
-                &[
-                    (PTR, &format!("@{wrapper_sym}")),
-                    (PTR, &format!("@{name_const}")),
-                    (I32, &name_len.to_string()),
-                ],
-            );
-        }
-    }
-
-    // #4101: register each function's retained source text against the same
-    // wrapper/closure address `js_closure_alloc_singleton` stamps into the
-    // ClosureHeader, so `fn.toString()` resolves the source by func_ptr.
-    if strings_outlive_registry {
-        let source_table = super::function_metadata_descriptors::emit_source_table(
-            chunker.module(),
-            module_prefix,
-            user_fn_source_constants
-                .iter()
-                .map(|(wrapper, source, is_non_strict_ordinary)| {
-                    (
-                        wrapper.as_str(),
-                        source.constant_pointer(),
-                        source.byte_len,
-                        *is_non_strict_ordinary,
-                    )
-                }),
-        );
-        if let Some(table) = source_table {
-            chunker.roll_if_full();
-            chunker.current_block().call_void(
-                "js_register_function_sources_static",
-                &[
-                    (PTR, &format!("@{}", table.global)),
-                    (I32, &table.len.to_string()),
-                ],
-            );
-        }
-    } else {
-        for (wrapper_sym, source, is_non_strict_ordinary) in &user_fn_source_constants {
-            chunker.roll_if_full();
-            let blk = chunker.current_block();
-            let source_ref = source.pointer(blk);
-            blk.call_void(
-                "js_register_function_source",
-                &[
-                    (PTR, &format!("@{wrapper_sym}")),
-                    (PTR, &source_ref),
-                    (I32, &source.byte_len.to_string()),
-                    (I32, if *is_non_strict_ordinary { "1" } else { "0" }),
-                ],
-            );
-        }
-    }
+    // Register only the descriptor owner. No function addresses or names are
+    // indexed at startup. Unloadable images copy at this ownership boundary.
+    let owner = chunker.module().function_metadata_owner_symbol();
+    chunker.roll_if_full();
+    chunker.current_block().call_void(
+        "js_register_function_metadata",
+        &[
+            (PTR, &format!("@{owner}")),
+            (I32, if strings_outlive_registry { "1" } else { "0" }),
+        ],
+    );
+    debug_assert!(
+        user_fn_source_constants.is_empty(),
+        "every retained source has a canonical info"
+    );
+    let _ = user_fn_name_constants;
 
     // #11420: every input to a class's birth [[Prototype]] identity
     // (`shapes::class_proto_id`: the anon-shape set and the generic-origin
@@ -1095,6 +1021,7 @@ pub(super) fn emit_string_pool(
     }
     method_triples.sort_unstable();
     let mut method_entries: Vec<StaticMethodEntry> = Vec::new();
+    let mut method_metadata_names: Vec<(String, String, usize)> = Vec::new();
     for (
         cid,
         method_name,
@@ -1121,7 +1048,6 @@ pub(super) fn emit_string_pool(
         // Its selected function object retains the lexical class evaluation.
         let home = fresh_cids.contains(&cid);
         let entry_name = format!("{}__eclo", llvm_name);
-        let entry_ref = format!("@{}", entry_name);
         method_entries.push(StaticMethodEntry {
             cid,
             llvm_name: llvm_name.clone(),
@@ -1139,11 +1065,12 @@ pub(super) fn emit_string_pool(
             ),
         });
         let bytes_i64 = blk.ptrtoint(&bytes_global, I64);
-        if home {
-            blk.call_void(
-                register_name_fn,
-                &[(PTR, &entry_ref), (PTR, &bytes_global), (I32, &len_str)],
-            );
+        if home && !entry.is_wtf8 {
+            method_metadata_names.push((
+                entry_name.clone(),
+                entry.bytes_global.clone(),
+                entry.byte_len,
+            ));
         }
         blk.call_void(
             "js_register_class_string_member_order",
@@ -1252,10 +1179,15 @@ pub(super) fn emit_string_pool(
             },
         );
         let blk = chunker.current_block();
-        blk.call_void(
-            register_name_fn,
-            &[(PTR, &entry_ref), (PTR, &bytes_global), (I32, &len_str)],
-        );
+        // FN_HAS_NAME licenses a UTF-8 info view. A computed WTF-8 key
+        // remains the closure's own name property, as before registration.
+        if !entry.is_wtf8 {
+            method_metadata_names.push((
+                entry_ref.trim_start_matches('@').to_string(),
+                entry.bytes_global.clone(),
+                entry.byte_len,
+            ));
+        }
         let entry_i64 = blk.ptrtoint(&entry_info_ref, I64);
         blk.call_void(
             "js_register_class_static_method_entry",
@@ -1749,6 +1681,15 @@ pub(super) fn emit_string_pool(
         module_prefix,
     );
     let [literal_chunks, class_chunks] = chunker.finish();
+    for (body, global, byte_len) in method_metadata_names {
+        llmod.note_fn_info(&body, |f| {
+            f.name = Some(crate::fn_info::RetainedName {
+                global,
+                byte_len,
+                image: false,
+            })
+        });
+    }
     record_fn_info_facts(
         llmod,
         module_prefix,

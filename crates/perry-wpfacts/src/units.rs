@@ -222,6 +222,10 @@ pub(crate) struct HandOverArg {
 
 #[derive(Clone, Debug, PartialEq, Hash)]
 pub(crate) struct FnContract {
+    /// Emitted body identity, independent of this analysis unit's stand-in.
+    /// The defining source path prevents equal HIR ids in different modules
+    /// from becoming the same callable body. None for synthesized code.
+    pub compiled_body: Option<(String, u32, bool)>,
     pub name: String,
     /// DECISIONS 165: a method of a published class (its owner's prototype
     /// holds it): a unit calling it publishes what it passes
@@ -384,6 +388,9 @@ impl FnContract {
     /// unknown result only grow; the result layouts grow, and a ⊤ result
     /// (`None`) absorbs them; the receiver is unused only if both say so.
     pub(crate) fn join(&mut self, o: &FnContract) {
+        if self.compiled_body != o.compiled_body {
+            self.compiled_body = None;
+        }
         self.method |= o.method;
         if self.this_class != o.this_class {
             self.this_class = None;

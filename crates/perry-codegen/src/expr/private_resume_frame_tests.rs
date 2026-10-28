@@ -93,6 +93,10 @@ fn private_resume_frame_uses_parent_owner_and_nonzero_offset() {
             .find(|l| l.starts_with("define ") && l.contains("@perry_resume_frame__"))
             .expect("private definition");
         assert!(
+            !definition.contains("optsize"),
+            "{mode}: private continuation uses execution policy"
+        );
+        assert!(
             definition.contains("i32 %frame_offset")
                 && definition.contains("i32 %frame_op")
                 && definition.contains("ptr %frame_out_kind"),

@@ -219,10 +219,17 @@ pub(crate) fn enter_owned_context(mut snapshot: AsyncContextSnapshot) -> AsyncCo
 }
 
 pub fn restore_context(mut snapshot: AsyncContextSnapshot) {
-    discard_disabled_entries(&mut snapshot);
     ACTIVE_CONTEXT.with(|ctx| {
-        snapshot.job_domain = ctx.borrow().job_domain.clone();
-        *ctx.borrow_mut() = snapshot;
+        let mut active = ctx.borrow_mut();
+        // No JS store changes in an empty-to-empty restore. The current
+        // canonical task identity stays in place, including when the saved
+        // snapshot came from a different native job domain.
+        if snapshot.entries.is_empty() && active.entries.is_empty() {
+            return;
+        }
+        discard_disabled_entries(&mut snapshot);
+        snapshot.job_domain = active.job_domain.clone();
+        *active = snapshot;
     });
 }
 
@@ -700,6 +707,34 @@ pub(crate) fn test_snapshot_token_lifetime(snapshot: &AsyncContextSnapshot) -> i
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_context_restore_checks_both_actual_slot_lists() {
+        let storage = AsyncLocalStoragePayload::default();
+        let original = enter_owned_context(AsyncContextSnapshot::default());
+        set_store(storage.token(), 71.0);
+        let occupied = enter_owned_context(AsyncContextSnapshot::default());
+        assert_eq!(get_store(storage.token()), None);
+        restore_context(occupied);
+        assert_eq!(get_store(storage.token()), Some(71.0));
+        restore_context(AsyncContextSnapshot::default());
+        assert_eq!(get_store(storage.token()), None);
+        restore_context(original);
+    }
+
+    #[test]
+    fn empty_context_restore_preserves_canonical_job_domain() {
+        let current = job_domain::JobDomain::new();
+        let other = job_domain::JobDomain::new();
+        current.run(|| {
+            let foreign = other.run(capture_context);
+            assert!(foreign.entries.is_empty());
+            restore_context(foreign);
+            assert!(current.is_current());
+            restore_context(AsyncContextSnapshot::default());
+            assert!(current.is_current());
+        });
+    }
 
     #[test]
     fn owned_task_context_keeps_displaced_stores_and_filters_disabled_tokens() {
