@@ -50,6 +50,27 @@ fn wasi_sdk(flavour: Flavour) -> Result<PathBuf> {
     )
 }
 
+/// The opt-in host imports a `--target wasip1` link may add. Each loads one
+/// runtime archive member; without them the module imports only
+/// `wasi_snapshot_preview1`. A WASIp2 link ignores both.
+#[derive(Clone, Copy, Default)]
+pub(super) struct HostImports {
+    /// `PERRY_WASM_NET=1`: the `perry_net` functions.
+    pub(super) net: bool,
+    /// `PERRY_WASM_DISCARD=1`: `perry_host.discard_pages`.
+    pub(super) discard: bool,
+}
+
+impl HostImports {
+    fn from_env() -> Self {
+        let on = |name: &str| std::env::var(name).as_deref() == Ok("1");
+        Self {
+            net: on("PERRY_WASM_NET"),
+            discard: on("PERRY_WASM_DISCARD"),
+        }
+    }
+}
+
 /// The clang/wasm-ld arguments for one link, split out for testing.
 pub(super) fn link_args(
     flavour: Flavour,
@@ -58,7 +79,7 @@ pub(super) fn link_args(
     runtime: &Path,
     output: &Path,
     keep_symbols: bool,
-    net: bool,
+    host: HostImports,
 ) -> Vec<String> {
     let mut args = vec![
         format!("--target={}", flavour.triple()),
@@ -77,11 +98,17 @@ pub(super) fn link_args(
         // The component adapter allocates through the module's allocator.
         args.push("-Wl,--export=cabi_realloc".to_string());
     }
-    if net && flavour == Flavour::P1 {
+    if host.net && flavour == Flavour::P1 {
         // Load the runtime archive member that imports the `perry_net` host
         // functions (outbound TCP and name resolution). Without it the module
         // imports only `wasi_snapshot_preview1`. WASIp2 has sockets of its own.
         args.push("-Wl,-u,perry_net_host".to_string());
+    }
+    if host.discard && flavour == Flavour::P1 {
+        // Load the member that imports `perry_host.discard_pages`, which the
+        // runtime calls to give freed pages back to the host. The WASIp2
+        // archive has no such code.
+        args.push("-Wl,-u,perry_wasm_discard_host".to_string());
     }
     args.extend([
         "-Wl,--stack-first".to_string(),
@@ -240,7 +267,7 @@ pub(crate) fn link_wasi(
         runtime,
         core.as_deref().unwrap_or(output),
         keep_symbols,
-        std::env::var("PERRY_WASM_NET").as_deref() == Ok("1"),
+        HostImports::from_env(),
     );
     if optimizer.is_some() && flavour == Flavour::P2 {
         args.insert(0, "-Wl,--skip-wit-component".to_string());
@@ -367,10 +394,10 @@ mod tests {
     use super::*;
 
     fn link(flavour: Flavour, keep_symbols: bool) -> Vec<String> {
-        link_net(flavour, keep_symbols, false)
+        link_host(flavour, keep_symbols, HostImports::default())
     }
 
-    fn link_net(flavour: Flavour, keep_symbols: bool, net: bool) -> Vec<String> {
+    fn link_host(flavour: Flavour, keep_symbols: bool, host: HostImports) -> Vec<String> {
         link_args(
             flavour,
             Path::new("/sdk"),
@@ -378,8 +405,22 @@ mod tests {
             Path::new("/rt/libperry_runtime.a"),
             Path::new("app.wasm"),
             keep_symbols,
-            net,
+            host,
         )
+    }
+
+    fn net_only() -> HostImports {
+        HostImports {
+            net: true,
+            ..HostImports::default()
+        }
+    }
+
+    fn discard_only() -> HostImports {
+        HostImports {
+            discard: true,
+            ..HostImports::default()
+        }
     }
 
     fn sysroot() -> String {
@@ -459,7 +500,7 @@ mod tests {
     #[test]
     fn net_loads_the_perry_net_imports_on_wasip1_only() {
         let plain = link(Flavour::P1, false);
-        let net = link_net(Flavour::P1, false, true);
+        let net = link_host(Flavour::P1, false, net_only());
         assert_eq!(net.len(), plain.len() + 1);
         assert!(net.iter().any(|arg| arg == "-Wl,-u,perry_net_host"));
         let without: Vec<_> = net
@@ -468,7 +509,38 @@ mod tests {
             .cloned()
             .collect();
         assert_eq!(without, plain);
-        assert_eq!(link_net(Flavour::P2, false, true), link(Flavour::P2, false));
+        assert_eq!(
+            link_host(Flavour::P2, false, net_only()),
+            link(Flavour::P2, false)
+        );
+    }
+
+    /// `PERRY_WASM_DISCARD=1` adds one flag to a P1 link and changes nothing
+    /// else, and composes with `PERRY_WASM_NET=1`; a P2 link ignores it.
+    #[test]
+    fn discard_loads_the_host_import_on_wasip1_only() {
+        const FLAG: &str = "-Wl,-u,perry_wasm_discard_host";
+        let plain = link(Flavour::P1, false);
+        assert!(!plain.iter().any(|arg| arg == FLAG));
+        let discard = link_host(Flavour::P1, false, discard_only());
+        assert_eq!(discard.len(), plain.len() + 1);
+        let without: Vec<_> = discard.iter().filter(|arg| *arg != FLAG).cloned().collect();
+        assert_eq!(without, plain);
+        let both = link_host(
+            Flavour::P1,
+            false,
+            HostImports {
+                net: true,
+                discard: true,
+            },
+        );
+        assert!(both.iter().any(|arg| arg == FLAG));
+        assert!(both.iter().any(|arg| arg == "-Wl,-u,perry_net_host"));
+        assert_eq!(both.len(), plain.len() + 2);
+        assert_eq!(
+            link_host(Flavour::P2, false, discard_only()),
+            link(Flavour::P2, false)
+        );
     }
 
     #[test]

@@ -777,7 +777,7 @@ pub(super) fn detect_optional_feature_usage(
     }) {
         ctx.uses_bigint = true;
     }
-    let computed = computed_members::scan(hir_module);
+    let computed = computed_members::scan(hir_module, &ctx.native_modules);
     ctx.uses_diagnostics |= computed.opaque_members
         && (ctx.native_module_imports.contains("process")
             || hir_debug.contains(r#"property: "process""#)

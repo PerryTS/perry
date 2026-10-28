@@ -600,7 +600,7 @@ pub(crate) fn copying_quarantine_from_spaces_and_flip() -> ArenaResetStats {
                 let block = &arena.blocks[arena.current];
                 inline.data = block.data;
                 inline.offset = block.offset;
-                inline.size = super::alloc_sample::inline_limit(block.offset, block.size);
+                inline.size = super::inline::allocation_limit(block.offset, block.size);
             }
         });
     });

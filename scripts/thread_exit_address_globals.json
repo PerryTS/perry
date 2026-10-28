@@ -41,10 +41,10 @@
     "region::map",
     "region::unmap"
    ],
-   "why": "Non-Linux mapping extents, not object identities. region::register records each native map; region::unmap removes its start key before apple::unmap or allocator dealloc. arena/block.rs routes pool overflow, pool drain, allocation failure and TLS teardown through that release path. Pooled mappings remain live and listed across agent reuse. The source pins bind the registry and all production region allocation/release callers to this audit. WRT3a re-audit: current Linux reservation branch never uses REGIONS; non-Linux map/register and all block.rs release paths still remove the extent before physical unmap/dealloc. Reuse keeps live pooled maps registered. Release re-audit 2026-10-28: all four production block release paths still call region::unmap; non-Linux removes REGIONS before apple::unmap/dealloc, while pooling and test-only retained mappings stay registered. Warning cleanup re-audit: ALIGN and mapped_len are now compiled only on Linux, matching their existing Linux-only callers. Registry insertion, removal-before-unmap, pooled mapping custody, and thread-exit release paths are unchanged.",
+   "why": "Non-Linux mapping extents, not object identities. region::register records each native map; region::unmap removes its start key before apple::unmap or allocator dealloc. arena/block.rs routes pool overflow, pool drain, allocation failure and TLS teardown through that release path. Pooled mappings remain live and listed across agent reuse. The source pins bind the registry and all production region allocation/release callers to this audit. WRT3a re-audit: current Linux reservation branch never uses REGIONS; non-Linux map/register and all block.rs release paths still remove the extent before physical unmap/dealloc. Reuse keeps live pooled maps registered. Release re-audit 2026-10-28: all four production block release paths still call region::unmap; non-Linux removes REGIONS before apple::unmap/dealloc, while pooling and test-only retained mappings stay registered. Warning cleanup re-audit: ALIGN and mapped_len are now compiled only on Linux, matching their existing Linux-only callers. Registry insertion, removal-before-unmap, pooled mapping custody, and thread-exit release paths are unchanged. Re-audited #13405: block.rs delegates the bump bound to inline::allocation_limit, which closes the fast path during black allocation. Region allocation, registration, pooling, removal-before-unmap and TLS teardown are unchanged.",
    "source_pins": {
     "crates/perry-runtime/src/arena/region.rs": "54bd302d181433f3f2eb4a92c8ff07f021492dcf516f9069403b61d88f5c2a01",
-    "crates/perry-runtime/src/arena/block.rs": "de1087ba37a313ad3f5d22c37fbc8a1788c344c871b948004a77526b18f46448"
+    "crates/perry-runtime/src/arena/block.rs": "170b10471a821673fce65710ec719489c5c8e793fed0c806fbdd163ca18a8d1a"
    }
   },
   {
@@ -4064,6 +4064,24 @@
    ],
    "verdict": "no_heap_address",
    "why": "Outstanding work count incremented on submit and decremented by OutstandingGuard at delivery. AtomicUsize contains only a job count, never a pointer."
+  },
+  {
+   "file": "crates/perry-runtime/src/wasm_discard.rs",
+   "names": [
+    "REUSED",
+    "SOURCE_CALLS",
+    "SOURCE_BYTES"
+   ],
+   "verdict": "no_heap_address",
+   "why": "REUSED counts blocks handed out by take; SOURCE_CALLS and SOURCE_BYTES count successful host discard calls and discarded byte lengths by Source enum index. All start at zero and are only incremented and read for diagnostics; none stores a block address."
+  },
+  {
+   "file": "crates/perry-runtime/src/wasm_discard.rs",
+   "names": [
+    "KEPT"
+   ],
+   "verdict": "process_global_allocation",
+   "why": "The WASIp1 discard allocator owns retained System/malloc allocations after the caller deallocates them. keep takes custody instead of calling System.dealloc, so an Arena dropping its block relinquishes ownership without physically freeing the allocation. take removes the slot before handing its pointer to a new caller; idle, capacity eviction and release_all remove each slot before release calls libc::free. Only slots below len are read. These are allocator-owned freed blocks, not live GC objects or borrowed thread-arena addresses. build.rs enables the module only for the wasm32-wasip1 wasm-discard runtime, whose allocator has one thread."
   }
  ]
 }

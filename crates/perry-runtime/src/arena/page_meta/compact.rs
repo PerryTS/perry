@@ -153,6 +153,7 @@ impl PageObjects {
         // path, with its length reloaded only across that cold reservation.
         unsafe {
             let len = self.offsets.len();
+            // GC_STORE_AUDIT(POINTER_FREE): u16 page offsets (or ENTERING), never heap pointers.
             self.offsets.as_mut_ptr().add(len).write(offset);
             self.offsets.set_len(len + 1);
         }

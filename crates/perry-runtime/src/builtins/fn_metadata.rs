@@ -412,6 +412,15 @@ const _: () = assert!(
 pub(crate) unsafe fn function_name_for_closure(
     closure: *const crate::closure::ClosureHeader,
 ) -> Option<String> {
+    with_function_name_for_closure(closure, str::to_owned)
+}
+
+/// Share image-range and registered-name precedence with reflection. The
+/// reader runs while any metadata owner is borrowed and must not register.
+unsafe fn with_function_name_for_closure<R>(
+    closure: *const crate::closure::ClosureHeader,
+    read: impl FnOnce(&str) -> R,
+) -> Option<R> {
     let closure = closure.as_ref()?;
     let info = closure.info.as_ref()?;
     if info.flags & crate::codegen_abi::FN_HAS_NAME != 0 {
@@ -420,11 +429,31 @@ pub(crate) unsafe fn function_name_for_closure(
         let tail = base.add(std::mem::size_of::<crate::closure::JsFunctionInfo>() + source_tail);
         let delta = tail.cast::<i32>().read_unaligned();
         let len = tail.add(4).cast::<u32>().read_unaligned() as usize;
-        // Compiler names originate as UTF-8 strings in immutable image bytes.
+        // Compiler-owned names originate as UTF-8; empty image names are
+        // valid too, exactly as in the String-returning reflection reader.
         let bytes = std::slice::from_raw_parts(descriptor_pointer(base, delta), len);
-        return Some(String::from_utf8_unchecked(bytes.to_vec()));
+        return Some(read(std::str::from_utf8_unchecked(bytes)));
     }
-    function_name_for_ptr(info.code as usize)
+    let ptr = info.code as usize;
+    if ptr == 0 {
+        return None;
+    }
+    with_registered_name(ptr, |name| (!name.is_empty()).then(|| read(name))).flatten()
+}
+
+/// Non-allocating presence with the same UTF-8 and override precedence as
+/// `function_name_for_ptr`.
+pub(crate) fn function_has_registered_name(func_ptr: usize) -> bool {
+    func_ptr != 0 && with_registered_name(func_ptr, |name| !name.is_empty()).unwrap_or(false)
+}
+
+/// # Safety
+/// `closure` is null or live; its info owns the ranges licensed by its flags.
+pub(crate) unsafe fn function_name_matches_closure(
+    closure: *const crate::closure::ClosureHeader,
+    expected: &[u8],
+) -> bool {
+    with_function_name_for_closure(closure, |name| name.as_bytes() == expected).unwrap_or(false)
 }
 
 /// Returns the name registered by `js_register_function_name{,_static}` (keyed
@@ -834,6 +863,8 @@ mod descriptor_name_tests {
                 unsafe { function_name_for_closure(&closure) }.as_deref(),
                 Some("named")
             );
+            assert!(unsafe { function_name_matches_closure(&closure, b"named") });
+            assert!(!unsafe { function_name_matches_closure(&closure, b"other") });
         }
     }
 }
@@ -1106,6 +1137,45 @@ mod tests {
             function_name_for_ptr(KEY_NAME_IF_ABSENT as usize).as_deref(),
             Some("inferred")
         );
+    }
+
+    #[test]
+    fn borrowed_name_queries_preserve_utf8_empty_and_override_rules() {
+        extern "C" fn body(
+            _: *const crate::closure::ClosureHeader,
+            _: crate::closure::JsThis,
+        ) -> f64 {
+            0.0
+        }
+        let info = crate::closure::JsFunctionInfo::of(
+            body as crate::codegen_abi::JsBody0<crate::closure::ClosureHeader>,
+        );
+        let key = info.code as *const u8;
+        let closure = crate::closure::ClosureHeader {
+            capture_count: 0,
+            shape_id: LayoutWord(crate::codegen_abi::FUNCTION_LAYOUT_WORD),
+            info: &info,
+            props: std::ptr::null_mut(),
+        };
+        unsafe { js_register_function_name_static(key, b"image".as_ptr(), 5) };
+        for bytes in [&b"owned"[..], &[0xff][..], &b""[..]] {
+            // Direct owner insertion includes the empty-entry edge which the
+            // public registration API intentionally ignores.
+            function_name_overrides()
+                .lock()
+                .unwrap()
+                .insert(key as usize, std::sync::Arc::from(bytes));
+            let oracle = function_name_for_ptr(key as usize);
+            assert_eq!(function_has_registered_name(key as usize), oracle.is_some());
+            for expected in [b"owned".as_slice(), b"image".as_slice(), b"".as_slice()] {
+                assert_eq!(
+                    unsafe { function_name_matches_closure(&closure, expected) },
+                    oracle.as_ref().is_some_and(|s| s.as_bytes() == expected)
+                );
+            }
+        }
+        assert!(!function_has_registered_name(0));
+        assert!(!unsafe { function_name_matches_closure(std::ptr::null(), b"") });
     }
 
     #[test]

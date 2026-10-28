@@ -1,0 +1,1 @@
+Keep string-copy GC witnesses live across loop polls, accept an empty post-collection live heap, and compile separate instrumented executables for GC benchmark trace and relocation checks while preserving ordinary-runtime timing.

@@ -433,6 +433,7 @@ pub(crate) fn utf8_initial_state(options_value: f64) -> Utf8StreamState {
         max_write,
         periodic_flush,
         periodic_flush_timer: None,
+        drain_scheduled: false,
         mkdir,
         mode_value,
         retry_eagain,
@@ -730,9 +731,57 @@ fn utf8_maybe_drain_after_write(id: usize) {
     });
     if should_write {
         match utf8_drain_buffers(id) {
-            Ok(()) => utf8_emit_event0(id, "drain"),
+            Ok(()) => utf8_schedule_drain(id),
             Err(err) => utf8_emit_event1(id, "error", err),
         }
+    }
+}
+
+fn utf8_deliver_drain(id: usize) {
+    let emit = UTF8_STREAM_REGISTRY.with(|registry| {
+        let mut registry = registry.borrow_mut();
+        let Some(state) = registry.get_mut(&id) else {
+            return false;
+        };
+        state.drain_scheduled = false;
+        !state.writing && !state.destroyed
+    });
+    if emit {
+        utf8_emit_event0(id, "drain");
+    }
+}
+
+extern "C" fn utf8_drain_tick_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
+    utf8_deliver_drain(stream_id_of(closure));
+    undefined_value()
+}
+
+fn utf8_schedule_drain(id: usize) {
+    let deferred = UTF8_STREAM_REGISTRY.with(|registry| {
+        let mut registry = registry.borrow_mut();
+        let state = registry.get_mut(&id)?;
+        if state.destroyed || state.drain_scheduled {
+            return None;
+        }
+        if state.sync {
+            state.drain_scheduled = true;
+        }
+        Some(state.sync)
+    });
+    match deferred {
+        Some(true) => {
+            let closure = js_closure_alloc(
+                crate::fn_info!(utf8_drain_tick_impl, 0; with_declared(0)),
+                1,
+            );
+            js_closure_set_capture_ptr(closure, 0, id as i64);
+            crate::builtins::js_queue_next_tick(closure as i64);
+        }
+        Some(false) => utf8_deliver_drain(id),
+        None => {}
     }
 }
 

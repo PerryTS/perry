@@ -55,10 +55,17 @@
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 #[cfg(all(
     not(all(target_pointer_width = "64", feature = "alloc-mimalloc")),
+    not(wasm_discard),
     not(feature = "alloc-census")
 ))]
 #[global_allocator]
 static GLOBAL: std::alloc::System = std::alloc::System;
+// wasip1 with `wasm-discard`: the system allocator plus a discard of each large
+// free's pages, so a host that provides `perry_host.discard_pages` gets them
+// back (`wasm_discard.rs`).
+#[cfg(all(wasm_discard, not(feature = "alloc-census")))]
+#[global_allocator]
+static GLOBAL: wasm_discard::DiscardAlloc = wasm_discard::DiscardAlloc;
 // `alloc-census` builds wrap whichever allocator the target would have used.
 // The wrapper is the only way to attribute native-heap bytes to a call site,
 // and it is compiled out of every build that does not ask for it.
@@ -72,11 +79,16 @@ static GLOBAL: alloc_census::CensusAlloc<mimalloc::MiMalloc> =
     alloc_census::CensusAlloc(mimalloc::MiMalloc);
 #[cfg(all(
     not(all(target_pointer_width = "64", feature = "alloc-mimalloc")),
+    not(wasm_discard),
     feature = "alloc-census"
 ))]
 #[global_allocator]
 static GLOBAL: alloc_census::CensusAlloc<std::alloc::System> =
     alloc_census::CensusAlloc(std::alloc::System);
+#[cfg(all(wasm_discard, feature = "alloc-census"))]
+#[global_allocator]
+static GLOBAL: alloc_census::CensusAlloc<wasm_discard::DiscardAlloc> =
+    alloc_census::CensusAlloc(wasm_discard::DiscardAlloc);
 
 // Declared FIRST and with `#[macro_use]`: `per_test_global!` has to be in
 // scope for every module below it. See its module docs for #7672.
@@ -294,6 +306,8 @@ pub mod v8;
 pub mod validators;
 pub mod value;
 pub mod wasi;
+#[cfg(wasm_discard)]
+pub(crate) mod wasm_discard;
 mod wasm_instance_state;
 pub mod web_storage;
 /// WebAssembly host shims (issue #76). The wasmi-backed engine lives in the
