@@ -129,13 +129,14 @@ macro_rules! fn_info {
     (@uty 15) => { $crate::codegen_abi::JsBodyUnwind15<$crate::closure::ClosureHeader> };
     (@uty 16) => { $crate::codegen_abi::JsBodyUnwind16<$crate::closure::ClosureHeader> };
     ($(#[realm($facts:literal)])? native_args $body:path, $declared:tt $(; $($m:ident($($a:expr),*)),* $(,)?)?) => {{
-        static INFO: $crate::closure::JsFunctionInfo =
+        static OWNER: $crate::codegen_abi::FunctionMetadataOwner = $crate::codegen_abi::FunctionMetadataOwner::native();
+        static INFO: $crate::codegen_abi::NativeFunctionInfo = $crate::codegen_abi::NativeFunctionInfo::new(
             $crate::closure::JsFunctionInfo::of_native_args(
                 $body as $crate::codegen_abi::JsNativeArgsBody<$crate::closure::ClosureHeader>,
                 $declared,
             )
-                $($(.$m($($a),*))*)?;
-        &INFO as *const $crate::closure::JsFunctionInfo
+                $($(.$m($($a),*))*)?, &OWNER);
+        &INFO.info as *const $crate::closure::JsFunctionInfo
     }};
     ($(#[realm($facts:literal)])? unwind_in_tests $body:path, $n:tt $(; $($m:ident($($a:expr),*)),* $(,)?)?) => {{
         #[cfg(panic = "abort")]
@@ -145,16 +146,18 @@ macro_rules! fn_info {
         info
     }};
     ($(#[realm($facts:literal)])? unwind $body:path, $n:tt $(; $($m:ident($($a:expr),*)),* $(,)?)?) => {{
-        static INFO: $crate::closure::JsFunctionInfo =
+        static OWNER: $crate::codegen_abi::FunctionMetadataOwner = $crate::codegen_abi::FunctionMetadataOwner::native();
+        static INFO: $crate::codegen_abi::NativeFunctionInfo = $crate::codegen_abi::NativeFunctionInfo::new(
             $crate::closure::JsFunctionInfo::of($body as $crate::fn_info!(@uty $n))
-                $($(.$m($($a),*))*)?;
-        &INFO as *const $crate::closure::JsFunctionInfo
+                $($(.$m($($a),*))*)?, &OWNER);
+        &INFO.info as *const $crate::closure::JsFunctionInfo
     }};
     ($(#[realm($facts:literal)])? $body:path, $n:tt $(; $($m:ident($($a:expr),*)),* $(,)?)?) => {{
-        static INFO: $crate::closure::JsFunctionInfo =
+        static OWNER: $crate::codegen_abi::FunctionMetadataOwner = $crate::codegen_abi::FunctionMetadataOwner::native();
+        static INFO: $crate::codegen_abi::NativeFunctionInfo = $crate::codegen_abi::NativeFunctionInfo::new(
             $crate::closure::JsFunctionInfo::of($body as $crate::fn_info!(@ty $n))
-                $($(.$m($($a),*))*)?;
-        &INFO as *const $crate::closure::JsFunctionInfo
+                $($(.$m($($a),*))*)?, &OWNER);
+        &INFO.info as *const $crate::closure::JsFunctionInfo
     }};
 }
 

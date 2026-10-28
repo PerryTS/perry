@@ -534,7 +534,7 @@ pub(crate) fn callee_boxes_primitive_this(target: f64) -> bool {
     }
     // Runtime-created functions and unloadable images retain the owning
     // compatibility registry because their image metadata is not permanent.
-    crate::builtins::function_is_non_strict_ordinary_for_ptr(info.code as usize)
+    crate::builtins::function_is_non_strict_ordinary_for_info(info)
 }
 
 /// `call`/`apply`/`bind`/`Reflect.apply` supply an EXPLICIT `this`. A concise /

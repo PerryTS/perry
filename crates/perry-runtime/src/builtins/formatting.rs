@@ -289,7 +289,7 @@ fn format_function_for_console(closure_ptr: *const crate::closure::ClosureHeader
         if func_ptr.is_null() {
             None
         } else {
-            registered_name_string(func_ptr as usize).filter(|n| !n.is_empty())
+            registered_name_string(&*(*closure_ptr).info).filter(|n| !n.is_empty())
         }
     };
     let label = match registry_name

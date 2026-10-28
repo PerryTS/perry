@@ -627,7 +627,7 @@ fn mock_function_metadata(original: f64) -> (String, u32) {
     let dynamic_name = crate::closure::closure_get_own_dynamic_prop(closure as usize, "name")
         .and_then(value_to_string);
     let name = dynamic_name
-        .or_else(|| unsafe { crate::builtins::function_name_for_ptr((*closure).code() as usize) })
+        .or_else(|| unsafe { crate::builtins::registered_name_for_closure(closure) })
         .unwrap_or_default();
     let length = crate::closure::closure_length(closure).unwrap_or(0);
     (name, length)
