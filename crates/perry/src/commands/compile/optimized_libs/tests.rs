@@ -863,6 +863,24 @@ fn the_instrumented_variant_names_its_archives_with_an_instr_suffix() {
 
 #[test]
 fn deserializers_install_regex_without_a_regex_literal() {
+    // Dynamic-code reachability belongs to a whole compilation and is process
+    // global. Run this negative feature witness in a fresh test process so a
+    // preceding parser fixture cannot turn its plain program into dyn-eval.
+    const CASE: &str = "commands::compile::optimized_libs::tests::deserializers_install_regex_without_a_regex_literal";
+    let isolated = ["--exact", CASE, "--nocapture", "--test-threads=1"];
+    if std::env::args().skip(1).collect::<Vec<_>>() != isolated {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(isolated)
+            .output()
+            .expect("run the isolated feature witness");
+        assert!(
+            output.status.success(),
+            "isolated witness failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let features = BTreeSet::new();
     let plain = CompilationContext::new(dir.path().to_path_buf());
