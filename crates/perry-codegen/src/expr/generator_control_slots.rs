@@ -23,8 +23,8 @@ pub(super) fn address(ctx: &mut FnCtx<'_>, id: u32) -> Result<String> {
     }
     let index = ctx.closure_captures[&id];
     let closure = current_closure_ptr_value(ctx, "fixed generator control")?;
-    let offset =
-        crate::target_layout::closure_header_size_bytes(ctx.target_triple) + 8 * u64::from(index);
+    let index = super::private_resume_frame::slot_index(ctx, index);
+    let offset = super::private_resume_frame::slot_offset(ctx, &index);
     Ok(ctx.block().add(I64, &closure, &offset.to_string()))
 }
 

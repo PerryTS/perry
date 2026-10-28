@@ -561,7 +561,7 @@ tar = "0.4"
 sha1 = "0.11"
 # zstd for transparent decompression of the npm-shipped `*.a.zst` archives.
 # Statically vendored (no system libzstd dependency on the user's machine).
-zstd = "0.13"
+zstd = "0.14.3"
 
 # Internal crates
 perry-parser = { path = "crates/perry-parser" }

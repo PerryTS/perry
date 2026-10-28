@@ -5434,6 +5434,8 @@ jobs:
         uses: ./.github/actions/perry/taiki-e/install-action
         with:
           tool: cargo-llvm-cov
+          # The vendored action has no generated binary download manifests.
+          fallback: cargo-install
       - name: Run coverage
         run: |
           mapfile -t excluded < <(python3 scripts/workspace_architecture.py \

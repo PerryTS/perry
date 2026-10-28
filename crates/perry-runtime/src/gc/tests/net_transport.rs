@@ -496,6 +496,9 @@ fn n9_a_stale_resolve_leaves_the_new_plan_and_backlog_alone() {
     let (mut peer, _) = listener
         .accept()
         .expect("only the new plan reaches the v4 listener");
+    // accept inherits O_NONBLOCK on Darwin; the bounded read below must wait
+    // for the bytes even when the completion precedes their delivery.
+    peer.set_nonblocking(false).unwrap();
     peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
     let mut bytes = [0; 11];
     peer.read_exact(&mut bytes).unwrap();

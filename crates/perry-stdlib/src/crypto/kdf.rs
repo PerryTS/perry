@@ -1315,7 +1315,9 @@ pub unsafe extern "C" fn js_crypto_generate_key_pair_sync(type_ptr: i64, options
         // 'ec' (default/prime256v1) and the explicit 'prime256v1'/'p-256'.
         "ec" | "prime256v1" | "p-256" | "p256" => {
             use p256::pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding};
-            let secret = p256::SecretKey::random(&mut rand_core_06::OsRng);
+            let secret = <p256::SecretKey as p256::elliptic_curve::Generate>::generate_from_rng(
+                &mut rand::rng(),
+            );
             let priv_pem = secret
                 .to_pkcs8_pem(LineEnding::LF)
                 .ok()

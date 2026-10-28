@@ -30,3 +30,42 @@ pub extern "C" fn js_regexp_exec(
         }
     }
 }
+
+/// Internal result-use projection. `method` is Get(receiver, "exec") evaluated
+/// BEFORE `argument`, exactly as for the source method call. A failed brand or
+/// builtin proof invokes that same method; there is no second property Get.
+#[no_mangle]
+pub extern "C" fn js_regexp_exec_projected(
+    receiver: f64,
+    method: f64,
+    argument: f64,
+    capture: f64,
+) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(receiver);
+    let method = scope.root_nanbox_f64(method);
+    let argument = scope.root_nanbox_f64(argument);
+    let branded = crate::regex::regexp_data_of(receiver.get_nanbox_f64()).is_some();
+    if !branded
+        || !crate::object::regex_proto_thunks::is_builtin_regexp_exec(method.get_nanbox_f64())
+    {
+        return perex_api::finish(perex_dispatch::call_one(&method, &receiver, &argument));
+    }
+    // Coercion can invoke arbitrary code (including compile/lastIndex writes).
+    // The same builtin thunk does it before executing, so root the receiver
+    // above and only inspect its current data in execute_rooted afterwards.
+    let input = perex_api::finish(perex_dispatch::to_string(&argument));
+    let input = scope.root_string_ptr(input);
+    let found = perex_api::finish(perex_api::execute_capture_rooted(
+        &receiver,
+        &input,
+        capture as usize,
+        &mut perex::Budget::new(perex_api::WORK),
+        &perex_memory::MemoryBudget::new(perex_api::SCRATCH_BYTES),
+        &mut perex_runtime::poll,
+        None,
+    ));
+    found.map_or(f64::from_bits(crate::value::TAG_NULL), |found| {
+        crate::value::js_nanbox_pointer(found.array as i64)
+    })
+}

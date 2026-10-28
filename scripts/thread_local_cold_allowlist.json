@@ -21,7 +21,6 @@
     "crates/perry-runtime/src/dyn_eval/bridge.rs": 1,
     "crates/perry-runtime/src/dyn_eval/env.rs": 1,
     "crates/perry-runtime/src/dyn_eval/mod.rs": 4,
-    "crates/perry-runtime/src/dyn_eval_hooks.rs": 1,
     "crates/perry-runtime/src/eh.rs": 1,
     "crates/perry-runtime/src/error.rs": 3,
     "crates/perry-runtime/src/event_pump.rs": 1,
