@@ -61,7 +61,7 @@ world plugin {
     export empty: async func(value: future) -> future;
     export units: async func(values: stream) -> stream;
     export bytes: async func(values: stream<u8>) -> stream<u8>;
-    export nested: async func(value: nested) -> nested;
+    export nested-value: async func(value: nested) -> nested;
     export status: func() -> u32;
 }
 
@@ -82,7 +82,7 @@ world supervisor {
         empty: async func(value: future) -> future;
         units: async func(values: stream) -> stream;
         bytes: async func(values: stream<u8>) -> stream<u8>;
-        nested: async func(value: nested) -> nested;
+        nested-value: async func(value: nested) -> nested;
         status: func() -> u32;
     }
     export run: async func(mode: u32, id: u32) -> u32;
