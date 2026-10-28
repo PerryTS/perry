@@ -511,4 +511,4 @@ hostname = { version = "0.4", optional = true }
 
 [target.'cfg(target_family = "wasm")'.dependencies]
 # Constructor-based enumeration of relocated image records in linear memory.
-inventory = "=0.3.21"
+inventory = "=0.3.25"

@@ -24,7 +24,7 @@ printpdf = { version = "0.10", default-features = false }
 # target-gated Tokio dependency, which Cargo resolves into every lockfile even
 # when building natively or for WASI. Keep the last Tokio-free release; the
 # repository-wide ban must pass before this pin can move.
-wasm-bindgen-futures = { version = "=0.4.78", default-features = false }
+wasm-bindgen-futures = { version = "=0.4.79", default-features = false }
 
 [dev-dependencies]
 perry-ffi = { workspace = true, features = ["runtime-link"] }
