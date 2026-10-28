@@ -108,7 +108,9 @@ jobs:
         run: |
           set -euo pipefail
           archive="$(python3 scripts/wasi_build_runtime.py wasm32-wasip1 | sed -n 's/^WASI archive: //p' | tail -n 1)"
-          python3 scripts/wasi_imports_check.py "$archive"
+          # The optional networking member ships in the archive; default
+          # linked modules still omit it unless PERRY_WASM_NET=1 is selected.
+          python3 scripts/wasi_imports_check.py "$archive" --allow-perry-net
           python3 scripts/wasi_release.py package --target wasm32-wasip1 --revision "$EXPECTED_SHA" \
             --runtime "$archive" --output wasip1-release
       - name: Upload the wasip1 runtime bundle
