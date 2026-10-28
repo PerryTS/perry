@@ -294,6 +294,10 @@ extern "C" fn iterator_helper_next_thunk(
     }
 }
 
+pub(crate) fn iterator_helper_next_code() -> *const u8 {
+    iterator_helper_next_thunk as *const u8
+}
+
 /// `%IteratorPrototype%[Symbol.iterator]()` returns `this` (the iterator).
 extern "C" fn iterator_proto_symbol_iterator_thunk(
     _c: *const crate::closure::ClosureHeader,
@@ -389,6 +393,7 @@ fn build_iterator_prototypes() {
         "Iterator Helper",
         shared,
     );
+    crate::iterator_helpers::install_prototype_methods(shared, iterator_helper_proto);
 
     ITERATOR_PROTOTYPE_PTR.store(shared as i64, Ordering::Release);
     ARRAY_ITERATOR_PROTOTYPE_PTR.store(array_proto as i64, Ordering::Release);
