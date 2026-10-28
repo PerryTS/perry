@@ -1899,7 +1899,7 @@ fn boxed_number_concat_matches_heap_builder_at_inline_boundary() {
             .to_vec();
             let expected_units = unsafe { (*expected).utf16_len };
             let expected_flags = unsafe { (*expected).flags };
-            let actual = js_string_concat_value_box(root.get_raw_const_ptr(), value);
+            let actual = super::concat::js_string_concat_value_box(root.get_raw_const_ptr(), value);
             let actual = crate::value::js_jsvalue_to_string(actual);
             let actual_bytes = unsafe {
                 std::slice::from_raw_parts(string_data(actual), (*actual).byte_len as usize)
