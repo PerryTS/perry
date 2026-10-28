@@ -1469,7 +1469,7 @@ unsafe fn find_key_index_hot(map: *const MapHeader, key: f64) -> Option<i32> {
         if tag == crate::value::SHORT_STRING_TAG >> 48 || tag == crate::value::STRING_TAG >> 48 {
             // The existing large-Map store owns the string index. Keep this
             // admitted path out of the general numeric/pointer cold frame.
-            return string_key::find_indexed(map, key_bits);
+            return Some(string_key::find_indexed(map, key_bits));
         }
         return None;
     }

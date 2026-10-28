@@ -62,8 +62,22 @@ unsafe fn heap_eq_short(ptr: *const u8, data: u64, len: u32) -> bool {
 /// slice comparison lowers to. The two words cover every key up to 16 bytes.
 #[inline(always)]
 unsafe fn heap_bytes_eq(a: *const u8, b: *const u8, len: usize) -> bool {
-    if len < 8 {
-        return (0..len).all(|i| *a.add(i) == *b.add(i));
+    if len < std::mem::size_of::<u64>() {
+        // Every load stays inside the proven byte extent. Overlapping head
+        // and tail words cover short strings without a byte-loop backedge.
+        if len >= std::mem::size_of::<u32>() {
+            let tail = len - std::mem::size_of::<u32>();
+            return a.cast::<u32>().read_unaligned() == b.cast::<u32>().read_unaligned()
+                && a.add(tail).cast::<u32>().read_unaligned()
+                    == b.add(tail).cast::<u32>().read_unaligned();
+        }
+        if len >= std::mem::size_of::<u16>() {
+            let tail = len - std::mem::size_of::<u16>();
+            return a.cast::<u16>().read_unaligned() == b.cast::<u16>().read_unaligned()
+                && a.add(tail).cast::<u16>().read_unaligned()
+                    == b.add(tail).cast::<u16>().read_unaligned();
+        }
+        return len == 0 || *a == *b;
     }
     let word = |p: *const u8, at: usize| (p.add(at) as *const u64).read_unaligned();
     if word(a, 0) != word(b, 0) || word(a, len - 8) != word(b, len - 8) {
@@ -194,20 +208,36 @@ impl StrKey {
 /// query is validated once; indexed candidates carry their insertion proof.
 /// A missing layout or invalid query is still decided by the general path.
 #[inline(never)]
-pub(super) unsafe fn find_indexed(map: *const super::MapHeader, key_bits: u64) -> Option<i32> {
-    let key = StrKey::decode(key_bits)?;
-    let store = (*map).store.as_ref()?;
+pub(super) unsafe fn find_indexed(map: *const super::MapHeader, key_bits: u64) -> i32 {
+    let Some(key) = StrKey::decode(key_bits) else {
+        return super::find_key_index_cold(map, f64::from_bits(key_bits));
+    };
+    let Some(store) = (*map).store.as_ref() else {
+        return super::find_key_index_cold(map, f64::from_bits(key_bits));
+    };
     let used = (*map).used;
     let entries = super::entries_ptr(map);
-    Some(
-        store
+    let hash = key.content_hash();
+    // The query representation is fixed before checking any candidate. Each
+    // callback carries only that representation's real fields.
+    match key {
+        StrKey::Heap { ptr, len } => store
             .strings
-            .find(key.content_hash(), |i| {
+            .find(hash, |i| {
                 i < used
-                    && key.matches_indexed(key_bits, entries.add(i as usize * 2).read().to_bits())
+                    && (StrKey::Heap { ptr, len })
+                        .matches_indexed(key_bits, entries.add(i as usize * 2).read().to_bits())
             })
             .map_or(-1, |i| i as i32),
-    )
+        StrKey::Short { len, data } => store
+            .strings
+            .find(hash, |i| {
+                i < used
+                    && (StrKey::Short { len, data })
+                        .matches_indexed(key_bits, entries.add(i as usize * 2).read().to_bits())
+            })
+            .map_or(-1, |i| i as i32),
+    }
 }
 
 #[cfg(test)]
@@ -452,5 +482,27 @@ mod tests {
         let key = heap("target-value");
         assert_eq!(js_map_get(handle.get_raw_mut_ptr::<MapHeader>(), key), 99.0);
         assert_eq!(js_map_size(handle.get_raw_mut_ptr::<MapHeader>()), 20);
+    }
+    #[test]
+    fn heap_equality_preserves_every_byte_for_aligned_and_unaligned_extents() {
+        for offset in 0..8 {
+            for len in 0..65 {
+                let a: Vec<u8> = (0..len + offset + 8)
+                    .map(|i| (i * 37 + 128) as u8)
+                    .collect();
+                let mut b = a.clone();
+                let pa = unsafe { a.as_ptr().add(offset) };
+                let pb = unsafe { b.as_ptr().add(offset) };
+                assert!(unsafe { super::heap_bytes_eq(pa, pb, len) });
+                for changed in 0..len {
+                    b[offset + changed] ^= 0x80;
+                    assert!(
+                        !unsafe { super::heap_bytes_eq(pa, pb, len) },
+                        "offset={offset} len={len} changed={changed}"
+                    );
+                    b[offset + changed] ^= 0x80;
+                }
+            }
+        }
     }
 }
