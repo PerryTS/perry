@@ -101,7 +101,7 @@ fn export_value(
             value.get_nanbox_f64(),
             crate::value::js_nanbox_get_pointer(value.get_nanbox_f64()) as usize,
         );
-        crate::closure::native_constructor::seal(module, property, value.get_nanbox_f64());
+        crate::closure::native_constructor::seal_selected(module, property, value.get_nanbox_f64());
         value
     };
     NATIVE_ESM_EXPORT_VALUES.with(|v| {
@@ -203,7 +203,10 @@ pub(crate) unsafe fn call_minted(
 ) -> Option<f64> {
     let property = super::canonical_native_callable_property(module, property);
     let module = canonical_native_callable_module(module, property);
-    let value = callable_exports::minted_native_callable_export(&format!("{module}\0{property}"))?;
+    let key = format!("{module}\0{property}");
+    let value = NATIVE_CALLABLE_EXPORTS
+        .with(|values| values.borrow().get(&key).copied())
+        .map(f64::from_bits)?;
     let closure =
         crate::value::js_nanbox_get_pointer(value) as *const crate::closure::ClosureHeader;
     if !crate::closure::is_closure_ptr(closure as usize)

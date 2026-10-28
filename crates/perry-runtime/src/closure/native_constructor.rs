@@ -6,6 +6,7 @@
 use super::shape;
 use crate::object::{layout_desc::PerryLayoutDesc, runtime_layouts as layouts};
 
+#[inline(always)]
 fn definition(module: &str, name: &str) -> Option<(*const PerryLayoutDesc, u64)> {
     Some(match (module, name) {
         ("events", "EventEmitter") => (
@@ -52,9 +53,14 @@ fn definition(module: &str, name: &str) -> Option<(*const PerryLayoutDesc, u64)>
     })
 }
 
-/// Complete the runtime's definition before any program code can see it.
-#[inline(always)]
+/// Dynamic constructor readers share the definition resolver.
 pub(crate) fn seal(module: &str, name: &str, value: f64) {
+    seal_selected(module, name, value)
+}
+
+/// A selected constructor specializes only its own static layout declaration.
+#[inline(always)]
+pub(crate) fn seal_selected(module: &str, name: &str, value: f64) {
     let Some((desc, serial)) = definition(module, name) else {
         return;
     };

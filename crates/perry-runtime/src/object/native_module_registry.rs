@@ -250,7 +250,7 @@ pub extern "C" fn js_nm_install_domain() {
 #[no_mangle]
 pub extern "C" fn js_nm_install_events() {
     js_nm_install_async_hooks();
-    crate::stream_hooks::install();
+    crate::stream_hooks::install_emitter();
     super::native_module::install_nm_ee_ops();
     nm_register_ctor(NmBucket::Events, nm_ctor_events);
     nm_register_attach(
@@ -470,6 +470,7 @@ pub extern "C" fn js_nm_install_sqlite() {
 #[no_mangle]
 pub extern "C" fn js_nm_install_stream() {
     js_nm_install_events();
+    crate::stream_hooks::install();
     super::native_module::install_nm_ee_ops();
     nm_register_attach(
         NmBucket::Stream,
