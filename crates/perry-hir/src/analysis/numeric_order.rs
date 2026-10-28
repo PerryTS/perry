@@ -243,7 +243,7 @@ impl<'a, R: Fn(&Expr) -> Option<NumericCallable<'a>>> Proof<'a, '_, R> {
         self.stack.pop();
         let mut result = None;
         for (_, value) in paths {
-            let value = value.unwrap_or_else(|| Value::constant(0.0)); // undefined sorts as a tie
+            let value = value.unwrap_or(Value::Undefined);
             result = Some(match result {
                 None => value,
                 Some(r) => Value::merge(r, value)?,
@@ -267,7 +267,7 @@ impl<'a, R: Fn(&Expr) -> Option<NumericCallable<'a>>> Proof<'a, '_, R> {
                     Stmt::Return(value) => {
                         let value = match value {
                             Some(v) => self.expr(v, &env)?,
-                            None => Value::constant(0.0),
+                            None => Value::Undefined,
                         };
                         next.push((env, Some(value)));
                     }
@@ -340,6 +340,17 @@ impl<'a, R: Fn(&Expr) -> Option<NumericCallable<'a>>> Proof<'a, '_, R> {
             } => {
                 let value = self.expr(v, env)?;
                 self.number(&value)?;
+                if let Value::Bool(mask) = value {
+                    return Some(match mask {
+                        1 => Value::constant(0.0),
+                        2 => Value::constant(1.0),
+                        _ => Value::Number {
+                            signs: ZERO | POS,
+                            nan: false,
+                            exact: None,
+                        },
+                    });
+                }
                 Some(if matches!(value, Value::Undefined) {
                     Value::constant(f64::NAN)
                 } else {
@@ -426,6 +437,18 @@ impl<'a, R: Fn(&Expr) -> Option<NumericCallable<'a>>> Proof<'a, '_, R> {
                         _ => false,
                     };
                     return Some(Value::Bool(if answer { 2 } else { 1 }));
+                }
+                // Strict equality does not coerce a Boolean to a Number.
+                if matches!(op, CompareOp::Eq | CompareOp::Ne)
+                    && matches!(
+                        (&a, &b),
+                        (Value::Bool(_), Value::Number { .. } | Value::Input(..))
+                            | (Value::Number { .. } | Value::Input(..), Value::Bool(_))
+                    )
+                {
+                    self.number(&a)?;
+                    self.number(&b)?;
+                    return Some(Value::Bool(if *op == CompareOp::Ne { 2 } else { 1 }));
                 }
                 let (relations, nan) = match (&a, &b) {
                     (Value::Input(a, ak), Value::Input(b, bk)) if ak == bk => {

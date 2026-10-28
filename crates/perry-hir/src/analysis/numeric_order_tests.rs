@@ -315,3 +315,61 @@ fn signed_zero_joins_do_not_invent_an_exact_reciprocal_sign() {
     ];
     assert_eq!(pure_numeric_order(&callback(body)), None);
 }
+
+#[test]
+fn helper_fallthrough_and_bare_return_remain_undefined_until_the_consumer() {
+    for bare_return in [false, true] {
+        let mut body = branches();
+        body.pop();
+        if bare_return {
+            body.push(Stmt::Return(None));
+        }
+        let helper = callback(body);
+        let mut direct = callback(ret(call(local(500), vec![local(17), local(23)])));
+        if let Expr::Closure { func_id, .. } = &mut direct {
+            *func_id = 101;
+        }
+        let resolve = |e: &Expr| {
+            if matches!(e, Expr::LocalGet(500)) {
+                NumericCallable::closure(&helper)
+            } else {
+                None
+            }
+        };
+        assert_eq!(
+            numeric_order_with(&direct, &resolve),
+            Some(NumericOrder::Ascending)
+        );
+        let invocation = call(local(500), vec![local(17), local(23)]);
+        let mut inconsistent = callback(ret(ternary(
+            compare(CompareOp::Eq, invocation.clone(), Expr::Undefined),
+            num(1.0),
+            invocation,
+        )));
+        if let Expr::Closure { func_id, .. } = &mut inconsistent {
+            *func_id = 102;
+        }
+        assert_eq!(numeric_order_with(&inconsistent, &resolve), None);
+    }
+}
+#[test]
+fn strict_boolean_number_equality_is_not_numeric_coercion() {
+    let less = compare(CompareOp::Lt, local(17), local(23));
+    let tail = ternary(
+        compare(CompareOp::Gt, local(17), local(23)),
+        num(1.0),
+        num(0.0),
+    );
+    let inconsistent = callback(ret(ternary(
+        compare(CompareOp::Eq, less.clone(), num(0.0)),
+        tail.clone(),
+        num(-1.0),
+    )));
+    assert_eq!(pure_numeric_order(&inconsistent), None);
+    let numeric = callback(ret(ternary(
+        compare(CompareOp::Eq, Expr::NumberCoerce(Box::new(less)), num(0.0)),
+        tail,
+        num(-1.0),
+    )));
+    assert_eq!(pure_numeric_order(&numeric), Some(NumericOrder::Ascending));
+}
