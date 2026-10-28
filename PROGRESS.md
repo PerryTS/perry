@@ -1,24 +1,15 @@
 # BRG progress
 
-Source7d66c8a0c8ef60c9ebb6e8e7b8f36f0998768e4b, based on current-main4268659de via merge92ffaaaae.
-DB probe and Symbol mechanisms fixed generically; no push.
-Runtime6190/Perry1324 active pass; CG2589/WPF561 pass with unchanged compiler.
-JSC22/22 both arms; Windows/ABI pass; facts52 exact, full26tdiff outputs equal,
-no new per-unit-stronger site. Startup five deterministic n3 witnesses <= main.
-
-Native six-pair sweep complete, all180 samples retained. Thirteen AWFY cases pass
-the paired-cycle limit. NBody initial clean median+3.904%, positive clean range.
-Its frontend/code-placement effect is now explained: clean Icache51.150M->105.252M,
-frontend12.5%->17.7%, hot-order controls reduce clean cost to+0.293/+0.440%.
-All eight sampled functions' instructions/constants stay equal within each arm's
-controls after validated relocations. No order/alignment tuning ships.
-A candidate bundle/report is being prepared for the remaining acceptance decision.
-
-DB n5 instructions27.664B->26.775B (<pre27.033B). Property788.642M is+0.2673%
-versus pre, within the explicit003 acceptance; flat versus integrated main.
-Only existing metadata owners are used; inferred-name copy success and UTF8 prove
-canonical equality, with actual code-key and image-name guards.
-
-All commits Ralph Küpper <ralph3@skelpo.com>, no attribution. Full failures/partial/
-contended evidence retained. Inactive dumps gzip+SHA verified; floor25GB monitored.
-Ball remains separate design-before-build under002/003. No Ball candidate built.
+DB/Symbol delivery ready: production ec91584e9007797711c13b4e831c62a3bf8e54b8, merged main b75a6a8a86ffc7ff7d469d0395291306341e3727.
+No push. Ralph Küpper <ralph3@skelpo.com>; no attribution lines.
+Manager009 accepts the named NBody placement effect; no layout tuning ships.
+Latest-main revalidation: both build-perry+sidecars, runtime 6204 pass,
+exact startup n3/arm all5 <=main, DB n5/arm below pre-regression instructions.
+The DB/Symbol mechanism patches are unchanged across all ten files.
+Main's canonical name publisher/decoder plus BRG's semantic guards and tests retained.
+Earlier full suites, JSC22/22, exact facts/tdiff and AWFY evidence stay source-attributed
+in REPORT.md; manager009 expressly scoped the latest merge checks.
+Final bundle /root/BRG/brgm.bundle; refs/hashes in brgm-delivery.json and013-done.md.
+Inactive dumps/archives preserved by gzip+SHA; intermediates restored before this build.
+BRG-restore-cargo-intermediates.py restores the three Cargo archive manifests if needed.
+Ball remains the next separate exact construction-to-escape design review under002/003.

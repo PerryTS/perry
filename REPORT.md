@@ -1,16 +1,76 @@
-# BRG DB/hash candidate — NBody acceptance decision pending
+# BRG DB/hash verification and delivery
 
-Verified production source: 7d66c8a0c8ef60c9ebb6e8e7b8f36f0998768e4b.
-Baseline: origin/main4268659dee094f6e7ee55770ba7996b8a0ff73d8, latest at the final integration check, merged
-without rebasing in92ffaaaaec935ae7086cfe27e7096320f06de634.
-No push. All lane commits author/committer Ralph Küpper <ralph3@skelpo.com>,
-without attribution lines. Ball remains a separate design review before building.
+Production source: ec91584e9007797711c13b4e831c62a3bf8e54b8.
+Merged baseline: origin/main b75a6a8a86ffc7ff7d469d0395291306341e3727; merge, never rebase.
+No push. Lane commits are by Ralph Küpper <ralph3@skelpo.com>, with no attribution lines.
+Ball remains separate and requires the002/003 design review before building.
 
-Functional, facts, parity and exact-startup gates pass. Thirteen AWFY cases pass
-manager007's paired-cycle limit. The original NBody cohort is+3.904% cycles,
-including positive uncontended pairs. Its placement/frontend mechanism is
-explained below; acceptance of that remaining normal-layout result is pending.
-No final all-AWFY pass is claimed.
+Manager009 accepts NBody's named+3.9% code-placement effect under007. The original
+normal-layout positive clean cohort stays disclosed below. Relocation-checked
+hot-function code matches and order controls shrink the cost to+0.3–0.4%.
+No order or alignment tuning ships.
+
+## Latest-main merge revalidation
+
+Per manager009, revalidation is limited to the merge's build/runtime/startup/DB
+scope. Both fresh main and head passed cargo build-perry with LLVM22, separate
+Cargo/runtime directories, x86-64-v3 and retained symbols, then GC sidecars.
+The full merged-head runtime suite passed 6204 tests, 0 failed,
+48 existing ignored. Both sets of name-publication semantic tests ran.
+Main's canonical publisher and decoder structure are retained, with BRG's owner
+read reuse, successful-publication proof and image-name/code-key checks.
+All ten DB/Symbol mechanism patches have identical added/removed lines relative
+to their respective old and new baselines: brgm-mechanism-source-scope.json.
+
+Exact startup, three deterministic runs per arm, same paths/environment, ASLR off:
+
+| Witness | Main Ir (each of3) | Head Ir (each of3) | Delta |
+|---|---:|---:|---:|
+| hello | 142166 | 142166 | +0 |
+| commander | 21221001 | 21217107 | -3894 |
+| commander-help | 23587176 | 23583851 | -3325 |
+| fastify | 164428334 | 164360914 | -67420 |
+| Richards | 42769430 | 42691105 | -78325 |
+
+Top five changed functions by absolute self-cost delta (head minus main Ir):
+
+- hello: no changed functions.
+- commander: /rustc/db8f076d2619ce2585b0380dda06e8da25a40da4/library/core/src/str/validations.rs:core::str::converts::from_utf8 -6342; ???:perry_runtime::object::native_module::class_method_declaration_value_bytes +5316; /rustc/db8f076d2619ce2585b0380dda06e8da25a40da4/library/core/src/str/converts.rs:core::str::converts::from_utf8 -1372; ???:perry_runtime::symbol::next_id -527; ???:perry_runtime::object::canonical_keys::probe_matching_node::<perry_runtime::object::canonical_keys::probe_node::{closure#0}> -330.
+- commander-help: /rustc/db8f076d2619ce2585b0380dda06e8da25a40da4/library/core/src/str/validations.rs:core::str::converts::from_utf8 -10485; ???:perry_runtime::object::native_module::class_method_declaration_value_bytes +8550; /rustc/db8f076d2619ce2585b0380dda06e8da25a40da4/library/core/src/str/converts.rs:core::str::converts::from_utf8 -2254; ???:perry_runtime::object::shapes::layout_probe::probe_get_underived::<true> +1067; ???:perry_runtime::object::shapes::layout_probe::own_value::<true> +871.
+- fastify: ???:perry_runtime::object::native_module::class_method_declaration_value_bytes -36440; ???:perry_runtime::object::shapes::layout_probe::derive -11550; /rustc/db8f076d2619ce2585b0380dda06e8da25a40da4/library/core/src/str/validations.rs:core::str::converts::from_utf8 -10461; ???:perry_runtime::symbol::next_id -6324; ???:perry_runtime::object::object_ops::define_property::apply_property_descriptor -4716.
+- Richards: ???:perry_runtime::object::native_module::class_method_declaration_value_bytes -76185; /rustc/db8f076d2619ce2585b0380dda06e8da25a40da4/library/core/src/str/validations.rs:core::str::converts::from_utf8 -1276; ???:perry_runtime::symbol::next_id -465; /rustc/db8f076d2619ce2585b0380dda06e8da25a40da4/library/core/src/str/converts.rs:core::str::converts::from_utf8 -308; ???:<hashbrown::map::HashMap<usize, perry_runtime::builtins::fn_metadata::RegisteredFunctionSource<&[u8]>, std::hash::random::RandomState>>::insert +303.
+
+The measurement-only input helper fixes entropy/clocks and selects an actual canonical
+stack-map row with an RLIMIT gap assertion. Its exact C sources and hashes are
+archived; it is outside product code. No startup noise waiver.
+All startup deltas are <=0 and full self-cost ledgers reconcile. Evidence:
+startup-brgm/{counts.json,diff.json,environment.json} and every raw callgrind profile.
+
+DeltaBlue n5, taskset on one admitted idle core with idle SMT sibling, alternating
+main/head order, Node26.12.1 parity on every run; all attempts retained:
+
+| Metric | Main median | Head median | Delta |
+|---|---:|---:|---:|
+| instructions:u | 27647178330 | 26758242259 | -3.2153% |
+| cycles:u | 5926285297 | 5845407234 | -1.3647% |
+| duration_time | 1491110324 | 1474789699 | -1.0945% |
+
+Head instructions remain below the pre-regression27,033,336,012 reference.
+Raw counts, sibling utilization and attempt records: brgm-db/. Fresh-producer hashes,
+new ELF hashes, build logs and a consolidated audit are in brgm-audit.json.
+
+All retained DB pairs: all n30 paired cycles median-1.1009%, range[-22.1580,+8.3075]%; uncontended n18 paired cycles median-1.1244%, range[-2.7810,+0.1413]%; raw paired instruction/cycle/wall ranges are in brgm-db/paired-ranges.json.
+
+Archived Cargo intermediates were restored and hash checked before this merge build; historical compressed copies remain. Current measured producers are intact.
+
+## Earlier complete verification, retained with its source
+
+The sections below retain the full verification of source7d66c8a0c on baseline4268659de.
+That includes the full Perry/codegen/wpfacts/runtime/Windows/ABI suites, JSC22/22,
+whole/per-unit tables and full tdiff equality, all14 AWFY six-pair results and the
+Storage/NBody profiles and layout controls. Those results are attributed to that
+integration; they were not silently relabeled as reruns on the latest main.
+Manager009's explicit narrower merge revalidation is reported above.
 
 ## Changes and mechanisms
 
@@ -34,15 +94,15 @@ becomes12994781566227106604 (bucket4 with mask7). This spreads sequential identi
 generically; it does not promise collision freedom or depend on a startup count.
 
 Method construction shares the existing registered-name read. When it infers a
-missing name, it uses the actual successful owned-byte write plus UTF-8 validation
-to establish the new fallback name, guarded by exact copy width and equality of
-the supplied key with the descriptor's code. Canonical image names, including
-empty image names, still win. Failed/malformed writes and differing keys use the
-ordinary reader. Computed, empty-name and native-entry modes keep their original
-registration/read path. The public copying API still returns void and owns bytes.
-No extra allocation is introduced. Tests prove copied-buffer lifetime, existing
-owner retention, empty overrides, invalid-owned/image fallback, key mismatch and
-image-name/source-tail precedence.
+missing name, actual successful owned-byte publication plus UTF-8 validation
+establishes the fallback name. Exact equality of the supplied registration key
+and descriptor code is required. Image names, including empty ones, still win.
+Failed/malformed publication and differing keys use the ordinary reader. Computed,
+empty-name and native-entry modes retain their ordinary registration/read path.
+The latest merge retains main's canonical full-slice register_function_name_bytes
+publisher and inline decoder, rather than BRG's former private copy wrapper.
+The public copying FFI API still returns void and owns its bytes. Both main's
+publication tests and BRG's lifetime/owner/image/key semantic tests are retained.
 
 No new registry, cache, runtime knob, threshold, ABI entry, TypeScript semantic
 proof, or wpfacts production change. No DECISIONS211/212 guard/assertion weakened.
@@ -137,7 +197,7 @@ arm medians. A dash means no uncontended pair, not a filtered pass.
 | Storage | -17.249 | -17.603 .. -16.826 | 6 | -17.249 | -17.603 .. -16.826 |
 | Towers | +0.535 | -0.478 .. +25.125 | 4 | +0.133 | -0.478 .. +0.913 |
 
-## NBody: explained placement/frontend effect; decision pending
+## NBody: explained placement/frontend effect; accepted in manager009
 
 Original six-pair cycles median+3.9044%, range[+2.4586,+5.7016]%; four
 uncontended pairs median+3.9044%, range[+3.4244,+4.3220]%.
@@ -187,9 +247,9 @@ including all contended repeats, is reported. The control removing the cost and
 the doubled clean Icache misses identify frontend placement sensitivity.
 No function-order/alignment change ships. Source remains the generic mechanism fix.
 Evidence: nbody-analysis/, nbody-isolation/, nbody-isolation-code.log,
-BRG-nbody-isolation-code.py. Current acceptance needs a manager decision because
-the original normal-layout clean cohort exceeds the brief's2% limit, while007
-asks that a real increase have its mechanism named.
+BRG-nbody-isolation-code.py. Manager009 explicitly accepted this named placement effect under007, based on
+unchanged instructions, relocation-checked hot code and the order controls.
+The normal-layout positive cost remains disclosed; no order/alignment tuning ships.
 
 ## Exact startup: PASS
 
@@ -243,17 +303,17 @@ The final affected Cargo checks held one build slot for serial runtime/Perry/
 Windows commands. Only owned, verified PIDs were stopped on rejected candidates.
 No historical checkout was profiled or bisected. No push.
 
-- /root/BRG/target-main/release/perry-main: 5ced4da8dd67ae2f6da3dfe21abcea74a0b1540ff3491967e91141bc3d2c75fd
-- /root/BRG/target-main/release/libperry_runtime.a: a66b0cf91ba702193a4504d0c804a4e291f9dfc3cd48f9b093db2a29c8903fe1
-- /root/BRG/target-head/release/perry: dac3396d5bfb2b483a864e0adfba13e496fbda2a96dec860695b7ff4f2409358
-- /root/BRG/target-head/release/libperry_runtime.a: 405e256197dd40993f66a001d9e32f9b0bd51c5397f34b7edb6d0d96e46521d2
+- /root/BRG/evidence/pre-brgm-producers/main-perry-main: 5ced4da8dd67ae2f6da3dfe21abcea74a0b1540ff3491967e91141bc3d2c75fd
+- /root/BRG/evidence/pre-brgm-producers/main-libperry_runtime.a: a66b0cf91ba702193a4504d0c804a4e291f9dfc3cd48f9b093db2a29c8903fe1
+- /root/BRG/evidence/pre-brgm-producers/head-perry: dac3396d5bfb2b483a864e0adfba13e496fbda2a96dec860695b7ff4f2409358
+- /root/BRG/evidence/pre-brgm-producers/head-libperry_runtime.a: 405e256197dd40993f66a001d9e32f9b0bd51c5397f34b7edb6d0d96e46521d2
 
 Complete raw timing, profiles and executables remain on qb9. Large inactive facts
 and logs are losslessly gzip-compressed, with decompressed SHA verification and
 path/size/hash manifests in compressed-inactive-facts.json and compressed-tip-facts.json.
 Current timing/ELFs/startup profiles stay intact. Space is monitored against25GB.
 
-Candidate bundle: /root/BRG/brg.bundle, refs/heads/brg, prerequisite origin/main4268659de.
-The docs-only candidate commit follows the verified7d66 production source. Its head
-and hashes are in the accompanying mailbox decision request. No done is claimed.
-Ball remains pending its separate exact construction-to-escape design review.
+Current delivery: /root/BRG/brgm.bundle, refs/heads/brg, based on the main commit
+listed at the top of this report. Its docs-only head and artifact hashes are in
+brgm-delivery.json and mailbox013-done.md. Prior brg.bundle remains preserved.
+Ball is pending its separate exact construction-to-escape design review.
