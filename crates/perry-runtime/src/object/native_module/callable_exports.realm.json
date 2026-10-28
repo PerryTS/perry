@@ -639,8 +639,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2ba94cc"
+            "kind": "bytes",
+            "value": "getPeerX509Certificate"
           },
           {
             "kind": "raw_word",
@@ -701,8 +701,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x29b3890"
+            "kind": "bytes",
+            "value": "getSharedSigalgs"
           },
           {
             "kind": "raw_word",
@@ -763,8 +763,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2ba94ba"
+            "kind": "bytes",
+            "value": "getX509Certificate"
           },
           {
             "kind": "raw_word",
@@ -825,8 +825,8 @@
         },
         "captures": [
           {
-            "kind": "raw_word",
-            "value": "0x2ba94b0"
+            "kind": "bytes",
+            "value": "setKeyCert"
           },
           {
             "kind": "raw_word",
