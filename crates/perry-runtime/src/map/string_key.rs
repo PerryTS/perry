@@ -145,6 +145,32 @@ impl StrKey {
         }
     }
 
+    /// Match a candidate supplied by the authoritative StringIndex. Unlike
+    /// an arbitrary entry, an indexed STRING_TAG key was validated when its
+    /// content hash was inserted. Compaction revalidates and GC rewrites the
+    /// traced entry key, so this exact membership proves its live payload.
+    ///
+    /// # Safety
+    /// `entry_bits` comes from a live StringIndex candidate's bounded entry
+    /// slot. This is not valid for an arbitrary linear-scan entry.
+    #[inline(always)]
+    pub(super) unsafe fn matches_indexed(self, key_bits: u64, entry_bits: u64) -> bool {
+        if entry_bits == key_bits {
+            return true;
+        }
+        if entry_bits >> 48 == STRING_UPPER {
+            let header =
+                (entry_bits & crate::value::POINTER_MASK) as *const crate::string::StringHeader;
+            let data = header
+                .cast::<u8>()
+                .add(std::mem::size_of::<crate::string::StringHeader>());
+            return self.eq_heap(data, (*header).byte_len);
+        }
+        // SSO keeps masked-tail equality; legacy pointer strings and Symbols
+        // retain the generic representation and identity guards.
+        self.matches(key_bits, entry_bits)
+    }
+
     /// The key's content hash, the same `string_content_hash` computes from
     /// the NaN-boxed value, without decoding it a second time: a heap key
     /// that is a property atom reads the hash it was born with
@@ -162,6 +188,26 @@ impl StrKey {
             StrKey::Heap { ptr, len } => unsafe { super::string_key_hash(ptr, len, true) },
         }
     }
+}
+
+/// Lookup for an admitted canonical string in an existing large Map. The
+/// query is validated once; indexed candidates carry their insertion proof.
+/// A missing layout or invalid query is still decided by the general path.
+#[inline(never)]
+pub(super) unsafe fn find_indexed(map: *const super::MapHeader, key_bits: u64) -> Option<i32> {
+    let key = StrKey::decode(key_bits)?;
+    let store = (*map).store.as_ref()?;
+    let used = (*map).used;
+    let entries = super::entries_ptr(map);
+    Some(
+        store
+            .strings
+            .find(key.content_hash(), |i| {
+                i < used
+                    && key.matches_indexed(key_bits, entries.add(i as usize * 2).read().to_bits())
+            })
+            .map_or(-1, |i| i as i32),
+    )
 }
 
 #[cfg(test)]
@@ -339,5 +385,72 @@ mod tests {
             let typed = js_string_from_bytes(b"k1".as_ptr(), 2);
             assert_eq!(js_map_get_string_key(map, typed), 1.0);
         }
+    }
+    #[test]
+    fn indexed_strings_keep_content_and_identity_after_mutation_and_gc() {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let handle = scope.root_raw_mut_ptr(js_map_alloc(16));
+        for i in 0..16 {
+            js_map_set(handle.get_raw_mut_ptr::<MapHeader>(), i as f64, i as f64);
+        }
+        for (name, value) in [("target-value", 41.0), ("", 42.0), ("short", 43.0)] {
+            let key = heap(name);
+            js_map_set(handle.get_raw_mut_ptr::<MapHeader>(), key, value);
+        }
+        let symbol = unsafe { crate::symbol::js_symbol_new_empty() };
+        let symbol_handle = scope.root_nanbox_f64(symbol);
+        js_map_set(
+            handle.get_raw_mut_ptr::<MapHeader>(),
+            symbol_handle.get_nanbox_f64(),
+            44.0,
+        );
+        for collect in [false, true] {
+            if collect {
+                let _ = crate::gc::gc_collect_minor();
+            }
+            let before = super::super::COLD_LOOKUPS.with(std::cell::Cell::get);
+            for (name, value) in [("target-value", 41.0), ("", 42.0), ("short", 43.0)] {
+                let key = heap(name);
+                let map = handle.get_raw_mut_ptr::<MapHeader>();
+                assert_eq!(js_map_get(map, key), value);
+                assert_eq!(js_map_has(map, key), 1);
+            }
+            assert_eq!(
+                js_map_get(handle.get_raw_mut_ptr::<MapHeader>(), sso("")),
+                42.0
+            );
+            assert_eq!(
+                js_map_get(handle.get_raw_mut_ptr::<MapHeader>(), sso("short")),
+                43.0
+            );
+            let missing = heap("absent-value");
+            assert_eq!(
+                js_map_get(handle.get_raw_mut_ptr::<MapHeader>(), missing).to_bits(),
+                TAG_UNDEFINED
+            );
+            assert_eq!(
+                super::super::COLD_LOOKUPS.with(std::cell::Cell::get),
+                before,
+                "canonical indexed queries should not enter the general cold frame"
+            );
+            assert_eq!(
+                js_map_get(
+                    handle.get_raw_mut_ptr::<MapHeader>(),
+                    symbol_handle.get_nanbox_f64()
+                ),
+                44.0
+            );
+        }
+        let key = heap("target-value");
+        assert_eq!(js_map_delete(handle.get_raw_mut_ptr::<MapHeader>(), key), 1);
+        let key = heap("target-value");
+        assert_eq!(
+            js_map_get(handle.get_raw_mut_ptr::<MapHeader>(), key).to_bits(),
+            TAG_UNDEFINED
+        );
+        js_map_set(handle.get_raw_mut_ptr::<MapHeader>(), key, 99.0);
+        let key = heap("target-value");
+        assert_eq!(js_map_get(handle.get_raw_mut_ptr::<MapHeader>(), key), 99.0);
+        assert_eq!(js_map_size(handle.get_raw_mut_ptr::<MapHeader>()), 20.0);
     }
 }

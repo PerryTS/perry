@@ -1465,6 +1465,12 @@ unsafe fn find_key_index_hot(map: *const MapHeader, key: f64) -> Option<i32> {
         return is_plain_nonzero_number_bits(key_bits).then_some(-1);
     }
     if !is_plain_nonzero_number_bits(key_bits) {
+        let tag = key_bits >> 48;
+        if tag == crate::value::SHORT_STRING_TAG >> 48 || tag == crate::value::STRING_TAG >> 48 {
+            // The existing large-Map store owns the string index. Keep this
+            // admitted path out of the general numeric/pointer cold frame.
+            return string_key::find_indexed(map, key_bits);
+        }
         return None;
     }
     let index = (*map).store.as_ref().map(|store| &store.numeric)?;
@@ -1575,8 +1581,10 @@ unsafe fn find_key_index_cold(map: *const MapHeader, key: f64) -> i32 {
                 return slot
                     .find(skey.content_hash(), |i| {
                         i < used
-                            && skey
-                                .matches(key_bits, ptr::read(entries.add(i as usize * 2)).to_bits())
+                            && skey.matches_indexed(
+                                key_bits,
+                                ptr::read(entries.add(i as usize * 2)).to_bits(),
+                            )
                     })
                     .map_or(-1, |i| i as i32);
             }
@@ -1677,7 +1685,10 @@ unsafe fn find_string_key_index(map: *const MapHeader, key: *const StringHeader)
             return slot
                 .find(skey.content_hash(), |i| {
                     i < used
-                        && skey.matches(key_bits, ptr::read(entries.add(i as usize * 2)).to_bits())
+                        && skey.matches_indexed(
+                            key_bits,
+                            ptr::read(entries.add(i as usize * 2)).to_bits(),
+                        )
                 })
                 .map_or(-1, |i| i as i32);
         }
