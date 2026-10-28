@@ -1,0 +1,1 @@
+Keep primitive number coercion and dynamic addition frameless by separating their existing plain-double fast paths from the full conversion bodies. Preserve boxed values, string and BigInt addition, and observable ToPrimitive behavior.
