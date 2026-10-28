@@ -300,7 +300,18 @@ impl Scan<'_> {
     }
 
     fn global(&self, expr: &ast::Expr) -> bool {
-        matches!(crate::patched_builtins::peel(expr), ast::Expr::Ident(i) if self.free(i) && is_global(&i.sym))
+        match crate::patched_builtins::peel(expr) {
+            ast::Expr::Ident(i) => self.free(i) && is_global(&i.sym),
+            ast::Expr::Member(member) if self.global(&member.obj) => {
+                let key = match &member.prop {
+                    ast::MemberProp::Ident(i) => Some(i.sym.to_string()),
+                    ast::MemberProp::Computed(c) => self.static_key(&c.expr),
+                    _ => None,
+                };
+                key.is_some_and(|key| is_global(&key))
+            }
+            _ => false,
+        }
     }
 
     fn native_module(&mut self, name: &str) {
@@ -359,6 +370,39 @@ impl Scan<'_> {
     }
 }
 
+impl Scan<'_> {
+    fn member(&mut self, member: &ast::MemberExpr, read: bool) {
+        if self.global(&member.obj) {
+            let key = match &member.prop {
+                ast::MemberProp::Ident(i) => Some(i.sym.to_string()),
+                ast::MemberProp::Computed(c) => self.static_key(&c.expr),
+                _ => None,
+            };
+            if let Some(key) = key {
+                if read && is_global(&key) {
+                    self.out.top.insert(RealmTop::GlobalObjectValue);
+                } else {
+                    self.add(&key);
+                }
+            } else {
+                self.out.top.insert(RealmTop::GlobalObjectValue);
+            }
+            // A static member does not use the global object as a value.
+            if let ast::MemberProp::Computed(c) = &member.prop {
+                c.expr.visit_with(self);
+            }
+        } else {
+            if !matches!(
+                crate::patched_builtins::peel(&member.obj),
+                ast::Expr::Lit(_) | ast::Expr::Array(_) | ast::Expr::Object(_) | ast::Expr::New(_)
+            ) {
+                self.primitive_prototypes();
+            }
+            member.visit_children_with(self);
+        }
+    }
+}
+
 impl Visit for Scan<'_> {
     fn visit_ts_type(&mut self, _: &ast::TsType) {}
 
@@ -376,30 +420,25 @@ impl Visit for Scan<'_> {
     }
 
     fn visit_member_expr(&mut self, member: &ast::MemberExpr) {
-        if self.global(&member.obj) {
-            let key = match &member.prop {
-                ast::MemberProp::Ident(i) => Some(i.sym.to_string()),
-                ast::MemberProp::Computed(c) => self.static_key(&c.expr),
-                _ => None,
-            };
-            if let Some(key) = key {
-                self.add(&key);
-            } else {
-                self.out.top.insert(RealmTop::GlobalObjectValue);
-            }
-            // A static member does not use the global object as a value.
-            if let ast::MemberProp::Computed(c) = &member.prop {
-                c.expr.visit_with(self);
-            }
+        self.member(member, true);
+    }
+
+    fn visit_simple_assign_target(&mut self, target: &ast::SimpleAssignTarget) {
+        if let ast::SimpleAssignTarget::Member(member) = target {
+            self.member(member, false);
         } else {
-            if !matches!(
-                crate::patched_builtins::peel(&member.obj),
-                ast::Expr::Lit(_) | ast::Expr::Array(_) | ast::Expr::Object(_) | ast::Expr::New(_)
-            ) {
-                self.primitive_prototypes();
-            }
-            member.visit_children_with(self);
+            target.visit_children_with(self);
         }
+    }
+
+    fn visit_unary_expr(&mut self, expression: &ast::UnaryExpr) {
+        if expression.op == ast::UnaryOp::Delete {
+            if let ast::Expr::Member(member) = crate::patched_builtins::peel(&expression.arg) {
+                self.member(member, false);
+                return;
+            }
+        }
+        expression.visit_children_with(self);
     }
 
     fn visit_prop(&mut self, prop: &ast::Prop) {

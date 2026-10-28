@@ -278,3 +278,24 @@ fn type_only_bases_and_tagged_template_quasis_add_no_builtin() {
     assert!(!r.names.contains("String"));
     assert!(!r.is_full());
 }
+
+#[test]
+fn chained_global_aliases_escape_only_when_the_object_value_is_read() {
+    for source in [
+        "consume(globalThis.self);",
+        "consume(globalThis['globalThis']);",
+    ] {
+        assert!(
+            reach(source).top.contains(&RealmTop::GlobalObjectValue),
+            "{source}"
+        );
+    }
+    for source in [
+        "globalThis.self.Map;",
+        "globalThis.global['Set'];",
+        "globalThis.self=1;",
+        "delete globalThis.self;",
+    ] {
+        assert!(!reach(source).is_full(), "{source}");
+    }
+}
