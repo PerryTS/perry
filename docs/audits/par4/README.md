@@ -6,6 +6,10 @@ PAR5 turns its runnable fixture into a regression test for DEC220. A read-site c
 
 The certificate refuses unknown, empty, escaped, or modified receivers, foreign templates without a sufficient contract, and any applicable global, prototype, or accessor obstruction. Literal-shape prototypes are layouts rather than runtime objects (DEC217(a)); an escape attributed to that synthetic layout alone is not a runtime alias to the private receiver. Real prototype objects, HARD operations and accessor obligations remain checked. The recovered certificate proves one own slot, not a fixed full layout, field value kind, or method target.
 
+DEC221 keeps the synthetic construction that models unknown callers of an escaped class, including unknown arguments, constructor/initializer effects and the escaping result. It removes the additional escape of the template-wide `NO_CTX` token: constructing fresh instances does not hand unknown code every existing private instance. Prototype/static exposure, genuine template-wide marks and foreign contracts remain intact. Constructor functions already use the fresh-result sink alone.
+
+The additional controls cover constructors publishing `this` into static, module and escaped state; methods publishing the program's receiver; actual constructor-return aliases; exposed prototype methods/accessors; and unknown construction of subclasses through `super()` in both analysis modes.
+
 ## Run the regression and escape control
 
 From the repository root, select a built compiler and its matching runtime:
@@ -21,6 +25,8 @@ Both ordinary commands require whole and per-unit proofs. `--require-whole` rema
 The fixture also executes JavaScript with an actual mutator of the sibling record and requires output `2`. Thus an isolated layout is not being substituted for the confinement argument, and actual escape is not excused.
 
 The wpfacts unit tests in `tests/receiver_slots.rs` cover sibling escape, deletion, data-property reconfiguration and prototype changes; actual alias, field and prototype paths to the private receiver; receiver deletion, getter reconfiguration and prototype mutation; and named/computed accessors on `Object.prototype`. They assert that template contracts retain the escaping sibling.
+
+`PAR5-native-siblings.ts` is a separate native/Node behavior fixture. Its Function mutator assigns, deletes, reconfigures a data property, installs a getter and changes a sibling's prototype. Private reads stay `2`; published controls expose the mutation. Compile it with the selected compiler and matching runtime, run the result, and compare with `node --experimental-strip-types docs/audits/par4/PAR5-native-siblings.ts`. The report retains both outputs and the solved facts; this behavior check does not demand an extra precision certificate for its shared mutator.
 
 ## Array callback precision
 
