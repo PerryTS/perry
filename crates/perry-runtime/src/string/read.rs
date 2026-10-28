@@ -7,6 +7,18 @@ use std::mem::MaybeUninit;
 // A streaming I/O buffer size, also used when a source supplies no size hint.
 const READ_CHUNK: usize = 64 * 1024;
 
+#[path = "read_ascii.rs"]
+mod ascii;
+
+/// Native input produces a pointer-free leaf. Existing malloc GC ownership
+/// lets a minor reclaim it without an old-arena page index for every payload
+/// page. The ordinary allocation trigger and runtime roots still apply.
+fn input_storage_alloc(capacity: u32) -> (*mut StringHeader, *mut u8) {
+    let size = std::mem::size_of::<StringHeader>() + capacity as usize;
+    let header = crate::gc::gc_malloc(size, crate::gc::GC_TYPE_STRING).cast::<StringHeader>();
+    (header, string_data(header).cast_mut())
+}
+
 #[derive(Default)]
 struct Utf8Progress {
     checked: usize,
@@ -20,9 +32,7 @@ impl Utf8Progress {
             return;
         }
         let chunk = &bytes[self.checked..];
-        // A reduction, rather than an early-exit word loop: LLVM can scan
-        // whole vectors while the newly read chunk is still resident.
-        if chunk.iter().fold(0u8, |bits, byte| bits | byte) < 0x80 {
+        if ascii::all_ascii(chunk) {
             self.units += chunk.len();
             self.checked = bytes.len();
         } else if provenance::is_utf8(chunk) {
@@ -52,7 +62,7 @@ pub(crate) fn read_utf8<R: Read + ?Sized>(
 ) -> io::Result<*mut StringHeader> {
     let scope = crate::gc::RuntimeHandleScope::new();
     let mut capacity = hint.min(MAX_STRING_LENGTH as u64) as u32;
-    let (header, _) = string_storage_alloc(capacity);
+    let (header, _) = input_storage_alloc(capacity);
     unsafe { init_string_header(header, 0, 0, capacity, 0, STRING_FLAG_WTF8_VALIDATED) };
     let owner = scope.root_string_ptr(header);
     let mut len = 0usize;
@@ -74,7 +84,7 @@ pub(crate) fn read_utf8<R: Read + ?Sized>(
             if next <= capacity {
                 throw_invalid_string_length();
             }
-            let (new, data) = string_storage_alloc(next);
+            let (new, data) = input_storage_alloc(next);
             unsafe {
                 // The old owner can move during allocation: reload its root.
                 init_string_header(new, 0, 0, next, 0, STRING_FLAG_WTF8_VALIDATED);

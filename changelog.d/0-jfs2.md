@@ -1,0 +1,1 @@
+Scan native UTF-8 input in wide ASCII blocks where AVX2 is available, with bounded portable fallback and unchanged Unicode/lossy decoding. Allocate native input string leaves through existing GC malloc ownership so reclamation avoids per-page old-arena registration.
