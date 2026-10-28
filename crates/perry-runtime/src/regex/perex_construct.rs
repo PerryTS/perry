@@ -151,10 +151,14 @@ pub(super) fn new_data<'s>(
         flags.set_raw_const_ptr(super::js_string_from_str(""));
     }
     let (canonical, flags) = canonical(&scope, flags)?;
-    if let Some(data) = super::perex_cache::data(&scope, &source, canonical) {
-        return Ok(data);
+    match super::perex_cache::data_or_compile(scope, &source, canonical, || {
+        compile_uncached(scope, source, canonical)
+    })? {
+        super::perex_cache::Construction::Data(data) => Ok(data),
+        super::perex_cache::Construction::Program(program) => {
+            new_data_miss(scope, source, flags, canonical, program)
+        }
     }
-    new_data_miss(scope, source, flags, canonical)
 }
 
 #[cold]
@@ -164,8 +168,8 @@ fn new_data_miss<'s>(
     source: RuntimeHandle<'s>,
     flags: RuntimeHandle<'s>,
     canonical: CanonicalFlags,
+    program: GcProgram<'s>,
 ) -> Result<RuntimeHandle<'s>, EngineError> {
-    let program = compile(&scope, source, canonical)?;
     let re = crate::arena::arena_alloc_gc(
         std::mem::size_of::<RegExpData>(),
         std::mem::align_of::<RegExpData>(),

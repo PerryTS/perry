@@ -157,31 +157,46 @@ fn lookup(
     hit
 }
 
-/// The same content lookup as compilation, when its entry already owns the
-/// immutable source/flags/program cell. Instances and lastIndex are never cached.
-pub(super) fn data<'s>(
+/// One construction lookup resolves the immutable data cell, an existing
+/// program, or the miss that must compile. No second address/content probe is
+/// needed between this scoped result and publication.
+pub(super) enum Construction<'s> {
+    Data(RuntimeHandle<'s>),
+    Program(GcProgram<'s>),
+}
+
+pub(super) fn data_or_compile<'s>(
     scope: &'s RuntimeHandleScope,
-    source: &RuntimeHandle<'_>,
+    source: &RuntimeHandle<'s>,
     flags: CanonicalFlags,
-) -> Option<RuntimeHandle<'s>> {
-    let (_, data) = lookup(source, flags)?;
-    if data.is_null() {
-        return None;
+    compile: impl FnOnce() -> Result<GcProgram<'s>, EngineError>,
+) -> Result<Construction<'s>, EngineError> {
+    if let Some((program, data)) = lookup(source, flags) {
+        if !data.is_null() {
+            if crate::hot_diag::regex_on() {
+                source.with_const_ptr::<StringHeader, _>(|p| {
+                    crate::hot_diag::regex_with(|d| {
+                        d.note_new(
+                            p as usize,
+                            super::string_as_bytes(p),
+                            flags.as_str(),
+                            false,
+                            false,
+                        )
+                    });
+                });
+            }
+
+            // Root the published cell before anything can collect.
+            return Ok(Construction::Data(scope.root_raw_const_ptr(data)));
+        }
+        retain_source(source, flags);
+        return Ok(Construction::Program(unsafe {
+            GcProgram::from_cached(scope, program)
+        }));
     }
-    if crate::hot_diag::regex_on() {
-        source.with_const_ptr::<StringHeader, _>(|p| {
-            crate::hot_diag::regex_with(|d| {
-                d.note_new(
-                    p as usize,
-                    super::string_as_bytes(p),
-                    flags.as_str(),
-                    false,
-                    false,
-                )
-            });
-        });
-    }
-    Some(scope.root_raw_const_ptr(data))
+    retain_source(source, flags);
+    compile_miss(scope, source, flags, compile).map(Construction::Program)
 }
 
 pub(super) fn install_data(
@@ -215,12 +230,7 @@ pub(super) fn install_data(
     });
 }
 
-pub(super) fn get_or_compile<'s>(
-    scope: &'s RuntimeHandleScope,
-    source: &RuntimeHandle<'s>,
-    flags: CanonicalFlags,
-    compile: impl FnOnce() -> Result<GcProgram<'s>, EngineError>,
-) -> Result<GcProgram<'s>, EngineError> {
+fn retain_source(source: &RuntimeHandle<'_>, flags: CanonicalFlags) {
     // Publication retains OriginalSource even on a content hit where this
     // particular string has never been bound by HeapSubject before.
     source.with_mut_ptr::<StringHeader, _>(|p| crate::string::js_string_addref(p));
@@ -237,9 +247,27 @@ pub(super) fn get_or_compile<'s>(
             });
         });
     }
+}
+
+pub(super) fn get_or_compile<'s>(
+    scope: &'s RuntimeHandleScope,
+    source: &RuntimeHandle<'s>,
+    flags: CanonicalFlags,
+    compile: impl FnOnce() -> Result<GcProgram<'s>, EngineError>,
+) -> Result<GcProgram<'s>, EngineError> {
+    retain_source(source, flags);
     if let Some((program, _)) = lookup(source, flags) {
         return Ok(unsafe { GcProgram::from_cached(scope, program) });
     }
+    compile_miss(scope, source, flags, compile)
+}
+
+fn compile_miss<'s>(
+    _scope: &'s RuntimeHandleScope,
+    source: &RuntimeHandle<'s>,
+    flags: CanonicalFlags,
+    compile: impl FnOnce() -> Result<GcProgram<'s>, EngineError>,
+) -> Result<GcProgram<'s>, EngineError> {
     let key = (unsafe { source.with_string_bytes(fingerprint) }, flags);
     let program = compile()?;
     let bytes = program
