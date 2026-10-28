@@ -434,6 +434,7 @@ pub(crate) unsafe fn get_native_module_constant(
         // node:perf_hooks — `performance.timeOrigin` (ms since epoch at start)
         // and `performance.nodeTiming`.
         "perf_hooks" => match property {
+            "performance" => Some(crate::perf_hook_slots::performance_namespace()),
             "timeOrigin" => Some(crate::perf_clock::time_origin_ms()),
             "nodeTiming" => Some(crate::perf_hook_slots::js_perf_node_timing()),
             // `constants` used to share the `perf_hooks` tag, which made

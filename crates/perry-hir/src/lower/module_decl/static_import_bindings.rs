@@ -154,6 +154,13 @@ pub(crate) fn prune_unused_named_cells(module: &mut Module) {
             *uses.entry(key).or_default() += 1;
         }
     });
+    // Native heritage stores the constructor value in class metadata instead
+    // of an expression. Its prototype must exist before class registration.
+    for class in &module.classes {
+        if let Some(parent) = &class.native_extends {
+            *uses.entry(parent.clone()).or_default() += 1;
+        }
+    }
     let exported: std::collections::HashSet<_> = module
         .exports
         .iter()

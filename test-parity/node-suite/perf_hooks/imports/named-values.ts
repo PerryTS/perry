@@ -1,0 +1,10 @@
+import { performance, createHistogram } from "node:perf_hooks";
+const value = performance;
+console.log(value === globalThis.performance, typeof value);
+const histogram = createHistogram();
+const timed = value.timerify((n: number) => n + 1, { histogram });
+console.log(timed(41), histogram.count);
+value.mark("named export", { detail: { value: 7 } });
+console.log(value.getEntriesByName("named export")[0].detail.value);
+value.clearMarks("named export");
+console.log(value.getEntriesByName("named export").length);

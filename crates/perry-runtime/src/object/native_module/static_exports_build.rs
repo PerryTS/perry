@@ -64,6 +64,8 @@ pub fn emit(out: &Path) {
                         "Stream" | "Readable" | "Writable" | "Duplex" | "Transform" | "PassThrough"
                     )) {
                 "super::install_nm_ee_ops(); crate::stream_hooks::install();"
+            } else if bucket == "wasi" {
+                "crate::wasi_hook_slots::install();"
             } else {
                 ""
             };

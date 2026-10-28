@@ -885,17 +885,6 @@ unsafe fn native_module_property_by_name_impl(
             return value;
         }
     }
-    // node:perf_hooks — `performance` and `constants` are object-valued
-    // exports. Resolve them to a `perf_hooks`-tagged namespace object so
-    // `typeof performance === "object"`, `performance.timeOrigin` (a
-    // constant), `performance.now` (a callable export), and
-    // `constants.NODE_PERFORMANCE_GC_*` (constants) all dispatch coherently.
-    if matches!(module_name, "perf_hooks" | "perf_hooks.default") && property_name == "performance"
-    {
-        // Singleton so `require("perf_hooks").performance` and the global
-        // `performance` are the same object (Node identity guarantee, #1327).
-        return crate::perf_hook_slots::performance_namespace();
-    }
     if matches!(module_name, "perf_hooks" | "perf_hooks.default") && property_name == "constants" {
         // Its OWN tag. Sharing the `perf_hooks` tag made every read of the
         // constants object resolve against the MODULE's surface, so
