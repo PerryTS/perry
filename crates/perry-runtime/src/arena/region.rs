@@ -58,7 +58,7 @@ pub(crate) fn contains(addr: usize, len: usize) -> bool {
 #[cfg(target_os = "linux")]
 pub(super) const ALIGN: usize = 2 * 1024 * 1024;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Kind {
     NurseryBlock,
     OldBlock,

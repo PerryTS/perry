@@ -1,6 +1,6 @@
 mod region_class;
 pub(crate) use region_class::{
-    classify_heap_generation, classify_heap_space_in_range, classify_region_ownership,
+    classify_heap_generation, classify_heap_space_in_range, classify_heap_storage_in_range, classify_region_ownership,
     uniform_heap_generation,
 };
 mod maintenance;
@@ -77,6 +77,7 @@ struct PageGenerationRange {
     generation: HeapGeneration,
     space: HeapSpace,
     object_starts: *mut u64,
+    large_storage: bool,
 }
 
 impl PageGenerationRange {
@@ -140,6 +141,7 @@ impl PageGenerationCache {
                 generation: HeapGeneration::Unknown,
                 space: HeapSpace::Unknown,
                 object_starts: std::ptr::null_mut(),
+                large_storage: false,
             },
             valid: false,
         }
@@ -454,11 +456,19 @@ pub(crate) fn register_block_space_with_object_starts(
     space: HeapSpace,
     object_starts: *mut u64,
 ) {
+    register_block_with_kind(base, size, generation, space, object_starts,
+        super::region::kind_for(generation, size));
+}
+
+pub(crate) fn register_block_with_kind(
+    base: usize, size: usize, generation: HeapGeneration, space: HeapSpace,
+    object_starts: *mut u64, kind: super::region::Kind,
+) {
     if base == 0 || size == 0 || matches!(generation, HeapGeneration::Unknown) {
         return;
     }
     #[cfg(target_os = "linux")]
-    if super::region::reservation::set_space(base, size, space, Some(object_starts as usize)) {
+    if super::region::reservation::set_space_with_kind(base, size, space, Some(object_starts as usize), Some(kind)) {
         if matches!(generation, HeapGeneration::Old) {
             register_old_block_pages(base, size);
         }
@@ -471,6 +481,7 @@ pub(crate) fn register_block_space_with_object_starts(
         generation,
         space,
         object_starts,
+        large_storage: kind == super::region::Kind::LargeObject,
     };
     let first_key = generation_class_key_for_addr(base);
     let last_key = generation_class_key_for_addr(end - 1);

@@ -444,3 +444,24 @@ mod tests {
         .unwrap();
     }
 }
+
+/// Dedicated leaf allocation already has the ordinary collecting-allocation
+/// effect. Finish an older non-moving cycle before publishing its new owner;
+/// a suppressed/unsafe construction leaves the guarded stepper deferred.
+pub(crate) fn finish_cycle_before_large_birth() {
+    if super::policy::gc_budgeted_cycle_active() && !super::schedule::budgeted_old_reclaim_forced() {
+        super::policy::gc_drain_active_budgeted_cycle();
+    }
+}
+
+/// Numeric pressure arms the existing poll, without tracing a partially
+/// initialized producer result or consulting the old-large major band.
+pub(crate) fn arm_young_after_large_birth() {
+    if super::policy::young_scavenge_cap_due()
+        && !super::policy::GC_SAFEPOINT_PENDING.with(Cell::get)
+    {
+        super::policy::GC_SAFEPOINT_DEFER_ARENA_BASE
+            .with(|base| base.set(crate::arena::arena_total_bytes()));
+        super::policy::set_safepoint_pending(true);
+    }
+}

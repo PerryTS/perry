@@ -814,7 +814,11 @@ pub(crate) fn json_output_storage_alloc(capacity: u32) -> (*mut StringHeader, *m
         return (ptr, data, false);
     }
     if json_leaf_prefers_arena(capacity) {
-        let (ptr, data) = string_storage_alloc(capacity);
+        let payload_size = std::mem::size_of::<StringHeader>() + capacity as usize;
+        let raw = crate::arena::arena_alloc_gc_old(payload_size, 8, crate::gc::GC_TYPE_STRING);
+        let ptr = raw as *mut StringHeader;
+        let data = string_data(ptr).cast_mut();
+        zero_alignment_padding_tail(raw, payload_size);
         crate::gc::note_young_leaf_born_old();
         return (ptr, data, false);
     }

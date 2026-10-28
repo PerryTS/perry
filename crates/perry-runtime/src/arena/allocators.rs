@@ -572,6 +572,14 @@ fn arena_alloc_gc_slow(size: usize, align: usize, obj_type: u8, total: usize) ->
     if crate::gc::is_large_object_total_size_for_type(total, obj_type)
         && !crate::gc::json_wide_birth_permits(total, obj_type)
     {
+        if crate::gc::gc_type_info(obj_type).is_some_and(|info| info.pointer_free
+            && info.rewrite_descriptor_kind == crate::gc::GcRewriteDescriptorKind::Leaf)
+        {
+            let raw = super::young_large::allocate(total, align);
+            let user = unsafe { init_young_header(raw, total, obj_type) };
+            crate::gc::allocation_pacing::arm_young_after_large_birth();
+            return user;
+        }
         return arena_alloc_gc_old(size, align, obj_type);
     }
 

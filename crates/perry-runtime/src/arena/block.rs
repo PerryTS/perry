@@ -238,7 +238,7 @@ pub(crate) fn block_pool_put(data: *mut u8, size: usize) -> bool {
     true
 }
 
-fn block_pool_take(size: usize) -> Option<*mut u8> {
+pub(super) fn block_pool_take(size: usize) -> Option<*mut u8> {
     let taken = BLOCK_POOL.with(|p| {
         let mut pool = p.borrow_mut();
         let idx = pool.blocks.iter().rposition(|block| block.size == size)?;
@@ -825,7 +825,7 @@ impl Arena {
         if matches!(
             self.blocks[idx].extent_kind,
             super::region::Kind::CollectingHolder
-        ) {
+        ) || (self.blocks[idx].extent_kind == super::region::Kind::LargeObject && self.blocks[idx].offset != 0) {
             return None;
         }
         let before = self.blocks[idx].offset;
@@ -869,7 +869,7 @@ impl Arena {
         if matches!(
             self.blocks[idx].extent_kind,
             super::region::Kind::CollectingHolder
-        ) {
+        ) || (self.blocks[idx].extent_kind == super::region::Kind::LargeObject && self.blocks[idx].offset != 0) {
             return None;
         }
         let before = self.blocks[idx].offset;

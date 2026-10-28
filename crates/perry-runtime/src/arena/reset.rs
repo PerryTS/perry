@@ -19,6 +19,7 @@ pub fn arena_reset_all_blocks_to_zero() {
     ARENA.with(|arena| unsafe {
         let arena = &mut *arena.get();
         for block in arena.blocks.iter_mut() {
+            if block.extent_kind == super::region::Kind::LargeObject { continue; }
             block.clear_object_starts();
             block.offset = 0;
         }
@@ -102,7 +103,7 @@ fn reset_region_to_zero(arena: &mut Arena, dead_cycles: DeadCycles) -> (usize, u
     let mut reset_blocks = 0usize;
     let mut reusable_bytes = 0usize;
     for block in arena.blocks.iter_mut() {
-        if block.data.is_null() {
+        if block.data.is_null() || block.extent_kind == super::region::Kind::LargeObject {
             continue;
         }
         if block.offset != 0 {
@@ -332,7 +333,7 @@ pub(super) fn release_idle_eden_blocks(arena: &mut Arena) -> ArenaResetStats {
     let keep_low = current.saturating_sub(4);
     let mut stats = ArenaResetStats::default();
     for (i, block) in arena.blocks.iter_mut().enumerate() {
-        if block.data.is_null() {
+        if block.data.is_null() || block.extent_kind == super::region::Kind::LargeObject {
             continue;
         }
         if (keep_low..=current).contains(&i) || block.offset != 0 {
@@ -417,7 +418,7 @@ pub fn arena_reset_empty_blocks(block_has_live: &[bool]) -> ArenaResetStats {
         for (i, block) in arena.blocks.iter_mut().enumerate() {
             // Tombstoned slot (gen-GC Phase C4b-δ): block was
             // deallocated on a prior cycle. Nothing to reset.
-            if block.data.is_null() {
+            if block.data.is_null() || block.extent_kind == super::region::Kind::LargeObject {
                 continue;
             }
             let live = block_has_live.get(i).copied().unwrap_or(false);
@@ -522,7 +523,7 @@ pub fn arena_reset_empty_blocks(block_has_live: &[bool]) -> ArenaResetStats {
         let mut removed_ranges: Vec<(usize, usize)> = Vec::new();
         let mut release_stats = ArenaResetStats::default();
         for (i, block) in arena.blocks.iter_mut().enumerate() {
-            if block.data.is_null() {
+            if block.data.is_null() || block.extent_kind == super::region::Kind::LargeObject {
                 continue;
             }
             if i == current {
@@ -783,7 +784,7 @@ impl ArenaResetEmptyBlocksState {
             let current = arena.current;
             let keep_low = current.saturating_sub(4);
             let block = arena.blocks.get_mut(block_idx)?;
-            if block.data.is_null()
+            if block.extent_kind == super::region::Kind::LargeObject || block.data.is_null()
                 || block.data as usize != snapshot.data
                 || block.size != snapshot.size
                 || block.offset != snapshot.offset

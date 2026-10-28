@@ -13,6 +13,9 @@ mod block;
 pub(crate) use block::discard_dead_payload_pages;
 mod construction;
 mod from_space;
+mod young_large;
+pub(crate) use young_large::{young_large_in_use_bytes, moving_from_space_in_use_bytes,
+    is_large_storage, finish_copied_young_large, finish_swept_young_large};
 mod region;
 pub(crate) use construction::ConstructionBatch;
 #[cfg(test)]
@@ -183,7 +186,7 @@ pub(crate) use stats::{old_gen_in_use_bytes_recomputed, old_gen_in_use_bytes_res
 // page_meta.rs (public + pub(crate) classification/page-meta API)
 pub(crate) use page_meta::{
     arena_header_is_object_start, classify_heap_generation, classify_heap_space,
-    classify_heap_space_in_range, classify_region_ownership, generation_page_for_addr,
+    classify_heap_space_in_range, classify_heap_storage_in_range, classify_region_ownership, generation_page_for_addr,
     materialize_promoted_page_runs_for_object, old_arena_block_range_index,
     old_arena_headers_on_pages, old_arena_movable_block_ranges, old_arena_page_index_remove_object,
     old_arena_source_blocks_for_pages, old_arena_walk_objects_on_pages, old_object_page_overlaps,

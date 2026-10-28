@@ -709,6 +709,7 @@ pub(crate) fn young_allocation_census() -> (usize, usize) {
     let mut objects = 0usize;
     let mut census_region = |blocks: &[ArenaBlock]| {
         for block in blocks {
+            if block.extent_kind == super::region::Kind::LargeObject { continue; }
             let mut offset = 0usize;
             while offset < block.offset {
                 let aligned = (offset + 7) & !7;

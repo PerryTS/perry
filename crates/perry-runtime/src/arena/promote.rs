@@ -261,7 +261,7 @@ pub(crate) fn young_in_use_bytes_after_retag() -> usize {
     let mut total = 0usize;
     let mut count = |blocks: &[ArenaBlock]| {
         for block in blocks {
-            if block.data.is_null() || block.offset == 0 {
+            if block.data.is_null() || block.offset == 0 || block.extent_kind == super::region::Kind::LargeObject {
                 continue;
             }
             if matches!(
@@ -281,7 +281,7 @@ pub(crate) fn young_in_use_bytes_after_retag() -> usize {
 
 fn collect_blocks(blocks: &[ArenaBlock], source: PromotionSource, out: &mut InPlacePromotion) {
     for (index, block) in blocks.iter().enumerate() {
-        if block.data.is_null() || block.offset == 0 {
+        if block.data.is_null() || block.offset == 0 || block.extent_kind == super::region::Kind::LargeObject {
             continue;
         }
         out.blocks.push(PromotedBlock {

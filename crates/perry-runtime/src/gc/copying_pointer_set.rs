@@ -10,6 +10,7 @@ use super::*;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum CopyingPointerKind {
     Eden,
+    YoungLarge,
     FromSurvivor,
     ToSurvivor,
     Longlived,
@@ -116,13 +117,13 @@ impl CopyingPointerSet {
         // becoming a read of the unmapped page below it. Before #7742 this was
         // two `classify_heap_space` calls for addresses 8 bytes apart, on
         // EVERY visited slot.
-        let Some((space, range_base, object_starts)) =
-            crate::arena::classify_heap_space_in_range(addr)
+        let Some((space, range_base, object_starts, large_storage)) =
+            crate::arena::classify_heap_storage_in_range(addr)
         else {
             return None;
         };
         let header_addr = addr - GC_HEADER_SIZE;
-        if header_addr < range_base {
+        if header_addr < range_base || (large_storage && header_addr != range_base) {
             return None;
         }
         debug_assert_eq!(
@@ -165,6 +166,7 @@ impl CopyingPointerSet {
         // spaces, so hoisting the non-survivor arms above them changes no
         // verdict — it just stops paying for an answer the arm does not use.
         let kind = match space {
+            crate::arena::HeapSpace::NurseryEden if large_storage => CopyingPointerKind::YoungLarge,
             crate::arena::HeapSpace::NurseryEden => CopyingPointerKind::Eden,
             crate::arena::HeapSpace::PromotedYoung => CopyingPointerKind::PromotedYoung,
             crate::arena::HeapSpace::Longlived => CopyingPointerKind::Longlived,

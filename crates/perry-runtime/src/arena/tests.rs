@@ -396,31 +396,15 @@ fn generation_metadata_bucket_keeps_exact_range_boundaries() {
 }
 
 #[test]
-fn large_object_arena_alloc_gc_is_old_tenured_and_indexed() {
+fn large_leaf_arena_birth_is_young_in_dedicated_storage() {
     run_with_fresh_arenas(|| {
-        let payload = crate::gc::LARGE_OBJECT_THRESHOLD_BYTES;
-        let ptr = arena_alloc_gc(payload, 8, GC_TYPE_STRING) as usize;
-        let header_addr = ptr - GC_HEADER_SIZE;
-        let total = unsafe { (*(header_addr as *const GcHeader)).size as usize };
-
-        assert!(
-            crate::gc::is_large_object_total_size(total),
-            "test allocation should exceed the large-object threshold"
-        );
-        assert_eq!(classify_heap_generation(ptr), HeapGeneration::Old);
-        assert!(pointer_in_old_gen(ptr));
-        assert!(!pointer_in_nursery(ptr));
-        unsafe {
-            let header = header_addr as *const GcHeader;
-            assert_ne!((*header).gc_flags & GC_FLAG_TENURED, 0);
-        }
-
-        let overlaps = old_object_page_overlaps(header_addr, total);
-        assert!(!overlaps.is_empty());
-        for &(page, _) in &overlaps {
-            let meta = old_page_meta(page);
-            assert_eq!(meta.object_count, 1);
-        }
+        let ptr = arena_alloc_gc(crate::gc::LARGE_OBJECT_THRESHOLD_BYTES, 8, GC_TYPE_STRING) as usize;
+        assert_eq!(classify_heap_generation(ptr), HeapGeneration::Nursery);
+        assert!(is_large_storage(ptr));
+        assert!(pointer_in_nursery(ptr));
+        assert!(!pointer_in_old_gen(ptr));
+        unsafe { assert_eq!((*((ptr-GC_HEADER_SIZE) as *const GcHeader)).gc_flags & GC_FLAG_TENURED,0); }
+        assert_eq!(old_page_summary().pages,0);
     });
 }
 
@@ -463,8 +447,9 @@ fn pointer_bearing_objects_get_a_wider_born_tenured_threshold_than_pointer_free_
 
         // Same size, pointer-free: unchanged, still born tenured in old-gen.
         let string = arena_alloc_gc(payload, 8, GC_TYPE_STRING) as usize;
-        assert!(pointer_in_old_gen(string));
-        assert!(!pointer_in_nursery(string));
+        assert!(!pointer_in_old_gen(string));
+        assert!(pointer_in_nursery(string));
+        assert!(is_large_storage(string));
 
         // Above the wider line, a pointer-bearing object is born tenured again.
         let huge = arena_alloc_gc(
