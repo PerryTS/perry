@@ -1296,9 +1296,9 @@ fn concat_chain_all_heap_strings_no_collect<const MAX_PARTS: usize>(
     let mut total_u16: u32 = 0;
 
     // Admission scan FIRST, and it touches nothing but `parts`. A chain with
-    // a number, an SSO value or an object in it needs `js_jsvalue_to_string`,
-    // which allocates, so it belongs on the rooted path — and it must reach
-    // that path having paid only n register compares, not n cold
+    // a number, an SSO value or an object in it needs a different conversion
+    // path. It must reach that path having paid only n register compares,
+    // not n cold
     // `StringHeader` loads it is about to throw away and redo.
     // STRING_TAG = 0x7FFF; `is_valid_string_ptr` is a range test, no deref.
     for i in 0..n {

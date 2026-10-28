@@ -1104,6 +1104,33 @@ mod tests {
         );
     }
 
+    #[test]
+    fn if_absent_preserves_valid_name_behind_invalid_override() {
+        let key = 0x9188_0171usize;
+        function_name_registry()
+            .lock()
+            .unwrap()
+            .insert(key, b"imageName");
+        function_name_overrides()
+            .lock()
+            .unwrap()
+            .insert(key, std::sync::Arc::from(&b"\xff"[..]));
+        register_function_name_if_absent(key, "inferred");
+        assert_eq!(function_name_for_ptr(key).as_deref(), Some("imageName"));
+        assert_eq!(
+            &**function_name_overrides().lock().unwrap().get(&key).unwrap(),
+            b"\xff"
+        );
+
+        function_name_registry().lock().unwrap().insert(key, b"\xff");
+        function_name_overrides()
+            .lock()
+            .unwrap()
+            .insert(key, std::sync::Arc::from(&b"ownedName"[..]));
+        register_function_name_if_absent(key, "inferred");
+        assert_eq!(function_name_for_ptr(key).as_deref(), Some("ownedName"));
+    }
+
     /// The `.stack` resolver reads both maps through one snapshot, and sizes
     /// its staleness check off `function_name_registry_len`. A name that the
     /// snapshot carries but the length does not count is a name the resolver
