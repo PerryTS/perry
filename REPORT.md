@@ -1,237 +1,259 @@
-# BRG: DB-PROBES and SYMBOL-HASH
+# BRG DB/hash candidate — NBody acceptance decision pending
 
-This is the DB/hash delivery authorized by manager replies 002 and 003. Ball is
-pending a separate construction-to-escape design review before any further Ball build.
-No Ball publication-model change is included.
+Verified production source: 7d66c8a0c8ef60c9ebb6e8e7b8f36f0998768e4b.
+Baseline: origin/main4268659dee094f6e7ee55770ba7996b8a0ff73d8, latest at the final integration check, merged
+without rebasing in92ffaaaaec935ae7086cfe27e7096320f06de634.
+No push. All lane commits author/committer Ralph Küpper <ralph3@skelpo.com>,
+without attribution lines. Ball remains a separate design review before building.
 
-Verified production source: f39ce2f62d9c320103249d4ac4ac8f1d7e6e0eea.
-Baseline: origin/main 334a705b9 (latest when fetched for integration), merged
-without rebasing in 3b066252584c2455ac76c7b839eb49cfbb3ec2e4.
-All lane commits are authored and committed by Ralph Küpper <ralph3@skelpo.com>,
-without attribution lines. No push.
+Functional, facts, parity and exact-startup gates pass. Thirteen AWFY cases pass
+manager007's paired-cycle limit. The original NBody cohort is+3.904% cycles,
+including positive uncontended pairs. Its placement/frontend mechanism is
+explained below; acceptance of that remaining normal-layout result is pending.
+No final all-AWFY pass is claimed.
 
 ## Changes and mechanisms
 
-Family-method call sites admit only exact layout words whose immutable method index
-can answer the requested name. Both the index emitter and admission use the same
-complete-prototype selection; own/accessor shadows and non-family-band rows stay
-excluded. Receiver, holder, and call-ABI runtime guards remain. No runtime index,
-cache, registry, knob, threshold, ABI entry, or TypeScript semantic proof is added.
-Current baseline/head GDB on the one-iteration DeltaBlue witness counts the
-always-missing execute-family path 140 -> 0 (the full benchmark previously made
-7.2 million such probes). See evidence/merged-mechanisms.
+Family-method call admission uses exact carried words whose emitted immutable
+method index can answer the name. Index emission and admission share the same
+complete-prototype selection. Own/accessor shadows and out-of-band or non-default-prototype
+rows stay excluded, and runtime receiver, holder, epoch and ABI guards remain.
+Current-main GDB, DeltaBlue1/1: all execute-family probes280 ->0, all family
+probes446 ->94. The first missing stack is Plan::execute -> Vector::forEach ->
+c.execute. The earlier140 count was a receiver-class subset, not the full count.
+The executable has96 family descriptors,25 with an index; execute exists in one
+(class41). Global name availability alone cannot remove unrelated-family misses.
 
-Fresh Symbols mix their unique ordinal once with the bijective MurmurHash3
-64-bit finalizer, stored in the existing move-stable id field. Relaxed atomic
-allocation supplies uniqueness; existing publication locks retain their roles.
-The inverse finalizer preserves the defensive symbol-enumeration fallback order.
-At the original baseline, schema id6/bucket6 collided with _tag6; mixing placed it
-in bucket3. Integrated main's lazy startup incidentally moves schema to ordinal1:
-bucket1 -> mixed id12994781566227106604/bucket4. The fix spreads sequential identities
+Fresh Symbols store the bijective MurmurHash3 fmix64 of their unique ordinal in
+the existing move-stable id field, once at birth. Relaxed atomic allocation
+supplies uniqueness; existing publication owners retain their roles. The inverse
+preserves the defensive own-symbol enumeration fallback. No new header field.
+Originally schema ordinal6/hash6 collided with _tag6; mixing moved it to bucket3.
+Current main's lazy startup incidentally makes schema ordinal1; its stored hash
+becomes12994781566227106604 (bucket4 with mask7). This spreads sequential identities
 generically; it does not promise collision freedom or depend on a startup count.
 
-To satisfy strict startup after integrating main, method construction borrows
-existing function metadata when it only tests presence or equality, avoiding
-temporary String copies. Reflection retains owned results. Existing locks and
-UTF-8, invalid-owned fallback, valid-empty precedence, descriptor-name and
-optional-source-tail semantics are preserved. Tests cover those distinctions.
+Method construction shares the existing registered-name read. When it infers a
+missing name, it uses the actual successful owned-byte write plus UTF-8 validation
+to establish the new fallback name, guarded by exact copy width and equality of
+the supplied key with the descriptor's code. Canonical image names, including
+empty image names, still win. Failed/malformed writes and differing keys use the
+ordinary reader. Computed, empty-name and native-entry modes keep their original
+registration/read path. The public copying API still returns void and owns bytes.
+No extra allocation is introduced. Tests prove copied-buffer lifetime, existing
+owner retention, empty overrides, invalid-owned/image fallback, key mismatch and
+image-name/source-tail precedence.
 
-The integrated baseline had a stale negative image-birth fixture: it directly
-invokes the unconditional audit body but expected the optional production hook's
-disabled behavior. Both pristine334a and head reproduced that isolated failure.
-The fixture now requires rejection in release too; production audit is unchanged.
-No wpfacts production changes or DECISIONS211/212 guard/assertion changes ship.
+No new registry, cache, runtime knob, threshold, ABI entry, TypeScript semantic
+proof, or wpfacts production change. No DECISIONS211/212 guard/assertion weakened.
+The initial merge deduplicated equivalent metadata helpers and the image-audit
+negative-fixture correction already landed on main, retaining BRG edge coverage.
 
 ## Verification
 
-- Codegen: 2585 passed, 1 existing ignored; wpfacts: 547 passed, 5 existing ignored.
-  The final compiler is byte-identical to the compiler used for these suites.
-- Final runtime: 6175 passed, 0 failed, 48 existing ignored.
-- Perry: all1318 enumerated cases accounted for; 1316 active passed, 2 existing
-  ignored, 0 failed. Every case ran in a fresh process, retaining every assertion.
-  This avoids a previously demonstrated shared-state CLI fixture issue.
-- JS-compiled: 22/22 for both baseline and final head, pinned Node26.12.1.
+- Codegen2589 pass,1 existing ignore; wpfacts561 pass,5 existing ignores.
+  These92ff results and its facts are reused with the byte-identical final compiler
+  dac3396d5bfb2b483a864e0adfba13e496fbda2a96dec860695b7ff4f2409358.
+  The only subsequent production changes are private runtime metadata operations.
+  Scope and byte checks: evidence/infer-compiler-proof.json.
+- Final runtime6190 pass,0 failed,48 existing ignored. The new copying/inference
+  test ran and passed; six image-name/source-tail combinations ran in the
+  descriptor fixture.
+- Perry:1326 listed,1324 active passed in fresh processes,2 existing ignored,
+  0 failed. Every assertion/case retained. Fresh processes avoid the previously
+  demonstrated combined-state CLI fixture interference.
+- JS-compiled parity22/22 both arms against pinned Node26.12.1.
 - Windows runtime offline check passed. Native ABI check has zero native
-  class/width/arity/return errors; Wasm catalogue check passed. The metadata
-  follow-up adds no native exports or signatures.
-- All52 whole/per-unit fact tables (26 witnesses in both modes,104 input files)
-  equal baseline exactly after synthetic-cache-prefix normalization. Complete
-  normalized site and tdiff comparisons also match; no new per-unit-stronger site
-  or template. Existing baseline stronger sites remain unchanged.
-  tdiff explicitly reports NO ORACLE (zero templates) on d_three_math, matmul,
-  prime_sieve in both arms; these are not claimed as template-oracle passes.
-  Their complete site tables are still equal. The final checker validates these
-  exact three documented exit2 cases rather than accepting arbitrary errors.
-- Final audit marker: evidence/names-final-audit.complete. The earlier
-  names-verify3 wrapper stopped on its overbroad tdiff-exit assertion; that failure
-  remains recorded. The corrected audit reuses the complete unchanged measurements.
+  class/width/arity/return errors; Wasm catalogue check passed.
+- All52 complete whole/per-unit tables (26 witnesses in both modes,104 files)
+  equal baseline after synthetic-cache-prefix normalization. Complete site
+  comparisons and all26 full tdiff outputs/arm also match; no new per-unit-stronger
+  site/template. Existing baseline stronger rows are explicitly retained.
+  d_three_math, matmul and prime_sieve have zero templates and tdiff's documented
+  NO ORACLE exit2 in both arms; these are not template-oracle passes.
+- Producer/archive hashes remained stable through all affected checks and timing.
 
-Evidence: merged-suite-summary.json, names-runtime2.log, names-perry-fresh.log
-and its per-case result manifest, names-windows.log, merged-abi.json,
-merged-main/jsc/results.json, names-head/jsc/results.json, facts-equal.json,
-facts-comparison.json, names-final-gates.json (all under /root/BRG/evidence).
+Evidence under /root/BRG/evidence: tip-suite-summary.json, infer-runtime.log,
+infer-runtime-summary.json, infer-perry-fresh/{manifest.json,results.json},
+infer-windows.log, infer-abi.json, tip-main/jsc/results.json,
+infer-head/jsc/results.json, tip-facts-equal.json, tip-facts-comparison.json,
+infer-audit.json. infer-audit.log preserves its intentional NBody gate failure.
 
-## Native n5 medians
+## Native measurements
 
-qb9, taskset on one admitted idle physical CPU per case, alternating paired arms,
-five runs per arm. Both CPU and SMT sibling must be idle at batch admission;
-sibling activity is recorded during every sample. Every interfered batch is
-retained and repeated by that activity rule, never by its benchmark delta.
-The common AWFY executable selects each case through its CLI arguments. Outputs
-match the pinned Node oracle for every accepted run. Final ELF hashes are in
-evidence/names-native-binaries.json; raw perf, CPU and parity receipts are in
-evidence/names-final. Final audit checks all14 AWFY cases plus property, not a subset.
+qb9, taskset, one CPU/SMT pair per case, AB/BA order for six pairs. All180
+samples remain; sibling raw ticks and host load are recorded for every run.
+Manager007's shared-host design chooses the quietest available pair, with every
+contended pair retained and marked. The common AWFY executable selects its case
+by CLI arguments. Every run matches the Node oracle.
+
+The following n5 medians are the first five pairs fixed in advance; pair6 remains
+in the paired analysis. Wall medians include recorded contention and are not
+claimed as clean estimates.
 
 | Case | Main instructions | Head instructions | Instructions delta | Cycles delta | Wall delta |
 |---|---:|---:|---:|---:|---:|
-| Bounce | 39,391,363,434 | 39,379,131,159 | -0.0311% | +0.0028% | +0.7333% |
-| CD | 25,186,341,224 | 25,186,060,938 | -0.0011% | +0.0608% | -0.2650% |
-| DeltaBlue | 27,717,066,826 | 26,828,515,742 | -3.2058% | -1.8537% | -1.7667% |
-| Havlak | 92,053,985,162 | 91,390,453,473 | -0.7208% | -2.8945% | -3.4115% |
-| Json | 110,265,592,704 | 110,264,877,888 | -0.0006% | -16.3002% | -15.6320% |
-| List | 16,360,091,485 | 16,359,806,562 | -0.0017% | +0.1926% | -0.1321% |
-| Mandelbrot | 2,792,959,434 | 2,792,881,514 | -0.0028% | +0.1500% | +0.0918% |
-| NBody | 51,697,556,963 | 51,697,475,585 | -0.0002% | -2.0485% | -2.0640% |
-| Permute | 52,752,669,913 | 52,752,589,157 | -0.0002% | +0.6547% | +0.7590% |
-| Queens | 40,672,890,145 | 40,672,807,784 | -0.0002% | -0.3274% | -0.9202% |
-| Richards | 207,754,247,959 | 207,754,168,324 | -0.0000% | -7.5661% | -7.3311% |
-| Sieve | 32,637,820,966 | 32,637,750,170 | -0.0002% | -0.2233% | +0.6615% |
-| Storage | 58,983,882,833 | 58,951,020,195 | -0.0557% | -3.9963% | -4.4083% |
-| Towers | 49,171,564,192 | 49,171,490,720 | -0.0001% | +0.1560% | +0.0269% |
-| property-prototype | 788,615,477 | 788,617,577 | +0.0003% | +0.8497% | +0.1882% |
+| Bounce | 38,851,116,936 | 38,838,870,413 | -0.0315% | -0.9200% | -0.7409% |
+| CD | 24,791,539,007 | 24,791,409,060 | -0.0005% | +0.1607% | -0.1620% |
+| DeltaBlue | 27,663,987,378 | 26,775,168,630 | -3.2129% | -6.0110% | -5.9162% |
+| Havlak | 92,072,777,856 | 91,409,167,492 | -0.7207% | -3.4740% | -2.9728% |
+| Json | 110,261,142,403 | 110,260,530,552 | -0.0006% | -23.1704% | -23.8453% |
+| List | 15,974,047,490 | 15,973,756,347 | -0.0018% | -0.5587% | -0.2819% |
+| Mandelbrot | 2,792,860,414 | 2,792,782,375 | -0.0028% | -0.0228% | +0.0118% |
+| NBody | 51,697,497,032 | 51,697,427,859 | -0.0001% | +4.0293% | +4.2175% |
+| Permute | 52,333,642,623 | 52,333,553,196 | -0.0002% | -0.5949% | +3.3267% |
+| Queens | 40,129,538,593 | 40,129,451,638 | -0.0002% | -0.0716% | -1.3330% |
+| Richards | 207,754,431,318 | 207,754,205,932 | -0.0001% | -33.6923% | -37.2708% |
+| Sieve | 32,637,573,766 | 32,637,584,003 | +0.0000% | +0.2379% | +0.7458% |
+| Storage | 58,983,784,142 | 58,951,031,721 | -0.0555% | -17.1549% | -16.1978% |
+| Towers | 48,259,316,843 | 48,259,236,214 | -0.0002% | +0.6966% | +0.7413% |
+| property-prototype | 788,641,458 | 788,641,589 | +0.0000% | +1.2130% | +2.0185% |
 
-No new AWFY regression reaches2% in instructions, cycles, or wall time.
-DeltaBlue's26.828515742B instructions are below the pre-regression27.033336012B.
-Property's788.617577M is +0.2643% versus pre786.539015M; manager003 explicitly
-accepted the minimal +0.27% residual under landing rule112's side band.
-It is not represented as complete pre-number recovery. Against integrated main
-it is instruction-flat. Absolute cycles and nanoseconds are in the full medians JSON.
+DeltaBlue head26.775168630B instructions is below pre27.033336012B.
+Property head788.641589M is+0.2673% versus pre786.539015M.
+Manager003 explicitly accepted the minimal +0.27% residual under rule112's side
+band. It is named here and is not represented as complete pre-number recovery.
+Against current main its instruction count is flat. Property's33ms n5 wall
+median is+2.02%; its six-pair cycles median is+0.531%, with the full range below.
 
-## Final paired check under manager007
+Paired percentages are100*(head/main-1), then median/full range, not a ratio of
+arm medians. A dash means no uncontended pair, not a filtered pass.
 
-After the n5 verification, manager007 required at least six AB/BA pairs per case,
-all pairs retained, sibling ticks/load for every sample, and paired medians with
-ranges both with and without contended pairs. The final check has180 samples:
-six pairs for each of14 AWFY cases plus property. Main/head order is
-AB, BA, AB, BA, AB, BA on one fixed physical CPU/SMT pair per case.
-
-The first six cases admitted an idle CPU pair. Following007's shared-host ruling,
-the remaining nine chose the quietest available pair after a two-second CPU census.
-No pair was discarded or repeated. The transition preserved all completed cases
-and stopped only the owned sleeping sampler with no child at a case boundary.
-Every run records raw before/after CPU ticks and host load. A contended pair has
-at least one sample with >2% sibling activity (a reporting classification only).
-
-The table uses100*(head_cycles/main_cycles-1) for each pair, then its median and
-full range. A dash means no uncontended pair; it does not imply a filtered pass.
-
-| Case | All6 median % | All6 range % | Uncontended n | Uncontended median % | Uncontended range % |
+| Case | All6 cycles median % | All6 range % | Uncontended n | Uncontended median % | Uncontended range % |
 |---|---:|---:|---:|---:|---:|
-| Bounce | -0.353 | -0.852 .. +0.629 | 4 | -0.103 | -0.399 .. +0.629 |
-| CD | +0.232 | -0.384 .. +1.154 | 6 | +0.232 | -0.384 .. +1.154 |
-| DeltaBlue | -2.494 | -7.253 .. -1.536 | 5 | -2.137 | -4.721 .. -1.536 |
-| Havlak | -3.158 | -7.061 .. +0.280 | 3 | -2.813 | -3.502 .. -2.776 |
-| Json | -14.920 | -16.857 .. +17.294 | 3 | -16.728 | -16.857 .. -15.047 |
-| List | +0.148 | -0.959 .. +2.052 | 6 | +0.148 | -0.959 .. +2.052 |
-| Mandelbrot | +0.126 | -0.354 .. +1.414 | 6 | +0.126 | -0.354 .. +1.414 |
-| NBody | -1.702 | -18.817 .. +15.694 | 2 | -2.120 | -2.174 .. -2.067 |
-| Permute | +0.513 | -0.027 .. +2.026 | 5 | +0.452 | -0.027 .. +0.694 |
-| Queens | -0.170 | -0.553 .. -0.043 | 6 | -0.170 | -0.553 .. -0.043 |
-| Richards | -3.407 | -32.021 .. +4.012 | 0 | — | — |
-| Sieve | +2.635 | -15.178 .. +11.154 | 1 | +0.341 | +0.341 .. +0.341 |
-| Storage | -3.769 | -4.414 .. +5.410 | 3 | -4.313 | -4.414 .. -3.676 |
-| Towers | +0.102 | -0.329 .. +0.860 | 5 | +0.066 | -0.329 .. +0.860 |
-| property-prototype | -3.543 | -8.962 .. +12.908 | 6 | -3.543 | -8.962 .. +12.908 |
+| property-prototype | +0.531 | -8.515 .. +11.225 | 6 | +0.531 | -8.515 .. +11.225 |
+| DeltaBlue | -5.887 | -7.526 .. -4.252 | 6 | -5.887 | -7.526 .. -4.252 |
+| Richards | -25.405 | -39.739 .. -17.216 | 2 | -17.785 | -18.353 .. -17.216 |
+| Json | -26.498 | -47.877 .. -14.680 | 1 | -19.472 | -19.472 .. -19.472 |
+| CD | +0.296 | -25.467 .. +1.250 | 5 | +0.417 | -0.544 .. +1.250 |
+| Havlak | -3.401 | -5.017 .. +5.474 | 5 | -3.721 | -5.017 .. -2.484 |
+| Bounce | -0.804 | -1.551 .. +0.031 | 5 | -0.562 | -1.181 .. +0.031 |
+| List | -0.382 | -0.925 .. -0.080 | 6 | -0.382 | -0.925 .. -0.080 |
+| Mandelbrot | -0.002 | -0.026 .. +3.615 | 5 | -0.003 | -0.026 .. +0.028 |
+| NBody | +3.904 | +2.459 .. +5.702 | 4 | +3.904 | +3.424 .. +4.322 |
+| Permute | -0.458 | -1.892 .. +24.942 | 3 | -0.987 | -1.892 .. -0.932 |
+| Queens | -0.153 | -1.470 .. +0.590 | 4 | -0.153 | -0.533 .. +0.120 |
+| Sieve | +0.176 | -0.092 .. +4.370 | 6 | +0.176 | -0.092 .. +4.370 |
+| Storage | -17.249 | -17.603 .. -16.826 | 6 | -17.249 | -17.603 .. -16.826 |
+| Towers | +0.535 | -0.478 .. +25.125 | 4 | +0.133 | -0.478 .. +0.913 |
 
-Thirteen AWFY cases have median paired cycles <=+2%. Sieve passes007's explicit
-alternative: its range straddles zero and instructions show no additional work.
-Sieve all-pair cycles median+2.6351%, range[-15.1785%,+11.1536%]; instructions
-median-0.0001613%. Five pairs are contended; the one uncontended pair is+0.3415%
-cycles. The independent earlier clean n5 was-0.2233% cycles and-0.0002% instructions.
-These figures are all retained; the positive paired median is not hidden.
+## NBody: explained placement/frontend effect; decision pending
 
-Sieve's actual767-instruction sieve body and referenced floating/NANBOX constants
-match exactly after ordinary branch/call/RIP relocations and three immediate
-references to the same two ELF globals (PERRY_GC_POLL_ARMED and
-PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED). nm and GDB resolve the globals in both
-ELFs; arbitrary immediates are not stripped. This supports the unchanged-work
-criterion, with no new instruction tolerance or product tuning.
-BRG-sieve-code-compare.py reproduces the comparison and BRG-paired-audit.py checks
-all180 rows, AB/BA ordering, tick/load fields, parity, unchanged ELFs, all ranges,
-and this explicit Sieve criterion. The check does not claim all paired medians
-are below2% or that the contended wall-time median is a clean measurement.
+Original six-pair cycles median+3.9044%, range[+2.4586,+5.7016]%; four
+uncontended pairs median+3.9044%, range[+3.4244,+4.3220]%.
+Instructions median-0.0001431%. The positive clean range is a real measured cost;
+later contended negative pairs are not used to hide it.
 
-Evidence: paired-final/{raw.json,summary.json,audit.json,audit.complete,sieve-code/}
-and paired-final-audit.log. Prior n5 batches, including every contended attempt,
-remain under names-final; old-n5-all-pairs.json reports all their paired ranges.
-No additional startup count was needed: the shipping source, compiler, runtime
-archive and native ELFs are unchanged.
+Clean sampled self-cycle periods (main -> head): advance7.902B ->8.000B,
+closure19 1.187B ->1.258B, dynamic_string_or_number_add269.46M ->413.36M,
+class-holder chain98.25M ->170.01M, native-call tower121.18M ->178.20M.
+Both cycle and Icache profile pairs had <=2% sibling activity and no lost samples.
+Clean Icache samples: total49.186M ->102.453M, advance21.527M ->39.887M,
+closure19 11.835M ->21.121M, dynamic add1.754M ->5.002M.
 
-## Exact startup
+Additional clean, unmultiplexed perf-stat pairs:
+Icache loads406.903M ->793.487M; misses51.150M ->105.252M.
+Frontend-bound slots12.5% ->17.7%. Branch misses22.480M ->17.546M,
+so increased branch-miss work does not explain the cost.
+Earlier contended metric attempts remain and are not interpreted as clean data.
+Admission receipts: nbody-clean-stats/{activity.json,selected.json}.
 
-Both arms: x86-64-v3, PERRY_KEEP_SYMBOLS=1, ASLR off, same executable and synthetic
-source paths, environment and cwd; three alternating runs per arm. Every arm's
-triple is identical. The measurement-only JRX input helper fixes entropy, clocks
-and canonical actual stack-map row selection (with an RLIMIT gap assertion);
-it is outside shipping source. No startup noise waiver.
+The normal advance bodies have4147 ->4145 instructions (shape clone3922 ->3920):
+two instructions are removed in the tail family-admission path. The hot prefix
+is otherwise unchanged after actual ELF relocations. Closure19(662), array
+forEach(830), dynamic add(13), family store(375), and holder chain(788) match
+between arms. The native-call tower has4454 instructions in both, with cold
+literal-address differences. No extra adapter/call route is introduced.
+
+The first control reordered only app methods and enter_home; it did not remove
+the cost. A second, profile-guided CONTROL reorders the eight sampled hot
+app/runtime functions lexically and in reverse, in both arms. All eight functions'
+instructions and referenced constants match each arm's normal binary after
+validated ELF symbol/GOT/boxed-static-pointer relocation. Numeric constants and
+arbitrary immediates are not discarded. This changes placement, not the algorithm.
+
+| Isolation/control | All6 cycles median % | All6 range % | Uncontended n | Uncontended cycles median % |
+|---|---:|---:|---:|---:|
+| normal | +0.567 | -19.845 .. +4.028 | 1 | +4.028 |
+| compiler-only | +1.196 | -16.929 .. +3.230 | 1 | +2.434 |
+| runtime-only | -0.908 | -12.249 .. +10.200 | 0 | — |
+| hot-lex | +0.147 | -4.896 .. +8.882 | 1 | +0.293 |
+| hot-rev | +0.648 | -2.293 .. +3.018 | 1 | +0.440 |
+
+The clean normal isolation pair is+4.028%; hot-order controls are+0.293%/+0.440%.
+Compiler-only's one clean pair is+2.434%; runtime-only has no clean pair, so that
+part of the crossover is not claimed as a clean isolation proof. Every pair,
+including all contended repeats, is reported. The control removing the cost and
+the doubled clean Icache misses identify frontend placement sensitivity.
+No function-order/alignment change ships. Source remains the generic mechanism fix.
+Evidence: nbody-analysis/, nbody-isolation/, nbody-isolation-code.log,
+BRG-nbody-isolation-code.py. Current acceptance needs a manager decision because
+the original normal-layout clean cohort exceeds the brief's2% limit, while007
+asks that a real increase have its mechanism named.
+
+## Exact startup: PASS
+
+x86-64-v3, PERRY_KEEP_SYMBOLS=1, ASLR off; same executable/synthetic-source paths,
+cwd/env per arm, three alternating runs/arm. Every triple is identical.
+The measurement-only JRX input helper fixes entropy, clocks and canonical actual
+stack-map row selection with an RLIMIT gap assertion; it is outside product source.
+No startup noise waiver. Full per-function ledgers reconcile exactly.
 
 | Witness | Main Ir (each of3) | Head Ir (each of3) | Delta |
 |---|---:|---:|---:|
 | hello | 142166 | 142166 | +0 |
-| commander | 21295232 | 21281539 | -13693 |
-| commander-help | 23698715 | 23673683 | -25032 |
-| fastify | 165165230 | 165073185 | -92045 |
-| Richards | 43116410 | 43036978 | -79432 |
+| commander | 21307245 | 21299528 | -7717 |
+| commander-help | 23683270 | 23671421 | -11849 |
+| fastify | 165000022 | 164916265 | -83757 |
+| Richards | 42986762 | 42905457 | -81305 |
 
 Top five changed functions by absolute self-cost delta (head minus main Ir):
 
 - hello: no changed functions.
-- commander: `perry_runtime::builtins::fn_metadata::registered_name_string` -39407; `perry_runtime::object::native_module::class_method_declaration_value_bytes` +32576; `mi_theap_malloc_aligned` -2150; `mi_free` -2058; `perry_runtime::builtins::fn_metadata::function_name_for_closure` -1911.
-- commander-help: `perry_runtime::builtins::fn_metadata::registered_name_string` -58448; `perry_runtime::object::native_module::class_method_declaration_value_bytes` +48582; `perry_runtime::builtins::fn_metadata::function_name_for_closure` -4383; `mi_theap_malloc_aligned` -3536; `mi_free` -3381.
-- fastify: `perry_runtime::builtins::fn_metadata::registered_name_string` -171562; `perry_runtime::object::native_module::class_method_declaration_value_bytes` +123546; `perry_runtime::builtins::fn_metadata::function_name_for_closure` +18328; `perry_runtime::object::shapes::layout_probe::derive` -11550; `mi_theap_malloc_aligned` -9470.
-- Richards: `perry_runtime::builtins::fn_metadata::registered_name_string` -182673; `perry_runtime::object::native_module::class_method_declaration_value_bytes` +147959; `mi_theap_malloc_aligned` -12480; `mi_free` -11928; `./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S:__memcpy_avx_unaligned_erms` -7660.
+- commander: perry_runtime::builtins::fn_metadata::copy_function_name +16253; js_register_function_name -15919; perry_runtime::object::native_module::class_method_declaration_value_bytes -5280; ./string/../sysdeps/x86_64/multiarch/memcmp-avx2-movbe.S:__memcmp_avx2_movbe -1832; perry_runtime::symbol::next_id -527.
+- commander-help: perry_runtime::builtins::fn_metadata::copy_function_name +24554; js_register_function_name -24222; perry_runtime::object::native_module::class_method_declaration_value_bytes -9396; ./string/../sysdeps/x86_64/multiarch/memcmp-avx2-movbe.S:__memcmp_avx2_movbe -3167; perry_runtime::object::shapes::layout_probe::probe_get_underived::<true> +1067.
+- fastify: perry_runtime::object::native_module::class_method_declaration_value_bytes -51700; perry_runtime::builtins::fn_metadata::copy_function_name +19335; js_register_function_name -19080; perry_runtime::object::shapes::layout_probe::derive -11550; perry_runtime::symbol::next_id -6324.
+- Richards: perry_runtime::object::native_module::class_method_declaration_value_bytes -80585; perry_runtime::builtins::fn_metadata::copy_function_name +6035; js_register_function_name -5872; perry_runtime::symbol::next_id -465; ./string/../sysdeps/x86_64/multiarch/memcmp-avx2-movbe.S:__memcmp_avx2_movbe -432.
 
-Each full per-function ledger sums exactly to its total delta. Profiles,
-callgrind_annotate output, normalization inputs, counts and ledgers:
-evidence/startup-final/{counts.json,diff.json}. Before the metadata change the
-merged candidate increased startup by21/542/1798 Ir on commander/help/Richards;
-those profiles identified temporary-name allocation. The generic fix removes
-642 such allocations in Richards. Failed and raw unnormalized profiles remain.
+Evidence: startup-infer/{counts.json,diff.json,environment.json} and profiles.
+The92ff source failed commander+58/help+864. The first shared-read candidate3a6
+failed+4156/+10643 because its cold inference path still read the newly written
+name. Profiles identified that path;7d66 uses the actual write result and passes.
+All failed profiles remain. The source3a6 runtime suite passed6189; its later
+unused Perry test compilation was cancelled after the deterministic startup failure.
 
-## Excluded candidate: Storage explanation requested in003
+## Prior Storage explanation requested in003
 
-The broader closure-proof ABI candidate is excluded in full. It had a clean
-Storage +6.65% cycles result. Deterministic lexical/reverse function-order
-controls changed that to -8.79%/-6.57%, with the six hot functions' normalized
-instructions and referenced constants identical within each arm. All18 hardware
-profile runs were clean, with unmultiplexed counters. Frontend-bound rose
-28.6% ->37.7%; buildTreeDepth sampled cycles1.245B ->1.649B and L1I misses
-11.419M ->20.296M; family-probe cycles0.702B ->0.967B and L1I misses
-18.368M ->25.162M. Branch misses34.515M ->35.263M.
-This explains the rejected candidate's code-placement/frontend effect. No
-function-order, alignment, or adapter tuning ships. The final minimal source
-instead improves Storage cycles3.996% and wall4.408%.
-Evidence: storage-layout-clean2/profile-attempt4 and layout-control/hot-code.json.
+The broader closure-proof ABI candidate is excluded in full. It had Storage
++6.65% cycles. Deterministic lexical/reverse order controls changed that to
+-8.79%/-6.57%, with six hot functions' normalized instructions/constants identical.
+All18 accepted hardware profile runs were clean and unmultiplexed.
+Frontend-bound28.6% ->37.7%; buildTreeDepth cycles1.245B ->1.649B and L1I misses
+11.419M ->20.296M; family probe cycles0.702B ->0.967B and misses18.368M ->25.162M.
+Branch misses34.515M ->35.263M. No layout tuning or post-proof ABI adapter ships.
+Full evidence: storage-layout-clean2/profile-attempt4, layout-control/hot-code.json.
+The completed334a verification and frozen bundle are separately retained;
+they are not substituted for the current426 integration.
 
-## Build and delivery
+## Producers, preservation and delivery
 
-Own targets target-main/target-head and explicit PERRY_RUNTIME_DIR roots.
-Both production arms used LLVM22 and /root/build.sh cargo build-perry --release
--j6, followed by scripts/gc_call_effects/sidecars.sh. The final hashes are:
+Both own production targets used LLVM22 and /root/build.sh cargo build-perry
+--release -j6, then scripts/gc_call_effects/sidecars.sh. PERRY_RUNTIME_DIR is pinned.
+The final affected Cargo checks held one build slot for serial runtime/Perry/
+Windows commands. Only owned, verified PIDs were stopped on rejected candidates.
+No historical checkout was profiled or bisected. No push.
 
-- Main compiler: 6e08352a8478e1e87d10ab1379053cdd73f94d6f8749d3b1a92d2d1b027b2015
-- Main runtime: ef5afb85619ce3ee554e644393540ec0c1ee7c8838ddd3399cab85c30a674455
-- Head compiler: 3e749d5554f1d549c575546a8e08e9068482f9fa7de8dabe5c65c8d49fdcaeae
-- Head runtime: f5b1a283214956e06ca2922e076050b2c69721f8203bf89295a01350955fcc02
+- /root/BRG/target-main/release/perry-main: 5ced4da8dd67ae2f6da3dfe21abcea74a0b1540ff3491967e91141bc3d2c75fd
+- /root/BRG/target-main/release/libperry_runtime.a: a66b0cf91ba702193a4504d0c804a4e291f9dfc3cd48f9b093db2a29c8903fe1
+- /root/BRG/target-head/release/perry: dac3396d5bfb2b483a864e0adfba13e496fbda2a96dec860695b7ff4f2409358
+- /root/BRG/target-head/release/libperry_runtime.a: 405e256197dd40993f66a001d9e32f9b0bd51c5397f34b7edb6d0d96e46521d2
 
-Final startup and final audit both verify archive/compiler stability.
-Runtime build.rs fingerprints the full source closure, including fixture files,
-so the test-only follow-up changed the archive build id; final checks use that archive.
-Root free space remained above25GB (319GB at the final audit). No other lane's
-PIDs were killed. No historical checkout was profiled or bisected.
+Complete raw timing, profiles and executables remain on qb9. Large inactive facts
+and logs are losslessly gzip-compressed, with decompressed SHA verification and
+path/size/hash manifests in compressed-inactive-facts.json and compressed-tip-facts.json.
+Current timing/ELFs/startup profiles stay intact. Space is monitored against25GB.
 
-Bundle: /root/BRG/brg.bundle, ref refs/heads/brg, prerequisite origin/main334a705b9.
-The final docs-only commits follow the verified production source; bundle head
-is recorded in the accompanying mailbox done message. Full raw evidence stays on
-qb9; brg-evidence.tar.gz carries compact verification receipts and driver scripts.
-No push. Next Ball action is the separate exact-chain/design review required by002/003.
+Candidate bundle: /root/BRG/brg.bundle, refs/heads/brg, prerequisite origin/main4268659de.
+The docs-only candidate commit follows the verified7d66 production source. Its head
+and hashes are in the accompanying mailbox decision request. No done is claimed.
+Ball remains pending its separate exact construction-to-escape design review.
