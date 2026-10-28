@@ -1,0 +1,1 @@
+Reduce regular-expression VM overhead by borrowing validated program sections and class records and retaining repeated-atom phases within a trial. Preserve capture answers, work accounting, relocation, and lazy-automaton behavior. Pin the reusable Perex engine to the exact reviewed Git revision.

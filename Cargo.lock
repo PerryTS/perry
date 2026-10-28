@@ -5160,8 +5160,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 [[package]]
 name = "perex"
 version = "0.1.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "51a7ee1a53a0fbe25a8b9f5be8ba3fbee87aa6ecca0fda04c99d24d8b9b386da"
+source = "git+https://github.com/PerryTS/perex?rev=a7ae86a9e260c2b434c440e9075091c0d08ffb34#a7ae86a9e260c2b434c440e9075091c0d08ffb34"
 
 [[package]]
 name = "perry"

@@ -439,13 +439,9 @@ regex = "1.12"
 aho-corasick = "1.1"
 memchr = "2"
 # The single regular-expression engine, through crates/perry-perex.
-# 0.1.14 adds exact bounded start-anchored literal execution (format 16):
-# immutable program instructions are compared with the original subject,
-# without a DFA cache, matcher scratch, or generated per-pattern native code.
-# Resolved once on 2026-10-18 with CARGO_RESOLVER_INCOMPATIBLE_PUBLISH_AGE=allow
-# before this release clears the 7-day publish-age window. Cargo.lock pins the
-# verified registry artifact; the global window is unchanged.
-perex = "0.1.14"
+# Pin borrowed program sections and chained repeated-atom VM phases.
+# The immutable Git revision retains format 16 and exact work charging.
+perex = { git = "https://github.com/PerryTS/perex", rev = "a7ae86a9e260c2b434c440e9075091c0d08ffb34" }
 # The per-agent event-loop driver. alpha.10 adds owned TCP connect, live socket
 # controls and cancellation-safe shutdown used by the synchronous WASI adapter.
 # Release source: e31526b5399d00e94b1452ffe8a8e0e76e4824ad (turnloop PR #115).
