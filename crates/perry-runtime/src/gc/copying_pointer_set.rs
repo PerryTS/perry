@@ -123,7 +123,8 @@ impl CopyingPointerSet {
             return None;
         };
         let header_addr = addr - GC_HEADER_SIZE;
-        if header_addr < range_base || (large_storage && header_addr != range_base) {
+        if header_addr < range_base
+            || (large_storage && space == crate::arena::HeapSpace::NurseryEden && header_addr != range_base) {
             return None;
         }
         debug_assert_eq!(

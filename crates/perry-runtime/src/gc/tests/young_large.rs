@@ -221,3 +221,95 @@ fn large_leaf_pressure_does_not_pretenure_the_special_json_output() {
     .join()
     .unwrap();
 }
+
+#[test]
+fn old_legacy_large_backing_still_classifies_secondary_objects() {
+    std::thread::spawn(|| unsafe {
+        let _guard = CopyingNurseryTestGuard::new(0);
+        let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let first =
+            crate::arena::arena_alloc_gc_old(3 * crate::arena::BLOCK_SIZE + 64, 8, GC_TYPE_STRING)
+                as usize;
+        let next = crate::arena::arena_alloc_gc_old(56, 8, GC_TYPE_STRING) as usize;
+        let a = crate::arena::classify_heap_storage_in_range(first).unwrap();
+        let b = crate::arena::classify_heap_storage_in_range(next).unwrap();
+        assert!(a.3 && b.3);
+        assert_eq!(
+            a.1, b.1,
+            "fixture must exercise the packed legacy old extent"
+        );
+        assert_ne!(next - GC_HEADER_SIZE, b.1);
+        assert_eq!(
+            CopyingPointerSet::new().classify(next).unwrap().kind,
+            CopyingPointerKind::Old
+        );
+    })
+    .join()
+    .unwrap();
+}
+
+#[test]
+fn partial_large_leaf_backing_is_not_a_bump_target_or_densely_advised() {
+    std::thread::spawn(|| unsafe {
+        let _guard = CopyingNurseryTestGuard::new(0);
+        let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let _suppression = GcSuppressScope::new();
+        let large = leaf(32 * 1024);
+        let (_, base, _, kind) = crate::arena::classify_heap_storage_in_range(large).unwrap();
+        assert!(kind);
+        let (used, size) = crate::arena::ARENA.with(|arena| {
+            let arena = &*arena.get();
+            let b = arena
+                .blocks
+                .iter()
+                .find(|b| b.data as usize == base)
+                .unwrap();
+            (b.offset, b.size)
+        });
+        assert!(
+            used < size && size < crate::arena::BLOCK_SIZE,
+            "fixture needs a partial OS-page tail"
+        );
+        crate::arena::sync_inline_arena_state();
+        let remaining = crate::arena::ARENA.with(|arena| {
+            let arena = &*arena.get();
+            let current = &arena.blocks[arena.current];
+            current.size - current.offset
+        });
+        let _filler = crate::arena::arena_alloc(remaining - 8, 8);
+        let next = crate::arena::arena_alloc_gc(32, 8, GC_TYPE_STRING) as usize;
+        assert!(
+            !(base..base + size).contains(&next),
+            "ordinary forward search must not pack the tail"
+        );
+        #[cfg(target_os = "linux")]
+        {
+            let maps = std::fs::read_to_string("/proc/self/smaps").unwrap();
+            let mut inside = false;
+            let mut flags = None;
+            for line in maps.lines() {
+                if let Some((a, b)) = line
+                    .split_whitespace()
+                    .next()
+                    .and_then(|w| w.split_once('-'))
+                {
+                    if let (Ok(a), Ok(b)) =
+                        (usize::from_str_radix(a, 16), usize::from_str_radix(b, 16))
+                    {
+                        inside = (a..b).contains(&base);
+                    }
+                }
+                if inside && line.starts_with("VmFlags:") {
+                    flags = Some(line);
+                    break;
+                }
+            }
+            assert!(
+                flags.unwrap().split_whitespace().any(|w| w == "nh"),
+                "partial extents must retain the existing base-page advice"
+            );
+        }
+    })
+    .join()
+    .unwrap();
+}
