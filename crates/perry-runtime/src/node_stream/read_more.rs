@@ -101,24 +101,24 @@ extern "C" fn maybe_read_more_tick(c: *const ClosureHeader, _: crate::closure::J
     let stream = scope.root_nanbox_f64(js_closure_get_capture_f64(c, 0));
     let s = &stream;
     // `_read` is user code: re-read every state word after it.
-    while !read_in_flight((s.get_nanbox_f64()))
-        && !stream_hidden_ended((s.get_nanbox_f64()))
-        && !stream_destroyed((s.get_nanbox_f64()))
+    while !read_in_flight(s.get_nanbox_f64())
+        && !stream_hidden_ended(s.get_nanbox_f64())
+        && !stream_destroyed(s.get_nanbox_f64())
     {
-        let length = buffered((s.get_nanbox_f64()));
-        if !(length < high_water_mark((s.get_nanbox_f64()))
-            || (readable_is_flowing((s.get_nanbox_f64())) && length == 0.0))
+        let length = buffered(s.get_nanbox_f64());
+        if !(length < high_water_mark(s.get_nanbox_f64())
+            || (readable_is_flowing(s.get_nanbox_f64()) && length == 0.0))
         {
             break;
         }
         // `read(0)`.
-        invoke_read_once((s.get_nanbox_f64()));
-        if buffered((s.get_nanbox_f64())) == length {
+        invoke_read_once(s.get_nanbox_f64());
+        if buffered(s.get_nanbox_f64()) == length {
             break;
         }
     }
     set_hidden_value(
-        (s.get_nanbox_f64()),
+        s.get_nanbox_f64(),
         Slot::ReadableReadingMore,
         f64::from_bits(TAG_FALSE),
     );

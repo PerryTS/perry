@@ -300,7 +300,9 @@ extern "C" fn fs_namespace_descriptor_getter_thunk(
     unsafe {
         let property_ptr = crate::closure::js_closure_get_capture_ptr(closure, 0) as *const u8;
         let property_len = crate::closure::js_closure_get_capture_ptr(closure, 1) as usize;
-        js_native_module_property_by_name(b"fs".as_ptr(), 2, property_ptr, property_len)
+        // A restored descriptor must resolve the builtin value, not consult its
+        // own accessor override and recursively invoke this getter again.
+        native_module_property_by_name_impl(b"fs".as_ptr(), 2, property_ptr, property_len, false)
     }
 }
 
@@ -1509,6 +1511,17 @@ pub(crate) unsafe fn nm_attach_crypto(
     }
     if property_name == "X509Certificate" {
         attach_crypto_x509_certificate_shape(closure_addr, value);
+    }
+    if property_name == "Certificate" {
+        for method in ["verifySpkac", "exportPublicKey", "exportChallenge"] {
+            let method_value = bound_native_callable_export_value("crypto.Certificate", method);
+            crate::closure::closure_set_dynamic_prop(closure_addr, method, method_value);
+            super::set_builtin_property_attrs(
+                closure_addr,
+                method.to_string(),
+                super::PropertyAttrs::new(true, false, true),
+            );
+        }
     }
     value
 }

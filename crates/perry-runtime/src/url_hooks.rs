@@ -1,7 +1,6 @@
 //! URL value operations reached through the compiler-selected engine install.
 use crate::feature_hooks::Hook;
-pub(crate) use crate::object::url_layout::is_url_object_shape;
-use crate::{ArrayHeader, ObjectHeader, StringHeader};
+use crate::{ObjectHeader, StringHeader};
 static CANONICALIZE_HOST: crate::feature_hooks::Hook<fn(&str) -> Option<String>> =
     crate::feature_hooks::Hook::empty();
 static DOMAIN_TO_ASCII: crate::feature_hooks::Hook<fn(&str) -> Option<String>> =

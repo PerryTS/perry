@@ -1,0 +1,2 @@
+(node:7) Warning: tracePromise was called with the function fn returned a non-thenable.
+kept

@@ -572,6 +572,16 @@ pub unsafe extern "C" fn js_dynamic_string_or_number_add(a: f64, b: f64) -> f64 
     {
         return a + b;
     }
+    dynamic_add_non_plain(a, b)
+}
+
+// A primitive numeric addition needs no roots or callee-saved registers.
+// Keep the full operation behind a tail-call boundary so its frame is paid
+// only by values that actually need string/BigInt/ToPrimitive dispatch.
+#[inline(never)]
+unsafe extern "C" fn dynamic_add_non_plain(a: f64, b: f64) -> f64 {
+    let abits = a.to_bits();
+    let bbits = b.to_bits();
     // Primitive strings need neither ToPrimitive nor SSO materialization.
     // The shared concat owns rooting only if its allocation can collect.
     if JSValue::from_bits(abits).is_any_string() && JSValue::from_bits(bbits).is_any_string() {

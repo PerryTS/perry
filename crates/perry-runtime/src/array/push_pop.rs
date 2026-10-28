@@ -1,7 +1,6 @@
 //! push / pop / shift / unshift / set_length / delete + grow primitive.
 use super::*;
 use crate::proxy_hooks::{proxy_delete, proxy_get, proxy_has, proxy_set};
-use crate::typedarray_hook_slots as typedarray;
 use crate::{gc, string, value};
 use std::ptr;
 

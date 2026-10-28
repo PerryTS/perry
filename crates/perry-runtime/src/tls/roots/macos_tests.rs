@@ -102,7 +102,9 @@ fn native_dictionary_type_and_policy_checks_match_selection_rules() {
 #[test]
 fn null_owned_reference_never_releases_and_nonnull_releases_once() {
     use std::sync::atomic::{AtomicUsize, Ordering};
-    static RELEASES: AtomicUsize = AtomicUsize::new(0);
+    per_test_global! {
+        static RELEASES: AtomicUsize = AtomicUsize::new(0);
+    }
     unsafe extern "C" fn count_release(_value: Cf) {
         RELEASES.fetch_add(1, Ordering::Relaxed);
     }

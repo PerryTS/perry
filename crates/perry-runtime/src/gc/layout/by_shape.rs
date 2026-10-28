@@ -52,6 +52,11 @@ fn selection_for_rep_with_special(
     if slot_count == 0 {
         return HeapPayloadSlotSelection::Empty;
     }
+    // All-Any is itself an exact shape fact. Avoid compacting thirty-two
+    // representation lanes only to discover that none can be skipped.
+    if rep == 0 {
+        return HeapPayloadSlotSelection::All { cursor: 0 };
+    }
     let skip = field_rep::non_pointer_slot_bits(rep, special_constfn_mask);
     if skip == 0 || slot_count > INLINE_MASK_SLOTS {
         return HeapPayloadSlotSelection::All { cursor: 0 };

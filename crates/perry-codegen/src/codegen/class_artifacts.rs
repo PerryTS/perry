@@ -50,7 +50,7 @@ pub(super) struct ClassArtifactsCtx<'a> {
     pub closure_rest_params: &'a HashMap<u32, usize>,
     pub imported_class_stubs: &'a [perry_hir::Class],
     pub opts: OptsView<'a>,
-    pub cross_module: &'a CrossModuleCtx,
+    pub cross_module: &'a CrossModuleCtx<'a>,
 }
 
 /// Lower every class defined in this module: instance methods (plus their

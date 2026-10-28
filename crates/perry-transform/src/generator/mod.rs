@@ -19,8 +19,8 @@ mod id_scan;
 mod iter_result_rewrite;
 mod linearize;
 mod lower;
-mod private_frame;
 mod per_iteration;
+mod private_frame;
 mod rewrite_returns;
 
 // Explicit named re-exports so siblings can reach each other via

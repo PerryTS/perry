@@ -15,7 +15,11 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // (`expr::body_call::emit_receiver_prologue`). Can allocate: a safepoint.
     module.declare_function("js_this_coerce_sloppy", DOUBLE, &[DOUBLE]);
     // Nonescaping exec result with one demanded numbered capture.
-    module.declare_function("js_regexp_exec_projected", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_regexp_exec_projected",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
     // RegExp exec
     module.declare_function("js_number_to_precision", I64, &[DOUBLE, DOUBLE]);
     module.declare_function("js_number_to_exponential", I64, &[DOUBLE, DOUBLE]);

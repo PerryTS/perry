@@ -366,25 +366,24 @@ pub(crate) unsafe fn apply_property_descriptor(
             .filter(|addr| !crate::buffer::is_uint8array_buffer(*addr));
         if buffer_addr.is_some() {
             let current_addr = || {
-                crate::value::js_nanbox_get_pointer(
-                    (f64::from_bits(obj_value_handle.get_nanbox_u64())),
-                ) as usize
+                crate::value::js_nanbox_get_pointer(f64::from_bits(
+                    obj_value_handle.get_nanbox_u64(),
+                )) as usize
             };
 
             // Symbol keys stay Symbols; string coercion would create an
             // unrelated `"Symbol(...)"` expando that symbol lookup cannot see.
-            if crate::symbol::js_is_symbol((key_handle.get_nanbox_f64())) != 0 {
+            if crate::symbol::js_is_symbol(key_handle.get_nanbox_f64()) != 0 {
                 return super::define_symbol_property::define_symbol_property(
                     &scope,
-                    (f64::from_bits(obj_value_handle.get_nanbox_u64())),
-                    (f64::from_bits(obj_value_handle.get_nanbox_u64())),
-                    (key_handle.get_nanbox_f64()),
+                    f64::from_bits(obj_value_handle.get_nanbox_u64()),
+                    f64::from_bits(obj_value_handle.get_nanbox_u64()),
+                    key_handle.get_nanbox_f64(),
                     descriptor,
                 );
             }
 
-            if let Some(name) = super::super::metadata_key_to_string((key_handle.get_nanbox_f64()))
-            {
+            if let Some(name) = super::super::metadata_key_to_string(key_handle.get_nanbox_f64()) {
                 // Key coercion and descriptor getters may collect. Every side
                 // table access below therefore re-derives the buffer owner from
                 // the rooted receiver instead of retaining `buffer_addr`.
@@ -427,7 +426,7 @@ pub(crate) unsafe fn apply_property_descriptor(
                         if has_get && get_field.get_nanbox_u64() != crate::value::TAG_UNDEFINED {
                             crate::closure::clone_closure_rebind_this(
                                 get_field.get_nanbox_u64(),
-                                (f64::from_bits(obj_value_handle.get_nanbox_u64())),
+                                f64::from_bits(obj_value_handle.get_nanbox_u64()),
                             )
                         } else if !has_get {
                             existing_get.get_nanbox_u64()
@@ -439,7 +438,7 @@ pub(crate) unsafe fn apply_property_descriptor(
                         if has_set && set_field.get_nanbox_u64() != crate::value::TAG_UNDEFINED {
                             crate::closure::clone_closure_rebind_this(
                                 set_field.get_nanbox_u64(),
-                                (f64::from_bits(obj_value_handle.get_nanbox_u64())),
+                                f64::from_bits(obj_value_handle.get_nanbox_u64()),
                             )
                         } else if !has_set {
                             existing_set.get_nanbox_u64()

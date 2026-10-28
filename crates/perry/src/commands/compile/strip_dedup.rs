@@ -131,7 +131,59 @@ fn pid_is_live(pid: u32) -> bool {
     std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
 }
 
-#[cfg(not(unix))]
+/// Process liveness on Windows: a pid is live iff it appears in the current
+/// process table (a Toolhelp32 snapshot). The kernel removes terminated
+/// processes from the table immediately, so absence means the strip
+/// directory can be reclaimed. A failed snapshot errs toward "live" so a
+/// transient error never deletes a directory in use.
+#[cfg(windows)]
+fn pid_is_live(pid: u32) -> bool {
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct ProcessEntry32W {
+        dw_size: u32,
+        cnt_usage: u32,
+        th32_process_id: u32,
+        th32_default_heap_id: usize,
+        th32_module_id: usize,
+        cnt_threads: u32,
+        th32_process_id_parent: u32,
+        dw_flags: u32,
+        sz_exe_file: [u16; 260],
+    }
+    const TH32CS_SNAPPROCESS: u32 = 0x00000002;
+    const INVALID_HANDLE: isize = -1;
+
+    extern "system" {
+        fn CreateToolhelp32Snapshot(dwFlags: u32, dwProcessId: u32) -> isize;
+        fn Process32FirstW(hSnapshot: isize, lppe: *mut ProcessEntry32W) -> i32;
+        fn Process32NextW(hSnapshot: isize, lppe: *mut ProcessEntry32W) -> i32;
+        fn CloseHandle(hObject: isize) -> i32;
+    }
+
+    let mut entry: ProcessEntry32W = unsafe { std::mem::zeroed() };
+    entry.dw_size = std::mem::size_of::<ProcessEntry32W>() as u32;
+    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+    if snapshot == INVALID_HANDLE {
+        return true;
+    }
+    let mut found = false;
+    if unsafe { Process32FirstW(snapshot, &mut entry) } != 0 {
+        loop {
+            if entry.th32_process_id == pid {
+                found = true;
+                break;
+            }
+            if unsafe { Process32NextW(snapshot, &mut entry) } == 0 {
+                break;
+            }
+        }
+    }
+    let _ = unsafe { CloseHandle(snapshot) };
+    found
+}
+
+#[cfg(not(any(unix, windows)))]
 fn pid_is_live(_pid: u32) -> bool {
     // No cheap portable probe; err toward "live" and leave the directory.
     true
@@ -1936,47 +1988,4 @@ pub(super) fn dedup_native_lib_for_tier3(
 mod strip_dedup_tests;
 
 #[cfg(test)]
-mod strip_tmp_base_tests {
-    use super::*;
-
-    /// #7261: a `perry_strip_<pid>` directory whose PID is dead must be swept.
-    /// PID 1 is the control — it is always live, so it proves the sweep
-    /// discriminates rather than deleting everything it finds.
-    #[test]
-    fn sweep_removes_dead_pid_dirs_and_keeps_live_ones() {
-        let tmp = std::env::temp_dir();
-        let dead = tmp.join(format!("perry_strip_{}", u32::MAX));
-        let live = tmp.join("perry_strip_1");
-        let mine = strip_tmp_base().to_path_buf();
-
-        std::fs::create_dir_all(&dead).unwrap();
-        std::fs::create_dir_all(&live).ok();
-        std::fs::write(dead.join("_x_trimmed.lib"), b"leaked").unwrap();
-
-        sweep_dead_strip_dirs();
-
-        assert!(!dead.exists(), "dead-PID dir must be swept (#7261)");
-        assert!(live.exists(), "a LIVE pid's dir must never be touched");
-        assert!(mine.exists(), "this process's own dir must never be swept");
-
-        std::fs::remove_dir_all(&live).ok();
-    }
-
-    /// The eight call sites must share one directory, not create eight.
-    #[test]
-    fn base_is_created_once_and_stable() {
-        let a = strip_tmp_base();
-        assert_eq!(a, strip_tmp_base());
-        assert!(a.exists());
-        assert!(a.ends_with(format!("perry_strip_{}", std::process::id())));
-    }
-
-    /// `u32::MAX as pid_t` is -1, which `kill()` reads as "every process".
-    #[test]
-    fn live_pid_probe_is_correct_at_the_boundaries() {
-        assert!(pid_is_live(std::process::id()), "self must read live");
-        assert!(pid_is_live(1), "pid 1 must read live");
-        assert!(!pid_is_live(u32::MAX), "an unassignable pid must read dead");
-        assert!(!pid_is_live(0), "pid 0 is a process group, not a process");
-    }
-}
+mod strip_tmp_base_tests;

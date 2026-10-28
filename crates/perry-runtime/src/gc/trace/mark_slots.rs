@@ -119,6 +119,12 @@ unsafe fn trace_heap_rewrite_slots_impl<const REMEMBER: bool, const OLD_PARENT: 
                     record_trace_slot_read();
                 }
                 let bits = slot.read();
+                // Keys have an exact raw-array descriptor, unlike an unknown
+                // payload word. A marked shared array has already discharged
+                // its trace, including any active handle observer.
+                if slot.shared_keys_already_marked(bits) {
+                    return false;
+                }
                 if !handles_active {
                     // Preserve the collector's observer-free specialization: the
                     // child descriptor can omit its handle gate too.

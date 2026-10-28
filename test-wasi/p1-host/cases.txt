@@ -5,6 +5,15 @@ http_server
 listen_addrs
 listen_exhausted
 mixed
+net_before_listen
+net_both_ways
+net_connect_roundtrip
+net_destroy_resolving
+net_dns_delayed
+net_dns_lookup
+net_dns_many
+net_notfound
+net_refused
 prestat_scan
 signal_exit
 signals

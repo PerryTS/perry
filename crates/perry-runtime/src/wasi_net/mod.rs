@@ -448,10 +448,11 @@ pub(crate) fn next_wake_ms() -> f64 {
             return 0.0;
         }
         #[cfg(all(target_os = "wasi", target_env = "p1"))]
-        if s.handles
-            .values()
-            .any(|h| h.connected_event || (h.shutdown.is_some() && h.writes.is_empty()))
-        {
+        // A connect still pending (`connecting`) is not work: its descriptor
+        // is in the park's write subscriptions and the host wakes the loop.
+        if s.handles.values().any(|h| {
+            !h.connecting && (h.connected_event || (h.shutdown.is_some() && h.writes.is_empty()))
+        }) {
             return 0.0;
         }
         let polled = !cfg!(all(target_os = "wasi", target_env = "p1")) && !s.handles.is_empty();

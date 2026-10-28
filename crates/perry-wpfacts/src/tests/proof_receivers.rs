@@ -46,7 +46,8 @@ fn stronger(u: &ProgramFacts, w: &ProgramFacts) -> Vec<String> {
         .filter(|s| !matches!(s.verdict, Verdict::No(_)))
         .filter(|s| {
             w.sites.iter().any(|x| {
-                (x.module, x.byte_offset, &x.key, x.is_call) == (s.module, s.byte_offset, &s.key, s.is_call)
+                (x.module, x.byte_offset, &x.key, x.is_call)
+                    == (s.module, s.byte_offset, &s.key, s.is_call)
                     && matches!(x.verdict, Verdict::No(_))
             })
         })
@@ -69,7 +70,13 @@ fn a_method_no_unit_calls_proves_no_read_of_its_receiver() {
         let mods = [("a", CLASS), ("m", m)];
         let (u, w) = (run(&mods, true), run(&mods, false));
         assert_eq!(vacuous(&u), Vec::<String>::new(), "{}", u.dump_text());
-        assert_eq!(stronger(&u, &w), Vec::<String>::new(), "{}\n---\n{}", u.dump_text(), w.dump_text());
+        assert_eq!(
+            stronger(&u, &w),
+            Vec::<String>::new(),
+            "{}\n---\n{}",
+            u.dump_text(),
+            w.dump_text()
+        );
         // What it does prove is the typed body behind the entry guard
         // `class_id(this) == C` (design §11.4), as the whole program does.
         let s = u.sites.iter().find(|s| s.key == "k").expect("the read");
@@ -83,20 +90,42 @@ fn a_method_only_the_runtime_calls_proves_no_read_of_its_receiver() {
     // `String(c)` calls `toString` from the runtime: no unit publishes its
     // receivers. The read in `m` (no call at all) is the same case.
     let a = "export class C { k: number; constructor() { this.k = 1; } m() { return this.k; } toString() { return 's' + this.k; } }";
-    let mods = [("a", a), ("m", "import { C } from './a'; console.log(String(new C()));")];
+    let mods = [
+        ("a", a),
+        (
+            "m",
+            "import { C } from './a'; console.log(String(new C()));",
+        ),
+    ];
     let (u, w) = (run(&mods, true), run(&mods, false));
     assert_eq!(vacuous(&u), Vec::<String>::new(), "{}", u.dump_text());
-    assert_eq!(stronger(&u, &w), Vec::<String>::new(), "{}\n---\n{}", u.dump_text(), w.dump_text());
+    assert_eq!(
+        stronger(&u, &w),
+        Vec::<String>::new(),
+        "{}\n---\n{}",
+        u.dump_text(),
+        w.dump_text()
+    );
 }
 
 #[test]
 fn a_called_method_still_proves_its_read() {
     // The rule only drops proofs over nothing: a unit that calls `m` on
     // `new C()` publishes the receiver, and the read is T0 over `C`.
-    let mods = [("a", CLASS), ("m", "import { C } from './a'; const c = new C(); console.log(c.m());")];
+    let mods = [
+        ("a", CLASS),
+        (
+            "m",
+            "import { C } from './a'; const c = new C(); console.log(c.m());",
+        ),
+    ];
     let u = run(&mods, true);
     let s = u.sites.iter().find(|s| s.key == "k").expect("the read");
-    assert!(matches!(s.verdict, Verdict::T0Mono), "{s:?}\n{}", u.dump_text());
+    assert!(
+        matches!(s.verdict, Verdict::T0Mono),
+        "{s:?}\n{}",
+        u.dump_text()
+    );
     assert_eq!(s.receivers, vec!["a.ts:C".to_string()]);
 }
 
@@ -114,12 +143,30 @@ fn unknown_code_cannot_write_an_escaped_module_namespace() {
         let c = pf
             .sites
             .iter()
-            .find(|s| s.module == 1 && s.key == "()" && s.targets.iter().any(|t| t.starts_with("a.ts:closure")))
+            .find(|s| {
+                s.module == 1
+                    && s.key == "()"
+                    && s.targets.iter().any(|t| t.starts_with("a.ts:closure"))
+            })
             .unwrap_or_else(|| panic!("the call of h is not proven\n{}", pf.dump_text()));
         assert!(matches!(c.verdict, Verdict::T0Mono), "{c:?}");
     }
-    assert_eq!(stronger(&u, &w), Vec::<String>::new(), "{}\n---\n{}", u.dump_text(), w.dump_text());
+    assert_eq!(
+        stronger(&u, &w),
+        Vec::<String>::new(),
+        "{}\n---\n{}",
+        u.dump_text(),
+        w.dump_text()
+    );
     // Its exports still escape: unknown code may call `f` with anything.
-    let k = w.sites.iter().find(|s| s.module == 0 && s.key == "k").expect("the read in f");
-    assert!(matches!(k.verdict, Verdict::No(_)), "{k:?}\n{}", w.dump_text());
+    let k = w
+        .sites
+        .iter()
+        .find(|s| s.module == 0 && s.key == "k")
+        .expect("the read in f");
+    assert!(
+        matches!(k.verdict, Verdict::No(_)),
+        "{k:?}\n{}",
+        w.dump_text()
+    );
 }

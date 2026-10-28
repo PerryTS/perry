@@ -184,12 +184,34 @@ impl StringIndex {
         );
     }
 
+    /// Check the inline candidate before consulting overflow. The predicate
+    /// compares the authoritative entry, so hash collisions remain exact.
+    #[inline]
+    pub(super) fn find(&self, hash: u64, matches: impl Fn(u32) -> bool) -> Option<u32> {
+        let first = *self.first.get(&hash)?;
+        if matches(first) {
+            return Some(first);
+        }
+        self.collisions
+            .get(&hash)?
+            .iter()
+            .copied()
+            .find(|&i| matches(i))
+    }
+
     pub(super) fn candidates(&self, hash: u64) -> impl Iterator<Item = u32> + '_ {
         self.first
             .get(&hash)
             .copied()
             .into_iter()
-            .chain(self.collisions.get(&hash).into_iter().flatten().copied())
+            // Most hashes have one candidate. Probe overflow only if the
+            // caller consumes past it, after checking authoritative key bytes.
+            .chain(
+                std::iter::once_with(move || self.collisions.get(&hash))
+                    .flatten()
+                    .flatten()
+                    .copied(),
+            )
     }
 
     pub(super) fn remove(&mut self, hash: u64, index: u32) {

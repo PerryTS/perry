@@ -77,8 +77,8 @@
 // without dragging in pino's downstream Node-API dependencies
 // (`tracingChannel`, `MAX_STRING_LENGTH`, etc.).
 
-import a from "./test_issue_pino_sorting_order_undefined_a";
-import b from "./test_issue_pino_sorting_order_undefined_b";
+import a from "./fixtures/issue_pino_sorting_order_undefined_a";
+import b from "./fixtures/issue_pino_sorting_order_undefined_b";
 
 console.log("a.value:", a.value);
 console.log("b.value:", b.value);

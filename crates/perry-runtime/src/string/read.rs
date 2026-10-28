@@ -4,8 +4,13 @@ use super::*;
 use std::io::{self, BorrowedBuf, Read};
 use std::mem::MaybeUninit;
 
-// A streaming I/O buffer size, also used when a source supplies no size hint.
+// Preserve the initial growth quantum for a source without a size hint.
 const READ_CHUNK: usize = 64 * 1024;
+// A fixed I/O/scan window amortizes syscalls while scanning resident chunks.
+const READ_WINDOW: usize = 512 * 1024;
+
+#[path = "read_ascii.rs"]
+mod ascii;
 
 #[derive(Default)]
 struct Utf8Progress {
@@ -20,9 +25,7 @@ impl Utf8Progress {
             return;
         }
         let chunk = &bytes[self.checked..];
-        // A reduction, rather than an early-exit word loop: LLVM can scan
-        // whole vectors while the newly read chunk is still resident.
-        if chunk.iter().fold(0u8, |bits, byte| bits | byte) < 0x80 {
+        if ascii::all_ascii(chunk) {
             self.units += chunk.len();
             self.checked = bytes.len();
         } else if provenance::is_utf8(chunk) {
@@ -79,6 +82,7 @@ pub(crate) fn read_utf8<R: Read + ?Sized>(
                 // The old owner can move during allocation: reload its root.
                 init_string_header(new, 0, 0, next, 0, STRING_FLAG_WTF8_VALIDATED);
                 ptr::copy_nonoverlapping(string_data(owner.get_raw_const_ptr()), data, len);
+                // GC_STORE_AUDIT(POINTER_FREE): one byte in the newly allocated string payload.
                 data.add(len).write(probe[0]);
             }
             owner.set_raw_mut_ptr(new);
@@ -89,7 +93,7 @@ pub(crate) fn read_utf8<R: Read + ?Sized>(
                 let data = string_data(owner.get_raw_const_ptr()).cast_mut().add(len);
                 let spare = slice::from_raw_parts_mut(
                     data.cast::<MaybeUninit<u8>>(),
-                    (capacity as usize - len).min(READ_CHUNK),
+                    (capacity as usize - len).min(READ_WINDOW),
                 );
                 let mut output = BorrowedBuf::from(spare);
                 loop {
@@ -130,23 +134,31 @@ pub(crate) fn read_utf8<R: Read + ?Sized>(
             if units > MAX_STRING_LENGTH || text.len() > u32::MAX as usize {
                 throw_invalid_string_length();
             }
-            return Ok(js_string_from_bytes_known_utf16(
+            let repaired = js_string_from_bytes_known_utf16(
                 text.as_ptr(),
                 text.len() as u32,
                 units as u32,
                 STRING_FLAG_WTF8_VALIDATED,
-            ));
+            );
+            owner.set_raw_mut_ptr(repaired);
+        } else {
+            init_string_header(
+                header,
+                progress.units as u32,
+                len as u32,
+                capacity,
+                0,
+                STRING_FLAG_WTF8_VALIDATED,
+            );
         }
-        init_string_header(
-            header,
-            progress.units as u32,
-            len as u32,
-            capacity,
-            0,
-            STRING_FLAG_WTF8_VALIDATED,
-        );
     }
-    Ok(header)
+    // A complete native input is a bulk producer boundary. Publish existing
+    // byte debt before returning, so the caller's next precise poll can pay it
+    // after its result dies instead of allocating another large input first.
+    // This may drain an already active non-moving cycle: the canonical result
+    // is rooted, and its native source/output borrows have ended. Reload it.
+    crate::gc::allocation_pacing::burst_boundary();
+    Ok(owner.get_raw_mut_ptr())
 }
 
 #[cfg(test)]

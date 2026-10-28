@@ -2,14 +2,14 @@ use super::*;
 use crate::array::header::array_numeric_layout;
 
 fn array(values: &[f64]) -> *mut ArrayHeader {
-    let a = js_array_alloc(values.len() as u32);
+    let mut live = js_array_alloc(values.len() as u32);
     let scope = crate::gc::RuntimeHandleScope::new();
-    let a = scope.root_raw_mut_ptr(a);
+    let a = scope.root_raw_mut_ptr(live);
     for &v in values {
-        let live = js_array_push_f64(a.get_raw_mut_ptr(), v);
+        live = a.with_mut_ptr(|array| js_array_push_f64(array, v));
         a.set_raw_mut_ptr(live);
     }
-    a.get_raw_mut_ptr()
+    live
 }
 
 #[test]
@@ -68,7 +68,9 @@ fn numeric_sort_refuses_holes_and_restricted_shapes() {
     ] {
         let a = array(&[3.0, 1.0, 2.0]);
         unsafe {
-            let header = (a as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+            let header = crate::value::addr_class::try_read_tracked_gc_header(a as usize)
+                .expect("fixture is a live array allocation")
+                .as_ptr();
             (*header)._reserved |= flag;
             assert!(!try_sort_numeric(a, false));
         }

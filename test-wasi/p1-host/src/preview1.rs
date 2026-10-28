@@ -6,23 +6,33 @@
 //! program that reaches an unimplemented call fails loudly.
 
 use crate::fdtable::{rights, Fd, Table};
+use crate::perry_net::{self, Dns};
 use std::fmt;
 use std::os::fd::{FromRawFd, OwnedFd};
+use std::sync::Arc;
 use wasmtime::{AsContextMut, Caller, Extern, Linker};
 
 pub mod errno {
     pub const SUCCESS: u16 = 0;
+    pub const ADDRNOTAVAIL: u16 = 4;
+    pub const AFNOSUPPORT: u16 = 5;
     pub const AGAIN: u16 = 6;
     pub const BADF: u16 = 8;
+    pub const CONNABORTED: u16 = 13;
+    pub const CONNREFUSED: u16 = 14;
     pub const CONNRESET: u16 = 15;
     pub const FAULT: u16 = 21;
+    pub const HOSTUNREACH: u16 = 23;
+    pub const INPROGRESS: u16 = 26;
     pub const INTR: u16 = 27;
     pub const INVAL: u16 = 28;
     pub const IO: u16 = 29;
+    pub const NETUNREACH: u16 = 40;
     pub const NOTCONN: u16 = 53;
     pub const NOTSOCK: u16 = 57;
     pub const PIPE: u16 = 64;
     pub const SPIPE: u16 = 70;
+    pub const TIMEDOUT: u16 = 73;
     pub const NOTCAPABLE: u16 = 76;
 }
 
@@ -60,6 +70,13 @@ pub struct Stats {
     pub prestat_calls: u64,
     /// The descriptor number of every accepted connection, in order.
     pub accepts: Vec<u32>,
+    /// Every non-blocking `connect` the host started for `perry_net`.
+    pub connect_attempts: u64,
+    /// The descriptor number of every `perry_net.tcp_connect`, in order.
+    pub connects: Vec<u32>,
+    /// Every `perry_net.sock_error` call: a guest that spins on a pending
+    /// connection makes many.
+    pub sock_errors: u64,
 }
 
 pub struct Host {
@@ -67,25 +84,47 @@ pub struct Host {
     pub env: Vec<String>,
     pub table: Table,
     pub stats: Stats,
+    /// The names `perry_net` can resolve.
+    pub dns: Arc<Dns>,
     random: Option<std::fs::File>,
 }
 
 impl Host {
-    pub fn new(args: Vec<String>, env: Vec<String>, table: Table) -> Self {
+    pub fn new(args: Vec<String>, env: Vec<String>, table: Table, dns: Dns) -> Self {
         Host {
             args,
             env,
             table,
             stats: Stats::default(),
+            dns: Arc::new(dns),
             random: None,
         }
     }
 }
 
-type Res<T = ()> = Result<T, u16>;
+pub type Res<T = ()> = Result<T, u16>;
 
 fn os_errno() -> u16 {
-    match std::io::Error::last_os_error().raw_os_error().unwrap_or(0) {
+    errno_of(std::io::Error::last_os_error().raw_os_error().unwrap_or(0))
+}
+
+/// The errno a failed connect reports: the ones a connection attempt can end
+/// with keep their own number, the rest map as for any other call.
+pub fn map_os(raw: i32) -> u16 {
+    match raw {
+        libc::ECONNREFUSED => errno::CONNREFUSED,
+        libc::ECONNABORTED => errno::CONNABORTED,
+        libc::EHOSTUNREACH | libc::EHOSTDOWN => errno::HOSTUNREACH,
+        libc::ENETUNREACH | libc::ENETDOWN => errno::NETUNREACH,
+        libc::ETIMEDOUT => errno::TIMEDOUT,
+        libc::EADDRNOTAVAIL => errno::ADDRNOTAVAIL,
+        libc::EAFNOSUPPORT => errno::AFNOSUPPORT,
+        other => errno_of(other),
+    }
+}
+
+fn errno_of(raw: i32) -> u16 {
+    match raw {
         libc::EAGAIN => errno::AGAIN,
         libc::EBADF => errno::BADF,
         libc::ECONNRESET | libc::ECONNABORTED => errno::CONNRESET,
@@ -99,7 +138,7 @@ fn os_errno() -> u16 {
 }
 
 /// The guest memory and the host state, borrowed together from a call.
-fn split<'a>(caller: &'a mut Caller<'_, Host>) -> Res<(&'a mut [u8], &'a mut Host)> {
+pub fn split<'a>(caller: &'a mut Caller<'_, Host>) -> Res<(&'a mut [u8], &'a mut Host)> {
     let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
         return Err(errno::FAULT);
     };
@@ -109,7 +148,7 @@ fn split<'a>(caller: &'a mut Caller<'_, Host>) -> Res<(&'a mut [u8], &'a mut Hos
 /// The guest range `ptr..ptr + len`, or `FAULT` when it overflows or leaves
 /// the memory. Every guest pointer plus length goes through here, so no guest
 /// value reaches an unchecked addition.
-fn span(mem: &[u8], ptr: u32, len: usize) -> Res<std::ops::Range<usize>> {
+pub fn span(mem: &[u8], ptr: u32, len: usize) -> Res<std::ops::Range<usize>> {
     let start = ptr as usize;
     let end = start.checked_add(len).ok_or(errno::FAULT)?;
     if end > mem.len() {
@@ -132,7 +171,7 @@ fn put(mem: &mut [u8], ptr: u32, bytes: &[u8]) -> Res {
     Ok(())
 }
 
-fn put_u32(mem: &mut [u8], ptr: u32, v: u32) -> Res {
+pub fn put_u32(mem: &mut [u8], ptr: u32, v: u32) -> Res {
     put(mem, ptr, &v.to_le_bytes())
 }
 
@@ -190,6 +229,9 @@ fn transfer(
         rights::FD_READ
     };
     let entry = lookup(host, fd, need)?;
+    if matches!(entry, Fd::Pending(_) | Fd::Failed(_)) {
+        return Err(errno::NOTCONN);
+    }
     if stream && !matches!(entry, Fd::Stream(_)) {
         return Err(errno::NOTSOCK);
     }
@@ -209,6 +251,10 @@ fn transfer(
 }
 
 fn set_nonblock(os: i32, on: bool) -> Res {
+    // A failed connection has nothing behind it to switch.
+    if os < 0 {
+        return Ok(());
+    }
     unsafe {
         let flags = libc::fcntl(os, libc::F_GETFL);
         if flags < 0 {
@@ -288,6 +334,9 @@ fn sock_accept(caller: &mut Caller<'_, Host>, fd: u32, flags: u32, out: u32) -> 
 fn sock_shutdown(caller: &mut Caller<'_, Host>, fd: u32, how: u32) -> Res {
     let (_, host) = split(caller)?;
     let entry = lookup(host, fd, rights::SOCK_SHUTDOWN)?;
+    if matches!(entry, Fd::Pending(_) | Fd::Failed(_)) {
+        return Err(errno::NOTCONN);
+    }
     if !matches!(entry, Fd::Stream(_)) {
         return Err(errno::NOTSOCK);
     }
@@ -306,7 +355,8 @@ fn sock_shutdown(caller: &mut Caller<'_, Host>, fd: u32, how: u32) -> Res {
 fn fd_fdstat_get(caller: &mut Caller<'_, Host>, fd: u32, out: u32) -> Res {
     let (mem, host) = split(caller)?;
     let entry = host.table.get(fd).ok_or(errno::BADF)?;
-    let nonblock = unsafe { libc::fcntl(entry.os(), libc::F_GETFL) } & libc::O_NONBLOCK != 0;
+    let nonblock = entry.os() >= 0
+        && unsafe { libc::fcntl(entry.os(), libc::F_GETFL) } & libc::O_NONBLOCK != 0;
     let mut stat = [0u8; 24];
     stat[0] = entry.filetype();
     stat[2..4].copy_from_slice(&(if nonblock { FDFLAG_NONBLOCK as u16 } else { 0 }).to_le_bytes());
@@ -415,33 +465,56 @@ fn poll_oneoff(
         .min();
     // (subscription index, errno, event type, hangup, nbytes)
     let mut events: Vec<(usize, u16, u8, bool, u64)> = Vec::new();
-    // The subscription index, the pollfd and whether the entry is a listener.
-    let mut polled: Vec<(usize, libc::pollfd, bool)> = Vec::new();
-    for (i, sub) in subs.iter().enumerate() {
-        if let Sub::Fd { fd, write } = sub {
+    host.stats.polls += 1;
+    host.stats.max_subs = host.stats.max_subs.max(count);
+    loop {
+        // Rebuilt every round: a connection still being resolved or connected
+        // changes the descriptor it waits on, and is never reported ready until
+        // it is decided (connected, or failed).
+        events.clear();
+        // The subscription index, the pollfd, the event type, whether the entry
+        // is a listener and whether it is internal to a pending connect.
+        let mut polled: Vec<(usize, libc::pollfd, u8, bool, bool)> = Vec::new();
+        for (i, sub) in subs.iter().enumerate() {
+            let Sub::Fd { fd, write } = sub else { continue };
             let kind = if *write {
                 EVENT_FD_WRITE
             } else {
                 EVENT_FD_READ
             };
+            if let Some(slot) = host.table.get_mut(*fd) {
+                perry_net::settle(slot, &mut host.stats);
+            }
             match lookup(host, *fd, rights::POLL_FD_READWRITE) {
-                Ok(entry) => polled.push((
+                Ok(Fd::Failed(_)) => events.push((
                     i,
-                    libc::pollfd {
-                        fd: entry.os(),
-                        events: if *write { libc::POLLOUT } else { libc::POLLIN },
-                        revents: 0,
-                    },
-                    matches!(entry, Fd::Listener(_)),
+                    errno::SUCCESS,
+                    kind,
+                    false,
+                    (kind == EVENT_FD_WRITE) as u64,
                 )),
+                Ok(entry) => {
+                    let (want, internal) = match entry {
+                        Fd::Pending(p) => (p.poll_events(), true),
+                        _ if *write => (libc::POLLOUT, false),
+                        _ => (libc::POLLIN, false),
+                    };
+                    polled.push((
+                        i,
+                        libc::pollfd {
+                            fd: entry.os(),
+                            events: want,
+                            revents: 0,
+                        },
+                        kind,
+                        matches!(entry, Fd::Listener(_)),
+                        internal,
+                    ));
+                }
                 Err(e) => events.push((i, e, kind, false, 0)),
             }
         }
-    }
-    host.stats.polls += 1;
-    host.stats.max_subs = host.stats.max_subs.max(count);
-    let mut pollfds: Vec<libc::pollfd> = polled.iter().map(|(_, p, _)| *p).collect();
-    loop {
+        let mut pollfds: Vec<libc::pollfd> = polled.iter().map(|(_, p, ..)| *p).collect();
         let elapsed = clock_ns(1)?.saturating_sub(started);
         let timeout_ms = if !events.is_empty() {
             0
@@ -465,16 +538,14 @@ fn poll_oneoff(
             }
             return Err(os_errno());
         }
-        for ((i, _, listener), p) in polled.iter().zip(&pollfds) {
-            if p.revents != 0 {
-                let write = p.events == libc::POLLOUT;
-                let kind = if write { EVENT_FD_WRITE } else { EVENT_FD_READ };
+        for ((i, _, kind, listener, internal), p) in polled.iter().zip(&pollfds) {
+            if p.revents != 0 && !internal {
                 events.push((
                     *i,
                     errno::SUCCESS,
-                    kind,
+                    *kind,
                     p.revents & libc::POLLHUP != 0,
-                    ready_bytes(p.fd, write, *listener),
+                    ready_bytes(p.fd, *kind == EVENT_FD_WRITE, *listener),
                 ));
             }
         }
@@ -658,6 +729,32 @@ pub fn add(linker: &mut Linker<Host>) -> wasmtime::Result<()> {
         "poll_oneoff",
         |mut c: Caller<'_, Host>, i: u32, o: u32, n: u32, e: u32| {
             code(poll_oneoff(&mut c, i, o, n, e))
+        },
+    )?;
+    Ok(())
+}
+
+/// Define the opt-in `perry_net` imports on `linker`. A module that was not
+/// built with `PERRY_WASM_NET=1` does not import them, so they stay unused.
+pub fn add_perry_net(linker: &mut Linker<Host>) -> wasmtime::Result<()> {
+    const M: &str = "perry_net";
+    linker.func_wrap(
+        M,
+        "tcp_connect",
+        |mut c: Caller<'_, Host>, addr: u32, len: u32, out: u32| {
+            code(perry_net::tcp_connect(&mut c, addr, len, out))
+        },
+    )?;
+    linker.func_wrap(
+        M,
+        "sock_error",
+        |mut c: Caller<'_, Host>, fd: u32, out: u32| code(perry_net::sock_error(&mut c, fd, out)),
+    )?;
+    linker.func_wrap(
+        M,
+        "resolve",
+        |mut c: Caller<'_, Host>, name: u32, len: u32, family: u32, out: u32| {
+            code(perry_net::resolve(&mut c, name, len, family, out))
         },
     )?;
     Ok(())
