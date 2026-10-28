@@ -195,7 +195,8 @@ impl StrKey {
     ///
     /// # Safety
     /// `entry_bits` comes from a live StringIndex candidate's bounded entry
-    /// slot. This is not valid for an arbitrary linear-scan entry.
+    /// slot with the query's full `map_content_hash`. This is not valid for
+    /// an arbitrary linear-scan entry or a candidate from another digest.
     #[inline(always)]
     pub(super) unsafe fn matches_indexed(self, key_bits: u64, entry_bits: u64) -> bool {
         if entry_bits == key_bits {
@@ -207,7 +208,18 @@ impl StrKey {
             let data = header
                 .cast::<u8>()
                 .add(std::mem::size_of::<crate::string::StringHeader>());
-            return self.eq_heap(data, (*header).byte_len);
+            let stored_len = (*header).byte_len;
+            let query_len = match self {
+                StrKey::Short { len, .. } | StrKey::Heap { len, .. } => len,
+            };
+            if stored_len != query_len {
+                return false;
+            }
+            // At a fixed length <= one word, the complete digest contains
+            // every byte injectively (including overlapping short words).
+            // Full-digest membership plus equal length proves equality;
+            // different lengths can collide and were rejected above.
+            return query_len <= 8 || self.eq_heap(data, stored_len);
         }
         // SSO keeps masked-tail equality; legacy pointer strings and Symbols
         // retain the generic representation and identity guards.
@@ -316,6 +328,44 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn indexed_digest_collisions_at_different_lengths_keep_exact_equality() {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let map = scope.root_raw_mut_ptr(js_map_alloc(16));
+        for i in 0..16 {
+            js_map_set(map.get_raw_mut_ptr::<MapHeader>(), i as f64, i as f64);
+        }
+        // The empty digest is zero. At eight bytes, the length seed xor
+        // this full word is also zero, but the strings are different.
+        let bytes = (8u64.wrapping_mul(0x9e37_79b9_7f4a_7c15)).to_le_bytes();
+        let other = scope.root_nanbox_f64(boxed_heap_string_key(js_string_from_bytes(
+            bytes.as_ptr(),
+            8,
+        )));
+        assert_eq!(
+            string_content_hash(sso("").to_bits()),
+            string_content_hash(other.get_nanbox_f64().to_bits())
+        );
+        js_map_set(map.get_raw_mut_ptr::<MapHeader>(), sso(""), 11.0);
+        js_map_set(
+            map.get_raw_mut_ptr::<MapHeader>(),
+            other.get_nanbox_f64(),
+            12.0,
+        );
+        assert_eq!(
+            js_map_get(map.get_raw_mut_ptr::<MapHeader>(), heap("")),
+            11.0
+        );
+        let fresh = boxed_heap_string_key(js_string_from_bytes(bytes.as_ptr(), 8));
+        assert_eq!(js_map_get(map.get_raw_mut_ptr::<MapHeader>(), fresh), 12.0);
+        assert_eq!(
+            js_map_delete(map.get_raw_mut_ptr::<MapHeader>(), sso("")),
+            1
+        );
+        assert_eq!(js_map_get(map.get_raw_mut_ptr::<MapHeader>(), fresh), 12.0);
+        assert_eq!(js_map_has(map.get_raw_mut_ptr::<MapHeader>(), heap("")), 0);
     }
 
     #[test]
