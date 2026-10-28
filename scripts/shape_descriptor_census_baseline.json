@@ -2,6 +2,7 @@
   "codegen_object_header_size_callsite_multiset": {
     "crates/perry-codegen/src/codegen/accessor_numeric.rs|crate::target_layout::object_header_size_bytes( ),": 1,
     "crates/perry-codegen/src/codegen/class_artifacts.rs|crate::target_layout::object_header_size_bytes(target_triple),": 1,
+    "crates/perry-codegen/src/codegen/realm_image.rs|let header = crate::target_layout::object_header_size_bytes(&triple);": 1,
     "crates/perry-codegen/src/codegen/static_constfn.rs|let header = crate::target_layout::object_header_size_bytes(ctx.target_triple);": 1,
     "crates/perry-codegen/src/expr/class_family_read.rs|let header = crate::target_layout::object_header_size_bytes(ctx.target_triple) as i64;": 1,
     "crates/perry-codegen/src/expr/element_shape_guard.rs|let header_skip = crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();": 1,
@@ -62,7 +63,7 @@
     "crates/perry-runtime/src/object/test_root_accessors.rs|keys_array|access|let inline = unsafe { (*st.object_hot.shape_inline_cache.get())[slot].keys_array as usize };": 1
   },
   "summary": {
-    "codegen_object_header_size_sites": 46,
+    "codegen_object_header_size_sites": 47,
     "raw_member_files": 13,
     "raw_member_sites": {
       "keys_array": 32

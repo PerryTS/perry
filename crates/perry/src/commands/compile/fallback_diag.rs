@@ -52,6 +52,9 @@ pub(super) fn facts_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> Arc<Fac
     for site in pf.sites.iter().filter(|s| s.module as usize == mi) {
         let reason = match &site.verdict {
             perry_wpfacts::Verdict::No(why) => why.clone(),
+            perry_wpfacts::Verdict::StringLength => {
+                "native primitive string-length proof recorded; string tag admission applies".into()
+            }
             perry_wpfacts::Verdict::T0Mono => {
                 "whole-program monomorphic proof recorded; generic guard/path emitted".into()
             }

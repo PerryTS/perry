@@ -1,0 +1,720 @@
+{
+  "version": 1,
+  "groups": {
+    "body:storage_clear": [
+      {
+        "name": "Storage.prototype.clear",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "clear"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::web_storage::storage_clear",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::web_storage::storage_clear",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_5f89261cab2544403f8e",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "body:storage_get_item": [
+      {
+        "name": "Storage.prototype.getItem",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "getItem"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::web_storage::storage_get_item",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::web_storage::storage_get_item",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_5a00fc128de5ef88661b",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "body:storage_global_setter": [
+      {
+        "name": "localStorage.<set>",
+        "kind": "setter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::web_storage::storage_global_setter",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::web_storage::storage_global_setter",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_5a47b28347bfd1580bfe",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "sessionStorage.<set>",
+        "kind": "setter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::web_storage::storage_global_setter",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::web_storage::storage_global_setter",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_5a47b28347bfd1580bfe",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "body:storage_key": [
+      {
+        "name": "Storage.prototype.key",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "key"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::web_storage::storage_key",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::web_storage::storage_key",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_ded424886494ade43704",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "body:storage_length_getter": [
+      {
+        "name": "Storage.prototype.length.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "get length"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::web_storage::storage_length_getter",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::web_storage::storage_length_getter",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_3fa5f3eb8e061e56b0c9",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "body:storage_local_global_getter": [
+      {
+        "name": "localStorage.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "localStorage"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::web_storage::storage_local_global_getter",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::web_storage::storage_local_global_getter",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_29eb7c962888b3b97f1c",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "body:storage_remove_item": [
+      {
+        "name": "Storage.prototype.removeItem",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "removeItem"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::web_storage::storage_remove_item",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::web_storage::storage_remove_item",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_42353960f868623d46b5",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "body:storage_session_global_getter": [
+      {
+        "name": "sessionStorage.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "sessionStorage"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::web_storage::storage_session_global_getter",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::web_storage::storage_session_global_getter",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_9d1cadfe943c347e26bf",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "body:storage_set_item": [
+      {
+        "name": "Storage.prototype.setItem",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "setItem"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::web_storage::storage_set_item",
+        "function_info": {
+          "params": 2,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 2,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::web_storage::storage_set_item",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_92b67436cad9f73e9301",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "objects": [
+      {
+        "name": "Storage",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "Storage"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "Storage.prototype"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 1677721600
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::web_storage::storage_constructor_illegal",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::web_storage::storage_constructor_illegal",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "int32",
+            "value": 72
+          }
+        ],
+        "info_symbol": "perry_realm_info_7e1a57e3210cbcf405cf",
+        "births": [
+          "Function.prototype",
+          "Storage.prototype"
+        ],
+        "constructor": {
+          "identity": 72,
+          "prototype_callable": false
+        }
+      },
+      {
+        "name": "Storage.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "clear",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "Storage.prototype.clear"
+            }
+          },
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Storage"
+            }
+          },
+          {
+            "key": "getItem",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "Storage.prototype.getItem"
+            }
+          },
+          {
+            "key": "key",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "Storage.prototype.key"
+            }
+          },
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 2,
+            "get": "Storage.prototype.length.<get>"
+          },
+          {
+            "key": "removeItem",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "Storage.prototype.removeItem"
+            }
+          },
+          {
+            "key": "setItem",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "Storage.prototype.setItem"
+            }
+          }
+        ],
+        "own_key_order": [
+          "constructor",
+          "clear",
+          "getItem",
+          "key",
+          "removeItem",
+          "setItem",
+          "length"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2176,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "Object.prototype",
+          "Storage",
+          "Storage.prototype.clear",
+          "Storage.prototype.getItem",
+          "Storage.prototype.key",
+          "Storage.prototype.length.<get>",
+          "Storage.prototype.removeItem",
+          "Storage.prototype.setItem"
+        ]
+      }
+    ]
+  }
+}

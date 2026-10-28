@@ -292,6 +292,17 @@ impl CopyingNurseryCollector {
         self.visit_slot_core(slot, parent_header, false, move || !skip, move || external);
     }
 
+    /// A slot of a remembered realm-image cell (`gc::image_cells`): a root.
+    /// The child is copied and the slot rewritten; nothing is re-remembered,
+    /// because the image's set keeps the cell for its whole life.
+    pub(super) unsafe fn visit_image_root_slot(
+        &mut self,
+        slot: GcMutableSlot,
+        parent_header: *mut GcHeader,
+    ) {
+        self.visit_slot_core(slot, parent_header, false, || false, || true);
+    }
+
     /// [`visit_slot_with_parent`](Self::visit_slot_with_parent) with the
     /// parent's weak-holder fact supplied by the caller, so a whole object's
     /// slots pay for it once. See [`weak_holder_fact`].

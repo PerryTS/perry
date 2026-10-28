@@ -1254,3 +1254,5 @@ mod backing_probe_gate_tests {
 }
 
 pub(crate) use crate::string::form_codec::{url_decode, url_encode};
+
+crate::realm_decl!("search_params.realm.json#*");

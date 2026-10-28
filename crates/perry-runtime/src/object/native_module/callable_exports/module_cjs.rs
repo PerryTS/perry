@@ -555,3 +555,5 @@ pub(super) fn attach_module_cjs_constructor_statics(module_value: f64) -> f64 {
     );
     module.get_nanbox_f64()
 }
+
+crate::realm_decl!("module_cjs.realm.json#*");

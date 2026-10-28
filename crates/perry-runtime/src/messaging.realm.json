@@ -1,0 +1,1006 @@
+{
+  "version": 1,
+  "groups": {
+    "body:has_ref": [
+      {
+        "name": "MessagePort.prototype.hasRef",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "hasRef"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::messaging::has_ref",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::messaging::has_ref",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_79ff533bf878f51b0188",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "body:noop0": [
+      {
+        "name": "BroadcastChannel.prototype.close",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "close"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::messaging::noop0",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::messaging::noop0",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_dd65c713f0dd0d3638f2",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "BroadcastChannel.prototype.ref",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "ref"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::messaging::noop0",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::messaging::noop0",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_dd65c713f0dd0d3638f2",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "BroadcastChannel.prototype.unref",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "unref"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::messaging::noop0",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::messaging::noop0",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_dd65c713f0dd0d3638f2",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "MessagePort.prototype.close",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "close"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::messaging::noop0",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::messaging::noop0",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_dd65c713f0dd0d3638f2",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "MessagePort.prototype.ref",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "ref"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::messaging::noop0",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::messaging::noop0",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_dd65c713f0dd0d3638f2",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "MessagePort.prototype.start",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "start"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::messaging::noop0",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::messaging::noop0",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_dd65c713f0dd0d3638f2",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "MessagePort.prototype.unref",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "unref"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::messaging::noop0",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::messaging::noop0",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_dd65c713f0dd0d3638f2",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "body:noop1": [
+      {
+        "name": "BroadcastChannel.prototype.postMessage",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "postMessage"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::messaging::noop1",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::messaging::noop1",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_83bae45bedd91ae19023",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "body:noop2": [
+      {
+        "name": "MessagePort.prototype.postMessage",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "postMessage"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "crate::messaging::noop2",
+        "function_info": {
+          "params": 2,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 2,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::messaging::noop2",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_0b89dff7103655cb7305",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "objects": [
+      {
+        "name": "BroadcastChannel",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "BroadcastChannel"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "BroadcastChannel.prototype"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 1669332992
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::messaging::js_broadcast_channel_constructor_call_error",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::messaging::js_broadcast_channel_constructor_call_error",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "int32",
+            "value": 71
+          }
+        ],
+        "info_symbol": "perry_realm_info_290aead44e1ad4b61cdd",
+        "births": [
+          "BroadcastChannel.prototype",
+          "Function.prototype"
+        ],
+        "constructor": {
+          "identity": 71,
+          "prototype_callable": false
+        }
+      },
+      {
+        "name": "BroadcastChannel.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "close",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "BroadcastChannel.prototype.close"
+            }
+          },
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "BroadcastChannel"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "undefined"
+            }
+          },
+          {
+            "key": "onmessage",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "null"
+            }
+          },
+          {
+            "key": "onmessageerror",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "null"
+            }
+          },
+          {
+            "key": "postMessage",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "BroadcastChannel.prototype.postMessage"
+            }
+          },
+          {
+            "key": "ref",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "BroadcastChannel.prototype.ref"
+            }
+          },
+          {
+            "key": "unref",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "BroadcastChannel.prototype.unref"
+            }
+          }
+        ],
+        "own_key_order": [
+          "constructor",
+          "name",
+          "close",
+          "postMessage",
+          "ref",
+          "unref",
+          "onmessage",
+          "onmessageerror"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2176,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "BroadcastChannel",
+          "BroadcastChannel.prototype.close",
+          "BroadcastChannel.prototype.postMessage",
+          "BroadcastChannel.prototype.ref",
+          "BroadcastChannel.prototype.unref",
+          "Object.prototype"
+        ]
+      },
+      {
+        "name": "MessageChannel",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "MessageChannel"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "MessageChannel.prototype"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 1652555776
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::messaging::js_message_channel_constructor_call_error",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::messaging::js_message_channel_constructor_call_error",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "int32",
+            "value": 69
+          }
+        ],
+        "info_symbol": "perry_realm_info_f72a5b9223887ae19c99",
+        "births": [
+          "Function.prototype",
+          "MessageChannel.prototype"
+        ],
+        "constructor": {
+          "identity": 69,
+          "prototype_callable": false
+        }
+      },
+      {
+        "name": "MessageChannel.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "MessageChannel"
+            }
+          }
+        ],
+        "own_key_order": [
+          "constructor"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2176,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "MessageChannel",
+          "Object.prototype"
+        ]
+      },
+      {
+        "name": "MessagePort",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "MessagePort"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "MessagePort.prototype"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 1660944384
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::messaging::js_message_port_constructor_call_error",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::messaging::js_message_port_constructor_call_error",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "int32",
+            "value": 70
+          }
+        ],
+        "info_symbol": "perry_realm_info_ea2ab05997379e57bbd4",
+        "births": [
+          "Function.prototype",
+          "MessagePort.prototype"
+        ],
+        "constructor": {
+          "identity": 70,
+          "prototype_callable": false
+        }
+      },
+      {
+        "name": "MessagePort.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "close",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "MessagePort.prototype.close"
+            }
+          },
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "MessagePort"
+            }
+          },
+          {
+            "key": "hasRef",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "MessagePort.prototype.hasRef"
+            }
+          },
+          {
+            "key": "onmessage",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "null"
+            }
+          },
+          {
+            "key": "onmessageerror",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "null"
+            }
+          },
+          {
+            "key": "postMessage",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "MessagePort.prototype.postMessage"
+            }
+          },
+          {
+            "key": "ref",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "MessagePort.prototype.ref"
+            }
+          },
+          {
+            "key": "start",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "MessagePort.prototype.start"
+            }
+          },
+          {
+            "key": "unref",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "MessagePort.prototype.unref"
+            }
+          }
+        ],
+        "own_key_order": [
+          "constructor",
+          "postMessage",
+          "start",
+          "ref",
+          "unref",
+          "hasRef",
+          "onmessage",
+          "onmessageerror",
+          "close"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2176,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "MessagePort",
+          "MessagePort.prototype.close",
+          "MessagePort.prototype.hasRef",
+          "MessagePort.prototype.postMessage",
+          "MessagePort.prototype.ref",
+          "MessagePort.prototype.start",
+          "MessagePort.prototype.unref",
+          "Object.prototype"
+        ]
+      }
+    ]
+  }
+}

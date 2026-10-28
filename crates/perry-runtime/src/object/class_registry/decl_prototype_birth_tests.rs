@@ -309,6 +309,7 @@ static EMPTY_INDEX: [u32; 1] = [u32::MAX];
 )]
 static mut CHECKED_LAYOUT: crate::object::layout_desc::PerryLayoutDesc =
     crate::object::layout_desc::PerryLayoutDesc {
+        image_keys: std::ptr::null_mut(),
         shape_id: 0,
         _layout_pad: 0,
         family: 0x41574202,

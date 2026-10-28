@@ -1333,3 +1333,5 @@ mod fifo_pending_tests {
         assert_eq!(unsafe { (*promise).reason }, 7.0);
     }
 }
+
+crate::realm_decl!("async_iterator.realm.json#*");

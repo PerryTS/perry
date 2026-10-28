@@ -115,3 +115,5 @@ const REFLECT_MEMBERS: &[Member] = &[
 pub(crate) fn create_reflect_namespace() -> *mut ObjectHeader {
     builtin_namespace::create(REFLECT_MEMBERS)
 }
+
+crate::realm_decl!("json_reflect_namespaces.realm.json#*");

@@ -1527,3 +1527,5 @@ mod tests {
         assert!(!has_colors_for_depth(16_777_217.0, 24));
     }
 }
+
+crate::realm_decl!("tty.realm.json#*");

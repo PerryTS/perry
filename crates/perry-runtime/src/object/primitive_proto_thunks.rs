@@ -517,3 +517,5 @@ pub(super) extern "C" fn string_proto_value_of_thunk(
 ) -> f64 {
     string_receiver_or_throw(this, "valueOf")
 }
+
+crate::realm_decl!("primitive_proto_thunks.realm.json#*");

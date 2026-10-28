@@ -35,7 +35,18 @@ fn linked_layout_section_contains_runtime_prototypes() {
 #[cfg(not(target_family = "wasm"))]
 fn linked_atom_sections_include_readonly_and_writable_records() {
     let descriptor = std::ptr::addr_of!(crate::object::runtime_layouts::OBJECT_PROTOTYPE);
-    let readonly = unsafe { (*(*descriptor).keys).atom };
+    unsafe extern "C" {
+        #[link_name = "perry_atom_636f6e7374727563746f72"]
+        static CONSTRUCTOR_ATOM: StaticAtom;
+    }
+    // The descriptor may use a const-readable view of the atom's facts.
+    // Section enumeration owns the canonical record, not that private view.
+    let readonly = std::ptr::addr_of!(CONSTRUCTOR_ATOM);
+    assert_eq!(
+        unsafe { (*(*(*descriptor).keys).atom).string },
+        unsafe { (*readonly).string },
+        "descriptor facts must name the canonical image string"
+    );
     let writable = std::ptr::addr_of!(WRITABLE_ATOM);
     let atoms: Vec<_> = image_atoms().map(|p| p.cast_const()).collect();
     assert_eq!(atoms.iter().filter(|&&p| p == readonly).count(), 1);

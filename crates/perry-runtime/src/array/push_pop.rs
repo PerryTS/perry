@@ -5,6 +5,11 @@ use crate::typedarray_hook_slots as typedarray;
 use crate::{gc, string, value};
 use std::ptr;
 
+#[path = "push_pop/growth.rs"]
+mod growth;
+use growth::initialize_growth_slack;
+pub(super) use growth::install_array_growth_forwarding_with;
+
 #[path = "push_pop/guards.rs"]
 mod guards;
 pub(crate) use guards::array_length_is_non_writable;
@@ -12,31 +17,6 @@ pub(super) use guards::throw_cannot_delete_array_index;
 use guards::throw_frozen_array_mutation;
 pub(crate) use guards::throw_non_extensible_array_push;
 use guards::throw_non_writable_length;
-
-/// Install an array-growth forwarding stub after `tracked_header_for` proves
-/// allocator ownership of `old_user_addr`. Keeping the classifier injectable
-/// makes the below-2-TiB macOS case deterministic without mapping a fixed low
-/// virtual address in the test process.
-///
-/// # Safety
-/// The classifier must return the live header for `old_user_addr`, and
-/// `new_user_addr` must be a live array allocation.
-#[inline]
-pub(super) unsafe fn install_array_growth_forwarding_with(
-    old_user_addr: usize,
-    new_user_addr: *mut u8,
-    tracked_header_for: impl FnOnce(usize) -> Option<std::ptr::NonNull<gc::GcHeader>>,
-) -> bool {
-    let Some(header) = tracked_header_for(old_user_addr) else {
-        return false;
-    };
-    let header = header.as_ptr();
-    if (*header).obj_type != gc::GC_TYPE_ARRAY || (*header).gc_flags & gc::GC_FLAG_ARENA == 0 {
-        return false;
-    }
-    gc::set_forwarding_address(header, new_user_addr);
-    true
-}
 
 #[inline]
 pub(crate) fn guard_writable_length(arr: *const ArrayHeader) {
@@ -158,25 +138,28 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
         // element kind word carries over exactly.
         (*new_ptr).ek_prefix = (*arr).ek_prefix;
         (*new_ptr).ek_kind = (*arr).ek_kind;
-        gc::runtime_write_barrier_slot(
-            new_ptr as usize,
-            std::ptr::addr_of_mut!((*new_ptr).named) as usize,
-            value::js_nanbox_pointer((*new_ptr).named as i64).to_bits(),
-        );
+        // A null named layout contributes no old-to-young edge. The
+        // fresh replacement needs this barrier only when that edge exists.
+        if !(*new_ptr).named.is_null() {
+            gc::runtime_write_barrier_slot(
+                new_ptr as usize,
+                std::ptr::addr_of_mut!((*new_ptr).named) as usize,
+                value::js_nanbox_pointer((*new_ptr).named as i64).to_bits(),
+            );
+        }
         // Copy the live dense prefix; sparse indices remain in the named layout.
         let used = (*arr).length.min(old_capacity) as usize;
         // GC_STORE_AUDIT(BARRIERED): growth normalizes the live backing
         // prefix, transfers its layout, and replays its write barriers below.
         ptr::copy_nonoverlapping(array_elements_ptr(arr), array_elements_ptr(new_ptr), used);
-        // Hole-fill unused slack so the from-space scan sees no stale pointers.
-        {
-            let new_elems =
-                crate::array::array_elements_ptr(new_ptr as *const ArrayHeader) as *mut u64;
-            for i in used..new_capacity as usize {
-                // GC_STORE_AUDIT(INIT): unpublished slack contains only
-                // TAG_HOLE; the copied live prefix replays barriers below.
-                ptr::write(new_elems.add(i), value::TAG_HOLE);
-            }
+        // A sparse logical length can make the barrier replay below inspect
+        // slots past `used`: initialize those now. For a dense source every
+        // subsequent read is in the copied live prefix. Its slack can wait
+        // until the old backing has become a forwarding stub, avoiding a
+        // resident high-water containing both the dead backing and new slack.
+        let sparse = (*arr).length as usize > used;
+        if sparse {
+            initialize_growth_slack(new_ptr, used, new_capacity as usize);
         }
         let old_header = (arr as *mut u8).sub(gc::GC_HEADER_SIZE) as *mut gc::GcHeader;
         let new_header = (new_ptr as *mut u8).sub(gc::GC_HEADER_SIZE) as *mut gc::GcHeader;
@@ -248,6 +231,23 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
             "array growth could not install a forwarding stub for the tracked source at {:#x}",
             arr as usize
         );
+
+        // A retained stub needs its GC header and first forwarding word, not
+        // the old elements/named slots. Keep its address, extent and allocator
+        // ownership intact; return only complete interior payload pages.
+        // GENERATION_PAGE_SIZE is the minimum supported OS page granularity,
+        // not a workload threshold. Smaller ranges contain no releasable page
+        // and need no OS page-size query during small-array startup work.
+        let stub_bytes = std::mem::size_of::<u64>();
+        if old_size - stub_bytes >= crate::arena::GENERATION_PAGE_SIZE {
+            crate::arena::discard_dead_payload_pages(
+                (arr as *mut u8).add(stub_bytes),
+                old_size - stub_bytes,
+            );
+        }
+        if !sparse {
+            initialize_growth_slack(new_ptr, used, new_capacity as usize);
+        }
 
         new_ptr
     }

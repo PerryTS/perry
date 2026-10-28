@@ -168,6 +168,9 @@ pub(super) fn arm_and_reconstruct_remembered_set_if_unarmed() {
     let recovered_old_pages = sticky.old_pages.len() as u64;
     let recovered_external_pages = sticky.external_pages.len() as u64;
     sticky.restore();
+    // The realm image's half: its stores before arming were not recorded
+    // either, and its entries are cells, not pages (`gc::image_cells`).
+    super::image_cells::reconstruct_image_remembered_set();
 
     RECONSTRUCT_CENSUS.with(|cell| {
         let mut census = cell.get();

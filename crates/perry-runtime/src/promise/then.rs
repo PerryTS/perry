@@ -1973,3 +1973,5 @@ extern "C" fn finally_passthrough_reject(
     }
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
+
+crate::realm_decl!("then.realm.json#*");
