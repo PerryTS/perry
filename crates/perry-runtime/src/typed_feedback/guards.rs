@@ -1,6 +1,19 @@
 use super::*;
 use crate::codegen_abi::LayoutWord;
 
+// Public method receivers are JSValues. Unlike internal raw-address probes,
+// an ordinary positive subnormal must not be interpreted as a heap address.
+fn boxed_method_receiver_addr(bits: u64) -> usize {
+    match bits & TAG_MASK {
+        POINTER_TAG | STRING_TAG | BIGINT_TAG => normalize_raw_object_addr(bits),
+        _ => 0,
+    }
+}
+
+#[cfg(test)]
+#[path = "boxed_receiver_tests.rs"]
+mod boxed_receiver_tests;
+
 fn object_has_own_key_bytes(obj: *const ObjectHeader, key_bytes: &[u8]) -> bool {
     if obj.is_null() || key_bytes.is_empty() || key_bytes.len() > 4096 {
         return false;
@@ -353,7 +366,7 @@ pub unsafe extern "C-unwind" fn js_typed_feedback_native_call_method(
     args_len: usize,
 ) -> f64 {
     let bits = object.to_bits();
-    let object_addr = normalize_raw_object_addr(bits);
+    let object_addr = boxed_method_receiver_addr(bits);
     let (shape_id, class_id, gc_type) = object_shape(object_addr);
     let name_hash = if valid_method_name(method_name_ptr, method_name_len) {
         hash_bytes(std::slice::from_raw_parts(
@@ -437,7 +450,7 @@ pub unsafe extern "C-unwind" fn js_typed_feedback_native_call_method_apply(
     args_array: i64,
 ) -> f64 {
     let bits = object.to_bits();
-    let object_addr = normalize_raw_object_addr(bits);
+    let object_addr = boxed_method_receiver_addr(bits);
     let (shape_id, class_id, gc_type) = object_shape(object_addr);
     let name_hash = if valid_method_name(method_name_ptr, method_name_len) {
         hash_bytes(std::slice::from_raw_parts(
