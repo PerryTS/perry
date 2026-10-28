@@ -95,7 +95,6 @@ members = [
 # `exclude` entry could remove them. Keeping them out of `crates/` also keeps
 # them out of the `crates/perry-ui*` globs used by the GC/lint census gates.
 exclude = [
-    "third_party/brotli",
     "third_party/windows-winui",
     "third_party/wac-graph",
     "third_party/turnloop",
@@ -668,8 +667,6 @@ codegen-units = 1
 # Required provider APIs are not all present in published alpha.10. Keep the
 # exact sources qualified with the component engine; see vendor provenance.
 [patch.crates-io]
-# Locked Brotli9 H10 custom-prefix repair; provenance and patch record below.
-brotli = { path = "third_party/brotli" }
 turnloop = { path = "third_party/turnloop/turnloop" }
 turnloop-http = { path = "third_party/turnloop/turnloop-http" }
 

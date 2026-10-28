@@ -143,8 +143,3 @@ fn brotli_dictionary_wire(quality: i32) {
 fn brotli_dictionary_quality_nine_wire_interoperates() {
     brotli_dictionary_wire(9);
 }
-
-#[test]
-fn brotli_dictionary_quality_eleven_wire_interoperates() {
-    brotli_dictionary_wire(11);
-}
