@@ -200,7 +200,6 @@ fn executor(
         // agent's shape slab. Initializing GC first would freeze the smaller
         // runtime-only prefix and reject this later-loaded app.
         module_init();
-        (api.gc_init)();
     }
     let mut stats = RunStats {
         calls: 0,

@@ -89,7 +89,6 @@ fn main() -> Result<(), String> {
         // Let the generated prologue bind the app's layout image before any
         // GC initialization commits the agent to the runtime-only prefix.
         module_init();
-        gc_init();
     }
 
     let promise = unsafe { entry(0) };
