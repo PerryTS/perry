@@ -1359,3 +1359,5 @@ unsafe fn write_ordinary_own_value(
         }
     }
 }
+
+crate::realm_decl!("arguments.realm.json#*");

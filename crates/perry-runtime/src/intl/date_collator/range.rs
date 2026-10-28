@@ -231,3 +231,5 @@ pub(crate) extern "C" fn date_time_format_bound_range_to_parts_thunk(
     }
     date_time_format_range_parts_value(obj, "formatRangeToParts", start, end)
 }
+
+crate::realm_decl!("range.realm.json#*");

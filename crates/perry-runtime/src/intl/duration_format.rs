@@ -912,3 +912,5 @@ pub(super) extern "C" fn constructor_thunk(
         super::rest_arg(rest, 1),
     )
 }
+
+crate::realm_decl!("duration_format.realm.json#*");

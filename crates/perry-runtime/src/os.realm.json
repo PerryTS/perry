@@ -1,0 +1,2074 @@
+{
+  "version": 1,
+  "groups": {
+    "objects": [
+      {
+        "name": "process.stderr.addListener",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::os::process_streams::process_stream_on_once_stub",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::os::process_streams::process_stream_on_once_stub",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_907d6949d59eaad677ce",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "process.stderr.destroy",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::os::process_streams::process_stream_on_once_stub",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::os::process_streams::process_stream_on_once_stub",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_907d6949d59eaad677ce",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "process.stderr.emit",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::os::process_streams::process_stream_emit_stub",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::os::process_streams::process_stream_emit_stub",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_e54290cdf091b748dfca",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "process.stderr.off",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::os::process_streams::process_stream_on_once_stub",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::os::process_streams::process_stream_on_once_stub",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_907d6949d59eaad677ce",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "process.stderr.on",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::os::process_streams::process_stream_on_once_stub",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::os::process_streams::process_stream_on_once_stub",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_907d6949d59eaad677ce",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "process.stderr.once",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::os::process_streams::process_stream_on_once_stub",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::os::process_streams::process_stream_on_once_stub",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_907d6949d59eaad677ce",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "process.stderr.pause",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::os::process_streams::process_stream_on_once_stub",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::os::process_streams::process_stream_on_once_stub",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_907d6949d59eaad677ce",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "process.stderr.removeAllListeners",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::os::process_streams::process_stream_on_once_stub",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::os::process_streams::process_stream_on_once_stub",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_907d6949d59eaad677ce",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "process.stderr.removeListener",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::os::process_streams::process_stream_on_once_stub",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::os::process_streams::process_stream_on_once_stub",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_907d6949d59eaad677ce",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "process.stderr.resume",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::os::process_streams::process_stream_on_once_stub",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::os::process_streams::process_stream_on_once_stub",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_907d6949d59eaad677ce",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "process.stderr.unref",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::os::process_streams::process_stream_on_once_stub",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::os::process_streams::process_stream_on_once_stub",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_907d6949d59eaad677ce",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "process.stderr.write",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4008000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 3,
+        "body": "crate::os::process_streams::process_stderr_write_stub",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 3,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::os::process_streams::process_stderr_write_stub",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_ecaaab6b74b0f58743ca",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "process.stdin.addListener",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "addListener"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "crate::os::process_streams::process_stdin_add_listener",
+        "function_info": {
+          "params": 2,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 2,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::os::process_streams::process_stdin_add_listener",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_d903ca5a0ce988b0a135",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "process.stdin.destroy",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::os::process_streams::process_stdin_detach_stub",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::os::process_streams::process_stdin_detach_stub",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_40ceca6b529281f5640c",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "process.stdin.emit",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::os::process_streams::process_stream_emit_stub",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::os::process_streams::process_stream_emit_stub",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_e54290cdf091b748dfca",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "process.stdin.listeners",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "listeners"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::os::process_streams::process_stdin_listeners",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::os::process_streams::process_stdin_listeners",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_7a812d82147514439c2d",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "process.stdin.off",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "off"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "crate::os::process_streams::process_stdin_remove_listener",
+        "function_info": {
+          "params": 2,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 2,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::os::process_streams::process_stdin_remove_listener",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_d162ac265e5e96e081e1",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "process.stdin.on",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "on"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "crate::os::process_streams::process_stdin_on",
+        "function_info": {
+          "params": 2,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 2,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::os::process_streams::process_stdin_on",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_4376950a4b9f4b457b9a",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "process.stdin.once",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "once"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "crate::os::process_streams::process_stdin_add_listener_once",
+        "function_info": {
+          "params": 2,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 2,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::os::process_streams::process_stdin_add_listener_once",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_e174999c9c36dba0afd3",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "process.stdin.pause",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::os::process_streams::process_stdin_detach_stub",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::os::process_streams::process_stdin_detach_stub",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_40ceca6b529281f5640c",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "process.stdin.read",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "read"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::os::process_streams::process_stdin_read",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::os::process_streams::process_stdin_read",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_d1d0bd15572352847f73",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "process.stdin.ref",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::os::process_streams::process_stdin_ref_stub",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::os::process_streams::process_stdin_ref_stub",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_19caa05e2f41741cd98a",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "process.stdin.removeAllListeners",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "removeAllListeners"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::os::process_streams::process_stdin_remove_all_listeners",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::os::process_streams::process_stdin_remove_all_listeners",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_0a0ca056490f33b0c4af",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "process.stdin.resume",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::os::process_streams::process_stdin_resume",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::os::process_streams::process_stdin_resume",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_b3c065bbad4755cdb164",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "process.stdin.setEncoding",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "setEncoding"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::os::process_streams::process_stdin_set_encoding",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::os::process_streams::process_stdin_set_encoding",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_b501e2a47351b38ff165",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "process.stdin.unref",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::os::process_streams::process_stdin_unref_stub",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::os::process_streams::process_stdin_unref_stub",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_99dab0eb9e2823d2f32b",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "process.stdin.write",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::os::process_streams::process_stdin_write_noop_stub",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::os::process_streams::process_stdin_write_noop_stub",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_84c5901962b2476f4f30",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "process.stdout.addListener",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::os::process_streams::process_stream_on_once_stub",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::os::process_streams::process_stream_on_once_stub",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_907d6949d59eaad677ce",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "process.stdout.destroy",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::os::process_streams::process_stream_on_once_stub",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::os::process_streams::process_stream_on_once_stub",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_907d6949d59eaad677ce",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "process.stdout.emit",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::os::process_streams::process_stream_emit_stub",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::os::process_streams::process_stream_emit_stub",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_e54290cdf091b748dfca",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "process.stdout.off",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::os::process_streams::process_stream_on_once_stub",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::os::process_streams::process_stream_on_once_stub",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_907d6949d59eaad677ce",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "process.stdout.on",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::os::process_streams::process_stream_on_once_stub",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::os::process_streams::process_stream_on_once_stub",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_907d6949d59eaad677ce",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "process.stdout.once",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::os::process_streams::process_stream_on_once_stub",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::os::process_streams::process_stream_on_once_stub",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_907d6949d59eaad677ce",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "process.stdout.pause",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::os::process_streams::process_stream_on_once_stub",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::os::process_streams::process_stream_on_once_stub",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_907d6949d59eaad677ce",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "process.stdout.removeAllListeners",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::os::process_streams::process_stream_on_once_stub",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::os::process_streams::process_stream_on_once_stub",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_907d6949d59eaad677ce",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "process.stdout.removeListener",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::os::process_streams::process_stream_on_once_stub",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::os::process_streams::process_stream_on_once_stub",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_907d6949d59eaad677ce",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "process.stdout.resume",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::os::process_streams::process_stream_on_once_stub",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::os::process_streams::process_stream_on_once_stub",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_907d6949d59eaad677ce",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "process.stdout.unref",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::os::process_streams::process_stream_on_once_stub",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::os::process_streams::process_stream_on_once_stub",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_907d6949d59eaad677ce",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "process.stdout.write",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4008000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 3,
+        "body": "crate::os::process_streams::process_stdout_write_stub",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 3,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::os::process_streams::process_stdout_write_stub",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_8bbef3b832f7b842997d",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ]
+  }
+}

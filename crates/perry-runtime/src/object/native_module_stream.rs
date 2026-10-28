@@ -477,3 +477,5 @@ mod tests {
         assert_object_property_function(web_pair_writable, b"getWriter");
     }
 }
+
+crate::realm_decl!("native_module_stream.realm.json#*");

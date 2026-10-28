@@ -934,6 +934,7 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
             dynamic_code_reach: cfg.dynamic_code_reach.clone(),
             sabotage: cfg.sabotage.clone(),
             bindings: vec![Default::default(); sorted.len()],
+            indexed_metadata_unwritten: true,
             ..Default::default()
         };
         if cfg.unit_io {
@@ -1540,12 +1541,18 @@ pub(super) fn merge_unit(
                 .into_iter()
                 .filter(|(id, _)| view.binding_locals.contains(id)),
         );
+        into.numeric_functions.extend(
+            b.numeric_functions
+                .into_iter()
+                .filter(|(id, _, _)| view.binding_funcs.contains(id)),
+        );
         into.this_of.extend(
             b.this_of
                 .into_iter()
                 .filter(|(id, _)| view.binding_funcs.contains(id)),
         );
     }
+    pf.indexed_metadata_unwritten &= u.indexed_metadata_unwritten;
     pf.super_unrelinked.extend(u.super_unrelinked);
     pf.interp_guard = pf.interp_guard.take().or(u.interp_guard);
     pf.fnproto_bind_written = pf.fnproto_bind_written.take().or(u.fnproto_bind_written);

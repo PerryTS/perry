@@ -526,6 +526,8 @@ pub(super) fn compile_closure(
         _ => return Err(anyhow!("compile_closure: expected Expr::Closure")),
     };
 
+    let private_resume_frame =
+        crate::expr::private_resume_frame::is_entry(llmod, module_prefix, func_id);
     // A LocalId is module-unique, but a closure can only observe ids referenced
     // or declared in its own body (plus its parameters/capture list). Older
     // code cloned the complete module-wide boxed/type/reassignment tables into
@@ -568,7 +570,11 @@ pub(super) fn compile_closure(
     closure_relevant_ids.extend(params.iter().map(|p| p.id));
     closure_relevant_ids.extend(captures.iter().copied());
 
-    let public_llvm_name = crate::fn_info::closure_body_symbol(module_prefix, func_id);
+    let public_llvm_name = if private_resume_frame {
+        crate::expr::private_resume_frame::symbol(module_prefix, func_id)
+    } else {
+        crate::fn_info::closure_body_symbol(module_prefix, func_id)
+    };
     let typed_public_trampoline = if cross_module.typed_f64_closures.contains(&func_id) {
         Some(TypedFunctionTrampolineKind::F64)
     } else if cross_module.typed_i32_closures.contains(&func_id) {
@@ -598,8 +604,7 @@ pub(super) fn compile_closure(
     // proven-unused first callback parameter for the caller's stack context,
     // so its ABI and register footprint stay identical to the ordinary
     // trusted clone.
-    let llvm_params =
-        crate::expr::body_call::js_body_params(params.iter().map(|p| format!("%arg{}", p.id)));
+    let llvm_params = crate::expr::private_resume_frame::abi_params(params, private_resume_frame);
 
     let ic_base = llmod.ic_counter;
     let buffer_alias_base = llmod.buffer_alias_counter;
@@ -724,7 +729,11 @@ pub(super) fn compile_closure(
                 .map(|(id, _)| *id),
         );
         for p in params {
-            let arg_name = format!("%arg{}", p.id);
+            let arg_name = if private_resume_frame && params.len() == 2 && p.id == params[0].id {
+                blk.sitofp(I32, "%frame_op", DOUBLE)
+            } else {
+                format!("%arg{}", p.id)
+            };
             // A closure region's Number parameter: an int32 box becomes the
             // equal plain double once, here (`split_regions`).
             let arg_name = if region_number_params.contains(&p.id) {
@@ -1291,6 +1300,7 @@ pub(super) fn compile_closure(
         resolved_versioned_loop_callback_targets: HashMap::new(),
         trusted_box_captures,
         fixed_generator_state,
+        private_resume_frame,
         versioned_loop_deopt_context,
         trusted_box_capture_ptrs,
         ready_cell_roots: crate::stmt::binding_cell::ReadyCellRoots::with_entry_cells(

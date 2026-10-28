@@ -224,6 +224,7 @@ pub(super) fn compile_env_value(name: &str) -> Option<String> {
 
 #[cfg(test)]
 const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
+    ("PERRY_REALM_REACH", "Compiler-only diagnostic of source facts; changes no emitted bytes, runtime state or archive selection."),
     ("PERRY_REACH_REPORT", "Compiler-only diagnostic; bypasses object caches and does not change emitted code."),
     ("PERRY_SOURCE_NEED_REPORT", "Compiler-only retained-source census; bypasses object caches and does not change emitted code."),
     ("PERRY_RETAIN_ALL_SOURCE", "Diagnostic: keeps retained source the compiler would drop; each module's HIR hash (its object-cache key) reflects the text, and whole-binary caching is bypassed."),
@@ -658,7 +659,15 @@ const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
         "Test-only fixture/child-process control; absent from compiler production paths.",
     ),
     (
+        "PERRY_TEST_DESERIALIZER_FEATURES_CHILD",
+        "Test-only child-process isolation marker; never read by the compiler's production path.",
+    ),
+    (
         "PERRY_TEST_BUN_CONDITIONS_CHILD",
+        "Test-only fixture/child-process control; absent from compiler production paths.",
+    ),
+    (
+        "PERRY_TEST_DESERIALIZER_FEATURES_CHILD",
         "Test-only fixture/child-process control; absent from compiler production paths.",
     ),
     (

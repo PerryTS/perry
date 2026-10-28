@@ -6452,6 +6452,32 @@ pub fn run_with_parse_cache(
         module_births.iter().flat_map(|(_, b)| b),
         &static_shape_ids,
     );
+    let mut realm_reach = ctx.realm_reach.clone();
+    for module in ctx.native_modules.values() {
+        perry_hir::realm_reach::scan_lowered(
+            module,
+            perry_codegen::realm_manifest::REALM,
+            &mut realm_reach,
+        );
+    }
+    realm_reach.program_signals(&ctx.patched_builtins);
+    realm_reach.close(perry_codegen::realm_manifest::REALM);
+    if std::env::var("PERRY_REALM_REACH").is_ok_and(|v| v == "1") {
+        let reasons: Vec<_> = realm_reach.top.iter().map(|r| r.reason()).collect();
+        eprintln!(
+            "[realm-reach] {}/{} top={:?}",
+            realm_reach.names.len(),
+            perry_codegen::realm_manifest::REALM.len(),
+            reasons
+        );
+        eprintln!(
+            "[realm-reach-json] {}",
+            serde_json::json!({
+                "names": realm_reach.names, "top": reasons,
+                "full": perry_codegen::realm_manifest::REALM.len()
+            })
+        );
+    }
     let reach_report = super::reach_report::start(&ctx, args.output_type != "executable")?;
     let source_need = super::source_need::start(need, &dropped_source, source_need_seconds)?;
     // fninfer (decision 140): per-function inferred signatures over the

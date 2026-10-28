@@ -11,6 +11,9 @@ use crate::gen::{variant_name, Fx, Gen};
 use crate::model::*;
 use perry_hir::{Expr, Stmt};
 
+#[path = "gen/accessor_descriptor.rs"]
+mod accessor_descriptor;
+
 fn kids(e: &Expr) -> Vec<&Expr> {
     let mut v = Vec::new();
     perry_hir::walker::walk_expr_children(e, &mut |c| v.push(c));
@@ -18,36 +21,6 @@ fn kids(e: &Expr) -> Vec<&Expr> {
 }
 
 impl<'a> Gen<'a> {
-    /// FVA 4.3a: `d` is an accessor descriptor literal: a closed literal
-    /// layout whose keys are within get/set/enumerable/configurable and
-    /// name a getter or a setter (no value, no writable).
-    fn accessor_descriptor(&self, mi: u32, d: &Expr) -> bool {
-        let Expr::New { class_name, .. } = d else {
-            return false;
-        };
-        let Some(&tm) = self.mods[mi as usize].classes.get(class_name) else {
-            return false;
-        };
-        let tpl = &self.m.tmpls[tm as usize];
-        if !matches!(
-            tpl.kind,
-            TmplKind::Class {
-                literal_shape: true,
-                ..
-            }
-        ) {
-            return false;
-        }
-        let keys: Vec<&str> = tpl
-            .birth_keys
-            .iter()
-            .map(|a| self.m.atoms[*a as usize].as_str())
-            .collect();
-        keys.iter()
-            .all(|k| matches!(*k, "get" | "set" | "enumerable" | "configurable"))
-            && keys.iter().any(|k| matches!(*k, "get" | "set"))
-    }
-
     /// An accessor descriptor literal (`accessor_descriptor`): its class, its
     /// constructor arguments, and which of them its own `get` and `set` are
     /// (a literal shape's constructor stores parameter i under its key).
@@ -194,8 +167,7 @@ impl<'a> Gen<'a> {
                     for n in o.into_iter().chain(a) {
                         self.to_sink(n, &why);
                     }
-                    self.m
-                        .top_val(&format!("result of native module {module}.{method}"))
+                    self.native_success_result(module, object.is_some(), method, args)
                 }
             }
             Expr::PrivateLexicalBrand(x) | Expr::PrivateLexicalBrandPush(x) => {
@@ -484,16 +456,10 @@ impl<'a> Gen<'a> {
             | Expr::BufferIsEncoding(..)
             | Expr::BufferByteLength { .. }
             | Expr::BufferToString { .. }
-            | Expr::BufferLength(..)
             | Expr::BufferCopy { .. }
             | Expr::BufferWrite { .. }
             | Expr::BufferFill { .. }
             | Expr::BufferEquals { .. }
-            | Expr::BufferIndexGet { .. }
-            | Expr::BufferIndexSet { .. }
-            | Expr::Uint8ArrayLength(..)
-            | Expr::Uint8ArrayGet { .. }
-            | Expr::Uint8ArraySet { .. }
             | Expr::PodLayoutSizeOf { .. }
             | Expr::PodLayoutAlignOf { .. }
             | Expr::PodLayoutOffsetOf { .. }
@@ -991,13 +957,14 @@ impl<'a> Gen<'a> {
                 // read, a buffer/view argument is shared (B1, flow only).
                 let ks = kids(e);
                 let (t, n) = self.bobj(mi, "TypedArray");
-                if let Expr::TypedArrayNew { kind, .. } = e {
-                    if let TokKind::Obj(tm, _) = self.m.toks[t as usize] {
-                        self.m.ta_elem.insert(tm, *kind);
-                    }
-                }
+                let owner = self.begin_indexed_owner(mi, t, e);
                 for k in ks {
                     let v = self.expr(fx, k);
+                    if owner {
+                        if let TokKind::Obj(tm, _) = self.m.toks[t as usize] {
+                            self.m.ta_birth_input.insert(tm, v);
+                        }
+                    }
                     let r = self.m.reason("typed-array source");
                     self.m.cons(
                         v,
@@ -1946,7 +1913,13 @@ impl<'a> Gen<'a> {
             | Expr::PropertyGet { .. }
             | Expr::PropertySet { .. }
             | Expr::PropertyUpdate { .. }
+            | Expr::BufferLength(..)
+            | Expr::Uint8ArrayLength(..)
+            | Expr::BufferIndexGet { .. }
+            | Expr::Uint8ArrayGet { .. }
             | Expr::IndexGet { .. }
+            | Expr::BufferIndexSet { .. }
+            | Expr::Uint8ArraySet { .. }
             | Expr::IndexSet { .. }
             | Expr::IndexUpdate { .. }
             | Expr::Object(..)

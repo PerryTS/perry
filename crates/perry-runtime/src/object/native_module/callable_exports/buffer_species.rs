@@ -138,3 +138,5 @@ pub(super) fn install_buffer_species(buffer_ctor: f64) {
         );
     }
 }
+
+crate::realm_decl!("buffer_species.realm.json#*");

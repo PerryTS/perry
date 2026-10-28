@@ -41,9 +41,9 @@
     "region::map",
     "region::unmap"
    ],
-   "why": "Non-Linux mapping extents, not object identities. region::register records each native map; region::unmap removes its start key before apple::unmap or allocator dealloc. arena/block.rs routes pool overflow, pool drain, allocation failure and TLS teardown through that release path. Pooled mappings remain live and listed across agent reuse. The source pins bind the registry and all production region allocation/release callers to this audit.",
+   "why": "Non-Linux mapping extents, not object identities. region::register records each native map; region::unmap removes its start key before apple::unmap or allocator dealloc. arena/block.rs routes pool overflow, pool drain, allocation failure and TLS teardown through that release path. Pooled mappings remain live and listed across agent reuse. The source pins bind the registry and all production region allocation/release callers to this audit. WRT3a re-audit: current Linux reservation branch never uses REGIONS; non-Linux map/register and all block.rs release paths still remove the extent before physical unmap/dealloc. Reuse keeps live pooled maps registered.",
    "source_pins": {
-    "crates/perry-runtime/src/arena/region.rs": "b68ddd1cb6fb89e90d3e7821f7e88c61b76c895c4a6bb2f6ebe17e3f73da0bf8",
+    "crates/perry-runtime/src/arena/region.rs": "2ceff2f7604c6cfe55c49a8fadf832e31eef9d0c7d72d14bc2d9961ffa4d4469",
     "crates/perry-runtime/src/arena/block.rs": "ee3f4358f6f719fab5b40f8d8cacfaf3664c8d74b3d39ffe524b68dfc84d05b8"
    }
   },
@@ -3958,6 +3958,14 @@
    ],
    "verdict": "process_global_allocation",
    "why": "Descriptor-owned ImageStorage lives in the linker image. ImageList::new points only to static image strings and its own static attribute cell. prepare only tags those addresses or installs symbols from the process-global, never-reset well-known/runtime symbol tables (symbol.rs), whose Box allocations are leaked for process lifetime. Binding symbols are rejected before publication. No word refers to a thread-arena allocation."
+  },
+  {
+   "file": "crates/perry-runtime/src/tls/roots/macos.rs",
+   "names": [
+    "API"
+   ],
+   "verdict": "no_heap_address",
+   "why": "OnceLock holds the immutable CoreFoundation/Security API: system-image function/data pointers and owned CFStrings allocated by CoreFoundation, never Perry arena cells. Api::load forgets both framework Image owners on success so their addresses stay mapped; cached Owned CFStrings have process lifetime. Per-operation keychain/trust values are not cached here."
   }
  ]
 }

@@ -858,3 +858,5 @@ mod snapshot_thread_name_tests {
         )));
     }
 }
+
+crate::realm_decl!("node_v8.realm.json#*");

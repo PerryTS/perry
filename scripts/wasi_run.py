@@ -95,7 +95,9 @@ def run_case(perry: Path, wasmtime: str, source: Path, output: Path,
         executed = subprocess.run(
             [wasmtime, "run", *WASMTIME_FLAGS[flavour], *config.get("wasmtime_args", []), str(wasm),
              *config.get("program_args", [])],
-            cwd=output, capture_output=True, timeout=timeout)
+            cwd=output, capture_output=True, timeout=timeout,
+            # `stdin` pipes the text to the program; without it the runner's own stdin is inherited.
+            **({"input": config["stdin"].encode()} if "stdin" in config else {}))
         (output / f"{name}.stderr").write_bytes(executed.stderr)
         actual = normalized(executed.stdout) + f"exit {executed.returncode}\n"
         (output / f"{name}.stdout").write_text(actual, encoding="utf-8")

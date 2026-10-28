@@ -947,3 +947,5 @@ mod to_primitive_fast_path_tests {
         }
     }
 }
+
+crate::realm_decl!("date_proto_thunks.realm.json#*");

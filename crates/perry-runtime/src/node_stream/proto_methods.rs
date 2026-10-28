@@ -1350,3 +1350,5 @@ extern "C" fn ns_legacy_pipe2(
     );
     dest.get_nanbox_f64()
 }
+
+crate::realm_decl!("proto_methods.realm.json#*");

@@ -299,7 +299,8 @@ mod number_exactness_tests;
 mod opts;
 mod program_facts_view;
 pub use program_facts_view::{
-    ElisionFacts, FactsBody, FactsClass, FactsField, FactsRecv, ProgramFactsView,
+    ElisionFacts, FactsBody, FactsClass, FactsField, FactsIndexedOwner, FactsNumericExpr,
+    FactsNumericFunction, FactsRecv, ProgramFactsView,
 };
 #[cfg(test)]
 mod ordinary_param_guard_tests;
@@ -335,12 +336,12 @@ pub(crate) fn string_pool_image_pointer(entry: &crate::strings::StringEntry) -> 
     string_pool::image_pointer(entry)
 }
 pub(crate) use string_pool::{emit_image_record, image_record_symbol};
+pub(crate) mod numeric_remainder;
 #[cfg(test)]
 mod testing_feature_gate_tests;
 #[cfg(test)]
 mod trusted_box_callback_tests;
 mod typed_abi;
-pub(crate) mod numeric_remainder;
 mod typed_abi_opt_report;
 mod typed_entry;
 pub(crate) use typed_entry::{emit_plain_number_bits_test, emit_plain_number_test};
