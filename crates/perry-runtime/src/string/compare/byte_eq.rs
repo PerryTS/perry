@@ -3,35 +3,38 @@
 //! Short property names need no out-of-line memcmp or alignment dispatch.
 //! Two overlapping words cover a slice up to twice their width; neither read
 //! crosses the slice boundary. Longer strings keep the standard comparison.
-#[inline]
+#[inline(always)]
 pub(super) fn equal(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
     }
     let n = a.len();
+    // Compare both covering words together: equality needs no branch on the
+    // first word, and every load stays within its operand, even at a page end.
     unsafe {
-        match n {
-            0 => true,
-            1 => *a.as_ptr() == *b.as_ptr(),
-            2..=3 => {
-                a.as_ptr().cast::<u16>().read_unaligned()
-                    == b.as_ptr().cast::<u16>().read_unaligned()
-                    && a.as_ptr().add(n - 2).cast::<u16>().read_unaligned()
-                        == b.as_ptr().add(n - 2).cast::<u16>().read_unaligned()
+        if n >= 8 {
+            if n > 16 {
+                return a == b;
             }
-            4..=7 => {
-                a.as_ptr().cast::<u32>().read_unaligned()
-                    == b.as_ptr().cast::<u32>().read_unaligned()
-                    && a.as_ptr().add(n - 4).cast::<u32>().read_unaligned()
-                        == b.as_ptr().add(n - 4).cast::<u32>().read_unaligned()
-            }
-            8..=16 => {
-                a.as_ptr().cast::<u64>().read_unaligned()
-                    == b.as_ptr().cast::<u64>().read_unaligned()
-                    && a.as_ptr().add(n - 8).cast::<u64>().read_unaligned()
-                        == b.as_ptr().add(n - 8).cast::<u64>().read_unaligned()
-            }
-            _ => a == b,
+            let front = a.as_ptr().cast::<u64>().read_unaligned()
+                ^ b.as_ptr().cast::<u64>().read_unaligned();
+            let tail = a.as_ptr().add(n - 8).cast::<u64>().read_unaligned()
+                ^ b.as_ptr().add(n - 8).cast::<u64>().read_unaligned();
+            (front | tail) == 0
+        } else if n >= 4 {
+            let front = a.as_ptr().cast::<u32>().read_unaligned()
+                ^ b.as_ptr().cast::<u32>().read_unaligned();
+            let tail = a.as_ptr().add(n - 4).cast::<u32>().read_unaligned()
+                ^ b.as_ptr().add(n - 4).cast::<u32>().read_unaligned();
+            (front | tail) == 0
+        } else if n >= 2 {
+            let front = a.as_ptr().cast::<u16>().read_unaligned()
+                ^ b.as_ptr().cast::<u16>().read_unaligned();
+            let tail = a.as_ptr().add(n - 2).cast::<u16>().read_unaligned()
+                ^ b.as_ptr().add(n - 2).cast::<u16>().read_unaligned();
+            (front | tail) == 0
+        } else {
+            n == 0 || *a.as_ptr() == *b.as_ptr()
         }
     }
 }
@@ -39,6 +42,17 @@ pub(super) fn equal(a: &[u8], b: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::equal;
+
+    #[test]
+    fn pointer_admission_excludes_the_entire_sentinel_range() {
+        use crate::string::{is_valid_string_ptr, StringHeader};
+        for address in 0..0x1000 {
+            assert!(!is_valid_string_ptr(address as *const StringHeader));
+        }
+        for address in [0x1000, 0x1001, 0xffff, usize::MAX] {
+            assert!(is_valid_string_ptr(address as *const StringHeader));
+        }
+    }
 
     #[test]
     fn exact_bytes_at_all_word_boundaries_and_alignments() {

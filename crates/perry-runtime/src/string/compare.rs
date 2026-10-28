@@ -148,6 +148,7 @@ pub extern "C" fn js_string_compare(a: *const StringHeader, b: *const StringHead
 }
 
 /// Compare two strings for equality
+#[inline(always)]
 #[no_mangle]
 pub extern "C" fn js_string_equals(a: *const StringHeader, b: *const StringHeader) -> i32 {
     // Pointer identity fast path
@@ -157,10 +158,10 @@ pub extern "C" fn js_string_equals(a: *const StringHeader, b: *const StringHeade
 
     let a_valid = is_valid_string_ptr(a);
     let b_valid = is_valid_string_ptr(b);
-    if !a_valid && !b_valid {
-        return 1;
+    if !a_valid {
+        return i32::from(!b_valid);
     }
-    if !a_valid || !b_valid {
+    if !b_valid {
         return 0;
     }
 
