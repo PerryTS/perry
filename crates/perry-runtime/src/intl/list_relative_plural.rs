@@ -1135,3 +1135,5 @@ pub(crate) extern "C" fn plural_rules_bound_resolved_options_thunk(
     let obj = captured_intl_object(closure, "resolvedOptions", KIND_PLURAL_RULES);
     plural_rules_resolved_options_object(obj)
 }
+
+crate::realm_decl!("list_relative_plural.realm.json#*");

@@ -308,6 +308,7 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
     let unchecked = pf.sabotage.as_deref() == Some("unchecked");
     out.interp_guard = pf.interp_guard.is_some() && !unchecked;
     out.super_unrelinked = pf.super_unrelinked.clone();
+    out.indexed_metadata_pristine = pf.indexed_metadata_pristine();
     // `PERRY_FACTS_SABOTAGE=fnproto-unwritten`: claim the fact for every
     // program (the bind gap tests that write Function.prototype must fail).
     out.fnproto_bind_unwritten =
@@ -315,6 +316,18 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
     let Some(mb) = pf.bindings_for(path) else {
         return out;
     };
+    if !out.interp_guard {
+        for (id, params, expression) in &mb.numeric_functions {
+            out.numeric_functions.insert(
+                *id,
+                perry_codegen::FactsNumericFunction {
+                    params: params.clone(),
+                    expression: perry_codegen::FactsNumericExpr::from_hir(expression)
+                        .expect("validated numeric expression"),
+                },
+            );
+        }
+    }
     let stable = pf.stable_classes();
     let recv = |b: &perry_wpfacts::BindingFacts| -> Option<FactsRecv> {
         let class_ids: Vec<u32> = b
@@ -360,6 +373,22 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
             .collect()
     };
     for (id, b) in &mb.locals {
+        if !interp {
+            if let Some(o) = &b.indexed_owner {
+                out.indexed_owners.insert(
+                    *id,
+                    perry_codegen::FactsIndexedOwner {
+                        kind: o.kind,
+                        min_len: o.min_len,
+                        exact_len: o.exact_len,
+                        allocations: o.allocations.clone(),
+                    },
+                );
+            }
+            if !b.other && b.class_ids.is_empty() && b.prims == prim::NUM {
+                out.number_inputs.insert(*id);
+            }
+        }
         if let Some(r) = recv(b) {
             out.locals.insert(*id, r);
         }

@@ -1,0 +1,606 @@
+{
+  "version": 1,
+  "groups": {
+    "body:module_cjs_extension_noop_thunk": [
+      {
+        "name": "node:module._extensions[\".js\"]",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ".js"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "crate::object::native_module::callable_exports::module_cjs::module_cjs_extension_noop_thunk",
+        "function_info": {
+          "params": 2,
+          "rest_fixed": 0,
+          "flags": 2056,
+          "length": 2,
+          "declared": 2,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::native_module::callable_exports::module_cjs::module_cjs_extension_noop_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_e4a6976248428bbbb4f4",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:module._extensions[\".json\"]",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ".json"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "crate::object::native_module::callable_exports::module_cjs::module_cjs_extension_noop_thunk",
+        "function_info": {
+          "params": 2,
+          "rest_fixed": 0,
+          "flags": 2056,
+          "length": 2,
+          "declared": 2,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::native_module::callable_exports::module_cjs::module_cjs_extension_noop_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_e4a6976248428bbbb4f4",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:module._extensions[\".node\"]",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ".node"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "crate::object::native_module::callable_exports::module_cjs::module_cjs_extension_noop_thunk",
+        "function_info": {
+          "params": 2,
+          "rest_fixed": 0,
+          "flags": 2056,
+          "length": 2,
+          "declared": 2,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::native_module::callable_exports::module_cjs::module_cjs_extension_noop_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_e4a6976248428bbbb4f4",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "body:module_prototype_constructor_getter": [
+      {
+        "name": "node:module.Module.prototype.constructor.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::native_module::callable_exports::module_cjs::module_prototype_constructor_getter",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::native_module::callable_exports::module_cjs::module_prototype_constructor_getter",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_756908049fb38206f9ac",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "body:module_prototype_false_getter": [
+      {
+        "name": "node:module.Module.prototype.isPreloading.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::native_module::callable_exports::module_cjs::module_prototype_false_getter",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::native_module::callable_exports::module_cjs::module_prototype_false_getter",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_68700a7649be90fa61b9",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "body:module_prototype_load_thunk": [
+      {
+        "name": "node:module.Module.prototype.load",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::native_module::callable_exports::module_cjs::module_prototype_load_thunk",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 3,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::native_module::callable_exports::module_cjs::module_prototype_load_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_0d79a7a9ea55d2c448f9",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "body:module_prototype_method_thunk": [
+      {
+        "name": "node:module.Module.prototype._compile",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4008000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 3,
+        "body": "crate::object::native_module::callable_exports::module_cjs::module_prototype_method_thunk",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 3,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::native_module::callable_exports::module_cjs::module_prototype_method_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_3f341b8f6ef265be6789",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "body:module_prototype_parent_getter": [
+      {
+        "name": "node:module.Module.prototype.parent.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::native_module::callable_exports::module_cjs::module_prototype_parent_getter",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::native_module::callable_exports::module_cjs::module_prototype_parent_getter",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_4db55d342f198025a69c",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "body:module_prototype_parent_setter": [
+      {
+        "name": "node:module.Module.prototype.parent.<set>",
+        "kind": "setter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::native_module::callable_exports::module_cjs::module_prototype_parent_setter",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::native_module::callable_exports::module_cjs::module_prototype_parent_setter",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_3d1ca5ce0e1091d4ff3f",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "body:module_prototype_require_thunk": [
+      {
+        "name": "node:module.Module.prototype.require",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::native_module::callable_exports::module_cjs::module_prototype_require_thunk",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 3,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::native_module::callable_exports::module_cjs::module_prototype_require_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_f716d6b5ec6ee6831718",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "body:module_wrap_thunk": [
+      {
+        "name": "node:module.Module.wrap",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "wrap"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::native_module::callable_exports::module_cjs::module_wrap_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2056,
+          "length": 1,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::native_module::callable_exports::module_cjs::module_wrap_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_5d71126261343c7ec014",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ]
+  }
+}

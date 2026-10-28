@@ -1109,3 +1109,5 @@ mod tests {
         assert_eq!(got, expected, "decode(DataView) must see the backing bytes");
     }
 }
+
+crate::realm_decl!("text.realm.json#*");

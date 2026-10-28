@@ -755,3 +755,5 @@ mod tests {
         assert!(output.categories.is_empty());
     }
 }
+
+crate::realm_decl!("trace_events.realm.json#*");

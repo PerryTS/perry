@@ -1043,3 +1043,5 @@ mod incoming_init_tests {
         }
     }
 }
+
+crate::realm_decl!("node_http_prototypes.realm.json#*");

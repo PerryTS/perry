@@ -794,3 +794,5 @@ mod tests {
         assert_eq!(crate::builtins::js_number_coerce(result), 5.0);
     }
 }
+
+crate::realm_decl!("builtin_thunks.realm.json#*");

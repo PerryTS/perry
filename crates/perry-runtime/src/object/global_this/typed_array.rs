@@ -812,3 +812,5 @@ pub(crate) fn typed_array_uint8_intrinsic_prototype_value() -> f64 {
         as *const crate::closure::ClosureHeader;
     crate::closure::js_closure_get_capture_f64(ctor, 0)
 }
+
+crate::realm_decl!("typed_array.realm.json#*");

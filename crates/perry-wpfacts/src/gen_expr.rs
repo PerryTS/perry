@@ -195,8 +195,18 @@ impl<'a> Gen<'a> {
     }
 
     /// An element store (`o[k] = v`): no construction phase, maybe rooted.
-    fn store_elem(&mut self, fx: &Fx, e: &Expr, recv: NodeId, key: Key, src: NodeId, desc: &str) {
+    fn store_elem(
+        &mut self,
+        fx: &Fx,
+        e: &Expr,
+        recv: NodeId,
+        key: Key,
+        key_value: NodeId,
+        src: NodeId,
+        desc: &str,
+    ) {
         let site = self.store_site(fx.module, fx.f, desc.into(), None, false);
+        self.m.stores[site as usize].key_value = Some(key_value);
         self.mark_rooted(e, site);
         self.m.cons(recv, Cons::Store { key, src, site });
     }
@@ -754,9 +764,21 @@ impl<'a> Gen<'a> {
                     }
                 } else {
                     let key = self.key_of(key);
-                    self.store_phased(fx, e, target, t, key, v, "putvalue".into(), owner);
+                    let site =
+                        self.store_phased(fx, e, target, t, key, v, "putvalue".into(), owner);
+                    self.m.stores[site as usize].key_value = Some(k);
                     // A receiver other than the target gets the own data store.
-                    self.store_phased(fx, e, target, rv, key, v, "putvalue-receiver".into(), owner);
+                    let site = self.store_phased(
+                        fx,
+                        e,
+                        target,
+                        rv,
+                        key,
+                        v,
+                        "putvalue-receiver".into(),
+                        owner,
+                    );
+                    self.m.stores[site as usize].key_value = Some(k);
                 }
                 v
             }
@@ -795,7 +817,20 @@ impl<'a> Gen<'a> {
                 );
                 nv2
             }
-            Expr::IndexGet { object, index } => {
+            Expr::BufferLength(array) | Expr::Uint8ArrayLength(array) => {
+                let o = self.expr(fx, array);
+                let key = self.m.atom("length");
+                self.load(o, Key::Named(key))
+            }
+            Expr::IndexGet { object, index }
+            | Expr::Uint8ArrayGet {
+                array: object,
+                index,
+            }
+            | Expr::BufferIndexGet {
+                buffer: object,
+                index,
+            } => {
                 let o = self.expr(fx, object);
                 let i = self.expr(fx, index);
                 let r = self.m.reason("ToPropertyKey");
@@ -821,6 +856,16 @@ impl<'a> Gen<'a> {
                 object,
                 index,
                 value,
+            }
+            | Expr::Uint8ArraySet {
+                array: object,
+                index,
+                value,
+            }
+            | Expr::BufferIndexSet {
+                buffer: object,
+                index,
+                value,
             } => {
                 let o = self.expr(fx, object);
                 let i = self.expr(fx, index);
@@ -841,7 +886,7 @@ impl<'a> Gen<'a> {
                     self.m.cons(kp, Cons::StoreKeyed { o, src: v, site });
                 } else {
                     let key = self.key_of(index);
-                    self.store_elem(fx, e, o, key, v, "[]=");
+                    self.store_elem(fx, e, o, key, i, v, "[]=");
                 }
                 v
             }
@@ -874,7 +919,7 @@ impl<'a> Gen<'a> {
                         add: false,
                     },
                 );
-                self.store_elem(fx, e, o, key, nv, "[]++");
+                self.store_elem(fx, e, o, key, i, nv, "[]++");
                 nv
             }
             Expr::Delete(target) => {

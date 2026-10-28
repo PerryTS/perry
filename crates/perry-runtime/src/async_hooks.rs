@@ -1921,3 +1921,5 @@ pub(crate) fn register_roots() {
         crate::gc::async_hooks_mutable_root_scanner,
     );
 }
+
+crate::realm_decl!("async_hooks.realm.json#*");

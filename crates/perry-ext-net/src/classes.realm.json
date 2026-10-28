@@ -1,0 +1,371 @@
+{
+  "version": 1,
+  "groups": {
+    "objects": [
+      {
+        "name": "node:net.BlockList.prototype.addAddress",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "addAddress"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "perry_ext_net::classes::prototype::add_address",
+        "function_info": {
+          "params": 2,
+          "rest_fixed": 0,
+          "flags": 1024,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_ext_net::classes::prototype::add_address",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_31b642708b754a50c53d",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:net.BlockList.prototype.addRange",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "addRange"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "perry_ext_net::classes::prototype::add_range",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 1024,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_ext_net::classes::prototype::add_range",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_0b255068d1dbff5e7895",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:net.BlockList.prototype.addSubnet",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "addSubnet"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "perry_ext_net::classes::prototype::add_subnet",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 1024,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_ext_net::classes::prototype::add_subnet",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_3a1dbbc4b228874b7125",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:net.BlockList.prototype.check",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "check"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "perry_ext_net::classes::prototype::check",
+        "function_info": {
+          "params": 2,
+          "rest_fixed": 0,
+          "flags": 1024,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_ext_net::classes::prototype::check",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_4d16be0222be935a0878",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:net.BlockList.prototype.fromJSON",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "fromJSON"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "perry_ext_net::classes::prototype::from_json",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 1024,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_ext_net::classes::prototype::from_json",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_c302452693335ddc5123",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:net.BlockList.prototype.rules.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "get rules"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "perry_ext_net::classes::prototype::rules",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 1024,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_ext_net::classes::prototype::rules",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_4ba289bd49487967b480",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:net.BlockList.prototype.toJSON",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "toJSON"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 128,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "perry_ext_net::classes::prototype::rules",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 1024,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_ext_net::classes::prototype::rules",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_4ba289bd49487967b480",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ]
+  }
+}

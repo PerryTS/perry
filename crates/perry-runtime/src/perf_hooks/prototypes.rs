@@ -569,3 +569,5 @@ pub(crate) unsafe fn attach_perf_hooks_constructor(
 
 #[cfg(test)]
 mod tests;
+
+crate::realm_decl!("prototypes.realm.json#*");

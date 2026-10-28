@@ -72,6 +72,41 @@ pub(crate) const ARRAY_MAX_CAPACITY: u32 =
 
 const _: () = assert!(ARRAY_MAX_CAPACITY <= crate::object::shape_rule3::MAX_PLUS_FOUR_WORD);
 
+/// Consume the allocator birth proof instead of reclassifying a receiver.
+/// Every caller just allocated GC_TYPE_ARRAY; the allocator resets _reserved
+/// (including on a recycled address), and no element-shape/mask record exists.
+/// Caller-owned reserve bits may already be set and must remain intact.
+/// `raw_f64` requires an empty numeric producer; `all_ptr` requires the same
+/// initialized-prefix contract as js_array_alloc_pointer_elements. Literal
+/// producers publish their immediate stores before any subsequent safepoint.
+#[inline(always)]
+unsafe fn initialize_fresh_array_layout(arr: *mut ArrayHeader, raw_f64: bool, all_ptr: bool) {
+    use crate::gc::{
+        GC_ARRAY_ELEMENT_SHAPE, GC_ARRAY_RAW_F64_HOLES, GC_ARRAY_RAW_F64_LAYOUT,
+        GC_LAYOUT_ALL_POINTERS, GC_LAYOUT_POINTER_FREE, GC_LAYOUT_SIDE_MASK, GC_LAYOUT_STATE_MASK,
+    };
+    let header = (arr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+    debug_assert_eq!((*header).obj_type, crate::gc::GC_TYPE_ARRAY);
+    debug_assert_eq!(
+        (*header)._reserved
+            & (GC_LAYOUT_STATE_MASK
+                | GC_LAYOUT_ALL_POINTERS
+                | GC_ARRAY_ELEMENT_SHAPE
+                | GC_ARRAY_RAW_F64_LAYOUT
+                | GC_ARRAY_RAW_F64_HOLES),
+        0
+    );
+    debug_assert!(!raw_f64 || !all_ptr);
+    let layout = if all_ptr {
+        GC_LAYOUT_SIDE_MASK | GC_LAYOUT_ALL_POINTERS
+    } else {
+        GC_LAYOUT_POINTER_FREE
+    };
+    // GC_STORE_AUDIT(POINTER_FREE): scalar birth-layout bits in the fresh,
+    // unpublished header; no existing layout record or remembered edge changes.
+    (*header)._reserved |= layout | if raw_f64 { GC_ARRAY_RAW_F64_LAYOUT } else { 0 };
+}
+
 /// Allocate a new array with the given initial capacity
 #[no_mangle]
 pub extern "C" fn js_array_alloc(capacity: u32) -> *mut ArrayHeader {
@@ -101,8 +136,7 @@ pub extern "C" fn js_array_alloc(capacity: u32) -> *mut ArrayHeader {
             // new edge to record, so no write barrier.
             std::ptr::write(elements_ptr.add(i), crate::value::TAG_HOLE);
         }
-        set_array_numeric_layout(ptr, NumericArrayLayout::RawF64);
-        crate::gc::layout_init_pointer_free(ptr as *mut u8);
+        initialize_fresh_array_layout(ptr, true, false);
     }
 
     ptr
@@ -166,11 +200,7 @@ pub(crate) fn js_array_alloc_pointer_elements(capacity: u32) -> *mut ArrayHeader
         // The caller writes a slot before it publishes the length that
         // covers it, so every slot it does not reach stays a hole.
         fill_fresh_capacity_with_holes(ptr);
-        // Arena slots can be reused after a raw-f64 array. The all-pointer
-        // layout owns the same header, so clear numeric representation flags
-        // before publishing it as pointer-only.
-        clear_array_numeric_layout(ptr);
-        crate::gc::layout_init_all_pointer_slots(ptr as *mut u8);
+        initialize_fresh_array_layout(ptr, false, true);
     }
 
     ptr
@@ -250,12 +280,7 @@ fn alloc_key_list(
             std::ptr::write(ptr.add(1) as *mut u64, crate::value::TAG_HOLE);
         }
         fill_fresh_capacity_with_holes(ptr);
-        clear_array_numeric_layout(ptr);
-        if all_ptr {
-            crate::gc::layout_init_all_pointer_slots(ptr as *mut u8);
-        } else {
-            crate::gc::layout_init_pointer_free(ptr as *mut u8);
-        }
+        initialize_fresh_array_layout(ptr, false, all_ptr);
         debug_assert_eq!(crate::array::array_front_offset(ptr), reserve);
     }
     ptr
@@ -306,8 +331,7 @@ pub extern "C" fn js_array_alloc_with_length(capacity: u32) -> *mut ArrayHeader 
             // GC_STORE_AUDIT(POINTER_FREE): TAG_HOLE is a non-pointer sentinel for fresh array slots.
             std::ptr::write(elements_ptr.add(i), crate::value::TAG_HOLE);
         }
-        clear_array_numeric_layout(ptr);
-        crate::gc::layout_init_pointer_free(ptr as *mut u8);
+        initialize_fresh_array_layout(ptr, false, false);
     }
 
     ptr
@@ -338,8 +362,7 @@ pub(crate) fn js_array_alloc_with_length_exact(capacity: u32) -> *mut ArrayHeade
             // GC_STORE_AUDIT(POINTER_FREE): TAG_HOLE is a non-pointer sentinel for fresh array slots.
             std::ptr::write(elements_ptr.add(i), crate::value::TAG_HOLE);
         }
-        clear_array_numeric_layout(ptr);
-        crate::gc::layout_init_pointer_free(ptr as *mut u8);
+        initialize_fresh_array_layout(ptr, false, false);
     }
 
     ptr
@@ -417,8 +440,7 @@ pub extern "C" fn js_array_alloc_with_length_longlived(capacity: u32) -> *mut Ar
         (*ptr).named = std::ptr::null_mut();
         (*ptr).ek_prefix = 0;
         (*ptr).ek_kind = 0;
-        clear_array_numeric_layout(ptr);
-        crate::gc::layout_init_pointer_free(ptr as *mut u8);
+        initialize_fresh_array_layout(ptr, false, false);
     }
 
     ptr
@@ -750,8 +772,7 @@ pub extern "C" fn js_array_alloc_literal(capacity: u32) -> *mut ArrayHeader {
         (*ptr).named = std::ptr::null_mut();
         (*ptr).ek_prefix = 0;
         (*ptr).ek_kind = 0;
-        clear_array_numeric_layout(ptr);
-        crate::gc::layout_init_pointer_free(ptr as *mut u8);
+        initialize_fresh_array_layout(ptr, false, false);
     }
     ptr
 }

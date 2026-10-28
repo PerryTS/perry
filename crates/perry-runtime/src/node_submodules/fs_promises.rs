@@ -145,9 +145,9 @@ pub(crate) extern "C" fn thunk_fs_promises_readFile(
     encoding: f64,
 ) -> f64 {
     // #10452: the Buffer form used to resolve `undefined` for a missing file.
-    let as_string = crate::fs::read_file_encoding(encoding).is_some();
     promise_from_result_value(|| unsafe {
-        crate::fs::read_file_value_result(path, encoding, as_string)
+        let text_encoding = crate::fs::read_file_encoding(encoding);
+        crate::fs::read_file_value_result(path, encoding, text_encoding.as_deref())
     })
 }
 
@@ -1143,3 +1143,5 @@ thunk!(
 #[cfg(test)]
 #[path = "fs_promises_gc_tests.rs"]
 mod gc_tests;
+
+crate::realm_decl!("fs_promises.realm.json#*");

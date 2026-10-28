@@ -1916,3 +1916,5 @@ mod tests;
 #[cfg(test)]
 #[path = "test_once_unit_tests.rs"]
 mod once_tests;
+
+crate::realm_decl!("test.realm.json#*");
