@@ -386,6 +386,12 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         Expr::PropertyGet {
             object, property, ..
         } => {
+            // The value proof is stronger than an erased field annotation.
+            // Keep Number selection in agreement with canonical-result and
+            // declared-only queries, including an unannotated receiver.
+            if crate::expr::wpfacts_access::proves_raw_f64(ctx, e) {
+                return true;
+            }
             if crate::expr::contained_number_get(ctx, object, property) {
                 return true;
             }

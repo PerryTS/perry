@@ -101,8 +101,9 @@ fn incomplete_field_contracts_keep_dynamic_value_exits() {
             "unproved field may concatenate {args:?}: {ir}"
         );
         assert!(
-            ir.contains("call double @js_number_coerce("),
-            "dynamic add result still needs Number coercion {args:?}: {ir}"
+            ir.contains("call double @js_number_coerce(")
+                || ir.contains("call double @js_dynamic_mod("),
+            "dynamic add result still needs ToNumber or ToNumeric {args:?}: {ir}"
         );
     }
 }
