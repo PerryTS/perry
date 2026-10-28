@@ -1021,11 +1021,7 @@ pub fn run_with_parse_cache(
     // Select from the surviving HIR, never from the wrapper's discarded
     // dynamic loader. In particular a dead createRequire import cannot
     // select URL/dgram, or contribute opaque keys to streams selection.
-    let modules = std::mem::take(&mut ctx.native_modules);
-    for hir_module in modules.values() {
-        collect_modules::feature_detect::detect_optional_feature_usage(&mut ctx, hir_module);
-    }
-    ctx.native_modules = modules;
+    collect_modules::feature_detect::detect_program_optional_feature_usage(&mut ctx);
 
     collect_modules::collect_declared_addons(&mut ctx, args.target.as_deref())?;
 
