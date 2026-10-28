@@ -92,10 +92,34 @@ impl AtomTable {
         bytes: &[u8],
         hash: u64,
     ) -> Option<*const StringHeader> {
-        self.probe_from(from, bytes, hash).ok()
+        if self.slots.is_empty() {
+            return None;
+        }
+        let mask = self.slots.len() - 1;
+        let mut i = Self::home(hash, mask);
+        loop {
+            let entry = &self.slots[i];
+            if entry.string_ptr == 0 {
+                return None;
+            }
+            if entry.hash == hash {
+                let existing = entry.string_ptr as *const StringHeader;
+                if entry.string_ptr == from {
+                    return Some(existing);
+                }
+                if (*existing).byte_len as usize == bytes.len()
+                    && std::slice::from_raw_parts(string_data(existing), bytes.len()) == bytes
+                {
+                    return Some(existing);
+                }
+            }
+            i = (i + 1) & mask;
+        }
     }
 
-    /// Return the existing atom or the vacant slot that ended this probe.
+    /// Seeding entry probe: return an atom or the vacant slot ending the probe.
+    /// Read-only queries retain their Option return path; carrying a vacant
+    /// slot through that path would add work to every successful key query.
     /// The slot is valid only until this table grows or is otherwise mutated.
     #[inline(always)]
     unsafe fn probe_from(
