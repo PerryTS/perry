@@ -9,5 +9,7 @@ try {
     const iterator = makeWatcher(directory, { signal: controller.signal });
     setTimeout(() => controller.abort(), 5);
     try { await iterator.next(); console.log("unexpected event"); }
-    catch (error) { console.log(error.name); }
+    catch (error) {
+        console.log(error.name, error.code, error.cause === controller.signal.reason);
+    }
 } finally { rmSync(directory, { recursive: true, force: true }); }

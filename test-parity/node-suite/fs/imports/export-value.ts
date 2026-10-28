@@ -11,6 +11,8 @@ try {
     console.log([readFileSync].map(read => read(path, "utf8").trim()).join("|"));
     console.log(f.call(undefined, path, "utf8").trim());
     console.log(f.apply(undefined, [path, "utf8"]).trim());
+    const bound = f.bind(undefined, path);
+    console.log(bound.length, bound("utf8").trim());
     const j = join;
     console.log(["a", "b", "c"].map(p => j("prefix", p)).join("|"));
     console.log(j(...["a", "b", "c", "d", "e", "f", "g", "h"]));

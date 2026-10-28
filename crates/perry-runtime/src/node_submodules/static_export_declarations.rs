@@ -36,14 +36,11 @@ fn selected_export(key: &'static str, export: &'static ExportSpec) -> f64 {
     }
     // node:test's callable aliases have one declaration identity.
     let name = if key == "test" {
-        let name = match export.name {
-            "default" | "test" | "it" => "test",
-            "suite" | "describe" => "suite",
+        match export.name {
+            "default" | "test" | "it" => js_node_export_test_test::SPEC.name,
+            "suite" | "describe" => js_node_export_test_suite::SPEC.name,
             _ => export.name,
-        };
-        find_export(&SUBMOD_TEST, name)
-            .map(|e| e.name)
-            .unwrap_or(export.name)
+        }
     } else {
         export.name
     };
