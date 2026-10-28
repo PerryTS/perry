@@ -603,8 +603,8 @@ pub(crate) unsafe fn call_function_with_explicit_this(
 ) -> f64 {
     let raw_ptr = (object.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
     // Constructor-export alias shims recognize native export metadata in both
-    // the legacy bound-method and export-specific body representations. The callee's own body record decides this once, before
-    // any shim probes its captures. An unknown body keeps the conservative
+    // the legacy bound-method and export-specific body representations.
+    // The callee's own body record decides this before a shim probes captures. An unknown body keeps the conservative
     // dispatch path.
     let construction_alias = crate::closure::closure_info(
         raw_ptr as *const crate::closure::ClosureHeader,

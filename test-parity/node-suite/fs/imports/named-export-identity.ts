@@ -19,4 +19,3 @@ console.log("after sync", readFileSync === patched, fs.readFileSync === patched,
 fsDefault.readFileSync = original;
 syncBuiltinESMExports();
 console.log("restored", readFileSync === original, fs.readFileSync === original);
-

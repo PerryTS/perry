@@ -59,7 +59,12 @@ fn export_value(
     let value = if let Some(bits) = existing {
         scope.root_nanbox_f64(f64::from_bits(bits))
     } else if let Some(value) = intrinsic_export(module, property) {
-        scope.root_nanbox_f64(value)
+        let value = scope.root_nanbox_f64(value);
+        NATIVE_CALLABLE_EXPORTS.with(|v| {
+            v.borrow_mut().insert(callable_key, value.get_nanbox_u64());
+        });
+        crate::gc::runtime_write_barrier_root_nanbox(value.get_nanbox_u64());
+        value
     } else {
         install_native_module_vtable();
         let ns = scope.root_nanbox_f64(js_create_native_module_namespace(
@@ -184,11 +189,13 @@ pub(crate) fn selected_value(
     value
 }
 
-/// The descriptor's layout tag proves this value has its own native body.
-/// Legacy bound-method values still go through their installed dispatch bucket.
+/// A real body is entered directly, including shared global intrinsics.
+/// Legacy bound-method sentinels still need their installed dispatch bucket;
+/// entering one here would recurse through this namespace dispatcher.
 pub(crate) unsafe fn call_minted(
     module: &str,
     property: &str,
+    receiver: f64,
     args: *const f64,
     len: usize,
 ) -> Option<f64> {
@@ -198,13 +205,13 @@ pub(crate) unsafe fn call_minted(
     let closure =
         crate::value::js_nanbox_get_pointer(value) as *const crate::closure::ClosureHeader;
     if !crate::closure::is_closure_ptr(closure as usize)
-        || (*(*closure).info).flags & crate::codegen_abi::FN_NATIVE_EXPORT == 0
+        || (*(*closure).info).code == crate::closure::BOUND_METHOD_FUNC_PTR
     {
         return None;
     }
     Some(crate::closure::js_native_call_value(
         value,
-        crate::closure::plain_call_receiver(),
+        crate::closure::JsThis::from_f64(receiver),
         args,
         len,
     ))

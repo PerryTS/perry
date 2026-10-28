@@ -4,3 +4,7 @@ const input = new TextEncoder().encode('test');
 const key = await subtle.importKey('raw', input, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify']);
 const signature = await subtle.sign('HMAC', key, input);
 console.log(key.type, signature.byteLength, await subtle.verify('HMAC', key, signature, input));
+const cryptoValue: any = webcrypto;
+console.log('global identity', cryptoValue.randomUUID === globalThis.crypto.randomUUID);
+console.log('uuid', cryptoValue.randomUUID().length);
+console.log('random', cryptoValue.getRandomValues(new Uint8Array(4)).length);

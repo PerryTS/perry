@@ -327,6 +327,7 @@ pub(crate) unsafe fn dispatch_native_module_method(
     if let Some(value) = super::native_module::call_minted_native_export(
         module_name,
         method_name,
+        crate::value::js_nanbox_pointer(obj as i64),
         args_ptr,
         args_len,
     ) {
