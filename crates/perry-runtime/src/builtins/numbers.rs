@@ -446,6 +446,14 @@ pub extern "C" fn js_number_coerce(value: f64) -> f64 {
     if (value.to_bits() & 0x7FFF_0000_0000_0000) < 0x7FF9_0000_0000_0000 {
         return value;
     }
+    number_coerce_non_plain(value)
+}
+
+// Keep the primitive identity path free of the coercion body's callee-saved
+// registers and stack frame. The boxed path keeps the same ToPrimitive order
+// and rooting; its recursive coercions re-enter the public classifier.
+#[inline(never)]
+extern "C" fn number_coerce_non_plain(value: f64) -> f64 {
     let jsval = JSValue::from_bits(value.to_bits());
 
     if jsval.is_undefined() {

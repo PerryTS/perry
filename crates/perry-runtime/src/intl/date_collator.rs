@@ -1645,31 +1645,31 @@ pub(super) fn resolve_collator_options(options: &crate::gc::RuntimeHandle<'_>) -
     if js.is_null() {
         throw_type_error("Cannot convert undefined or null to object");
     }
-    collator_enum_option((options.get_nanbox_f64()), "usage", &["sort", "search"]);
+    collator_enum_option(options.get_nanbox_f64(), "usage", &["sort", "search"]);
     collator_enum_option(
-        (options.get_nanbox_f64()),
+        options.get_nanbox_f64(),
         "localeMatcher",
         &["lookup", "best fit"],
     );
     // `collation` (string, no enum), `numeric` / `ignorePunctuation` (boolean via
     // ToBoolean) never throw for an in-range value; read them so the GetOption
     // getter sequence still matches, but coerce a Symbol `collation` per ToString.
-    let _ = get_option_string((options.get_nanbox_f64()), "collation");
+    let _ = get_option_string(options.get_nanbox_f64(), "collation");
     // GetOption(options, "numeric", boolean): read once here and handed back, so
     // the comparison never re-reads the getter.
     let numeric =
-        crate::value::js_is_truthy(get_option_value((options.get_nanbox_f64()), "numeric")) != 0;
+        crate::value::js_is_truthy(get_option_value(options.get_nanbox_f64(), "numeric")) != 0;
     collator_enum_option(
-        (options.get_nanbox_f64()),
+        options.get_nanbox_f64(),
         "caseFirst",
         &["upper", "lower", "false"],
     );
     collator_enum_option(
-        (options.get_nanbox_f64()),
+        options.get_nanbox_f64(),
         "sensitivity",
         &["base", "accent", "case", "variant"],
     );
-    let _ = get_option_value((options.get_nanbox_f64()), "ignorePunctuation");
+    let _ = get_option_value(options.get_nanbox_f64(), "ignorePunctuation");
     numeric
 }
 

@@ -68,5 +68,5 @@ pub(super) struct ModuleArtifactsCtx<'a> {
     /// Keys global to `(class id, packed GcHeader word)` for inline `new`.
     pub class_header_image_inits: &'a HashMap<String, (u32, u64, u32)>,
     pub imported_class_stubs: &'a [perry_hir::Class],
-    pub cross_module: &'a CrossModuleCtx,
+    pub cross_module: &'a CrossModuleCtx<'a>,
 }

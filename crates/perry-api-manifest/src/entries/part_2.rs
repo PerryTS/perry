@@ -469,7 +469,7 @@ pub(crate) const API_MANIFEST_PART_2: &[ApiEntry] = &[
         "brotliDecompressSync",
         false,
         None,
-        &[p_any("p0"), ZLIB_OPTIONS_PARAM],
+        &[p_any("buffer"), ZLIB_OPTIONS_PARAM],
         TypeSpec::Buffer,
     ),
     method_sig(

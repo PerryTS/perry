@@ -59,6 +59,7 @@ must still establish the new margin.
 | `binary-size` |  |  | yes |
 | `parity` |  |  | yes |
 | `node-suite-guard` |  |  | yes |
+| `test262` |  |  | yes |
 | `compile-smoke` |  |  | yes |
 | `native-abi-evidence-packet` |  |  | yes |
 | `drizzle-mysql-smoke` |  |  | yes |
@@ -262,6 +263,13 @@ runs inside each shard (it is shard-safe by design); the threshold minimums and 
 per-module matrix trend run once in `parity-aggregate` over the merged report
 (`scripts/parity_report_merge.py`, which refuses a missing shard rather than
 shrinking the suite).
+
+`test262` runs every Test262 case (`scripts/test262_subset.py --full-corpus`) as
+16 shards at the SHA in `test-compat/test262/pinned-sha.txt`. `test262-aggregate`
+merges them with `scripts/test262_ratchet.py`, prints the pass rate over the
+whole corpus in the run summary, and fails on a new failure, on a known failure that now passes
+(remove it from `test-compat/test262/baseline.json`), or on a pass count below
+the baseline. Re-baseline with `scripts/test262_ratchet.py --update <reports>`.
 
 
 ## Workflow suite selection

@@ -593,6 +593,7 @@ fn lane_store(
     if metadata.is_empty() {
         ctx.block().store(ty, value, ptr);
     } else {
+        // GC_STORE_AUDIT(POINTER_FREE): typed-array numeric lane, never a managed pointer.
         ctx.block()
             .emit_raw(format!("store {ty} {value}, ptr {ptr}{metadata}"));
     }

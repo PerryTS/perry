@@ -8,10 +8,13 @@ use std::sync::{
     Arc,
 };
 
-static READY: AtomicBool = AtomicBool::new(false);
-static CALLS: AtomicUsize = AtomicUsize::new(0);
-static DROPS: AtomicUsize = AtomicUsize::new(0);
-static FAIL: AtomicBool = AtomicBool::new(false);
+// The controlled host callbacks run on the test's owning thread.
+per_test_global! {
+    static READY: AtomicBool = AtomicBool::new(false);
+    static CALLS: AtomicUsize = AtomicUsize::new(0);
+    static DROPS: AtomicUsize = AtomicUsize::new(0);
+    static FAIL: AtomicBool = AtomicBool::new(false);
+}
 
 mod unused {
     #![allow(dead_code)]

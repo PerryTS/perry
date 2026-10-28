@@ -60,5 +60,18 @@
     "source_sha256": {
       "crates/perry-runtime/src/tls_os_pool/tests.rs": "62326d71ae8da425342d9cf6011ceb42f199ac2b2c07e392d38169ab5e7febbe"
     }
+  },
+  "crates/perry-runtime/src/exception.rs::ON": {
+    "claim": "Immutable OnceLock diagnostic flag: initialized once from PERRY_TRACE_THROW and only read by trace_throw_enabled; no reset or assertion depends on a mutable shared counter. Throw state itself is thread-local.",
+    "source_sha256": {
+      "crates/perry-runtime/src/exception.rs": "e4a2ab99bf43e37d7ad9eb37bfb0144a165d7ca7f28d76bb13484fb81fb5ee17"
+    }
+  },
+  "crates/perry-runtime/src/tls/roots/macos.rs::API": {
+    "claim": "Immutable OnceLock framework dispatch table: successful initialization retains both framework images permanently, and all stored CFString keys are immutable. Queries allocate separate inventory/trust objects; tests copy the table to override callbacks without mutating the cached API.",
+    "source_sha256": {
+      "crates/perry-runtime/src/tls/roots/macos.rs": "8054ebf28b4fe4ca12686d4d38cf0d1813f9a5123575cb503f3455ea319b44ce",
+      "crates/perry-runtime/src/tls/roots/macos_tests.rs": "b6ba6b5914f2955aa87fd57ae09b2c543ade4a19c0516eebdeeacf9faa577be2"
+    }
   }
 }

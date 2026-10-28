@@ -201,7 +201,9 @@ unsafe fn property_of(handle: Handle, name: &str) -> Option<f64> {
                     None | Some("") => ":memory:".to_string(),
                     Some(p) => p.to_string(),
                 };
-                bits(JsValue::from_string_ptr(alloc_string(&path).as_raw() as *mut StringHeader))
+                bits(JsValue::from_string_ptr(
+                    alloc_string(&path).as_raw() as *mut StringHeader
+                ))
             }
             // The handle resolved, so the database is open; `close()` drops it.
             "open" => bits(JsValue::from_bool(true)),
@@ -225,7 +227,7 @@ unsafe fn property_of(handle: Handle, name: &str) -> Option<f64> {
         return Some(match name {
             // Already stored: this is the statement's own SQL text.
             "source" => bits(JsValue::from_string_ptr(
-                alloc_string(&stmt.sql).as_raw() as *mut StringHeader,
+                alloc_string(&stmt.sql).as_raw() as *mut StringHeader
             )),
             // `reader` is "this statement returns rows"; `readonly` is "it
             // writes nothing". Both come from a fresh prepare, since the
