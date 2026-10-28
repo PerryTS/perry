@@ -398,6 +398,25 @@ fn numeric_string_region_admits_conditional_scalar_updates_and_keeps_all_exits()
     assert!(ir.contains("indexed.string.storage"), "{ir}");
     assert!(ir.contains("indexed.owner.if.end"), "{ir}");
     assert!(ir.contains("indexed.owner.slow"), "{ir}");
+    let first_poll = ir
+        .find("call void @js_gc_loop_safepoint()")
+        .expect("pending GC work must be serviced before string admission");
+    let storage = ir.find("indexed.string.heap").unwrap();
+    assert!(
+        first_poll < storage,
+        "the entry poll must precede raw string storage admission: {ir}"
+    );
+    let fast = ir
+        .split("\nindexed.owner.fast.")
+        .nth(1)
+        .unwrap()
+        .split("\nindexed.owner.exit.")
+        .next()
+        .unwrap();
+    assert!(
+        !fast.contains("call "),
+        "raw storage stays call-free: {fast}"
+    );
     assert!(
         ir.contains("PERRY_AGENT_PTRS"),
         "prototype authority must dominate admission: {ir}"

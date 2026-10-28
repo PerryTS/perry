@@ -1447,6 +1447,16 @@ pub(super) fn lower(
     {
         return Ok(false);
     }
+    if !p.strings.is_empty() {
+        // The original condition/body can drain work deferred by a preceding
+        // allocation even though this admitted region cannot allocate. Keep
+        // that entry safepoint before loading any owner or raw string bytes;
+        // removing it can retain the previous allocation cohort through the
+        // next allocating operation. The ordinary effect/arming checks still
+        // decide whether the poll exists and whether it calls the collector.
+        let controls: Vec<_> = condition.into_iter().chain(update).collect();
+        super::loops::emit_gc_loop_safepoint(ctx, body, &controls);
+    }
     let slow_idx = ctx.new_block("indexed.owner.slow");
     let slow_l = ctx.block_label(slow_idx);
     let done_idx = ctx.new_block("indexed.owner.done");
