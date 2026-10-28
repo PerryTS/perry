@@ -43,8 +43,10 @@ def main() -> int:
     if target == "wasm32-wasip1":
         # The one wasip1 archive also carries perry-stdlib and the Node module
         # crates; the perry-stdlib feature list lives in perry-runtime-static's
-        # Cargo.toml.
-        features += ",perry-runtime-static/wasi-node-modules"
+        # Cargo.toml. `wasm-discard` adds the allocator that hands freed pages
+        # to a host's `perry_host.discard_pages`; a program imports it only
+        # when compiled with PERRY_WASM_DISCARD=1.
+        features += ",perry-runtime-static/wasi-node-modules,perry-runtime/wasm-discard"
     if args.gc_instruments:
         features += ",perry-runtime/gc-instruments"
     if args.image_selftest:
