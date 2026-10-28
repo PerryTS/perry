@@ -220,11 +220,25 @@ pub unsafe extern "C" fn js_register_function_name(
         return;
     }
     let bytes = std::slice::from_raw_parts(name_ptr, name_len as usize);
+    register_function_name_bytes(func_ptr as usize, bytes);
+}
+
+/// Copy a name into its canonical owner and report whether publication
+/// succeeded. An immediate consumer can use this result without looking up
+/// the same entry again. This says nothing about UTF-8; reads keep their
+/// existing validation and image-name precedence.
+pub(crate) fn register_function_name_bytes(func_ptr: usize, bytes: &[u8]) -> bool {
+    if func_ptr == 0 || bytes.is_empty() {
+        return false;
+    }
     if eager_fn_metadata_validation() && std::str::from_utf8(bytes).is_err() {
-        return;
+        return false;
     }
     if let Ok(mut overrides) = function_name_overrides().lock() {
-        overrides.insert(func_ptr as usize, std::sync::Arc::from(bytes));
+        overrides.insert(func_ptr, std::sync::Arc::from(bytes));
+        true
+    } else {
+        false
     }
 }
 
@@ -1372,5 +1386,35 @@ mod compressed_source_tests {
                 if versioned { 16 } else { 0 }
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod name_publication_tests {
+    use super::*;
+
+    #[test]
+    fn publication_reports_success_and_copies_the_exact_bytes() {
+        let key = publication_reports_success_and_copies_the_exact_bytes as *const () as usize;
+        let mut bytes = b"published-name".to_vec();
+        assert!(register_function_name_bytes(key, &bytes));
+        bytes.fill(b'x');
+        assert_eq!(
+            registered_name_string(key).as_deref(),
+            Some("published-name")
+        );
+        assert!(register_function_name_bytes(key, b"replacement"));
+        assert_eq!(registered_name_string(key).as_deref(), Some("replacement"));
+    }
+
+    #[test]
+    fn invalid_or_empty_publication_cannot_prove_a_reflected_name() {
+        let key = invalid_or_empty_publication_cannot_prove_a_reflected_name as *const () as usize;
+        assert!(!register_function_name_bytes(0, b"name"));
+        assert!(!register_function_name_bytes(key, b""));
+        let _ = register_function_name_bytes(key, &[0xff]);
+        assert!(registered_name_string(key).is_none());
+        assert!(register_function_name_bytes(key, b"valid"));
+        assert_eq!(registered_name_string(key).as_deref(), Some("valid"));
     }
 }
