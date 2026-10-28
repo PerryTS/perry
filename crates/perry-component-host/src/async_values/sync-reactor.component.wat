@@ -63,15 +63,19 @@
   (instance $producer (instantiate $producer))
   (alias export $producer "bytes" (type $stream))
   (alias export $producer "make" (func $make))
-  ;; A synchronous lower can call an async function. The private producer
-  ;; returns its reader before blocking; its callback task keeps running after
-  ;; the public synchronous wrapper has returned. Distinct component instances
-  ;; avoid forbidden reentry into the factory's own instance.
-  (core func $make (canon lower (func $make)))
-  (core module $wrapper
-    (import "host" "make" (func $make (result i32)))
-    (func (export "make") (result i32) (call $make)))
-  (core instance $wrapper (instantiate $wrapper (with "host" (instance (export "make" (func $make))))))
-  (func (export "make") (result $stream) (canon lift (core func $wrapper "make")))
+  ;; Keep the producer and facade as siblings: calls through equal or
+  ;; ancestor component instances are rejected by canonical adapter validation.
+  (component $facade
+    (type $stream (stream u8))
+    (import "make" (func $make async (result $stream)))
+    (core func $make (canon lower (func $make)))
+    (core module $wrapper
+      (import "host" "make" (func $make (result i32)))
+      (func (export "make") (result i32) (call $make)))
+    (core instance $wrapper (instantiate $wrapper (with "host" (instance (export "make" (func $make))))))
+    (func (export "make") (result $stream) (canon lift (core func $wrapper "make"))))
+  (instance $facade (instantiate $facade (with "make" (func $make))))
+  (alias export $facade "make" (func $public-make))
+  (export "make" (func $public-make))
   (alias export $producer "finished" (func $finished))
   (export "finished" (func $finished)))
