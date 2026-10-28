@@ -1,0 +1,2 @@
+Fix every `--target wasip1` and `--target wasi` compile panicking with `runtime_abi.tsv: bad return in "js_zlib_brotli_quality\ti32\tf64"`.
+The wasm32 runtime ABI table listed the new `js_zlib_brotli_quality` with an `i32` return, which the table reader does not accept (it expects `i32s` or `i32u`), and the table is parsed on every wasm compile. The table is regenerated with `scripts/runtime_abi_check.py --emit-wasm-abi`, which writes `i32s`.
