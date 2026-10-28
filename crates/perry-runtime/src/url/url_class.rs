@@ -498,23 +498,6 @@ pub extern "C" fn js_url_set_href(url: *mut ObjectHeader, value: f64) {
     }
 }
 
-unsafe fn is_gc_object_header(obj: *mut ObjectHeader) -> bool {
-    if obj.is_null() || !crate::object::is_valid_obj_ptr(obj as *const u8) {
-        return false;
-    }
-    let gc_header = (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    (*gc_header).obj_type == crate::gc::GC_TYPE_OBJECT
-}
-
-pub(crate) fn is_url_object_shape(url: *mut ObjectHeader) -> bool {
-    if url.is_null() {
-        return false;
-    }
-    unsafe {
-        is_gc_object_header(url) && (*url).class_id == crate::object::runtime_layouts::URL_CLASS_ID
-    }
-}
-
 /// #3880: If `value` (a NaN-boxed JSValue) is a WHATWG `URL` instance,
 /// return its `href` string (NaN-boxed); otherwise return `undefined`.
 ///
@@ -724,3 +707,5 @@ pub extern "C" fn js_url_get_search_params(url: *mut ObjectHeader) -> f64 {
     }
     crate::object::js_object_get_field_f64(url, URL_SEARCH_PARAMS)
 }
+
+pub(crate) use crate::object::url_layout::{is_gc_object_header, is_url_object_shape};

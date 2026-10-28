@@ -26,7 +26,7 @@ use std::fmt::Write as _;
 pub(crate) const SPECIFIER: &str = "perry:cjs";
 
 /// The import every wrapped module carries first.
-pub(super) const SUPPORT_IMPORT: &str = "import { cache as __perry_cjs_cache, main as __perry_cjs_main, extensions as __perry_cjs_extensions, setPending as __perry_cjs_set_pending, takePending as __perry_cjs_take_pending, link as __perry_cjs_link, requireComputed as __perry_cjs_require_computed, requireError as __perry_cjs_require_error } from 'perry:cjs';";
+pub(super) const SUPPORT_IMPORT: &str = "import { cache as __perry_cjs_cache, main as __perry_cjs_main, extensions as __perry_cjs_extensions, setPending as __perry_cjs_set_pending, takePending as __perry_cjs_take_pending, link as __perry_cjs_link, requireComputed as __perry_cjs_require_computed, requireError as __perry_cjs_require_error, reload as __perry_cjs_reload } from 'perry:cjs';";
 
 /// The support module's source for a graph whose CommonJS modules are
 /// `paths` (canonical source paths, as the wrapper spells its cache key).
@@ -54,10 +54,16 @@ pub(crate) fn source(paths: &[String], entry_is_cjs: bool) -> String {
     let base_path = serde_json::to_string(paths.first().map_or("/", String::as_str))
         .expect("path is JSON encodable");
     format!(
-        r#"import {{ createRequire as __perry_cjs_support_create_require, isBuiltin as __perry_cjs_support_is_builtin }} from 'node:module';
+        r#"import {{ createRequire as __perry_cjs_support_create_require }} from 'node:module';
 export const cache = __perry_declared_keys({keys});
 export const main = {main};
-export const extensions = __perry_cjs_install(cache, main);
+// The runtime's `Module._cache`, `process.mainModule` and
+// `require.extensions` exist only for a program that can reach them (not
+// closed): a closed program reads none of them by census.
+export let extensions;
+if (__perry_cjs_open()) {{
+    extensions = __perry_cjs_install(cache, main);
+}}
 let pendingParent;
 export function setPending(record) {{
     pendingParent = record;
@@ -68,9 +74,34 @@ export function takePending() {{
     return record;
 }}
 let base;
+// A static edge whose target was evaluated and then deleted from the cache
+// re-runs it, as Node does, with the requiring module as its parent (the
+// handoff its record reads). One loader for the program: the path is
+// absolute. One body, so the edges of every module share it (the facts solve
+// it once). The edge links the new record: it reads the cache by its literal
+// path, a declared slot. A read here by the parameter is a computed key that
+// reaches `Object.prototype` (its `constructor`), and the link would store
+// the parent on it.
+let reloader;
+export function reload(path, parent) {{
+    if (__perry_cjs_open()) {{
+        if (reloader === undefined) reloader = __perry_cjs_support_create_require({base_path});
+        pendingParent = parent;
+        try {{ return reloader(path); }} finally {{ pendingParent = undefined; }}
+    }} else {{
+        throw requireError('error', 'ERR_PERRY_CJS_CLOSED', 'a closed program has no CommonJS loader');
+    }}
+}}
+// A literal builtin `require` is a static native binding (#13296); only a
+// computed specifier reaches this loader, and only a program that is not
+// closed has one. A closed program links no `createRequire`.
 export function builtin(specifier) {{
-    if (base === undefined) base = __perry_cjs_support_create_require({base_path});
-    return base(specifier);
+    if (__perry_cjs_open()) {{
+        if (base === undefined) base = __perry_cjs_support_create_require({base_path});
+        return base(specifier);
+    }} else {{
+        throw requireError('error', 'MODULE_NOT_FOUND', "Cannot find module '" + specifier + "'");
+    }}
 }}
 // Node's updateChildren: a required child is linked once to its first parent
 // and appears once in each requiring module's children.
@@ -83,10 +114,14 @@ export function link(module, child) {{
 // through the requiring module's own loader. (A wrapper's static cases do the
 // same with their literal path, so each reads its own cache slot.)
 function refresh(path, value, reloader) {{
-    const cached = cache[path];
-    if (cached !== undefined) return cached.exports;
-    if (!__perry_has_path_module(path)) return value;
-    return reloader()(path);
+    if (__perry_cjs_open()) {{
+        const cached = cache[path];
+        if (cached !== undefined) return cached.exports;
+        if (!__perry_has_path_module(path)) return value;
+        return reloader()(path);
+    }} else {{
+        return value;
+    }}
 }}
 export function requireError(kind, code, message) {{
     const err = kind === 'type' ? new TypeError(message) : new Error(message);
@@ -94,11 +129,13 @@ export function requireError(kind, code, message) {{
     return err;
 }}
 export function requireComputed(specifier, dir, reloader) {{
+    // A closed program has no computed require (design CJS_LINK §2.5).
+    if (__perry_cjs_open()) {{
     // Builtins not hoisted as static imports resolve through createRequire,
     // which calls js_create_native_module_namespace, as Node's
     // require("process") does. The original spelling is kept: prefix-only
     // builtins are packages when requested without `node:` (#10410).
-    if (__perry_cjs_support_is_builtin(specifier)) return builtin(specifier);
+    if (__perry_is_builtin(specifier)) return builtin(specifier);
     // Native addons resolve through the same authenticated manifest and cache
     // as createRequire and process.dlopen, including computed paths.
     if (specifier.slice(-5) === '.node') return reloader()(specifier);
@@ -131,6 +168,9 @@ export function requireComputed(specifier, dir, reloader) {{
     // A computed bare platform package can name a manifest-listed addon
     // through package.json main, without a .node suffix in the request.
     return reloader()(specifier);
+    }} else {{
+        throw requireError('error', 'MODULE_NOT_FOUND', "Cannot find module '" + specifier + "'");
+    }}
 }}
 "#
     )

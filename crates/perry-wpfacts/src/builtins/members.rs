@@ -541,7 +541,7 @@ fn ns_statics(ns: BuiltinNs) -> Option<&'static [(&'static str, Mem)]> {
             ("parseInt", FN),
         ],
         BuiltinNs::String => &[("fromCharCode", FN), ("fromCodePoint", FN), ("raw", FN)],
-        BuiltinNs::Boolean | BuiltinNs::Function => &[],
+        BuiltinNs::Boolean | BuiltinNs::Function | BuiltinNs::ObjectProtoMethod => &[],
         // Map/WeakMap and Set/WeakSet.
         BuiltinNs::Map => &[("groupBy", FN), ("@@__perry_wk_species", Mem::Ctor)],
         BuiltinNs::Set => &[("@@__perry_wk_species", Mem::Ctor)],
@@ -559,9 +559,48 @@ fn ns_statics(ns: BuiltinNs) -> Option<&'static [(&'static str, Mem)]> {
 /// namespace is not described (every name may be a member).
 pub(super) fn ns_member(ns: BuiltinNs, name: &str) -> Option<Option<Mem>> {
     let statics = ns_statics(ns)?;
-    let chain = match ns {
-        BuiltinNs::Math | BuiltinNs::Json | BuiltinNs::Reflect => Family::Object,
+    Some(find(statics, name).or_else(|| member(ns_chain(ns), name)))
+}
+
+/// The chain of builtin namespace object `ns`: `Function.prototype` for a
+/// function (a constructor, `require`, an `Object.prototype` method),
+/// `Object.prototype` for a namespace object (`Math`, `JSON`, `Reflect`,
+/// `console`, `process`, the global object).
+pub(super) fn ns_chain(ns: BuiltinNs) -> Family {
+    match ns {
+        BuiltinNs::Math
+        | BuiltinNs::Json
+        | BuiltinNs::Reflect
+        | BuiltinNs::Console
+        | BuiltinNs::GlobalThis
+        | BuiltinNs::Process => Family::Object,
         _ => Family::Function,
+    }
+}
+
+/// What a key that may name any member reads on the family's chain
+/// (`Object.prototype` included): the kinds of its data members, and
+/// whether its own prototype has a function member (`Object.prototype`'s
+/// methods, its `constructor` and `__proto__` are on every chain).
+pub(super) fn any_member(fam: Family) -> (bool, u16) {
+    let own: &[(&str, Mem)] = match fam {
+        Family::Object => &[],
+        Family::Function => FUNCTION,
+        Family::Array => ARRAY,
+        Family::Str => STRING,
+        Family::Num => NUMBER,
+        Family::Bool => BOOLEAN,
+        Family::Sym => SYMBOL,
+        Family::BigInt => BIGINT,
+        Family::Collection => COLLECTION,
+        Family::Iterator => ITERATOR,
+        Family::Promise => PROMISE,
+        Family::Error => ERROR,
+        Family::Box | Family::Wrapper | Family::Opaque => return (true, prim::ALL),
     };
-    Some(find(statics, name).or_else(|| member(chain, name)))
+    let prims = own.iter().fold(0, |p, (_, m)| match m {
+        Mem::Prim(k) => p | k,
+        _ => p,
+    });
+    (own.iter().any(|(_, m)| *m == Mem::Fn), prims)
 }

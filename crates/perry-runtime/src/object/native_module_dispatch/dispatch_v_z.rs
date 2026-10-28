@@ -206,7 +206,7 @@ pub(crate) unsafe fn nm_dispatch_wasi(ctx: &NmCtx, module_name: &str, method_nam
         typed_kind
     );
     match (module_name, method_name) {
-        ("wasi", "WASI") => crate::wasi::js_wasi_constructor_call(arg(0)),
+        ("wasi", "WASI") => crate::wasi_hook_slots::js_wasi_constructor_call(arg(0)),
 
         // ── net module legacy/internal helpers ──
         _ => f64::from_bits(JSValue::undefined().bits()),

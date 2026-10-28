@@ -207,7 +207,7 @@ pub unsafe extern "C-unwind" fn js_class_value_super_construct_site(
     }
     // Reified builtins have a Construct entry distinct from their Call entry
     // (Map/Set deliberately throw on Call). Preserve the current newTarget.
-    if crate::proxy::js_proxy_is_proxy(parent) != 0
+    if crate::proxy_hooks::proxy_is_proxy(parent) != 0
         || crate::object::class_registry::identify_global_builtin_constructor(parent).is_some()
     {
         let scope = crate::gc::RuntimeHandleScope::new();

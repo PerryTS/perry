@@ -344,7 +344,7 @@ fn emit_get(
 
 /// The header guard excludes shared owners. Read one ordinary lane of the
 /// exact element width; shared storage uses the atomic runtime arm.
-pub(super) fn emit_element(blk: &mut crate::block::LlBlock, ptr: &str, kind: u8) -> String {
+pub(crate) fn emit_element(blk: &mut crate::block::LlBlock, ptr: &str, kind: u8) -> String {
     let ty = match kind {
         0 | 1 | 8 => I8,
         2 | 3 | 11 => I16,

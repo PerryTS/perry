@@ -175,7 +175,7 @@ pub extern "C" fn js_promise_resolved(value: f64) -> *mut Promise {
         // When lifecycle hooks are active, go through the real resolve path so
         // `settled`/`before`/`after` fire (instead of poking the state field).
         // A `settled` hook can collect, so the promise is reread after it.
-        if crate::v8::promise_hooks_active() || crate::async_hooks::promise_hooks_active() {
+        if crate::v8::promise_hooks_active() || crate::async_hook_slots::promise_hooks_active() {
             let scope = crate::gc::RuntimeHandleScope::new();
             let promise = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(promise as i64));
             js_promise_resolve(
@@ -300,7 +300,7 @@ pub extern "C" fn js_promise_resolved_then(
     // The primitive fast path below bypasses `js_promise_new`/`then`, so it
     // would never fire `v8.promiseHooks` (#3139). When hooks are active, route
     // through the real resolve+then path instead.
-    if crate::v8::promise_hooks_active() || crate::async_hooks::promise_hooks_active() {
+    if crate::v8::promise_hooks_active() || crate::async_hook_slots::promise_hooks_active() {
         bump(&MT_FAST_PATH_MISS);
         let p1 = js_promise_resolved(value);
         return js_promise_then(p1, on_fulfilled, on_rejected);
@@ -313,7 +313,7 @@ pub extern "C" fn js_promise_resolved_then(
         // drain via the `Task::Inline` arm.
         let next = js_promise_new();
         TASK_QUEUE.with(|q| {
-            q.borrow_mut().push_back(Task::Inline(
+            q.borrow_mut().enqueue_promise_job(Task::Inline(
                 on_fulfilled,
                 value,
                 next,
@@ -516,7 +516,7 @@ pub extern "C" fn js_async_step_chain(value: f64, step_closure: ClosurePtr) -> *
     let can_reuse = !trap.trap_next.is_null() && trap.current_step == step_closure as usize;
     let trap_next = trap.trap_next;
 
-    let async_hooks_active = crate::async_hooks::promise_hooks_active();
+    let async_hooks_active = crate::async_hook_slots::promise_hooks_active();
     let (next, queued_value, is_error, direct_trigger_async_id) = if is_definitely_primitive(value)
     {
         // Primitive value: enqueue Task::AsyncStep directly.
@@ -677,9 +677,9 @@ pub extern "C" fn js_async_step_chain(value: f64, step_closure: ClosurePtr) -> *
         let trigger_async_id = if direct_trigger_async_id != 0 {
             direct_trigger_async_id
         } else {
-            crate::async_hooks::execution_async_id_u64()
+            crate::async_hook_slots::execution_async_id_u64()
         };
-        let ids = crate::async_hooks::init_resource_with_trigger(
+        let ids = crate::async_hook_slots::init_resource_with_trigger(
             "PROMISE",
             resource,
             false,
@@ -699,7 +699,7 @@ pub extern "C" fn js_async_step_chain(value: f64, step_closure: ClosurePtr) -> *
     };
     crate::r#box::retain_async_box_activation(trap.box_activation);
     TASK_QUEUE.with(|q| {
-        q.borrow_mut().push_back(Task::AsyncStep(
+        q.borrow_mut().enqueue_promise_job(Task::AsyncStep(
             rooted_step(),
             queued_value_handle.get_nanbox_f64(),
             next,

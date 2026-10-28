@@ -122,7 +122,8 @@ unsafe fn ordinary_receiver(addr: usize) -> Option<*const ObjectHeader> {
         || (*obj).class_id == super::native_module::NATIVE_MODULE_CLASS_ID
         || super::class_registry::is_class_object_ptr(obj.cast())
         || crate::array::object_prototype_addr_matches(addr)
-        || ((*obj).class_id == 0 && crate::url::is_url_object_shape(obj as *mut ObjectHeader))
+        || ((*obj).class_id == 0
+            && crate::object::url_layout::is_url_object_shape(obj as *mut ObjectHeader))
     {
         return None;
     }

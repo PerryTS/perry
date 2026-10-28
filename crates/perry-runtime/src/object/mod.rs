@@ -217,6 +217,7 @@ pub(crate) mod native_call_method;
 pub(crate) mod native_get;
 // `pub(crate)` since #340/#341: a family that owns its prototypes outside this
 // module (`timer.rs`) installs their method names and `.length` through here.
+pub(crate) mod native_method_install;
 pub(crate) mod native_module;
 mod nm_namespace_hooks;
 pub(crate) use native_module::class_ref_id;
@@ -270,6 +271,7 @@ pub(crate) mod shape_carriers;
 mod class_family_birth;
 mod function_family_birth;
 pub mod layout_desc;
+pub(crate) mod native_instance_layout;
 pub(crate) use shapes::layout_probe;
 #[cfg(test)]
 mod layout_desc_tests;
@@ -1512,7 +1514,6 @@ pub fn scan_object_cache_roots(mark: &mut dyn FnMut(f64)) {
 }
 
 pub fn scan_object_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    crate::event_target::state::scan_roots(visitor);
     // Object-owned weak layout caches: rewrite moves without retaining keys.
     for slot in [
         &HTTP_METHODS_CACHE,
@@ -1921,6 +1922,10 @@ mod record_layout_tests;
 
 #[cfg(test)]
 mod address_free_slots_tests;
+
+pub(crate) mod property_ops;
+
+pub(crate) mod url_layout;
 
 #[cfg(any(test, target_os = "wasi"))]
 pub(crate) use call_method_depth::call_method_depth_restore_depth;

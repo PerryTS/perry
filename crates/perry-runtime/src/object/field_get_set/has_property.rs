@@ -345,8 +345,8 @@ fn object_has_property_generic(obj: f64, key: f64) -> f64 {
     // deref the fake pointer (or call symbol helpers that do) and segfault. Route
     // `key in proxy` through the proxy `has` trap and ToBoolean-coerce, matching
     // `Reflect.has`.
-    if crate::proxy::js_proxy_is_proxy(obj) != 0 {
-        let r = crate::proxy::js_proxy_has(obj, key);
+    if crate::proxy_hooks::proxy_is_proxy(obj) != 0 {
+        let r = crate::proxy_hooks::proxy_has(obj, key);
         return if crate::value::js_is_truthy(r) != 0 {
             nanbox_true
         } else {
@@ -611,8 +611,8 @@ fn object_has_property_generic(obj: f64, key: f64) -> f64 {
         return nanbox_false;
     }
     if obj_addr >= 0x10000 {
-        if crate::typedarray::lookup_typed_array_kind(obj_addr as usize).is_some() {
-            let ta = obj_addr as *const crate::typedarray::TypedArrayHeader;
+        if crate::typedarray_hook_slots::lookup_typed_array_kind(obj_addr as usize).is_some() {
+            let ta = obj_addr as *const crate::typedarray_hook_slots::TypedArrayHeader;
             if key_val.is_any_string() {
                 let key_str =
                     crate::value::js_get_string_pointer_unified(key) as *const crate::StringHeader;
@@ -750,7 +750,7 @@ fn object_has_property_generic(obj: f64, key: f64) -> f64 {
                         as *const crate::StringHeader;
                     if unsafe {
                         crate::typedarray_props::typed_array_has_own_property(
-                            obj_addr as *const crate::typedarray::TypedArrayHeader,
+                            obj_addr as *const crate::typedarray_hook_slots::TypedArrayHeader,
                             key_str,
                         )
                     } {
@@ -869,7 +869,7 @@ fn object_has_property_generic(obj: f64, key: f64) -> f64 {
                     super::super::prototype_chain::object_static_prototype(obj_ptr as usize)
                         .filter(|&b| (b >> 48) == 0x7FFD)
                         .map(f64::from_bits)
-                        .filter(|&v| crate::proxy::js_proxy_is_proxy(v) != 0);
+                        .filter(|&v| crate::proxy_hooks::proxy_is_proxy(v) != 0);
                 // Numeric key: extract the index. Accept both NaN-boxed i32
                 // and plain f64 (e.g. literal `1`) provided it's a
                 // non-negative integer in range.
@@ -919,7 +919,7 @@ fn object_has_property_generic(obj: f64, key: f64) -> f64 {
                                 return nanbox_true;
                             }
                             if let Some(proxy) = proxy_proto {
-                                return if crate::value::js_is_truthy(crate::proxy::js_proxy_has(
+                                return if crate::value::js_is_truthy(crate::proxy_hooks::proxy_has(
                                     proxy, key,
                                 )) != 0
                                 {
@@ -1194,10 +1194,10 @@ unsafe fn ordinary_has_property(
                 // the rest of the chain.
                 if top16 == 0x7FFD {
                     let proto_val = f64::from_bits(b);
-                    if crate::proxy::js_proxy_is_proxy(proto_val) != 0 {
+                    if crate::proxy_hooks::proxy_is_proxy(proto_val) != 0 {
                         let key_val =
                             f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
-                        let result = crate::proxy::js_proxy_has(proto_val, key_val);
+                        let result = crate::proxy_hooks::proxy_has(proto_val, key_val);
                         return crate::value::js_is_truthy(result) != 0;
                     }
                 }
@@ -1349,9 +1349,9 @@ pub(crate) unsafe fn prototype_value_has_property(
         return false;
     }
     let proto_val = f64::from_bits(proto_bits);
-    if crate::proxy::js_proxy_is_proxy(proto_val) != 0 {
+    if crate::proxy_hooks::proxy_is_proxy(proto_val) != 0 {
         let key_val = f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
-        return crate::value::js_is_truthy(crate::proxy::js_proxy_has(proto_val, key_val)) != 0;
+        return crate::value::js_is_truthy(crate::proxy_hooks::proxy_has(proto_val, key_val)) != 0;
     }
     let top16 = proto_bits >> 48;
     let proto_ptr = if top16 == 0x7FFD {

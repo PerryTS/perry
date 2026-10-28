@@ -1820,6 +1820,10 @@ pub(super) fn image_layouts() -> impl Iterator<Item = *mut PerryLayoutDesc> {
     }
 }
 
+#[cfg(any(test, target_family = "wasm"))]
+#[path = "layout_desc/enumeration.rs"]
+mod enumeration;
+
 fn descriptor_index(desc: *const PerryLayoutDesc) -> Option<u32> {
     let (start, end) = layout_bounds();
     let at = desc as usize;
@@ -1883,6 +1887,9 @@ mod windows_atom_bounds_tests {
     }
 }
 
+#[cfg(test)]
+#[path = "layout_section_tests.rs"]
+mod layout_section_tests;
 #[cfg(all(feature = "wasm-image-selftest", target_family = "wasm"))]
 #[path = "layout_desc/wasm_program_image_checks.rs"]
 mod wasm_program_image_checks;

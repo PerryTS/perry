@@ -1,5 +1,5 @@
 //! Private GC arrays for per-Promise combinator and reaction records.
-//! The metadata edge owns a fixed three-slot bag; each slot owns one flat list.
+//! The metadata edge owns a fixed four-slot bag; each slot owns one flat list.
 use super::*;
 
 pub(super) const ALL_STATES: u32 = 0;
@@ -26,11 +26,14 @@ pub(super) unsafe fn state_list(
 }
 
 pub(super) unsafe fn push_record(promise: *mut Promise, slot: u32, words: &[f64]) {
+    if slot != 3 {
+        super::operation_owner::observe(promise);
+    }
     let _no_move = crate::gc::GcSuppressScope::new();
     let meta = crate::object::object_meta_ensure_for_cell(promise as usize)
         .expect("Promise metadata edge");
     if (*meta).owned_state == 0 {
-        let bag = crate::array::js_array_alloc_with_length(3);
+        let bag = crate::array::js_array_alloc_with_length(4);
         crate::gc::runtime_store_gc_heap_word_slot(
             meta as usize,
             std::ptr::addr_of_mut!((*meta).owned_state) as usize,

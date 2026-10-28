@@ -138,8 +138,7 @@ fn resolve_disk(specifier: &str, parent: &Path) -> Option<PathBuf> {
 
 fn decode_path(value: &str) -> PathBuf {
     if value.starts_with("file:") {
-        let decoded =
-            crate::url::node_compat::js_url_file_url_to_path(string_value(value), undefined());
+        let decoded = crate::url_hooks::url_file_url_to_path(string_value(value), undefined());
         PathBuf::from(value_to_string(decoded, "parent"))
     } else {
         PathBuf::from(value)
@@ -185,10 +184,9 @@ pub extern "C" fn js_import_meta_resolve(specifier: f64, parent: f64, fallback: 
     } else {
         path.strip_prefix(r"\\?\").unwrap_or(&path).to_owned()
     };
-    string_value(&crate::url::node_compat::path_to_file_url_string(
-        &path,
-        cfg!(windows),
-    ))
+    string_value(
+        &crate::module_require::file_url_text::path_to_file_url_string(&path, cfg!(windows)),
+    )
 }
 
 extern "C" fn resolve_closure(

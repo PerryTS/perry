@@ -163,7 +163,7 @@ fn object_has_own_generic(obj_value: f64, key_value: f64) -> f64 {
         // `hasOwnProperty` through `[[GetOwnProperty]]` (a present own property
         // is one whose descriptor is not undefined) rather than dereferencing
         // the fake pointer. (Proxy crash cluster.)
-        if crate::proxy::js_proxy_is_proxy(obj_value) != 0 {
+        if crate::proxy_hooks::proxy_is_proxy(obj_value) != 0 {
             let desc = crate::proxy::js_reflect_get_own_property_descriptor(obj_value, key_value);
             return f64::from_bits(if desc.to_bits() != crate::value::TAG_UNDEFINED {
                 TAG_TRUE
@@ -462,7 +462,7 @@ unsafe fn has_own_of_non_ordinary_kind(
         .flatten()
     {
         return Some(crate::typedarray_props::typed_array_has_own_property(
-            addr as *const crate::typedarray::TypedArrayHeader,
+            addr as *const crate::typedarray_hook_slots::TypedArrayHeader,
             key_str,
         ));
     }
@@ -513,9 +513,9 @@ unsafe fn has_own_of_non_ordinary_kind(
                 .unwrap_or(false),
         );
     }
-    if buffer_like && crate::typedarray::lookup_typed_array_kind(ptr).is_some() {
+    if buffer_like && crate::typedarray_hook_slots::lookup_typed_array_kind(ptr).is_some() {
         return Some(crate::typedarray_props::typed_array_has_own_property(
-            ptr as *const crate::typedarray::TypedArrayHeader,
+            ptr as *const crate::typedarray_hook_slots::TypedArrayHeader,
             key_str,
         ));
     }
@@ -551,7 +551,7 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
         // Proxy receiver: resolve the descriptor via `[[GetOwnProperty]]` and
         // report its `enumerable` attribute (absent property → false) rather
         // than dereferencing the fake pointer. (Proxy crash cluster.)
-        if crate::proxy::js_proxy_is_proxy(obj_value) != 0 {
+        if crate::proxy_hooks::proxy_is_proxy(obj_value) != 0 {
             let desc = crate::proxy::js_reflect_get_own_property_descriptor(obj_value, key_value);
             if desc.to_bits() == crate::value::TAG_UNDEFINED {
                 return f64::from_bits(TAG_FALSE);
@@ -673,7 +673,7 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
 
         if let Some(addr) = crate::typedarray_props::typed_array_addr_from_value(obj_value) {
             let enumerable = crate::typedarray_props::typed_array_property_is_enumerable(
-                addr as *const crate::typedarray::TypedArrayHeader,
+                addr as *const crate::typedarray_hook_slots::TypedArrayHeader,
                 key_str,
             );
             return f64::from_bits(if enumerable { TAG_TRUE } else { TAG_FALSE });
@@ -723,9 +723,9 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
                     .unwrap_or(true);
                 return f64::from_bits(if enumerable { TAG_TRUE } else { TAG_FALSE });
             }
-            if crate::typedarray::lookup_typed_array_kind(ptr).is_some() {
+            if crate::typedarray_hook_slots::lookup_typed_array_kind(ptr).is_some() {
                 let enumerable = crate::typedarray_props::typed_array_property_is_enumerable(
-                    ptr as *const crate::typedarray::TypedArrayHeader,
+                    ptr as *const crate::typedarray_hook_slots::TypedArrayHeader,
                     key_str,
                 );
                 return f64::from_bits(if enumerable { TAG_TRUE } else { TAG_FALSE });

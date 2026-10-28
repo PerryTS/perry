@@ -1012,6 +1012,13 @@ pub fn run_with_parse_cache(
         cache.finish_lowering();
     }
 
+    // CommonJS closed world (`cjs_link`): one bit for the program, applied to
+    // the wrapper's escape forms before any transform, codegen or facts pass.
+    ctx.cjs_closed = super::cjs_link::program_is_closed(&ctx.native_modules);
+    for hir_module in ctx.native_modules.values_mut() {
+        super::cjs_link::resolve_open_sites(hir_module, ctx.cjs_closed)?;
+    }
+
     collect_modules::collect_declared_addons(&mut ctx, args.target.as_deref())?;
 
     // "Just works" transparency (#466 follow-up): when perry auto-preferred a
@@ -3322,6 +3329,8 @@ pub fn run_with_parse_cache(
                 });
             }
         }
+        // A CommonJS module's record binding is plumbing, not a member.
+        entries.retain(|entry| !perry_hir::is_cjs_record_export(&entry.name));
         // ECMA-262 10.4.6: a namespace's string keys are its export names
         // in code-unit order; the namespace layout is that sequence.
         entries.sort_by(|a, b| a.name.encode_utf16().cmp(b.name.encode_utf16()));
@@ -3774,7 +3783,7 @@ pub fn run_with_parse_cache(
         std::sync::Arc::new(
             ctx.native_modules
                 .iter()
-                .filter(|(_, m)| m.init_kind == perry_hir::ModuleInitKind::Deferred)
+                .filter(|(_, m)| m.init_kind != perry_hir::ModuleInitKind::Eager)
                 .map(|(_, m)| sanitize_name(&m.name))
                 .collect(),
         );
@@ -3847,6 +3856,19 @@ pub fn run_with_parse_cache(
                                 .any(|dir| p.starts_with(dir))
                 })
                 .map(|(p, m)| (p.to_string_lossy().into_owned(), sanitize_name(&m.name)))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        // A require edge runs its target's init directly; only a program that
+        // can require by path (not closed) needs the anchor of an on-demand
+        // module, and only once it looks a path up: registered lazily.
+        let lazy_path_init_modules: Vec<(String, String)> = if is_entry && !ctx.cjs_closed {
+            ctx.native_modules
+                .iter()
+                .filter(|(_, module)| module.init_kind == perry_hir::ModuleInitKind::OnDemand)
+                .map(|(p, m)| (p.to_string_lossy().into_owned(), sanitize_name(&m.name)))
+                .filter(|pair| !nextjs_path_init_modules.contains(pair))
                 .collect()
         } else {
             Vec::new()
@@ -4389,6 +4411,9 @@ pub fn run_with_parse_cache(
                     // Register all exports from the source module
                     if let Some(exports) = all_module_exports.get(&resolved_path_str) {
                         for (export_name, origin_path) in exports {
+                            if perry_hir::is_cjs_record_export(export_name) {
+                                continue;
+                            }
                             let origin_prefix = compute_module_prefix(
                                 origin_path,
                                 &ctx.project_root,
@@ -4927,6 +4952,9 @@ pub fn run_with_parse_cache(
                             };
                             namespace_imports.push(local_name.clone());
                             for (export_name, origin_path) in target_exports {
+                                if perry_hir::is_cjs_record_export(export_name) {
+                                    continue;
+                                }
                                 let origin_prefix = compute_module_prefix(
                                     origin_path,
                                     &ctx.project_root,
@@ -6209,6 +6237,7 @@ pub fn run_with_parse_cache(
                 .cloned()
                 .unwrap_or_default(),
             nextjs_path_init_modules,
+            lazy_path_init_modules,
             deferred_module_prefixes,
             module_init_deps,
             // Issue #842: signal side-effect-only dynamic-import

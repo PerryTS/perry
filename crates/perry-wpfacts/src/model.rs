@@ -91,6 +91,11 @@ pub enum BuiltinNs {
     /// constant specifier ([`Model::call_lit`]): a compiled module's path
     /// gives that module's exports; anything else is the unknown loader.
     Require,
+    /// A method of `Object.prototype` read as a value under a key that may
+    /// name any of them (`o[k]` on an object whose chain ends there): one of
+    /// `hasOwnProperty`, `valueOf`, `__defineGetter__` ... A call runs each
+    /// one's effect on its receiver (`proto_method`); none is a constructor.
+    ObjectProtoMethod,
     Other,
 }
 
@@ -287,6 +292,11 @@ pub struct Template {
     /// Classes whose constructor chain `super()` ran on this class's
     /// instances during the solve (the parent value's class tokens).
     pub parent_links: Vec<TmplId>,
+    /// A declared-keys record born with a null prototype
+    /// (`Class::declared_keys_null_proto`: `require.cache`): its prototype
+    /// stand-in has no members and no prototype, so a lookup through it ends
+    /// there and never reaches `Object.prototype`.
+    pub null_proto: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -680,9 +690,14 @@ pub enum Cons {
     Implicit { reason: u32, proto: Protocol },
     /// The node holds `Object.create` prototype arguments (E10).
     CreateProto { reason: u32 },
-    /// The node is `ProtoNode(t)`: dst ⊇ the values of `key` on each
-    /// prototype (and further up), shared by every receiver of `t`.
-    ChainUnion { key: Key, dst: NodeId },
+    /// The node is `ProtoNode(of)`: dst ⊇ the values of `key` on each
+    /// prototype (and further up), shared by every receiver of `of`.
+    ChainUnion { key: Key, dst: NodeId, of: Tok },
+    /// The node holds a value given as the prototype of an object (its
+    /// `ProtoNode` is `protos`): a builtin prototype there may be any of
+    /// them (`ObjectProto` collapses them), whose members the chain cannot
+    /// name: the chain also holds an unknown prototype.
+    ProtoGiven { protos: NodeId },
     /// The node is `ProtoNode(t)`: dst ⊇ every prototype, transitively.
     ProtoClosure { dst: NodeId },
     /// The node is the prototype closure of receiver `origin`: builtin
@@ -866,6 +881,7 @@ impl Cons {
             Cons::Implicit { .. } => "implicit",
             Cons::CreateProto { .. } => "createproto",
             Cons::ChainUnion { .. } => "chainunion",
+            Cons::ProtoGiven { .. } => "protogiven",
             Cons::ProtoClosure { .. } => "protoclosure",
             Cons::ProtoMethods { .. } => "protomethods",
             Cons::AnyAccessors { .. } => "anyaccessors",
@@ -1000,6 +1016,28 @@ pub struct FieldWriters {
     pub post: Vec<SiteId>,
 }
 
+/// Where the solve work went (PERRY_FACTS_PROFILE only): by the popped node
+/// it was spent for (or the phase outside the worklist), by rule kind
+/// (inclusive of what the rule triggers), by propagation step, and a growth
+/// line every `WorkProfile::STEP` work.
+#[derive(Default)]
+pub struct WorkProfile {
+    /// The work since `at.1` is charged to node `at.0` (`NO_NODE`: phase `at.2`).
+    pub at: (NodeId, u64, &'static str),
+    pub node: FxHashMap<NodeId, u64>,
+    pub phase: FxHashMap<&'static str, u64>,
+    /// Rule kind: (applications, work, attach replays, attach replay work).
+    pub kind: FxHashMap<&'static str, (u64, u64, u64, u64)>,
+    /// Pop charge (delta x constraints), fast copy deliveries, copy visits and
+    /// checks, `copy_to` extra.
+    pub step: [u64; 4],
+    pub next_curve: u64,
+}
+
+impl WorkProfile {
+    pub const STEP: u64 = 5_000_000;
+}
+
 #[derive(Default)]
 pub struct Model {
     pub toks: Vec<TokKind>,
@@ -1028,7 +1066,13 @@ pub struct Model {
     pub field_any: FxHashMap<Tok, NodeId>,
     /// An array's values under a key no store named (`Model::named_any`):
     /// what its named non-index keys read. Its elements are not among them.
+    /// A module namespace's values every name reads (DECISIONS 215).
     pub named_any: FxHashMap<Tok, NodeId>,
+    /// DECISIONS 215: a module namespace -> the namespaces of its `export *`
+    /// sources (`TOP`: one outside the program), and the names the module
+    /// exports itself (those shadow every `export *`).
+    pub star_from: FxHashMap<Tok, Vec<Tok>>,
+    pub ns_own: crate::pts::FxHashSet<(Tok, Atom)>,
     pub all_fields: FxHashMap<Tok, NodeId>,
     pub proto_node: FxHashMap<Tok, NodeId>,
     pub field_keys: FxHashMap<Tok, Vec<Atom>>,
@@ -1057,6 +1101,8 @@ pub struct Model {
     // dedup of bindings / chain walks
     pub bind_done: crate::pts::FxHashSet<(CallId, Tok, Tok)>,
     pub chain_done: crate::pts::FxHashSet<(NodeId, Tok, Key, ChainAct)>,
+    /// (value node, `ProtoNode`) pairs a `ProtoGiven` watches.
+    pub given_proto: crate::pts::FxHashSet<(NodeId, NodeId)>,
     pub implicit_done: crate::pts::FxHashSet<(Tok, Protocol)>,
     pub construct_done: crate::pts::FxHashSet<(CallId, Tok)>,
     pub idx_done: crate::pts::FxHashSet<(NodeId, Tok, NodeId, u8)>,
@@ -1291,6 +1337,12 @@ pub struct Model {
     /// publishes `global:*` unknown, as for a global unmodeled code writes.
     pub global_cells: bool,
     pub global_late: bool,
+    /// This unit's own code (not a replayed write of another unit's,
+    /// `shared_replay`) put the globals in reach of unmodeled code: the
+    /// global object reached ⊤, a computed key of it was written, a global
+    /// was named after the boundary. Its `global:*` write says so; a
+    /// replayed one is its writer's, published there already.
+    pub global_written_own: bool,
     /// DECISIONS 94: arrays published through an element cell
     /// (`arr:<name>`, `Gen::arr_leaves`) and other units' arrays this unit
     /// holds, each with the seed of cell `arr:<name>#named`: a named field
@@ -1326,6 +1378,8 @@ pub struct Model {
     /// With the profile: propagation work by source-node label
     /// (delta × successors, delta × constraints).
     pub label_work: FxHashMap<&'static str, (u64, u64, u64)>,
+    /// With the profile: where the solve work went (`WorkProfile`).
+    pub prof: Option<Box<WorkProfile>>,
     pub fn_inst: FxHashMap<FnIdx, TmplId>,
     /// Per-unit contracts (design §11.2): the methods of a published class
     /// run on its receiver token (`Model::publish_class`), one per published
@@ -1478,6 +1532,12 @@ pub struct Model {
     /// The reason of a publication to another unit (`unit_boundary`): a
     /// published method's receiver is its contract's then (DECISIONS 85).
     pub pub_reason: Option<u32>,
+    /// The reason thrown values reach interpreted code (`compute_in`), and
+    /// what the seed of cell `thrown` holds: the values the other units
+    /// threw (DECISIONS 174), as their contracts name them. Another unit's
+    /// value thrown there escaped in its thrower's solve (`escape`).
+    pub thrown_reason: Option<u32>,
+    pub thrown_in: crate::pts::FxHashSet<Tok>,
     /// The function contracts the census broke (`fn:<name>`): published as
     /// escapes, not contracts.
     pub broken_fns: crate::pts::FxHashSet<String>,
@@ -1524,10 +1584,7 @@ pub struct Model {
     /// left with the function (unknown code reads and writes them); the
     /// reason it left.
     pub props_escaped: FxHashMap<Tok, u32>,
-    /// Solving one unit (`FactsConfig::unit`): what escapes reaches other
-    /// units' code, which the whole program sees.
-    pub per_unit: bool,
-    /// DECISIONS 210: this unit's functions unknown code constructs
+    /// DECISIONS 210/211: the functions unknown code constructs
     /// (`Model::construct_unknown`), once each.
     pub unknown_new: crate::pts::FxHashSet<FnIdx>,
     /// DECISIONS 210: the `new` calls of other units' functions: no call

@@ -344,6 +344,43 @@ pub(super) fn compile_module_entry(
                 (cn, len, prefix.clone())
             })
             .collect();
+        // The on-demand CommonJS modules of a program that is not closed: one
+        // generated function registers their initializers, which the runtime
+        // runs at its first path lookup (`js_register_path_inits_lazily`), so
+        // startup pays one call, not a registry insert per module.
+        let lazy_path_registrar: Option<String> = if cross_module.lazy_path_init_modules.is_empty()
+        {
+            None
+        } else {
+            let inits: Vec<(String, usize, String)> = cross_module
+                .lazy_path_init_modules
+                .iter()
+                .map(|(path, prefix)| {
+                    let (cn, len) =
+                        llmod.add_string_constant(&perry_hir::source_remap::baked_path(path));
+                    (cn, len, prefix.clone())
+                })
+                .collect();
+            let name = format!("{module_prefix}__perry_lazy_path_inits");
+            let registrar = llmod.define_function(&name, VOID, vec![]);
+            let _ = registrar.create_block("entry");
+            let blk = registrar.block_mut(0).unwrap();
+            for (const_name, byte_len, prefix) in &inits {
+                let path_ptr = format!("@{}", const_name);
+                let len_str = byte_len.to_string();
+                let init_addr = format!("ptrtoint (ptr @{}__init to i64)", prefix);
+                blk.call_void(
+                    "js_register_path_init",
+                    &[
+                        (PTR, path_ptr.as_str()),
+                        (I64, len_str.as_str()),
+                        (I64, init_addr.as_str()),
+                    ],
+                );
+            }
+            blk.ret_void();
+            Some(name)
+        };
         // Worker entries: `(path constant, byte_len, init symbol)`, registered
         // below before any module init so every way of constructing a Worker
         // can find a compiled entry by its path.
@@ -605,6 +642,12 @@ pub(super) fn compile_module_entry(
                         (I64, len_str.as_str()),
                         (I64, init_addr.as_str()),
                     ],
+                );
+            }
+            if let Some(registrar) = &lazy_path_registrar {
+                blk.call_void(
+                    "js_register_path_inits_lazily",
+                    &[(PTR, format!("@{registrar}").as_str())],
                 );
             }
             for (const_name, byte_len, init) in &worker_entry_inits {

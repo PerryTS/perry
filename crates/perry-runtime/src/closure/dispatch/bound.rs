@@ -855,7 +855,7 @@ unsafe fn function_bind_observable(
     // pass-through — they can't be wrapped in a BOUND_FUNCTION closure yet.
     if !closure_target
         && !crate::object::value_is_callable(target_value)
-        && crate::proxy::js_proxy_is_proxy(target_value) != 1
+        && crate::proxy_hooks::proxy_is_proxy(target_value) != 1
     {
         let message = b"Bind must be called on a function";
         let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);

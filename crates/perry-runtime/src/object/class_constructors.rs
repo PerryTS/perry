@@ -782,16 +782,16 @@ pub unsafe extern "C-unwind" fn js_super_construct_apply(
             };
             match cur {
                 crate::native_class_ids::EVENT_TARGET => {
-                    crate::event_target::js_event_target_subclass_init(this_value, 0);
+                    crate::event_target_hook_slots::js_event_target_subclass_init(this_value, 0);
                 }
                 crate::native_class_ids::ABORT_CONTROLLER => {
-                    crate::event_target::js_event_target_subclass_init(this_value, 1);
+                    crate::event_target_hook_slots::js_event_target_subclass_init(this_value, 1);
                 }
                 crate::native_class_ids::ABORT_SIGNAL => {
-                    crate::event_target::js_event_target_subclass_init(this_value, 2);
+                    crate::event_target_hook_slots::js_event_target_subclass_init(this_value, 2);
                 }
                 crate::native_class_ids::EVENT | crate::native_class_ids::CUSTOM_EVENT => {
-                    crate::event_target::js_event_subclass_init(
+                    crate::event_target_hook_slots::js_event_subclass_init(
                         this_value,
                         arg(0),
                         arg(1),
@@ -800,7 +800,11 @@ pub unsafe extern "C-unwind" fn js_super_construct_apply(
                     );
                 }
                 _ => {
-                    crate::event_target::js_dom_exception_subclass_init(this_value, arg(0), arg(1));
+                    crate::event_target_hook_slots::js_dom_exception_subclass_init(
+                        this_value,
+                        arg(0),
+                        arg(1),
+                    );
                 }
             }
             return undef;

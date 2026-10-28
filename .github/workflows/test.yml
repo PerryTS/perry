@@ -65,7 +65,7 @@ on:
       suite:
         description: 'Core CI or one auxiliary check.'
         type: choice
-        options: [core, all, coverage, security-audit, zizmor, native-result-ledger, npm-launcher]
+        options: [core, all, coverage, security-audit, zizmor, native-result-ledger, npm-launcher, wasi-hosts]
         default: core
       tier:
         description: 'Which tier to run (release-packages.yml dispatches `full`)'
@@ -233,6 +233,35 @@ jobs:
           fi
           python3 scripts/ci_plan.py "${args[@]}"
 
+
+  # The dependency ban is independent of the build planner and Rust setup.
+  # Every PR must pass it, including docs-only and custom-suite runs.
+  tokio-ban:
+    needs: route
+    if: always() && (github.event_name == 'pull_request' || needs.route.outputs.run_core == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository for the dependency ban
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --depth 1 origin "$CHECKOUT_REF"
+          git checkout --detach FETCH_HEAD
+      - name: Prove the ban catches regressions
+        run: python3 scripts/tokio_inventory.py --self-test
+      - name: Prove offline rejection and mandatory CI results
+        run: python3 scripts/test_tokio_gate.py
+      - name: Reject Tokio across repository dependencies and sources
+        run: python3 scripts/tokio_inventory.py --offline
 
   # ---------------------------------------------------------------------------
   # Lint: cargo fmt --check, no-compile audits, and a Windows type-check.
@@ -432,6 +461,7 @@ jobs:
           python3 scripts/ci_plan.py --self-test
           python3 scripts/ci_pr_files.py --self-test
           python3 scripts/test_actions_plan.py
+          python3 scripts/test_wasi_host_qualification.py
           python3 scripts/test_component_network_peer.py
           python3 scripts/test_delete_retired_workflow_runs.py
           python3 scripts/check_actions_topology.py
@@ -5241,7 +5271,7 @@ jobs:
       run: python scripts/wasi_build_runtime.py
     - name: Image classifier checks as a wasm program
       run: python scripts/wasi_image_selftest.py target/perry-dev/perry
-    - name: Build the runtime for wasm32-wasip1 and check it imports only preview 1
+    - name: Build the bundled runtime for wasm32-wasip1 and check it imports only preview 1
       shell: bash
       run: |
         python scripts/wasi_imports_check.py --self-test
@@ -5288,6 +5318,7 @@ jobs:
       - route
       - plan
       - lint
+      - tokio-ban
       - check
       - warnings
       - cargo-test
@@ -5332,6 +5363,11 @@ jobs:
           fi
           if [ "$plan_result" != "success" ]; then
             echo "::error::the plan job did not succeed ($plan_result); nothing below it ran, so this is a red run, not a green one."
+            exit 1
+          fi
+          tokio_result="$(echo "$NEEDS" | jq -r '.["tokio-ban"].result')"
+          if [ "$tokio_result" != "success" ]; then
+            echo "::error::the mandatory no-Tokio gate did not pass ($tokio_result)."
             exit 1
           fi
           wasi_planned="$(echo "$NEEDS" | jq -r '.plan.outputs.plan | fromjson | .jobs.wasi_execution')"
@@ -6201,4 +6237,158 @@ jobs:
               print('Suite job failures:', json.dumps(bad, sort_keys=True), file=sys.stderr)
               raise SystemExit(1)
           print(f'{len(ids)} suite jobs completed or were intentionally skipped')
+          PY
+
+  wasi-hosts__qualify:
+    name: wasi-hosts / qualify (${{ matrix.target }})
+    needs: route
+    if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['wasi-hosts'] }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - os: macos-14
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 150
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_BUILD_JOBS: '4'
+      CARGO_INCREMENTAL: '0'
+      CARGO_TARGET_DIR: target
+      PERRY_INSTR_TARGET_DIR: target-instr
+      PERRY_CODEGEN_CPU_SLOTS: '4'
+      RUST_TEST_THREADS: '1'
+      PYTHONUTF8: '1'
+      EXPECTED_HOST_TARGET: ${{ matrix.target }}
+    steps:
+      - name: Checkout repository (inline git)
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth 1 origin "$CHECKOUT_REF"
+          git checkout --force --detach FETCH_HEAD
+      - name: Install pinned Rust and guest target
+        run: |
+          set -euo pipefail
+          rustup toolchain install nightly-2026-10-04 --profile minimal
+          rustup target add wasm32-unknown-unknown wasm32-wasip2
+          rustc -vV
+          test "$(rustc -vV | sed -n 's/^host: //p')" = "$EXPECTED_HOST_TARGET"
+      - uses: ./.github/actions/setup-llvm22
+      - name: Set up MSVC environment
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/setup_wasi_host_msvc.ps1
+      - uses: ./.github/actions/perry/actions/setup-node
+        with:
+          node-version-file: .node-version
+      - uses: ./.github/actions/perry/Swatinem/rust-cache
+        with:
+          shared-key: wasi-hosts-${{ matrix.target }}
+          cache-on-failure: true
+          workspaces: |
+            . -> target
+            . -> target-instr
+      - name: Build matching native host artifacts
+        run: |
+          set -euo pipefail
+          rm -rf target/wasi-host-qualification
+          mkdir -p target/wasi-host-qualification
+          cargo build --locked --profile perry-dev -p perry -p perry-runtime-static -p perry-stdlib-static \
+            -p perry-wasm-host -p perry-component-host -p perry-wit -p perry-gc-effects \
+            2>&1 | tee target/wasi-host-qualification/build.log
+          cargo build --locked --profile perry-dev -p perry-wit --example componentize \
+            2>&1 | tee -a target/wasi-host-qualification/build.log
+          suffix=''
+          [[ "$RUNNER_OS" != Windows ]] || suffix='.exe'
+          export GC_EFFECTS_BIN="$PWD/target/perry-dev/perry-gc-effects${suffix}"
+          scripts/gc_call_effects/sidecars.sh target/perry-dev
+          PERRY_INSTR_PACKAGES=runtime scripts/build_instr_runtime.sh '' perry-dev \
+            2>&1 | tee target/wasi-host-qualification/instrumented-build.log
+      - name: Verify loop interrupt IR construction and placement
+        run: |
+          set -euo pipefail
+          cargo test --locked --profile perry-dev -p perry-codegen --lib inprocess::loop_interrupt::tests -- --test-threads=1 \
+            2>&1 | tee target/wasi-host-qualification/loop-interrupt-units.log
+          grep -F 'test result: ok. 4 passed; 0 failed;' target/wasi-host-qualification/loop-interrupt-units.log
+      - name: Verify Windows helper linkage and linked image sections
+        run: |
+          set -euo pipefail
+          cargo test --locked --profile perry-dev -p perry-codegen --lib inprocess::coff::tests -- --test-threads=1 \
+            2>&1 | tee target/wasi-host-qualification/coff-helper-units.log
+          grep -F 'test result: ok. 2 passed; 0 failed;' target/wasi-host-qualification/coff-helper-units.log
+          cargo test --locked --profile perry-dev -p perry-runtime --lib layout_section_tests -- --test-threads=1 \
+            2>&1 | tee target/wasi-host-qualification/layout-section-units.log
+          grep -F 'test result: ok. 2 passed; 0 failed;' target/wasi-host-qualification/layout-section-units.log
+      - name: Execute both native host unit suites
+        run: |
+          set -euo pipefail
+          cargo test --locked --profile perry-dev -p perry-wasm-host -p perry-component-host --lib -- --test-threads=1 \
+            2>&1 | tee target/wasi-host-qualification/native-host-units.log
+      - name: Qualify P1 parity and P2 component interoperability
+        run: |
+          set -euo pipefail
+          suffix=''
+          [[ "$RUNNER_OS" != Windows ]] || suffix='.exe'
+          python3 scripts/wasi_host_qualification.py \
+            --perry "target/perry-dev/perry${suffix}" --runtime-dir target/perry-dev \
+            --wit "target/perry-dev/perry-wit${suffix}" \
+            --componentize "target/perry-dev/examples/componentize${suffix}" \
+            --output target/wasi-host-qualification
+      - name: Retain qualification evidence
+        if: always()
+        uses: ./.github/actions/perry/actions/upload-artifact
+        with:
+          name: wasi-hosts-${{ matrix.target }}-${{ github.run_id }}
+          if-no-files-found: error
+          path: |
+            target/wasi-host-qualification/*.log
+            target/wasi-host-qualification/*.json
+            target/wasi-host-qualification/p1*/**/*.log
+            target/wasi-host-qualification/p2/*.log
+            target/wasi-host-qualification/p2/*.json
+            target/wasi-host-qualification/command/*.log
+            target/wasi-host-qualification/command/results.json
+            target/wasi-host-qualification/command/**/*.wasm
+            target/wasi-host-qualification/p2/**/*.wasm
+  wasi-hosts:
+    name: wasi-hosts / suite result
+    needs:
+      - route
+      - wasi-hosts__qualify
+    if: ${{ always() && (needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['wasi-hosts']) }}
+    permissions: {}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      CHILD_JOB_IDS: '["wasi-hosts__qualify"]'
+      JOB_RESULTS: ${{ toJSON(needs) }}
+    steps:
+      - name: Require all planned host platforms to pass
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+          ids = json.loads(os.environ['CHILD_JOB_IDS'])
+          results = json.loads(os.environ['JOB_RESULTS'])
+          bad = {job: results.get(job, {}).get('result', 'missing') for job in ids
+                 if results.get(job, {}).get('result') != 'success'}
+          if bad:
+              print('Host qualification failed:', json.dumps(bad, sort_keys=True), file=sys.stderr)
+              raise SystemExit(1)
+          print('All planned native host platforms passed')
           PY

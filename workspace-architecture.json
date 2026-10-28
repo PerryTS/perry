@@ -433,6 +433,10 @@
       "category": "runtime-core",
       "decision": "keep"
     },
+    "perry-wasi": {
+      "category": "runtime-core",
+      "decision": "keep"
+    },
     "perry-wasm-host": {
       "category": "runtime-core",
       "decision": "keep"

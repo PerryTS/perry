@@ -93,8 +93,8 @@ fn source_bytes(value: f64) -> Vec<u8> {
     let accepted = addr != 0
         && (is_uint8array_buffer(addr)
             || (is_registered_buffer(addr) && !is_any_array_buffer(addr) && !is_data_view(addr))
-            || crate::typedarray::lookup_typed_array_kind(addr)
-                == Some(crate::typedarray::KIND_UINT8));
+            || crate::typedarray_hook_slots::lookup_typed_array_kind(addr)
+                == Some(crate::typedarray_hook_slots::KIND_UINT8));
     if !accepted {
         throw_invalid_source(value);
     }

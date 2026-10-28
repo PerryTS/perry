@@ -66,7 +66,9 @@ pub(crate) fn buffer_receiver_dispatch(
     // Prove ownership before trusting the tag. Process-global SABs have a
     // real header but live outside this thread's arena; they still need the
     // buffer classification below rather than an arena-only rejection.
-    if unsafe { crate::typedarray::arena_payload_has_gc_type(addr, crate::gc::GC_TYPE_ARRAY) } {
+    if unsafe {
+        crate::typedarray_hook_slots::arena_payload_has_gc_type(addr, crate::gc::GC_TYPE_ARRAY)
+    } {
         return None;
     }
     // `is_typed_array_buffer` is the same gate `dispatch_buffer_method`'s

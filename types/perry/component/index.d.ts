@@ -13,7 +13,11 @@ export interface ComponentOptions {
 
 declare const componentBrand: unique symbol;
 declare const resourceBrand: unique symbol;
-export interface ComponentHandle { readonly [componentBrand]: true; }
+export interface ComponentHandle {
+  readonly [componentBrand]: true;
+  /** Native standalone factories for the exact async types in the selected WIT world. */
+  asyncTypes(): ReadonlyArray<ComponentAsyncType>;
+}
 export interface BorrowedResource<T extends string> {
   readonly [resourceBrand]: T;
 }
@@ -24,12 +28,97 @@ export interface OwnedResource<T extends string> extends BorrowedResource<T> {
   dispose(): void;
 }
 
+declare const futureBrand: unique symbol;
+declare const streamBrand: unique symbol;
+/** Owned canonical future returned by a native component; deliberately not thenable. */
+export interface ComponentFuture<T> {
+  readonly [futureBrand]: (value: T) => T;
+  /** Consume its single value; reading twice is an error. */
+  read(): Promise<T>;
+  /** Close the readable end, cancelling an outstanding read if present. */
+  dispose(): void;
+}
+/** Owned canonical stream returned by a native component. Byte streams use Uint8Array. */
+export interface ComponentStream<T, Chunk = Array<T>> {
+  readonly [streamBrand]: (value: T) => T;
+  /** Read a bounded chunk. Only one read may be pending on this stream. */
+  read(maxElements?: number): Promise<{ done: false; value: Chunk } | { done: true }>;
+  dispose(): void;
+}
+
+export interface ComponentWriteResult<Chunk> {
+  written: number;
+  /** Unconsumed values have fresh ownership after native lowering. */
+  remaining: Chunk;
+  cancelled: boolean;
+  closed: boolean;
+}
+export interface ComponentFutureWriter<T> {
+  write(value: T): Promise<ComponentWriteResult<Array<T>>>;
+  /** Cancel the pending write; await it to recover unconsumed owners. */
+  cancel(): void;
+  /** An unfinished canonical future cannot close: disposal retires its component. */
+  dispose(): void;
+}
+export interface ComponentStreamWriter<T, Chunk = Array<T>> {
+  write(values: Chunk): Promise<ComponentWriteResult<Chunk>>;
+  cancel(): void;
+  /** Close the stream and dispose any unconsumed pending payloads. */
+  close(): void;
+  dispose(): void;
+}
+export type ComponentProducer<T, Chunk = Array<T>> =
+  | { kind: "future"; value: ComponentFuture<T>; writer: ComponentFutureWriter<T> }
+  | { kind: "stream"; value: ComponentStream<T, Chunk>; writer: ComponentStreamWriter<T, Chunk> };
+export interface ComponentAsyncType {
+  readonly kind: "future" | "stream";
+  /** Serialized structural WIT schema; resource identities refer to the generated contract. */
+  readonly schema: string;
+  /** Select T/Chunk to describe this schema. Native writes validate the actual WIT type. */
+  create<T = unknown, Chunk = Array<T>>(): Promise<ComponentProducer<T, Chunk>>;
+}
+
 /** Use generated WIT bindings for application calls. These lower-level entry
  * points validate the manifest and component's canonical types at load time. */
 export function loadComponent(bytes: Uint8Array, contract: string, imports: unknown, options?: ComponentOptions): ComponentHandle;
 export function callComponent(handle: ComponentHandle, interfaceName: string, functionName: string, args: unknown[]): unknown;
 export function disposeComponent(handle: ComponentHandle): void;
-/** Execute a WASI P2 command once in an isolated native store, then release it.
+
+declare const httpServerBrand: unique symbol;
+export interface ComponentHttpServer {
+  readonly [httpServerBrand]: true;
+  /** Bound numeric address, including the selected port when binding port 0. */
+  readonly address: string;
+}
+export interface ComponentHttpServerOptions {
+  /** Explicit numeric socket address, e.g. "127.0.0.1:0" or "[::1]:8080". */
+  address: string;
+  /** Positive connection limit. Default: 64. */
+  maxConnections?: number;
+  handshakeTimeoutMs?: number;
+  requestHeadTimeoutMs?: number;
+  responseHeadTimeoutMs?: number;
+  betweenBytesTimeoutMs?: number;
+  lingerTimeoutMs?: number;
+  /** Explicit PEM credentials; no ambient certificate or key files are read. */
+  tls?: { certificatePem: string; privateKeyPem: string };
+}
+/** Native-only HTTP/1.1 listener. Each accepted connection serves one request.
+ * Creating a listener does not grant a component outbound network access. */
+export function createComponentHttpServer(options: ComponentHttpServerOptions): ComponentHttpServer;
+/** Accept one request and invoke the selected P2 incoming-handler or P3 0.3.0 handler.
+ * Prefer generated Component.handleHttp(server), which supplies its WIT version.
+ * Resolves after the response transport completes; traps, cancellation and
+ * transport errors reject. Bodies stream through bounded native buffers.
+ * Pending work keeps the event loop alive. The P2 guest handler executes
+ * synchronously on the owning JS thread. P3 suspends canonical tasks and async
+ * imports without blocking that thread. Closing the listener or disposing the
+ * component cancels pending P3 handling. Fuel does not bound host I/O waits. */
+export function handleComponentHttpRequest(server: ComponentHttpServer, handle: ComponentHandle, interfaceName: string): Promise<void>;
+/** Idempotently stop the listener and cancel pending accepts and exchanges. */
+export function closeComponentHttpServer(server: ComponentHttpServer): void;
+
+/** Execute a WASI P2 or 0.3.0 command once in an isolated native store, then release it.
  * Returns 0/1 for wasi:cli/run's ok/err and preserves explicit WASI exit codes.
  * Guest exit never terminates Perry. Invalid components, traps and exhausted
  * limits throw ERR_COMPONENT. No WIT bindings or application imports are needed.

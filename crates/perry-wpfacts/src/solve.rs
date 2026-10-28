@@ -130,6 +130,77 @@ impl Model {
         }
     }
 
+    /// Charge the work since the last mark to what it was spent for, and
+    /// from now on to `n` (a popped node) or, with `NO_NODE`, to `phase`
+    /// (PERRY_FACTS_PROFILE only).
+    pub fn prof_mark(&mut self, n: NodeId, phase: &'static str) {
+        let Some(p) = self.prof.as_mut() else { return };
+        let (at, w0, ph) = p.at;
+        let w = self.work - w0;
+        if w != 0 {
+            if at == NO_NODE {
+                *p.phase.entry(ph).or_default() += w;
+            } else {
+                *p.node.entry(at).or_default() += w;
+            }
+        }
+        p.at = (n, self.work, phase);
+        if self.work >= p.next_curve {
+            p.next_curve = (self.work / WorkProfile::STEP + 1) * WorkProfile::STEP;
+            let cons: usize = self.nodes.iter().map(|n| n.cons.len()).sum();
+            eprintln!(
+                "perry: wpfacts curve work={} pops={} nodes={} pts={} cons={} toks={} insts={} wl={}",
+                self.work,
+                self.pops,
+                self.nodes.len(),
+                self.pts_entries,
+                cons,
+                self.toks.len(),
+                self.sum.insts.len(),
+                self.wl.len()
+            );
+        }
+    }
+
+    /// The work profile (PERRY_FACTS_PROFILE): phases, steps, rule kinds and
+    /// the 20 nodes the most work was spent for.
+    pub fn prof_report(&mut self) {
+        let Some(p) = self.prof.take() else { return };
+        let mut ph: Vec<_> = p.phase.iter().collect();
+        ph.sort_by(|a, b| b.1.cmp(a.1));
+        let in_pops: u64 = p.node.values().sum();
+        eprintln!(
+            "perry: wpfacts work total={} in pops={in_pops} phases={ph:?} steps pop-charge={} fast-copy={} copy={} copy-extra={}",
+            self.work, p.step[0], p.step[1], p.step[2], p.step[3]
+        );
+        let mut ks: Vec<_> = p.kind.iter().collect();
+        ks.sort_by(|a, b| (b.1 .1 + b.1 .3).cmp(&(a.1 .1 + a.1 .3)));
+        for (k, (n, w, rn, rw)) in ks.iter().take(25) {
+            eprintln!("perry: wpfacts kindwork {k} applies={n} work={w} attach={rn} attachwork={rw}");
+        }
+        let mut ns: Vec<_> = p.node.iter().map(|(n, w)| (*w, *n)).collect();
+        ns.sort_unstable_by(|a, b| b.cmp(a));
+        for (w, n) in ns.into_iter().take(20) {
+            let node = &self.nodes[n as usize];
+            let mut kinds: crate::pts::FxHashMap<&'static str, u32> = Default::default();
+            for c in &node.cons {
+                *kinds.entry(c.kind_name()).or_default() += 1;
+            }
+            let mut kinds: Vec<_> = kinds.into_iter().collect();
+            kinds.sort_by(|a, b| b.1.cmp(&a.1));
+            kinds.truncate(6);
+            let some: Vec<String> = node.pts.to_sorted().iter().take(8).map(|&t| self.tok_name(t)).collect();
+            eprintln!(
+                "perry: wpfacts nodework #{n} {} work={w} pts={} top={} succ={} cons={} kinds={kinds:?} some={some:?}",
+                self.labels[n as usize],
+                node.pts.len(),
+                node.pts.contains_tok(TOP) as u8,
+                node.succ.len(),
+                node.cons.len()
+            );
+        }
+    }
+
     /// Sizes of the solver's structures (progress diagnostics).
     pub fn size_line(&self) -> String {
         let visits: usize = self.visits.values().map(|v| v.len()).sum();
@@ -301,6 +372,11 @@ impl Model {
         self.nodes[n as usize].pts.sorted_into(&mut toks);
         // The replay is solve work: the bound covers it.
         self.work += toks.len() as u64 + 1;
+        if let Some(p) = self.prof.as_mut() {
+            let e = p.kind.entry(c.kind_name()).or_default();
+            e.2 += 1;
+            e.3 += toks.len() as u64 + 1;
+        }
         let saved = (self.cur_src, self.cur_why);
         self.cur_src = n;
         self.cur_why = u32::MAX;
@@ -314,8 +390,11 @@ impl Model {
         self.mark_params();
         self.members_settled.get_mut().clear();
         loop {
+            self.prof_mark(NO_NODE, "instances");
             self.fill_instances();
+            self.prof_mark(NO_NODE, "marker links");
             self.replay_marker_links();
+            self.prof_mark(NO_NODE, "settle");
             let Some(n) = self.wl.pop_front() else {
                 if self.sum.pending.is_empty()
                     && self.marker_links.is_empty()
@@ -328,6 +407,7 @@ impl Model {
                 continue;
             };
             self.pops += 1;
+            self.prof_mark(n, "");
             if self.aborted {
                 return;
             }
@@ -362,6 +442,9 @@ impl Model {
             self.cur_why = u32::MAX;
             let ncons0 = self.nodes[n as usize].cons.len();
             self.work += (delta.len() as u64 + 1) * ncons0 as u64;
+            if let Some(p) = self.prof.as_mut() {
+                p.step[0] += (delta.len() as u64 + 1) * ncons0 as u64;
+            }
             if self.profile.is_some() {
                 let e = self.label_work.entry(self.labels[n as usize]).or_default();
                 e.1 += delta.len() as u64 * ncons0 as u64;
@@ -376,6 +459,9 @@ impl Model {
                 let s = self.nodes[n as usize].succ[i];
                 if self.try_copy_delivery(n, s, &delta, dprim) {
                     self.work += 1 + delivery_overhead;
+                    if let Some(p) = self.prof.as_mut() {
+                        p.step[1] += 1 + delivery_overhead;
+                    }
                     if self.max_work != 0 && self.work > self.max_work {
                         self.aborted = true;
                         return;
@@ -395,6 +481,9 @@ impl Model {
                 };
                 let visits = toks.len() as u64;
                 self.work += visits + checks + delivery_overhead;
+                if let Some(p) = self.prof.as_mut() {
+                    p.step[2] += visits + checks + delivery_overhead;
+                }
                 if self.profile.is_some() {
                     self.label_work
                         .entry(self.labels[n as usize])
@@ -410,6 +499,9 @@ impl Model {
                 } else {
                     let extra = self.copy_to(n, s, toks, dprim);
                     self.work += extra;
+                    if let Some(p) = self.prof.as_mut() {
+                        p.step[3] += extra;
+                    }
                     if self.max_work != 0 && self.work > self.max_work {
                         self.aborted = true;
                         return;
@@ -458,12 +550,21 @@ impl Model {
             self.add_tok(n, r);
         } else {
             // An array's named non-index key is its own key: its elements
-            // (`field_any`) are read under an index only (`named_any`).
-            let any = match self.is_elem_array(t) && !numeric_key(&self.atoms[a as usize]) {
+            // (`field_any`) are read under an index only (`named_any`). A
+            // module namespace's named key is resolved by name (DECISIONS
+            // 215): it never reads the namespace's other keys.
+            let named = matches!(self.toks[t as usize], TokKind::ModNs(_))
+                || self.is_elem_array(t) && !numeric_key(&self.atoms[a as usize]);
+            let any = match named {
                 true => self.named_any(t),
                 false => self.field_any(t),
             };
             self.edge(any, n);
+            if let Some(srcs) = self.star_from.get(&t).cloned() {
+                for s in srcs {
+                    self.star_key(t, s, a, n);
+                }
+            }
         }
         let all = self.all_fields(t);
         self.edge(n, all);
@@ -563,6 +664,46 @@ impl Model {
         match self.is_elem_array(t) {
             true => self.named_any(t),
             false => self.field_any(t),
+        }
+    }
+
+    /// DECISIONS 215 (ECMAScript ResolveExport): `export * from` the module
+    /// of namespace `src` (`TOP`: a source outside the program) makes each
+    /// name of `src` a name of namespace `ns`, unless `ns`'s module exports
+    /// that name itself; `default` is never one. A computed key reads every
+    /// key (`field_any`); a named key reads only that name of each source.
+    pub(crate) fn export_star(&mut self, ns: Tok, src: Tok) {
+        let fa = self.field_any(ns);
+        if src == TOP {
+            self.add_top(fa, |_| "unresolved export * source".into());
+        } else {
+            let all = self.all_fields(src);
+            self.edge(all, fa);
+        }
+        let v = self.star_from.entry(ns).or_default();
+        if v.contains(&src) {
+            return;
+        }
+        v.push(src);
+        // The names asked of `ns` before this source was known.
+        let keys = self.field_keys.get(&ns).cloned().unwrap_or_default();
+        for a in keys {
+            let n = self.fields[&(ns, a)];
+            self.star_key(ns, src, a, n);
+        }
+    }
+
+    /// Name `a` of namespace `ns` (node `n`) through its `export *` source
+    /// `src` (`export_star`).
+    fn star_key(&mut self, ns: Tok, src: Tok, a: Atom, n: NodeId) {
+        if self.ns_own.contains(&(ns, a)) || &*self.atoms[a as usize] == "default" {
+            return;
+        }
+        if src == TOP {
+            self.add_top(n, |_| "unresolved export * source".into());
+        } else {
+            let f = self.field(src, a);
+            self.edge(f, n);
         }
     }
 
@@ -678,6 +819,8 @@ impl Model {
                 (None, None) => match self.tmpls[tm as usize].parent_value {
                     // `S.prototype.__proto__` is the parent's `prototype`.
                     Some((_, pp)) => self.edge(pp, n),
+                    // A null-prototype record: the chain ends here.
+                    None if self.tmpls[tm as usize].null_proto => {}
                     None => self.add_tok(n, objproto),
                 },
             },
@@ -719,8 +862,14 @@ impl Model {
         }
         if self.profile.is_some() {
             let started = std::time::Instant::now();
+            let w0 = self.work;
             self.apply_inner(n, c, toks, prim);
             let name = c.kind_name();
+            if let Some(p) = self.prof.as_mut() {
+                let e = p.kind.entry(name).or_default();
+                e.0 += 1;
+                e.1 += self.work - w0;
+            }
             let e = self.profile.as_mut().unwrap().entry(name).or_default();
             e.0 += 1;
             e.1 += started.elapsed();
@@ -1589,9 +1738,10 @@ impl Model {
                 format!("implicit {n} {reason} {}", proto.name())
             }
             Cons::CreateProto { reason } => format!("createproto {n} {reason}"),
-            Cons::ChainUnion { key, dst } => {
-                format!("chainunion {n} {} {dst}", self.key_name(*key))
+            Cons::ChainUnion { key, dst, of } => {
+                format!("chainunion {n} {} {dst} {of}", self.key_name(*key))
             }
+            Cons::ProtoGiven { protos } => format!("protogiven {n} {protos}"),
             Cons::ProtoClosure { dst } => format!("protoclosure {n} {dst}"),
             Cons::ProtoMethods { origin, key, call } => {
                 format!("protomethods {n} {origin} {} {call}", self.key_name(*key))

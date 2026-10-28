@@ -1,0 +1,334 @@
+{
+  "date": "2026-10-27",
+  "scope": "Generated async C argument/result ownership cleanup prerequisites. All resource-bearing experimental async profiles and public async guest output remain rejected.",
+  "sourceBase": "290980832b38785ca6dd44fe3534834cf8703a62",
+  "sourceSnapshot": "v431",
+  "sourceSha256": {
+    "crates/perry-wit/src/guest_c.rs": "07776d77e3f53a5d46dc4ad08ab467bf553974d1f41c0aabb46fe4c424050df9",
+    "crates/perry-wit/src/guest_c/asynchronous.rs": "f62453861cdec1515ad6d317047aee5afd3bc0ea676ae167a176d42042129d3b",
+    "crates/perry-wit/src/guest_c/asynchronous/imports.rs": "61aeab7ea0e6eab45019b41455a1a9ecb4d2933be216f7403c344e9df0722c59",
+    "crates/perry-wit/src/guest_c/asynchronous/tests.rs": "3b80e6c922767f61d8955dbe28ed8ffd5a45a5155b2aebc66ea6797e21e9c159",
+    "crates/perry-wit/src/guest_c/asynchronous/tests/custody.c": "30889e6e4f1ddfe8201c9cf0d2bbf495bb0c910d1ad1f3209d4978b9ad368420",
+    "crates/perry-wit/src/guest_c/scheduler.h": "65a6d0c3a1b6427e1eac58bcaaae36a275e11f48ce63b65aea1e3ebbb49b5fa8",
+    "crates/perry-wit/src/guest_c/values.rs": "228007ca57b0030df4ed6bb96a2db636fdf91f45a7db6204514d666480561f7f",
+    "crates/perry-wit/src/guest_c/values/discard.rs": "7b4580609eb756c40672b3794a1cfaa91bf7a4aa1700944ff02009471a2ba8f5"
+  },
+  "evidence": {
+    "archive": "perry-guest-resource-custody-v431-evidence.tar.gz",
+    "sha256": "0aaea95bc3485c5fdc1f55bf533d0b4de5bb7a527267d9cd3ba746b7690775e4",
+    "bytes": 123336349,
+    "members": 121
+  },
+  "allIndexedEvidenceVerifiedLocallyAndRemotely": true,
+  "artifacts": {
+    "/root/codex-components-p2-20261021/perry-resource-custody-v431-artifacts/compiler-v377": "28ff0a47b850c595e18e171aa3fbe6413dacc20f2cfe5851582e743db5e8b467",
+    "/root/codex-components-p2-20261021/perry-resource-custody-v431-artifacts/async_guest_cancel": "8e5cf3db3f11fdb0c35b1c45f967c76620d5b435bc4ff6cc9e3cb127337558da",
+    "/root/codex-components-p2-20261021/perry-resource-custody-v431-artifacts/async_guest_imports": "e0eb17717f929c4f049f3bb9f94c0d885eafbe75de57664fc04c50aa114717d8",
+    "/root/codex-components-p2-20261021/perry-resource-custody-v431-artifacts/async_guest-dev": "cefb6fabbf3ad2195196e58b51ba6db2495d1bc704a53225e370a3d6efae7da8",
+    "/root/codex-components-p2-20261021/perry-resource-custody-v431-artifacts/export-host-v413": "2b3cd93018d1777491c569471c4fb7dac18e62d831e763d4200566fc2cc95788",
+    "/root/codex-components-p2-20261021/perry-resource-custody-v431-artifacts/libperry_runtime.a": "5d3fbc164946e324a8681ea86649bb8ccaaba8e3197b2d8f99c2796da2219d16",
+    "/root/codex-components-p2-20261021/perry-resource-custody-v431-artifacts/wit-tests": "c2eab940b4c1b49cc3cb21895a8aa650509ffc3a4d934efa070eddf2d683e829",
+    "/root/codex-components-p2-20261021/perry-resource-custody-v431-artifacts/async_guest": "bab14248e0c005881ca133ad810bf5ce0db05223c938c1aa22a9f5788969ac18",
+    "/root/codex-components-p2-20261021/perry-resource-custody-v431-artifacts/canonical_c": "8908d73058e4248500a19099b38de30ac1895a9a9f1bab251a848fabee5f335e"
+  },
+  "implementation": [
+    "track parameter consumption separately from terminal completion; STARTING alone does not transfer parameters",
+    "STARTED events and RETURNED, including terminal states whose start event was not observed, mark arguments consumed",
+    "only STARTED_CANCELLED permits dropping committed owned arguments which native code never consumed",
+    "after synchronous cancellation acknowledgement, discard initialized owned results if cancellation won before JS lifting",
+    "recursively visit aliases, records, tuples, lists, variants, options and results; borrowed handles and inactive payloads are never dropped",
+    "drop owned handles before freeing native buffers and retiring the rooted import frame/borrow loans",
+    "normal inline and resumed results are claimed before lift; C cleanup does not drop JS owners",
+    "a failed owned-result lift traps before Promise settlement, including inline completion, because safe recovery needs per-handle rollback",
+    "failed import_begin leaves uncommitted JS owners and runtime-owned frame untouched; no child linkage or native I/O",
+    "profile validation remains on both public entry points; only private test code generates guarded resource worlds"
+  ],
+  "build": {
+    "profiles": [
+      "dev WIT tests and native generated C harness",
+      "dev all-targets host/WIT Clippy -D warnings",
+      "prod actual async generator/native host probes"
+    ],
+    "witBindgenC": "0.60.0",
+    "wasmtime": "48.0.7",
+    "wasiSDK": "34.0",
+    "runtimeArchive": "protected prod WASI v426, defaults except alloc-mimalloc; no new runtime build",
+    "runtimeSourceInputsVerifiedUnchanged": 1946,
+    "compiler": "frozen compiler v377 used only for WASI staticlib compilation",
+    "exportRegressionHost": "frozen v413; example source verified unchanged",
+    "lockedCargo": true,
+    "cargoLocksUnchanged": true,
+    "externalProviderOverrides": false,
+    "rustFlagsPreserved": true,
+    "newDependencies": false,
+    "provider": "vendored Turnloop; strict no Tokio",
+    "guestOpsABI": 2,
+    "nativeEngineABI": 12,
+    "runtimeKeepaliveEntries": 47,
+    "newRuntimeCSymbols": false,
+    "fullCoherentNativeDistributionBuilt": false
+  },
+  "checks": {
+    "witTests": 27,
+    "newRustTests": 2,
+    "guardedResourceWorldsSyntaxChecked": 2,
+    "nativeC": {
+      "host": "Linux",
+      "compiler": "clang with -Wall -Werror",
+      "sanitizers": [
+        "AddressSanitizer heap/stack/use-after-free plus leak detection",
+        "UndefinedBehaviorSanitizer halt-on-error"
+      ],
+      "globalASanMetadata": false,
+      "globalASanMetadataReason": "allows linker to discard the unused adapter registration graph and unmocked JS callbacks; heap/stack checks remain enabled",
+      "deterministicOwnershipCases": 14,
+      "failedOwnedLiftProbe": "actual generated simple owned-result finish callback exits with SIGILL before Promise settlement; settlement mock would SIGABRT",
+      "canonicalOperationsMocked": true,
+      "jsLiftingMockedExceptFailedOwnedLiftProbe": true,
+      "resourceComponentInteropQualified": false,
+      "cases": [
+        "before-start cancellation drops six owned arguments and preserves a borrowed handle",
+        "after-start cancellation preserves consumed argument ownership",
+        "observed STARTED event and queued unobserved STARTED both preserve ownership",
+        "return race covers empty variant, nested owner tuple/list/option, string, error owner and inactive optional payload",
+        "inline success waits for the original runtime handoff before frame retirement",
+        "resumed success lifts ownership without duplicate drops",
+        "failed import begin and prior conversion failure publish no child, perform no native I/O and drop no staged owner"
+      ]
+    },
+    "allTargetsClippy": [
+      "perry-wit",
+      "perry-component-host"
+    ],
+    "witPhases": [
+      {
+        "phase": "invalidate",
+        "exitCode": 0
+      },
+      {
+        "phase": "wit-tests",
+        "exitCode": 0
+      },
+      {
+        "phase": "examples",
+        "exitCode": 0
+      },
+      {
+        "phase": "clippy",
+        "exitCode": 0
+      }
+    ],
+    "actualNonResourceAsyncRegression": {
+      "fullOneCommandAcceptance": true,
+      "phases": [
+        {
+          "phase": "ordinary-import-regression",
+          "exitCode": 0
+        },
+        {
+          "phase": "build-caller-probes",
+          "exitCode": 0
+        },
+        {
+          "phase": "generate-caller",
+          "exitCode": 0
+        },
+        {
+          "phase": "link-caller",
+          "exitCode": 0
+        },
+        {
+          "phase": "compose",
+          "exitCode": 0
+        },
+        {
+          "phase": "execute",
+          "exitCode": 0
+        },
+        {
+          "phase": "moving",
+          "exitCode": 0
+        }
+      ],
+      "importPhases": [
+        {
+          "phase": "invalidate",
+          "exitCode": 0
+        },
+        {
+          "phase": "build",
+          "exitCode": 0
+        },
+        {
+          "phase": "generate",
+          "exitCode": 0
+        },
+        {
+          "phase": "compile",
+          "exitCode": 0
+        },
+        {
+          "phase": "link",
+          "exitCode": 0
+        },
+        {
+          "phase": "execute",
+          "exitCode": 0
+        },
+        {
+          "phase": "moving",
+          "exitCode": 0
+        },
+        {
+          "phase": "cancel",
+          "exitCode": 0
+        },
+        {
+          "phase": "failure",
+          "exitCode": 0
+        },
+        {
+          "phase": "inline",
+          "exitCode": 0
+        },
+        {
+          "phase": "inline-moving",
+          "exitCode": 0
+        }
+      ],
+      "exportPhases": [
+        {
+          "phase": "generate",
+          "exitCode": 0
+        },
+        {
+          "phase": "compile",
+          "exitCode": 0
+        },
+        {
+          "phase": "link",
+          "exitCode": 0
+        },
+        {
+          "phase": "normal",
+          "exitCode": 0
+        },
+        {
+          "phase": "moving",
+          "exitCode": 0
+        },
+        {
+          "phase": "cancel",
+          "exitCode": 0
+        }
+      ],
+      "ordinaryReversePairsPerMode": 64,
+      "exportReverseWakePairsPerMode": 64,
+      "cooperativeCancellationRoundsPerMode": 8,
+      "nativeChildrenCancelledPerMode": 16,
+      "sameStoreReused": true,
+      "moving": {
+        "imports": {
+          "copiedObjects": 32862,
+          "evacuationVerified": true
+        },
+        "inlineImports": {
+          "copiedObjects": 3859,
+          "evacuationVerified": true
+        },
+        "cooperativeCancellation": {
+          "copiedObjects": 6159,
+          "evacuationVerified": true
+        },
+        "exports": {
+          "copiedObjects": 20863,
+          "evacuationVerified": true
+        }
+      }
+    },
+    "inventories": {
+      "phases": [
+        {
+          "phase": "address",
+          "exitCode": 1,
+          "identicalToParent": true
+        },
+        {
+          "phase": "holders",
+          "exitCode": 1,
+          "identicalToParent": true
+        },
+        {
+          "phase": "tokio",
+          "exitCode": 0,
+          "identicalToParent": true
+        },
+        {
+          "phase": "node",
+          "exitCode": 0,
+          "identicalToParent": true
+        },
+        {
+          "phase": "size",
+          "exitCode": 1,
+          "identicalToParent": true
+        }
+      ],
+      "changedRustFileLines": {
+        "crates/perry-wit/src/guest_c.rs": 476,
+        "crates/perry-wit/src/guest_c/asynchronous.rs": 185,
+        "crates/perry-wit/src/guest_c/asynchronous/imports.rs": 105,
+        "crates/perry-wit/src/guest_c/asynchronous/tests.rs": 134,
+        "crates/perry-wit/src/guest_c/values.rs": 499,
+        "crates/perry-wit/src/guest_c/values/discard.rs": 102
+      },
+      "baselineOversizedFilesByteUnchanged": [],
+      "newCustodyVerdicts": [],
+      "shippingCargoLockSha256": "3b488b475a0cbd5196b47eb1bd1a86b5ad690aa2b547cabc98dc3da800ccd6b8"
+    },
+    "formatAndDiffChecksPass": true
+  },
+  "prototypeFindings": [
+    {
+      "snapshot": "v427",
+      "finding": "maintained C backend panics when asked to define a named own/borrow handle alias",
+      "action": "fixture now uses an alias of list<own<item>>; named direct handle aliases remain a known backend gap, not fixed by this milestone"
+    },
+    {
+      "snapshot": "v428",
+      "finding": "ASan registration metadata kept the unused adapter registration graph and unmocked callbacks alive during native harness linkage",
+      "action": "disable global ASan metadata only; retain heap/stack ASan, leak detection and UBSan"
+    },
+    {
+      "snapshot": "v428",
+      "finding": "exported resource name own-item collided with the generated alias of an imported item handle",
+      "action": "renamed fixture resource gadget; C backend type-name collision remains a known unqualified shape"
+    },
+    {
+      "snapshot": "v430 preliminary acceptance",
+      "finding": "overlapping clean in the shared Cargo pool removed canonical_c between build and freeze; ordinary import phases had passed",
+      "action": "preliminary run discarded as final evidence; v431 final sequence completed after the preliminary job exited; final executed probes were frozen before subsequent cleans"
+    }
+  ],
+  "limitations": [
+    "no actual async resource-bearing component has been enabled or qualified; native mocks explicitly test scheduler state and cleanup only",
+    "exported resource results still need transactional commit before canonical return",
+    "borrowed export arguments need expiration at task.return, including forwarding into pending children",
+    "loan release at native ACK versus later inline C frame handoff remains to qualify",
+    "resource finalizer obligations during task cancellation remain to qualify",
+    "failed compound resource lifting requires Store retirement; no per-handle rollback or compound partial-adoption engine test",
+    "direct named own/borrow aliases and some generated C resource type-name collisions remain backend gaps",
+    "public async CLI and future/stream values remain guarded",
+    "WASI AsyncLocalStorage constructor/link gap remains; timers and foreign native I/O are outside guest checkpoints",
+    "macOS, Windows and coherent native/WASM distribution packaging remain pending",
+    "no strict TypeScript fixture check or new native runtime suite run; runtime source/archive unchanged",
+    "inherited address/root-holder/file-size inventory failures remain byte-identical; no waiver added"
+  ],
+  "next": [
+    "exported resource result commits and canonical borrow-scope expiration",
+    "resource cancellation/finalizer ownership, native ACK and inline handoff qualification",
+    "actual async resource component fixture before relaxing profile guard",
+    "named handle alias and generated resource type-name collision handling",
+    "future/stream values, WASI ALS packaging, broader HTTP/layout/platform checks and final distribution qualification"
+  ]
+}

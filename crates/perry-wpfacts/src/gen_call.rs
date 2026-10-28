@@ -73,13 +73,6 @@ impl<'a> Gen<'a> {
                 return self.call_value(c, ThisArg::Undef, vec![lit], vec![]);
             }
         }
-        // A literal `require("...")` in a CommonJS-wrapped module: the one
-        // module the wrapper resolved it to (`Gen::cjs_static_require`).
-        if let (Expr::FuncRef(_) | Expr::LocalGet(_), [Expr::String(spec)]) = (callee, args) {
-            if let Some(n) = self.cjs_static_require(fx.module, callee, spec) {
-                return n;
-            }
-        }
         let a: Vec<NodeId> = args.iter().map(|x| self.expr(fx, x)).collect();
         self.call_lit_arg = match args.first().map(|x| self.const_eval(fx.module, x)) {
             Some(Some(crate::gen_const::Const::Str(s))) => Some(self.m.atom(&s)),

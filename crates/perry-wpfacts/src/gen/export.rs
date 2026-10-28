@@ -26,6 +26,43 @@ impl<'a> Gen<'a> {
     /// Connect every module's export declarations to their export nodes.
     pub fn link_exports(&mut self) {
         let modules = self.modules.clone();
+        // The names each module exports itself: they shadow every `export *`
+        // (ECMAScript ResolveExport, §16.2.1.6.3; DECISIONS 215).
+        let mut own: crate::pts::FxHashSet<(u32, Atom)> = Default::default();
+        for mi in 0..modules.len() {
+            let mut names: Vec<&str> = Vec::new();
+            for e in self.exports_of(mi) {
+                match e {
+                    Export::Named { exported, .. } | Export::ReExport { exported, .. } => {
+                        names.push(exported)
+                    }
+                    Export::NamespaceReExport { name, .. } => names.push(name),
+                    Export::ExportAll { .. } => {}
+                }
+            }
+            names.extend(
+                self.exported_functions_of(mi)
+                    .iter()
+                    .map(|(n, _)| n.as_str()),
+            );
+            for f in self.functions_of(mi) {
+                if f.is_exported {
+                    names.push(&f.name);
+                }
+            }
+            for c in self.classes_of(mi) {
+                if c.is_exported {
+                    names.push(&c.name);
+                }
+            }
+            names.extend(self.exported_objects_of(mi).iter().map(|n| n.as_str()));
+            let ns = self.mods[mi].ns_tok;
+            for n in names {
+                let a = self.m.atom(n);
+                own.insert((mi as u32, a));
+                self.m.ns_own.insert((ns, a));
+            }
+        }
         for (mi, (_, module)) in modules.iter().enumerate() {
             let mi = mi as u32;
             let ns = self.mods[mi as usize].ns_tok;
@@ -75,20 +112,14 @@ impl<'a> Gen<'a> {
                         let f = self.m.field(ns, a);
                         self.m.edge(en, f);
                     }
+                    // Every export of `t` is visible through `mi` under its
+                    // own name (DECISIONS 215).
                     Export::ExportAll { source } => match self.resolve_source(mi, module, source) {
                         Some(t) => {
-                            // Every export of `t` is visible through `mi`.
                             let tns = self.mods[t as usize].ns_tok;
-                            let all = self.m.all_fields(tns);
-                            let fa = self.m.field_any(ns);
-                            self.m.edge(all, fa);
-                            let _ = all;
+                            self.m.export_star(ns, tns);
                         }
-                        None => {
-                            let fa = self.m.field_any(ns);
-                            self.m
-                                .add_top(fa, |_| format!("unresolved export * source {source}"));
-                        }
+                        None => self.m.export_star(ns, TOP),
                     },
                     Export::NamespaceReExport { source, name } => {
                         let a = self.m.atom(name);
@@ -152,44 +183,9 @@ impl<'a> Gen<'a> {
             }
         }
         // An export a module never declares, asked for by an importer, reads
-        // through `export *` chains: route every export node through the
-        // namespace's computed-key node (the `export *` targets feed it).
-        // A name the module declares itself is not read through them: an
-        // own export shadows every `export *` (ECMAScript ResolveExport,
-        // §18.14).
-        let mut own: crate::pts::FxHashSet<(u32, Atom)> = Default::default();
-        for mi in 0..modules.len() {
-            let mut names: Vec<&str> = Vec::new();
-            for e in self.exports_of(mi) {
-                match e {
-                    Export::Named { exported, .. } | Export::ReExport { exported, .. } => {
-                        names.push(exported)
-                    }
-                    Export::NamespaceReExport { name, .. } => names.push(name),
-                    Export::ExportAll { .. } => {}
-                }
-            }
-            names.extend(
-                self.exported_functions_of(mi)
-                    .iter()
-                    .map(|(n, _)| n.as_str()),
-            );
-            for f in self.functions_of(mi) {
-                if f.is_exported {
-                    names.push(&f.name);
-                }
-            }
-            for c in self.classes_of(mi) {
-                if c.is_exported {
-                    names.push(&c.name);
-                }
-            }
-            names.extend(self.exported_objects_of(mi).iter().map(|n| n.as_str()));
-            for n in names {
-                let a = self.m.atom(n);
-                own.insert((mi as u32, a));
-            }
-        }
+        // through `export *` chains: the namespace's key of that name (each
+        // `export *` source's key of the name, DECISIONS 215). A name the
+        // module declares itself is not read through them (`own`).
         let keys: Vec<(u32, Atom)> = self.exports.keys().copied().collect();
         for (mi, a) in keys {
             if self
@@ -1040,6 +1036,7 @@ impl<'a> Gen<'a> {
         let Some(u) = self.unit_in else { return };
         let me = self.view.map(|v| v.key.clone()).unwrap_or_default();
         let seed = self.m.node_named("cell", || format!("cell({key})"));
+        self.cell_seeds.insert(n, seed);
         if u.cells_top {
             self.m
                 .add_top(seed, |_| "cell written by a unit over the bound".into());
@@ -1054,6 +1051,10 @@ impl<'a> Gen<'a> {
                 continue;
             }
             let v = self.stand_in_value(0, key, &w.c);
+            if n == self.thrown {
+                let held = self.m.nodes[v as usize].pts.to_sorted();
+                self.m.thrown_in.extend(held);
+            }
             self.m.edge(v, seed);
         }
         self.m.edge(seed, n);
@@ -1852,6 +1853,12 @@ impl<'a> Gen<'a> {
         }
         if let Some(n) = self.import_value(mi, name) {
             return n;
+        }
+        if self.m.explain {
+            eprintln!(
+                "perry: wpfacts explain: unresolved scope name {name} in {}",
+                self.modules[mi as usize].0
+            );
         }
         self.m.top_val(&format!("unresolved scope name {name}"))
     }

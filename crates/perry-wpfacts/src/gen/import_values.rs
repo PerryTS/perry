@@ -62,6 +62,23 @@ impl<'a> Gen<'a> {
                 "re-exported by {src}: no contract of {file} for it"
             ));
         }
+        // A back edge may read this binding before its exporting unit
+        // publishes a named contract in this round. Keep it unknown, but
+        // also track the owner's function when one is known. If this
+        // value reaches unknown code, escaping that stand-in exposes its
+        // result through the census. Merely reading/calling an import
+        // does not let unknown code retain the function itself.
+        let owner = format!("{}:{name}", crate::decl_units::module_of(path));
+        if let Some(c) = self.unit_in.and_then(|u| u.own_fn(&owner)) {
+            let f = self.stand_in_fn(mi, c);
+            let unknown = unresolved(self);
+            // Never add it to the shared TOP node, or use it as the
+            // binding's identity: the binding may have been rebound.
+            let n = self.m.node_l("unknown-import");
+            self.m.edge(unknown, n);
+            self.m.edge(f, n);
+            return n;
+        }
         unresolved(self)
     }
 
@@ -108,7 +125,8 @@ impl<'a> Gen<'a> {
             },
         );
         if open {
-            let fa = self.m.field_any(tok);
+            // Under every name (DECISIONS 215: a named key reads `named_any`).
+            let fa = self.m.named_any(tok);
             self.m.add_top(fa, |_| {
                 format!("namespace of {src}: export * from outside the program")
             });

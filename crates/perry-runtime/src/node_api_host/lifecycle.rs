@@ -1,5 +1,5 @@
 use super::*;
-use crate::async_hooks::AsyncResourceIds;
+use crate::async_hook_slots::AsyncResourceIds;
 use crate::value::JSValue;
 use std::ffi::{c_char, c_void};
 use std::sync::LazyLock;
@@ -96,7 +96,7 @@ pub unsafe extern "C" fn napi_async_init(
         Ok(name) => name,
         Err(status) => return set_status(env, status, "resource name must be a string"),
     };
-    let ids = crate::async_hooks::init_resource(&name, f64::from_bits(resource_bits), true);
+    let ids = crate::async_hook_slots::init_resource(&name, f64::from_bits(resource_bits), true);
     let context = with_env_mut(env, |env| {
         let mut record = Box::new(AsyncContextRecord {
             env_serial: env.serial,
@@ -128,7 +128,7 @@ pub unsafe extern "C" fn napi_async_destroy(env: NapiEnv, context: NapiAsyncCont
         return set_status(env, NapiStatus::InvalidArg, "async context is not live");
     };
     match catch_value_call(env, || {
-        crate::async_hooks::destroy(ids.async_id);
+        crate::async_hook_slots::destroy(ids.async_id);
         f64::from_bits(crate::value::TAG_UNDEFINED)
     }) {
         Ok(_) => ok(env),
@@ -153,11 +153,11 @@ pub unsafe extern "C" fn napi_make_callback(
     let Some(ids) = ids else {
         return set_status(env, NapiStatus::InvalidArg, "async context is not live");
     };
-    if let Err(error) = crate::async_hooks::try_enter_resource_scope(ids) {
+    if let Err(error) = crate::async_hook_slots::try_enter_resource_scope(ids) {
         return store_pending_exception(env, error.to_bits());
     }
     let call_status = napi_call_function(env, recv, function, argc, argv, result);
-    let leave = crate::async_hooks::try_leave_resource_scope(ids.async_id);
+    let leave = crate::async_hook_slots::try_leave_resource_scope(ids.async_id);
     if call_status != NapiStatus::Ok {
         return call_status;
     }

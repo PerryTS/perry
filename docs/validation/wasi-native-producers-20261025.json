@@ -1,0 +1,728 @@
+{
+  "scope": "Native Rust bidirectional generic future/stream producers on the persistent component driver",
+  "baseRevision": "7d7c739ca4253324105e0e5286b9305535b451d6",
+  "qualifiedSnapshot": "v245",
+  "finalDocumentationSnapshot": "v246",
+  "sourceFilesVerifiedExceptValidationLock": 38656,
+  "turnloopSourceFilesVerified": 1529,
+  "postQualificationDocumentationOnly": [
+    "crates/perry-component-host/src/driver.rs",
+    "docs/WASI_COMPONENTS.md",
+    "docs/WASI_ROADMAP.md",
+    "docs/WASI_SUPPORT.md"
+  ],
+  "rustDocumentationDelta": "One Driver doc-comment line removes the obsolete claim that native producer factories are unfinished; exact byte replacement verified.",
+  "shippingCargoLockSha256": "e2fea4dcc6c051c2b340d44015a7ee1cf3a388d572eb554bed8035cc17203599",
+  "shippingLockUnchanged": true,
+  "manifestsUnchanged": true,
+  "wasmtime": "48.0.7",
+  "componentHostAbi": 8,
+  "componentGuestAbi": 2,
+  "tests": {
+    "engineDevelopment": 138,
+    "engineProductionPanicAbort": 138,
+    "witDevelopment": 22,
+    "witProductionPanicAbort": 22,
+    "allTargetsClippy": true,
+    "strictTypescript": true,
+    "typescript": "5.9.3",
+    "productionExecution": "unprivileged uid/gid 65534, one test thread",
+    "tokioGate": "0 root edges/packages/source lines and standalone fixtures clean",
+    "normalDependencyTreeTokioFree": true
+  },
+  "developmentPhases": [
+    {
+      "phase": "invalidate",
+      "exitCode": 0
+    },
+    {
+      "phase": "wit-tests",
+      "exitCode": 0
+    },
+    {
+      "phase": "engine-tests",
+      "exitCode": 0
+    },
+    {
+      "phase": "clippy",
+      "exitCode": 0
+    },
+    {
+      "phase": "wit-cli",
+      "exitCode": 0
+    },
+    {
+      "phase": "bindings",
+      "exitCode": 0
+    },
+    {
+      "phase": "typecheck",
+      "exitCode": 0
+    }
+  ],
+  "productionPhases": [
+    {
+      "phase": "invalidate-engine-wit",
+      "exitCode": 0
+    },
+    {
+      "phase": "build",
+      "exitCode": 0
+    },
+    {
+      "phase": "perry_wit",
+      "exitCode": 0
+    },
+    {
+      "phase": "perry_component_host",
+      "exitCode": 0
+    },
+    {
+      "phase": "tree",
+      "exitCode": 0
+    }
+  ],
+  "negativeControls": {
+    "intent": [
+      {
+        "phase": "invalidate",
+        "exitCode": 0
+      },
+      {
+        "phase": "build",
+        "exitCode": 0
+      },
+      {
+        "phase": "async_values::producer_tests::post_return_writer_controls_win_before_commit_without_dropping_consumed_owners",
+        "exitCode": 101,
+        "expectedFailure": true
+      },
+      {
+        "phase": "async_values::integration_cancel_tests::close_from_post_return_cleanup_wins_before_read_commit_and_drops_payload_once",
+        "exitCode": 101,
+        "expectedFailure": true
+      }
+    ],
+    "close": [
+      {
+        "phase": "invalidate",
+        "exitCode": 0
+      },
+      {
+        "phase": "build",
+        "exitCode": 0
+      },
+      {
+        "phase": "async_values::producer_tests::post_return_writer_controls_win_before_commit_without_dropping_consumed_owners",
+        "exitCode": 101,
+        "expectedFailure": true
+      }
+    ]
+  },
+  "productionArtifacts": {
+    "perry_component_host": {
+      "path": "/root/codex-components-p2-20261021/turnloop-provider-target/prod/build/perry-component-host/96c241177e06800f/out/perry_component_host-96c241177e06800f",
+      "sha256": "2322e90bb060bc1597f33455069cfb341c8e9dd99a51ad3b797b3f7c130142b7",
+      "fresh": false,
+      "frozenPath": "/root/codex-components-p2-20261021/perry-native-producer-v245-artifacts/perry_component_host-tests"
+    },
+    "perry_wit": {
+      "path": "/root/codex-components-p2-20261021/turnloop-provider-target/prod/build/perry-wit/527fd89bba1749a8/out/perry_wit-527fd89bba1749a8",
+      "sha256": "4b3388229ee182e937219598bcc5209a11b2abbad05699e3cbef20ded99278d2",
+      "fresh": false,
+      "frozenPath": "/root/codex-components-p2-20261021/perry-native-producer-v245-artifacts/perry_wit-tests"
+    }
+  },
+  "nativeProducerSubjects": [
+    "production_factory_future_transfers_nominal_resource_and_cancellation_returns_owner_for_retry",
+    "production_factory_stream_partial_write_returns_unconsumed_resource_and_close_produces_eof",
+    "close_pending_stream_writer_discards_unwritten_owner_and_keeps_store_reusable",
+    "production_factories_reject_foreign_types_writers_and_invalid_payloads_without_consuming_owners",
+    "production_factory_compound_and_void_futures_pass_through_original_guest_exports",
+    "production_factory_unit_stream_and_queued_cancellation_preserve_counts",
+    "native_factory_quota_reserves_both_ends_before_running_concurrent_factories",
+    "explicit_producer_abort_retires_only_its_component_and_dropping_started_writer_also_retires",
+    "queued_writer_close_preserves_uncommitted_arguments_and_mailbox_rejection_leaves_a_write_alive",
+    "writer_handles_survive_quiescent_host_recovery_and_restart_of_the_driver",
+    "native_factory_nested_futures_keep_both_writers_and_exact_payload_types",
+    "post_return_writer_controls_win_before_commit_without_dropping_consumed_owners",
+    "native_factory_reader_can_be_returned_by_an_import_and_consumed_inside_the_guest",
+    "native_factory_owned_future_is_read_inside_the_original_resource_defining_guest"
+  ],
+  "behavior": {
+    "types": "AsyncValueType handles retain Store identity, adapter index and WIT payload aliases; foreign types reject before queueing. Actual instantiated types remain private and resource-aware.",
+    "api": [
+      "DriverClient::async_value_types",
+      "DriverClient::create_async_value",
+      "DriverClient::write_async_value",
+      "DriverClient::cancel_async_write",
+      "DriverClient::close_async_writer",
+      "DriverClient::abort_async_writer"
+    ],
+    "factory": "Create {value,writer} descriptors with private nonce/counter tokens. Reserve both endpoints before running the canonical factory. Core writer integers never enter the application transport.",
+    "write": "Bounded 1..65536-element writes; futures take exactly one element; void/unit values use null placeholders. Return {written,remaining,cancelled,closed}. Transactional lowering validates every owned resource and nested async value before commit.",
+    "ownership": "After canonical transfer, unconsumed values lift with fresh owned descriptors; preflight failure and skipped queued writes preserve original owners. Consumed prefixes are never disposed with remaining suffixes.",
+    "cancellation": "Submission-time intent wins before semantic commit even after helper return. Cancellation returns remaining ownership for retry; stream close disposes it and closes writable continuation. Accepted controls survive observer drop.",
+    "operationIdentity": "Delayed cancellation only targets operation IDs registered at submission; a subsequent retry is not cancelled by an older request.",
+    "abort": "Explicit producer abort validates ownership then retires only that Store; dropping a started write observer also retires it. Future writer close is rejected before setting cancellation intent; completion or explicit abort is required.",
+    "quota": "1024 live readable/writer descriptors plus in-flight factory reservations, 64 outstanding commands; 512 concurrent pairs fill the live quota and excess factories reject without orphaning ends.",
+    "lifecycle": "Quiescent Host recovery and restarting the driver retain writer metadata. Immutable adapter metadata is shared by Arc across read/write operations.",
+    "guests": "Real canonical guest reads consume factory-created futures returned by a host import or passed to an async export, including own<resource> defined by that guest; invocation origin and exact nominal identity survive.",
+    "payloads": "Compound wide integer/Unicode/65,537 bytes, nested futures, unit streams with 3/3/1 partial writes, resource cancellation/retry, unread peer closure and independent prefix/remainder destruction.",
+    "legacy": "TypeScript remains on its existing single-call ABI. Generic TypeScript methods are declarations only until per-invocation frames, wrappers and GC ownership are wired."
+  },
+  "security": {
+    "auditExitCode": 1,
+    "denyExitCode": 0,
+    "outstandingAdvisory": "RUSTSEC-2026-0387",
+    "versions": [
+      "crypto-bigint 0.5.5",
+      "crypto-bigint 0.7.5"
+    ],
+    "baselineAlsoFails": true,
+    "componentEngineNormalTreeAffected": false,
+    "newAuditIgnoreAdded": false,
+    "status": "Workspace advisory remains unresolved; no manifest/lock change or audit exception in this milestone."
+  },
+  "validationDependencyOverride": "Only validation locks/config use immutable Turnloop paths. No released registry dependency or shipping package claim.",
+  "notQualified": [
+    "TypeScript ABI9 per-invocation callback/cleanup frames, ALS and error routing",
+    "owned traced TypeScript future/stream wrappers, producer interfaces and GC deferred close",
+    "maintained C async guest adapter and cross-language async composition",
+    "new compiler/runtime or moving-GC acceptance",
+    "macOS/Windows current providers and final packaging",
+    "workspace security-audit readiness"
+  ],
+  "developmentFailuresRetained": [
+    "v240 Access lacks data(); used data_mut() for native manager access",
+    "v241 constructing requests::State outside its module required a constructor",
+    "v242 all 135 engine tests passed; Clippy large enum variant and slice clone; share Adapter metadata via Arc and borrow the input slice"
+  ],
+  "postQualificationAdditions": [
+    "Documentation delta above, validation receipt and pending changeset only."
+  ],
+  "evidenceMembers": {
+    "development/v240/engine-tests.log": {
+      "sha256": "5b3c7b73e9d9c338078319347113bcf505c1eda693a84982dbc8a1d06cd5b2e2",
+      "bytes": 6460
+    },
+    "development/v240/invalidate.log": {
+      "sha256": "02d635a0b495d1f54b06a306c22c0d0222b8a8605250561e3a21bd624ef75457",
+      "bytes": 84
+    },
+    "development/v240/phases.json": {
+      "sha256": "ea362c52a83f636518aca24a4599ace3fdecdd3202c485f0cb616c1de01720f0",
+      "bytes": 168
+    },
+    "development/v240/wit-tests.log": {
+      "sha256": "d8441788cd054b56b6bab9b500dced2109fdd5271c15d803dc26ddcdf0901bde",
+      "bytes": 6603
+    },
+    "development/v241/engine-tests.log": {
+      "sha256": "9ea8b268c76f5b04db8a60a4b81964e29dfd9e6f547b5be865227d5c4935ea4c",
+      "bytes": 5101
+    },
+    "development/v241/invalidate.log": {
+      "sha256": "738719c7ecacad3f08e77e7221dab793675a603ba18d87f7b1061ee9cb9dc43b",
+      "bytes": 82
+    },
+    "development/v241/phases.json": {
+      "sha256": "ea362c52a83f636518aca24a4599ace3fdecdd3202c485f0cb616c1de01720f0",
+      "bytes": 168
+    },
+    "development/v241/wit-tests.log": {
+      "sha256": "80d677777d55b199f4efa9e5ba53d1e05491f47a8a46d86b822fb2e49b384d34",
+      "bytes": 6603
+    },
+    "development/v242/clippy.log": {
+      "sha256": "308f1b2f5698b400af64f1010667a9cfc4d995ab8c722f26a1e4a06757efc82e",
+      "bytes": 6245
+    },
+    "development/v242/engine-tests.log": {
+      "sha256": "d13b12a7ea68ef8a930cac7ff9a24f9f5418c6c01f4f754c29cf170b657ac1f3",
+      "bytes": 18745
+    },
+    "development/v242/invalidate.log": {
+      "sha256": "738719c7ecacad3f08e77e7221dab793675a603ba18d87f7b1061ee9cb9dc43b",
+      "bytes": 82
+    },
+    "development/v242/phases.json": {
+      "sha256": "87160046ea289aec1b04145a8999514784e53c58595589a5e1ae1c0cc755c459",
+      "bytes": 218
+    },
+    "development/v242/wit-tests.log": {
+      "sha256": "1eab7465a62aa27d441c6f4301bc72a0e6997f78bf17b6c6b9816cde2d1d121a",
+      "bytes": 6603
+    },
+    "development/v243/bindings.log": {
+      "sha256": "24d9d0a8abf430c960b39c5a173f06418669cd3d65c92451ba352c9c845f33cd",
+      "bytes": 45
+    },
+    "development/v243/clippy.log": {
+      "sha256": "348ab5dc97d86b970b51fb84d0b5da6a37396bc7d8e9cc54cb6a2e1c5776c201",
+      "bytes": 4644
+    },
+    "development/v243/engine-tests.log": {
+      "sha256": "3bf6f2448ccd95e40be4b257e1b58bc896236f324f89b03c61c4befe72db0c81",
+      "bytes": 18745
+    },
+    "development/v243/invalidate.log": {
+      "sha256": "9d44d47ba9b816cf10ede1df9f0a404553679bf3e514e906af3719cc0e34b166",
+      "bytes": 83
+    },
+    "development/v243/phases.json": {
+      "sha256": "f9944cd53ef88c1f3ec1a1d1a6e5955f7f04399f8d2957fd0e655a3f318ab06e",
+      "bytes": 372
+    },
+    "development/v243/typecheck/generated/bindings.ts": {
+      "sha256": "48619a5a79cb7cb7732ca61102947dc11a8cc875ce96cfe39f20bd2220cb513b",
+      "bytes": 4112
+    },
+    "development/v243/typecheck/generated/guest.ts": {
+      "sha256": "af6183533059cb638a34cc452efad842c1a1552ef7e14a80ea8a4102fae9d951",
+      "bytes": 3266
+    },
+    "development/v243/typecheck/generated/world.json": {
+      "sha256": "f017262e5153ce478af7e9774ede1a8a305b60d96fa6d51b21e894f8e6b136f0",
+      "bytes": 2977
+    },
+    "development/v243/typecheck/tsconfig.json": {
+      "sha256": "f55ea26e9028b9a54e69712a058ab556b32b41f2d5ba6719a3f20497170148c9",
+      "bytes": 530
+    },
+    "development/v243/typecheck/typecheck.ts": {
+      "sha256": "7db75513776920a75cfd664346a561439bde3ba892932409da5e2786f0f17344",
+      "bytes": 1570
+    },
+    "development/v243/typecheck/world.wit": {
+      "sha256": "bb9a38bcf36ea263746c7fa5e274a7708b6784b26589ed9f698eaa136cfb2727",
+      "bytes": 365
+    },
+    "development/v243/typecheck.log": {
+      "sha256": "24d9d0a8abf430c960b39c5a173f06418669cd3d65c92451ba352c9c845f33cd",
+      "bytes": 45
+    },
+    "development/v243/wit-cli.log": {
+      "sha256": "20d0556a7a519c4f628779ca1706d7b2440b89aa41f82edfa1eed40ed5066b30",
+      "bytes": 4507
+    },
+    "development/v243/wit-tests.log": {
+      "sha256": "0e536b9c707c775b0da8d3b0e6a3bba896dc61ad2fdb6871174feafda7b578ab",
+      "bytes": 6603
+    },
+    "development/v245/bindings.log": {
+      "sha256": "24d9d0a8abf430c960b39c5a173f06418669cd3d65c92451ba352c9c845f33cd",
+      "bytes": 45
+    },
+    "development/v245/clippy.log": {
+      "sha256": "2da806bb54f2f08c3e4a84d01830203d089a6f3a45abf193f71048b6f816d201",
+      "bytes": 4644
+    },
+    "development/v245/engine-tests.log": {
+      "sha256": "fc141c94d293a3a7ad9dd412a31b7918d569deea7af28d69cccf75672308c0a2",
+      "bytes": 19111
+    },
+    "development/v245/invalidate.log": {
+      "sha256": "51309ea781287fd869569190328e1e5e9c47671f19493b77e96bf02ddbe45476",
+      "bytes": 84
+    },
+    "development/v245/phases.json": {
+      "sha256": "f9944cd53ef88c1f3ec1a1d1a6e5955f7f04399f8d2957fd0e655a3f318ab06e",
+      "bytes": 372
+    },
+    "development/v245/typecheck/generated/bindings.ts": {
+      "sha256": "48619a5a79cb7cb7732ca61102947dc11a8cc875ce96cfe39f20bd2220cb513b",
+      "bytes": 4112
+    },
+    "development/v245/typecheck/generated/guest.ts": {
+      "sha256": "af6183533059cb638a34cc452efad842c1a1552ef7e14a80ea8a4102fae9d951",
+      "bytes": 3266
+    },
+    "development/v245/typecheck/generated/world.json": {
+      "sha256": "f017262e5153ce478af7e9774ede1a8a305b60d96fa6d51b21e894f8e6b136f0",
+      "bytes": 2977
+    },
+    "development/v245/typecheck/tsconfig.json": {
+      "sha256": "f3e96cb8170dbf35ef331e432edfeb35c12523373f7393d20966313b8d8dccc4",
+      "bytes": 530
+    },
+    "development/v245/typecheck/typecheck.ts": {
+      "sha256": "7db75513776920a75cfd664346a561439bde3ba892932409da5e2786f0f17344",
+      "bytes": 1570
+    },
+    "development/v245/typecheck/world.wit": {
+      "sha256": "bb9a38bcf36ea263746c7fa5e274a7708b6784b26589ed9f698eaa136cfb2727",
+      "bytes": 365
+    },
+    "development/v245/typecheck.log": {
+      "sha256": "24d9d0a8abf430c960b39c5a173f06418669cd3d65c92451ba352c9c845f33cd",
+      "bytes": 45
+    },
+    "development/v245/wit-cli.log": {
+      "sha256": "f6644026c63218eaafd7be133af412d18085604b9a76fed71edb397e47ee7a32",
+      "bytes": 4507
+    },
+    "development/v245/wit-tests.log": {
+      "sha256": "3a75e05a92596162c58c5a492aec0bbb3defc0a95471b8eabf476d1981c76eba",
+      "bytes": 6603
+    },
+    "production/build.log": {
+      "sha256": "41cc763afbf764e224c7764dde7a01500e6da6cc7a4b0ae45cbfb2cc5b0ede54",
+      "bytes": 265352
+    },
+    "production/invalidate-engine-wit.log": {
+      "sha256": "1989603e9478c5fa6464102cd3345ec7d0b3ca9b345ac32f91813281d6a5c058",
+      "bytes": 82
+    },
+    "production/perry_component_host-binary.json": {
+      "sha256": "0ef85bb95da921988face4a295b154d69d767d8c900ad2eb37ab92240c8fdc1f",
+      "bytes": 265
+    },
+    "production/perry_component_host-tests.log": {
+      "sha256": "c477994cdaa65ddce1184f127c836a596b1262d48b12d63ebb9eb38b693285c1",
+      "bytes": 14319
+    },
+    "production/perry_wit-binary.json": {
+      "sha256": "fe773164f059096e0f27ca97d06512b3a02d103755f8e1f3a457426bdfaeae56",
+      "bytes": 243
+    },
+    "production/perry_wit-tests.log": {
+      "sha256": "3ff5a9600103dda6546a13dea6edd747c4b20a9149cd97872df00d0326d30515",
+      "bytes": 1971
+    },
+    "production/phases.json": {
+      "sha256": "d00c2e369b040c60ad77d6038ccd37f870b32e99c2e3f040ff4e966ea0dab61f",
+      "bytes": 282
+    },
+    "production/tree.log": {
+      "sha256": "28c70723ddd070e03763807e726f0abb782b55249cf8187f3a56431e25d562c2",
+      "bytes": 12498
+    },
+    "negative/intent/build.log": {
+      "sha256": "eadb0bad4e1cadad3320f584feaaa8c4f76114ab4bfd33d1744d473ee93c305d",
+      "bytes": 269368
+    },
+    "negative/intent/invalidate.log": {
+      "sha256": "d7f139a331cdbdb44517d2003422b8bda3712783c551876e8823a8f34f7b2023",
+      "bytes": 83
+    },
+    "negative/intent/negative-0.log": {
+      "sha256": "8f38e2144aa29604c53dd53b82f1c00f4d65a2359b896e618871f8de2e41db69",
+      "bytes": 906
+    },
+    "negative/intent/negative-1.log": {
+      "sha256": "3c3df58249f9e77bb3de020522ea758606b790b8fccc05ccaea6b346d43abf97",
+      "bytes": 997
+    },
+    "negative/intent/phases.json": {
+      "sha256": "adfd196a30ade3b53d920deb4e983b8e0991de20c3eefc3a622891f3285e9887",
+      "bytes": 481
+    },
+    "negative/intent/requests.rs": {
+      "sha256": "98fda49ef38ca69aab599dc1bce8b8e933e6a73a0c42bef1299daae3f3bf4af6",
+      "bytes": 17105
+    },
+    "negative/close/build.log": {
+      "sha256": "b4eba6b1c5062c7a84908eb7f0f2487d5938ab31de2187625ee48623322f9569",
+      "bytes": 269352
+    },
+    "negative/close/invalidate.log": {
+      "sha256": "7259e72d4bc2f4cac559cf29911038788da5381f283beedd6a2e4ed18186547f",
+      "bytes": 82
+    },
+    "negative/close/negative-0.log": {
+      "sha256": "2995cca98e881283b287965b29e20217d57526e373ed97b9caac935cd19a88cd",
+      "bytes": 1051
+    },
+    "negative/close/phases.json": {
+      "sha256": "3677006c2f57b26d213a3555df990ce8bd7abef93c689f486a697be2e5bc3c29",
+      "bytes": 289
+    },
+    "negative/close/requests.rs": {
+      "sha256": "6e152383356c6fee747639356f352169258fcd512b907b5a13b6ca8e4fe202ee",
+      "bytes": 17066
+    },
+    "security/Cargo.lock": {
+      "sha256": "e2fea4dcc6c051c2b340d44015a7ee1cf3a388d572eb554bed8035cc17203599",
+      "bytes": 258501
+    },
+    "security/audit-baseline.log": {
+      "sha256": "00c765eeb96938fa9018defdeacc685422123d5247132ad85aaa8a5ae80f6a21",
+      "bytes": 2948
+    },
+    "security/audit.log": {
+      "sha256": "df3e75773d2dddca85303a7b626ffd549cac2038c17f691547c24d9236a9f64c",
+      "bytes": 3040
+    },
+    "security/component-tree.log": {
+      "sha256": "8b45cad6b7ad35c6f1b4bb9c67146371b764e8da71e27c18caaa2ceca30973bf",
+      "bytes": 11858
+    },
+    "security/crypto-new-tree.log": {
+      "sha256": "c69ed9071b22a5a865a82a13a45154567524852a83690c0f2674dcc5a811293d",
+      "bytes": 505
+    },
+    "security/crypto-old-tree.log": {
+      "sha256": "b3b5fd925ae709377e2a2a650dd47c21fcff639f445f2e5e4987af13b9663caf",
+      "bytes": 908
+    },
+    "security/deny.log": {
+      "sha256": "e6ff654c545198a09478fb3b1d29421064d9c172707e3c2cce67784871d2ebe6",
+      "bytes": 1095522
+    },
+    "security/lock.log": {
+      "sha256": "749f9ca3db5fe38d9c2d9aa6eeed688688d1ef921d6ddb5f164a57932f98154a",
+      "bytes": 467
+    },
+    "snapshots/perry-http-runtime-v245-manifest.json": {
+      "sha256": "09bce719b7d6d5160bdbf90524df9284cf18b9666d54bdcc313fbab25f1f36fd",
+      "bytes": 5673477
+    },
+    "snapshots/perry-http-runtime-v245-overlay.tar.gz": {
+      "sha256": "c8574cf19d9fbb6e7b2bd165fcc7272c81f2261034c548c65d7977c38737aed0",
+      "bytes": 873248
+    },
+    "snapshots/perry-http-runtime-v246-manifest.json": {
+      "sha256": "7301a89db6c019d2f63ce0178bbd082eafdf5e2101e2f3efdba4c51fd1fb1244",
+      "bytes": 5673477
+    },
+    "snapshots/perry-http-runtime-v246-overlay.tar.gz": {
+      "sha256": "74be0253bea72937d5c1e4c4f227cebef1fc86dc7385e90b592ca16197c1862a",
+      "bytes": 873764
+    },
+    "source/crates/perry-component-host/src/async_values/cancel.component.wat": {
+      "sha256": "f2aa5923749113715ba9c40e4ecef077ad77097340593249d696257233a13cd7",
+      "bytes": 6655
+    },
+    "source/crates/perry-component-host/src/async_values/cancel_tests.rs": {
+      "sha256": "48c5cc4b715deb6ef55de3967390fb6ad84b2b69b8a92a71f54baf29a54658fd",
+      "bytes": 4484
+    },
+    "source/crates/perry-component-host/src/async_values/compose.rs": {
+      "sha256": "64657725e71ded96a1ffe9f372e4cea734431aa27db320c03bb6a1ce1def0ca2",
+      "bytes": 8990
+    },
+    "source/crates/perry-component-host/src/async_values/compound-producer.component.wat": {
+      "sha256": "d2864611778fc59895cdf2f1ce7760af37e35c23850950635b828c4d63457176",
+      "bytes": 5057
+    },
+    "source/crates/perry-component-host/src/async_values/contract_tests.rs": {
+      "sha256": "ed6f1fee8d36b14727c53d281b3df0266a7b407c71bc82e81a27be3c9b620c2a",
+      "bytes": 732
+    },
+    "source/crates/perry-component-host/src/async_values/control.rs": {
+      "sha256": "0822ba3c530319870509d925e3900ca9d95ff91b238c3a5eb8b8758e5f073b90",
+      "bytes": 2912
+    },
+    "source/crates/perry-component-host/src/async_values/factory-echo.component.wat": {
+      "sha256": "415d49c7bd53ee28ad0ebb165092d9257e9ad68914d6f32042c14a083f334188",
+      "bytes": 906
+    },
+    "source/crates/perry-component-host/src/async_values/factory-import.component.wat": {
+      "sha256": "41d25e89add98a6a123d92d529f88365fe9b9908073c245de88a42b3cc689eb2",
+      "bytes": 2683
+    },
+    "source/crates/perry-component-host/src/async_values/factory-owned-consumer.wat": {
+      "sha256": "876f11f5f74a9863445c928d331212511aabe24daed0c14c9a61161be07fbbb7",
+      "bytes": 2334
+    },
+    "source/crates/perry-component-host/src/async_values/heap.wat": {
+      "sha256": "d5195643a9affba2550641ca2d94d9a2e57ce7d048693898fc2181df78dd6cda",
+      "bytes": 4725
+    },
+    "source/crates/perry-component-host/src/async_values/heap_tests.rs": {
+      "sha256": "8a0f26ce07a0213910f4054a022f49f139b8ee83583a825c145e51499f07c28e",
+      "bytes": 3583
+    },
+    "source/crates/perry-component-host/src/async_values/imported-producer.component.wat": {
+      "sha256": "efeae8f801290ec786c0705ffb164ea4edcd9160ebe6b6bc583941b0203319a5",
+      "bytes": 4315
+    },
+    "source/crates/perry-component-host/src/async_values/integration_cancel_tests.rs": {
+      "sha256": "44c56ea6fb45752f4ab41285f6295219403186b7fa68e4c4dabbf17754e56190",
+      "bytes": 10241
+    },
+    "source/crates/perry-component-host/src/async_values/integration_tests.rs": {
+      "sha256": "c5ef101b8b829122ab47f15b9433a026267d50a8903c149d3aff2fc84aa0a655",
+      "bytes": 18821
+    },
+    "source/crates/perry-component-host/src/async_values/nested-producer.component.wat": {
+      "sha256": "91e0d253263c1ef8f6c1f4e48d13dcd4e9e4edce81cb09f77ca760f0e6287a1a",
+      "bytes": 6050
+    },
+    "source/crates/perry-component-host/src/async_values/paused-producer.component.wat": {
+      "sha256": "7dfb54e4312ae297c1e6e345d56fd8f5b95eaf8dcf219f9fc5447bca94b195f4",
+      "bytes": 6284
+    },
+    "source/crates/perry-component-host/src/async_values/producer.component.wat": {
+      "sha256": "dedb4a2a2d14244a9d3e2e1c964aa5980ccce7453596e9da90891166433cea16",
+      "bytes": 4325
+    },
+    "source/crates/perry-component-host/src/async_values/producer_tests.rs": {
+      "sha256": "64f01b25a41b3df44a078981aa5ed14eb561625d492a714a5b2cca466874418b",
+      "bytes": 28420
+    },
+    "source/crates/perry-component-host/src/async_values/reader.component.wat": {
+      "sha256": "578bf22c11fc6779f2cac25c0ebb69bcb745e685a6320afdf74663a60f961371",
+      "bytes": 10638
+    },
+    "source/crates/perry-component-host/src/async_values/reader.rs": {
+      "sha256": "31ba5db1d1bea9e211fdcb4c66dd673ba4e2529ea257f226f4a8a69797ce1266",
+      "bytes": 5229
+    },
+    "source/crates/perry-component-host/src/async_values/reader_cleanup.rs": {
+      "sha256": "cb0b679d8815bb2a016d3748869a831f8d9582572f7c440b6f027a058fe93688",
+      "bytes": 3294
+    },
+    "source/crates/perry-component-host/src/async_values/reader_dispose.rs": {
+      "sha256": "89355cbc4fdea7a87b85055cd9213801aea7fef4188750da05957171e40fda34",
+      "bytes": 5834
+    },
+    "source/crates/perry-component-host/src/async_values/reader_tests.rs": {
+      "sha256": "2b1b705bea9d040d7ad4057567cb55effc5ff930617acf0f45673199331633c2",
+      "bytes": 27352
+    },
+    "source/crates/perry-component-host/src/async_values/reader_types.rs": {
+      "sha256": "18f401b95107f3723f632451c12483e0dfbe75d3ab0ccda09861b9c76d8f63d5",
+      "bytes": 9727
+    },
+    "source/crates/perry-component-host/src/async_values/task_context.component.wat": {
+      "sha256": "73dffa26aa7a1401a4ad935a71fc5df843ae5643fb28bdf2e9cc5569b31aac5b",
+      "bytes": 3495
+    },
+    "source/crates/perry-component-host/src/async_values/task_context_tests.rs": {
+      "sha256": "4be897f1680c598db678755f8984f2f181c80240d713ac27dbe8e7cff5887206",
+      "bytes": 4824
+    },
+    "source/crates/perry-component-host/src/async_values/transfer_tests.rs": {
+      "sha256": "5f951f530dbc65aae1ae75a34f4d514e64d4df87c433367daf8334ff8a1f7d15",
+      "bytes": 4428
+    },
+    "source/crates/perry-component-host/src/async_values/values.rs": {
+      "sha256": "aa0ae8e784168fe84d784fb40b2ba819272128ba52d421b72dc0db649ba3c51b",
+      "bytes": 9040
+    },
+    "source/crates/perry-component-host/src/async_values/writer.rs": {
+      "sha256": "4e556c4e1b137356aaa72ff2154b2098eb96ebf8637fb03ab429e02fbcb41b27",
+      "bytes": 4107
+    },
+    "source/crates/perry-component-host/src/async_values/writer.wat": {
+      "sha256": "60f9e565f5f7b5c9ae2efc6633e914b92950ddb2ec7b90aea21cb19f43bb8b13",
+      "bytes": 6761
+    },
+    "source/crates/perry-component-host/src/async_values/writer_tests.rs": {
+      "sha256": "8b02ead3028cb275dbf7111ef906e808a80fd4ed91e8206bc9c19a46df22b4f6",
+      "bytes": 15459
+    },
+    "source/crates/perry-component-host/src/async_values/writers.rs": {
+      "sha256": "ecc8a53de57e1243db046d490433e5fda7bff2b9298a087afce95c4eca8360b7",
+      "bytes": 7529
+    },
+    "source/crates/perry-component-host/src/driver/async_values.rs": {
+      "sha256": "20c86fd08adcf128ba1161d4529558e8588ec02b630532f57518a79ea61cf71c",
+      "bytes": 7957
+    },
+    "source/crates/perry-component-host/src/driver/requests.rs": {
+      "sha256": "f0bfeea996d99a16b7d4d3c8aaf0bee2dd5a72095f8aeb1affa456f75932cb65",
+      "bytes": 17071
+    },
+    "source/crates/perry-component-host/src/driver/tests.rs": {
+      "sha256": "8ca072b424b9f7717332d7df6a49e226c48ffc4290cf4bef7af83d16c409a571",
+      "bytes": 20503
+    },
+    "source/crates/perry-component-host/src/driver/writers.rs": {
+      "sha256": "c0e3e871deca5a00d4670a071176ce46cffdab4b9243bd10f26d67a5d9dfe172",
+      "bytes": 6863
+    },
+    "source/crates/perry-component-host/src/async_values.rs": {
+      "sha256": "36967ef5ca532c4c85bbae98cf8bd82da1cb8702e005782c00f6dce9f5456e5d",
+      "bytes": 1539
+    },
+    "source/crates/perry-component-host/src/driver.rs": {
+      "sha256": "d1485024b90b8a638e7bc382419b9b24e205178220efc532003f9de11f1a4899",
+      "bytes": 13170
+    },
+    "source/crates/perry-component-host/src/lib.rs": {
+      "sha256": "a81068bdd2d517e8b58f1cdbf132ec5cb6d28da16657b298e585fec3fd698dee",
+      "bytes": 18525
+    },
+    "source/crates/perry-component-host/src/transport.rs": {
+      "sha256": "fb60efc769884b1c4110bfc32c9a438422ee68487bd62df46e26b27cf3c317f6",
+      "bytes": 9497
+    },
+    "source/crates/perry-component-host/src/wire.rs": {
+      "sha256": "9b11ed580405f98900a038c485a8ba42cfe143bfbd322ce553251eaebe7730a0",
+      "bytes": 14016
+    },
+    "source/crates/perry-component-host/Cargo.toml": {
+      "sha256": "b57b9f1dbf0244a20c17eecb8f4483d7a78339923c3dad7c047da5e7738c5819",
+      "bytes": 795
+    },
+    "source/Cargo.toml": {
+      "sha256": "1cc7f5b244a66d940dcab64b6e7f40ac3693ba0f26b4e0fb1cb1ccce5a4f256e",
+      "bytes": 30952
+    },
+    "source/Cargo.lock": {
+      "sha256": "9b33197bcb5a09b4ae9f5c1a9a7f0dd2678be1f8dcba8fefb9d81f3942d8410b",
+      "bytes": 258641
+    },
+    "source/.cargo/config.toml": {
+      "sha256": "f78759b1721b9116d5024ea3c52e7f8a57b0fa6dbfea95af53e9c5c2accbcbc0",
+      "bytes": 4738
+    },
+    "source/rust-toolchain.toml": {
+      "sha256": "02d08527a444fc4330aecf139695ef487fed9059cc1473f65e67e64a782cc348",
+      "bytes": 876
+    },
+    "source/docs/WASI_COMPONENTS.md": {
+      "sha256": "ce7fb82719f54c7495955b815573225d948b56116b660a3dea36b98b804f57cd",
+      "bytes": 50864
+    },
+    "source/docs/WASI_SUPPORT.md": {
+      "sha256": "9f4a6a140b1ed7ff3724e19629e7e0b306506f10c98fd57f9dc006f41ae6029d",
+      "bytes": 19970
+    },
+    "source/docs/WASI_ROADMAP.md": {
+      "sha256": "d8355162c476db71c066f8cce72cba74647474f7de0260a48b9c1915c6df1d61",
+      "bytes": 14052
+    },
+    "tools/perry-native-producer-prod.py": {
+      "sha256": "c159d59ca1c1a7593752c8ef88d1aacbce9d101a678f92ad0da5e4946fc82808",
+      "bytes": 7643
+    },
+    "tools/perry-native-producer-negative.py": {
+      "sha256": "6306cf48f303c140fd60a66acac1a4e848b32d06ef29982ab170b9fbb3ef7ce5",
+      "bytes": 3513
+    },
+    "tools/perry-native-producer-verify.py": {
+      "sha256": "c92295495196c6b4ec8233986ebc9f692495d08caf32cc3e910486977f6786ff",
+      "bytes": 12408
+    },
+    "tools/perry-generic-async-check.py": {
+      "sha256": "4fdc625ea6e87a282d7bc8248fac7b49f2eb31826980cb63579c5fd257c1fe0e",
+      "bytes": 2962
+    },
+    "tools/perry-p3-http-bridge-prepare.py": {
+      "sha256": "5a26b049c35d9469c5ac7b2b4e7a289a8cda20097f493e80753dd0e04c01ab75",
+      "bytes": 1997
+    },
+    "tools/turnloop-http-case-v3-manifest.json": {
+      "sha256": "71ee0f2692d2e9f02ec3710c3c9c380dba2f9ece84ab55242542e25b09d5ea46",
+      "bytes": 207761
+    },
+    "tools/turnloop-http-case-v3-patch.toml": {
+      "sha256": "fc4a5afe7272cfc9eaa5e96448188bf2c42ec8d62ec0728182932f515201bcaa",
+      "bytes": 340
+    },
+    "checks/tokio.log": {
+      "sha256": "fe4f2bd9190b963378e83eeb8c9f38d5f4b08ff5522c06bbf3b6e3ece97bbf61",
+      "bytes": 138
+    }
+  },
+  "evidenceArchive": {
+    "archive": "perry-native-producer-v246-evidence.tar.gz",
+    "sha256": "558938ee09f0300526a3270eabc4052dd1ece87e0d000baac53f7f9d130669ac",
+    "bytes": 5585461,
+    "verifiedMembers": 129
+  }
+}

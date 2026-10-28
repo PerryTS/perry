@@ -18,7 +18,7 @@ unsafe fn throw_dom_exception(name: &str, message: &str) -> ! {
     let message_str = perry_runtime::js_string_from_bytes(message.as_ptr(), message.len() as u32);
     let name_val = f64::from_bits(JSValue::string_ptr(name_str).bits());
     let message_val = f64::from_bits(JSValue::string_ptr(message_str).bits());
-    let err = perry_runtime::event_target::js_dom_exception_new(message_val, name_val);
+    let err = perry_runtime::event_target_hook_slots::js_dom_exception_new(message_val, name_val);
     if err.is_null() {
         throw_type_error(message);
     }

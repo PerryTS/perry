@@ -1,0 +1,10 @@
+package test:async-guest-exports@1.0.0;
+world plugin {
+    record payload { text: string, bytes: list<u8>, owner: u32 }
+    export wait: async func(id: u32, input: payload) -> payload;
+    export wake: func(id: u32);
+    export immediate: async func(input: payload) -> payload;
+    export empty: async func();
+    export status: func() -> u32;
+    export reject: async func();
+}

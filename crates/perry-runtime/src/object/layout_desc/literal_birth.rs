@@ -103,10 +103,13 @@ pub(super) fn descriptor_at(index: u32) -> Option<(*const PerryLayoutDesc, bool)
         // Runtime inventory follows both program spans. Program births only
         // subtract linker bounds; they never walk or count the inventory.
         #[cfg(target_family = "wasm")]
-        return inventory::iter::<crate::wasm_image::Layout>
-            .into_iter()
-            .nth((offset - literal_bytes) / std::mem::size_of::<PerryLayoutDesc>())
-            .map(|item| (item.0.cast_const(), false));
+        return super::enumeration::enumerated_layout_at(
+            inventory::iter::<crate::wasm_image::Layout>
+                .into_iter()
+                .map(|item| item.0),
+            ((offset - literal_bytes) / std::mem::size_of::<PerryLayoutDesc>()) as u32,
+        )
+        .map(|desc| (desc, false));
         #[cfg(not(target_family = "wasm"))]
         return None;
     }
@@ -148,10 +151,15 @@ pub(super) fn literal_index(desc: *const PerryLayoutDesc) -> Option<u32> {
 /// linker-owned program spans in the same checked index space.
 #[cfg(target_family = "wasm")]
 pub(super) fn runtime_index(desc: *const PerryLayoutDesc) -> Option<u32> {
-    let position = inventory::iter::<crate::wasm_image::Layout>
-        .into_iter()
-        .position(|item| std::ptr::eq(item.0, desc))?;
-    let index = count(layout_bounds()) + count(bounds()) + u32::try_from(position).ok()?;
+    let position = super::enumeration::enumerated_layout_index(
+        inventory::iter::<crate::wasm_image::Layout>
+            .into_iter()
+            .map(|item| item.0),
+        desc,
+    )?;
+    let index = count(layout_bounds())
+        .checked_add(count(bounds()))?
+        .checked_add(position)?;
     (index < LAYOUT_INDEX_LIMIT).then_some(index)
 }
 

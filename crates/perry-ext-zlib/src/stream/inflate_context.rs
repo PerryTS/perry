@@ -5,7 +5,7 @@
 //! moving this Rust handle never moves the C stream or retains input bytes.
 
 use super::allocation::{out_of_memory, Placed};
-use libz_ng_sys as z;
+use super::zsys as z;
 use perry_ffi::native_payload::buffer::BufferOwner;
 use std::ffi::{c_void, CStr};
 use std::io::{self, ErrorKind};

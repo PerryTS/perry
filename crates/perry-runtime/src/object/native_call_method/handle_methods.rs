@@ -148,8 +148,8 @@ pub(super) unsafe fn dispatch_handle(
         // callback-bearing + immutable methods to the shared helper before the
         // GC_TYPE_ARRAY check below (which only matches plain arrays).
         // Issues #2797 / #2798 / #2799.
-        if crate::typedarray::lookup_typed_array_kind(raw_ptr).is_some() {
-            let ta = raw_ptr as *mut crate::typedarray::TypedArrayHeader;
+        if crate::typedarray_hook_slots::lookup_typed_array_kind(raw_ptr).is_some() {
+            let ta = raw_ptr as *mut crate::typedarray_hook_slots::TypedArrayHeader;
             if let Some(r) = dispatch_typed_array_method(ta, method_name, args_ptr, args_len) {
                 return Some(r);
             }
@@ -856,7 +856,7 @@ pub(super) unsafe fn dispatch_handle(
                 ));
             }
             if let Some(result) =
-                crate::node_test::dispatch_object_method((*obj).class_id, method_name)
+                crate::node_test_hook_slots::dispatch_object_method((*obj).class_id, method_name)
             {
                 return Some(result);
             }
@@ -893,10 +893,7 @@ pub(super) unsafe fn dispatch_handle(
             if (*obj).class_id == crate::regex::REGEXP_STRING_ITERATOR_CLASS_ID
                 && crate::collection_iter_object::is_intrinsic_iterator_method(method_name)
             {
-                return Some(crate::regex::dispatch_regexp_string_iterator_method(
-                    obj as *mut ObjectHeader,
-                    method_name,
-                ));
+                return crate::regex::hooked_iterator_method(obj as *mut ObjectHeader, method_name);
             }
             // #2874: lazy iterator-helper objects (`Iterator.from(x)` and the
             // chain it produces: `.map`/`.filter`/`.take`/`.drop`/`.flatMap`/

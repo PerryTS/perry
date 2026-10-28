@@ -129,7 +129,7 @@ fn proxy_layout_never_proves_an_array_builtin() {
         );
         assert!(array_admits(&mut ordinary, b"map", &mut []));
         let handler = crate::object::js_object_alloc(0, 0);
-        let mut proxy = crate::proxy::js_proxy_new(
+        let mut proxy = crate::proxy_hooks::proxy_new(
             crate::value::js_nanbox_pointer(
                 target.get_raw_mut_ptr::<crate::array::ArrayHeader>() as i64
             ),
@@ -138,7 +138,7 @@ fn proxy_layout_never_proves_an_array_builtin() {
         assert!(!array_fast_admits(proxy));
         assert!(!array_admits(&mut proxy, b"map", &mut []));
         assert!(!crate::object::builtin_proto::receiver_pristine(proxy));
-        crate::proxy::js_proxy_revoke(proxy);
+        crate::proxy_hooks::proxy_revoke(proxy);
         assert!(!array_admits(&mut proxy, b"push", &mut []));
         assert!(!crate::object::builtin_proto::receiver_pristine(proxy));
     }

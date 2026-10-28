@@ -694,6 +694,10 @@ pub enum ModuleInitKind {
     /// Every path from the entry to this module goes through a dynamic
     /// `import()` edge — init runs on first dispatch.
     Deferred,
+    /// Reached from the entry only through a CommonJS `require` edge
+    /// (design CJS_LINK §2.2): the entry's eager sequence skips it and the
+    /// first edge that runs evaluates it, which is Node's order.
+    OnDemand,
 }
 
 /// Determine the module kind for a given import path

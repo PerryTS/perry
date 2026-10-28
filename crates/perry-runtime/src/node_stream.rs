@@ -353,24 +353,30 @@ extern "C" fn ns_readable_resume_microtask(
     let scope = crate::gc::RuntimeHandleScope::new();
     let stream =
         scope.root_nanbox_f64(f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64));
-    let s = || stream.get_nanbox_f64();
     set_hidden_value(
-        s(),
+        stream.get_nanbox_f64(),
         hidden_readable_resume_scheduled_key(),
         f64::from_bits(TAG_FALSE),
     );
-    if readable_is_flowing(s()) && !stream_destroyed(s()) {
+    if readable_is_flowing(stream.get_nanbox_f64()) && !stream_destroyed(stream.get_nanbox_f64()) {
         // node's `resume_`: `read(0)` unless a `_read` is in flight, then
         // 'resume', the flow, and `read(0)` again while flowing.
-        let hook = has_read_hook(s());
-        if hook && !read_in_flight(s()) {
-            invoke_read_once(s());
+        let hook = has_read_hook(stream.get_nanbox_f64());
+        if hook && !read_in_flight(stream.get_nanbox_f64()) {
+            invoke_read_once(stream.get_nanbox_f64());
         }
-        let _ = emit_stream_event(s(), literal_string_value(b"resume"), &[]);
-        flush_pending_readable_chunks(s());
-        schedule_readable_from_drain(s());
-        if !hook || (readable_is_flowing(s()) && !read_in_flight(s())) {
-            invoke_read_once(s());
+        let _ = emit_stream_event(
+            stream.get_nanbox_f64(),
+            literal_string_value(b"resume"),
+            &[],
+        );
+        flush_pending_readable_chunks(stream.get_nanbox_f64());
+        schedule_readable_from_drain(stream.get_nanbox_f64());
+        if !hook
+            || (readable_is_flowing(stream.get_nanbox_f64())
+                && !read_in_flight(stream.get_nanbox_f64()))
+        {
+            invoke_read_once(stream.get_nanbox_f64());
         }
     }
     f64::from_bits(TAG_UNDEFINED)
@@ -440,13 +446,17 @@ extern "C" fn ns_finished_signal_abort(
     let callback = js_closure_get_capture_f64(closure, 1);
     let signal = js_closure_get_capture_f64(closure, 3);
     if let Some(signal_obj) = object_ptr_from_value(signal) {
-        crate::url::js_abort_signal_remove_listener(
+        crate::event_target_hook_slots::js_abort_signal_remove_listener(
             signal_obj,
             literal_string_value(b"abort"),
             box_pointer(closure as *const u8),
         );
     }
-    call_listener_args(stream, callback, &[crate::url::js_abort_error_value()]);
+    call_listener_args(
+        stream,
+        callback,
+        &[crate::event_target_hook_slots::js_abort_error_value()],
+    );
     f64::from_bits(TAG_UNDEFINED)
 }
 
@@ -1202,12 +1212,7 @@ extern "C" fn ns_uncork0(closure: *const ClosureHeader, this: crate::closure::Js
     uncork_stream(this_value(closure, this))
 }
 
-extern "C" fn writable_write_callback_noop(
-    _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
-) -> f64 {
-    f64::from_bits(TAG_UNDEFINED)
-}
+use crate::closure::body_call::native_noop0 as writable_write_callback_noop;
 
 fn invoke_writable_write(stream: f64, chunk: f64, enc: f64, len: f64, callback: f64) {
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -1481,7 +1486,7 @@ fn stream_value_from_handle(stream_handle: i64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_node_stream_method_emit(stream_handle: i64, event: f64, arg: f64) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
-    if let Some(result) = crate::fs::utf8_stream_emit_value(stream, event, arg) {
+    if let Some(result) = crate::fs_hook_slots::utf8_stream_emit_value(stream, event, arg) {
         return result;
     }
     let mut args = crate::array::js_array_alloc(0);
@@ -1508,7 +1513,7 @@ pub extern "C" fn js_node_stream_method_emit_args(
             f64::from_bits(TAG_UNDEFINED)
         }
     };
-    if let Some(result) = crate::fs::utf8_stream_emit_value(stream, event, first_arg) {
+    if let Some(result) = crate::fs_hook_slots::utf8_stream_emit_value(stream, event, first_arg) {
         return result;
     }
     emit_stream_event_from_array(stream, event, args_ptr as *const crate::array::ArrayHeader)
@@ -1763,7 +1768,7 @@ pub extern "C" fn js_node_stream_method_write(
     cb: f64,
 ) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
-    if let Some(result) = crate::fs::utf8_stream_write_value(stream, chunk) {
+    if let Some(result) = crate::fs_hook_slots::utf8_stream_write_value(stream, chunk) {
         return result;
     }
     write_writable_chunk(stream, chunk, enc, cb)
@@ -1782,7 +1787,7 @@ pub extern "C" fn js_node_stream_method_write3(
 #[no_mangle]
 pub extern "C" fn js_node_stream_method_end(stream_handle: i64, chunk: f64) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
-    if let Some(result) = crate::fs::utf8_stream_end_value(stream, chunk) {
+    if let Some(result) = crate::fs_hook_slots::utf8_stream_end_value(stream, chunk) {
         return result;
     }
     finish_stream_with_args(
@@ -1802,7 +1807,7 @@ pub extern "C" fn js_node_stream_method_end3(
     cb: f64,
 ) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
-    if let Some(result) = crate::fs::utf8_stream_end_value(stream, chunk) {
+    if let Some(result) = crate::fs_hook_slots::utf8_stream_end_value(stream, chunk) {
         return result;
     }
     finish_stream_with_args(stream, chunk, encoding, cb);

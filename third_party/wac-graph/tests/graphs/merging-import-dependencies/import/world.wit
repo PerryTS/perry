@@ -1,0 +1,10 @@
+package foo:test-import;
+
+world w {
+    export my-interface;
+}
+
+interface my-interface{
+    use foo:dependency/types.{my-variant};
+    my-func: func() -> my-variant;
+}
