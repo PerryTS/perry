@@ -66,7 +66,7 @@ pub fn emit(out: &Path) {
                 if bucket == "stream" {
                     "super::install_nm_ee_ops(); crate::stream_hooks::install(); super::super::native_module_registry::install_stream_constructor_metadata();"
                 } else {
-                    "super::install_nm_ee_ops(); crate::stream_hooks::install();"
+                    "super::install_nm_ee_ops(); crate::stream_hooks::install_emitter();"
                 }
             } else if bucket == "wasi" {
                 "crate::wasi_hook_slots::install();"
@@ -150,9 +150,9 @@ pub extern "C" fn {symbol}(observe_writes: i32) -> f64 {{
             "zlib" => "constants::nm_const_zlib",
             "http" | "https" => "constants::nm_const_http",
             "cluster" => "constants::nm_const_cluster",
-            _ => "constants::get_native_module_constant",
+            _ => "constants::selected_native_module_constant",
         };
-        let args = if owner.ends_with("get_native_module_constant") {
+        let args = if owner.ends_with("selected_native_module_constant") {
             "0.0"
         } else {
             "0.0, false"

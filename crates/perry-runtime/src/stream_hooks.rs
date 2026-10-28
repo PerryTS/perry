@@ -84,10 +84,16 @@ pub(crate) fn ensure_lazy_stream(value: f64) -> f64 {
     ENSURE_LAZY_STREAM.get().map_or_else(|| value, |f| f(value))
 }
 
-pub(crate) fn install() {
+/// Emitter construction owns only emitter initialization. Stream probes are
+/// installed by stream births, whose layouts make those probes meaningful.
+pub(crate) fn install_emitter() {
     JS_EVENT_EMITTER_SUBCLASS_INIT.set(crate::node_stream::js_event_emitter_subclass_init);
     JS_EVENT_EMITTER_ASYNC_RESOURCE_SUBCLASS_INIT
         .set(crate::node_stream::js_event_emitter_async_resource_subclass_init);
+}
+
+pub(crate) fn install() {
+    install_emitter();
     IS_CLASSIC_STREAM_INSTANCE_VALUE.set(crate::node_stream::is_classic_stream_instance_value);
     IS_CLASSIC_STREAM_INSTANCE_OF.set(crate::node_stream::is_classic_stream_instance_of);
     READABLE_HANDLE_ASYNC_ITERATOR

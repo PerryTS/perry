@@ -179,10 +179,19 @@ fn dns_error_alias(property: &str) -> Option<&'static str> {
     }
 }
 
-/// Return constant (non-method) property values for native modules.
-/// Returns None for method names, which should create bound closures instead.
-#[inline(always)]
+/// Dynamic namespace reads share one resolver. Only a statically selected
+/// export should specialize this body for its module and property literals.
 pub(crate) unsafe fn get_native_module_constant(
+    module_name: &str,
+    property: &str,
+    namespace: f64,
+) -> Option<f64> {
+    selected_native_module_constant(module_name, property, namespace)
+}
+
+/// Return one statically selected non-method export without its neighbours.
+#[inline(always)]
+pub(crate) unsafe fn selected_native_module_constant(
     module_name: &str,
     property: &str,
     namespace_obj: f64,
