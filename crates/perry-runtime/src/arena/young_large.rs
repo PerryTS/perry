@@ -90,7 +90,7 @@ pub(crate) fn young_large_in_use_bytes() -> usize {
 /// The nursery budget includes large ownership. The copying/reset quantity
 /// excludes it, so it cannot skew small-object survival or survivor influx.
 pub(crate) fn moving_from_space_in_use_bytes() -> usize {
-    copying_from_space_in_use_bytes().saturating_sub(young_large_in_use_bytes())
+    young_in_use_bytes().saturating_sub(young_large_in_use_bytes())
 }
 
 pub(crate) fn is_large_storage(addr: usize) -> bool {

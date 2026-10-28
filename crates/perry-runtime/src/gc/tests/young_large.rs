@@ -197,3 +197,27 @@ fn large_birth_after_sweep_snapshot_survives_only_that_cycle() {
     .join()
     .unwrap();
 }
+
+#[test]
+fn large_leaf_pressure_does_not_pretenure_the_special_json_output() {
+    std::thread::spawn(|| unsafe {
+        let _guard = CopyingNurseryTestGuard::new(0);
+        let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        seed_young_survival_for_tests(999);
+        let base = gc_scavenge_nursery_cap_bytes();
+        let moving_before = crate::arena::moving_from_space_in_use_bytes();
+        let _large = leaf(base + LARGE_OBJECT_THRESHOLD_BYTES);
+        let output = (base / 2).max(moving_before + 1024) as u32;
+        assert!(crate::arena::young_in_use_bytes() >= base);
+        assert_eq!(
+            crate::arena::moving_from_space_in_use_bytes(),
+            moving_before
+        );
+        assert!(
+            !crate::string::json_leaf_prefers_arena(output),
+            "a non-moving leaf is not the retained copying tree of the legacy JSON route"
+        );
+    })
+    .join()
+    .unwrap();
+}

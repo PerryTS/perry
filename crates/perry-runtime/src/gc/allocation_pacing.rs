@@ -465,3 +465,11 @@ pub(crate) fn arm_young_after_large_birth() {
         super::policy::set_safepoint_pending(true);
     }
 }
+
+/// The legacy JSON output route is justified by a copying nursery's cost.
+/// Large non-moving owners count against the young budget, but cannot stand
+/// in for the moving tree this staged workaround was written for.
+pub(crate) fn moving_young_generation_holds_a_nursery() -> bool {
+    super::policy::young_generation_holds_a_nursery()
+        && crate::arena::moving_from_space_in_use_bytes() >= super::gc_scavenge_nursery_cap_bytes()
+}

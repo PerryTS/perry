@@ -840,8 +840,8 @@ pub(crate) fn json_output_storage_alloc(capacity: u32) -> (*mut StringHeader, *m
 #[inline]
 pub(crate) fn json_leaf_prefers_arena(capacity: u32) -> bool {
     crate::gc::gen_gc_enabled()
-        && crate::arena::copying_from_space_in_use_bytes() >= capacity as usize
-        && crate::gc::young_generation_holds_a_nursery()
+        && crate::arena::moving_from_space_in_use_bytes() >= capacity as usize
+        && crate::gc::allocation_pacing::moving_young_generation_holds_a_nursery()
         && !crate::gc::young_generation_measured_dying()
 }
 

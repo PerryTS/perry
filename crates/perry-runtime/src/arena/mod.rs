@@ -13,6 +13,7 @@ mod block;
 pub(crate) use block::discard_dead_payload_pages;
 mod construction;
 mod from_space;
+pub(crate) use from_space::copying_from_space_in_use_bytes as young_in_use_bytes;
 mod young_large;
 pub(crate) use young_large::{young_large_in_use_bytes, moving_from_space_in_use_bytes,
     is_large_storage, finish_copied_young_large, finish_swept_young_large};
