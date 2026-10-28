@@ -76,6 +76,10 @@ pub struct LlFunction {
     /// "is this code hot?" rather than "should LLVM's threshold move?" read
     /// this.
     pub hot_loop_callee: bool,
+    /// A verified numeric indexed region supplies its own storage/range/effect
+    /// proofs. Let LLVM optimize its counted loops for execution rather than
+    /// applying the default application-size policy to the containing body.
+    pub has_indexed_owner_region: bool,
     /// #7871: `collectors::collect_alloc_hot_functions` admitted this function
     /// — it has an in-loop direct call site (uncapped) or calls itself. Read
     /// ONLY by `lower_call/new_alloc.rs::new_site_is_in_loop`; it must not be
@@ -269,6 +273,8 @@ struct ShadowFramePush {
     post_init: bool,
     /// Index of the line within that region.
     line_idx: usize,
+    /// The push line plus the state/handle lines after it.
+    line_count: usize,
     /// SSA register the push result is assigned to, needed to re-render.
     handle_reg: String,
 }
@@ -299,6 +305,7 @@ impl LlFunction {
             nanbox_operands: false,
             inline_hint: false,
             hot_loop_callee: false,
+            has_indexed_owner_region: false,
             alloc_hot: false,
             personality: None,
             blocks: Vec::new(),
@@ -412,10 +419,12 @@ impl LlFunction {
             let line_idx = self.entry_allocas.len();
             (&mut self.entry_allocas, line_idx)
         };
+        let line_count = 1 + rest.len();
         region.splice(line_idx..line_idx, std::iter::once(push_line).chain(rest));
         self.shadow_frame_push = Some(ShadowFramePush {
             post_init,
             line_idx,
+            line_count,
             handle_reg: state_reg,
         });
         self.shadow_frame_slot_count = slot_count;
@@ -713,7 +722,7 @@ impl LlFunction {
     pub fn entry_setup_call_void(&mut self, func_name: &str, args: &[(LlvmType, &str)]) {
         crate::ext_registry::record_ffi_call(func_name);
         self.reg_counter
-            .note_shadow_slot_bind(func_name, args.get(1).map(|(_, v)| *v));
+            .note_shadow_slot_write(func_name, args.get(1).map(|(_, v)| *v));
         let arg_str = args
             .iter()
             .map(|(ty, value)| format!("{} {}", ty, value))
@@ -1025,10 +1034,13 @@ impl LlFunction {
     /// internal/private definitions so cross-unit calls bind (mirror of
     /// `render_fn_external`).
     pub fn define_header(&self, force_external: bool) -> String {
-        self.define_header_with_size_attrs(
-            force_external,
-            crate::linker::application_size_function_attrs(),
-        )
+        let attrs = crate::linker::application_size_function_attrs();
+        let attrs = if self.has_indexed_owner_region && attrs == " optsize" {
+            ""
+        } else {
+            attrs
+        };
+        self.define_header_with_size_attrs(force_external, attrs)
     }
 
     /// The linkage word a codegen-unit definition carries, empty when the
@@ -1154,6 +1166,31 @@ impl LlFunction {
         self.to_ir_with_gc_leaf_callees(&HashSet::new())
     }
 
+    /// The frame-handle slot of a shadow frame that is actually rendered.
+    ///
+    /// The frame is sized before lowering, from bindings that may turn out
+    /// never to be rooted (a specialized entry's `i32` parameter, a local the
+    /// Number proof clears). A frame no slot write reaches holds only zeroes
+    /// and roots nothing, so it is not rendered: no push, no pop, no pad
+    /// restore. Decided here, after lowering, from the writes themselves.
+    fn rendered_shadow_frame_slot(&self) -> Option<&String> {
+        self.shadow_frame_slot
+            .as_ref()
+            .filter(|_| self.reg_counter.shadow_slot_written())
+    }
+
+    /// Whether line `idx` of the entry region (`post_init` selects which) is
+    /// part of a shadow-frame push that is not rendered.
+    fn is_unrendered_push_line(&self, post_init: bool, idx: usize) -> bool {
+        match &self.shadow_frame_push {
+            Some(push) if push.post_init == post_init => {
+                self.rendered_shadow_frame_slot().is_none()
+                    && (push.line_idx..push.line_idx + push.line_count).contains(&idx)
+            }
+            _ => false,
+        }
+    }
+
     /// Render with the module's transitive Perry-GC leaf closure available at
     /// direct call sites. Standalone function tests use [`Self::to_ir`] and an
     /// empty set; module and codegen-unit renderers compute the whole-module
@@ -1248,7 +1285,7 @@ impl LlFunction {
         sink: &mut dyn FnMut(FinalItem<'_>) -> Result<(), E>,
     ) -> Result<(), E> {
         let rewrite_rets =
-            self.shadow_frame_slot.is_some() || !self.pre_return_void_calls.is_empty();
+            self.rendered_shadow_frame_slot().is_some() || !self.pre_return_void_calls.is_empty();
         let mut seq: u32 = 0;
         for (i, blk) in self.blocks.iter().enumerate() {
             if i > 0 {
@@ -1261,7 +1298,10 @@ impl LlFunction {
                     let alloca = format!("  {reg} = alloca [{count} x double], align 8");
                     self.text_item(&alloca, rewrite_rets, &mut seq, sink)?;
                 }
-                for alloca in &self.entry_allocas {
+                for (line_idx, alloca) in self.entry_allocas.iter().enumerate() {
+                    if self.is_unrendered_push_line(false, line_idx) {
+                        continue;
+                    }
                     self.text_item(alloca, rewrite_rets, &mut seq, sink)?;
                 }
             }
@@ -1276,7 +1316,10 @@ impl LlFunction {
             let mut in_entry_block = is_entry;
             for inst in blk.insts() {
                 if idx == boundary {
-                    for line in &self.entry_post_init_setup {
+                    for (line_idx, line) in self.entry_post_init_setup.iter().enumerate() {
+                        if self.is_unrendered_push_line(true, line_idx) {
+                            continue;
+                        }
                         self.text_item(line, rewrite_rets, &mut seq, sink)?;
                     }
                 }
@@ -1290,7 +1333,10 @@ impl LlFunction {
                 idx += 1;
             }
             if is_entry && idx == boundary {
-                for line in &self.entry_post_init_setup {
+                for (line_idx, line) in self.entry_post_init_setup.iter().enumerate() {
+                    if self.is_unrendered_push_line(true, line_idx) {
+                        continue;
+                    }
                     self.text_item(line, rewrite_rets, &mut seq, sink)?;
                 }
             }
@@ -1346,7 +1392,7 @@ impl LlFunction {
         seq: &mut u32,
         sink: &mut dyn FnMut(FinalItem<'_>) -> Result<(), E>,
     ) -> Result<(), E> {
-        let Some(handle_slot) = &self.shadow_frame_slot else {
+        let Some(handle_slot) = self.rendered_shadow_frame_slot() else {
             return Ok(());
         };
         if !matches!(inst, crate::inst::LlInst::Call { callee, .. } if callee == "js_eh_pad_enter")
@@ -1394,7 +1440,7 @@ impl LlFunction {
         for func_name in &self.pre_return_void_calls {
             sink(FinalItem::Text(&format!("  call void @{}()", func_name)))?;
         }
-        if let Some(handle_slot) = &self.shadow_frame_slot {
+        if let Some(handle_slot) = self.rendered_shadow_frame_slot() {
             let load_reg = format!("%shadow_pop_l_{}", seq);
             *seq += 1;
             sink(FinalItem::Text(&format!(
@@ -1656,6 +1702,50 @@ mod define_header_tests {
                  is not the backend in that build, and claiming it would run the \
                  pass over IR that has no addrspace(1) roots to rewrite"
             );
+        }
+    }
+
+    /// A shadow frame that no slot write reaches roots nothing, so it renders
+    /// no push and no pop (a specialized raw-i32 frame: sized for its
+    /// parameter, which the `i32` rep never roots). The same frame renders
+    /// both once one bind or set reaches it, in either entry region.
+    #[test]
+    fn shadow_frame_renders_only_when_a_slot_is_written() {
+        use crate::codegen::helpers::NativeRootsPin;
+        use crate::types::{DOUBLE, I32, I64, PTR};
+        let _shadow = NativeRootsPin::shadow();
+        let render = |post_init: bool, write: Option<&str>| {
+            let mut f = probe();
+            if post_init {
+                f.enable_post_init_shadow_frame(2);
+            } else {
+                f.enable_shadow_frame(2);
+            }
+            let slot = f.alloca_entry(DOUBLE);
+            let entry = f.create_block("entry");
+            match write {
+                Some("bind") => entry.call_void("js_shadow_slot_bind", &[(I32, "0"), (PTR, &slot)]),
+                Some(_) => entry.call_void("js_shadow_slot_set", &[(I32, "1"), (I64, "0")]),
+                None => {}
+            }
+            entry.ret(DOUBLE, "%a");
+            f.to_ir()
+        };
+        for post_init in [false, true] {
+            let unwritten = render(post_init, None);
+            assert!(!unwritten.contains("@js_shadow_frame_enter"), "{unwritten}");
+            assert!(!unwritten.contains("@js_shadow_frame_pop"), "{unwritten}");
+            for write in ["bind", "set"] {
+                let written = render(post_init, Some(write));
+                assert!(
+                    written.contains("call ptr @js_shadow_frame_enter(i32 2)"),
+                    "{write}: {written}"
+                );
+                assert!(
+                    written.contains("call void @js_shadow_frame_pop("),
+                    "{write}: {written}"
+                );
+            }
         }
     }
 

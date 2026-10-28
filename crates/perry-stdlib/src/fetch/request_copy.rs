@@ -142,7 +142,7 @@ pub unsafe extern "C" fn js_request_new_from_input(input: f64, init: f64) -> f64
     let signal = field(b"signal");
     if signal.to_bits() != TAG_UNDEFINED {
         if signal.to_bits() != TAG_NULL
-            && perry_runtime::url::js_abort_signal_resolve_ptr(signal).is_null()
+            && perry_runtime::event_target_hook_slots::js_abort_signal_resolve_ptr(signal).is_null()
         {
             throw_fetch_type_error("Request signal must be an AbortSignal");
         }

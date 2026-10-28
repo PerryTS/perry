@@ -139,7 +139,7 @@
 //! ```
 
 use std::ptr;
-use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[cfg(test)]
 use crate::bigint::BIGINT_LIMBS;
@@ -459,46 +459,7 @@ pub use clone_read::deserialize_nanbox_on_current_thread;
 use clone_write::serialize_capture_for_thread;
 pub use clone_write::{serialize_message, serialize_nanbox_for_thread};
 
-/// Cross-thread codec hook for `fs.promises` FileHandle values (binary
-/// size). The serializer's FileHandle probe and the deserializer's
-/// detached-handle builder live in `crate::fs`; referencing them statically
-/// from this always-linked codec pinned the whole fs surface into every
-/// binary (the microtask pump drains diagnostics publishes through the
-/// codec, so it is reachable from `main` unconditionally). `crate::fs` arms
-/// the hook at the top of `build_filehandle_object` — before the first
-/// FileHandle object can exist — so a program that never creates one links
-/// none of it and can never observe the difference: with no FileHandle in
-/// the process, the probe cannot match and the variant is never produced.
-pub(crate) struct FsThreadCodec {
-    /// `is_fs_filehandle_value(v) || filehandle_object_fd(v).is_some()`.
-    pub is_filehandle: fn(f64) -> bool,
-    /// `build_detached_filehandle_object` (FileHandle shape, `fd === -1`).
-    pub build_detached: fn() -> f64,
-}
-
-static FS_THREAD_CODEC: AtomicPtr<FsThreadCodec> = AtomicPtr::new(ptr::null_mut());
-
-pub(crate) fn arm_fs_thread_codec(codec: &'static FsThreadCodec) {
-    // `black_box` for the same reason as `NM_INSTALL_ALL_HOOK`: a
-    // single-store AtomicPtr gets speculatively devirtualized by
-    // whole-program optimization (only one value is ever stored, so the
-    // compiler proves it and re-materializes the direct reference —
-    // re-pinning everything this hook exists to unpin).
-    FS_THREAD_CODEC.store(
-        std::hint::black_box(codec as *const FsThreadCodec as *mut FsThreadCodec),
-        Ordering::Release,
-    );
-}
-
-fn fs_thread_codec() -> Option<&'static FsThreadCodec> {
-    let p = FS_THREAD_CODEC.load(Ordering::Acquire);
-    if p.is_null() {
-        None
-    } else {
-        // SAFETY: only ever stores `&'static FsThreadCodec`.
-        Some(unsafe { &*p })
-    }
-}
+pub(crate) use crate::thread_hook_slots::{arm_fs_thread_codec, fs_thread_codec, FsThreadCodec};
 
 /// Human-readable name for a GC object type that cannot cross a thread
 /// boundary. Used only to build the TypeError message (#6185).

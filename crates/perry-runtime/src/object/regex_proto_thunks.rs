@@ -249,7 +249,12 @@ pub(super) extern "C" fn regex_proto_exec_thunk(
     let re = regex_instance_or_throw(this, "exec");
     let scope = crate::gc::RuntimeHandleScope::new();
     let re = scope.root_raw_const_ptr(re);
-    let s = crate::value::js_jsvalue_to_string_coerce(arg);
+    let s = if let Some(string) = crate::regex::perex_dispatch::primitive_string(arg) {
+        string
+    } else {
+        let argument = scope.root_nanbox_f64(arg);
+        crate::regex::perex_api::finish(crate::regex::perex_dispatch::to_string(&argument))
+    };
     // Re-read after the coercion; `js_regexp_exec` roots both arguments.
     let arr =
         re.with_mut_ptr::<crate::regex::RegExpHeader, _>(|re| crate::regex::js_regexp_exec(re, s));
@@ -378,7 +383,7 @@ pub(crate) fn is_intrinsic_regexp_constructor(value: f64) -> bool {
 /// prototype methods. `compile` is only installed here when the `regex-engine`
 /// feature is on; the fallback no-op (for builds without an engine) is installed
 /// by the caller.
-pub(super) fn install_regex_proto_methods(proto_obj: *mut ObjectHeader) {
+pub(crate) fn install_regex_proto_methods(proto_obj: *mut ObjectHeader) {
     use super::global_this::install_proto_method as ipm;
     #[cfg(feature = "regex-engine")]
     ipm(
@@ -486,7 +491,7 @@ fn install_regex_symbol_methods(proto: *mut crate::object::ObjectHeader) {
 }
 
 /// Install all RegExp.prototype accessor getters.
-pub(super) fn install_regex_proto_accessors(proto_obj: *mut ObjectHeader) {
+pub(crate) fn install_regex_proto_accessors(proto_obj: *mut ObjectHeader) {
     install_getter(
         proto_obj,
         "flags",
@@ -538,3 +543,5 @@ pub(super) fn install_regex_proto_accessors(proto_obj: *mut ObjectHeader) {
         crate::fn_info!(regex_proto_has_indices_getter, 0; with_declared(0)),
     );
 }
+
+crate::realm_decl!("regex_proto_thunks.realm.json#*");

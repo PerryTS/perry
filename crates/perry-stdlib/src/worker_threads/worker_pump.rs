@@ -34,6 +34,10 @@ pub(super) fn start_stdin_reader() {
         return;
     }
 
+    // Threads never run on wasi: no reader, so no stdin messages.
+    if cfg!(target_os = "wasi") {
+        return;
+    }
     // Spawn a thread to read lines from stdin
     // We use a regular thread (not tokio) because stdin reading is blocking
     std::thread::spawn(move || {
@@ -121,7 +125,7 @@ pub extern "C" fn js_worker_threads_process_pending() -> i32 {
                 dispatch_worker_event(worker_id, "exit", Some(code as f64));
                 if let Some(async_resources) = async_resources {
                     for resource in async_resources {
-                        perry_runtime::async_hooks::destroy(resource.async_id);
+                        perry_runtime::async_hook_slots::destroy(resource.async_id);
                     }
                 }
                 if let Some(promise) = terminate_promise {
@@ -223,7 +227,7 @@ fn dispatch_worker_event(worker_id: u64, event: &str, arg: Option<f64>) -> bool 
     let (object_bits, callbacks, async_resources): (
         u64,
         Vec<(u64, bool)>,
-        [perry_runtime::async_hooks::AsyncResourceIds; 3],
+        [perry_runtime::async_hook_slots::AsyncResourceIds; 3],
     ) = {
         let mut workers = WORKERS.lock().unwrap();
         let Some(worker) = workers.get_mut(&worker_id) else {
@@ -269,7 +273,7 @@ fn dispatch_worker_event(worker_id: u64, event: &str, arg: Option<f64>) -> bool 
         _ => async_resources[0],
     };
     let mut listened = !callbacks.is_empty();
-    perry_runtime::async_hooks::run_resource_scope_catching(resource, || {
+    perry_runtime::async_hook_slots::run_resource_scope_catching(resource, || {
         let property_name = match event {
             "message" => Some("onmessage"),
             "error" => Some("onerror"),

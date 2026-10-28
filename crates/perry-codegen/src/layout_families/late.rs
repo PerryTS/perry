@@ -62,8 +62,10 @@ fn late_key_ok(k: &str) -> bool {
 }
 
 /// One receiver group's static keys.
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub(super) struct Group {
+    /// Module-local binding identity, retained only for code selection.
+    local: Option<u32>,
     /// Every key read or written through it.
     keys: BTreeSet<String>,
     /// Keys stored through it, in first-store order.
@@ -73,7 +75,7 @@ pub(super) struct Group {
     /// The local is a new object: initialised by `new`, or by a factory call
     /// whose callee returns one of its own locals (the stores of a creation
     /// group come before any later phase's).
-    creation: bool,
+    pub(super) creation: bool,
     /// The number literals of the arguments of the call (or `new`) that
     /// initialises the local, by position (`None`: not a number literal).
     /// A family whose constructor stores a parameter into a constructor key
@@ -630,7 +632,13 @@ pub(super) fn module_groups(hir: &HirModule) -> Vec<(Option<u32>, Group)> {
             }
         }
     }
-    let mut out: Vec<(Option<u32>, Group)> = locals.into_values().map(|g| (None, g)).collect();
+    let mut out: Vec<(Option<u32>, Group)> = locals
+        .into_iter()
+        .map(|(id, mut g)| {
+            g.local = Some(id);
+            (None, g)
+        })
+        .collect();
     out.extend(c.thises.into_inner().into_iter().map(|(c, g)| (Some(c), g)));
     out
 }
@@ -1060,4 +1068,46 @@ mod tests {
         // No constructor key: no family.
         assert!(fams(&["symbol", "flowNode"]).is_empty());
     }
+}
+
+/// Select one unambiguous literal family by the existing creation/use census.
+/// This is not a lifetime proof: the read always checks the current ShapeId.
+pub(super) fn receiver_candidates(
+    hir: &HirModule,
+    layouts: &super::ProgramLayouts,
+) -> BTreeMap<u32, u32> {
+    if layouts.literal_families.is_empty() {
+        return BTreeMap::new();
+    }
+    let families: Vec<_> = layouts.families.values().collect();
+    let owns: Vec<_> = families
+        .iter()
+        .map(|f| {
+            property_keys(
+                &f.keys[..f.own_count as usize]
+                    .iter()
+                    .map(|(key, _)| key.clone())
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect();
+    let ids: Vec<_> = families.iter().map(|f| f.class_id).collect();
+    module_groups(hir)
+        .into_iter()
+        .filter_map(|(this_class, group)| {
+            if this_class.is_some() {
+                return None;
+            }
+            let id = group.local?;
+            let candidates = group_families(&group, &owns, &ids);
+            if candidates.len() != 1 {
+                return None;
+            }
+            let class = ids[*candidates.first()?];
+            layouts
+                .literal_families
+                .contains(&class)
+                .then_some((id, class))
+        })
+        .collect()
 }

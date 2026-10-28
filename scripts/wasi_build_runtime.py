@@ -40,6 +40,11 @@ def main() -> int:
     if not os.environ.get(f"CC_{target.replace('-', '_')}"):
         sys.exit("Configure wasi-sdk first (scripts/wasi_toolchain.ps1 or wasi_toolchain.sh)")
     features = ",".join(f"perry-runtime/{f}" for f in runtime_features())
+    if target == "wasm32-wasip1":
+        # The one wasip1 archive also carries perry-stdlib and the Node module
+        # crates; the perry-stdlib feature list lives in perry-runtime-static's
+        # Cargo.toml.
+        features += ",perry-runtime-static/wasi-node-modules"
     if args.gc_instruments:
         features += ",perry-runtime/gc-instruments"
     if args.image_selftest:
@@ -51,7 +56,12 @@ def main() -> int:
     # artifact message instead of requiring an mtime change on every build.
     required = {"perry_runtime"}
     live = set()
-    with subprocess.Popen(command, cwd=ROOT, stdout=subprocess.PIPE, text=True) as process:
+    build_env = dict(os.environ)
+    if args.gc_instruments:
+        # Release instruments require both their features and this variant.
+        build_env["PERRY_RUNTIME_INSTRUMENTS"] = "1"
+    with subprocess.Popen(command, cwd=ROOT, env=build_env,
+                          stdout=subprocess.PIPE, text=True) as process:
         for line in process.stdout:
             try:
                 message = json.loads(line)

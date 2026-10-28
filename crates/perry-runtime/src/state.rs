@@ -17,7 +17,7 @@
 //! `RuntimeState` on first use, exactly as each `thread_local!` table used
 //! to lazily initialize per thread. The state is freed at thread exit via
 //! [`StateOwner`]'s TLS destructor, mirroring the drop the old per-table
-//! TLS values received.
+//! TLS values received, except on the thread that ends the process.
 //!
 //! Borrow discipline is also unchanged for now (fields keep their
 //! `RefCell`/`Cell`/`UnsafeCell` wrappers); relaxing it is explicitly a
@@ -78,6 +78,14 @@ struct StateOwner(*mut RuntimeState);
 
 impl Drop for StateOwner {
     fn drop(&mut self) {
+        // The thread that emitted the process `exit` event is ending the
+        // process (natural exit returns from `main` into libc's `exit`, which
+        // runs this destructor): every observable effect already happened, so
+        // the state is left to the OS instead of being torn down entry by
+        // entry. Any other thread's exit frees it.
+        if crate::os_hook_slots::process_exit_event_emitted() {
+            return;
+        }
         STATE_PTR.with(|c| c.set(std::ptr::null_mut()));
         // Safety: `self.0` came from `Box::into_raw` in `init_state` and is
         // only freed here; nulling STATE_PTR above keeps any later `state()`

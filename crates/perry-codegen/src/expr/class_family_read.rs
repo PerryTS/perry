@@ -102,8 +102,14 @@ pub(crate) fn begin(
         return None;
     }
     let class = crate::type_analysis::receiver_class_name(ctx, object)
-        .or_else(|| super::property_get::guarded_declared_class_get_candidate(ctx, object))?;
-    let class_id = *ctx.class_ids.get(&class)?;
+        .or_else(|| super::property_get::guarded_declared_class_get_candidate(ctx, object));
+    let class_id = if let Some(class) = class {
+        *ctx.class_ids.get(&class)?
+    } else if let perry_hir::Expr::LocalGet(id) = object {
+        *ctx.receiver_families.get(id)?
+    } else {
+        return None;
+    };
     let arms = candidates(&ctx.program_layouts, class_id, property);
     if arms.is_empty() {
         return None;
@@ -145,6 +151,8 @@ pub(crate) fn begin(
                 &desc,
                 &[(I64, &crate::layout_desc::DESC_LAYOUT_ID_OFFSET.to_string())],
             );
+            // The whole-image DPA row word is immutable. Publication of the
+            // current agent's shape facts happens before an object is born.
             let expected = blk.load(I32, &ptr);
             // Only a registered ordinary-band layout proves an object. Reject
             // both 0 (declined registration) and u32::MAX (the startup marker).

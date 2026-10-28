@@ -582,7 +582,7 @@ pub extern "C" fn js_module_find_package_json(specifier: f64, base: f64, arg_cou
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_default()
     } else {
-        match crate::url::node_compat::module_base_to_path(base) {
+        match crate::module_require::file_url_text::module_base_to_path(base) {
             Some(p) => p,
             None => {
                 let message = format!(

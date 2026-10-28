@@ -626,12 +626,18 @@ mod dense_layout_tests {
             assert_eq!(layout_descriptor_identity_offset(target), 56);
         }
         use perry_abi::{PerryLayoutImageV1 as Image, PerryStaticLayoutRequestV1 as Request};
-        assert_eq!(std::mem::size_of::<Image>(), 16);
-        assert_eq!(std::mem::align_of::<Image>(), 4);
+        // Four words, then the seed table pointer (WRT step 2): 24 bytes on
+        // LP64, 20 on ILP32, pointer-aligned either way.
+        assert_eq!(
+            std::mem::size_of::<Image>(),
+            16 + std::mem::size_of::<usize>()
+        );
+        assert_eq!(std::mem::align_of::<Image>(), std::mem::size_of::<usize>());
         assert_eq!(std::mem::offset_of!(Image, abi_version), 0);
         assert_eq!(std::mem::offset_of!(Image, static_rows), 4);
         assert_eq!(std::mem::offset_of!(Image, family_first), 8);
         assert_eq!(std::mem::offset_of!(Image, family_count), 12);
+        assert_eq!(std::mem::offset_of!(Image, seeds), 16);
         assert_eq!(std::mem::size_of::<Request>(), 8);
         assert_eq!(std::mem::offset_of!(Request, layout_word), 4);
     }
@@ -641,7 +647,7 @@ mod dense_layout_tests {
 #[test]
 fn emitted_descriptor_type_has_exact_llvm_target_layout() {
     use inkwell::{context::Context, targets::TargetData};
-    for (layout, size, identity) in [("e-p:64:64-i64:64", 80, 72), ("e-p:32:32-i64:64", 64, 56)] {
+    for (layout, size, identity) in [("e-p:64:64-i64:64", 88, 72), ("e-p:32:32-i64:64", 72, 56)] {
         let context = Context::create();
         let ir = format!(
             "%Desc = type {}\n@descriptor = global %Desc zeroinitializer\n",
@@ -654,5 +660,6 @@ fn emitted_descriptor_type_has_exact_llvm_target_layout() {
         assert_eq!(data.offset_of_element(&ty, 5), Some(12));
         assert_eq!(data.offset_of_element(&ty, 15), Some(identity));
         assert_eq!(data.offset_of_element(&ty, 16), Some(identity + 4));
+        assert_eq!(data.offset_of_element(&ty, 17), Some(identity + 8));
     }
 }

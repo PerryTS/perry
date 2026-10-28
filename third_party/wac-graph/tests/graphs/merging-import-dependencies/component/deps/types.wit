@@ -1,0 +1,11 @@
+package foo:dependency;
+
+interface types {
+    record my-record {
+        foo: string
+    }
+}
+
+world w {
+    export types;
+}

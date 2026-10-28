@@ -833,7 +833,7 @@ pub(crate) fn set_foreign_finalizer(
 fn enqueue_foreign_finalizer(addr: usize) {
     if is_foreign_backed_buffer(addr) {
         if let Some(finalizer) = unsafe { (*(addr as *mut ForeignBuffer)).finalizer.take() } {
-            crate::node_api_host::enqueue_finalizer(finalizer);
+            crate::native_finalizer_hook::enqueue(finalizer);
         }
     }
     FOREIGN_FINALIZER_OWNERS.with(|owners| {

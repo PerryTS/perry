@@ -119,14 +119,10 @@ impl Converter<'_> {
     fn function(&mut self, function: &wit_parser::Function) -> Result<Function> {
         use wit_parser::FunctionKind as Kind;
         let kind = match function.kind {
-            Kind::Freestanding => FunctionKind::Function,
+            Kind::Freestanding | Kind::AsyncFreestanding => FunctionKind::Function,
             Kind::Constructor(id) => FunctionKind::Constructor(self.definition(id)?),
-            Kind::Method(id) => FunctionKind::Method(self.definition(id)?),
-            Kind::Static(id) => FunctionKind::Static(self.definition(id)?),
-            _ => bail!(
-                "{}: async functions require the P3 binding profile",
-                function.name
-            ),
+            Kind::Method(id) | Kind::AsyncMethod(id) => FunctionKind::Method(self.definition(id)?),
+            Kind::Static(id) | Kind::AsyncStatic(id) => FunctionKind::Static(self.definition(id)?),
         };
         let params = function
             .params
@@ -143,6 +139,7 @@ impl Converter<'_> {
             params,
             result: function.result.map(|ty| self.ty(ty)).transpose()?,
             kind,
+            async_: function.kind.is_async(),
         })
     }
 
@@ -251,6 +248,22 @@ impl Converter<'_> {
                 err: result.err.map(|ty| self.ty(ty).map(Box::new)).transpose()?,
             },
             TypeDefKind::List(ty) => Type::List(Box::new(self.ty(*ty)?)),
+            TypeDefKind::Future(ty) => {
+                Type::Future(ty.map(|t| self.ty(t).map(Box::new)).transpose()?)
+            }
+            TypeDefKind::Stream(ty) => {
+                let mut payload = *ty;
+                while let Some(wit_parser::Type::Id(id)) = payload {
+                    if let TypeDefKind::Type(next) = self.resolve.types[id].kind {
+                        payload = Some(next);
+                    } else {
+                        break;
+                    }
+                }
+                ensure!(payload != Some(wit_parser::Type::Char),
+                    "type {name}: stream<char> is unsupported; use stream<u8> with an explicit encoding");
+                Type::Stream(ty.map(|t| self.ty(t).map(Box::new)).transpose()?)
+            }
             unsupported => bail!(
                 "type {name}: {} is unsupported by the P2 binding profile",
                 unsupported.as_str()

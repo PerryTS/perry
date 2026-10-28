@@ -27,10 +27,9 @@
 //!      go through the same call chokepoint and pick up the correct edge
 //!      automatically.
 //!
-//! WASI keeps setjmp transport (no landing pads without wasm EH): a WASI
-//! `try` arms a jump buffer with `js_try_push(frame sp)` and pops it with
-//! `js_try_end` on every exit ([`emit_try_end`]); the runtime restores the
-//! managed stacks to the frame's mark before the `longjmp`.
+//! WASI uses scoped wasm exception pads and a frame-owned depth checkpoint.
+//! Its handlers restore the checkpoint before catchret enters ordinary JS CFG;
+//! native action pads and stack-mark restoration remain unchanged.
 //!
 //! History: until #7302 this was setjmp/longjmp-based, which required
 //! `returns_twice` + `noinline` on every try-containing function plus a
@@ -40,20 +39,10 @@
 
 use super::*;
 use crate::block::EhScope;
-use crate::types::{I32, I64, PTR};
+use crate::types::{I64, PTR};
 
-/// Does this target lower `try` with setjmp transport (WASI)?
-pub(crate) fn sjlj_try(ctx: &FnCtx<'_>) -> bool {
-    ctx.target_triple.starts_with("wasm32")
-}
-
-/// Pop one WASI setjmp handler; nothing on targets whose handlers are landing
-/// pads (entering and leaving a `try` costs nothing there).
-pub(crate) fn emit_try_end(ctx: &mut FnCtx<'_>) {
-    if sjlj_try(ctx) {
-        ctx.block().call_void("js_try_end", &[]);
-    }
-}
+/// Lexical wasm handlers have no registration to pop; native pads likewise.
+pub(crate) fn emit_try_end(_ctx: &mut FnCtx<'_>) {}
 
 /// The first instructions of every Perry landing pad after its
 /// `landingpad`: `js_eh_pad_enter(llvm.stacksave(), handle_height)` restores
@@ -121,20 +110,8 @@ pub(super) fn emit_eh_dispatch(
     exc_label: &str,
     normal_label: &str,
 ) -> EhScope {
-    if sjlj_try(ctx) {
-        // WASI uses wasm SjLj. The jump target is this generated frame,
-        // never a Rust frame; the wasm backend rewrites setjmp into EH. The
-        // handler records this frame's stack pointer: a throw restores the
-        // managed stacks to it before the longjmp, as a pad here would. There
-        // is no pad, so no action scope can chain to this handler.
-        let sp = ctx.block().call(PTR, "llvm.stacksave.p0", &[]);
-        let env = ctx.block().call(PTR, "js_try_push", &[(PTR, &sp)]);
-        let status = ctx.block().call(I32, "setjmp", &[(PTR, &env)]);
-        let thrown = ctx.block().next_reg();
-        ctx.block()
-            .emit_raw(format!("{thrown} = icmp ne i32 {status}, 0"));
-        ctx.block().cond_br(&thrown, exc_label, normal_label);
-        return EhScope::handler(String::new(), None);
+    if ctx.target_triple.starts_with("wasm32") {
+        return super::wasm_eh::emit_dispatch(ctx, exc_label, normal_label);
     }
     // One personality for every pad; runtime traps are landing pads too
     // (perry-runtime `exception::trap`), so the unwinder stops at whichever
@@ -239,10 +216,9 @@ pub(crate) fn lower_try(
 
     // --- try body (scope active) ---
     ctx.current_block = try_body_idx;
-    // Return/break/continue inside the body pop a WASI handler via
-    // `emit_try_end` before leaving (see `Stmt::Return` in stmt/mod.rs).
-    // WASI registers every `try` (setjmp), so there every one counts.
-    let counted = registered || sjlj_try(ctx);
+    // Count scopes whose normal exits run the existing completion cleanup.
+    // Lexical wasm handlers require no dynamic registration or pop.
+    let counted = registered;
     ctx.try_depth += usize::from(counted);
     ctx.func.push_eh_scope_entry(scope);
     lower_stmts(ctx, body)?;
@@ -317,8 +293,10 @@ pub(crate) fn lower_try(
             ctx.current_block = cfail_idx;
             emit_try_end(ctx);
             let exc2 = ctx.block().call(DOUBLE, "js_get_exception", &[]);
+            let pending = super::wasm_eh::root_pending(ctx, &exc2);
             lower_stmts(ctx, f)?;
             if !ctx.block().is_terminated() {
+                let exc2 = super::wasm_eh::reload_pending(ctx, pending, exc2);
                 ctx.block().call_void("js_throw", &[(DOUBLE, &exc2)]);
                 ctx.block().unreachable();
             }
@@ -340,10 +318,12 @@ pub(crate) fn lower_try(
         // overrides the pending exception, per spec).
         emit_try_end(ctx);
         let exc = ctx.block().call(DOUBLE, "js_get_exception", &[]);
+        let pending = super::wasm_eh::root_pending(ctx, &exc);
         if let Some(f) = finally {
             lower_stmts(ctx, f)?;
         }
         if !ctx.block().is_terminated() {
+            let exc = super::wasm_eh::reload_pending(ctx, pending, exc);
             ctx.block().call_void("js_throw", &[(DOUBLE, &exc)]);
             ctx.block().unreachable();
         }

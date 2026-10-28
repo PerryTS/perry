@@ -1336,6 +1336,9 @@ pub(super) fn run_copied_minor_attempt(
         }
         remembered_entries = remembered_stats.entries_scanned;
         remembered_slots = remembered_stats.dirty_slots_scanned;
+        // WRT: remembered realm-image cells are roots (`gc::image_cells`).
+        let _phase = super::pin::CopyingWalkPhaseGuard::enter("image_cells");
+        unsafe { super::image_cells::visit_image_roots_copying(&mut collector) };
     }
     if let Some(diag) = phase_diag.as_mut() {
         diag.record(Phase::RememberedSetYoungLogs, remembered_phase_start);

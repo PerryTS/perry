@@ -140,7 +140,7 @@ pub extern "C" fn js_loose_eq(a: JSValue, b: JSValue) -> JSValue {
         // BigInt == BigInt → compare by mathematical value.
         if a.is_bigint() && b.is_bigint() {
             return JSValue::bool(
-                crate::bigint::js_bigint_cmp(a.as_bigint_ptr(), b.as_bigint_ptr()) == 0,
+                crate::bigint_hooks::js_bigint_cmp(a.as_bigint_ptr(), b.as_bigint_ptr()) == 0,
             );
         }
         let (big, other) = if a.is_bigint() { (a, b) } else { (b, a) };
@@ -154,16 +154,16 @@ pub extern "C" fn js_loose_eq(a: JSValue, b: JSValue) -> JSValue {
         // are never equal). `bigint_cmp_f64` returns 0 only on exact equality.
         if other.is_number() {
             return JSValue::bool(
-                crate::bigint::bigint_cmp_f64(big.as_bigint_ptr(), other.as_number()) == 0,
+                crate::bigint_hooks::bigint_cmp_f64(big.as_bigint_ptr(), other.as_number()) == 0,
             );
         }
         // BigInt == String → StringToBigInt(string); a non-numeric string makes
         // the result `false` (StringToBigInt is undefined → not equal).
         if other.is_any_string() {
             let s = unsafe { string_content_for_bigint(f64::from_bits(other.bits())) };
-            return match crate::bigint::string_to_bigint(&s) {
+            return match crate::bigint_hooks::string_to_bigint(&s) {
                 Some(ny) => {
-                    JSValue::bool(crate::bigint::js_bigint_cmp(big.as_bigint_ptr(), ny) == 0)
+                    JSValue::bool(crate::bigint_hooks::js_bigint_cmp(big.as_bigint_ptr(), ny) == 0)
                 }
                 None => JSValue::bool(false),
             };
@@ -238,7 +238,7 @@ unsafe fn rel_to_primitive(value: f64) -> f64 {
     if crate::date::is_date_value(value) {
         // ToPrimitive(date, number) → Date.prototype.valueOf → the ms timestamp,
         // which is itself a Number (a plain `f64` is its own NaN-box).
-        return crate::date::js_date_coerce_number(value);
+        return crate::date_hook_slots::js_date_coerce_number(value);
     }
     // ToPrimitive(temporal, NUMBER) → the type's `valueOf`, which is a hard
     // `TypeError` for every `Temporal.*` value (the spec bans relational ordering
@@ -323,12 +323,12 @@ unsafe fn abstract_relational(x: f64, y: f64, x_first: bool) -> i32 {
         // `string_to_bigint` allocates the parsed BigInt, so re-derive the `x`
         // pointer from its handle *after* that call — the snapshot in `vx` may
         // name a forwarded address by now (#6655).
-        return match crate::bigint::string_to_bigint(&s) {
+        return match crate::bigint_hooks::string_to_bigint(&s) {
             None => REL_UNDEFINED,
             Some(ny) => {
                 let px_ptr =
                     JSValue::from_bits(px_handle.get_nanbox_f64().to_bits()).as_bigint_ptr();
-                if crate::bigint::js_bigint_cmp(px_ptr, ny) < 0 {
+                if crate::bigint_hooks::js_bigint_cmp(px_ptr, ny) < 0 {
                     REL_TRUE
                 } else {
                     REL_FALSE
@@ -338,12 +338,12 @@ unsafe fn abstract_relational(x: f64, y: f64, x_first: bool) -> i32 {
     }
     if vx.is_any_string() && y_big {
         let s = string_content_for_bigint(px_handle.get_nanbox_f64());
-        return match crate::bigint::string_to_bigint(&s) {
+        return match crate::bigint_hooks::string_to_bigint(&s) {
             None => REL_UNDEFINED,
             Some(nx) => {
                 let py_ptr =
                     JSValue::from_bits(py_handle.get_nanbox_f64().to_bits()).as_bigint_ptr();
-                if crate::bigint::js_bigint_cmp(nx, py_ptr) < 0 {
+                if crate::bigint_hooks::js_bigint_cmp(nx, py_ptr) < 0 {
                     REL_TRUE
                 } else {
                     REL_FALSE
@@ -358,7 +358,7 @@ unsafe fn abstract_relational(x: f64, y: f64, x_first: bool) -> i32 {
     if x_big && y_big {
         let px_ptr = JSValue::from_bits(px_handle.get_nanbox_f64().to_bits()).as_bigint_ptr();
         let py_ptr = JSValue::from_bits(py_handle.get_nanbox_f64().to_bits()).as_bigint_ptr();
-        return if crate::bigint::js_bigint_cmp(px_ptr, py_ptr) < 0 {
+        return if crate::bigint_hooks::js_bigint_cmp(px_ptr, py_ptr) < 0 {
             REL_TRUE
         } else {
             REL_FALSE
@@ -372,7 +372,7 @@ unsafe fn abstract_relational(x: f64, y: f64, x_first: bool) -> i32 {
         // BigInt pointer from its handle after the coercion (#6655).
         let yn = js_number_coerce(py_handle.get_nanbox_f64());
         let px_ptr = JSValue::from_bits(px_handle.get_nanbox_f64().to_bits()).as_bigint_ptr();
-        return match crate::bigint::bigint_cmp_f64(px_ptr, yn) {
+        return match crate::bigint_hooks::bigint_cmp_f64(px_ptr, yn) {
             2 => REL_UNDEFINED,
             c if c < 0 => REL_TRUE,
             _ => REL_FALSE,
@@ -382,7 +382,7 @@ unsafe fn abstract_relational(x: f64, y: f64, x_first: bool) -> i32 {
         let xn = js_number_coerce(px_handle.get_nanbox_f64());
         let py_ptr = JSValue::from_bits(py_handle.get_nanbox_f64().to_bits()).as_bigint_ptr();
         // `bigint_cmp_f64(y, xn)` is the sign of (y − x); x < y ⇔ that is positive.
-        return match crate::bigint::bigint_cmp_f64(py_ptr, xn) {
+        return match crate::bigint_hooks::bigint_cmp_f64(py_ptr, xn) {
             2 => REL_UNDEFINED,
             c if c > 0 => REL_TRUE,
             _ => REL_FALSE,
@@ -802,7 +802,7 @@ pub(crate) fn classify_value_typeof(value: f64) -> ValueTypeofTag {
         // #10694: a raw word must be allocator-owned before the brand read.
         if top16 == 0 && bits >= 0x10000 && crate::buffer::header_is_owned(bits as usize) {
             let addr = bits as usize;
-            if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
+            if crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some() {
                 return ValueTypeofTag::Object;
             }
         }

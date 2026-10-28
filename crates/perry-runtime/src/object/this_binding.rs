@@ -52,13 +52,20 @@ pub(crate) fn static_private_owner_unwind_to(sp: usize) {
     });
 }
 
+#[cfg(any(test, target_os = "wasi"))]
+pub(crate) fn static_private_owner_restore_depth(depth: usize) {
+    STATIC_PRIVATE_OWNER_STACK.with(|stack| {
+        stack.borrow_mut().restore_depth(depth);
+    });
+}
+
 pub(crate) fn static_private_owner_check_marks(sp: usize) {
     STATIC_PRIVATE_OWNER_STACK.with(|stack| {
         crate::exception::marks::check_marks(stack.borrow().marks(), sp, "static_private_owner")
     });
 }
 
-#[cfg(test)]
+#[cfg(any(test, target_os = "wasi"))]
 pub(crate) fn static_private_owner_depth() -> usize {
     STATIC_PRIVATE_OWNER_STACK.with(|stack| stack.borrow().len())
 }
@@ -410,6 +417,13 @@ pub(crate) fn derived_super_binding_truncate(depth: usize) {
 pub(crate) fn derived_super_binding_unwind_to(sp: usize) {
     DERIVED_SUPER_BINDING_STACK.with(|stack| {
         stack.borrow_mut().unwind_to(sp);
+    });
+}
+
+#[cfg(any(test, target_os = "wasi"))]
+pub(crate) fn derived_super_binding_restore_depth(depth: usize) {
+    DERIVED_SUPER_BINDING_STACK.with(|stack| {
+        stack.borrow_mut().restore_depth(depth);
     });
 }
 

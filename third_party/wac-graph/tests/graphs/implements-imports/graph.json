@@ -1,0 +1,14 @@
+{
+    "packages": [
+        {
+            "name": "test:consumer",
+            "path": "consumer.wat"
+        }
+    ],
+    "nodes": [
+        {
+            "type": "instantiation",
+            "package": 0
+        }
+    ]
+}

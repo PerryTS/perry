@@ -34,7 +34,7 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
         // `node:stream/web` imports are normalized to `stream/web` before
         // the resolver records the known-submodule key `stream_web`; both
         // spellings need the same feature for auto-optimized stdlib builds.
-        "streams" | "stream/web" | "stream_web" | "fs/promises" => &["bundled-streams"],
+        "streams" | "stream/web" | "stream_web" => &["bundled-streams"],
 
         // ── Web Fetch compatibility surface ───────────────────────────
         // Node HTTP/HTTPS/HTTP2 are provided by perry-ext-http and need
@@ -268,7 +268,7 @@ mod tests {
     fn stream_web_imports_enable_bundled_streams() {
         assert_eq!(module_to_features("stream/web"), &["bundled-streams"]);
         assert_eq!(module_to_features("stream_web"), &["bundled-streams"]);
-        assert_eq!(module_to_features("fs/promises"), &["bundled-streams"]);
+        assert!(module_to_features("fs/promises").is_empty());
 
         let mut imports = BTreeSet::new();
         imports.insert("stream_web".to_string());
@@ -276,6 +276,12 @@ mod tests {
 
         let features = compute_required_features(&imports, false, false);
         assert!(features.contains("bundled-streams"));
+    }
+
+    #[test]
+    fn fs_promises_alone_does_not_install_web_streams() {
+        let imports = BTreeSet::from(["fs/promises".to_string()]);
+        assert!(!compute_required_features(&imports, false, false).contains("bundled-streams"));
     }
 
     #[test]

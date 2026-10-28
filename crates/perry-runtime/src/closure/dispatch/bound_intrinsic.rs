@@ -258,7 +258,7 @@ pub(crate) unsafe fn packed_apply_values<const N: usize>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::object::shapes::{shape_object_kind_for_word, ShapeObjectKind};
+    use crate::object::shapes::ShapeObjectKind;
 
     extern "C" fn body(_c: *const ClosureHeader, this: JsThis, a: f64, b: f64) -> f64 {
         this.as_f64() + a + b

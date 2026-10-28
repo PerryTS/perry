@@ -11,6 +11,9 @@ use crate::gen::{variant_name, Fx, Gen};
 use crate::model::*;
 use perry_hir::{Expr, Stmt};
 
+#[path = "gen/accessor_descriptor.rs"]
+mod accessor_descriptor;
+
 fn kids(e: &Expr) -> Vec<&Expr> {
     let mut v = Vec::new();
     perry_hir::walker::walk_expr_children(e, &mut |c| v.push(c));
@@ -18,36 +21,6 @@ fn kids(e: &Expr) -> Vec<&Expr> {
 }
 
 impl<'a> Gen<'a> {
-    /// FVA 4.3a: `d` is an accessor descriptor literal: a closed literal
-    /// layout whose keys are within get/set/enumerable/configurable and
-    /// name a getter or a setter (no value, no writable).
-    fn accessor_descriptor(&self, mi: u32, d: &Expr) -> bool {
-        let Expr::New { class_name, .. } = d else {
-            return false;
-        };
-        let Some(&tm) = self.mods[mi as usize].classes.get(class_name) else {
-            return false;
-        };
-        let tpl = &self.m.tmpls[tm as usize];
-        if !matches!(
-            tpl.kind,
-            TmplKind::Class {
-                literal_shape: true,
-                ..
-            }
-        ) {
-            return false;
-        }
-        let keys: Vec<&str> = tpl
-            .birth_keys
-            .iter()
-            .map(|a| self.m.atoms[*a as usize].as_str())
-            .collect();
-        keys.iter()
-            .all(|k| matches!(*k, "get" | "set" | "enumerable" | "configurable"))
-            && keys.iter().any(|k| matches!(*k, "get" | "set"))
-    }
-
     /// An accessor descriptor literal (`accessor_descriptor`): its class, its
     /// constructor arguments, and which of them its own `get` and `set` are
     /// (a literal shape's constructor stores parameter i under its key).
@@ -133,7 +106,8 @@ impl<'a> Gen<'a> {
 
     /// Store `v` into every element/entry of what `recv` holds.
     fn elem_store(&mut self, fx: &Fx, recv: NodeId, v: NodeId, what: &str) {
-        self.store(fx, recv, Key::Any, v, what.to_string(), None, false);
+        let ek = self.m.elem_key();
+        self.store(fx, recv, ek, v, what.to_string(), None, false);
     }
 
     /// Call `cb` with `args` (this = undefined); returns the result node.
@@ -193,8 +167,7 @@ impl<'a> Gen<'a> {
                     for n in o.into_iter().chain(a) {
                         self.to_sink(n, &why);
                     }
-                    self.m
-                        .top_val(&format!("result of native module {module}.{method}"))
+                    self.native_success_result(module, object.is_some(), method, args)
                 }
             }
             Expr::PrivateLexicalBrand(x) | Expr::PrivateLexicalBrandPush(x) => {
@@ -483,16 +456,10 @@ impl<'a> Gen<'a> {
             | Expr::BufferIsEncoding(..)
             | Expr::BufferByteLength { .. }
             | Expr::BufferToString { .. }
-            | Expr::BufferLength(..)
             | Expr::BufferCopy { .. }
             | Expr::BufferWrite { .. }
             | Expr::BufferFill { .. }
             | Expr::BufferEquals { .. }
-            | Expr::BufferIndexGet { .. }
-            | Expr::BufferIndexSet { .. }
-            | Expr::Uint8ArrayLength(..)
-            | Expr::Uint8ArrayGet { .. }
-            | Expr::Uint8ArraySet { .. }
             | Expr::PodLayoutSizeOf { .. }
             | Expr::PodLayoutAlignOf { .. }
             | Expr::PodLayoutOffsetOf { .. }
@@ -748,10 +715,7 @@ impl<'a> Gen<'a> {
                         proto: Protocol::ToPrimitive,
                     },
                 );
-                let key = match k.as_ref() {
-                    Expr::String(s) => Some(s.clone()),
-                    _ => None,
-                };
+                let key = self.const_key(mi, k);
                 let accessor = self.accessor_descriptor(mi, d);
                 match self.for_in_key_of(mi, k).filter(|_| key.is_none()) {
                     Some(kp) => {
@@ -787,9 +751,36 @@ impl<'a> Gen<'a> {
                     "E5 Object.defineProperties".to_string()
                 };
                 let r = self.m.reason(&why);
+                // A map of exactly known keys defines each by its descriptor
+                // (`Cons::DefineAll`); any other map's own values are these
+                // descriptors, defined under a computed key.
                 let descs = self.tmp("own-descriptors");
-                self.m.cons(pn, Cons::OwnValues { dst: descs });
-                self.define_property(fx, on, None, descs, r, false);
+                let va = self.m.atom("value");
+                let value = self.load(descs, Key::Named(va));
+                let site = self.store_site(fx.module, fx.f, "defineProperty".into(), None, false);
+                let star = self.m.atom(crate::STAR_KEY);
+                for (name, setter) in [("get", false), ("set", true)] {
+                    let a = self.m.atom(name);
+                    let f = self.load(descs, Key::Named(a));
+                    self.m.cons(
+                        f,
+                        Cons::Accessor {
+                            holder: on,
+                            key: star,
+                            setter,
+                        },
+                    );
+                }
+                self.m.cons(
+                    pn,
+                    Cons::DefineAll {
+                        o: on,
+                        descs,
+                        value,
+                        site,
+                        reason: r,
+                    },
+                );
                 on
             }
             Expr::ObjectGetOwnPropertyDescriptor(o, k)
@@ -830,6 +821,7 @@ impl<'a> Gen<'a> {
                     proto_members: vec![],
                     parent_value: None,
                     parent_links: Vec::new(),
+                    null_proto: false,
                 });
                 let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
                 let pn = self.m.proto_node(t);
@@ -965,13 +957,14 @@ impl<'a> Gen<'a> {
                 // read, a buffer/view argument is shared (B1, flow only).
                 let ks = kids(e);
                 let (t, n) = self.bobj(mi, "TypedArray");
-                if let Expr::TypedArrayNew { kind, .. } = e {
-                    if let TokKind::Obj(tm, _) = self.m.toks[t as usize] {
-                        self.m.ta_elem.insert(tm, *kind);
-                    }
-                }
+                let owner = self.begin_indexed_owner(mi, t, e);
                 for k in ks {
                     let v = self.expr(fx, k);
+                    if owner {
+                        if let TokKind::Obj(tm, _) = self.m.toks[t as usize] {
+                            self.m.ta_birth_input.insert(tm, v);
+                        }
+                    }
                     let r = self.m.reason("typed-array source");
                     self.m.cons(
                         v,
@@ -1778,7 +1771,21 @@ impl<'a> Gen<'a> {
                     Expr::String(s) => Key::Named(self.m.atom(s)),
                     _ => Key::Any,
                 };
-                self.load(t, key)
+                // DECISIONS 217: a computed key is `o[k]`'s (`IdxLoad`: the
+                // key's values decide what it names). Under `__proto__`
+                // Object.prototype's getter runs on the receiver.
+                let out = match key {
+                    Key::Any => {
+                        let dst = self.tmp("reflect.get");
+                        self.m.cons(t, Cons::IdxLoad { idx: k, dst });
+                        dst
+                    }
+                    _ => self.load(t, key),
+                };
+                if self.m.is_proto_key(key) {
+                    self.m.cons(rv, Cons::ProtoOf { dst: out });
+                }
+                out
             }
             Expr::ReflectSet {
                 target,
@@ -1906,7 +1913,13 @@ impl<'a> Gen<'a> {
             | Expr::PropertyGet { .. }
             | Expr::PropertySet { .. }
             | Expr::PropertyUpdate { .. }
+            | Expr::BufferLength(..)
+            | Expr::Uint8ArrayLength(..)
+            | Expr::BufferIndexGet { .. }
+            | Expr::Uint8ArrayGet { .. }
             | Expr::IndexGet { .. }
+            | Expr::BufferIndexSet { .. }
+            | Expr::Uint8ArraySet { .. }
             | Expr::IndexSet { .. }
             | Expr::IndexUpdate { .. }
             | Expr::Object(..)

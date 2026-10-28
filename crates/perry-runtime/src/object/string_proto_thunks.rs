@@ -352,7 +352,7 @@ extern "C" fn string_proto_match_thunk(
     this: crate::closure::JsThis,
     arg: f64,
 ) -> f64 {
-    crate::regex::js_string_match_js(this.as_f64(), arg)
+    crate::regex::hooked::js_string_match_js(this.as_f64(), arg)
 }
 #[cfg(feature = "regex-engine")]
 extern "C" fn string_proto_search_thunk(
@@ -360,7 +360,7 @@ extern "C" fn string_proto_search_thunk(
     this: crate::closure::JsThis,
     arg: f64,
 ) -> f64 {
-    crate::regex::js_string_search_js(this.as_f64(), arg)
+    crate::regex::hooked::js_string_search_js(this.as_f64(), arg)
 }
 
 #[cfg(feature = "regex-engine")]
@@ -369,7 +369,7 @@ extern "C" fn string_proto_match_all_thunk(
     this: crate::closure::JsThis,
     arg: f64,
 ) -> f64 {
-    crate::regex::js_string_match_all_js(this.as_f64(), arg)
+    crate::regex::hooked::js_string_match_all_js(this.as_f64(), arg)
 }
 
 #[cfg(feature = "regex-engine")]
@@ -379,7 +379,7 @@ extern "C" fn string_proto_replace_thunk(
     search: f64,
     replacement: f64,
 ) -> f64 {
-    crate::regex::js_string_replace_js(this.as_f64(), search, replacement)
+    crate::regex::hooked::js_string_replace_js(this.as_f64(), search, replacement)
 }
 #[cfg(feature = "regex-engine")]
 extern "C" fn string_proto_replace_all_thunk(
@@ -388,7 +388,7 @@ extern "C" fn string_proto_replace_all_thunk(
     search: f64,
     replacement: f64,
 ) -> f64 {
-    crate::regex::js_string_replace_all_js(this.as_f64(), search, replacement)
+    crate::regex::hooked::js_string_replace_all_js(this.as_f64(), search, replacement)
 }
 
 #[cfg(feature = "regex-engine")]
@@ -398,7 +398,7 @@ extern "C" fn string_proto_split_thunk(
     separator: f64,
     limit: f64,
 ) -> f64 {
-    crate::regex::js_string_split_js(this.as_f64(), separator, limit)
+    crate::regex::hooked::js_string_split_js(this.as_f64(), separator, limit)
 }
 
 /// Fixed register ABI for indexOf, shared by reflective and method-site calls.
@@ -426,3 +426,5 @@ pub(super) extern "C" fn string_proto_index_of_thunk(
         from,
     ) as f64
 }
+
+crate::realm_decl!("string_proto_thunks.realm.json#*");

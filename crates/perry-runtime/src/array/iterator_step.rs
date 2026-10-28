@@ -16,7 +16,18 @@ pub unsafe extern "C-unwind" fn js_iterator_step(iter: f64, next: f64, out: *mut
         {
             if header.obj_type == crate::gc::GC_TYPE_OBJECT {
                 let obj = raw as *mut ObjectHeader;
-                if crate::object::iterator_step_method_is_builtin(obj, next) {
+                // Only these layouts can use the builtin collection step. A
+                // generator's branded frame goes directly to resume below;
+                // do not resolve an unrelated iterator-family owner first.
+                if matches!(
+                    (*obj).class_id,
+                    crate::buffer::BUFFER_ITERATOR_CLASS_ID
+                        | crate::array::ARRAY_ITERATOR_CLASS_ID
+                        | crate::collection_iter_object::MAP_ITERATOR_CLASS_ID
+                        | crate::collection_iter_object::SET_ITERATOR_CLASS_ID
+                        | crate::string::STRING_ITERATOR_CLASS_ID
+                ) && crate::object::iterator_step_method_is_builtin(obj, next)
+                {
                     match (*obj).class_id {
                         crate::buffer::BUFFER_ITERATOR_CLASS_ID => {
                             crate::buffer::dispatch_buffer_iterator_step(obj, &mut step)

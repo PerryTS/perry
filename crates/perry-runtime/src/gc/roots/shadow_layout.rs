@@ -122,6 +122,9 @@ pub const SHADOW_STATE_LEN_OFFSET: usize = std::mem::size_of::<usize>();
 /// Byte offset of [`ShadowStackState::frame_top`]. Part of the codegen
 /// contract.
 pub const SHADOW_STATE_FRAME_TOP_OFFSET: usize = 3 * std::mem::size_of::<usize>();
+/// Byte offset of [`ShadowStackState::cap`]. Part of the codegen contract on
+/// single-threaded wasm, where generated code pushes frames inline.
+pub const SHADOW_STATE_CAP_OFFSET: usize = 2 * std::mem::size_of::<usize>();
 /// Size of one [`ShadowEntry`]. Part of the codegen contract: generated code
 /// indexes the buffer by shifting, so this must stay a power of two.
 pub const SHADOW_ENTRY_SIZE: usize = 16;
@@ -135,6 +138,7 @@ const _: () = {
     assert!(std::mem::offset_of!(ShadowStackState, ptr) == SHADOW_STATE_PTR_OFFSET);
     assert!(std::mem::offset_of!(ShadowStackState, len) == SHADOW_STATE_LEN_OFFSET);
     assert!(std::mem::offset_of!(ShadowStackState, frame_top) == SHADOW_STATE_FRAME_TOP_OFFSET);
+    assert!(std::mem::offset_of!(ShadowStackState, cap) == SHADOW_STATE_CAP_OFFSET);
     assert!(std::mem::size_of::<ShadowEntry>() == SHADOW_ENTRY_SIZE);
     assert!(std::mem::align_of::<ShadowEntry>() == 8);
     assert!(std::mem::offset_of!(ShadowEntry, value) == 0);

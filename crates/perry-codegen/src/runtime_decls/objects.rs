@@ -456,7 +456,11 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("js_import_meta_resolve_value", DOUBLE, &[DOUBLE]);
     module.declare_function("js_globalthis_seed_async_local_storage", VOID, &[]);
     // Next.js wall 54: runtime `require(absolutePath.js)` -> AOT-compiled module.
-    module.declare_function("js_register_path_module_partial", VOID, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_register_path_module_partial",
+        VOID,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
     module.declare_function("js_register_path_module", VOID, &[DOUBLE, DOUBLE]);
     // #6769: parent linking, emitted in the preamble ahead of the body.
     module.declare_function("js_link_path_module_parent", VOID, &[DOUBLE]);
@@ -474,6 +478,7 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // Next.js wall 54 (part 2): register a Deferred module's `__init` address by
     // path so a runtime `require(absolutePath)` can trigger its lazy init.
     module.declare_function("js_register_path_init", VOID, &[PTR, I64, I64]);
+    module.declare_function("js_register_path_inits_lazily", VOID, &[PTR]);
     // Array alloc variant that pre-sets length to N (for exclude_keys array filling).
     module.declare_function("js_array_alloc_with_length", I64, &[I32]);
     // Unchecked array set (plain array, no buffer/Set/Map dispatch).

@@ -219,7 +219,7 @@ fn abort_cancellation_orders_error_exit_close_and_removes_listener() {
     ));
     cp_install_abort_signal(handle, Some(signal.get_nanbox_f64()), cp_undefined());
     assert_eq!(
-        crate::url::abort::js_abort_signal_listener_count(
+        crate::event_target::abort::js_abort_signal_listener_count(
             cp_object_ptr(signal.get_nanbox_f64()).unwrap()
         ),
         1.0
@@ -233,7 +233,7 @@ fn abort_cancellation_orders_error_exit_close_and_removes_listener() {
         ["spawn", "error", "exit", "close"]
     );
     assert_eq!(
-        crate::url::abort::js_abort_signal_listener_count(
+        crate::event_target::abort::js_abort_signal_listener_count(
             cp_object_ptr(signal.get_nanbox_f64()).unwrap()
         ),
         0.0

@@ -235,6 +235,7 @@ pub extern "C" fn js_globalthis_seed_async_local_storage() {
 
 #[no_mangle]
 pub extern "C" fn js_nm_install_async_hooks() {
+    crate::async_hook_slots::install();
     nm_register_attach(
         NmBucket::AsyncHooks,
         super::native_module::callable_exports::nm_attach_async_hooks,
@@ -275,6 +276,7 @@ pub extern "C" fn js_nm_install_bun() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_child_process() {
+    crate::feature_hooks::install_json_engine();
     js_nm_install_events();
     nm_register_attach(
         NmBucket::ChildProcess,
@@ -288,6 +290,7 @@ pub extern "C" fn js_nm_install_child_process() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_cluster() {
+    crate::feature_hooks::install_json_engine();
     js_nm_install_events();
     nm_register_const(
         NmBucket::Cluster,
@@ -355,6 +358,8 @@ pub extern "C" fn js_nm_install_domain() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_events() {
+    js_nm_install_async_hooks();
+    crate::stream_hooks::install();
     super::native_module::install_nm_ee_ops();
     nm_register_ctor(NmBucket::Events, nm_ctor_events);
     nm_register_attach(
@@ -368,6 +373,7 @@ pub extern "C" fn js_nm_install_events() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_fs() {
+    crate::fs::install_roots();
     js_nm_install_stream();
     nm_register_attach(
         NmBucket::Fs,
@@ -413,6 +419,8 @@ pub extern "C" fn js_nm_install_inspector() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_module() {
+    crate::feature_hooks::install_url_values();
+    crate::feature_hooks::install_json_engine();
     nm_register_attach(
         NmBucket::Module,
         super::native_module::callable_exports::nm_attach_module,
@@ -424,6 +432,8 @@ pub extern "C" fn js_nm_install_module() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_net() {
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::turnloop_net::install();
     js_nm_install_stream();
     nm_register_attach(
         NmBucket::Net,
@@ -616,6 +626,9 @@ pub extern "C" fn js_nm_install_tty() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_url() {
+    crate::feature_hooks::install_url_values();
+    crate::feature_hooks::js_runtime_install_global_url();
+    crate::feature_hooks::install_json_engine();
     NM_DISPATCH_REGISTRY[NmBucket::Url as usize].store(
         nm_dispatch_url as NmDispatchFn as *mut (),
         Ordering::Relaxed,
@@ -634,6 +647,7 @@ pub extern "C" fn js_nm_install_util() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_v8() {
+    crate::feature_hooks::install_json_engine();
     nm_register_attach(NmBucket::V8, crate::node_v8::attach_v8_constructor);
     NM_DISPATCH_REGISTRY[NmBucket::V8 as usize]
         .store(nm_dispatch_v8 as NmDispatchFn as *mut (), Ordering::Relaxed);
@@ -646,6 +660,7 @@ pub extern "C" fn js_nm_install_vm() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_wasi() {
+    crate::wasi_hook_slots::install();
     nm_register_attach(
         NmBucket::Wasi,
         super::native_module::callable_exports::nm_attach_wasi,

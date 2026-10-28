@@ -61,6 +61,7 @@ ir-corpus/
 !test-features/
 !test-parity/
 !test-coverage/
+!test-wasi/
 # But ignore compiled test binaries (no extension) inside them
 test-files/test_*
 test-files/test-*
@@ -257,3 +258,5 @@ android-build/app/src/main/jniLibs/
 
 # Stray build/install logs at the repo root
 /*.log
+
+/.blaze/

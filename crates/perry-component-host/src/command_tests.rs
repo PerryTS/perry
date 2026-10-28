@@ -18,7 +18,7 @@ fn exit_component(code: u8, with_code: bool, start: bool, export: bool) -> Vec<u
     wat::parse_str(exit_source(code, with_code, start, export)).unwrap()
 }
 
-fn exit_source(code: u8, with_code: bool, start: bool, export: bool) -> String {
+pub(super) fn exit_source(code: u8, with_code: bool, start: bool, export: bool) -> String {
     let (name, param, ty, version) = if with_code {
         ("exit-with-code", "status-code", "u8", "0.2.12")
     } else {

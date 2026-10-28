@@ -521,7 +521,7 @@ fn weakmap_ephemeron_proxy_chain_and_dead_proxy_backedge() {
     root_object(5);
     // Strong endpoints make observing this proxy add NO new heap marks.
     // Its newly live handle must still enable B's conditional value.
-    let proxy = crate::proxy::js_proxy_new(rooted(4), rooted(5));
+    let proxy = crate::proxy_hooks::proxy_new(rooted(4), rooted(5));
     js_weakmap_set(rooted(0), proxy, rooted(3));
     js_weakmap_set(rooted(2), rooted(1), proxy);
     js_shadow_slot_set(3, 0);

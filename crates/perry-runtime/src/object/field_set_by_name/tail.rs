@@ -409,7 +409,7 @@ pub(crate) fn set_field_by_name_object_tail(
         if !plan_fast
             && !key.is_null()
             && (key as usize) > 0x10000
-            && crate::url::is_url_object_shape(obj)
+            && crate::object::url_layout::is_url_object_shape(obj)
         {
             let key_str = key_to_str_for_diag(key);
             let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
@@ -417,43 +417,43 @@ pub(crate) fn set_field_by_name_object_tail(
             match key_str.as_str() {
                 "origin" | "searchParams" => return,
                 "host" => {
-                    crate::url::js_url_set_host(obj, value);
+                    crate::url_hooks::url_set_host(obj, value);
                     return;
                 }
                 "pathname" => {
-                    crate::url::js_url_set_pathname(obj, value);
+                    crate::url_hooks::url_set_pathname(obj, value);
                     return;
                 }
                 "search" => {
-                    crate::url::js_url_set_search(obj, value);
+                    crate::url_hooks::url_set_search(obj, value);
                     return;
                 }
                 "hash" => {
-                    crate::url::js_url_set_hash(obj, value);
+                    crate::url_hooks::url_set_hash(obj, value);
                     return;
                 }
                 "protocol" => {
-                    crate::url::js_url_set_protocol(obj, value);
+                    crate::url_hooks::url_set_protocol(obj, value);
                     return;
                 }
                 "hostname" => {
-                    crate::url::js_url_set_hostname(obj, value);
+                    crate::url_hooks::url_set_hostname(obj, value);
                     return;
                 }
                 "port" => {
-                    crate::url::js_url_set_port(obj, value);
+                    crate::url_hooks::url_set_port(obj, value);
                     return;
                 }
                 "username" => {
-                    crate::url::js_url_set_username(obj, value);
+                    crate::url_hooks::url_set_username(obj, value);
                     return;
                 }
                 "password" => {
-                    crate::url::js_url_set_password(obj, value);
+                    crate::url_hooks::url_set_password(obj, value);
                     return;
                 }
                 "href" => {
-                    crate::url::js_url_set_href(obj, value);
+                    crate::url_hooks::url_set_href(obj, value);
                     return;
                 }
                 _ => {}

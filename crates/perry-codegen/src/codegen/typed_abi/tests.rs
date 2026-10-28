@@ -236,3 +236,106 @@ fn closure_capture_representations_follow_effective_slot_order() {
         ])
     );
 }
+
+#[test]
+fn typed_number_remainder_keeps_integer_check_and_ieee_fallback() {
+    use crate::block::{LlBlock, RegCounter};
+    use std::rc::Rc;
+
+    let params = vec![param(10, "a", Type::Number)];
+    let mut block = LlBlock::new("entry", Rc::new(RegCounter::new()));
+    // The same lowering serves free functions and captured closure bodies.
+    // A raw numeric capture is admitted by its value guard, not its type.
+    let body = ret(Expr::Binary {
+        op: BinaryOp::Mod,
+        left: Box::new(Expr::LocalGet(10)),
+        right: Box::new(Expr::LocalGet(20)),
+    });
+    lower_typed_f64_body_with_seed_locals_and_reps(
+        &mut block,
+        &params,
+        &body,
+        HashMap::from([(20, "%capture".to_string())]),
+        HashMap::from([(20, TypedParamRep::F64)]),
+    )
+    .unwrap();
+    let ir = block.to_ir();
+    assert!(
+        ir.contains("call double @perry_checked_number_remainder(double %arg10, double %capture)"),
+        "{ir}"
+    );
+    assert!(
+        !ir.contains("frem"),
+        "typed Number remainder must retain the exact integer path: {ir}"
+    );
+
+    let receiver = TypedReceiverMethodInfo {
+        fields: vec![TypedReceiverField {
+            name: "divisor".to_string(),
+            index: 0,
+        }],
+    };
+    let body = ret(Expr::Binary {
+        op: BinaryOp::Mod,
+        left: Box::new(Expr::LocalGet(10)),
+        right: Box::new(Expr::PropertyGet {
+            object: Box::new(Expr::This),
+            property: "divisor".to_string(),
+            byte_offset: 0,
+        }),
+    });
+    let mut block = LlBlock::new("entry", Rc::new(RegCounter::new()));
+    lower_typed_f64_receiver_body(&mut block, &params, &body, &receiver, 24).unwrap();
+    let ir = block.to_ir();
+    assert!(
+        ir.contains("call double @perry_checked_number_remainder("),
+        "{ir}"
+    );
+    assert!(!ir.contains("frem"), "{ir}");
+}
+
+#[test]
+fn numeric_captures_share_the_actual_value_ordered_entry_tier() {
+    let mut module = perry_hir::Module::new("numeric_capture_entry");
+    let closure = Expr::Closure {
+        func_id: 2,
+        params: vec![param(30, "x", Type::Number)],
+        return_type: Type::Number,
+        body: ret(Expr::Binary {
+            op: BinaryOp::Add,
+            left: Box::new(Expr::LocalGet(30)),
+            right: Box::new(Expr::LocalGet(20)),
+        }),
+        captures: vec![20],
+        mutable_captures: Vec::new(),
+        captures_this: false,
+        captures_new_target: false,
+        enclosing_class: None,
+        is_arrow: true,
+        is_async: false,
+        is_generator: false,
+        is_strict: true,
+    };
+    module.functions.push(function(
+        Type::Any,
+        vec![param(20, "capture", Type::Number)],
+        ret(closure),
+    ));
+    let opts = crate::CompileOptions {
+        emit_ir_only: true,
+        ..Default::default()
+    };
+    let ir = String::from_utf8(crate::compile_module(&module, opts).unwrap()).unwrap();
+    let public = ir
+        .split("define ")
+        .find(|f| {
+            f.lines()
+                .next()
+                .is_some_and(|line| line.contains("@perry_closure_numeric_capture_entry__2("))
+        })
+        .expect("public closure entry");
+    let entry = public.split("typed_closure_public.fast").next().unwrap();
+    assert_eq!(entry.matches("fcmp ord double").count(), 2, "{public}");
+    assert!(public.contains("typed_closure_public.int32"), "{public}");
+    assert!(public.contains("$generic"), "{public}");
+}

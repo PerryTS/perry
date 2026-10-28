@@ -1,0 +1,57 @@
+[package]
+name = "turnloop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["event-loop", "networking", "sans-io"]
+categories = ["network-programming", "asynchronous"]
+documentation = "https://docs.rs/turnloop"
+description = "An embeddable event-loop driver, turned by its host"
+
+[features]
+default = []
+executor = ["dep:futures-io"]
+epoll-timerfd = []
+wasi-p3-experimental = ["dep:wasip3"]
+web-worker = []
+process-sigchld = []
+
+[dependencies]
+futures-io = { workspace = true, optional = true }
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = [
+    "Wdk_Storage_FileSystem",
+    "Win32_Foundation", "Win32_Networking_WinSock", "Win32_Security",
+    "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_IO",
+    "Win32_System_JobObjects", "Win32_System_LibraryLoader", "Win32_System_Pipes",
+    "Win32_System_Threading", "Win32_UI_WindowsAndMessaging",
+] }
+
+[lints]
+workspace = true
+
+[target.'cfg(loom)'.dependencies]
+loom.workspace = true
+
+[package.metadata.turnloop-ci]
+role = "core"
+wasi-lib-tests = true
+loom-filters = ["models"]
+miri-filters = ["timer::tests", "table::tests", "slots::tests"]
+
+[target.'cfg(all(target_os = "wasi", target_env = "p2"))'.dependencies]
+wasip2 = "1.0.3"
+
+[target.'cfg(all(target_os = "wasi", target_env = "p3"))'.dependencies]
+wasip3 = { version = "0.8.0", optional = true }
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+wasm-bindgen = "0.2.108"
+js-sys = "0.3.85"

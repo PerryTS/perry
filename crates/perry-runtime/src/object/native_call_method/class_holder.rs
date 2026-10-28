@@ -728,7 +728,7 @@ pub(crate) unsafe fn class_instance_property_value(
         })
     });
     super::super::field_get_set::accessor_receiver_override_end(
-        prev_override.map(|handle| handle.get_nanbox_f64()),
+        prev_override.map(crate::gc::RuntimeHandle::into_nanbox_f64),
     );
     Some(value.bits())
 }

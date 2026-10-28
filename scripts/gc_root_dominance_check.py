@@ -1718,6 +1718,8 @@ def is_collecting(callee):
 #          count and are deliberately NOT folded in here — same reasoning as
 #          ALLOC_RE's deleted `bigint_\w+_op`.
 POLL_CAPABLE_RUNTIME = {
+    # These wrappers inherit coercion / splitter callback collection points.
+    "js_string_replace_all_js", "js_string_split",
     # Null-raw birth calls reach js_inline_arena_slow_alloc, which can collect.
     # Non-null fast calls carry a call-site gc-leaf-function attribute; the
     # symbol itself must never be classified as noncollecting.

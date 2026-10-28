@@ -8,6 +8,16 @@ use super::*;
 pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
     let c = m.calls[call as usize].clone();
     match name {
+        // A well-known-symbol member of `Function.prototype`: only
+        // `@@hasInstance` (OrdinaryHasInstance reads `prototype`, a data
+        // property of a function; it calls nothing). Any other symbol is
+        // absent on a function value: a protocol touch (ToPrimitive,
+        // iteration) finds nothing there, a call of it throws.
+        Some(n) if n.starts_with(WK_PREFIX) => {
+            if n == crate::model::WK_HAS_INSTANCE {
+                ret_prim(m, call, prim::BOOL);
+            }
+        }
         Some("call") => {
             let this = match c.args.first() {
                 Some(&n) => ThisArg::Node(n),
@@ -282,8 +292,11 @@ fn iterator_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
             m.edge(acc, c.ret);
         }
         Some("hasOwnProperty") => ret_prim(m, call, prim::BOOL),
-        Some(n) => unknown_method(
+        Some(n) => undescribed_method(
             m,
+            Family::Iterator,
+            t,
+            n,
             call,
             &format!("argument of unmodeled iterator method {n}"),
         ),
@@ -487,7 +500,18 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
             ret_tok(m, call, it);
         }
         Some("hasOwnProperty") => ret_prim(m, call, prim::BOOL),
-        Some(n) => unknown_method(m, call, &format!("argument of unmodeled array method {n}")),
+        // A name `Array.prototype` does not define is no method of the
+        // array: `Object.prototype`'s run through the chain, any other is
+        // absent (`split`, `valueOf` through ToPrimitive, a class's method
+        // name on a value that may also be an array).
+        Some(n) => undescribed_method(
+            m,
+            Family::Array,
+            t,
+            n,
+            call,
+            &format!("argument of unmodeled array method {n}"),
+        ),
     }
 }
 
@@ -615,9 +639,17 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             let pb = site_tmpl(m, call, "primbox");
             ret_tok(m, call, pb);
         }
-        ("primbox" | "keys" | "json" | "descriptor" | "groups" | "fromEntries", Some(n)) => {
-            array_method(m, t, Some(n), call)
-        }
-        (_, Some(n)) => unknown_method(m, call, &format!("argument of {what}.{n}")),
+        (
+            "primbox" | "keys" | "json" | "descriptor" | "descriptors" | "groups" | "fromEntries",
+            Some(n),
+        ) => array_method(m, t, Some(n), call),
+        (_, Some(n)) => undescribed_method(
+            m,
+            members::bobj_family(what),
+            t,
+            n,
+            call,
+            &format!("argument of {what}.{n}"),
+        ),
     }
 }

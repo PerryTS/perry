@@ -211,7 +211,7 @@ pub(crate) extern "C" fn global_this_date_thunk(
     _this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
-    let string = crate::date::js_date_to_string(crate::date::js_date_new());
+    let string = crate::date_hook_slots::js_date_to_string(crate::date_hook_slots::js_date_new());
     crate::value::js_nanbox_string(string as i64)
 }
 
@@ -730,10 +730,10 @@ pub unsafe extern "C-unwind" fn js_fetch_or_value_super(
             };
             match method.as_str() {
                 "EventEmitter" => {
-                    return crate::node_stream::js_event_emitter_subclass_init(this_box, options)
+                    return crate::stream_hooks::js_event_emitter_subclass_init(this_box, options)
                 }
                 "EventEmitterAsyncResource" => {
-                    return crate::node_stream::js_event_emitter_async_resource_subclass_init(
+                    return crate::stream_hooks::js_event_emitter_async_resource_subclass_init(
                         this_box, options,
                     )
                 }
@@ -753,7 +753,7 @@ pub unsafe extern "C-unwind" fn js_fetch_or_value_super(
         } else {
             undef
         };
-        crate::wasi::js_wasi_init_subclass(this_box, arg0);
+        crate::wasi_hook_slots::js_wasi_init_subclass(this_box, arg0);
         return undef;
     }
     // #10453: `class X extends AsyncResource` threw "Class constructor
@@ -791,7 +791,7 @@ pub unsafe extern "C-unwind" fn js_fetch_or_value_super(
         } else {
             undef
         };
-        crate::async_hooks::js_async_resource_subclass_init(this_box, type_value, options);
+        crate::async_hook_slots::js_async_resource_subclass_init(this_box, type_value, options);
         return undef;
     }
     // #10625: `class X extends AsyncLocalStorage` reached indirectly (local
@@ -1063,13 +1063,13 @@ pub unsafe extern "C-unwind" fn js_fetch_or_value_super(
     // properties; replacing it would lose derived fields and prototype identity.
     match kind {
         Some("EventTarget") => {
-            return crate::event_target::js_event_target_subclass_init(this_box, 0)
+            return crate::event_target_hook_slots::js_event_target_subclass_init(this_box, 0)
         }
         Some("AbortController") => {
-            return crate::event_target::js_event_target_subclass_init(this_box, 1)
+            return crate::event_target_hook_slots::js_event_target_subclass_init(this_box, 1)
         }
         Some("AbortSignal") => {
-            return crate::event_target::js_event_target_subclass_init(this_box, 2)
+            return crate::event_target_hook_slots::js_event_target_subclass_init(this_box, 2)
         }
         Some("Event") | Some("CustomEvent") => {
             let arg0 = if args_len > 0 { *args_ptr } else { undef };
@@ -1078,7 +1078,7 @@ pub unsafe extern "C-unwind" fn js_fetch_or_value_super(
             } else {
                 undef
             };
-            return crate::event_target::js_event_subclass_init(
+            return crate::event_target_hook_slots::js_event_subclass_init(
                 this_box,
                 arg0,
                 arg1,
@@ -1093,7 +1093,9 @@ pub unsafe extern "C-unwind" fn js_fetch_or_value_super(
             } else {
                 undef
             };
-            return crate::event_target::js_dom_exception_subclass_init(this_box, arg0, arg1);
+            return crate::event_target_hook_slots::js_dom_exception_subclass_init(
+                this_box, arg0, arg1,
+            );
         }
         _ => {}
     }
@@ -1398,3 +1400,5 @@ mod dynamic_super_new_target_tests {
         }
     }
 }
+
+crate::realm_decl!("fetch_globals.realm.json#*");

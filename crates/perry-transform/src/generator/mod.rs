@@ -19,6 +19,7 @@ mod id_scan;
 mod iter_result_rewrite;
 mod linearize;
 mod lower;
+mod private_frame;
 mod per_iteration;
 mod rewrite_returns;
 
@@ -246,6 +247,7 @@ pub fn transform_generators(module: &mut Module) {
         let collected = std::mem::take(&mut *s.borrow_mut());
         module.async_generator_funcs.extend(collected);
     });
+    private_frame::run(module);
 }
 
 fn transform_generator_closures_in_stmts(

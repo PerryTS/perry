@@ -23,49 +23,12 @@
 //! the unhandled-exception filter runs with the stack intact), and the
 //! uncaught path runs on the intact stack.
 //!
-//! WASI keeps setjmp transport (design §1.3): a generated `try` and a runtime
-//! trap push a jump buffer ([`js_try_push`]) that records the frame's mark;
-//! `js_throw` restores with the same mark rule and `longjmp`s.
+//! WASI uses standard wasm exception pads and frame-owned depth checkpoints.
+//! Generated handlers and the runtime catch shim restore every managed prefix
+//! before JS resumes. An outer command handler reports uncaught exceptions.
 
-#[cfg(target_os = "wasi")]
-mod wasi_handlers {
-    // Platform-specific jmp_buf size (in i32 units); conservative.
-    pub(super) const JMP_BUF_SIZE: usize = 64; // 64 * i32 = 256 bytes
-
-    #[repr(C, align(16))]
-    #[derive(Copy, Clone)]
-    pub(super) struct JmpBuf {
-        pub(super) data: [i32; JMP_BUF_SIZE],
-    }
-
-    impl JmpBuf {
-        pub(super) fn as_mut_ptr(&mut self) -> *mut i32 {
-            self.data.as_mut_ptr()
-        }
-    }
-
-    // SAFETY: plain `i32`s, and a slot is armed by `setjmp` before it is ever
-    // jumped through.
-    unsafe impl crate::zeroed_cache::ZeroEmpty for JmpBuf {}
-
-    // Jump buffers live in fixed-size heap slabs per thread, so published
-    // jmp_buf addresses stay stable as the depth grows.
-    pub(super) const JUMP_BUFFER_SLAB_SIZE: usize = 256;
-
-    /// What a WASI handler restores besides the mark rule: the stacks that
-    /// compiled code pushes in its own frame. A landing pad closes those with
-    /// actions; a setjmp handler has no pad, so it records their depths.
-    #[derive(Clone, Copy)]
-    pub(super) struct WasiHandler {
-        pub(super) mark: usize,
-        pub(super) handles: usize,
-        pub(super) shadow: crate::gc::FrameRootSavepoint,
-        pub(super) temp_roots: usize,
-        pub(super) derived_super: usize,
-    }
-}
-#[cfg(target_os = "wasi")]
-use wasi_handlers::*;
+#[cfg(any(target_os = "wasi", all(test, not(windows))))]
+mod wasm;
 
 pub(crate) mod marks;
 pub(crate) use marks::CatchStack;
@@ -73,17 +36,7 @@ pub use marks::{caller_frame_mark, frame_mark};
 mod native_call;
 pub(crate) use native_call::catch_native_callback;
 
-#[cfg(target_os = "wasi")]
-extern "C" {
-    #[link_name = "perry_wasi_longjmp"]
-    fn longjmp(env: *mut i32, val: i32) -> !;
-}
-
 struct ExceptionState {
-    #[cfg(target_os = "wasi")]
-    jump_buffer_slabs: Vec<Box<[JmpBuf]>>,
-    #[cfg(target_os = "wasi")]
-    handlers: Vec<WasiHandler>,
     current_exception: f64,
     has_exception: bool,
     in_finally: bool,
@@ -100,10 +53,6 @@ struct ExceptionState {
 impl ExceptionState {
     fn new() -> Self {
         Self {
-            #[cfg(target_os = "wasi")]
-            jump_buffer_slabs: vec![crate::zeroed_cache::new_zeroed_cache(JUMP_BUFFER_SLAB_SIZE)],
-            #[cfg(target_os = "wasi")]
-            handlers: Vec::new(),
             current_exception: 0.0,
             has_exception: false,
             in_finally: false,
@@ -112,19 +61,6 @@ impl ExceptionState {
             #[cfg(debug_assertions)]
             in_pad_enter: false,
         }
-    }
-
-    /// The jump buffer of handler `depth`, growing the slabs as needed.
-    /// Appending a slab can move the Vec of Box handles, never the separate
-    /// heap allocations whose addresses have escaped to setjmp frames.
-    #[cfg(target_os = "wasi")]
-    fn jump_buffer_ptr(&mut self, depth: usize) -> *mut i32 {
-        let slab_index = depth / JUMP_BUFFER_SLAB_SIZE;
-        while self.jump_buffer_slabs.len() <= slab_index {
-            self.jump_buffer_slabs
-                .push(crate::zeroed_cache::new_zeroed_cache(JUMP_BUFFER_SLAB_SIZE));
-        }
-        self.jump_buffer_slabs[slab_index][depth % JUMP_BUFFER_SLAB_SIZE].as_mut_ptr()
     }
 }
 
@@ -179,50 +115,6 @@ pub extern "C" fn js_eh_handle_height() -> u64 {
     crate::gc::runtime_handle_stack_len() as u64
 }
 
-// ---------------------------------------------------------------------------
-// WASI handlers (setjmp transport).
-// ---------------------------------------------------------------------------
-
-/// Push a WASI handler and return its jmp_buf. `mark` is the handler frame's
-/// stack pointer (`llvm.stacksave` in a generated `try`, [`frame_mark`] in a
-/// runtime trap); a throw restores every managed stack to it, as a landing
-/// pad at that frame would.
-///
-/// The buffer is armed by the C trampoline (`perry_sjlj_try`, via [`trap`]) or
-/// by generated WASI code, NEVER by a raw `setjmp` call from Rust: rustc
-/// cannot express `returns_twice` (#9305).
-#[cfg(target_os = "wasi")]
-#[no_mangle]
-pub extern "C" fn js_try_push(mark: *const u8) -> *mut i32 {
-    with_exception_state(|s| unsafe {
-        let depth = (*s).handlers.len();
-        (*s).handlers.push(WasiHandler {
-            mark: mark as usize,
-            handles: crate::gc::runtime_handle_stack_len(),
-            shadow: crate::gc::frame_root_savepoint(),
-            temp_roots: crate::gc::temp_root_len(),
-            derived_super: crate::object::derived_super_binding_len(),
-        });
-        (*s).jump_buffer_ptr(depth)
-    })
-}
-
-/// End a WASI `try` (pop its handler). Does NOT clear the exception.
-#[cfg(target_os = "wasi")]
-#[no_mangle]
-pub extern "C" fn js_try_end() {
-    with_exception_state(|s| unsafe {
-        (*s).handlers.pop();
-    });
-}
-
-// ---------------------------------------------------------------------------
-// Runtime traps (ehfree 2b): a landing-pad shim on native, setjmp on WASI.
-// ---------------------------------------------------------------------------
-
-/// The body a runtime trap runs. `C-unwind`: a JS throw unwinds out of it
-/// into the shim's landing pad, and a plain `"C"` boundary would plant
-/// `panic_cannot_unwind` there under panic=unwind (see [`js_throw`]).
 pub type TrapBody = unsafe extern "C-unwind" fn(*mut core::ffi::c_void);
 
 // Declared `extern "C"` (nounwind) on purpose: the shim never unwinds out —
@@ -232,7 +124,6 @@ pub type TrapBody = unsafe extern "C-unwind" fn(*mut core::ffi::c_void);
 // listing only the shim call) makes every OTHER call site in it a terminate
 // site, so a throw passing through such a frame failed phase 1 with
 // `_URC_FATAL_PHASE1_ERROR` (gap test_gap_7911, run_combinator).
-#[cfg(not(target_os = "wasi"))]
 extern "C" {
     /// The landing-pad shim (`src/ffi/perry_trap.ll`, compiled by build.rs):
     /// `invoke body(ctx)` under a catch-all pad with Perry's personality,
@@ -244,18 +135,6 @@ extern "C" {
     /// returns 2. The personality accepts only this frame while
     /// [`hand_to_worker_base`] carries an exception to the base.
     fn perry_trap_call_base(body: TrapBody, ctx: *mut core::ffi::c_void) -> core::ffi::c_int;
-}
-
-#[cfg(target_os = "wasi")]
-extern "C" {
-    /// WASI setjmp trampoline (`src/ffi/perry_sjlj.c`): arms `env` in its own
-    /// C frame and runs `body(ctx)`; returns 0, or the `longjmp` value (1)
-    /// when a JS throw lands.
-    fn perry_sjlj_try(
-        env: *mut core::ffi::c_void,
-        body: TrapBody,
-        ctx: *mut core::ffi::c_void,
-    ) -> core::ffi::c_int;
 }
 
 /// Function start of the worker base shim, for the personality's handoff
@@ -298,10 +177,7 @@ unsafe fn trap_raw<const BASE: bool>(body: TrapBody, ctx: *mut core::ffi::c_void
     }
     #[cfg(target_os = "wasi")]
     {
-        let env = js_try_push(frame_mark() as *const u8);
-        let returned = perry_sjlj_try(env.cast(), body, ctx) == 0;
-        js_try_end();
-        returned
+        perry_trap_call(body, ctx) == 0
     }
 }
 
@@ -589,25 +465,8 @@ pub extern "C-unwind" fn js_throw(value: f64) -> ! {
     if trace_throw_enabled() {
         trace_throw(value);
     }
-    // WASI handlers (generated and runtime traps) use libsetjmp over
-    // standardized wasm EH. Restore to the handler frame's mark, exactly as a
-    // landing pad at that frame would, then jump.
     #[cfg(target_os = "wasi")]
-    {
-        let jb = with_exception_state(|s| unsafe {
-            let depth = (*s).handlers.len().checked_sub(1)?;
-            Some(((&(*s).handlers)[depth], (*s).jump_buffer_ptr(depth)))
-        });
-        let Some((handler, jb)) = jb else {
-            exit_uncaught(value)
-        };
-        crate::closure::reset_throw_not_callable_counter();
-        marks::unwind_managed_stacks(handler.mark, handler.handles);
-        crate::gc::frame_root_restore(handler.shadow);
-        crate::gc::temp_roots_truncate_to(handler.temp_roots);
-        crate::object::derived_super_binding_truncate(handler.derived_super);
-        unsafe { longjmp(jb, 1) }
-    }
+    crate::eh::raise_wasm_exception();
     #[cfg(not(target_os = "wasi"))]
     {
         // First throw of the process: prove the unwinder can step runtime
@@ -683,13 +542,10 @@ pub extern "C" fn js_clear_exception() {
     });
 }
 
-/// A `catch` clause's entry: take the pending exception and clear it. On
-/// WASI it first ends the `try` (pops its setjmp handler); a landing pad has
-/// nothing to pop.
+/// A `catch` clause's entry: take the pending exception and clear it.
+/// Lexical handlers require no registration to pop.
 #[no_mangle]
 pub extern "C" fn js_catch_enter() -> f64 {
-    #[cfg(target_os = "wasi")]
-    js_try_end();
     take_exception()
 }
 

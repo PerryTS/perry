@@ -252,8 +252,9 @@ crate::perry_thread_local! {
 }
 
 const _: () = assert!(
-    crate::native_class_ids::ZLIB_BASE - crate::native_class_ids::WEB_BUILTIN_BLOCK_START
-        < PROTOTYPE_SLOTS as u32,
+    crate::native_class_ids::COMPONENT_HTTP_OPERATION
+        - crate::native_class_ids::WEB_BUILTIN_BLOCK_START
+        < (PROTOTYPE_SLOTS - 2) as u32,
     "a native-payload family id outgrew the prototype slot array"
 );
 
@@ -477,7 +478,7 @@ pub fn payload_cell_of_word(word: u64) -> Option<*mut NativeHandleHeader> {
     match header.obj_type {
         crate::gc::GC_TYPE_NATIVE_HANDLE => Some(target as *mut NativeHandleHeader),
         crate::gc::GC_TYPE_ARRAY => {
-            let cell = crate::node_stream::record_payload_cell(word);
+            let cell = crate::stream_hooks::record_payload_cell(word);
             (cell != 0).then(|| (cell & crate::value::POINTER_MASK) as *mut NativeHandleHeader)
         }
         _ => None,

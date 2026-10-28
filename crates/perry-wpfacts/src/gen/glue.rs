@@ -21,7 +21,8 @@ impl<'a> Gen<'a> {
     /// become accessors of the target (called with `this` = the target).
     /// `accessor`: the descriptor is an accessor descriptor (FVA 4.3a): with
     /// a constant key the definition is an accessor key on every layout that
-    /// does not hold the key as data (`Cons::DefineAccessor`), not E5 HARD.
+    /// does not hold the key as data, and either descriptor a key of a
+    /// prototype (`Cons::DefineKey`), not E5 HARD.
     pub(crate) fn define_property(
         &mut self,
         fx: &Fx,
@@ -32,11 +33,18 @@ impl<'a> Gen<'a> {
         accessor: bool,
     ) {
         match &key {
-            Some(k) if accessor => {
+            Some(k) => {
                 let ka = self.m.atom(k);
-                self.m.cons(o, Cons::DefineAccessor { key: ka, reason: r });
+                self.m.cons(
+                    o,
+                    Cons::DefineKey {
+                        key: ka,
+                        data: !accessor,
+                        reason: r,
+                    },
+                );
             }
-            _ => self.m.cons(
+            None => self.m.cons(
                 o,
                 Cons::Hard {
                     kind: Hard::E5DefineProperty,
@@ -194,7 +202,7 @@ impl<'a> Gen<'a> {
     ) -> NodeId {
         let arg = |i: usize| args.get(i).copied();
         match method {
-            "arrayRecordNeedsIterator" | "arrayRecordForBound" | "hasPathModule" => {
+            "arrayRecordNeedsIterator" | "arrayRecordForBound" | "hasPathModule" | "isBuiltin" => {
                 self.prim_node(prim::BOOL)
             }
             // What codegen lowers them to: the cursor itself, the payload's
@@ -261,6 +269,26 @@ impl<'a> Gen<'a> {
                 self.prim_node(prim::BOOL)
             }
             "iteratorStepOutput" => self.iter_out_node(fx),
+            // The rest element of an array destructuring (`[a, ...rest] =
+            // it`): what codegen lowers it to, `js_array_push_f64(rest,
+            // value)`, the array itself as the result.
+            "iteratorRestAppend" => {
+                let (Some(rest), Some(value)) = (arg(0), arg(1)) else {
+                    return self.m.top_val("iteratorRestAppend without arguments");
+                };
+                self.store(
+                    fx,
+                    rest,
+                    Key::Any,
+                    value,
+                    "rest element append".into(),
+                    None,
+                    false,
+                );
+                let out = self.tmp("rest-append");
+                self.m.edge(rest, out);
+                out
+            }
             "iteratorCloseOnThrow" | "iteratorCloseIfNotDone" | "arrayRecordClose" => {
                 if let Some(it) = arg(0) {
                     // `iterator.return()` runs.
@@ -274,6 +302,13 @@ impl<'a> Gen<'a> {
                 }
                 out
             }
+            // A literal CommonJS require (design CJS_LINK §3): the target's
+            // init runs (every module body is in the program), and the value
+            // is a read of its record binding; the caller reads `.exports`.
+            "cjsRequireEdge" => match arg(0) {
+                Some(record) => record,
+                None => self.m.top_val("cjsRequireEdge without its record binding"),
+            },
             "registerPathModule" | "registerPathModulePartial" => {
                 if let Some(value) = arg(1) {
                     let registry = match source_args.first() {
@@ -308,17 +343,16 @@ impl<'a> Gen<'a> {
                 // it computes. The main record is what `process.mainModule`
                 // reads (`builtins`). The result is `require.extensions`.
                 if let Some(cache) = arg(0) {
+                    // The runtime caches a record under its own canonical
+                    // path only: a compiled module's record is the slot's
+                    // birth publication already, and a module outside the
+                    // graph is cached under a key no static read names. So
+                    // a static edge's read of its target's slot (CJL2) sees
+                    // that target's record, never the registry summary; the
+                    // summary is reached through the computed paths only
+                    // (`requirePathModule`, the program's `require` with a
+                    // computed specifier, DECISIONS 150).
                     self.m.edge(cache, self.m.cjs_cache);
-                    let registry = self.cjs_registry;
-                    self.store(
-                        fx,
-                        cache,
-                        Key::Any,
-                        registry,
-                        "records the runtime caches".into(),
-                        None,
-                        false,
-                    );
                 }
                 if let Some(main) = arg(1) {
                     self.m.edge(main, self.m.cjs_main);
@@ -336,11 +370,24 @@ impl<'a> Gen<'a> {
                     self.m.edge(record, self.cjs_registry);
                     // The runtime links the requiring module's cached record,
                     // or a stand-in object it makes for a parent outside the
-                    // cache (`module_require.rs` `link_parent`).
+                    // cache (`module_require.rs` `link_parent`). The whole
+                    // program holds the records of the registry union. Per
+                    // unit the requiring module is another module, its
+                    // record another unit's value: unknown, as all their
+                    // code is (`FactsConfig::unit`). Through the registry
+                    // cell every CommonJS unit would read every unit's
+                    // registry writes for a field its code rarely reads
+                    // (opencode: 14879 units, 1929 writes each).
                     let pa = self.m.atom("parent");
                     let (_, stand_in) = self.bobj(fx.module, "CjsParent");
-                    let registry = self.cjs_registry;
-                    self.m.edge(registry, stand_in);
+                    if self.unit_in.is_some() {
+                        self.m.add_top(stand_in, |_| {
+                            "the requiring module's record: another unit's".into()
+                        });
+                    } else {
+                        let registry = self.cjs_registry;
+                        self.m.edge(registry, stand_in);
+                    }
                     self.store(
                         fx,
                         record,
@@ -378,9 +425,21 @@ impl<'a> Gen<'a> {
                     }
                     _ => true,
                 };
+                // Per unit a computed path is another module's exports:
+                // another unit's value, unknown (`FactsConfig::unit`), as
+                // the parent link's record is. Read through the registry
+                // cell, each such unit took a stand-in of every registry
+                // write and published a ⊤ write for each array it let
+                // escape (opencode: 1122 units x 3660 arrays, 54.6M writes).
                 if whole_registry {
-                    self.m
-                        .cons(self.cjs_registry, Cons::CjsPublish { dst: out });
+                    if self.unit_in.is_some() {
+                        self.m
+                            .add_top(out, |_| "a computed require: another unit's exports".into());
+                        self.m.add_prim(out, prim::ALL);
+                    } else {
+                        self.m
+                            .cons(self.cjs_registry, Cons::CjsPublish { dst: out });
+                    }
                 }
                 self.m.add_prim(out, prim::UNDEF);
                 out

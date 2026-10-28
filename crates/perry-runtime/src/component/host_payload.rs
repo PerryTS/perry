@@ -141,6 +141,7 @@ pub extern "C" fn js_component_host_resource_create(
             true,
             undefined(),
             undefined(),
+            undefined(),
         )
     });
     if result.is_err() && id != 0 {

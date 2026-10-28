@@ -203,3 +203,5 @@ pub(super) fn populate_prototype(
     );
     super::global_this::set_intrinsic_to_string_tag(proto, tag);
 }
+
+crate::realm_decl!("temporal_proto.realm.json#*");

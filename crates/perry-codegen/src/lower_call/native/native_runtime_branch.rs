@@ -1,6 +1,7 @@
 {
     if module == "__perry_runtime" && class_name.is_none() && object.is_none() {
         if let Some(result) = crate::array_record_stack::lower(ctx, method, args)? { return Ok(result); }
+        if let Some(result) = crate::expr::private_resume_frame::lower(ctx, method, args)? { return Ok(result); }
         match method {
             "importMetaResolve" | "importMetaResolveValue" => {
                 // #11789 sweep: `import.meta.resolve(specifier, parent)` holds
@@ -327,6 +328,37 @@ return crate::lower_array_record_length::lower(ctx, &args[0]);
                 );
                 arg_group.release(ctx);
                 return Ok(extensions);
+            }
+            // A literal CommonJS require (design CJS_LINK §2.2): the target's
+            // idempotent init guard, then its record binding. No string, no
+            // table: the edge was resolved at compile time.
+            "cjsRequireEdge" => {
+                let Some(Expr::ExternFuncRef { name, .. }) = args.first() else {
+                    anyhow::bail!("cjsRequireEdge takes the target's imported record binding");
+                };
+                let Some(prefix) = ctx.import_function_prefixes.get(name).cloned() else {
+                    anyhow::bail!("cjsRequireEdge: `{name}` is not a compiled module's binding");
+                };
+                let init_fn = format!("{prefix}__init");
+                ctx.pending_declares
+                    .push((init_fn.clone(), crate::types::VOID, vec![]));
+                ctx.block().call_void(&init_fn, &[]);
+                return lower_expr(ctx, &args[0]);
+            }
+            "isBuiltin" => {
+                let specifier = args.first().map_or_else(
+                    || Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))),
+                    |arg| lower_expr(ctx, arg),
+                )?;
+                return Ok(ctx
+                    .block()
+                    .call(DOUBLE, "js_module_is_builtin", &[(DOUBLE, &specifier)]));
+            }
+            // Resolved by the program's closed-world pass before codegen.
+            "cjsOpen" => {
+                anyhow::bail!(
+                    "internal compiler error: `__perry_cjs_open()` reached codegen unresolved"
+                );
             }
             // #6769: link `module.parent` before the wrapper body runs.
             "linkPathModuleParent" => {

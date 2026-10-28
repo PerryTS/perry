@@ -400,24 +400,9 @@ impl<'a> Gen<'a> {
                 });
             }
             for name in lits {
-                let Some(c) = self.modules[mi]
-                    .1
-                    .classes
-                    .iter()
-                    .find(|c| c.name == name && c.is_literal_shape())
-                else {
-                    continue;
-                };
-                let names = c
-                    .fields
-                    .iter()
-                    .filter(|f| !f.is_private && f.key_expr.is_none())
-                    .map(|f| f.name.as_str())
-                    .chain(c.getters.iter().chain(&c.setters).map(|(n, _)| n.as_str()))
-                    .chain(c.methods.iter().map(|m| m.name.as_str()));
-                for n in names {
-                    let a = self.m.atom(n);
-                    self.m.accessor_atoms.insert(a);
+                for n in self.literal_keys(mi, &name) {
+                    let a = self.m.atom(&n);
+                    self.m.add_accessor_atom(a);
                     self.m.for_in_define_keys.insert(a);
                 }
             }
@@ -427,18 +412,18 @@ impl<'a> Gen<'a> {
 
 /// The HIR a solve walks of one module: a unit's items (a unit view borrows
 /// the whole module), else the module's.
-struct Walked<'a> {
+pub(super) struct Walked<'a> {
     /// Declarations and class members (closures are found as expressions).
-    fns: Vec<&'a Function>,
+    pub(super) fns: Vec<&'a Function>,
     decls: Vec<&'a Function>,
     classes: Vec<&'a Class>,
-    init: Vec<&'a Stmt>,
+    pub(super) init: Vec<&'a Stmt>,
     globals: Vec<&'a Expr>,
 }
 
 impl<'a> Walked<'a> {
     /// Every expression, closure bodies included.
-    fn each_expr(&self, f: &mut dyn FnMut(&Expr)) {
+    pub(super) fn each_expr(&self, f: &mut dyn FnMut(&Expr)) {
         for func in &self.decls {
             for_each_function_expr(func, f);
         }
@@ -455,7 +440,7 @@ impl<'a> Walked<'a> {
 }
 
 impl<'a> Gen<'a> {
-    fn walked(&self, mi: usize) -> Walked<'a> {
+    pub(super) fn walked(&self, mi: usize) -> Walked<'a> {
         let classes = self.classes_of(mi);
         let decls = self.functions_of(mi);
         let mut fns = decls.clone();

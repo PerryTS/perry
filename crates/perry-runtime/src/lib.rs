@@ -11,6 +11,8 @@
 #![recursion_limit = "256"]
 // Anchors are `#[used(compiler)]`: retained by rustc, not ld64 dead-strip roots.
 #![feature(used_with_arg)]
+// Native file reads initialize only the bytes written into final string storage.
+#![feature(read_buf, core_io_borrowed_buf)]
 #![feature(linkage)]
 // Keep the cold class-cache publisher compact without outlining hot reads.
 #![feature(optimize_attribute)]
@@ -96,9 +98,11 @@ pub mod arena;
 pub mod array;
 pub mod async_context;
 pub mod async_hooks;
+pub mod async_local_storage;
 pub mod atomics;
 pub mod atomics_futex;
 pub mod bigint;
+mod bigint_hooks;
 pub mod r#box;
 pub mod buffer;
 mod build_stamp;
@@ -185,6 +189,7 @@ pub mod wpfacts_check;
 // #6468: the `node:http2` constant tables are only reachable through the
 // `http2` native-module namespace (via `module_hooks`), so a program that never
 // imports `node:http2` links none of them.
+mod json_hooks;
 pub mod node_http2_constants;
 pub mod node_inspector;
 pub mod node_repl;
@@ -192,6 +197,7 @@ pub mod node_sea;
 pub mod node_stream;
 pub mod node_submodules;
 pub mod node_test;
+mod stream_hooks;
 pub mod yoga;
 pub(crate) mod zeroed_cache;
 // #3137/#3138/#3142: public `node:v8` serialize/deserialize + heap stats + GCProfiler.
@@ -271,6 +277,9 @@ pub mod turnloop_proc;
 // (`turnloop_pool/mod.rs`). Same target gate as P1 and P2 — the driver itself
 // is a native-only dependency, and the pool it wraps is turnloop's.
 #[cfg(not(target_arch = "wasm32"))]
+pub mod turnloop_pool;
+#[cfg(target_os = "wasi")]
+#[path = "turnloop_pool_wasm.rs"]
 pub mod turnloop_pool;
 // turnloop P10: run a host job on the loop of the agent this thread acts for
 // (`turnloop_post/mod.rs`). Same target gate as P1, P2 and P4. This is what a
@@ -555,7 +564,7 @@ pub(crate) mod stdlib_pump {
     }
 
     /// The re-entrant stdlib-pump depth.
-    #[cfg(test)]
+    #[cfg(any(test, target_os = "wasi"))]
     pub(crate) fn pump_depth() -> u32 {
         PUMP_DEPTH.with(|depth| depth.borrow().len() as u32)
     }
@@ -570,6 +579,19 @@ pub(crate) mod stdlib_pump {
         let emptied = PUMP_DEPTH.with(|depth| {
             let mut depth = depth.borrow_mut();
             depth.unwind_to(sp) > 0 && depth.is_empty()
+        });
+        if emptied {
+            end_outer_pump();
+        }
+    }
+
+    #[cfg(any(test, target_os = "wasi"))]
+    pub(crate) fn pump_depth_restore_depth(keep: usize) {
+        let emptied = PUMP_DEPTH.with(|depth| {
+            let mut depth = depth.borrow_mut();
+            let popped = depth.len() > keep;
+            depth.restore_depth(keep);
+            popped && depth.is_empty()
         });
         if emptied {
             end_outer_pump();
@@ -851,7 +873,7 @@ pub(crate) mod stdlib_pump {
         debug_assert!(!outermost || ACTIVE_OUTER_PUMPS.load(Ordering::Acquire) > 0);
         crate::promise::js_native_async_process_pending();
         crate::node_api_host::hooks::process_pending();
-        crate::os::js_process_signal_drain();
+        crate::os_hook_slots::js_process_signal_drain();
         // Drain the tty resize-pending flag (#347 Phase 3). Lives in
         // perry-runtime, not stdlib, so it runs even when stdlib isn't
         // linked — a TUI program that uses process.stdout.on('resize')
@@ -954,13 +976,13 @@ pub(crate) mod stdlib_pump {
         // once stdin is detached (`pause`/`unref`/`destroy`), and false again
         // after EOF has been seen and the terminal `'end'`/`'close'` dispatch
         // has run.
-        if crate::os::stdin_listeners_keep_loop_alive() {
+        if crate::os_hook_slots::stdin_listeners_keep_loop_alive() {
             return 1;
         }
         if crate::process::js_process_ipc_has_active() != 0 {
             return 1;
         }
-        if crate::os::js_process_signal_has_active() != 0 {
+        if crate::os_hook_slots::js_process_signal_has_active() != 0 {
             return 1;
         }
         // #9591: a ref'd `fs.watch` handle / started `fsPromises.watch`
@@ -1341,3 +1363,60 @@ pub extern "C" fn perry_runtime_widget_init() {
 mod hot_text;
 
 mod source_read_log;
+
+pub mod proxy_hooks;
+
+pub mod url_hooks;
+
+pub mod async_hook_slots;
+
+mod fs_hook_slots;
+mod io_error;
+
+mod thread_hook_slots;
+
+mod calendar;
+mod clock;
+pub mod date_hook_slots;
+mod date_layout;
+
+mod perf_clock;
+mod perf_hook_slots;
+
+mod event_emitter_error;
+mod os_hook_slots;
+mod process_startup;
+
+mod messaging_hook_slots;
+
+mod wasi_hook_slots;
+
+pub mod event_target_hook_slots;
+
+mod byte_cell_support;
+pub mod typedarray_hook_slots;
+
+mod builtin_value_support;
+mod bun_hook_slots;
+
+mod node_test_hook_slots;
+
+#[path = "temporal/hooked.rs"]
+pub mod temporal_hook_slots;
+mod temporal_layout;
+
+#[cfg(not(target_arch = "wasm32"))]
+mod dgram_registry_owner;
+
+mod wasm_hook_slots;
+
+mod segmenter_hook_roots;
+
+mod native_finalizer_hook;
+
+mod string_combining_class;
+
+mod diagnostic_report_roots;
+
+mod dyn_eval_hook_roots;
+mod interp_proto_guard;

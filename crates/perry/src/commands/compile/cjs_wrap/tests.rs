@@ -1749,12 +1749,13 @@ fn cjs_wrap_builtin_require_uses_static_import() {
         wrapped.contains("import _req_0 from 'process';"),
         "{wrapped}"
     );
+    // The body reads the binding (CJL2); the arm, the namespace as a value,
+    // is reached only where `require` is one: a program that is not closed.
+    assert!(wrapped.contains("let node_process = _req_0;"), "{wrapped}");
     assert!(
-        wrapped.contains("let node_process = require(\"process\");"),
-        "{wrapped}"
-    );
-    assert!(
-        wrapped.contains("if (specifier === 'process') { return _req_0; }"),
+        wrapped.contains(
+            "if (__perry_cjs_open()) { if (specifier === 'process') { return _req_0; } }"
+        ),
         "{wrapped}"
     );
     assert!(

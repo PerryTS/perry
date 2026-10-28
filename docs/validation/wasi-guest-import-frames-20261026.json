@@ -1,0 +1,235 @@
+{
+  "date": "2026-10-26",
+  "scope": "Stable deferred guest import frames and finite C task resume callbacks; async guest generator remains guarded",
+  "baseCommit": "497e6f06e0669cfcf4cd050210ca3086f13f9fed",
+  "snapshot": "v401",
+  "platform": "Linux x86_64",
+  "abi": {
+    "componentHost": 12,
+    "canonicalGuest": 2,
+    "guestOpsLayoutChanged": false,
+    "adapterAnchors": 45
+  },
+  "runtimeTests": {
+    "development": {
+      "component": 92,
+      "asyncContext": 8,
+      "promise": 59,
+      "asyncHooks": 12,
+      "weakref": 6,
+      "finregFilter": 6,
+      "diagnostics": 10
+    },
+    "productionPanicAbort": {
+      "component": 92,
+      "asyncContext": 8,
+      "promise": 59,
+      "asyncHooks": 12,
+      "weakref": 6,
+      "finregFilter": 6,
+      "diagnostics": 10,
+      "uid": 65534,
+      "gid": 65534,
+      "panicAbort": true,
+      "closureAbi": 1,
+      "nativeClass": 1
+    }
+  },
+  "witTests": 22,
+  "allTargetsBindingsAndHostClippyExitCode": 0,
+  "qualifiedSourceSha256": {
+    "crates/perry-runtime/src/async_context/job_domain.rs": "efa270f2471b46336e0436c262662ac54382665ce06d50fe2ec24d7f95a2641c",
+    "crates/perry-runtime/src/component/guest.rs": "e988ed4a5675ae9b1c22c333e98c7539a86db328688b4c67481d88e21f653b5b",
+    "crates/perry-runtime/src/component/guest/frame.rs": "ddf97f754fbde528724639695ef7c2929e14dd7f756df731fbd83256c7cb251a",
+    "crates/perry-runtime/src/component/guest/frame/suspended.rs": "b5f8384e53ac8d66f8593be22cfe768001ed245f871eb1b8a6da8f5300fb5a36",
+    "crates/perry-runtime/src/component/guest/frame/suspended/tests.rs": "02f60f78c265647a1b300b3dbcc7a2280d7399a2929fcc0dcbc92057d39d75c4",
+    "crates/perry-runtime/src/component/guest/frame/task.rs": "e6c8a4e6e92293c2de085e3f0c7a3cd1f745091ab0c9351959e54630b5b000e3",
+    "crates/perry-runtime/src/component/guest/frame_tests.rs": "88842e15c884dc63ecf52c55a82d6d7601644f4039a9ded886cb678f1a4c953a",
+    "crates/perry-wit/src/guest_frame.h": "8d5eee8ca163e629dd988ae1693162f46be219b54ffc233aabe0fbfb8a8649ed"
+  },
+  "artifacts": {
+    "runtime-dev": {
+      "path": "/root/codex-components-p2-20261021/perry-import-frames-v401-artifacts/runtime-dev",
+      "sha256": "d6eaf65813ae49cfd92c88f8e394a96ff0cd4a7914113b36b65f574f9434c117"
+    },
+    "wit-dev": {
+      "path": "/root/codex-components-p2-20261021/perry-import-frames-v401-artifacts/wit-dev",
+      "sha256": "c40ea8bbb2a62f097b113f4cb47cbcc39b9cd5c73753bb8efc66439e30afc03a"
+    },
+    "runtime-prod": {
+      "path": "/root/codex-components-p2-20261021/perry-import-frames-v401-artifacts/perry-runtime-tests",
+      "sha256": "2eb4d2c9645855b972f90ad00e7d31aac780cd2ca1f9f625c9f6aa646a810f3e"
+    }
+  },
+  "wasi": {
+    "archive": [
+      {
+        "path": "/root/codex-components-p2-20261021/perry-import-frames-wasi-v401-artifacts/libperry_runtime.a",
+        "bytes": 52746834,
+        "sha256": "78f1ed3f6e33b2a0dd52fe67ea134bb3dd53a9f4543eaf9f029355fb3a37095b"
+      }
+    ],
+    "exportedSymbols": {
+      "perry_component_frame_import_begin": [
+        "000d6e66 T perry_component_frame_import_begin"
+      ],
+      "perry_component_frame_import_resolve": [
+        "000d6ebe T perry_component_frame_import_resolve"
+      ],
+      "perry_component_frame_import_reject": [
+        "000d6e71 T perry_component_frame_import_reject"
+      ],
+      "perry_component_frame_task_resume": [
+        "00107a26 T perry_component_frame_task_resume"
+      ]
+    },
+    "profile": "prod",
+    "features": {
+      "defaults": [
+        "full",
+        "regex-engine",
+        "temporal",
+        "url-engine",
+        "intl-namespace",
+        "intl-datetime",
+        "diagnostics",
+        "bun-cli-utils",
+        "dyn-eval",
+        "keepalive-anchors",
+        "alloc-mimalloc",
+        "gc-instruments",
+        "hot-diag"
+      ],
+      "excluded": [
+        "alloc-mimalloc"
+      ],
+      "selected": "perry-runtime/full,perry-runtime/regex-engine,perry-runtime/temporal,perry-runtime/url-engine,perry-runtime/intl-namespace,perry-runtime/intl-datetime,perry-runtime/diagnostics,perry-runtime/bun-cli-utils,perry-runtime/dyn-eval,perry-runtime/keepalive-anchors,perry-runtime/gc-instruments,perry-runtime/hot-diag"
+    },
+    "executedPerryGuest": true,
+    "guestExecutionScope": "Fresh synchronous transform and resource guests; generated async guest output remains guarded"
+  },
+  "negativeControl": {
+    "snapshot": "v399",
+    "passed": 90,
+    "failed": 1,
+    "subject": "pending_imports_keep_heap_frames_and_als_through_moving_gc_and_reverse_c_resume",
+    "failure": "Raw Promise fulfillment skips the then getter: no import ALS markers are observed"
+  },
+  "localChecks": {
+    "rustfmt": 0,
+    "c11HeaderWarningsAsErrors": 0,
+    "diffCheck": 0
+  },
+  "lint": [
+    {
+      "gate": "address",
+      "exitCode": 1,
+      "byteIdenticalToQualifiedParent": true,
+      "sha256": "9ed7255453b910401c7c49ae78b97d438169d390b3321eb349e4bce1f9be05ea"
+    },
+    {
+      "gate": "holders",
+      "exitCode": 1,
+      "byteIdenticalToQualifiedParent": true,
+      "sha256": "d545b30e51168a7cbe0e17576898ad9ba3ee397b583ad7de0ffeff1fd6a62b48"
+    },
+    {
+      "gate": "tokio",
+      "exitCode": 0,
+      "byteIdenticalToQualifiedParent": true,
+      "sha256": "fe4f2bd9190b963378e83eeb8c9f38d5f4b08ff5522c06bbf3b6e3ece97bbf61"
+    },
+    {
+      "gate": "node",
+      "exitCode": 0,
+      "byteIdenticalToQualifiedParent": true,
+      "sha256": "c5de53a384a6ebd59c492797b73ac9386059d4a59c9e773ac0b343da51785dc3"
+    },
+    {
+      "gate": "size",
+      "exitCode": 1,
+      "byteIdenticalToQualifiedParent": true,
+      "sha256": "55d717db298ca6fa4e868f701947b560def2009b99707e3d27097da3f8d6845b"
+    }
+  ],
+  "evidenceArchives": [
+    {
+      "file": "perry-import-frames-v401-evidence.tar.gz",
+      "sha256": "bce0bed8fe260a5cf80cd45dc22bf61573f552ee3a23459f1b7ef748e1264d87",
+      "bytes": 4648925,
+      "verifiedMembers": 61,
+      "allMembersVerifiedLocally": true
+    },
+    {
+      "file": "perry-import-frames-guest-v401-evidence.tar.gz",
+      "sha256": "78d779f5f4bd70ae9be488137a16a2ce55e3bbac3e272de59f232d8b6b8c57c3",
+      "bytes": 6623822,
+      "verifiedMembers": 49,
+      "allMembersVerifiedLocally": true
+    }
+  ],
+  "qualificationNotes": [
+    "The first archive helper incorrectly selected the native stdlib feature set and failed on OpenSSL. The successful runtime-only WASI build follows scripts/wasi_build_runtime.py, excluding only alloc-mimalloc from derived runtime defaults. The WASI linker does not use perry-stdlib.a.",
+    "Development diagnostics includes four nested isolated child runs and ten selected tests; production selects the same ten tests.",
+    "All eight changed runtime/header files match the qualified source snapshot byte for byte. Documentation, changelog and receipt were added after qualification."
+  ],
+  "limitations": [
+    "The generated async import/export C scheduler, typed canonical buffer retention, canonical cancellation, and future/stream guest values remain unimplemented and guarded.",
+    "task_resume callbacks must finish without canonical suspension and must not reenter or drop their borrowed parent frame.",
+    "C must retain a deferred import frame through canonical use and drop it once after the runtime handoff, including immediate completion.",
+    "The exported symbol check alone does not qualify async execution of these functions in WASI.",
+    "No new full native compiler/archive set, macOS, Windows or final package is qualified."
+  ],
+  "guestExecution": {
+    "snapshot": "v401",
+    "phases": 10,
+    "artifacts": {
+      "perry-frozen-v377": {
+        "path": "/root/codex-components-p2-20261021/perry-import-frames-guest-v401-artifacts/perry-frozen-v377",
+        "sha256": "28ff0a47b850c595e18e171aa3fbe6413dacc20f2cfe5851582e743db5e8b467",
+        "bytes": 101741576
+      },
+      "rust-host-frozen-v387": {
+        "path": "/root/codex-components-p2-20261021/perry-import-frames-guest-v401-artifacts/rust-host-frozen-v387",
+        "sha256": "7d819c6bc9941fe4b92a70a1f6de7df8f798d577adb21d4876b7897b3edc316c",
+        "bytes": 178245760
+      },
+      "wit-current-v401": {
+        "path": "/root/codex-components-p2-20261021/perry-import-frames-guest-v401-artifacts/wit-current-v401",
+        "sha256": "78d83cf102e72f36fa44bae552cf96fa065991278a6883bf19b956c74ba0c6a3",
+        "bytes": 28527616
+      },
+      "wasi-runtime-current-v401": {
+        "path": "/root/codex-components-p2-20261021/perry-import-frames-guest-v401-artifacts/wasi-runtime-current-v401",
+        "sha256": "78f1ed3f6e33b2a0dd52fe67ea134bb3dd53a9f4543eaf9f029355fb3a37095b",
+        "bytes": 52746834
+      },
+      "transform": {
+        "path": "/root/codex-components-p2-20261021/perry-import-frames-guest-v401-artifacts/transform.component.wasm",
+        "sha256": "010f3a39085117fbd5d9e86f6a698d794ba04355dc92b95b36ac901d728444c7",
+        "bytes": 11165986
+      },
+      "resources": {
+        "path": "/root/codex-components-p2-20261021/perry-import-frames-guest-v401-artifacts/resources.component.wasm",
+        "sha256": "36b7477fcc03805ccd94e5204af40e52f59dbe4dcd2454608fb0dd963844031a",
+        "bytes": 11159142
+      }
+    },
+    "fixtureSource": {
+      "test-wasi/components/transform/host.ts": "c54f026ee749fa4cb9af83100a96859b89c533ecef2974f2b4a95e6dc95f5bff",
+      "test-wasi/components/transform/world.wit": "7b4e581b0dc6cd193dfe4a2efadcbf9cc982dd26886a06237cd252a6beb32a36",
+      "test-wasi/components/transform/perry-host.ts": "16d9540730d348750c467d81ef87f41b23b77d2bc88f68e4a13ba9409bad1415",
+      "test-wasi/components/transform/guest.ts": "9427650a285a48d0d1fb7ad2a59215a33af17dd1b3b11dad23202141fd701dbd",
+      "test-wasi/components/guest-resources/world.wit": "7fcedfcdb79d2d20265dc8796a7ae56700ed7166f5dc42f140fc3c6b591ca755",
+      "test-wasi/components/guest-resources/guest.ts": "0f2aef2790cc1b4c1e4ea20d88329c7471299c2b48bbd71e3ebff7b7068f4364"
+    },
+    "moving": {
+      "copiedObjects": 8791,
+      "evacuationVerified": true
+    },
+    "limits": [
+      "Frozen compiler v377 and Rust host v387 reused by exact binary hash; WIT CLI and runtime archive rebuilt from v401.",
+      "Fresh Perry WASI synchronous guest execution only; no generated async guest adapters enabled."
+    ]
+  }
+}

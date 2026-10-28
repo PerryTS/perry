@@ -34,7 +34,7 @@ pub extern "C" fn js_child_process_fork(module_ptr: i64, args_ptr: i64, opts_ptr
         );
     }
     let module = if module_raw.starts_with("file:") {
-        crate::url::node_compat::module_base_to_path(cp_box_string(&module_raw))
+        crate::module_require::file_url_text::module_base_to_path(cp_box_string(&module_raw))
             .unwrap_or(module_raw)
     } else {
         module_raw

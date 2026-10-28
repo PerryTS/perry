@@ -386,7 +386,10 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
                     crate::value::js_nanbox_pointer(proto_obj as i64),
                 );
             }
-            crate::event_target::prototype::install_constructor_constants(name, closure_ptr.cast());
+            crate::event_target_hook_slots::prototype_install_constructor_constants(
+                name,
+                closure_ptr.cast(),
+            );
             if let Some(serial) = declaration.prototype_serial {
                 // SAFETY: `proto_obj` is the live, just-populated prototype.
                 unsafe {
@@ -436,7 +439,9 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
                 }
             }
             if matches!(name, "MessageChannel" | "MessagePort" | "BroadcastChannel") {
-                crate::messaging::populate_messaging_prototype(name, proto_obj, ctor_value);
+                crate::messaging_hook_slots::populate_messaging_prototype(
+                    name, proto_obj, ctor_value,
+                );
             }
             if name == "Storage" {
                 crate::web_storage::install_storage_globals(
@@ -845,7 +850,7 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
     {
         let pname = b"performance";
         let pkey = crate::string::js_string_from_bytes(pname.as_ptr(), pname.len() as u32);
-        let pval = crate::perf_hooks::performance_namespace();
+        let pval = crate::perf_hook_slots::performance_namespace();
         js_object_set_field_by_name(singleton(), pkey, pval);
     }
     // Perf_hooks constructors are globals identical to the module exports.
@@ -1187,3 +1192,5 @@ unsafe fn name_first_realm_prototype(proto: *mut ObjectHeader, serial: u64) {
     crate::object::proto_validity::assign_intrinsic_prototype_serial(proto as usize, serial);
     let _ = crate::object::builtin_proto::name_runtime_prototype(proto, serial);
 }
+
+crate::realm_decl!("populate.realm.json#*");

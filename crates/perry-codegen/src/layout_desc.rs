@@ -27,9 +27,9 @@ use crate::strings::StringPool;
 
 /// `%PerryLayoutDesc`: family, variant, kind, integrity, slot_count,
 /// template word, rep, proto, keys, key_count, index_mask, index, class, parent,
-/// methods, identity and pad (80 bytes LP64; 64 bytes ILP32).
+/// methods, identity, pad and image keys (88 bytes LP64; 72 bytes ILP32).
 pub const DESC_TY: &str =
-    "{ i32, i16, i8, i8, i32, i32, i64, ptr, ptr, i32, i32, ptr, i32, i32, ptr, i32, i32 }";
+    "{ i32, i16, i8, i8, i32, i32, i64, ptr, ptr, i32, i32, ptr, i32, i32, ptr, i32, i32, ptr }";
 mod methods;
 /// `%PerryLayoutKey`: atom, slot, attrs, pad (16 bytes).
 pub const KEY_TY: &str = "{ ptr, i32, i8, [3 x i8] }";
@@ -259,7 +259,7 @@ pub(crate) fn image_colour_flags(bytes: &[u8]) -> u32 {
 }
 
 /// The static atom global of `key` (emitting it once per module).
-fn atom(
+pub(crate) fn atom(
     llmod: &mut LlModule,
     strings: &mut StringPool,
     emitted: &mut BTreeMap<String, String>,
@@ -436,8 +436,17 @@ fn emit_image_descriptor(
         true,
         identity,
     );
+    let image_keys = crate::codegen::realm_image::emit_layout_key_list(
+        llmod,
+        &format!("{desc_name}_image_keys"),
+        &keys
+            .iter()
+            .enumerate()
+            .map(|(i, (a, h, attrs))| (a.clone(), *h, *attrs, i as u32))
+            .collect::<Vec<_>>(),
+    );
     llmod.add_raw_global(format!(
-        "@{desc_name} = global {DESC_TY} {{ i32 {family}, i16 {variant}, i8 0, i8 {integrity}, i32 {}, i32 {}, i64 0, ptr inttoptr (i64 {proto} to ptr), ptr @{keys_name}, i32 {count}, i32 {}, ptr @{index_name}, i32 0, i32 0, ptr null, i32 {identity}, i32 0 }}, section \"{sect}\", align 8",
+        "@{desc_name} = global {DESC_TY} {{ i32 {family}, i16 {variant}, i8 0, i8 {integrity}, i32 {}, i32 {}, i64 0, ptr inttoptr (i64 {proto} to ptr), ptr @{keys_name}, i32 {count}, i32 {}, ptr @{index_name}, i32 0, i32 0, ptr null, i32 {identity}, i32 0, ptr {image_keys} }}, section \"{sect}\", align 8",
         count.max(1),
         word as i32,
         cap - 1
@@ -681,13 +690,18 @@ fn module_literals(hir: &HirModule) -> Vec<Vec<String>> {
     out
 }
 
+/// Install the program's key colouring on this thread, which [`atom`] reads:
+/// the static seed unit emits atoms outside any module's codegen.
+pub(crate) fn set_colours(layouts: &ProgramLayouts) {
+    COLOURS.with(|c| *c.borrow_mut() = layouts.colored.clone());
+}
+
 /// Whether this compile emits layout descriptors at all (executables only:
 /// atoms point at image strings, which only executables carry).
 /// `PERRY_LAYOUT_DESCS=0` disables emission and with it every family.
-pub(crate) fn layouts_enabled(output_type: &str, target_triple: &str) -> bool {
+pub(crate) fn layouts_enabled(output_type: &str, _target_triple: &str) -> bool {
     output_type != "dylib"
         && output_type != "staticlib"
-        && !target_triple.contains("wasm")
         && std::env::var("PERRY_LAYOUT_DESCS").as_deref() != Ok("0")
 }
 
@@ -769,11 +783,28 @@ fn emit_desc(
         format!("{keys:?}|{family}|{slot_count}|{class:?}"),
         0,
         true,
-        class.0 != 0,
+        // Both nominal and admitted classless families carry their DPA word.
+        true,
         0,
     );
+    let image_keys = crate::codegen::realm_image::emit_layout_key_list(
+        llmod,
+        &format!("{desc_name}_image_keys"),
+        &keys
+            .iter()
+            .map(|(key, atom, slot)| {
+                let attrs = crate::runtime_abi::LAYOUT_KEY_OPTIONAL
+                    | if key.is_private() {
+                        crate::runtime_abi::LAYOUT_KEY_PRIVATE_FIELD
+                    } else {
+                        0
+                    };
+                (atom.clone(), fnv1a(key.spelling().as_bytes()), attrs, *slot)
+            })
+            .collect::<Vec<_>>(),
+    );
     llmod.add_raw_global(format!(
-        "@{desc_name} = global {DESC_TY} {{ i32 {family}, i16 0, i8 0, i8 0, i32 {slot_count}, i32 {}, i64 0, ptr inttoptr (i64 {} to ptr), ptr @{keys_name}, i32 {count}, i32 {}, ptr @{index_name}, i32 {}, i32 {}, ptr {methods}, i32 0, i32 0 }}, section \"{sect}\", align 8",
+        "@{desc_name} = global {DESC_TY} {{ i32 {family}, i16 0, i8 0, i8 0, i32 {slot_count}, i32 {}, i64 0, ptr inttoptr (i64 {} to ptr), ptr @{keys_name}, i32 {count}, i32 {}, ptr @{index_name}, i32 {}, i32 {}, ptr {methods}, i32 0, i32 0, ptr {image_keys} }}, section \"{sect}\", align 8",
         word as i32,
         // The `PerryLayoutDesc.proto` tag (perry-runtime `layout_desc`).
         proto,
@@ -1072,9 +1103,28 @@ pub(crate) fn emit_module_layouts(
             variants.push((v.key_bits, vnamed, v.slot_count));
         }
         let methods = methods::emit(llmod, strings, &mut atoms, fam);
+        let literal = layouts.literal_families.contains(&fam.class_id);
+        let identity = if literal {
+            (0, 0)
+        } else {
+            (fam.class_id, fam.parent_class_id)
+        };
+        // First-birth literal descriptors are static image data outside the
+        // startup enumeration. DPA assigns their immutable row words; the
+        // runtime publishes the current agent's facts only at first birth.
+        let family_section = if literal {
+            section(
+                &llmod.target_triple,
+                "perry_literal_layouts",
+                "__DATA,__perry_litlay",
+                ".perrylit$m",
+            )
+        } else {
+            sect.clone()
+        };
         emit_desc(
             llmod,
-            &sect,
+            &family_section,
             (
                 &format!("perry_layout_keys_{module_prefix}_{n}"),
                 &format!("perry_layout_index_{module_prefix}_{n}"),
@@ -1083,7 +1133,7 @@ pub(crate) fn emit_module_layouts(
             family,
             &named,
             fam.slot_count,
-            (fam.class_id, fam.parent_class_id),
+            identity,
             &methods,
             declared_proto_tag(class),
         );
@@ -1093,7 +1143,7 @@ pub(crate) fn emit_module_layouts(
             let name = format!("perry_layout_class_{}_v{j}", fam.class_id);
             emit_desc(
                 llmod,
-                &sect,
+                &family_section,
                 (
                     &format!("perry_layout_keys_{module_prefix}_{n}"),
                     &format!("perry_layout_index_{module_prefix}_{n}"),
@@ -1102,7 +1152,7 @@ pub(crate) fn emit_module_layouts(
                 family,
                 vnamed,
                 *slot_count,
-                (fam.class_id, fam.parent_class_id),
+                identity,
                 &methods,
                 declared_proto_tag(class),
             );
@@ -1335,8 +1385,18 @@ fn emit_descriptor(
             layout_id != 0,
             identity,
         );
+        let image_keys = crate::codegen::realm_image::emit_layout_key_list(
+            llmod,
+            &format!("{desc_name}_image_keys"),
+            &atom_names
+                .iter()
+                .zip(keys)
+                .enumerate()
+                .map(|(i, (atom, key))| (atom.clone(), fnv1a(key.as_bytes()), 0, i as u32))
+                .collect::<Vec<_>>(),
+        );
         llmod.add_raw_global(format!(
-            "@{desc_name} = global {DESC_TY} {{ i32 {family}, i16 0, i8 0, i8 0, i32 {slot_count}, i32 {}, i64 {}, ptr inttoptr (i64 {proto} to ptr), ptr @{keys_name}, i32 {count}, i32 {}, ptr @{index_name}, i32 0, i32 0, ptr null, i32 {identity}, i32 0 }}, section \"{sect}\", align 8",
+            "@{desc_name} = global {DESC_TY} {{ i32 {family}, i16 0, i8 0, i8 0, i32 {slot_count}, i32 {}, i64 {}, ptr inttoptr (i64 {proto} to ptr), ptr @{keys_name}, i32 {count}, i32 {}, ptr @{index_name}, i32 0, i32 0, ptr null, i32 {identity}, i32 0, ptr {image_keys} }}, section \"{sect}\", align 8",
             word as i32,
             rep as i64,
             cap - 1

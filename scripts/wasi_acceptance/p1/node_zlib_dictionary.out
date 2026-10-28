@@ -1,0 +1,5 @@
+zlib true
+missing Z_NEED_DICT Missing dictionary
+bad Z_NEED_DICT Bad dictionary
+raw true
+exit 0

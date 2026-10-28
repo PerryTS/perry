@@ -1,0 +1,523 @@
+//! The realm image's cells as data (WRT, DESIGN §2.1): GC-headed objects and
+//! function objects emitted into the writable `perry_realm` section exactly as
+//! the heap would hold them, with `MARKED|PINNED` headers and addresses the
+//! linker fills. The runtime classifies them by the section's range
+//! (`value::addr_class::realm`) and the collector treats them as immortal
+//! roots (`gc::image_cells`).
+//!
+//! A slot naming another image cell holds a NaN-boxed pointer. How it becomes
+//! data depends on what the object format can carry:
+//!
+//! * ELF and COFF: one link-time constant, `ptrtoint + tag`; the load-time
+//!   relocation adds the slide to the whole word.
+//! * 32-bit targets (wasm32, arm64_32): two 32-bit halves, the address and the
+//!   tag's high word. Only the address half is relocated.
+//! * 64-bit Apple targets: a chained fixup has no room for a 16-bit tag above
+//!   its target, so the slot holds the untagged address (an ordinary rebase)
+//!   and `main` ORs the tag in before any initializer runs ([`TagFixup`]),
+//!   the way `string_pool` boxes image string handles on the same targets.
+//!
+//! Step 1 emits only the test fixture ([`test_fixture_requested`]); step 3
+//! emits the program's realm through the same cell emitters.
+use crate::block::LlBlock;
+use crate::module::LlModule;
+use crate::types::{DOUBLE, I64, I8, VOID};
+
+const GC_TYPE_ARRAY: u8 = 1;
+const GC_TYPE_OBJECT: u8 = 2;
+const GC_TYPE_CLOSURE: u8 = 4;
+/// `GC_FLAG_MARKED | GC_FLAG_PINNED`: an image cell is never white and never
+/// moves (perry-runtime `realm::IMAGE_CELL_FLAGS`).
+const IMAGE_CELL_FLAGS: u8 = 0x01 | 0x04;
+/// A canonical key list also carries `GC_FLAG_SHAPE_SHARED`
+/// (`js_array_alloc_canonical_keys`).
+const KEY_LIST_FLAGS: u8 = IMAGE_CELL_FLAGS | 0x08;
+const GC_HEADER_SIZE: u64 = crate::target_layout::GC_HEADER_SIZE_BYTES;
+/// `ArrayHeader`: length, capacity, `named`, element kind prefix and kind;
+/// 24 bytes on LP64 and (with its pad word) on ILP32.
+const ARRAY_HEADER_SIZE: u64 = 24;
+const POINTER_TAG: u64 = crate::nanbox::POINTER_TAG;
+const STRING_TAG: u64 = crate::nanbox::STRING_TAG;
+
+/// The section name per object format (same scheme as `perry_strings`).
+pub(crate) fn section(triple: &str) -> &'static str {
+    if triple.contains("apple") {
+        "__DATA,__perry_realm"
+    } else if triple.contains("windows") {
+        ".perryrealm$m"
+    } else {
+        "perry_realm"
+    }
+}
+
+/// A value slot of an image object.
+#[derive(Clone, Debug)]
+pub(crate) enum Slot {
+    /// A primitive's bits (undefined, booleans, numbers).
+    Bits(u64),
+    /// A NaN-boxed pointer to the image cell with this symbol.
+    Cell(String),
+    /// A NaN-boxed string pointer to the image string whose record has this
+    /// symbol (`perry_image_literal_*`): a key of a canonical key list.
+    ImageString(String),
+}
+
+/// A slot `main` must tag before the program runs (64-bit Apple targets).
+#[derive(Clone, Debug)]
+pub(crate) struct TagFixup {
+    pub(crate) cell: String,
+    pub(crate) offset: u64,
+    pub(crate) tag: u64,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PointerSlots {
+    TaggedRelocation,
+    SplitHalves,
+    TaggedAtStartup,
+}
+
+fn pointer_slots(triple: &str) -> PointerSlots {
+    if crate::target_layout::target_is_ilp32(triple) {
+        PointerSlots::SplitHalves
+    } else if triple.contains("apple") {
+        PointerSlots::TaggedAtStartup
+    } else {
+        PointerSlots::TaggedRelocation
+    }
+}
+
+fn user_address(cell: &str) -> String {
+    format!("getelementptr (i8, ptr @{cell}, i64 {GC_HEADER_SIZE})")
+}
+
+/// One 8-byte slot as `(llvm type, initializer)`, plus the tag startup code
+/// must OR in when the format cannot carry it.
+fn slot_init(triple: &str, slot: &Slot) -> (&'static str, String, Option<u64>) {
+    let mode = pointer_slots(triple);
+    let (address, tag) = match slot {
+        Slot::Bits(bits) => {
+            return match mode {
+                PointerSlots::SplitHalves => (
+                    "{ i32, i32 }",
+                    format!(
+                        "{{ i32 {}, i32 {} }}",
+                        *bits as u32 as i32,
+                        (*bits >> 32) as u32 as i32
+                    ),
+                    None,
+                ),
+                _ => ("i64", crate::nanbox::i64_literal(*bits), None),
+            };
+        }
+        Slot::Cell(cell) => (user_address(cell), POINTER_TAG),
+        Slot::ImageString(record) => (user_address(record), STRING_TAG),
+    };
+    match mode {
+        PointerSlots::SplitHalves => (
+            "{ i32, i32 }",
+            format!(
+                "{{ i32 ptrtoint (ptr {address} to i32), i32 {} }}",
+                (tag >> 32) as u32 as i32
+            ),
+            None,
+        ),
+        PointerSlots::TaggedRelocation => (
+            "i64",
+            format!(
+                "add (i64 ptrtoint (ptr {address} to i64), i64 {})",
+                crate::nanbox::i64_literal(tag)
+            ),
+            None,
+        ),
+        PointerSlots::TaggedAtStartup => {
+            ("i64", format!("ptrtoint (ptr {address} to i64)"), Some(tag))
+        }
+    }
+}
+
+/// A function object cell: `GcHeader` + `ClosureHeader` with no captures, its
+/// `info` the runtime's static `JsFunctionInfo` named `info_symbol` (declared
+/// here as an external byte: only its address is used).
+pub(crate) fn emit_closure_cell(llmod: &mut LlModule, name: &str, info_symbol: &str, shape: u32) {
+    let triple = llmod.target_triple.clone();
+    if !llmod.is_declared(info_symbol) {
+        llmod.add_raw_global(format!("@{info_symbol} = external global i8"));
+    }
+    let size = GC_HEADER_SIZE + crate::target_layout::closure_header_size_bytes(&triple);
+    llmod.add_raw_global(format!(
+        "@{name} = internal global {{ i8, i8, i16, i32, i32, i32, ptr, ptr }} \
+         {{ i8 {GC_TYPE_CLOSURE}, i8 {IMAGE_CELL_FLAGS}, i16 {}, i32 {size}, i32 0, i32 {}, ptr @{info_symbol}, ptr null }}, \
+         section \"{}\", align 8",
+        perry_abi::GC_LAYOUT_POINTER_FREE,
+        shape as i32,
+        section(&triple)
+    ));
+}
+
+/// An ordinary object cell: `GcHeader` + `ObjectHeader` (class 0, the layout
+/// word, no meta record) + one 8-byte slot per entry of `slots`. Returns the
+/// slots `main` must tag ([`emit_tag_fixups`]).
+pub(crate) fn emit_object_cell(
+    llmod: &mut LlModule,
+    name: &str,
+    layout_word: u32,
+    reserved: u16,
+    slots: &[Slot],
+) -> Vec<TagFixup> {
+    let triple = llmod.target_triple.clone();
+    let header = crate::target_layout::object_header_size_bytes(&triple);
+    let size = GC_HEADER_SIZE + header + 8 * slots.len() as u64;
+    let ilp32 = crate::target_layout::target_is_ilp32(&triple);
+    // ILP32 keeps the slot region 8-aligned with a pad word before `meta`.
+    let (pad_ty, pad_init) = if ilp32 {
+        ("i32, ", "i32 0, ")
+    } else {
+        ("", "")
+    };
+    let mut fixups = Vec::new();
+    let mut types = Vec::new();
+    let mut inits = Vec::new();
+    for (index, slot) in slots.iter().enumerate() {
+        let (ty, init, tag_at_startup) = slot_init(&triple, slot);
+        types.push(ty);
+        inits.push(format!("{ty} {init}"));
+        if let Some(tag) = tag_at_startup {
+            fixups.push(TagFixup {
+                cell: name.to_string(),
+                offset: GC_HEADER_SIZE + header + 8 * index as u64,
+                tag,
+            });
+        }
+    }
+    llmod.add_raw_global(format!(
+        "@{name} = internal global {{ i8, i8, i16, i32, i32, i32, {pad_ty}ptr, {{ {} }} }} \
+         {{ i8 {GC_TYPE_OBJECT}, i8 {IMAGE_CELL_FLAGS}, i16 {reserved}, i32 {size}, i32 0, i32 {}, {pad_init}ptr null, {{ {} }} {{ {} }} }}, \
+         section \"{}\", align 8",
+        types.join(", "),
+        layout_word as i32,
+        types.join(", "),
+        inits.join(", "),
+        section(&triple)
+    ));
+    fixups
+}
+
+/// A canonical key list cell (WRT step 2): `GcHeader` + `ArrayHeader` + one
+/// slot per key, laid out as `js_array_alloc_canonical_keys` lays out a heap
+/// list with no attributes: length and capacity are the key count, `named`
+/// is null, the element kind words are zero. Each slot is the NaN-boxed
+/// pointer of a key's image string record (`records`, in key order).
+/// Returns the slots startup code must tag ([`emit_tag_fixups`]).
+pub(crate) fn emit_key_list_cell(
+    llmod: &mut LlModule,
+    name: &str,
+    records: &[String],
+) -> Vec<TagFixup> {
+    emit_array_cell(
+        llmod,
+        name,
+        &records
+            .iter()
+            .cloned()
+            .map(Slot::ImageString)
+            .collect::<Vec<_>>(),
+        records.len(),
+        perry_abi::GC_LAYOUT_SIDE_MASK | perry_abi::GC_LAYOUT_ALL_POINTERS,
+    )
+}
+
+/// A descriptor's keys, attributes and storage permutation as image cells.
+/// Process-lifetime symbols are resolved before publication; per-evaluation
+/// symbol bindings deliberately keep their dynamic path.
+pub(crate) fn emit_layout_key_list(
+    llmod: &mut LlModule,
+    name: &str,
+    keys: &[(String, u64, u8, u32)],
+) -> String {
+    if keys.is_empty() {
+        return "null".into();
+    }
+    let mut slots = Vec::new();
+    for (atom, _, _, _) in keys {
+        if atom.starts_with("perry_atom_sym_") {
+            slots.push(Slot::Bits(crate::nanbox::TAG_UNDEFINED));
+            continue;
+        }
+        let Some(hex) = atom.strip_prefix("perry_atom_") else {
+            return "null".into();
+        };
+        if hex.is_empty() || hex.len() % 2 != 0 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return "null".into();
+        }
+        slots.push(Slot::ImageString(format!("perry_image_literal_0_{hex}")));
+    }
+    let mapped = keys.iter().enumerate().any(|(i, key)| key.3 as usize != i);
+    let attributes = mapped || keys.iter().any(|key| key.2 != 0);
+    let mut reserved = perry_abi::GC_LAYOUT_SIDE_MASK | perry_abi::GC_LAYOUT_ALL_POINTERS;
+    if attributes {
+        let attrs_name = format!("{name}_attrs");
+        let mut previous = 0;
+        let mut words = Vec::new();
+        for (atom, hash, entry, slot) in keys {
+            previous = perry_abi::canonical_key_attribute_word(
+                previous,
+                *entry,
+                if atom.starts_with("perry_atom_sym_") {
+                    0
+                } else {
+                    1u16 << (*hash >> 60)
+                },
+                mapped.then_some(*slot),
+            );
+            words.push(Slot::Bits(previous));
+        }
+        emit_array_cell(
+            llmod,
+            &attrs_name,
+            &words,
+            words.len(),
+            perry_abi::GC_LAYOUT_POINTER_FREE,
+        );
+        slots.insert(0, Slot::Cell(attrs_name));
+        reserved |= 0x100; // GC_ARRAY_KEY_ATTRS, existing front-reserve ABI.
+    }
+    // Apple slots are tagged on the descriptor's first registration, alongside
+    // runtime-owned cells. Literal seeds keep their existing unit constructor.
+    emit_array_cell(llmod, name, &slots, keys.len(), reserved);
+    format!("getelementptr (i8, ptr @{name}, i64 {GC_HEADER_SIZE})")
+}
+
+fn emit_array_cell(
+    llmod: &mut LlModule,
+    name: &str,
+    slots: &[Slot],
+    count: usize,
+    reserved: u16,
+) -> Vec<TagFixup> {
+    let triple = llmod.target_triple.clone();
+    let size = GC_HEADER_SIZE + ARRAY_HEADER_SIZE + 8 * slots.len() as u64;
+    let (pad_ty, pad_init) = if crate::target_layout::target_is_ilp32(&triple) {
+        ("i32, ", "i32 0, ")
+    } else {
+        ("", "")
+    };
+    let mut fixups = Vec::new();
+    let mut types = Vec::new();
+    let mut inits = Vec::new();
+    for (index, slot) in slots.iter().enumerate() {
+        let (ty, init, tag_at_startup) = slot_init(&triple, slot);
+        types.push(ty);
+        inits.push(format!("{ty} {init}"));
+        if let Some(tag) = tag_at_startup {
+            fixups.push(TagFixup {
+                cell: name.to_string(),
+                offset: GC_HEADER_SIZE + ARRAY_HEADER_SIZE + 8 * index as u64,
+                tag,
+            });
+        }
+    }
+    llmod.add_raw_global(format!(
+        "@{name} = internal global {{ i8, i8, i16, i32, i32, i32, ptr, {pad_ty}i32, i32, {{ {} }} }} \
+         {{ i8 {GC_TYPE_ARRAY}, i8 {KEY_LIST_FLAGS}, i16 {reserved}, i32 {size}, i32 {count}, i32 {count}, ptr null, {pad_init}i32 0, i32 0, {{ {} }} {{ {} }} }}, \
+         section \"{}\", align 8",
+        types.join(", "), types.join(", "), inits.join(", "), section(&triple)
+    ));
+    fixups
+}
+
+/// OR each listed slot's tag in. Runs before any module initializer (in
+/// `main`, or a constructor of the unit that owns the cells), on targets
+/// whose relocations cannot carry the tag.
+pub(crate) fn emit_tag_fixups(blk: &mut LlBlock, fixups: &[TagFixup]) {
+    for fixup in fixups {
+        let offset = fixup.offset.to_string();
+        let slot = blk.gep(I8, &format!("@{}", fixup.cell), &[(I64, offset.as_str())]);
+        let raw = blk.load(I64, &slot);
+        let tagged = blk.or(I64, &raw, &crate::nanbox::i64_literal(fixup.tag));
+        blk.store(I64, &tagged, &slot);
+    }
+}
+
+/// `PERRY_REALM_TEST_FIXTURE=1`: emit WRT step 1's fixture. A compile-time
+/// diagnostic knob: off, nothing is emitted and nothing is linked.
+pub(crate) fn test_fixture_requested() -> bool {
+    std::env::var("PERRY_REALM_TEST_FIXTURE").as_deref() == Ok("1")
+}
+
+/// The fixture's cells, emitted before `main` exists (a module edit while a
+/// function is open is not possible).
+pub(crate) struct TestFixture {
+    object: String,
+    fixups: Vec<TagFixup>,
+}
+
+/// One function cell whose `info` is the runtime's `perry_realm_fixture_info`
+/// (its body returns 42), and one `{value, done}` object on the runtime's
+/// ITERATOR_RESULT layout whose `value` names the function cell and whose
+/// `done` is `false`: the shape of a realm (prototype → method) built by the
+/// path step 3 uses.
+pub(crate) fn emit_test_fixture(llmod: &mut LlModule) -> TestFixture {
+    let function = "perry_realm_fixture_fn";
+    let object = "perry_realm_fixture_object";
+    emit_closure_cell(
+        llmod,
+        function,
+        "perry_realm_fixture_info",
+        perry_abi::FUNCTION_LAYOUT_WORD,
+    );
+    let fixups = emit_object_cell(
+        llmod,
+        object,
+        perry_abi::native_layout_word("ITERATOR_RESULT", 0),
+        perry_abi::OBJ_FLAG_PLAIN_ORDINARY,
+        &[
+            Slot::Cell(function.to_string()),
+            Slot::Bits(crate::nanbox::TAG_FALSE),
+        ],
+    );
+    llmod.declare_function("js_realm_test_fixture_publish", VOID, &[DOUBLE]);
+    TestFixture {
+        object: object.to_string(),
+        fixups,
+    }
+}
+
+/// In `main`, after the static shape seed: tag what the target could not, then
+/// publish the object as `globalThis.__perryRealmFixture`.
+pub(crate) fn emit_test_fixture_install(blk: &mut LlBlock, fixture: &TestFixture) {
+    emit_tag_fixups(blk, &fixture.fixups);
+    let header = GC_HEADER_SIZE.to_string();
+    let user = blk.gep(
+        I8,
+        &format!("@{}", fixture.object),
+        &[(I64, header.as_str())],
+    );
+    let address = blk.ptrtoint(&user, I64);
+    let tagged = blk.or(I64, &address, crate::nanbox::POINTER_TAG_I64);
+    let value = blk.bitcast_i64_to_double(&tagged);
+    blk.call_void("js_realm_test_fixture_publish", &[(DOUBLE, &value)]);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture_ir(triple: &str) -> String {
+        let mut module = LlModule::new(triple);
+        let fixture = emit_test_fixture(&mut module);
+        let block = module
+            .define_function("main", VOID, vec![])
+            .create_block("entry");
+        emit_test_fixture_install(block, &fixture);
+        block.ret_void();
+        module.to_ir()
+    }
+
+    #[test]
+    fn process_symbols_have_image_slots_but_binding_symbols_do_not() {
+        for triple in [
+            "x86_64-unknown-linux-gnu",
+            "aarch64-apple-darwin",
+            "wasm32-wasip2",
+        ] {
+            let mut module = LlModule::new(triple);
+            let keys = [(
+                "perry_atom_sym_014040776b3a30".into(),
+                0xffff_ffff_ffff_ffff,
+                1,
+                0,
+            )];
+            assert_ne!(
+                emit_layout_key_list(&mut module, "symbol_keys", &keys),
+                "null"
+            );
+            let ir = module.to_ir();
+            let literal = |bits: u64| {
+                if crate::target_layout::target_is_ilp32(triple) {
+                    format!(
+                        "i32 {}, i32 {}",
+                        bits as u32 as i32,
+                        (bits >> 32) as u32 as i32
+                    )
+                } else {
+                    format!("i64 {}", bits as i64)
+                }
+            };
+            assert!(
+                ir.contains(&literal(crate::nanbox::TAG_UNDEFINED)),
+                "{triple}: {ir}"
+            );
+            let expected = perry_abi::canonical_key_attribute_word(0, 1, 0, None);
+            assert!(
+                ir.contains(&literal(expected)),
+                "symbol attributes carry no string Bloom bit: {ir}"
+            );
+            let context = inkwell::context::Context::create();
+            crate::inprocess::parse_ir_text(&context, &ir, "symbol_keys")
+                .expect("symbol-list image IR parses");
+            let binding = [("perry_atom_local_module_7".into(), 0, 0, 0)];
+            assert_eq!(
+                emit_layout_key_list(&mut module, "bound_keys", &binding),
+                "null"
+            );
+        }
+    }
+
+    #[test]
+    fn cells_land_in_the_realm_section_on_every_object_format() {
+        for (triple, section) in [
+            ("x86_64-unknown-linux-gnu", "perry_realm"),
+            ("aarch64-apple-darwin", "__DATA,__perry_realm"),
+            ("x86_64-pc-windows-msvc", ".perryrealm$m"),
+            ("wasm32-wasip2", "perry_realm"),
+        ] {
+            let ir = fixture_ir(triple);
+            assert_eq!(
+                ir.matches(&format!("section \"{section}\", align 8"))
+                    .count(),
+                2,
+                "{triple}: both cells in {section}\n{ir}"
+            );
+            assert!(
+                ir.contains("@perry_realm_fixture_fn = internal global"),
+                "{triple}"
+            );
+            assert!(ir.contains("ptr @perry_realm_fixture_info"), "{triple}");
+            assert!(
+                ir.contains("call void @js_realm_test_fixture_publish(double"),
+                "{triple}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_cell_pointer_is_tagged_by_what_the_format_can_carry() {
+        // ELF/COFF: one tagged link-time constant, no startup work.
+        let linux = fixture_ir("x86_64-unknown-linux-gnu");
+        assert!(linux.contains("add (i64 ptrtoint (ptr getelementptr (i8, ptr @perry_realm_fixture_fn, i64 8) to i64), i64 9222527611924643840)"));
+        assert_eq!(linux.matches("load i64").count(), 0);
+        // Apple: an untagged rebase, tagged in main.
+        let mac = fixture_ir("aarch64-apple-darwin");
+        assert!(!mac.contains("add (i64 ptrtoint"));
+        assert!(mac.contains(
+            "i64 ptrtoint (ptr getelementptr (i8, ptr @perry_realm_fixture_fn, i64 8) to i64)"
+        ));
+        assert_eq!(mac.matches("load i64").count(), 1, "{mac}");
+        // wasm32: address half relocated, tag half constant.
+        let wasm = fixture_ir("wasm32-wasip2");
+        assert!(wasm.contains("{ i32 ptrtoint (ptr getelementptr (i8, ptr @perry_realm_fixture_fn, i64 8) to i32), i32 2147287040 }"), "{wasm}");
+        assert_eq!(wasm.matches("load i64").count(), 0);
+    }
+
+    #[test]
+    fn the_cell_sizes_are_the_runtime_layouts() {
+        let linux = fixture_ir("x86_64-unknown-linux-gnu");
+        // GcHeader 8 + ClosureHeader 24; GcHeader 8 + ObjectHeader 16 + 2 slots.
+        assert!(linux.contains("{ i8 4, i8 5, i16 16384, i32 32,"));
+        assert!(linux.contains("{ i8 2, i8 5, i16 512, i32 40,"));
+        let wasm = fixture_ir("wasm32-wasip2");
+        assert!(wasm.contains("{ i8 4, i8 5, i16 16384, i32 24,"), "{wasm}");
+        assert!(wasm.contains("{ i8 2, i8 5, i16 512, i32 40,"), "{wasm}");
+    }
+}

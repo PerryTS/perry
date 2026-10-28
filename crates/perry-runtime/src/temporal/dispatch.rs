@@ -146,7 +146,8 @@ pub(crate) fn read_bigint_i128(v: f64) -> Option<i128> {
     let jv = JSValue::from_bits(v.to_bits());
     if jv.is_bigint() {
         let ptr = jv.as_bigint_ptr();
-        let s_ptr = crate::bigint::js_bigint_to_string(ptr as *mut crate::bigint::BigIntHeader);
+        let s_ptr =
+            crate::bigint_hooks::js_bigint_to_string(ptr as *mut crate::bigint::BigIntHeader);
         let s = read_string(crate::value::js_nanbox_string(s_ptr as i64));
         return s.parse::<i128>().ok();
     }
@@ -162,7 +163,7 @@ pub(crate) fn read_bigint_i128(v: f64) -> Option<i128> {
 /// Box an `i128` as a JS BigInt value (via its decimal string).
 pub(crate) fn bigint_from_i128(n: i128) -> f64 {
     let s = n.to_string();
-    let ptr = crate::bigint::js_bigint_from_string(s.as_ptr(), s.len() as u32);
+    let ptr = crate::bigint_hooks::js_bigint_from_string(s.as_ptr(), s.len() as u32);
     crate::value::js_nanbox_bigint(ptr as i64)
 }
 

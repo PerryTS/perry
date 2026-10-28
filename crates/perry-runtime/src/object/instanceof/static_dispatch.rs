@@ -34,9 +34,10 @@ pub(super) fn heap_builtin_name(class_id: u32) -> Option<&'static str> {
         crate::error::CLASS_ID_EVAL_ERROR => "EvalError",
         crate::error::CLASS_ID_URI_ERROR => "URIError",
         crate::error::CLASS_ID_AGGREGATE_ERROR => "AggregateError",
-        crate::typedarray::CLASS_ID_INT8_ARRAY..=crate::typedarray::CLASS_ID_FLOAT16_ARRAY => {
-            crate::typedarray::name_for_kind(
-                (class_id - crate::typedarray::CLASS_ID_INT8_ARRAY) as u8,
+        crate::typedarray_hook_slots::CLASS_ID_INT8_ARRAY
+            ..=crate::typedarray_hook_slots::CLASS_ID_FLOAT16_ARRAY => {
+            crate::typedarray_hook_slots::name_for_kind(
+                (class_id - crate::typedarray_hook_slots::CLASS_ID_INT8_ARRAY) as u8,
             )
         }
         _ => return None,
@@ -93,8 +94,8 @@ fn instanceof_dispatch(
     let mut value = value;
     if !lhs_non_proxy {
         let mut depth = 0;
-        while depth < 16 && crate::proxy::js_proxy_is_proxy(value) != 0 {
-            value = crate::proxy::js_proxy_target(value);
+        while depth < 16 && crate::proxy_hooks::proxy_is_proxy(value) != 0 {
+            value = crate::proxy_hooks::proxy_target(value);
             depth += 1;
         }
     }
@@ -303,7 +304,8 @@ fn native_instanceof(
     }
     if class_id == CLASS_ID_URL {
         let addr = value_addr(value);
-        let branded = addr != 0 && crate::url::is_url_object_shape(addr as *mut ObjectHeader);
+        let branded =
+            addr != 0 && crate::object::url_layout::is_url_object_shape(addr as *mut ObjectHeader);
         return if branded
             || recorded_prototype_instanceof_builtin(rooted_value, "URL", constructor) == Some(true)
         {
@@ -323,7 +325,7 @@ fn native_instanceof(
         _ => None,
     };
     if let Some(name) = classic_stream_name {
-        return if crate::node_stream::is_classic_stream_instance_of(value, name)
+        return if crate::stream_hooks::is_classic_stream_instance_of(value, name)
             || super::tls_constructor_prototype_is_instance_of(value, name)
         {
             true_val
@@ -348,7 +350,7 @@ fn native_instanceof(
         };
     }
     if class_id == CLASS_ID_ASYNC_RESOURCE {
-        return if crate::async_hooks::resolve_async_resource_handle(value_addr(value) as i64)
+        return if crate::async_hook_slots::resolve_async_resource_handle(value_addr(value) as i64)
             .is_some()
         {
             true_val
@@ -406,21 +408,21 @@ fn native_instanceof(
         };
     }
     if class_id == crate::fs::CLASS_ID_FS_READ_STREAM {
-        return if crate::fs::is_fs_stream_instance_value(value, "ReadStream") {
+        return if crate::fs_hook_slots::is_fs_stream_instance_value(value, "ReadStream") {
             true_val
         } else {
             false_val
         };
     }
     if class_id == crate::fs::CLASS_ID_FS_WRITE_STREAM {
-        return if crate::fs::is_fs_stream_instance_value(value, "WriteStream") {
+        return if crate::fs_hook_slots::is_fs_stream_instance_value(value, "WriteStream") {
             true_val
         } else {
             false_val
         };
     }
     if class_id == crate::fs::CLASS_ID_FS_UTF8_STREAM {
-        return if crate::fs::is_fs_stream_instance_value(value, "Utf8Stream") {
+        return if crate::fs_hook_slots::is_fs_stream_instance_value(value, "Utf8Stream") {
             true_val
         } else {
             false_val
@@ -484,7 +486,7 @@ fn native_instanceof(
             brand == Some(super::super::view_brand::ViewBrand::NodeBuffer)
         } else {
             brand.and_then(super::super::view_brand::ViewBrand::typed_array_kind)
-                == Some(crate::typedarray::KIND_UINT8)
+                == Some(crate::typedarray_hook_slots::KIND_UINT8)
         };
         return if matches { true_val } else { false_val };
     }
@@ -749,7 +751,7 @@ fn native_instanceof(
             if crate::buffer::buffer_family_type_owned(addr).is_some()
                 || crate::set::is_registered_set(addr)
                 || crate::map::is_registered_map(addr)
-                || crate::typedarray::lookup_typed_array_kind(addr).is_some()
+                || crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some()
             {
                 return true_val;
             }
@@ -777,12 +779,13 @@ fn native_instanceof(
 
     // Both per-kind constructor values and legacy byte-view ids use the
     // shared classifier, so Node Buffer retains its Uint8Array superclass.
-    if (crate::typedarray::CLASS_ID_INT8_ARRAY..=crate::typedarray::CLASS_ID_FLOAT16_ARRAY)
+    if (crate::typedarray_hook_slots::CLASS_ID_INT8_ARRAY
+        ..=crate::typedarray_hook_slots::CLASS_ID_FLOAT16_ARRAY)
         .contains(&class_id)
     {
         let matches = super::super::view_brand::view_brand(value)
             .and_then(super::super::view_brand::ViewBrand::typed_array_kind)
-            .is_some_and(|kind| crate::typedarray::class_id_for_kind(kind) == class_id);
+            .is_some_and(|kind| crate::typedarray_hook_slots::class_id_for_kind(kind) == class_id);
         return if matches { true_val } else { false_val };
     }
 
@@ -816,7 +819,7 @@ fn native_instanceof(
             let err_ptr = obj_ptr as *const crate::error::ErrorHeader;
             let kind = (*err_ptr).error_kind;
             if class_id == crate::event_target::CLASS_ID_DOM_EXCEPTION {
-                return if crate::event_target::is_dom_exception_error(err_ptr) {
+                return if crate::event_target_hook_slots::is_dom_exception_error(err_ptr) {
                     true_val
                 } else {
                     false_val
@@ -897,12 +900,12 @@ fn native_instanceof(
 
         if gc_type == crate::gc::GC_TYPE_OBJECT {
             if let Some(matches) =
-                crate::perf_hooks::is_perf_hooks_shape_instance_of(value, class_id)
+                crate::perf_hook_slots::is_perf_hooks_shape_instance_of(value, class_id)
             {
                 return if matches { true_val } else { false_val };
             }
             if let Some(matches) =
-                crate::perf_hooks::is_perf_entry_object_instance_of(obj_ptr, class_id)
+                crate::perf_hook_slots::is_perf_entry_object_instance_of(obj_ptr, class_id)
             {
                 return if matches { true_val } else { false_val };
             }

@@ -1,0 +1,590 @@
+{
+  "version": 1,
+  "groups": {
+    "objects": [
+      {
+        "name": "node:timers.default.clearImmediate",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::node_submodules::timers::timers_ns_clear_immediate",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::node_submodules::timers::timers_ns_clear_immediate",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_2e92d6695edc98b0f51a",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:timers.default.clearInterval",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::node_submodules::timers::timers_ns_clear_interval",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::node_submodules::timers::timers_ns_clear_interval",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_c4323f9346a04d232a29",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:timers.default.clearTimeout",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::node_submodules::timers::timers_ns_clear_timeout",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::node_submodules::timers::timers_ns_clear_timeout",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_d4502b64056ef5354556",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:timers.default.setImmediate",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::node_submodules::timers::timers_ns_set_immediate",
+        "function_info": {
+          "params": 2,
+          "rest_fixed": 1,
+          "flags": 1,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::node_submodules::timers::timers_ns_set_immediate",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_d0c2c8c2de69c83755bc",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:timers.default.setInterval",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "crate::node_submodules::timers::timers_ns_set_interval",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 2,
+          "flags": 1,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::node_submodules::timers::timers_ns_set_interval",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_32bf22822959c8a9ca7d",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:timers.default.setTimeout",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "crate::node_submodules::timers::timers_ns_set_timeout",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 2,
+          "flags": 1,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::node_submodules::timers::timers_ns_set_timeout",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_86cdcd31eee0f54613eb",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:timers/promises.scheduler.wait",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "crate::node_submodules::timers::timers_promises_scheduler_wait",
+        "function_info": {
+          "params": 2,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 2,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::node_submodules::timers::timers_promises_scheduler_wait",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_e09e783f49987ff8a866",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:timers/promises.scheduler.yield",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::node_submodules::timers::timers_promises_scheduler_yield",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::node_submodules::timers::timers_promises_scheduler_yield",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_c381a8f5e04bd23ac693",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:timers/promises.setImmediate",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "crate::node_submodules::timers::timers_promises_set_immediate",
+        "function_info": {
+          "params": 2,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 2,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::node_submodules::timers::timers_promises_set_immediate",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_b0923da494298abadf0d",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:timers/promises.setInterval",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4008000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 3,
+        "body": "crate::node_submodules::timers::timers_promises_set_interval",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 3,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::node_submodules::timers::timers_promises_set_interval",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_574cede645d5f3e3101a",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "node:timers/promises.setTimeout",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4008000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 3,
+        "body": "crate::node_submodules::timers::timers_promises_set_timeout",
+        "function_info": {
+          "params": 3,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 3,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::node_submodules::timers::timers_promises_set_timeout",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_579b647f93a45b6ff5cf",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ]
+  }
+}

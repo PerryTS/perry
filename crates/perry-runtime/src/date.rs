@@ -10,56 +10,7 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const NANBOX_PTR_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
-
-/// A `Date` is a **reference type**: a NaN-boxed POINTER (POINTER_TAG) to
-/// this 1-slot mutable heap cell, *not* a raw f64 timestamp. Aliases
-/// (`const b = a`), function parameters, and closure captures all share
-/// the same cell, so an in-place setter mutation is visible through every
-/// binding — this is what fixes #2089 (effect `DateTime.add`). The cell is
-/// arena-allocated as `GC_TYPE_DATE_CELL`: non-movable (a NaN-boxed pointer
-/// living in a plain f64/DOUBLE local is kept alive by the conservative
-/// stack scan, and the stable address means that un-shadow-rooted pointer
-/// never goes stale across a GC).
-///
-/// RULE 3 (single-path object model, `object/shape_rule3.rs`): `meta` comes
-/// FIRST, and the timestamp starts at payload `+8`. The emitted property-read
-/// path loads the u32 at `receiver + 4` and compares it against a cached
-/// ShapeId; with `ts` at `+0` that word was the high half of an IEEE double,
-/// and `new Date(-1)` — `0xBFF0_0000_0000_0000` — put `0xBFF0_0000` there,
-/// inside `[SHAPE_ID_BASE, SHAPE_ID_END)`. A time value has no bound to
-/// appeal to, so the cell is relaid out instead: `+4` is now the high half of
-/// a heap pointer (zero while `meta` is null), which the collector's own
-/// address ceiling keeps below `0x1_0000`. Field order is the only thing that
-/// changed — the cell is still two words, and nothing outside this file reads
-/// it by offset (`object::cell_meta_slot` and `thread.rs` both go through the
-/// named fields).
-#[repr(C)]
-pub struct DateCell {
-    /// #6759 phase 1 (header unification): per-object metadata record, or null.
-    ///
-    /// Adding this made `DateCell` non-pointer-free, so its GC type entry moved
-    /// from `GcRewriteDescriptorKind::Leaf` (a no-op arm) to `MetaOnly` and its
-    /// `pointer_free` flag to `false` — a cell with a pointer must be scanned.
-    pub meta: *mut crate::object::ObjectMeta,
-    /// ILP32: the four bytes between the pointer and the eight-byte-aligned
-    /// timestamp. They are the word at payload `+4` that every property read
-    /// loads as a ShapeId, so `alloc_date_cell` must zero them (64-bit targets
-    /// have the pointer's high half there, which is zero already).
-    #[cfg(target_pointer_width = "32")]
-    pub(crate) _meta_padding: u32,
-    /// Milliseconds since the epoch, or NaN for an *Invalid Date*. A raw IEEE
-    /// double, so a setter's store needs no write barrier.
-    pub ts: f64,
-}
-
-const _: () = {
-    assert!(std::mem::offset_of!(DateCell, meta) == 0);
-    // RULE 3: the word at payload +4 must not be able to hold a ShapeId, so
-    // the timestamp may not start before +8.
-    assert!(std::mem::offset_of!(DateCell, ts) == 8);
-    assert!(std::mem::size_of::<DateCell>() == 16);
-};
+use crate::date_layout::NANBOX_PTR_MASK;
 
 /// Allocate a fresh Date cell holding `ts` and return it as a NaN-boxed
 /// pointer (an f64 carrying POINTER_TAG). `ts` may be NaN — that is an
@@ -99,78 +50,6 @@ pub fn date_invalid() -> f64 {
     alloc_date_cell(f64::NAN)
 }
 
-/// True if `addr` (a cleaned heap address, NOT NaN-boxed bits) points at a
-/// `DateCell`. Reads the `GcHeader.obj_type`: for any live `is_pointer()`
-/// value the header is always present and valid, and because `DateCell` is
-/// non-movable its address is stable, so this is an exact identity check
-/// with no side-table registry to keep in sync.
-#[inline]
-pub fn is_date_cell_addr(addr: usize) -> bool {
-    // #4004: small-handle registry ids (Web Fetch Request/Headers/Response,
-    // perry-ffi/node:http handles, timer ids, …) are NaN-boxed as POINTER_TAG
-    // values but are NOT real heap addresses — they live in the small-handle
-    // band (see `value::addr_class`). Real `DateCell`s are arena-allocated,
-    // always above the small-handle cutoff. Dereferencing
-    // `addr - GC_HEADER_SIZE` on a small handle reads unmapped memory: once
-    // #4018 moved fetch handles up to 0x40000 (past the old 0x1000 floor), any
-    // untyped `request.headers.get()` dispatch routed its receiver through
-    // `is_date_value` here and segfaulted. `try_read_gc_header` rejects the
-    // whole band before the deref, so this is an exact heap-pointer check.
-    // #5226: small typed arrays and `Buffer`s are raw-`alloc`'d off the GC
-    // heap with NO `GcHeader` prefix. `try_read_gc_header` only rejects the
-    // handle band and (on some platforms) low addresses, so on Windows these
-    // pass its magnitude check and the `addr - GC_HEADER_SIZE` back-read below
-    // faults when the block sits at the start of a freshly mapped region.
-    // Reject them via the side tables first — they are never `DateCell`s.
-    if crate::typedarray::is_offheap_sidetable_alloc(addr) {
-        return false;
-    }
-    unsafe {
-        let header = match crate::value::addr_class::try_read_gc_header(addr) {
-            Some(header) => header,
-            None => return false,
-        };
-        if header.obj_type != crate::gc::GC_TYPE_DATE_CELL {
-            return false;
-        }
-        // #4003: `Buffer`s are raw-`alloc`'d with NO `GcHeader`, so the word at
-        // `addr - GC_HEADER_SIZE` is unrelated heap memory that can
-        // coincidentally hold the `DATE_CELL` tag — observed for the first
-        // `gunzipSync` result, whose `.length`/`.byteLength` then mis-routed
-        // through the Date branch in `js_object_get_field_by_name` and returned
-        // `undefined`. A registered buffer is never a `DateCell`, so reject it.
-        // The lookup runs only in the rare tag-match case, keeping the common
-        // (non-Date) property-read path unchanged.
-        if crate::buffer::is_registered_buffer(addr) {
-            return false;
-        }
-        // #11558: a `Symbol.for` / well-known symbol is a Box-leaked
-        // `SymbolHeader` with no `GcHeader` either, and under mimalloc the
-        // word before it is the tail of the previous block — for a symbol
-        // allocated right after another symbol, that symbol's `id`. Once the
-        // id counter passes 17 (`GC_TYPE_DATE_CELL`) the next symbol read as
-        // a Date, and since `DateCell.meta` is the first word, its
-        // `SYMBOL_MAGIC` word was then dereferenced as an `ObjectMeta`:
-        // claude-code 2.1.112's `doctor` SIGSEGV'd reading `defaultProps` off
-        // a React element-type symbol. Every symbol carries `SYMBOL_MAGIC` in
-        // its first word, so the screen is one load for a real Date.
-        // A real Date starts with a null or aligned ObjectMeta pointer; the
-        // odd SYMBOL_MAGIC cannot occur there, so no address registry is needed.
-        !crate::symbol::may_be_symbol_header(addr as *const u8)
-    }
-}
-
-/// True if `value` is a Date — i.e. a NaN-boxed pointer to a `DateCell`.
-/// Replaces the old value-keyed `is_registered_date_bits`.
-#[inline]
-pub fn is_date_value(value: f64) -> bool {
-    let bits = value.to_bits();
-    if !crate::value::JSValue::from_bits(bits).is_pointer() {
-        return false;
-    }
-    is_date_cell_addr((bits & NANBOX_PTR_MASK) as usize)
-}
-
 /// The [[Prototype]] of a Date cell: the prototype recorded on the cell (an
 /// instance of `class D extends Date` links `D.prototype`; `setPrototypeOf`
 /// records its target, `null` included), else the realm's `Date.prototype`.
@@ -187,24 +66,6 @@ pub fn date_cell_prototype(value: f64) -> f64 {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype")
-}
-
-/// Read the timestamp out of a Date value. If `value` is a `DateCell`
-/// pointer, dereference it; otherwise (a raw numeric timestamp handed to a
-/// Date method directly — e.g. via `Date.UTC()` or a legacy path) pass it
-/// through unchanged. Every public Date getter/formatter funnels its
-/// receiver through this so it works whether it was given a cell or a bare
-/// number.
-#[inline]
-pub fn date_cell_timestamp(value: f64) -> f64 {
-    let bits = value.to_bits();
-    if crate::value::JSValue::from_bits(bits).is_pointer() {
-        let addr = (bits & NANBOX_PTR_MASK) as usize;
-        if is_date_cell_addr(addr) {
-            return unsafe { (*(addr as *const DateCell)).ts };
-        }
-    }
-    value
 }
 
 /// Mutate the `DateCell` `value` points at, writing `ts` into it. No-op if
@@ -253,245 +114,10 @@ pub extern "C" fn js_date_coerce_number(value: f64) -> f64 {
     date_cell_timestamp(value)
 }
 
-/// Back-compat shim for the old value-keyed identity check. Date is now a
-/// reference type, so identity is "the value is a pointer to a `DateCell`".
-/// Kept so external callers (e.g. `perry-stdlib`'s querystring) need only a
-/// trivial update. Prefer [`is_date_value`].
-#[inline]
-pub fn is_registered_date_bits(bits: u64) -> bool {
-    is_date_value(f64::from_bits(bits))
-}
-
-/// Convert a UTC timestamp (seconds) to local-time components.
-/// Returns (year, month [1-12], day, hour, minute, second, tz_offset_seconds).
-/// tz_offset_seconds is the number of seconds that need to be added to the
-/// UTC timestamp to get the local-time representation (i.e. local - UTC).
-#[cfg(unix)]
-fn timestamp_to_local_components(secs: i64) -> (i32, u32, u32, u32, u32, u32, i64) {
-    unsafe {
-        let t: libc::time_t = secs as libc::time_t;
-        let mut tm: libc::tm = std::mem::zeroed();
-        let res = libc::localtime_r(&t, &mut tm);
-        if res.is_null() {
-            let (y, m, d, h, mi, s) = timestamp_to_components(secs);
-            return (y, m, d, h, mi, s, 0);
-        }
-        let year = tm.tm_year + 1900;
-        let month = (tm.tm_mon + 1) as u32;
-        let day = tm.tm_mday as u32;
-        let hour = tm.tm_hour as u32;
-        let minute = tm.tm_min as u32;
-        let second = tm.tm_sec as u32;
-        let tz_offset = tm.tm_gmtoff as i64;
-        (year, month, day, hour, minute, second, tz_offset)
-    }
-}
-
-/// WASI (#11377) has no time-zone database (wasi-libc's `localtime` is UTC),
-/// so local time is UTC with a zero offset.
-#[cfg(target_os = "wasi")]
-fn timestamp_to_local_components(secs: i64) -> (i32, u32, u32, u32, u32, u32, i64) {
-    let (y, m, d, h, mi, s) = timestamp_to_components(secs);
-    (y, m, d, h, mi, s, 0)
-}
-
-#[cfg(windows)]
-fn timestamp_to_local_components(secs: i64) -> (i32, u32, u32, u32, u32, u32, i64) {
-    unsafe {
-        let t: libc::time_t = secs as libc::time_t;
-        let mut tm: libc::tm = std::mem::zeroed();
-        let err = libc::localtime_s(&mut tm, &t);
-        if err != 0 {
-            let (y, m, d, h, mi, s) = timestamp_to_components(secs);
-            return (y, m, d, h, mi, s, 0);
-        }
-        let year = tm.tm_year + 1900;
-        let month = (tm.tm_mon + 1) as u32;
-        let day = tm.tm_mday as u32;
-        let hour = tm.tm_hour as u32;
-        let minute = tm.tm_min as u32;
-        let second = tm.tm_sec as u32;
-        let mut utm: libc::tm = std::mem::zeroed();
-        let tz_offset = if libc::gmtime_s(&mut utm, &t) == 0 {
-            let local_secs = components_to_timestamp(year, month, day, hour, minute, second);
-            let utc_secs = components_to_timestamp(
-                utm.tm_year + 1900,
-                (utm.tm_mon + 1) as u32,
-                utm.tm_mday as u32,
-                utm.tm_hour as u32,
-                utm.tm_min as u32,
-                utm.tm_sec as u32,
-            );
-            local_secs - utc_secs
-        } else {
-            0
-        };
-        (year, month, day, hour, minute, second, tz_offset)
-    }
-}
-
-/// The host IANA time-zone identifier (e.g. `"Europe/Berlin"`), matching what
-/// Node returns from `Intl.DateTimeFormat().resolvedOptions().timeZone`. Honors
-/// the `TZ` environment variable first (like libc / Node), then the OS default
-/// via the `/etc/localtime` symlink; falls back to `"UTC"`. Cached for the
-/// process lifetime (the host zone doesn't change under us).
-pub fn host_time_zone_name() -> &'static str {
-    use std::sync::OnceLock;
-    static TZ: OnceLock<String> = OnceLock::new();
-    crate::once_init::get_or_init(&TZ, || {
-        if let Some(raw) = std::env::var_os("TZ") {
-            if let Some(s) = raw.to_str() {
-                // A `TZ` of `:Europe/Berlin` / `:/path/zoneinfo/Europe/Berlin`
-                // (leading colon) or a bare IANA id. Empty `TZ` means UTC.
-                let s = s.trim().strip_prefix(':').unwrap_or_else(|| s.trim());
-                if s.is_empty() {
-                    return "UTC".to_string();
-                }
-                if let Some(name) = iana_id_from_zoneinfo_path(s) {
-                    return name;
-                }
-                return s.to_string();
-            }
-        }
-        #[cfg(unix)]
-        {
-            if let Ok(target) = std::fs::read_link("/etc/localtime") {
-                if let Some(name) = iana_id_from_zoneinfo_path(&target.to_string_lossy()) {
-                    return name;
-                }
-            }
-        }
-        "UTC".to_string()
-    })
-    .as_str()
-}
-
-/// Extract the IANA id (`Europe/Berlin`) after a `.../zoneinfo/` path segment.
-/// Returns `None` when the path has no `zoneinfo/` component (e.g. a bare id).
-fn iana_id_from_zoneinfo_path(p: &str) -> Option<String> {
-    const MARKER: &str = "zoneinfo/";
-    p.rfind(MARKER).map(|i| p[i + MARKER.len()..].to_string())
-}
-
-/// Parse a fixed UTC offset like `"+02:00"`, `"-0500"`, `"+03"` into seconds
-/// east of UTC. Returns `None` for named zones / non-offset strings.
-fn parse_fixed_offset(tz: &str) -> Option<i64> {
-    let bytes = tz.as_bytes();
-    let sign = match bytes.first()? {
-        b'+' => 1,
-        b'-' => -1,
-        _ => return None,
-    };
-    let digits: String = tz[1..].chars().filter(|c| c.is_ascii_digit()).collect();
-    let (h, m) = match digits.len() {
-        1 | 2 => (digits.parse::<i64>().ok()?, 0),
-        3 => (digits[..1].parse().ok()?, digits[1..].parse().ok()?),
-        4 => (digits[..2].parse().ok()?, digits[2..].parse().ok()?),
-        _ => return None,
-    };
-    if h > 23 || m > 59 {
-        return None;
-    }
-    Some(sign * (h * 3600 + m * 60))
-}
-
-#[cfg(feature = "intl-datetime")]
-fn compiled_tzdb() -> &'static timezone_provider::tzif::CompiledTzdbProvider {
-    use std::sync::OnceLock;
-    static PROVIDER: OnceLock<timezone_provider::tzif::CompiledTzdbProvider> = OnceLock::new();
-    PROVIDER.get_or_init(Default::default)
-}
-
-/// Resolve a named zone through the compiled IANA database and return its
-/// canonical identifier. This is also the membership check used by
-/// `Intl.DateTimeFormat`: a structurally plausible but unknown name must not be
-/// reported from `resolvedOptions()` as though Perry can format it.
-#[cfg(feature = "intl-datetime")]
-pub(crate) fn canonicalize_tzdb_name(tz: &str) -> Option<String> {
-    use timezone_provider::provider::TimeZoneProvider;
-
-    let provider = compiled_tzdb();
-    let id = provider.get(tz.as_bytes()).ok()?;
-    let canonical = provider.canonicalized(id).ok()?;
-    provider
-        .identifier(canonical)
-        .ok()
-        .map(|name| name.into_owned())
-}
-
-#[cfg(feature = "intl-datetime")]
-fn compiled_zone_offset_seconds(tz: &str, secs: i64) -> Option<i64> {
-    use timezone_provider::provider::TimeZoneProvider;
-
-    let provider = compiled_tzdb();
-    let id = provider.get(tz.as_bytes()).ok()?;
-    let epoch_ns = i128::from(secs).checked_mul(1_000_000_000)?;
-    provider
-        .transition_nanoseconds_for_utc_epoch_nanoseconds(id, epoch_ns)
-        .ok()
-        .map(|offset| offset.0)
-}
-
-/// UTC offset (seconds east of UTC) for time-zone `tz` at instant `secs`,
-/// DST-aware, matching the OS tz database — the amount to add to a UTC timestamp
-/// to get the wall-clock time in `tz`. `UTC`/`GMT`/empty are 0; a fixed numeric
-/// offset is parsed directly; the process's own host zone is read straight from
-/// libc (thread-safe — it uses the process `TZ`). `intl-datetime` builds resolve
-/// every other named zone through the compiled IANA database, without mutating
-/// process-global state. Minimal builds without that feature retain the UTC
-/// fallback for non-host named zones.
-pub fn zone_offset_seconds(tz: &str, secs: i64) -> i64 {
-    if tz.is_empty()
-        || tz.eq_ignore_ascii_case("UTC")
-        || tz.eq_ignore_ascii_case("GMT")
-        || tz == "Etc/UTC"
-        || tz == "Etc/GMT"
-    {
-        return 0;
-    }
-    if let Some(off) = parse_fixed_offset(tz) {
-        return off;
-    }
-    if tz == host_time_zone_name() {
-        // The process is already running in this zone; libc localtime applies
-        // the correct (DST-aware) offset for `secs`.
-        return timestamp_to_local_components(secs).6;
-    }
-    // The compiled IANA database is reached through the `intl-datetime`
-    // install (see `crate::feature_hooks`); without it non-host named zones
-    // keep the UTC fallback, as a build without the feature does.
-    if let Some(offset) = COMPILED_ZONE_OFFSET.get().and_then(|f| f(tz, secs)) {
-        return offset;
-    }
-    0
-}
-
-static COMPILED_ZONE_OFFSET: crate::feature_hooks::Hook<fn(&str, i64) -> Option<i64>> =
-    crate::feature_hooks::Hook::empty();
-
-/// The `intl-datetime` install's Date half.
-#[cfg(feature = "intl-datetime")]
-pub(crate) fn install_compiled_tzdb() {
-    COMPILED_ZONE_OFFSET.set(compiled_zone_offset_seconds);
-}
-
 /// Get current timestamp in milliseconds (Date.now())
 #[no_mangle]
 pub extern "C" fn js_date_now() -> f64 {
-    if let Some(now) = crate::timer::js_mock_timers_date_now() {
-        return now;
-    }
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as f64)
-        .unwrap_or(0.0)
-}
-
-/// performance.now() — high-resolution time in milliseconds (sub-ms precision).
-/// Returns ms since performance.timeOrigin as f64.
-#[no_mangle]
-pub extern "C" fn js_performance_now() -> f64 {
-    crate::perf_hooks::performance_now_ms()
+    crate::clock::wall_millis()
 }
 
 /// Create a new Date from current time, returning a NaN-boxed DateCell pointer.
@@ -611,39 +237,6 @@ fn rebase_two_digit_year(year: f64) -> f64 {
 
 mod parse;
 use parse::parse_date_string;
-
-/// Convert date components (UTC) to Unix timestamp in seconds.
-/// Inverse of timestamp_to_components. Used only by the Windows tz-offset
-/// fallback; superseded elsewhere by [`make_utc_ms`] (which normalizes
-/// out-of-range components).
-#[cfg_attr(not(windows), allow(dead_code))]
-pub(crate) fn components_to_timestamp(
-    year: i32,
-    month: u32,
-    day: u32,
-    hour: u32,
-    minute: u32,
-    second: u32,
-) -> i64 {
-    // Howard Hinnant's civil_from_days (inverse of days_from_civil)
-    let y = if month <= 2 {
-        year as i64 - 1
-    } else {
-        year as i64
-    };
-    let m = if month <= 2 {
-        month as i64 + 9
-    } else {
-        month as i64 - 3
-    };
-    let era = if y >= 0 { y / 400 } else { (y - 399) / 400 };
-    let yoe = (y - era * 400) as u64;
-    let doy = (153 * m as u64 + 2) / 5 + day as u64 - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days = era * 146097 + doe as i64 - 719468;
-
-    days * 86400 + hour as i64 * 3600 + minute as i64 * 60 + second as i64
-}
 
 /// Format a calendar year for ISO 8601 (`toISOString` / `toJSON`): `0..=9999`
 /// is 4 zero-padded digits ("2024"), every other year uses the expanded sign +
@@ -831,12 +424,6 @@ fn weekday_from_timestamp(secs: i64) -> u32 {
     };
     let dow = (days + 4).rem_euclid(7);
     dow as u32
-}
-
-/// Allocate a StringHeader pointer holding `s`.
-fn alloc_runtime_string(s: &str) -> *mut crate::StringHeader {
-    // Use the standard string allocator which sets both utf16_len and byte_len
-    crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32)
 }
 
 /// Date.parse(isoString) — parse an ISO 8601 string and return ms since epoch.
@@ -1653,75 +1240,6 @@ pub extern "C" fn js_date_to_locale_time_string(timestamp: f64) -> *mut crate::S
     alloc_runtime_string(&s)
 }
 
-/// `(n).toLocaleString()` for numeric receivers (#600). Formats with
-/// thousands separators in en-US — `(12345).toLocaleString() === "12,345"`.
-/// The HIR lowers `n.toLocaleString()` on any receiver to
-/// `Expr::DateToLocaleString(n)` (the variant predates numeric
-/// support), so the LLVM codegen routes statically-Number receivers
-/// here and Date receivers to `js_date_to_locale_string` below. Decimal
-/// part follows JS spec: trailing zeros after the decimal stripped,
-/// leading sign preserved.
-///
-/// The non-finite and signed-zero spellings are ECMA-402's, not Rust's
-/// (#9452): the operation is defined as "format with a default
-/// `Intl.NumberFormat`", whose number pattern renders the infinities with
-/// U+221E ("∞" / "-∞") and keeps the sign of negative zero ("-0"). `NaN`
-/// stays the literal "NaN" in both. Before #9452 this returned Rust's
-/// `Display` spelling "Infinity"/"-Infinity" and dropped the sign of `-0`,
-/// so `x.toLocaleString()` disagreed with `x.toLocaleString("en-US")` —
-/// which since #9448 goes through the real formatter (see
-/// `intl::number_format`, whose sign test this now mirrors).
-#[no_mangle]
-pub extern "C" fn js_number_to_locale_string(n: f64) -> *mut crate::StringHeader {
-    if n.is_nan() {
-        return alloc_runtime_string("NaN");
-    }
-    if n.is_infinite() {
-        return alloc_runtime_string(if n > 0.0 { "\u{221e}" } else { "-\u{221e}" });
-    }
-    // `-0.0 < 0.0` is false, so the sign of a negative zero has to be read
-    // off the bit pattern — the same test `intl::number_format` applies.
-    let negative = n < 0.0 || (n == 0.0 && n.is_sign_negative());
-    let abs = n.abs();
-    // Split into integer and decimal parts. JS's default
-    // `Number.prototype.toLocaleString()` shows up to 3 fraction digits
-    // (Intl.NumberFormat default `maximumFractionDigits`), trailing
-    // zeros stripped.
-    let frac = abs - abs.trunc();
-    // Format integer part with comma every 3 digits (en-US). #6127: derive the
-    // digits from the f64's shortest round-trip (Rust `{}` is always positional,
-    // never scientific) rather than an exact `as u64` cast — the cast both
-    // overflows past ~1.8e19 and, in [2^53, 2^64), prints more digits than the
-    // shortest decimal V8 groups (`2**60` → `…847,000`, not `…846,976`).
-    let int_str = format!("{}", abs.trunc());
-    let mut grouped = String::new();
-    let bytes = int_str.as_bytes();
-    let len = bytes.len();
-    for (i, &b) in bytes.iter().enumerate() {
-        let from_end = len - i;
-        grouped.push(b as char);
-        if from_end > 1 && from_end % 3 == 1 {
-            grouped.push(',');
-        }
-    }
-    let mut out = if negative {
-        format!("-{}", grouped)
-    } else {
-        grouped
-    };
-    if frac != 0.0 {
-        // 3 fraction digits, trailing zeros stripped.
-        let frac_str = format!("{:.3}", frac);
-        // frac_str = "0.xxx" — keep "xxx", strip trailing zeros.
-        let frac_digits = frac_str.trim_start_matches("0.").trim_end_matches('0');
-        if !frac_digits.is_empty() {
-            out.push('.');
-            out.push_str(frac_digits);
-        }
-    }
-    alloc_runtime_string(&out)
-}
-
 /// date.toLocaleString() — combined date and time (local time).
 #[no_mangle]
 pub extern "C" fn js_date_to_locale_string(timestamp: f64) -> *mut crate::StringHeader {
@@ -1758,63 +1276,20 @@ pub extern "C" fn js_date_to_json(timestamp: f64) -> *mut crate::StringHeader {
     js_date_to_iso_string(timestamp)
 }
 
-/// Convert Unix timestamp (seconds) to date components (year, month, day, hour, minute, second)
-/// Returns components in UTC
-pub fn timestamp_to_components(secs: i64) -> (i32, u32, u32, u32, u32, u32) {
-    // Handle negative timestamps (dates before 1970)
-    let is_negative = secs < 0;
-    let abs_secs = if is_negative { -secs } else { secs } as u64;
-
-    // Extract time of day
-    let second = (abs_secs % 60) as u32;
-    let minute = ((abs_secs / 60) % 60) as u32;
-    let hour = ((abs_secs / 3600) % 24) as u32;
-
-    // Calculate days from Unix epoch
-    let days = if is_negative {
-        -((abs_secs / 86400) as i64)
-            - if !abs_secs.is_multiple_of(86400) {
-                1
-            } else {
-                0
-            }
-    } else {
-        (abs_secs / 86400) as i64
-    };
-
-    // For negative timestamps, adjust time components
-    let (hour, minute, second) = if is_negative && !abs_secs.is_multiple_of(86400) {
-        let remaining = abs_secs % 86400;
-        let adjusted = 86400 - remaining;
-        (
-            ((adjusted / 3600) % 24) as u32,
-            ((adjusted / 60) % 60) as u32,
-            (adjusted % 60) as u32,
-        )
-    } else {
-        (hour, minute, second)
-    };
-
-    // Days since 1970-01-01
-    // Using a simplified algorithm based on Howard Hinnant's date algorithms
-    let z = days + 719468; // Days from 0000-03-01 to 1970-01-01 is 719468
-
-    let era = if z >= 0 {
-        z / 146097
-    } else {
-        (z - 146096) / 146097
-    };
-    let doe = (z - era * 146097) as u32; // Day of era [0, 146096]
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365; // Year of era [0, 399]
-    let y = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // Day of year [0, 365]
-    let mp = (5 * doy + 2) / 153; // Month proxy [0, 11]
-    let d = doy - (153 * mp + 2) / 5 + 1; // Day [1, 31]
-    let m = if mp < 10 { mp + 3 } else { mp - 9 }; // Month [1, 12]
-    let y = if m <= 2 { y + 1 } else { y };
-
-    (y as i32, m, d, hour, minute, second)
-}
-
 #[cfg(test)]
 mod tests;
+
+pub use crate::date_layout::{
+    date_cell_timestamp, is_date_cell_addr, is_date_value, is_registered_date_bits, DateCell,
+};
+
+#[cfg(feature = "intl-datetime")]
+pub(crate) use crate::calendar::{canonicalize_tzdb_name, install_compiled_tzdb};
+pub(crate) use crate::calendar::{components_to_timestamp, timestamp_to_local_components};
+pub use crate::calendar::{host_time_zone_name, timestamp_to_components, zone_offset_seconds};
+
+pub use crate::clock::js_performance_now;
+
+pub use crate::builtins::js_number_to_locale_string;
+
+use crate::string::alloc_runtime_string;

@@ -38,7 +38,7 @@ pub fn scan_transition_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisit
         let mut visited = 0u64;
         let mut kept = TRANSITION_CACHE_YOUNG.with(|log| log.borrow_mut().take_spare());
         #[cfg(debug_assertions)]
-        with_transition_cache(|table| unsafe {
+        with_used_transition_cache(|table| unsafe {
             let relevant: Vec<u32> = (0..TRANSITION_CACHE_SIZE)
                 .filter(|&i| transition_entry_is_minor_relevant(&(*table)[i]))
                 .map(|i| i as u32)
@@ -50,7 +50,7 @@ pub fn scan_transition_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisit
         });
         let batch = TRANSITION_CACHE_YOUNG.with(|log| log.borrow_mut().take_sorted());
         logged += batch.len() as u64;
-        with_transition_cache(|table| unsafe {
+        with_used_transition_cache(|table| unsafe {
             for slot in batch {
                 visited += 1;
                 if scan_transition_cache_slot(visitor, table, slot as usize) {
@@ -75,7 +75,7 @@ pub fn scan_transition_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisit
     }
     let _ = TRANSITION_CACHE_YOUNG.with(|log| log.borrow_mut().take_sorted());
     let mut kept = Vec::new();
-    with_transition_cache(|table| unsafe {
+    with_used_transition_cache(|table| unsafe {
         for i in 0..TRANSITION_CACHE_SIZE {
             if scan_transition_cache_slot(visitor, table, i) {
                 kept.push(i as u32);
@@ -157,7 +157,7 @@ unsafe fn scan_transition_cache_slot(
 pub(crate) fn prune_dead_transition_cache_entries_young(is_dead_owner: &dyn Fn(usize) -> bool) {
     let candidates = TRANSITION_CACHE_YOUNG.with(|log| log.borrow_mut().take_sorted());
     let mut kept = Vec::with_capacity(candidates.len());
-    with_transition_cache(|table| unsafe {
+    with_used_transition_cache(|table| unsafe {
         for slot in candidates {
             let entry = &mut (*table)[slot as usize];
             if entry.next_keys == 0 {
@@ -218,7 +218,7 @@ fn transition_entry_is_dead(
 /// transition stamp.
 #[cold]
 pub(crate) fn prune_dead_transition_cache_entries(is_dead_owner: &dyn Fn(usize) -> bool) {
-    with_transition_cache(|table| unsafe {
+    with_used_transition_cache(|table| unsafe {
         for i in 0..TRANSITION_CACHE_SIZE {
             let entry = &mut (*table)[i];
             if entry.next_keys == 0 {

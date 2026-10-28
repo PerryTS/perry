@@ -849,3 +849,9 @@ pub extern "C" fn js_net_socket_address_to_json(handle: i64) -> f64 {
     }
     boxed_handle(object.get())
 }
+
+// Source-only realm facts beside the owning builtin bodies.
+macro_rules! realm_decl {
+    ($facts:literal) => {};
+}
+realm_decl!("classes.realm.json#*");

@@ -315,7 +315,7 @@ pub(crate) fn string(
     if crate::proxy::reflect_value_is_object(pattern.get_nanbox_f64()) {
         let method = scope.root_nanbox_f64(dispatch::get_symbol(&pattern, operation.symbol())?);
         if !matches!(method.get_nanbox_f64().to_bits(), TAG_UNDEFINED | TAG_NULL) {
-            if !crate::proxy::proxy_wraps_callable(method.get_nanbox_f64()) {
+            if !crate::proxy_hooks::proxy_wraps_callable(method.get_nanbox_f64()) {
                 return Err(EngineError::Type("RegExp symbol method is not callable"));
             }
             return dispatch::call_one(&method, &pattern, &receiver);
@@ -340,7 +340,7 @@ pub(crate) fn string(
     })??;
     let re = scope.root_nanbox_f64(js_nanbox_pointer(re as i64));
     let method = scope.root_nanbox_f64(dispatch::get_symbol(&re, operation.symbol())?);
-    if !crate::proxy::proxy_wraps_callable(method.get_nanbox_f64()) {
+    if !crate::proxy_hooks::proxy_wraps_callable(method.get_nanbox_f64()) {
         return Err(EngineError::Type("RegExp symbol method is not callable"));
     }
     let argument = scope.root_nanbox_f64(
@@ -363,3 +363,5 @@ pub(crate) extern "C" fn search_thunk(
 ) -> f64 {
     api::finish(regexp(Operation::Search, this.as_f64(), arg))
 }
+
+crate::realm_decl!("perex_match_search.realm.json#*");

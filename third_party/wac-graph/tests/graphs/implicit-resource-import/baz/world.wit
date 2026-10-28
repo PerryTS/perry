@@ -1,0 +1,8 @@
+package foo:baz;
+
+world w {
+    use foo:dependency/types.{x};
+    import my-func: func() -> x;
+    // The test will fail whether this is here or not
+    import foo:dependency/types;
+}

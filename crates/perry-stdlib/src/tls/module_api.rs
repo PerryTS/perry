@@ -254,7 +254,7 @@ pub unsafe extern "C" fn js_tls_convert_alpn_protocols(protocols: f64, out: f64)
                     encoded.extend_from_slice(bytes);
                 }
             });
-        } else if perry_runtime::typedarray::lookup_typed_array_kind(addr).is_some() {
+        } else if perry_runtime::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some() {
             perry_runtime::buffer::bytes::no_gc(|scope| {
                 if let Ok(bytes) = perry_runtime::buffer::bytes::bytes(protocols, scope) {
                     encoded.extend_from_slice(bytes);
@@ -381,7 +381,7 @@ mod tests {
             let cert = scope.root_raw_mut_ptr(perry_runtime::js_object_alloc(0, 0));
             let key = scope.root_nanbox_f64(nanbox_str("subjectaltname"));
             let san = scope.root_nanbox_f64(nanbox_str(san));
-            cert.with_mut_ptr(|cert| unsafe {
+            cert.with_mut_ptr(|cert| {
                 perry_runtime::js_object_set_field_by_name(
                     cert,
                     perry_runtime::js_get_string_pointer_unified(key.get_nanbox_f64())

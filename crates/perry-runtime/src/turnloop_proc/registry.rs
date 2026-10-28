@@ -73,7 +73,9 @@ pub(crate) fn deliver(owner: Owner, id: u64, event: StreamEvent) {
     match owner {
         Owner::Dgram { socket } => crate::module_hooks::dgram_on_completion(socket, event),
         #[cfg(unix)]
-        Owner::ProcessSignal { signum } => crate::os::signal::on_signal_completion(signum, event),
+        Owner::ProcessSignal { signum } => {
+            crate::os_hook_slots::on_signal_completion(signum, event)
+        }
         #[cfg(not(unix))]
         Owner::ProcessSignal { .. } => {
             let _ = event;

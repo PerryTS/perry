@@ -129,6 +129,7 @@ fn thread_exit_releases_the_threads_async_hooks_resources() {
 #[test]
 fn thread_exit_clears_the_async_hooks_singletons_it_allocated() {
     let (top, providers, live) = std::thread::spawn(|| {
+        perry_runtime::feature_hooks::js_runtime_install_async_hooks();
         perry_runtime::async_hooks::clear_cached_singletons_for_test();
         let top = perry_runtime::async_hooks::js_async_hooks_execution_async_resource().to_bits();
         let providers = perry_runtime::async_hooks::js_async_hooks_async_wrap_providers().to_bits();

@@ -344,7 +344,7 @@ pub fn js_data_view_get(buf_f64: f64, offset_value: f64, kind: DataViewKind, lit
                 } else {
                     i64::from_be_bytes(b)
                 };
-                crate::value::js_nanbox_bigint(crate::bigint::js_bigint_from_i64(v) as i64)
+                crate::value::js_nanbox_bigint(crate::bigint_hooks::js_bigint_from_i64(v) as i64)
             }
             DataViewKind::BigUint64 => {
                 let b = read_bytes::<8>(buf, offset);
@@ -353,7 +353,7 @@ pub fn js_data_view_get(buf_f64: f64, offset_value: f64, kind: DataViewKind, lit
                 } else {
                     u64::from_be_bytes(b)
                 };
-                crate::value::js_nanbox_bigint(crate::bigint::js_bigint_from_u64(v) as i64)
+                crate::value::js_nanbox_bigint(crate::bigint_hooks::js_bigint_from_u64(v) as i64)
             }
         }
     }
@@ -542,7 +542,7 @@ fn to_bigint_raw_or_throw(value: f64) -> u64 {
     // Reuse the typed-array lane's complete ToBigInt implementation. In
     // particular, object values must run @@toPrimitive/valueOf/toString and
     // propagate abrupt completion before the DataView bounds check.
-    let coerced = crate::typedarray::bigint::to_bigint_for_store(value);
+    let coerced = crate::typedarray_hook_slots::bigint::to_bigint_for_store(value);
     let bi = crate::value::JSValue::from_bits(coerced.to_bits()).as_bigint_ptr()
         as *const crate::bigint::BigIntHeader;
     let bi = crate::bigint::clean_bigint_ptr(bi);

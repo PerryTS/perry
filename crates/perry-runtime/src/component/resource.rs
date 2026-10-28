@@ -2,8 +2,9 @@
 //! The engine remains authoritative for ownership, type and call lifetimes.
 use super::*;
 use crate::object::owned_state_bag::{
-    self as bag, COMPONENT_RESOURCE_OWNER as OWNER, COMPONENT_RESOURCE_PARENT as PARENT,
-    COMPONENT_RESOURCE_STATE as STATE, COMPONENT_RESOURCE_TOKEN as TOKEN,
+    self as bag, COMPONENT_RESOURCE_BORROW as BORROW, COMPONENT_RESOURCE_OWNER as OWNER,
+    COMPONENT_RESOURCE_PARENT as PARENT, COMPONENT_RESOURCE_STATE as STATE,
+    COMPONENT_RESOURCE_TOKEN as TOKEN,
 };
 
 fn load(resource: f64, slot: u32) -> f64 {
@@ -32,7 +33,57 @@ pub(super) fn encode(resource: f64) -> Option<Value> {
     if state == 2.0 {
         fail("Component resource is disposed");
     }
-    Some(serde_json::json!({"$resource":string(token), "owned":state == 1.0}))
+    let borrow = load(resource, BORROW);
+    if !JSValue::from_bits(borrow.to_bits()).is_undefined() {
+        let borrow = array_pointer(borrow).unwrap();
+        let lifetime = crate::array::js_array_get_f64(borrow, 1);
+        if !JSValue::from_bits(lifetime.to_bits()).is_undefined()
+            && crate::array::js_array_get_f64(array_pointer(lifetime).unwrap(), 0) != 1.0
+        {
+            fail("Component resource borrow has expired");
+        }
+    }
+    let mut value = serde_json::json!({"$resource":string(token), "owned":state == 1.0});
+    if !JSValue::from_bits(borrow.to_bits()).is_undefined() {
+        value["$borrow"] = Value::String(string(crate::array::js_array_get_f64(
+            array_pointer(borrow).unwrap(),
+            0,
+        )));
+    }
+    Some(value)
+}
+
+pub(super) fn decode(owner: f64, value: &Value, lifetime: f64) -> f64 {
+    let scope = RuntimeHandleScope::new();
+    let owner = scope.root_nanbox_f64(owner);
+    let lifetime = scope.root_nanbox_f64(lifetime);
+    let token = value["$resource"]
+        .as_str()
+        .unwrap_or_else(|| fail("Invalid resource token"));
+    let owned = value["owned"] == true;
+    if let Some(capability) = value.get("$borrow") {
+        if owned || capability.as_str() != Some(token) {
+            fail("Invalid component resource borrow capability");
+        }
+    }
+    let resource = scope.root_nanbox_f64(wrap(owner.get_nanbox_f64(), token, owned));
+    if value.get("$borrow").is_some() {
+        let state = scope.root_raw_mut_ptr(crate::array::js_array_alloc_with_length(2));
+        crate::array::js_array_set_f64(
+            state.get_raw_mut_ptr(),
+            0,
+            load(resource.get_nanbox_f64(), TOKEN),
+        );
+        crate::array::js_array_set_f64(state.get_raw_mut_ptr(), 1, lifetime.get_nanbox_f64());
+        store(
+            resource.get_nanbox_f64(),
+            BORROW,
+            crate::value::js_nanbox_pointer(
+                state.get_raw_mut_ptr::<crate::array::ArrayHeader>() as i64
+            ),
+        );
+    }
+    resource.get_nanbox_f64()
 }
 
 pub(super) fn wrap(owner: f64, token: &str, owned: bool) -> f64 {
@@ -114,6 +165,19 @@ extern "C" fn dispose(
     let mut error = Vec::new();
     let result = crate::exception::catch_js_throw(|| {
         token = string(load(resource.get_nanbox_f64(), TOKEN));
+        if persistent::enabled(frame.owner.get_nanbox_f64()) {
+            let request =
+                serde_json::json!({"op":"resource-drop","value":{"$resource":token,"owned":true}});
+            let result = crate::exception::catch_js_throw(|| {
+                persistent::submit::unit(frame.owner.get_nanbox_f64(), &request)
+            });
+            drop(request);
+            if result.is_ok() || !unsafe { (*context).alive } {
+                store(resource.get_nanbox_f64(), STATE, 2.0);
+                cleanup::unregister(frame.owner.get_nanbox_f64(), resource.get_nanbox_f64());
+            }
+            return finish(result);
+        }
         let mut buffer = Buffer::default();
         let status = unsafe {
             (host::ops().perry_component_host_resource_drop)(

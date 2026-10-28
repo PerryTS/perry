@@ -402,6 +402,10 @@ const SYNC_GLOBAL_PROPS: &[&str] = &[
 /// Runtime externs the HIR names directly that are synchronous.
 const SYNC_EXTERNS: &[&str] = &[
     "js_for_of_next",
+    // This wraps the original visible Get(exec)/call, preserving all its
+    // operands and user bodies in the census. It adds no scheduling of its
+    // own; any override/coercion that can queue work still fails this proof.
+    "js_regexp_exec_projected",
     "js_process_exit_code_get",
     "js_process_exit_code_set",
 ];
@@ -703,6 +707,23 @@ mod tests {
                 );
                 assert!(why_module_not_synchronous(&asynchronous).is_some());
             }
+        }
+    }
+
+    #[test]
+    fn projected_exec_preserves_the_original_scheduling_census() {
+        let wrap = |operand: &str| {
+            format!(
+                r#"Module {{ init: [Expr(Call {{ callee: ExternFuncRef {{ name: "js_regexp_exec_projected" }}, args: [LocalGet(0), PropertyGet {{ object: LocalGet(0), property: "exec", byte_offset: 0 }}, {operand}, Number(1)] }})] }}"#
+            )
+        };
+        assert_eq!(why_module_not_synchronous(&wrap("String(\"x\")")), None);
+        for operand in [
+            "Await(LocalGet(1))",
+            "QueueMicrotask(LocalGet(2))",
+            "Closure { is_async: true }",
+        ] {
+            assert!(why_module_not_synchronous(&wrap(operand)).is_some());
         }
     }
 

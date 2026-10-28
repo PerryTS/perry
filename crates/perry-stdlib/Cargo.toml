@@ -339,8 +339,9 @@ rustls-pemfile = { workspace = true, optional = true }
 rusqlite = { version = "0.39", features = ["bundled", "column_decltype", "limits", "session"], optional = true }
 
 # Crypto
-# CPU-dispatched fixed SHA-384/512 contexts, without an EVP allocation.
-openssl-sys = { version = "0.9", optional = true, features = ["vendored"] }
+# SHA-384/512 contexts come from OpenSSL's CPU-dispatched fixed contexts
+# (`openssl-sys`, declared in the non-wasi target table below) or, on WASI,
+# where OpenSSL cannot build, from `sha2` (`crypto/wide_digest.rs`).
 sha2 = { version = "0.11", optional = true }
 sha1 = { version = "0.11", optional = true }
 # SHAKE128/256 moved out of `sha3`'s root into this crate as of sha3 0.12.
@@ -352,9 +353,9 @@ md-5 = { version = "0.11", optional = true }
 perry-hex = { workspace = true, optional = true }
 hmac = { version = "0.13", optional = true }
 bcrypt = { version = "0.19", optional = true }
-p256 = { version = "0.13", optional = true, default-features = false, features = ["pkcs8", "pem", "ecdsa", "ecdh"] }
-p384 = { version = "0.13", optional = true, default-features = false, features = ["pkcs8", "pem", "ecdsa", "ecdh"] }
-p521 = { version = "0.13", optional = true, default-features = false, features = ["pkcs8", "pem", "ecdsa", "ecdh"] }
+p256 = { version = "0.14", optional = true, default-features = false, features = ["pkcs8", "pem", "ecdsa", "ecdh"] }
+p384 = { version = "0.14", optional = true, default-features = false, features = ["pkcs8", "pem", "ecdsa", "ecdh"] }
+p521 = { version = "0.14", optional = true, default-features = false, features = ["pkcs8", "pem", "ecdsa", "ecdh"] }
 rsa = { version = "0.9", optional = true, default-features = false, features = ["pem", "pkcs5", "sha2"] }
 # #1367 node:crypto X509Certificate — DER/PEM cert parsing. x509-cert 0.3 and
 # the direct dependency use DER/SPKI 0.8; jsonwebtoken's current RSA and
@@ -388,7 +389,7 @@ flate2 = { version = "1.0", optional = true }
 # Brotli decompression — feature-checked by axios at module init.
 brotli = { version = "9.0", optional = true }
 # Zstd codecs — exposed by modern Node alongside gzip/deflate/Brotli.
-zstd = { version = "0.13.3", optional = true }
+zstd = { version = "0.14.3", optional = true }
 
 # Email: no direct lettre edge. The MIME builder comes through
 # `turnloop_smtp::message`, which re-exports lettre's `Message` and
@@ -411,6 +412,9 @@ scraper = { version = "0.27", optional = true }
 # IDs
 # Pulled only by crypto or bundled-nodemailer.
 perry-uuid = { workspace = true, optional = true }
+
+[target.'cfg(not(target_os = "wasi"))'.dependencies]
+openssl-sys = { version = "0.9", optional = true, features = ["vendored"] }
 
 # libc — termios for readline's raw-mode toggle (#347 Phase 2). The
 # Unix path uses tcsetattr/cfmakeraw; Windows uses SetConsoleMode via

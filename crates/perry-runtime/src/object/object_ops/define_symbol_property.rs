@@ -12,14 +12,15 @@ pub(super) unsafe fn define_symbol_property(
     let obj_value_handle = scope.root_nanbox_u64(obj_value.to_bits());
     let receiver_handle = scope.root_nanbox_u64(receiver_value.to_bits());
     let key_handle = scope.root_nanbox_f64(key_value);
-    let current_obj = || f64::from_bits(obj_value_handle.get_nanbox_u64());
-    let current_key = || key_handle.get_nanbox_f64();
+    let current_obj = &obj_value_handle;
+    let current_key = &key_handle;
 
     let _holder_edit = super::super::descriptor_state::HolderEdit::new(
-        crate::symbol::obj_key_from_f64(current_obj()),
+        crate::symbol::obj_key_from_f64((f64::from_bits(current_obj.get_nanbox_u64()))),
     );
-    let current_owner = || crate::symbol::obj_key_from_f64(current_obj());
-    let current_sym = || crate::symbol::sym_key_from_f64(current_key());
+    let current_owner =
+        || crate::symbol::obj_key_from_f64((f64::from_bits(current_obj.get_nanbox_u64())));
+    let current_sym = || crate::symbol::sym_key_from_f64((current_key.get_nanbox_f64()));
     let existing_accessor_bits =
         crate::symbol::symbol_accessor_descriptor_bits(current_owner(), current_sym());
     let existing_data_bits = existing_accessor_bits
@@ -33,7 +34,11 @@ pub(super) unsafe fn define_symbol_property(
     let existing_data =
         scope.root_nanbox_u64(existing_data_bits.unwrap_or(crate::value::TAG_UNDEFINED));
     let existed = existing_accessor_bits.is_some() || existing_data_bits.is_some();
-    if !existed && crate::value::js_is_truthy(js_object_is_extensible(current_obj())) == 0 {
+    if !existed
+        && crate::value::js_is_truthy(js_object_is_extensible(
+            (f64::from_bits(current_obj.get_nanbox_u64())),
+        )) == 0
+    {
         return false;
     }
     // A symbol installed by ordinary assignment has no explicit
@@ -91,8 +96,8 @@ pub(super) unsafe fn define_symbol_property(
             existing_set.get_nanbox_u64()
         };
         crate::symbol::set_symbol_accessor_property(
-            current_obj(),
-            current_key(),
+            (f64::from_bits(current_obj.get_nanbox_u64())),
+            (current_key.get_nanbox_f64()),
             get.get_nanbox_u64(),
             set,
         );
@@ -104,7 +109,11 @@ pub(super) unsafe fn define_symbol_property(
         } else {
             existing_data.get_nanbox_f64()
         };
-        crate::symbol::define_symbol_data_property(current_obj(), current_key(), value);
+        crate::symbol::define_symbol_data_property(
+            (f64::from_bits(current_obj.get_nanbox_u64())),
+            (current_key.get_nanbox_f64()),
+            value,
+        );
     }
     let read_flag = |name: &[u8]| -> Option<bool> {
         descriptor.has_named(name).then(|| {

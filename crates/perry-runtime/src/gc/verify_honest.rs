@@ -127,6 +127,8 @@ pub(super) fn verify_honest_pointers(phase: &str) -> HonestPointerStats {
     for header in super::verify::malloc_headers_for_verification() {
         visit(header);
     }
+    // WRT: realm image cells are live by definition (born MARKED|PINNED).
+    super::image_cells::for_each_image_cell(|header| visit(header));
     report_honest_pointers(phase, &stats);
     stats
 }

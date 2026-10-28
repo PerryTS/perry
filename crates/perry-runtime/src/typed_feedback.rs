@@ -503,7 +503,7 @@ fn raw_heap_type(addr: usize) -> u16 {
     if crate::buffer::is_registered_buffer(addr) {
         return crate::gc::GC_TYPE_BUFFER as u16;
     }
-    if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
+    if crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some() {
         return crate::gc::GC_TYPE_TYPED_ARRAY as u16;
     }
     if !crate::object::is_valid_obj_ptr(addr as *const u8) {
@@ -597,10 +597,11 @@ fn classify_array(addr: usize, index: Option<u32>) -> (u32, u16, u64, u16) {
         );
     }
 
-    if let Some(kind) = crate::typedarray::lookup_typed_array_kind(addr) {
+    if let Some(kind) = crate::typedarray_hook_slots::lookup_typed_array_kind(addr) {
         let len = unsafe {
-            crate::typedarray::element_length(addr as *const crate::typedarray::TypedArrayHeader)
-                as u64
+            crate::typedarray_hook_slots::element_length(
+                addr as *const crate::typedarray_hook_slots::TypedArrayHeader,
+            ) as u64
         };
         let access_kind = match index {
             Some(i) if i != u32::MAX && i as u64 >= len => ARRAY_ACCESS_INDEXED_OUT_OF_BOUNDS,
@@ -608,7 +609,7 @@ fn classify_array(addr: usize, index: Option<u32>) -> (u32, u16, u64, u16) {
         };
         let element_kind = STABLE_VALUE_NUMBER;
         return (
-            crate::typedarray::class_id_for_kind(kind),
+            crate::typedarray_hook_slots::class_id_for_kind(kind),
             crate::gc::GC_TYPE_TYPED_ARRAY as u16,
             pack_array_aux(access_kind, ARRAY_LAYOUT_TYPED_ARRAY, element_kind, kind),
             element_kind,
@@ -697,7 +698,7 @@ fn helper_return_facts(bits: u64) -> (LayoutWord, u32, u16, u64, u16) {
     }
 
     if crate::buffer::is_registered_buffer(addr)
-        || crate::typedarray::lookup_typed_array_kind(addr).is_some()
+        || crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some()
     {
         let (class_id, heap_type, aux, element_kind) = classify_array(addr, None);
         return (LayoutWord(0), class_id, heap_type, aux, element_kind);
@@ -1683,20 +1684,22 @@ fn masked_window_ta_kind(addr: usize, min_idx: i32, max_idx_exclusive: i32) -> i
     if min_idx < 0 {
         return MASKED_WINDOW_TA_KIND_NONE;
     }
-    let Some(kind) = crate::typedarray::lookup_typed_array_kind(addr) else {
+    let Some(kind) = crate::typedarray_hook_slots::lookup_typed_array_kind(addr) else {
         return MASKED_WINDOW_TA_KIND_NONE;
     };
     let code = match kind {
-        crate::typedarray::KIND_INT32 => MASKED_WINDOW_TA_KIND_I32,
-        crate::typedarray::KIND_UINT32 => MASKED_WINDOW_TA_KIND_U32,
-        crate::typedarray::KIND_FLOAT64 => MASKED_WINDOW_TA_KIND_F64,
+        crate::typedarray_hook_slots::KIND_INT32 => MASKED_WINDOW_TA_KIND_I32,
+        crate::typedarray_hook_slots::KIND_UINT32 => MASKED_WINDOW_TA_KIND_U32,
+        crate::typedarray_hook_slots::KIND_FLOAT64 => MASKED_WINDOW_TA_KIND_F64,
         _ => return MASKED_WINDOW_TA_KIND_NONE,
     };
     // A view's p+0 word is its construction length; detach, resize and
     // out-of-bounds are read from the owner, so the window must be checked
     // against the current length (0 once detached).
     let len = unsafe {
-        crate::typedarray::element_length(addr as *const crate::typedarray::TypedArrayHeader)
+        crate::typedarray_hook_slots::element_length(
+            addr as *const crate::typedarray_hook_slots::TypedArrayHeader,
+        )
     };
     if i64::from(max_idx_exclusive) > i64::from(len) {
         return MASKED_WINDOW_TA_KIND_NONE;
@@ -2264,7 +2267,7 @@ pub extern "C" fn js_typed_feedback_array_index_get_fallback_boxed(
         if let Some(proxy) =
             crate::array::array_ptr_as_proxy(receiver.to_bits() as *const ArrayHeader)
         {
-            return crate::proxy::js_proxy_get(proxy, index);
+            return crate::proxy_hooks::proxy_get(proxy, index);
         }
     }
     if receiver_value.is_handle() {
@@ -2290,9 +2293,9 @@ pub extern "C" fn js_typed_feedback_array_index_get_fallback_boxed(
         }
     }
 
-    if crate::typedarray::lookup_typed_array_kind(raw_addr).is_some() {
-        return crate::typedarray::js_typed_array_index_get_dynamic(
-            raw_addr as *const crate::typedarray::TypedArrayHeader,
+    if crate::typedarray_hook_slots::lookup_typed_array_kind(raw_addr).is_some() {
+        return crate::typedarray_hook_slots::js_typed_array_index_get_dynamic(
+            raw_addr as *const crate::typedarray_hook_slots::TypedArrayHeader,
             index,
         );
     }
@@ -2656,9 +2659,9 @@ pub extern "C" fn js_typed_feedback_array_index_set_fallback_boxed(
         return receiver;
     }
 
-    if crate::typedarray::lookup_typed_array_kind(raw_addr).is_some() {
-        crate::typedarray_props::js_typed_array_index_set_dynamic(
-            raw_addr as *mut crate::typedarray::TypedArrayHeader,
+    if crate::typedarray_hook_slots::lookup_typed_array_kind(raw_addr).is_some() {
+        crate::typedarray_hook_slots::js_typed_array_index_set_dynamic(
+            raw_addr as *mut crate::typedarray_hook_slots::TypedArrayHeader,
             index,
             value,
         );

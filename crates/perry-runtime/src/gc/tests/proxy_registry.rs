@@ -26,7 +26,7 @@ fn unreachable_proxy_cell_and_its_owned_graph_die_in_full_trace() {
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let (target_ptr, target) = alloc_proxy_endpoint();
     let (handler_ptr, handler) = alloc_proxy_endpoint();
-    let proxy = crate::proxy::js_proxy_new(target, handler);
+    let proxy = crate::proxy_hooks::proxy_new(target, handler);
 
     full_collect();
 
@@ -41,7 +41,7 @@ fn a_minor_keeps_the_old_proxy_until_full_collection() {
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let (target_ptr, target) = alloc_proxy_endpoint();
     let (handler_ptr, handler) = alloc_proxy_endpoint();
-    let proxy = crate::proxy::js_proxy_new(target, handler);
+    let proxy = crate::proxy_hooks::proxy_new(target, handler);
 
     let _ = gc_collect_minor();
 
@@ -59,7 +59,7 @@ fn a_shadow_root_keeps_a_proxy_and_its_graph_until_the_next_full_trace() {
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let (target_ptr, target) = alloc_proxy_endpoint();
     let (handler_ptr, handler) = alloc_proxy_endpoint();
-    let proxy = crate::proxy::js_proxy_new(target, handler);
+    let proxy = crate::proxy_hooks::proxy_new(target, handler);
     js_shadow_slot_set(0, proxy.to_bits());
 
     full_collect();
@@ -81,7 +81,7 @@ fn a_proxy_in_an_object_field_is_traced_as_a_heap_edge() {
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let (_target_ptr, target) = alloc_proxy_endpoint();
     let (_handler_ptr, handler) = alloc_proxy_endpoint();
-    let proxy = crate::proxy::js_proxy_new(target, handler);
+    let proxy = crate::proxy_hooks::proxy_new(target, handler);
     let (owner, fields) = unsafe { alloc_old_test_object(1) };
     unsafe {
         *fields = proxy.to_bits();
@@ -107,8 +107,8 @@ fn observing_an_outer_proxy_recursively_keeps_its_proxy_target_live() {
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let (_inner_target_ptr, inner_target) = alloc_proxy_endpoint();
     let (_handler_ptr, handler) = alloc_proxy_endpoint();
-    let inner = crate::proxy::js_proxy_new(inner_target, handler);
-    let outer = crate::proxy::js_proxy_new(inner, handler);
+    let inner = crate::proxy_hooks::proxy_new(inner_target, handler);
+    let outer = crate::proxy_hooks::proxy_new(inner, handler);
     js_shadow_slot_set(0, outer.to_bits());
 
     full_collect();
@@ -142,11 +142,11 @@ fn check_owned_proxy(erase: bool) {
     {
         crate::object::js_object_set_field_f64(target, 0, 73.0);
     }
-    let proxy = crate::proxy::js_proxy_new(
+    let proxy = crate::proxy_hooks::proxy_new(
         f64::from_bits(ptr_bits(target as usize)),
         f64::from_bits(ptr_bits(handler as usize)),
     );
-    let cell = crate::proxy::canonical_address(proxy).unwrap();
+    let cell = crate::proxy_hooks::canonical_address(proxy).unwrap();
     js_shadow_slot_set(0, proxy.to_bits());
     let _ = gc_collect_minor();
     assert_eq!(js_shadow_slot_get(0), proxy.to_bits());
@@ -180,7 +180,7 @@ fn check_owned_proxy(erase: bool) {
             ),
             73.0
         );
-        crate::proxy::js_proxy_revoke(proxy);
+        crate::proxy_hooks::proxy_revoke(proxy);
         full_collect();
         assert_eq!(
             crate::weakref::js_weakref_deref(weak.get_nanbox_f64()).to_bits(),
@@ -199,11 +199,11 @@ fn ordinary_allocation_is_not_a_proxy_cell() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let object = crate::object::js_object_alloc(0, 0);
     let ordinary = f64::from_bits(ptr_bits(object as usize));
-    assert!(crate::proxy::canonical_address(ordinary).is_none());
+    assert!(crate::proxy_hooks::canonical_address(ordinary).is_none());
     assert!(!crate::value::addr_class::is_proxy_cell(object as usize));
     let target = crate::object::js_object_alloc(0, 0);
     let handler = crate::object::js_object_alloc(0, 0);
-    let proxy = crate::proxy::js_proxy_new(
+    let proxy = crate::proxy_hooks::proxy_new(
         f64::from_bits(ptr_bits(target as usize)),
         f64::from_bits(ptr_bits(handler as usize)),
     );
@@ -213,6 +213,6 @@ fn ordinary_allocation_is_not_a_proxy_cell() {
         crate::value::POINTER_TAG
     );
     assert_eq!(proxy.to_bits() & 7, 0);
-    let cell = crate::proxy::canonical_address(proxy).unwrap();
+    let cell = crate::proxy_hooks::canonical_address(proxy).unwrap();
     assert!(crate::value::addr_class::is_proxy_cell(cell));
 }

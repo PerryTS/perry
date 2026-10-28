@@ -358,10 +358,34 @@ impl Histogram {
     }
 }
 
-crate::perry_thread_local! {
-    /// Per-thread histogram registry. A `perf_histogram` namespace object holds
-    /// only its index here, so `first !== second` and their state is disjoint.
-    static HISTOGRAMS: RefCell<Vec<Histogram>> = const { RefCell::new(Vec::new()) };
+mod histogram_tls {
+    use super::*;
+    type Storage = crate::tls_hot::HotCell<
+        RefCell<Vec<Histogram>>,
+        { std::mem::needs_drop::<RefCell<Vec<Histogram>>>() as usize },
+    >;
+    crate::__perry_thread_local_storage!(Storage, const { RefCell::new(Vec::new()) });
+    pub(super) fn resolve(idx: u32) -> Result<*mut u8, crate::tls_hot::AccessError> {
+        STORAGE.try_with(|cell| {
+            cell.arm_guard(idx);
+            cell.value_addr()
+        })
+    }
+    pub(super) static KEY: crate::tls_hot::HotKey<RefCell<Vec<Histogram>>> =
+        crate::tls_hot::HotKey::new(
+            crate::tls_hot::SlotId::named(concat!(
+                module_path!(),
+                "::HISTOGRAMS@",
+                line!(),
+                ":",
+                column!()
+            )),
+            crate::perf_hook_slots::resolve_histograms,
+        );
+}
+use histogram_tls::KEY as HISTOGRAMS;
+pub(crate) fn install_tls_resolver() {
+    crate::perf_hook_slots::install_histogram_resolver(histogram_tls::resolve);
 }
 
 /// Keep each instance's cached `percentiles` Map alive across GC. The Map is a
@@ -394,7 +418,7 @@ fn bool_value(value: bool) -> f64 {
 }
 
 fn bigint(value: i64) -> f64 {
-    let ptr = crate::bigint::js_bigint_from_i64(value);
+    let ptr = crate::bigint_hooks::js_bigint_from_i64(value);
     f64::from_bits(JSValue::bigint_ptr(ptr).bits())
 }
 
@@ -402,9 +426,7 @@ fn throw_invalid_arg_type(message: &str) -> ! {
     crate::fs::validate::throw_type_error_with_code(message, "ERR_INVALID_ARG_TYPE")
 }
 
-fn throw_out_of_range(message: &str) -> ! {
-    crate::fs::validate::throw_range_error_with_code(message)
-}
+use crate::validators::received::throw_range_error_with_code as throw_out_of_range;
 
 /// Node's `validateObject(value, name)` — rejects null, primitives, arrays and
 /// functions. `undefined` is the caller's "argument omitted" signal and is
@@ -698,7 +720,7 @@ pub(crate) unsafe fn histogram_method(
             let value = arg(0);
             let jv = JSValue::from_bits(value.to_bits());
             let recorded = if jv.is_bigint() {
-                crate::bigint::js_bigint_to_f64(jv.as_bigint_ptr()) as i64
+                crate::bigint_hooks::js_bigint_to_f64(jv.as_bigint_ptr()) as i64
             } else {
                 validate_integer(value, "val", 1.0, 9007199254740991.0)
             };

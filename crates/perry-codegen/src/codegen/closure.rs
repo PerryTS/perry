@@ -146,24 +146,39 @@ fn emit_public_typed_closure_trampoline(
     let wf = llmod.define_function(&public_name, DOUBLE, llvm_params);
     let _ = wf.create_block("entry");
 
-    let (guards, capture_guard) = {
+    let (entry_values, guards) = {
         let blk = wf.block_mut(0).unwrap();
-        let guards: Vec<EntryArgGuard> = arg_names
+        let mut values = arg_names.clone();
+        let mut guards: Vec<EntryArgGuard> = arg_names
             .iter()
             .zip(arg_reps.iter())
             .map(|(arg, rep)| typed_entry_arg_guard(blk, *rep, arg))
             .collect();
-        let capture_guard = emit_entry_typed_capture_guard(blk, capture_header, capture_reps);
-        (guards, capture_guard)
+        // Captures obey the same actual-value admission as arguments. Plain
+        // Numbers need only the ordered tier; boxed int32s and numeric NaNs
+        // retain the full second tier. No capture annotation is a proof.
+        for (idx, rep) in capture_reps.iter().enumerate() {
+            let bits = load_entry_capture_word(blk, capture_header, idx);
+            let value = blk.bitcast_i64_to_double(&bits);
+            guards.push(typed_entry_arg_guard(blk, *rep, &value));
+            values.push(value);
+        }
+        (values, guards)
     };
     emit_tiered_entry_dispatch(
         wf,
         "typed_closure_public",
-        &arg_names,
+        &entry_values,
         &guards,
-        capture_guard,
+        None,
         &mut |blk, values| {
-            emit_typed_closure_trampoline_fast_value(blk, kind, &typed_name, values, &arg_reps)
+            emit_typed_closure_trampoline_fast_value(
+                blk,
+                kind,
+                &typed_name,
+                &values[..arg_names.len()],
+                &arg_reps,
+            )
         },
         &mut |blk| {
             // The generic body is this entry's own continuation: it gets the
@@ -206,26 +221,6 @@ fn load_typed_capture(
     // The public entry's capture guard admitted this value, so the inline
     // conversions are exact (string materialization stays a call).
     emit_typed_arg_to_raw(blk, rep, &captured)
-}
-
-/// [`emit_typed_capture_guard`] for a closure body's own entry: the words are
-/// the running closure's, loaded inline ([`load_entry_capture_word`]).
-fn emit_entry_typed_capture_guard(
-    blk: &mut crate::block::LlBlock,
-    header_size: u64,
-    capture_reps: &[TypedParamRep],
-) -> Option<String> {
-    let mut guard: Option<String> = None;
-    for (idx, rep) in capture_reps.iter().enumerate() {
-        let captured_bits = load_entry_capture_word(blk, header_size, idx);
-        let captured = blk.bitcast_i64_to_double(&captured_bits);
-        let ok = emit_typed_arg_guard(blk, *rep, &captured);
-        guard = Some(match guard {
-            Some(prev) => blk.and(I1, &prev, &ok),
-            None => ok,
-        });
-    }
-    guard
 }
 
 pub(crate) fn emit_typed_capture_guard(
@@ -531,6 +526,8 @@ pub(super) fn compile_closure(
         _ => return Err(anyhow!("compile_closure: expected Expr::Closure")),
     };
 
+    let private_resume_frame =
+        crate::expr::private_resume_frame::is_entry(llmod, module_prefix, func_id);
     // A LocalId is module-unique, but a closure can only observe ids referenced
     // or declared in its own body (plus its parameters/capture list). Older
     // code cloned the complete module-wide boxed/type/reassignment tables into
@@ -573,7 +570,11 @@ pub(super) fn compile_closure(
     closure_relevant_ids.extend(params.iter().map(|p| p.id));
     closure_relevant_ids.extend(captures.iter().copied());
 
-    let public_llvm_name = crate::fn_info::closure_body_symbol(module_prefix, func_id);
+    let public_llvm_name = if private_resume_frame {
+        crate::expr::private_resume_frame::symbol(module_prefix, func_id)
+    } else {
+        crate::fn_info::closure_body_symbol(module_prefix, func_id)
+    };
     let typed_public_trampoline = if cross_module.typed_f64_closures.contains(&func_id) {
         Some(TypedFunctionTrampolineKind::F64)
     } else if cross_module.typed_i32_closures.contains(&func_id) {
@@ -603,8 +604,7 @@ pub(super) fn compile_closure(
     // proven-unused first callback parameter for the caller's stack context,
     // so its ABI and register footprint stay identical to the ordinary
     // trusted clone.
-    let llvm_params =
-        crate::expr::body_call::js_body_params(params.iter().map(|p| format!("%arg{}", p.id)));
+    let llvm_params = crate::expr::private_resume_frame::abi_params(params, private_resume_frame);
 
     let ic_base = llmod.ic_counter;
     let buffer_alias_base = llmod.buffer_alias_counter;
@@ -729,7 +729,11 @@ pub(super) fn compile_closure(
                 .map(|(id, _)| *id),
         );
         for p in params {
-            let arg_name = format!("%arg{}", p.id);
+            let arg_name = if private_resume_frame && params.len() == 2 && p.id == params[0].id {
+                blk.sitofp(I32, "%frame_op", DOUBLE)
+            } else {
+                format!("%arg{}", p.id)
+            };
             // A closure region's Number parameter: an int32 box becomes the
             // equal plain double once, here (`split_regions`).
             let arg_name = if region_number_params.contains(&p.id) {
@@ -1190,6 +1194,7 @@ pub(super) fn compile_closure(
         class_hierarchy: &cross_module.class_hierarchy,
         wpfacts: cross_module.wpfacts.clone(),
         program_layouts: cross_module.program_layouts.clone(),
+        receiver_families: cross_module.receiver_families.clone(),
         wpfacts_sites: 0,
         wpfacts_tested: Vec::new(),
         wpfacts_off: false,
@@ -1295,6 +1300,7 @@ pub(super) fn compile_closure(
         resolved_versioned_loop_callback_targets: HashMap::new(),
         trusted_box_captures,
         fixed_generator_state,
+        private_resume_frame,
         versioned_loop_deopt_context,
         trusted_box_capture_ptrs,
         ready_cell_roots: crate::stmt::binding_cell::ReadyCellRoots::with_entry_cells(

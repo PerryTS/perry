@@ -110,9 +110,9 @@ pub(super) fn call(
     args: &List<'_>,
     memory: &MemoryBudget,
 ) -> Result<f64, EngineError> {
-    if crate::proxy::js_proxy_is_proxy(method.get_nanbox_f64()) == 1 {
+    if crate::proxy_hooks::proxy_is_proxy(method.get_nanbox_f64()) == 1 {
         return api::caught(|| {
-            crate::proxy::js_proxy_apply(
+            crate::proxy_hooks::proxy_apply(
                 method.get_nanbox_f64(),
                 receiver.get_nanbox_f64(),
                 args.value(),
