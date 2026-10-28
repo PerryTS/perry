@@ -21,13 +21,19 @@ def defined_symbols(library, darwin):
 def build_runtime(arguments, archive, library, darwin, real_cc):
     source = library.parent / "runtime-provider.rs"
     source.write_text("pub extern crate perry_runtime;\n")
+    metadata = Path(archive).with_suffix(".rmeta")
+    externs = ["--extern", "perry_runtime=" + archive]
+    # Current Cargo separates full metadata from the final-link rlib stub.
+    # Use the adjacent file selected by that exact artifact identity.
+    if metadata.is_file():
+        externs.extend(["--extern", "perry_runtime=" + str(metadata)])
     command = [
         os.environ.get("RUSTC", "rustc"), "--edition=2021",
         "--crate-name", "perry_provider_runtime", "--crate-type=dylib",
         "-C", "panic=abort", "-C", "opt-level=2", "-C", "codegen-units=16",
         "-C", "force-unwind-tables=yes", "-Z", "use-sync-unwind=yes",
         "-C", "linker=" + real_cc,
-        "--extern", "perry_runtime=" + archive, str(source), "-o", str(library),
+        *externs, str(source), "-o", str(library),
     ]
     # Cargo's artifact layout can put every dependency in a separate directory.
     # Resolve by the original crate metadata, never by a guessed archive glob.
