@@ -41,10 +41,10 @@
     "region::map",
     "region::unmap"
    ],
-   "why": "Non-Linux mapping extents, not object identities. region::register records each native map; region::unmap removes its start key before apple::unmap or allocator dealloc. arena/block.rs routes pool overflow, pool drain, allocation failure and TLS teardown through that release path. Pooled mappings remain live and listed across agent reuse. The source pins bind the registry and all production region allocation/release callers to this audit. WRT3a re-audit: current Linux reservation branch never uses REGIONS; non-Linux map/register and all block.rs release paths still remove the extent before physical unmap/dealloc. Reuse keeps live pooled maps registered.",
+   "why": "Non-Linux mapping extents, not object identities. region::register records each native map; region::unmap removes its start key before apple::unmap or allocator dealloc. arena/block.rs routes pool overflow, pool drain, allocation failure and TLS teardown through that release path. Pooled mappings remain live and listed across agent reuse. The source pins bind the registry and all production region allocation/release callers to this audit. WRT3a re-audit: current Linux reservation branch never uses REGIONS; non-Linux map/register and all block.rs release paths still remove the extent before physical unmap/dealloc. Reuse keeps live pooled maps registered. Release re-audit 2026-10-28: all four production block release paths still call region::unmap; non-Linux removes REGIONS before apple::unmap/dealloc, while pooling and test-only retained mappings stay registered.",
    "source_pins": {
     "crates/perry-runtime/src/arena/region.rs": "2ceff2f7604c6cfe55c49a8fadf832e31eef9d0c7d72d14bc2d9961ffa4d4469",
-    "crates/perry-runtime/src/arena/block.rs": "ee3f4358f6f719fab5b40f8d8cacfaf3664c8d74b3d39ffe524b68dfc84d05b8"
+    "crates/perry-runtime/src/arena/block.rs": "de1087ba37a313ad3f5d22c37fbc8a1788c344c871b948004a77526b18f46448"
    }
   },
   {
@@ -902,7 +902,7 @@
    "why": "Queue of Arc<AsyncWorkInner> (Rust-heap) whose env_address is the Rust Box of the owning thread's NODE_API_ENV and data/execute/complete are native addon pointers; drained only when work.owner == current ThreadId and env serial matches via with_env (async_work.rs:270-288, mod.rs:421-433), so no GC arena address and a dead owner's entries can never be dereferenced (ThreadIds are never reused)."
   },
   {
-   "file": "crates/perry-runtime/src/perf_hooks.rs",
+   "file": "crates/perry-runtime/src/perf_clock.rs",
    "names": [
     "PERF_CLOCK"
    ],
@@ -1806,7 +1806,7 @@
    "why": "Monotonic process-global counter minting dgram socket ids for the process-global LIVE table."
   },
   {
-   "file": "crates/perry-runtime/src/thread.rs",
+   "file": "crates/perry-runtime/src/thread_hook_slots.rs",
    "names": [
     "FS_THREAD_CODEC"
    ],
@@ -2316,13 +2316,14 @@
    "hook_file": "crates/perry-stdlib/src/worker_threads/worker_pump.rs"
   },
   {
-   "file": "crates/perry-runtime/src/dgram.rs",
+   "file": "crates/perry-runtime/src/dgram_registry_owner.rs",
    "names": [
     "DGRAM_REGISTRY"
    ],
    "verdict": "thread_exit_invalidated",
    "why": "(feature mod-dgram) Deterministic-mode map from bound address to a NaN-boxed socket object; bindings whose socket is freed are removed at thread exit.",
-   "hook": "release_dgram_bindings_in_freed_ranges"
+   "hook": "release_dgram_bindings_in_freed_ranges",
+   "hook_file": "crates/perry-runtime/src/dgram.rs"
   },
   {
    "file": "crates/perry-runtime/src/gc/idle_reclaim.rs",
@@ -3966,6 +3967,103 @@
    ],
    "verdict": "no_heap_address",
    "why": "OnceLock holds the immutable CoreFoundation/Security API: system-image function/data pointers and owned CFStrings allocated by CoreFoundation, never Perry arena cells. Api::load forgets both framework Image owners on success so their addresses stay mapped; cached Owned CFStrings have process lifetime. Per-operation keychain/trust values are not cached here."
+  },
+  {
+   "file": "crates/perry-runtime/src/bun_compat/self_global.rs",
+   "names": [
+    "KEY"
+   ],
+   "verdict": "per_thread",
+   "why": "Explicit HotKey descriptor replacing a macro-expanded per-thread declaration. HotKey holds a SlotId and resolver function; with/get resolves the calling thread's HotCell, whose guard retires its cache slot. The process-global descriptor does not contain the thread's value or arena address."
+  },
+  {
+   "file": "crates/perry-runtime/src/dyn_eval/function_owner.rs",
+   "names": [
+    "KEY"
+   ],
+   "verdict": "per_thread",
+   "why": "Explicit HotKey descriptor replacing a macro-expanded per-thread declaration. HotKey holds a SlotId and resolver function; with/get resolves the calling thread's HotCell, whose guard retires its cache slot. The process-global descriptor does not contain the thread's value or arena address."
+  },
+  {
+   "file": "crates/perry-runtime/src/fs/dir_glob_watch/watch_backend.rs",
+   "names": [
+    "KEY"
+   ],
+   "verdict": "per_thread",
+   "why": "Explicit HotKey descriptor replacing a macro-expanded per-thread declaration. HotKey holds a SlotId and resolver function; with/get resolves the calling thread's HotCell, whose guard retires its cache slot. The process-global descriptor does not contain the thread's value or arena address."
+  },
+  {
+   "file": "crates/perry-runtime/src/messaging.rs",
+   "names": [
+    "KEY"
+   ],
+   "verdict": "per_thread",
+   "why": "Explicit HotKey descriptor replacing a macro-expanded per-thread declaration. HotKey holds a SlotId and resolver function; with/get resolves the calling thread's HotCell, whose guard retires its cache slot. The process-global descriptor does not contain the thread's value or arena address."
+  },
+  {
+   "file": "crates/perry-runtime/src/node_api_host/loader.rs",
+   "names": [
+    "KEY"
+   ],
+   "verdict": "per_thread",
+   "why": "Explicit HotKey descriptor replacing a macro-expanded per-thread declaration. HotKey holds a SlotId and resolver function; with/get resolves the calling thread's HotCell, whose guard retires its cache slot. The process-global descriptor does not contain the thread's value or arena address."
+  },
+  {
+   "file": "crates/perry-runtime/src/node_api_host/metadata.rs",
+   "names": [
+    "KEY"
+   ],
+   "verdict": "per_thread",
+   "why": "Explicit HotKey descriptor replacing a macro-expanded per-thread declaration. HotKey holds a SlotId and resolver function; with/get resolves the calling thread's HotCell, whose guard retires its cache slot. The process-global descriptor does not contain the thread's value or arena address."
+  },
+  {
+   "file": "crates/perry-runtime/src/node_api_host/mod.rs",
+   "names": [
+    "KEY"
+   ],
+   "verdict": "per_thread",
+   "why": "Explicit HotKey descriptor replacing a macro-expanded per-thread declaration. HotKey holds a SlotId and resolver function; with/get resolves the calling thread's HotCell, whose guard retires its cache slot. The process-global descriptor does not contain the thread's value or arena address."
+  },
+  {
+   "file": "crates/perry-runtime/src/os/os_process_emitter.rs",
+   "names": [
+    "KEY"
+   ],
+   "verdict": "per_thread",
+   "why": "Explicit HotKey descriptor replacing a macro-expanded per-thread declaration. HotKey holds a SlotId and resolver function; with/get resolves the calling thread's HotCell, whose guard retires its cache slot. The process-global descriptor does not contain the thread's value or arena address."
+  },
+  {
+   "file": "crates/perry-runtime/src/perf_histogram.rs",
+   "names": [
+    "KEY"
+   ],
+   "verdict": "per_thread",
+   "why": "Explicit HotKey descriptor replacing a macro-expanded per-thread declaration. HotKey holds a SlotId and resolver function; with/get resolves the calling thread's HotCell, whose guard retires its cache slot. The process-global descriptor does not contain the thread's value or arena address."
+  },
+  {
+   "file": "crates/perry-runtime/src/component/value.rs",
+   "names": [
+    "NULL"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Immutable serde_json::Value::Null sentinel in member_type, not a Perry JSValue. No allocation or address is stored."
+  },
+  {
+   "file": "crates/perry-runtime/src/os/signal.rs",
+   "names": [
+    "WASI_PENDING",
+    "WASI_LISTENERS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Preview-1 signal delivery counters indexed by the fixed WASI_SIGNALS table. WASI_PENDING counts arrivals and WASI_LISTENERS counts listeners; callback values live in traced per-thread signal state, never in these atomics."
+  },
+  {
+   "file": "crates/perry-runtime/src/turnloop_pool/mod.rs",
+   "names": [
+    "OUTSTANDING"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Outstanding work count incremented on submit and decremented by OutstandingGuard at delivery. AtomicUsize contains only a job count, never a pointer."
   }
  ]
 }

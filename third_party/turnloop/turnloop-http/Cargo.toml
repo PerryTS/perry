@@ -162,7 +162,7 @@ features = ["wasi-p3-experimental"]
 optional = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies.zstd]
-version = "0.13"
+version = "0.14.3"
 default-features = false
 
 [target.'cfg(target_arch = "wasm32")'.dependencies.turnloop-zstd-decoder]

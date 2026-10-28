@@ -177,6 +177,7 @@ pub(super) fn emit_module_artifacts(
     }
     progress.checkpoint("reassigned-local analysis");
 
+    crate::expr::private_resume_frame::record_entries(llmod, hir, module_prefix);
     let closure_started = Instant::now();
     let closure_progress_step = (closures.len() / 20).max(1);
     for (closure_index, (func_id, closure_expr)) in closures.iter().enumerate() {
