@@ -67,6 +67,7 @@ fn decode_registered(slot: Option<&[u8]>) -> Option<String> {
 
 /// Consume a validated view while its registry owner is locked. The caller
 /// chooses whether the result needs owned bytes; presence checks do not.
+#[inline(always)]
 fn decode_registered_with<R>(slot: Option<&[u8]>, read: impl FnOnce(&str) -> R) -> Option<R> {
     decode_registered_bytes(slot?).map(read)
 }

@@ -363,3 +363,112 @@ fn specialized_byte_stores_inside_transparent_hir_blocks_use_the_same_region() {
     );
     assert!(text.contains("indexed.owner.fast"));
 }
+
+fn string_code(index: Expr) -> Expr {
+    Expr::Call {
+        callee: Box::new(Expr::PropertyGet {
+            object: Box::new(get(1)),
+            property: "charCodeAt".into(),
+            byte_offset: 0,
+        }),
+        args: vec![index],
+        type_args: vec![],
+        byte_offset: 0,
+    }
+}
+
+#[test]
+fn numeric_string_region_admits_conditional_scalar_updates_and_keeps_all_exits() {
+    let body = vec![
+        let_(4, string_code(get(3)), false),
+        Stmt::If {
+            condition: Expr::Compare {
+                op: CompareOp::Eq,
+                left: Box::new(get(4)),
+                right: Box::new(Expr::Integer(59)),
+            },
+            then_branch: vec![Stmt::Expr(Expr::Update {
+                id: 2,
+                op: UpdateOp::Increment,
+                prefix: false,
+            })],
+            else_branch: Some(vec![Stmt::Expr(Expr::LocalSet(
+                2,
+                Box::new(bin(BinaryOp::Sub, get(2), Expr::Integer(1))),
+            ))]),
+        },
+    ];
+    let ir = ir("string", body);
+    assert!(ir.contains("indexed.string.storage"), "{ir}");
+    assert!(ir.contains("indexed.owner.if.end"), "{ir}");
+    assert!(ir.contains("indexed.owner.slow"), "{ir}");
+    let first_poll = ir
+        .find("call void @js_gc_loop_safepoint()")
+        .expect("pending GC work must be serviced before string admission");
+    let storage = ir.find("indexed.string.heap").unwrap();
+    assert!(
+        first_poll < storage,
+        "the entry poll must precede raw string storage admission: {ir}"
+    );
+    let fast = ir
+        .split("\nindexed.owner.fast.")
+        .nth(1)
+        .unwrap()
+        .split("\nindexed.owner.exit.")
+        .next()
+        .unwrap();
+    assert!(
+        !fast.contains("call "),
+        "raw storage stays call-free: {fast}"
+    );
+    assert!(
+        ir.contains("PERRY_AGENT_PTRS"),
+        "prototype authority must dominate admission: {ir}"
+    );
+    assert!(
+        ir.contains("and i32") && ir.contains(", 4"),
+        "raw byte provenance must be validated: {ir}"
+    );
+}
+
+#[test]
+fn string_region_rejects_rebinding_and_calls_before_any_body_effect() {
+    for body in [
+        vec![
+            Stmt::If {
+                condition: Expr::Compare {
+                    op: CompareOp::Eq,
+                    left: Box::new(string_code(get(3))),
+                    right: Box::new(Expr::Integer(59)),
+                },
+                then_branch: vec![Stmt::Expr(Expr::LocalSet(4, Box::new(Expr::Integer(1))))],
+                else_branch: None,
+            },
+            let_(4, Expr::Integer(0), true),
+        ],
+        vec![
+            Stmt::Expr(Expr::LocalSet(1, Box::new(Expr::Integer(4)))),
+            Stmt::Expr(string_code(get(3))),
+        ],
+        vec![
+            Stmt::Expr(string_code(get(3))),
+            Stmt::Expr(Expr::Call {
+                callee: Box::new(get(2)),
+                args: vec![],
+                type_args: vec![],
+                byte_offset: 0,
+            }),
+        ],
+        vec![Stmt::If {
+            condition: Expr::Compare {
+                op: CompareOp::Gt,
+                left: Box::new(string_code(get(3))),
+                right: Box::new(Expr::Integer(0)),
+            },
+            then_branch: vec![let_(4, Expr::Integer(1), false)],
+            else_branch: None,
+        }],
+    ] {
+        assert!(!ir("string", body).contains("indexed.string.storage"));
+    }
+}
