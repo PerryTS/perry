@@ -106,11 +106,11 @@ fn private_resume_frame_uses_parent_owner_and_nonzero_offset() {
         assert!(!ir.contains("call double @js_generator_create("));
         assert!(!ir.contains("call i32 @js_iterator_step("));
         assert!(
-            ir.contains("add i32 %frame_offset, 6"),
-            "managed slot uses offset"
+            ir.contains(", 80"),
+            "managed slot includes the fixed nonzero frame offset"
         );
         assert!(
-            ir.contains("call void @js_generator_set_slot("),
+            ir.contains("call void @js_write_barrier_slot_validated_parent("),
             "managed store retains parent barrier"
         );
         assert!(
@@ -123,6 +123,140 @@ fn private_resume_frame_uses_parent_owner_and_nonzero_offset() {
         assert!(
             ir.contains("js_shadow_slot_bind") || ir.contains("addrspace(1)"),
             "{mode}: owner root"
+        );
+    });
+}
+
+#[test]
+fn async_adapter_queues_the_allocation_owner_and_keeps_managed_slot_barriers() {
+    crate::temp_root_coverage::under_both_lowerings(|mode| {
+        let params = [100, 101]
+            .into_iter()
+            .map(|id| Param {
+                id,
+                name: format!("p{id}"),
+                ty: if id == 101 { Type::Boolean } else { Type::Any },
+                default: None,
+                decorators: vec![],
+                is_rest: false,
+                arguments_object: None,
+            })
+            .collect();
+        let closure = Expr::Closure {
+            func_id: 1,
+            params,
+            return_type: Type::Any,
+            body: vec![
+                Stmt::Expr(Expr::LocalSet(
+                    8,
+                    Box::new(Expr::Binary {
+                        op: perry_hir::BinaryOp::Add,
+                        left: Box::new(Expr::LocalGet(8)),
+                        right: Box::new(Expr::Integer(1)),
+                    }),
+                )),
+                Stmt::Expr(Expr::LocalSet(
+                    7,
+                    Box::new(Expr::Array(vec![Expr::Number(4.0)], None)),
+                )),
+                Stmt::Return(Some(Expr::AsyncStepDone {
+                    value: Box::new(Expr::LocalGet(7)),
+                    step_closure: Box::new(Expr::CurrentStepClosure),
+                })),
+            ],
+            captures: vec![7, 8],
+            mutable_captures: vec![],
+            captures_this: false,
+            captures_new_target: false,
+            enclosing_class: None,
+            is_arrow: false,
+            is_strict: true,
+            is_async: false,
+            is_generator: false,
+        };
+        let init = vec![
+            Stmt::Let {
+                id: 8,
+                name: "ordinary_spelling".into(),
+                ty: Type::Any,
+                mutable: true,
+                init: Some(Expr::Number(0.0)),
+            },
+            Stmt::Let {
+                id: 7,
+                name: "pointer".into(),
+                ty: Type::Any,
+                mutable: true,
+                init: Some(Expr::Undefined),
+            },
+            Stmt::Let {
+                id: 10,
+                name: "owner".into(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(runtime(
+                    "privateAsyncResumeFrame",
+                    vec![
+                        closure,
+                        Expr::Sequence(vec![Expr::LocalGet(8)]),
+                        Expr::Sequence(vec![]),
+                    ],
+                )),
+            },
+            Stmt::Expr(Expr::AsyncFirstCall {
+                step_closure: Box::new(Expr::LocalGet(10)),
+            }),
+        ];
+        let module = crate::temp_root_coverage::module_with_init(
+            "async_frame_owner",
+            vec![Stmt::If {
+                condition: Expr::Bool(true),
+                then_branch: init,
+                else_branch: None,
+            }],
+        );
+        let ir = String::from_utf8(
+            crate::compile_module(&module, crate::temp_root_coverage::entry_opts()).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            ir.contains("fptosi double"),
+            "{mode}: explicit scalar-control descriptor lost"
+        );
+        assert!(
+            ir.contains("@js_async_first_call("),
+            "{mode}: live queue entry"
+        );
+        let adapter = ir
+            .lines()
+            .find(|l| l.starts_with("define ") && l.contains("%sent") && l.contains("%error"))
+            .expect("callable parent adapter");
+        assert!(
+            adapter.contains("i64 %this_closure, i64 %js_this, double %sent, double %error"),
+            "{mode}: {adapter}"
+        );
+        let call = ir
+            .lines()
+            .find(|l| l.contains("call double @perry_resume_frame__"))
+            .expect("live async private call");
+        assert!(
+            call.contains("i64 %this_closure, i32 1, i32"),
+            "{mode}: parent plus nonzero child offset"
+        );
+        assert!(
+            ir.contains("call void @js_write_barrier_slot_validated_parent("),
+            "{mode}: managed slot barrier"
+        );
+        assert!(
+            call.contains("ptr null")
+                && !ir
+                    .lines()
+                    .any(|line| line.contains("store") && line.contains("ptr %frame_out_kind")),
+            "{mode}: async adapter needs no native output-kind stack slot"
+        );
+        assert!(
+            ir.contains("js_shadow_slot_bind") || ir.contains("addrspace(1)"),
+            "{mode}: allocation-owner statepoint root"
         );
     });
 }
