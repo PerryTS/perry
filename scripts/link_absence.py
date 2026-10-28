@@ -38,6 +38,7 @@ NEGATIVES = {
     "named_fs_constants": ["node_stream"],
     "named_util_types": [],
     "named_events_constructor": [],
+    "events_without_process_hooks": [],
     "without_json": ["global_json", "json_tape"],
     "bun_file_without_json": ["global_json", "json_tape"],
     "without_turnloop_net": ["turnloop_net"],
