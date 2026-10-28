@@ -3,6 +3,7 @@ name = "issue-8075-stdlib-provider"
 version = "0.0.0"
 edition = "2021"
 publish = false
+build = "build.rs"
 
 [lib]
 name = "issue_8075_stdlib"
