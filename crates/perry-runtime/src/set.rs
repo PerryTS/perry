@@ -866,8 +866,8 @@ pub(crate) unsafe fn compact_if_holey_set(set: *mut SetHeader) {
 /// number against the elements by bit identity. `elements[0..used)` is exactly
 /// the membership (`delete` compacts, `add` normalises `-0`), and no tagged
 /// value equals a number, so a bit match is a hit and a full scan is a miss.
-/// Everything else — larger sets, tagged / zero / NaN values, every string —
-/// is [`find_value_index_cold`]'s, using a small scan or the owner-local index.
+/// Larger sets probe the existing index directly for an admitted Number.
+/// Tagged / zero / NaN values and every string keep the general cold path.
 #[inline(always)]
 unsafe fn find_value_index_hot(set: *const SetHeader, value: f64) -> Option<i32> {
     let bits = value.to_bits();
@@ -876,7 +876,11 @@ unsafe fn find_value_index_hot(set: *const SetHeader, value: f64) -> Option<i32>
     }
     let used = (*set).used;
     if used > SMALL_SET_SCAN_MAX {
-        return None;
+        // An untagged legacy pointer needs the ordinary identity hash.
+        if bits >> 48 == 0 {
+            return None;
+        }
+        return Some(index::lookup_plain_number(set, bits));
     }
     let elements = elements_ptr(set);
     for i in 0..used {
