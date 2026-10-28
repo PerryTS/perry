@@ -644,6 +644,22 @@ pub(super) fn compile_module_init(
         }
     }
     init_static_fields_early(&mut ctx, hir)?;
+    // Self-importing modules populate before the body, not at the tail below
+    // — see `CompileOptions::namespace_self_import`.
+    let self_namespace_populated = cross_module.namespace_self_import
+        && (!cross_module.namespace_entries.is_empty()
+            || cross_module.is_dynamic_import_target)
+        && !ctx.block().is_terminated();
+    if self_namespace_populated {
+        emit_namespace_populator(
+            &mut ctx,
+            &cross_module.namespace_entries,
+            namespace_key_globals,
+            module_prefix,
+            output_type,
+            cross_module.namespace_adopts_cjs_exports,
+        );
+    }
     stmt::lower_top_level_stmts(&mut ctx, &hir.init)
         .with_context(|| format!("lowering init statements of module '{}'", hir.name))?;
     init_static_fields_late(&mut ctx, hir)?;
@@ -661,7 +677,8 @@ pub(super) fn compile_module_init(
     // is a target). The populator emits `js_create_namespace(0, ...)`
     // → an empty NaN-boxed object → stored into `@__perry_ns_<prefix>`,
     // satisfying the consumer-side extern reference.
-    if (!cross_module.namespace_entries.is_empty() || cross_module.is_dynamic_import_target)
+    if !self_namespace_populated
+        && (!cross_module.namespace_entries.is_empty() || cross_module.is_dynamic_import_target)
         && !ctx.block().is_terminated()
     {
         emit_namespace_populator(

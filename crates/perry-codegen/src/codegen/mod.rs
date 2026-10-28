@@ -3353,6 +3353,7 @@ fn lower_module(
         deferred_module_prefixes: opts.deferred_module_prefixes.clone(),
         module_init_deps: opts.module_init_deps.clone(),
         is_dynamic_import_target: opts.is_dynamic_import_target,
+        namespace_self_import: opts.namespace_self_import,
         namespace_adopts_cjs_exports: opts.namespace_adopts_cjs_exports,
     };
 

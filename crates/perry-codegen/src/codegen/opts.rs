@@ -583,6 +583,12 @@ pub struct CompileOptions {
     /// Without this, side-effect-only dynamic-import targets fail at
     /// link with `Undefined symbols: ___perry_ns_<prefix>`.
     pub is_dynamic_import_target: bool,
+    /// A module that namespace-imports ITSELF (`import * as Mod from
+    /// "./this-module.js"`). Its `@__perry_ns_<prefix>` populator runs before
+    /// the top-level body rather than after it, since the body is itself a
+    /// consumer of the namespace. Entries are getter-backed, so building the
+    /// object early keeps bindings live.
+    pub namespace_self_import: bool,
     /// This module is CommonJS compiled for `--platform bun`: its namespace
     /// also carries every own enumerable key of the evaluated
     /// `module.exports` (Bun interop), built by `js_create_cjs_namespace`.
@@ -1476,6 +1482,8 @@ pub(crate) struct CrossModuleCtx<'a> {
     /// `@__perry_ns_<prefix>` + populator even when `namespace_entries`
     /// is empty (side-effect-only modules with no `export`s).
     pub is_dynamic_import_target: bool,
+    /// See doc on `CompileOptions::namespace_self_import`.
+    pub namespace_self_import: bool,
     /// This module is CommonJS compiled for `--platform bun`: its namespace
     /// also carries every own enumerable key of the evaluated
     /// `module.exports` (Bun interop), built by `js_create_cjs_namespace`.

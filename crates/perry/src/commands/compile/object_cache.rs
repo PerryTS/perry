@@ -577,6 +577,12 @@ fn compute_object_cache_key_with_env(
             "0"
         },
     );
+    // The flag moves the namespace populator from the tail of `__init` to
+    // before the body, so it changes the emitted IR and must key the cache.
+    h.field(
+        "self_ns",
+        if opts.namespace_self_import { "1" } else { "0" },
+    );
     {
         let mut v: Vec<&String> = opts.js_module_specifiers.iter().collect();
         v.sort();

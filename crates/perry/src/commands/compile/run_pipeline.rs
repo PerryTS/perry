@@ -3135,6 +3135,30 @@ pub fn run_with_parse_cache(
         }
     }
 
+    // A self-importing module needs its own `@__perry_ns_<prefix>` emitted,
+    // which is what membership in `dyn_target_paths` buys it. Per-member reads
+    // (`Mod.f()`) resolved to this module's own symbols and always worked; only
+    // a whole-namespace read loaded the never-emitted global as `undefined`.
+    let mut self_namespace_paths: HashSet<PathBuf> = HashSet::new();
+    for (path, hir_module) in &ctx.native_modules {
+        let self_namespace_import = hir_module.imports.iter().any(|import| {
+            !import.type_only
+                && !import.runtime_erased
+                && import
+                    .specifiers
+                    .iter()
+                    .any(|spec| matches!(spec, perry_hir::ImportSpecifier::Namespace { .. }))
+                && import
+                    .resolved_path
+                    .as_deref()
+                    .is_some_and(|resolved| Path::new(resolved) == path.as_path())
+        });
+        if self_namespace_import {
+            dyn_target_paths.insert(path.clone());
+            self_namespace_paths.insert(path.clone());
+        }
+    }
+
     // Per-module precomputed namespace_entries (keyed by path).
     let mut per_module_namespace_entries: HashMap<PathBuf, Vec<perry_codegen::NamespaceEntry>> =
         HashMap::new();
@@ -6253,6 +6277,7 @@ pub fn run_with_parse_cache(
             // alone is insufficient because it's empty when the
             // target has no `export` statements.
             is_dynamic_import_target: dyn_target_paths.contains(path),
+            namespace_self_import: self_namespace_paths.contains(path),
             namespace_adopts_cjs_exports: cjs_namespace_paths.contains(path),
             // #5247: source-location tracking for the dynamic call-dispatch
             // throw path. Gated by `--debug-symbols` so the default build is

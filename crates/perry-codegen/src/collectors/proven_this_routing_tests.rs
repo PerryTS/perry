@@ -102,6 +102,7 @@ fn ir_opts(is_entry: bool) -> CompileOptions {
         deferred_module_prefixes: Default::default(),
         module_init_deps: Vec::new(),
         is_dynamic_import_target: false,
+        namespace_self_import: false,
         namespace_adopts_cjs_exports: false,
         debug_locations: false,
         module_source: None,
