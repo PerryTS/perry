@@ -115,8 +115,8 @@ fn define_host_property(
 /// a recognised byte buffer.
 fn extract_bytes(jsval: f64) -> Option<Vec<u8>> {
     let addr = unbox_pointer(jsval) as usize;
-    if let Some(kind) = crate::typedarray::lookup_typed_array_kind(addr) {
-        if crate::typedarray::elem_size_for_kind(kind) != 1 {
+    if let Some(kind) = crate::typedarray_hook_slots::lookup_typed_array_kind(addr) {
+        if crate::typedarray_hook_slots::elem_size_for_kind(kind) != 1 {
             return None;
         }
     } else if !crate::buffer::is_registered_buffer(addr) {
@@ -895,7 +895,7 @@ unsafe extern "C" fn call_wasm_import(
     } else {
         std::slice::from_raw_parts(arg_bits, arg_count)
     };
-    if let Some(errno) = crate::wasi::call_import(
+    if let Some(errno) = crate::wasi_hook_slots::call_import(
         callback.get_nanbox_f64(),
         kinds,
         bits,
@@ -941,8 +941,8 @@ unsafe extern "C" fn call_wasm_import(
         Ok(result) => result,
         Err(error) => {
             record_import_exception(error);
-            if crate::wasi::is_exit_marker(error) {
-                if let Some(code) = crate::wasi::pending_exit_code() {
+            if crate::wasi_hook_slots::is_exit_marker(error) {
+                if let Some(code) = crate::wasi_hook_slots::pending_exit_code() {
                     *result_bits = code as u32 as u64;
                     return perry_abi::wasi::IMPORT_EXIT;
                 }

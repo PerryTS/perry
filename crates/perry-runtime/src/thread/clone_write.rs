@@ -479,7 +479,7 @@ impl Writer<'_> {
         if crate::buffer::is_registered_buffer(addr) || crate::buffer::is_uint8array_buffer(addr) {
             return self.buffer(addr);
         }
-        if let Some(kind) = crate::typedarray::lookup_typed_array_kind(addr) {
+        if let Some(kind) = crate::typedarray_hook_slots::lookup_typed_array_kind(addr) {
             return self.typed_array(addr, kind);
         }
         let Some(header) = crate::value::addr_class::try_read_gc_header(addr) else {
@@ -769,9 +769,13 @@ impl Writer<'_> {
         // outside the heap; a copy would be an empty `{}` (#6185).
         let obj = addr as *const crate::object::ObjectHeader;
         let class_id = (*obj).class_id;
-        if let Some(name) = crate::event_target::native_class_name(class_id).or_else(|| {
-            crate::event_target::state::transfer_family(addr as *mut crate::object::ObjectHeader)
-        }) {
+        if let Some(name) =
+            crate::event_target_hook_slots::native_class_name(class_id).or_else(|| {
+                crate::event_target_hook_slots::state_transfer_family(
+                    addr as *mut crate::object::ObjectHeader,
+                )
+            })
+        {
             return SerializedValue::Unsupported(name);
         }
         if crate::native_class_ids::is_native_backed_class_id(class_id) {
@@ -1210,11 +1214,11 @@ impl Writer<'_> {
         let kind = if crate::buffer::is_data_view(addr) {
             VIEW_KIND_DATA_VIEW
         } else {
-            crate::typedarray::KIND_UINT8
+            crate::typedarray_hook_slots::KIND_UINT8
         };
         let length = crate::buffer::store::raw_length(header as usize);
         if self.mode == CloneMode::Thread {
-            if kind == crate::typedarray::KIND_UINT8 {
+            if kind == crate::typedarray_hook_slots::KIND_UINT8 {
                 // Keep perry/thread's plain-bytes form: no backing copy.
                 if let Err(seen) = self.begin(Some(addr)) {
                     return seen;
@@ -1250,7 +1254,7 @@ impl Writer<'_> {
             return SerializedValue::Unsupported("detached ArrayBuffer");
         }
         if self.mode == CloneMode::Thread {
-            let bytes = length * crate::typedarray::elem_size_for_kind(kind) as u32;
+            let bytes = length * crate::typedarray_hook_slots::elem_size_for_kind(kind) as u32;
             return self.visible_bytes_view(addr, kind, bytes);
         }
         if let Err(seen) = self.begin(Some(addr)) {
@@ -1285,7 +1289,7 @@ impl Writer<'_> {
         let elem = if kind == VIEW_KIND_DATA_VIEW {
             1
         } else {
-            crate::typedarray::elem_size_for_kind(kind) as u32
+            crate::typedarray_hook_slots::elem_size_for_kind(kind) as u32
         };
         SerializedValue::View {
             kind,
@@ -1377,7 +1381,7 @@ impl Writer<'_> {
     #[optimize(size)]
     unsafe fn error(&mut self, bits: u64, addr: usize) -> SerializedValue {
         let err = addr as *const crate::error::ErrorHeader;
-        if crate::event_target::is_dom_exception_error(err) {
+        if crate::event_target_hook_slots::is_dom_exception_error(err) {
             return SerializedValue::Unsupported("DOMException");
         }
         // The stack text is formatted on first read, which allocates.

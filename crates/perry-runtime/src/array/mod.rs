@@ -83,6 +83,7 @@ pub use storage::array_elements_ptr;
 pub(crate) use storage::{array_front_offset, array_physical_capacity, array_truncate_length};
 mod subclass;
 pub(crate) mod subclass_elements;
+pub(crate) mod subclass_init;
 
 #[cfg(test)]
 mod callback_rooting_tests;
@@ -383,3 +384,6 @@ pub(crate) use iterator_method::array_shape_iterator;
 pub(crate) use iterator_step::js_array_record_iterator_at;
 #[cfg(test)]
 mod fill_descriptor_tests;
+
+mod refresh_head;
+pub use refresh_head::js_array_refresh_local_head;

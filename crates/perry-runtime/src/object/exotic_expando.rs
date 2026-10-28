@@ -520,7 +520,7 @@ mod tests {
         let set = crate::set::js_set_alloc(4) as usize;
         let error = crate::error::js_error_new() as usize;
         let promise = crate::promise::js_promise_new() as usize;
-        let date = crate::date::js_date_new();
+        let date = crate::date_hook_slots::js_date_new();
         assert!(exotic_expando_kind(map) == Some(ExoticKind::Map));
         assert!(exotic_expando_kind(set) == Some(ExoticKind::Set));
         assert!(exotic_expando_kind(error) == Some(ExoticKind::Error));

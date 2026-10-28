@@ -269,7 +269,7 @@ struct WorkerRecord {
     alive: bool,
     refed: bool,
     terminate_promise: Option<usize>,
-    async_resources: [perry_runtime::async_hooks::AsyncResourceIds; 3],
+    async_resources: [perry_runtime::async_hook_slots::AsyncResourceIds; 3],
     async_resource_bits: [u64; 3],
 }
 
@@ -513,7 +513,7 @@ pub(crate) mod thread_exit_probe {
             alive: false,
             refed: false,
             terminate_promise: None,
-            async_resources: [perry_runtime::async_hooks::AsyncResourceIds {
+            async_resources: [perry_runtime::async_hook_slots::AsyncResourceIds {
                 async_id: 0,
                 trigger_async_id: 0,
             }; 3],
@@ -953,7 +953,7 @@ fn throw_invalid_state_error(detail: &str) -> ! {
 fn throw_dom_exception(name: &str, detail: &str) -> ! {
     let message = string_value(detail);
     let name = string_value(name);
-    let err = perry_runtime::event_target::js_dom_exception_new(message, name);
+    let err = perry_runtime::event_target_hook_slots::js_dom_exception_new(message, name);
     perry_runtime::exception::js_throw(f64::from_bits(JSValue::pointer(err as *const u8).bits()))
 }
 
@@ -1436,7 +1436,7 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
     let termination = sender.termination.clone();
     let worker_obj = worker_object(worker_id, &options_state);
     let resource_scope = perry_runtime::gc::RuntimeHandleScope::new();
-    let mut async_resources = [perry_runtime::async_hooks::AsyncResourceIds {
+    let mut async_resources = [perry_runtime::async_hook_slots::AsyncResourceIds {
         async_id: 0,
         trigger_async_id: 0,
     }; 3];
@@ -1448,7 +1448,7 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
         let resource = perry_runtime::object::js_object_alloc_null_proto(0, 0);
         let resource_handle = resource_scope
             .root_nanbox_f64(perry_runtime::value::js_nanbox_pointer(resource as i64));
-        async_resources[index] = perry_runtime::async_hooks::init_resource(
+        async_resources[index] = perry_runtime::async_hook_slots::init_resource(
             type_name,
             resource_handle.get_nanbox_f64(),
             true,

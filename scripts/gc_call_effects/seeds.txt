@@ -11,6 +11,8 @@
 # nothing (renamed, inlined away) seeds nothing, and every verdict computed
 # from it would be vacuous. Exemptions (indirect, extern) may be target-specific
 # and are reported, not failed, when they match nothing.
+# An active indirect delegation with no matching callback target is an error:
+# trusting an empty target set would silently turn the indirect call into Leaf.
 #
 # Seeds are deliberately layered: an entry point AND the root-reading
 # chokepoint below it. Inlining may erase one symbol from a path, never both.
@@ -226,4 +228,489 @@ indirect regex ^perry_runtime::gc::full_trace:: -- the full-trace fetch hook (au
 indirect regex ^perry_runtime::feature_hooks::run_feature_installer$ => regex ^js_runtime_install_ -- js_gc_init runs the installer registered by js_runtime_register_feature_installer. The only registration is the static constructor perry_codegen::stubs::generate_feature_installer_object emits, and the installer it registers is a generated function that only calls js_runtime_install_* entry points (made callees here; the forbid rule below keeps archive code from registering anything else)
 indirect regex ^js_segments_view_next$ => regex ^perry_runtime::intl::segmenter::next_grapheme_boundary_impl$ -- the segments-view cursor (ink's per-grapheme loop) finds the next boundary through the `intl-segmenter` slot; the only function that slot can hold is next_grapheme_boundary_impl (set by `intl::segmenter::install`, which is the slot's only writer), a pure unicode-segmentation cursor step. Without this delegation the slot's indirect call would turn a Leaf hot path into Reenters
 indirect regex ^js_node_submod_install_all$ => regex ^perry_runtime::node_submodules::install_test_buckets$ -- install-all adds the node:test buckets through the `mod-node-test` slot; the only function that slot can hold is install_test_buckets (set by `node_submodules::install_node_test`, the slot's only writer), which stores two static spec pointers
+# HWS2 BigInt slots: each target is a real graph edge, never a Leaf cut.
+indirect regex ^js_is_truthy$ => exact js_bigint_is_zero -- its only new indirect call reads the private JS_BIGINT_IS_ZERO slot, whose sole writer bigint_hooks::install installs js_bigint_is_zero; ordinary value truthiness runs no callbacks
+indirect regex ^js_jsvalue_(equals|loose_equals)$ => exact js_bigint_eq -- equality reads the private JS_BIGINT_EQ slot installed only by bigint_hooks::install; the delegate is the exact integer equality implementation, so a future collecting target changes the derived class
+indirect regex ^js_jsvalue_compare$ => regex ^js_bigint_(cmp|to_f64)$ -- numeric comparison reads only JS_BIGINT_CMP and JS_BIGINT_TO_F64 from bigint_hooks::install; both callbacks stay graph callees rather than being declared noncollecting here
+indirect regex ^perry_runtime::map::jsvalue_eq$ => exact js_bigint_eq -- SameValueZero for a BigInt key reads only the private JS_BIGINT_EQ slot; its sole writer bigint_hooks::install supplies js_bigint_eq, and ordinary Map keys invoke no callbacks
+indirect regex ^perry_runtime::bigint_hooks::(bigint_cmp_f64|js_bigint_(cmp|eq|is_zero|is_negative|to_f64|to_buffer))$ => regex ^js_bigint_(cmp|eq|is_zero|is_negative|to_f64|to_buffer)$|^perry_runtime::bigint::compare::bigint_cmp_f64$ -- these private typed slots have only the corresponding targets assigned in bigint_hooks::install; their union conservatively lets every actual callback determine the wrapper effect
+# Stream-carrier reads inline into these public payload/layout probes. The
+# only indirect operation is RECORD_PAYLOAD_CELL; registration is private.
+indirect regex ^js_perry_payload_(external_bytes|has_attached|lifecycle|owner_link|project|receiver_link|reopen)$|^js_node_http_response_layout_receiver$ => regex ^perry_runtime::node_stream::state_record::record_payload_cell$ -- payload_cell_of_word follows a stream record through the private RECORD_PAYLOAD_CELL slot; stream_hooks::install is its sole writer and installs node_stream::record_payload_cell, a graph callee here
+indirect regex ^perry_runtime::stream_hooks::record_payload_cell$|^perry_runtime::native_payload_abi::family_cell$ => regex ^perry_runtime::node_stream::state_record::record_payload_cell$ -- this private carrier slot is assigned only node_stream::record_payload_cell in stream_hooks::install; retaining its real graph edge preserves the callback effect
+indirect regex ^js_perry_agent_post_available$|^perry_runtime::event_pump::loop_hooks::has_route$ => regex ^perry_runtime::event_pump::agent_loop::has_route$ -- the private HAS_ROUTE slot is assigned only agent_loop::has_route by loop_hooks::install; availability reads the route without running a turn, and its exact callback determines the effect
 forbid exact js_runtime_register_feature_installer -- the run_feature_installer delegation assumes the generated link-step object is the only registrant
+
+# URL slots preserve their real callback effects.
+indirect exact perry_runtime::url_hooks::file_url_to_path_bytes => exact perry_runtime::url::node_compat::file_url_to_path_bytes -- the private FILE_URL_TO_PATH_BYTES slot is filled only by the selected URL installer; follow its actual callback rather than claiming a Leaf cut
+indirect exact perry_runtime::url_hooks::file_url_to_path_string_posix => exact perry_runtime::url::node_compat::file_url_to_path_string_posix -- the private FILE_URL_TO_PATH_STRING_POSIX slot is filled only by the selected URL installer; follow its actual callback rather than claiming a Leaf cut
+indirect exact perry_runtime::url_hooks::install_url_prototype_accessors => exact perry_runtime::url::prototype::install_url_prototype_accessors -- the private INSTALL_URL_PROTOTYPE_ACCESSORS slot is filled only by the selected URL installer; follow its actual callback rather than claiming a Leaf cut
+indirect exact perry_runtime::url_hooks::url_can_parse => exact js_url_can_parse -- the private JS_URL_CAN_PARSE slot is filled only by the selected URL installer; follow its actual callback rather than claiming a Leaf cut
+indirect exact perry_runtime::url_hooks::url_can_parse_with_base => exact js_url_can_parse_with_base -- the private JS_URL_CAN_PARSE_WITH_BASE slot is filled only by the selected URL installer; follow its actual callback rather than claiming a Leaf cut
+indirect exact perry_runtime::url_hooks::url_coerce_string => exact js_url_coerce_string -- the private JS_URL_COERCE_STRING slot is filled only by the selected URL installer; follow its actual callback rather than claiming a Leaf cut
+indirect exact perry_runtime::url_hooks::url_domain_to_ascii => exact js_url_domain_to_ascii -- the private JS_URL_DOMAIN_TO_ASCII slot is filled only by the selected URL installer; follow its actual callback rather than claiming a Leaf cut
+indirect exact perry_runtime::url_hooks::url_domain_to_unicode => exact js_url_domain_to_unicode -- the private JS_URL_DOMAIN_TO_UNICODE slot is filled only by the selected URL installer; follow its actual callback rather than claiming a Leaf cut
+indirect exact perry_runtime::url_hooks::url_file_url_to_path => exact js_url_file_url_to_path -- the private JS_URL_FILE_URL_TO_PATH slot is filled only by the selected URL installer; follow its actual callback rather than claiming a Leaf cut
+indirect exact perry_runtime::url_hooks::url_file_url_to_path_buffer => exact js_url_file_url_to_path_buffer -- the private JS_URL_FILE_URL_TO_PATH_BUFFER slot is filled only by the selected URL installer; follow its actual callback rather than claiming a Leaf cut
+indirect exact perry_runtime::url_hooks::url_format => exact js_url_format -- the private JS_URL_FORMAT slot is filled only by the selected URL installer; follow its actual callback rather than claiming a Leaf cut
+indirect exact perry_runtime::url_hooks::url_get_href => exact js_url_get_href -- the private JS_URL_GET_HREF slot is filled only by the selected URL installer; follow its actual callback rather than claiming a Leaf cut
+indirect exact perry_runtime::url_hooks::url_href_if_url => exact js_url_href_if_url -- the private JS_URL_HREF_IF_URL slot is filled only by the selected URL installer; follow its actual callback rather than claiming a Leaf cut
+indirect exact perry_runtime::url_hooks::url_legacy_parse => exact js_url_legacy_parse -- the private JS_URL_LEGACY_PARSE slot is filled only by the selected URL installer; follow its actual callback rather than claiming a Leaf cut
+indirect exact perry_runtime::url_hooks::url_legacy_resolve => exact js_url_legacy_resolve -- the private JS_URL_LEGACY_RESOLVE slot is filled only by the selected URL installer; follow its actual callback rather than claiming a Leaf cut
+indirect exact perry_runtime::url_hooks::url_legacy_resolve_object => exact js_url_legacy_resolve_object -- the private JS_URL_LEGACY_RESOLVE_OBJECT slot is filled only by the selected URL installer; follow its actual callback rather than claiming a Leaf cut
+indirect exact perry_runtime::url_hooks::url_legacy_url_new => exact js_url_legacy_url_new -- the private JS_URL_LEGACY_URL_NEW slot is filled only by the selected URL installer; follow its actual callback rather than claiming a Leaf cut
+indirect exact perry_runtime::url_hooks::url_new => exact js_url_new -- the private JS_URL_NEW slot is filled only by the selected URL installer; follow its actual callback rather than claiming a Leaf cut
+indirect exact perry_runtime::url_hooks::url_new_with_base => exact js_url_new_with_base -- the private JS_URL_NEW_WITH_BASE slot is filled only by the selected URL installer; follow its actual callback rather than claiming a Leaf cut
+indirect exact perry_runtime::url_hooks::url_parse => exact js_url_parse -- the private JS_URL_PARSE slot is filled only by the selected URL installer; follow its actual callback rather than claiming a Leaf cut
+indirect exact perry_runtime::url_hooks::url_parse_with_base => exact js_url_parse_with_base -- the private JS_URL_PARSE_WITH_BASE slot is filled only by the selected URL installer; follow its actual callback rather than claiming a Leaf cut
+indirect exact perry_runtime::url_hooks::url_path_to_file_url => exact js_url_path_to_file_url -- the private JS_URL_PATH_TO_FILE_URL slot is filled only by the selected URL installer; follow its actual callback rather than claiming a Leaf cut
+indirect exact perry_runtime::url_hooks::url_pattern_constructor_call => exact js_url_pattern_constructor_call -- the private JS_URL_PATTERN_CONSTRUCTOR_CALL slot is filled only by the selected URL installer; follow its actual callback rather than claiming a Leaf cut
+indirect exact perry_runtime::url_hooks::url_pattern_exec => exact js_url_pattern_exec -- the private JS_URL_PATTERN_EXEC slot is filled only by the selected URL installer; follow its actual callback rather than claiming a Leaf cut
+indirect exact perry_runtime::url_hooks::url_pattern_test => exact js_url_pattern_test -- the private JS_URL_PATTERN_TEST slot is filled only by the selected URL installer; follow its actual callback rather than claiming a Leaf cut
+indirect exact perry_runtime::url_hooks::url_search_params_entries_arr => exact js_url_search_params_entries_arr -- the private JS_URL_SEARCH_PARAMS_ENTRIES_ARR slot is filled only by the selected URL installer; follow its actual callback rather than claiming a Leaf cut
+indirect exact perry_runtime::url_hooks::url_search_params_keys_arr => exact js_url_search_params_keys_arr -- the private JS_URL_SEARCH_PARAMS_KEYS_ARR slot is filled only by the selected URL installer; follow its actual callback rather than claiming a Leaf cut
+indirect exact perry_runtime::url_hooks::url_search_params_new => exact js_url_search_params_new -- the private JS_URL_SEARCH_PARAMS_NEW slot is filled only by the selected URL installer; follow its actual callback rather than claiming a Leaf cut
+indirect exact perry_runtime::url_hooks::url_search_params_new_any => exact js_url_search_params_new_any -- the private JS_URL_SEARCH_PARAMS_NEW_ANY slot is filled only by the selected URL installer; follow its actual callback rather than claiming a Leaf cut
+indirect exact perry_runtime::url_hooks::url_search_params_new_empty => exact js_url_search_params_new_empty -- the private JS_URL_SEARCH_PARAMS_NEW_EMPTY slot is filled only by the selected URL installer; follow its actual callback rather than claiming a Leaf cut
+indirect exact perry_runtime::url_hooks::url_search_params_to_string => exact js_url_search_params_to_string -- the private JS_URL_SEARCH_PARAMS_TO_STRING slot is filled only by the selected URL installer; follow its actual callback rather than claiming a Leaf cut
+indirect exact perry_runtime::url_hooks::url_search_params_values_arr => exact js_url_search_params_values_arr -- the private JS_URL_SEARCH_PARAMS_VALUES_ARR slot is filled only by the selected URL installer; follow its actual callback rather than claiming a Leaf cut
+indirect exact perry_runtime::url_hooks::url_set_hash => exact js_url_set_hash -- the private JS_URL_SET_HASH slot is filled only by the selected URL installer; follow its actual callback rather than claiming a Leaf cut
+indirect exact perry_runtime::url_hooks::url_set_host => exact js_url_set_host -- the private JS_URL_SET_HOST slot is filled only by the selected URL installer; follow its actual callback rather than claiming a Leaf cut
+indirect exact perry_runtime::url_hooks::url_set_hostname => exact js_url_set_hostname -- the private JS_URL_SET_HOSTNAME slot is filled only by the selected URL installer; follow its actual callback rather than claiming a Leaf cut
+indirect exact perry_runtime::url_hooks::url_set_href => exact js_url_set_href -- the private JS_URL_SET_HREF slot is filled only by the selected URL installer; follow its actual callback rather than claiming a Leaf cut
+indirect exact perry_runtime::url_hooks::url_set_password => exact js_url_set_password -- the private JS_URL_SET_PASSWORD slot is filled only by the selected URL installer; follow its actual callback rather than claiming a Leaf cut
+indirect exact perry_runtime::url_hooks::url_set_pathname => exact js_url_set_pathname -- the private JS_URL_SET_PATHNAME slot is filled only by the selected URL installer; follow its actual callback rather than claiming a Leaf cut
+indirect exact perry_runtime::url_hooks::url_set_port => exact js_url_set_port -- the private JS_URL_SET_PORT slot is filled only by the selected URL installer; follow its actual callback rather than claiming a Leaf cut
+indirect exact perry_runtime::url_hooks::url_set_protocol => exact js_url_set_protocol -- the private JS_URL_SET_PROTOCOL slot is filled only by the selected URL installer; follow its actual callback rather than claiming a Leaf cut
+indirect exact perry_runtime::url_hooks::url_set_search => exact js_url_set_search -- the private JS_URL_SET_SEARCH slot is filled only by the selected URL installer; follow its actual callback rather than claiming a Leaf cut
+indirect exact perry_runtime::url_hooks::url_set_username => exact js_url_set_username -- the private JS_URL_SET_USERNAME slot is filled only by the selected URL installer; follow its actual callback rather than claiming a Leaf cut
+indirect exact perry_runtime::url_hooks::url_to_http_options => exact js_url_to_http_options -- the private JS_URL_TO_HTTP_OPTIONS slot is filled only by the selected URL installer; follow its actual callback rather than claiming a Leaf cut
+indirect exact perry_runtime::url_hooks::shape_is_url_search_params => exact perry_runtime::url::search_params::shape_is_url_search_params -- the private SHAPE_IS_URL_SEARCH_PARAMS slot is filled only by the selected URL installer; follow its actual callback rather than claiming a Leaf cut
+indirect exact perry_runtime::url_hooks::try_read_as_search_params => exact perry_runtime::url::search_params::try_read_as_search_params -- the private TRY_READ_AS_SEARCH_PARAMS slot is filled only by the selected URL installer; follow its actual callback rather than claiming a Leaf cut
+indirect exact perry_runtime::url_hooks::try_url_search_params_dynamic_dispatch => exact perry_runtime::url::search_params::try_url_search_params_dynamic_dispatch -- the private TRY_URL_SEARCH_PARAMS_DYNAMIC_DISPATCH slot is filled only by the selected URL installer; follow its actual callback rather than claiming a Leaf cut
+indirect exact perry_runtime::url_hooks::url_search_params_backing_of => exact perry_runtime::url::search_params::url_search_params_backing_of -- the private URL_SEARCH_PARAMS_BACKING_OF slot is filled only by the selected URL installer; follow its actual callback rather than claiming a Leaf cut
+
+# HWS2 Proxy slots: installer writes exact callbacks; real callees decide effects.
+indirect exact perry_runtime::proxy_hooks::property_bag => exact perry_runtime::proxy::property_bag -- the private PROPERTY_BAG slot is assigned only crate::proxy::property_bag by proxy_hooks::install; this is a graph edge to the implementation, not a Leaf exemption
+indirect exact perry_runtime::proxy_hooks::property_bag_ensure => exact perry_runtime::proxy::property_bag_ensure -- the private PROPERTY_BAG_ENSURE slot is assigned only crate::proxy::property_bag_ensure by proxy_hooks::install; this is a graph edge to the implementation, not a Leaf exemption
+indirect exact perry_runtime::proxy_hooks::proxy_wraps_callable => exact perry_runtime::proxy::proxy_wraps_callable -- the private PROXY_WRAPS_CALLABLE slot is assigned only crate::proxy::proxy_wraps_callable by proxy_hooks::install; this is a graph edge to the implementation, not a Leaf exemption
+indirect exact perry_runtime::proxy_hooks::proxy_target_class_id => exact perry_runtime::proxy::proxy_target_class_id -- the private PROXY_TARGET_CLASS_ID slot is assigned only crate::proxy::proxy_target_class_id by proxy_hooks::install; this is a graph edge to the implementation, not a Leaf exemption
+indirect exact perry_runtime::proxy_hooks::is_array_proxy_step => exact perry_runtime::proxy::is_array_proxy_step -- the private IS_ARRAY_PROXY_STEP slot is assigned only crate::proxy::is_array_proxy_step by proxy_hooks::install; this is a graph edge to the implementation, not a Leaf exemption
+indirect exact perry_runtime::proxy_hooks::call_proxy_value_with_this => exact perry_runtime::proxy::apply_construct::call_proxy_value_with_this -- the private CALL_PROXY_VALUE_WITH_THIS slot is assigned only crate::proxy::apply_construct::call_proxy_value_with_this by proxy_hooks::install; this is a graph edge to the implementation, not a Leaf exemption
+indirect exact perry_runtime::proxy_hooks::proxy_get => exact js_proxy_get -- the private JS_PROXY_GET slot is assigned only crate::proxy::get::js_proxy_get by proxy_hooks::install; this is a graph edge to the implementation, not a Leaf exemption
+indirect exact perry_runtime::proxy_hooks::proxy_get_from_prototype => exact perry_runtime::proxy::get::proxy_get_from_prototype -- the private PROXY_GET_FROM_PROTOTYPE slot is assigned only crate::proxy::get::proxy_get_from_prototype by proxy_hooks::install; this is a graph edge to the implementation, not a Leaf exemption
+indirect exact perry_runtime::proxy_hooks::proxy_get_with_receiver => exact perry_runtime::proxy::get::proxy_get_with_receiver -- the private PROXY_GET_WITH_RECEIVER slot is assigned only crate::proxy::get::proxy_get_with_receiver by proxy_hooks::install; this is a graph edge to the implementation, not a Leaf exemption
+indirect exact perry_runtime::proxy_hooks::proxy_has => exact js_proxy_has -- the private JS_PROXY_HAS slot is assigned only crate::proxy::has_delete::js_proxy_has by proxy_hooks::install; this is a graph edge to the implementation, not a Leaf exemption
+indirect exact perry_runtime::proxy_hooks::proxy_delete => exact js_proxy_delete -- the private JS_PROXY_DELETE slot is assigned only crate::proxy::has_delete::js_proxy_delete by proxy_hooks::install; this is a graph edge to the implementation, not a Leaf exemption
+indirect exact perry_runtime::proxy_hooks::proxy_set => exact js_proxy_set -- the private JS_PROXY_SET slot is assigned only crate::proxy::put_value::js_proxy_set by proxy_hooks::install; this is a graph edge to the implementation, not a Leaf exemption
+indirect exact perry_runtime::proxy_hooks::proxy_set_with_receiver => exact perry_runtime::proxy::put_value::proxy_set_with_receiver -- the private PROXY_SET_WITH_RECEIVER slot is assigned only crate::proxy::put_value::proxy_set_with_receiver by proxy_hooks::install; this is a graph edge to the implementation, not a Leaf exemption
+indirect exact perry_runtime::proxy_hooks::proxy_checked_target => exact perry_runtime::proxy::json::js_proxy_checked_target -- the private JS_PROXY_CHECKED_TARGET slot is assigned only crate::proxy::json::js_proxy_checked_target by proxy_hooks::install; this is a graph edge to the implementation, not a Leaf exemption
+indirect exact perry_runtime::proxy_hooks::proxy_own_keys_for_json => exact perry_runtime::proxy::json::js_proxy_own_keys_for_json -- the private JS_PROXY_OWN_KEYS_FOR_JSON slot is assigned only crate::proxy::json::js_proxy_own_keys_for_json by proxy_hooks::install; this is a graph edge to the implementation, not a Leaf exemption
+indirect exact perry_runtime::proxy_hooks::proxy_own_keys => exact js_proxy_own_keys -- the private JS_PROXY_OWN_KEYS slot is assigned only crate::proxy::own_keys::js_proxy_own_keys by proxy_hooks::install; this is a graph edge to the implementation, not a Leaf exemption
+indirect exact perry_runtime::proxy_hooks::proxy_enum_own_keys => exact perry_runtime::proxy::own_keys::proxy_enum_own_keys -- the private PROXY_ENUM_OWN_KEYS slot is assigned only crate::proxy::own_keys::proxy_enum_own_keys by proxy_hooks::install; this is a graph edge to the implementation, not a Leaf exemption
+indirect exact perry_runtime::proxy_hooks::proxy_own_property_names => exact perry_runtime::proxy::own_keys::proxy_own_property_names -- the private PROXY_OWN_PROPERTY_NAMES slot is assigned only crate::proxy::own_keys::proxy_own_property_names by proxy_hooks::install; this is a graph edge to the implementation, not a Leaf exemption
+indirect exact perry_runtime::proxy_hooks::proxy_own_property_symbols => exact perry_runtime::proxy::own_keys::proxy_own_property_symbols -- the private PROXY_OWN_PROPERTY_SYMBOLS slot is assigned only crate::proxy::own_keys::proxy_own_property_symbols by proxy_hooks::install; this is a graph edge to the implementation, not a Leaf exemption
+indirect exact perry_runtime::proxy_hooks::proxy_get_prototype_of => exact perry_runtime::proxy::reflect_misc::js_proxy_get_prototype_of -- the private JS_PROXY_GET_PROTOTYPE_OF slot is assigned only crate::proxy::reflect_misc::js_proxy_get_prototype_of by proxy_hooks::install; this is a graph edge to the implementation, not a Leaf exemption
+indirect exact perry_runtime::proxy_hooks::proxy_get_prototype_of_impl => exact perry_runtime::proxy::reflect_misc::proxy_get_prototype_of_impl -- the private PROXY_GET_PROTOTYPE_OF_IMPL slot is assigned only crate::proxy::reflect_misc::proxy_get_prototype_of_impl by proxy_hooks::install; this is a graph edge to the implementation, not a Leaf exemption
+indirect exact perry_runtime::proxy_hooks::proxy_get_own_property_descriptor => exact perry_runtime::proxy::reflect::proxy_get_own_property_descriptor -- the private PROXY_GET_OWN_PROPERTY_DESCRIPTOR slot is assigned only crate::proxy::reflect::proxy_get_own_property_descriptor by proxy_hooks::install; this is a graph edge to the implementation, not a Leaf exemption
+indirect exact perry_runtime::proxy_hooks::proxy_is_extensible => exact perry_runtime::proxy::reflect_misc::proxy_is_extensible -- the private PROXY_IS_EXTENSIBLE slot is assigned only crate::proxy::reflect_misc::proxy_is_extensible by proxy_hooks::install; this is a graph edge to the implementation, not a Leaf exemption
+indirect exact perry_runtime::proxy_hooks::proxy_prevent_extensions => exact perry_runtime::proxy::reflect_misc::proxy_prevent_extensions -- the private PROXY_PREVENT_EXTENSIONS slot is assigned only crate::proxy::reflect_misc::proxy_prevent_extensions by proxy_hooks::install; this is a graph edge to the implementation, not a Leaf exemption
+indirect exact perry_runtime::proxy_hooks::proxy_set_prototype_of => exact perry_runtime::proxy::prototype::proxy_set_prototype_of -- the private PROXY_SET_PROTOTYPE_OF slot is assigned only crate::proxy::prototype::proxy_set_prototype_of by proxy_hooks::install; this is a graph edge to the implementation, not a Leaf exemption
+indirect exact perry_runtime::proxy_hooks::proxy_is_constructor => exact perry_runtime::proxy::proxy_is_constructor -- the private PROXY_IS_CONSTRUCTOR slot is assigned only crate::proxy::proxy_is_constructor by proxy_hooks::install; this is a graph edge to the implementation, not a Leaf exemption
+indirect exact perry_runtime::proxy_hooks::proxy_new => exact js_proxy_new -- the private JS_PROXY_NEW slot is assigned only crate::proxy::js_proxy_new by proxy_hooks::install; this is a graph edge to the implementation, not a Leaf exemption
+indirect exact perry_runtime::proxy_hooks::proxy_revocable => exact js_proxy_revocable -- the private JS_PROXY_REVOCABLE slot is assigned only crate::proxy::js_proxy_revocable by proxy_hooks::install; this is a graph edge to the implementation, not a Leaf exemption
+indirect exact perry_runtime::proxy_hooks::proxy_revoke => exact js_proxy_revoke -- the private JS_PROXY_REVOKE slot is assigned only crate::proxy::js_proxy_revoke by proxy_hooks::install; this is a graph edge to the implementation, not a Leaf exemption
+indirect exact perry_runtime::proxy_hooks::proxy_is_revoked => exact js_proxy_is_revoked -- the private JS_PROXY_IS_REVOKED slot is assigned only crate::proxy::js_proxy_is_revoked by proxy_hooks::install; this is a graph edge to the implementation, not a Leaf exemption
+indirect exact perry_runtime::proxy_hooks::proxy_target => exact js_proxy_target -- the private JS_PROXY_TARGET slot is assigned only crate::proxy::js_proxy_target by proxy_hooks::install; this is a graph edge to the implementation, not a Leaf exemption
+indirect exact perry_runtime::proxy_hooks::proxy_handler => exact js_proxy_handler -- the private JS_PROXY_HANDLER slot is assigned only crate::proxy::js_proxy_handler by proxy_hooks::install; this is a graph edge to the implementation, not a Leaf exemption
+indirect exact perry_runtime::proxy_hooks::proxy_apply => exact js_proxy_apply -- the private JS_PROXY_APPLY slot is assigned only crate::proxy::apply_construct::js_proxy_apply by proxy_hooks::install; this is a graph edge to the implementation, not a Leaf exemption
+indirect exact perry_runtime::proxy_hooks::proxy_construct => exact js_proxy_construct -- the private JS_PROXY_CONSTRUCT slot is assigned only crate::proxy::apply_construct::js_proxy_construct by proxy_hooks::install; this is a graph edge to the implementation, not a Leaf exemption
+
+indirect exact perry_runtime::native_payload::attach::attach_external_rooted => exact perry_runtime::node_stream::state_record::store_record_payload_cell -- the only indirect operation in shared attachment is the private STORE_RECORD_PAYLOAD_CELL slot, assigned only by stream_hooks::install; following its real array-store callback preserves AllocOnly without claiming Leaf
+
+indirect exact js_fetch_input_ptr => exact js_url_href_if_url -- the inlined URL probe follows the engine callback; absence returns the original input pointer
+
+# Async slot callbacks and their inlined caller sites.
+indirect exact perry_runtime::async_hook_slots::adopt_async_resource_prototype => exact perry_runtime::async_hooks::adopt_async_resource_prototype -- the selected async installer fills this typed callback; follow its actual target
+indirect exact perry_runtime::async_hook_slots::after => exact perry_runtime::async_hooks::after -- the selected async installer fills this typed callback; follow its actual target
+indirect exact perry_runtime::async_hook_slots::after_promise => exact perry_runtime::async_hooks::after_promise -- the selected async installer fills this typed callback; follow its actual target
+indirect exact perry_runtime::async_hook_slots::async_local_storage_static_snapshot_value => exact perry_runtime::async_hooks::context_snapshots::async_local_storage_static_snapshot_value -- the selected async installer fills this typed callback; follow its actual target
+indirect exact perry_runtime::async_hook_slots::before => exact perry_runtime::async_hooks::before -- the selected async installer fills this typed callback; follow its actual target
+indirect exact perry_runtime::async_hook_slots::before_promise => exact perry_runtime::async_hooks::before_promise -- the selected async installer fills this typed callback; follow its actual target
+indirect exact perry_runtime::async_hook_slots::before_scheduled => exact perry_runtime::async_hooks::before_scheduled -- the selected async installer fills this typed callback; follow its actual target
+indirect exact perry_runtime::async_hook_slots::defer_destroy_after_check_turns => exact perry_runtime::async_hooks::provider_ffi::defer_destroy_after_check_turns -- the selected async installer fills this typed callback; follow its actual target
+indirect exact perry_runtime::async_hook_slots::destroy => exact perry_runtime::async_hooks::destroy -- the selected async installer fills this typed callback; follow its actual target
+indirect exact perry_runtime::async_hook_slots::destroy_scheduled => exact perry_runtime::async_hooks::destroy_scheduled -- the selected async installer fills this typed callback; follow its actual target
+indirect exact perry_runtime::async_hook_slots::drain_gc_destroy_queue => exact perry_runtime::async_hooks::drain_gc_destroy_queue -- the selected async installer fills this typed callback; follow its actual target
+indirect exact perry_runtime::async_hook_slots::enqueue_gc_destroy => exact perry_runtime::async_hooks::enqueue_gc_destroy -- the selected async installer fills this typed callback; follow its actual target
+indirect exact perry_runtime::async_hook_slots::execution_async_id_u64 => exact perry_runtime::async_hooks::execution_async_id_u64 -- the selected async installer fills this typed callback; follow its actual target
+indirect exact perry_runtime::async_hook_slots::resource_state::finalize => exact perry_runtime::async_hooks::resource_state::finalize -- the selected async installer fills this typed callback; follow its actual target
+indirect exact perry_runtime::async_hook_slots::gc_destroy_work_pending => exact perry_runtime::async_hooks::gc_destroy_work_pending -- the selected async installer fills this typed callback; follow its actual target
+indirect exact perry_runtime::async_hook_slots::resource_state::get => exact perry_runtime::async_hooks::resource_state::get -- the selected async installer fills this typed callback; follow its actual target
+indirect exact perry_runtime::async_hook_slots::init_esm_evaluation_promise => exact perry_runtime::async_hooks::init_esm_evaluation_promise -- the selected async installer fills this typed callback; follow its actual target
+indirect exact perry_runtime::async_hook_slots::init_resource => exact perry_runtime::async_hooks::init_resource -- the selected async installer fills this typed callback; follow its actual target
+indirect exact perry_runtime::async_hook_slots::init_resource_with_trigger => exact perry_runtime::async_hooks::init_resource_with_trigger -- the selected async installer fills this typed callback; follow its actual target
+indirect exact perry_runtime::async_hook_slots::init_scheduled_resource => exact perry_runtime::async_hooks::init_scheduled_resource -- the selected async installer fills this typed callback; follow its actual target
+indirect exact perry_runtime::async_hook_slots::js_async_hooks_async_wrap_providers => exact perry_runtime::async_hooks::js_async_hooks_async_wrap_providers -- the selected async installer fills this typed callback; follow its actual target
+indirect exact perry_runtime::async_hook_slots::js_async_hooks_create_hook => exact js_async_hooks_create_hook -- the selected async installer fills this typed callback; follow its actual target
+indirect exact perry_runtime::async_hook_slots::js_async_hooks_execution_async_id => exact js_async_hooks_execution_async_id -- the selected async installer fills this typed callback; follow its actual target
+indirect exact perry_runtime::async_hook_slots::js_async_hooks_execution_async_resource => exact js_async_hooks_execution_async_resource -- the selected async installer fills this typed callback; follow its actual target
+indirect exact js_async_hooks_owned_provider_destroy => exact perry_runtime::async_hooks::provider_ffi::js_async_hooks_owned_provider_destroy -- the selected async installer fills this typed callback; follow its actual target
+indirect exact js_async_hooks_owned_provider_emit_init => exact perry_runtime::async_hooks::provider_ffi::js_async_hooks_owned_provider_emit_init -- the selected async installer fills this typed callback; follow its actual target
+indirect exact js_async_hooks_owned_provider_new => exact perry_runtime::async_hooks::provider_ffi::js_async_hooks_owned_provider_new -- the selected async installer fills this typed callback; follow its actual target
+indirect exact js_async_hooks_provider_defer_destroy => exact perry_runtime::async_hooks::provider_ffi::js_async_hooks_provider_defer_destroy -- the selected async installer fills this typed callback; follow its actual target
+indirect exact js_async_hooks_provider_destroy => exact perry_runtime::async_hooks::provider_ffi::js_async_hooks_provider_destroy -- the selected async installer fills this typed callback; follow its actual target
+indirect exact js_async_hooks_provider_init => exact perry_runtime::async_hooks::provider_ffi::js_async_hooks_provider_init -- the selected async installer fills this typed callback; follow its actual target
+indirect exact js_async_hooks_provider_init_with_trigger => exact perry_runtime::async_hooks::provider_ffi::js_async_hooks_provider_init_with_trigger -- the selected async installer fills this typed callback; follow its actual target
+indirect exact js_async_hooks_provider_leave => exact perry_runtime::async_hooks::provider_ffi::js_async_hooks_provider_leave -- the selected async installer fills this typed callback; follow its actual target
+indirect exact js_async_hooks_provider_run_catching => exact perry_runtime::async_hooks::provider_ffi::js_async_hooks_provider_run_catching -- the selected async installer fills this typed callback; follow its actual target
+indirect exact js_async_hooks_provider_run_catching_deferred_destroy => exact perry_runtime::async_hooks::provider_ffi::js_async_hooks_provider_run_catching_deferred_destroy -- the selected async installer fills this typed callback; follow its actual target
+indirect exact js_async_hooks_provider_run_catching_deferred_destroy_on_error => exact perry_runtime::async_hooks::provider_ffi::js_async_hooks_provider_run_catching_deferred_destroy_on_error -- the selected async installer fills this typed callback; follow its actual target
+indirect exact js_async_hooks_provider_run_catching_with_this => exact perry_runtime::async_hooks::provider_ffi::js_async_hooks_provider_run_catching_with_this -- the selected async installer fills this typed callback; follow its actual target
+indirect exact perry_runtime::async_hook_slots::js_async_hooks_trigger_async_id => exact js_async_hooks_trigger_async_id -- the selected async installer fills this typed callback; follow its actual target
+indirect exact perry_runtime::async_hook_slots::js_async_local_storage_static_bind_method => exact perry_runtime::async_hooks::js_async_local_storage_static_bind_method -- the selected async installer fills this typed callback; follow its actual target
+indirect exact perry_runtime::async_hook_slots::js_async_local_storage_static_snapshot_method => exact perry_runtime::async_hooks::context_snapshots::js_async_local_storage_static_snapshot_method -- the selected async installer fills this typed callback; follow its actual target
+indirect exact perry_runtime::async_hook_slots::js_async_resource_async_id => exact js_async_resource_async_id -- the selected async installer fills this typed callback; follow its actual target
+indirect exact perry_runtime::async_hook_slots::js_async_resource_emit_destroy => exact js_async_resource_emit_destroy -- the selected async installer fills this typed callback; follow its actual target
+indirect exact perry_runtime::async_hook_slots::js_async_resource_new => exact js_async_resource_new -- the selected async installer fills this typed callback; follow its actual target
+indirect exact js_async_resource_runtime_async_id => exact perry_runtime::async_hooks::js_async_resource_runtime_async_id -- the selected async installer fills this typed callback; follow its actual target
+indirect exact perry_runtime::async_hook_slots::js_async_resource_set_event_emitter => exact js_async_resource_set_event_emitter -- the selected async installer fills this typed callback; follow its actual target
+indirect exact perry_runtime::async_hook_slots::js_async_resource_static_bind_method => exact perry_runtime::async_hooks::js_async_resource_static_bind_method -- the selected async installer fills this typed callback; follow its actual target
+indirect exact perry_runtime::async_hook_slots::js_async_resource_subclass_init => exact js_async_resource_subclass_init -- the selected async installer fills this typed callback; follow its actual target
+indirect exact perry_runtime::async_hook_slots::js_async_resource_trigger_async_id => exact js_async_resource_trigger_async_id -- the selected async installer fills this typed callback; follow its actual target
+indirect exact perry_runtime::async_hook_slots::leave_resource_scope => exact perry_runtime::async_hooks::scopes::leave_resource_scope -- the selected async installer fills this typed callback; follow its actual target
+indirect exact perry_runtime::async_hook_slots::promise_hooks_active => exact perry_runtime::async_hooks::promise_hooks_active -- the selected async installer fills this typed callback; follow its actual target
+indirect exact perry_runtime::async_hook_slots::promise_resolve => exact perry_runtime::async_hooks::promise_resolve -- the selected async installer fills this typed callback; follow its actual target
+indirect exact perry_runtime::async_hook_slots::release_async_hooks_in_freed_ranges => exact perry_runtime::async_hooks::thread_exit::release_async_hooks_in_freed_ranges -- the selected async installer fills this typed callback; follow its actual target
+indirect exact perry_runtime::async_hook_slots::reserve_resource_ids => exact perry_runtime::async_hooks::reserve_resource_ids -- the selected async installer fills this typed callback; follow its actual target
+indirect exact perry_runtime::async_hook_slots::resolve_async_resource_handle => exact perry_runtime::async_hooks::resolve_async_resource_handle -- the selected async installer fills this typed callback; follow its actual target
+indirect exact perry_runtime::async_hook_slots::scan_async_hooks_roots => exact perry_runtime::async_hooks::scan_async_hooks_roots -- the selected async installer fills this typed callback; follow its actual target
+indirect exact perry_runtime::async_hook_slots::scan_async_hooks_roots_mut => exact perry_runtime::async_hooks::scan_async_hooks_roots_mut -- the selected async installer fills this typed callback; follow its actual target
+indirect exact perry_runtime::async_hook_slots::resource_state::scan_token => exact perry_runtime::async_hooks::resource_state::scan_token -- the selected async installer fills this typed callback; follow its actual target
+indirect exact perry_runtime::async_hook_slots::try_enter_resource_scope_at => exact perry_runtime::async_hooks::scopes::try_enter_resource_scope_at -- the selected async installer fills this typed callback; follow its actual target
+indirect exact perry_runtime::async_hook_slots::try_leave_resource_scope => exact perry_runtime::async_hooks::scopes::try_leave_resource_scope -- the selected async installer fills this typed callback; follow its actual target
+indirect exact perry_runtime::async_hook_slots::unwind_execution_scope => exact perry_runtime::async_hooks::unwind_execution_scope -- the selected async installer fills this typed callback; follow its actual target
+indirect exact perry_runtime::async_hook_slots::owned_provider_scope => exact perry_runtime::async_hooks::slots_bridge::owned_provider_scope -- synchronous FnOnce adapter delegates to the unchanged provider callback scope
+indirect exact perry_runtime::async_hook_slots::owned_provider_scope_rooted => exact perry_runtime::async_hooks::slots_bridge::owned_provider_scope_rooted -- synchronous FnOnce adapter delegates to the unchanged provider callback scope
+indirect exact perry_runtime::async_hook_slots::run_provider_completion => exact perry_runtime::async_hooks::slots_bridge::run_provider_completion -- synchronous FnOnce adapter delegates to the unchanged provider callback scope
+indirect exact perry_runtime::async_hook_slots::run_resource_scope => exact perry_runtime::async_hooks::slots_bridge::run_resource_scope -- synchronous FnOnce adapter delegates to the unchanged provider callback scope
+indirect exact perry_runtime::async_hook_slots::run_resource_scope_catching => exact perry_runtime::async_hooks::slots_bridge::run_resource_scope_catching -- synchronous FnOnce adapter delegates to the unchanged provider callback scope
+indirect exact perry_runtime::async_hook_slots::run_with_context_snapshot => exact perry_runtime::async_hooks::slots_bridge::run_with_context_snapshot -- synchronous FnOnce adapter delegates to the unchanged provider callback scope
+indirect exact js_async_hooks_provider_enter => exact perry_runtime::async_hooks::provider_ffi::provider_enter_at -- the provider entry passes its original caller frame mark across the selected slot
+indirect exact perry_runtime::async_hook_slots::register_installed_roots => exact perry_runtime::async_hooks::register_roots -- the native async installer fills the root-registration callback
+indirect exact perry_runtime::async_context::apply_context_guard => exact perry_runtime::async_hooks::unwind_execution_scope -- RestoreExecutionIds calls only the installed execution-stack cleanup
+indirect exact js_nm_install_async_hooks => exact perry_runtime::async_hooks::register_roots -- the inlined root-registration slot invokes the selected scanner registration
+indirect exact js_runtime_install_async_hooks => exact perry_runtime::async_hooks::register_roots -- the early installer invokes the same scanner-registration callback
+indirect exact perry_runtime::gc::gc_init => exact perry_runtime::async_hooks::register_roots -- per-thread initialization invokes the installed root-registration callback
+indirect regex ^(js_nm_install_all|js_nm_install_child_process|js_nm_install_cluster|js_nm_install_crypto|js_nm_install_dgram|js_nm_install_domain|js_nm_install_events|js_nm_install_fs|js_nm_install_http|js_nm_install_inspector|js_nm_install_net|js_nm_install_readline|js_nm_install_repl|js_nm_install_stream|js_nm_install_tls|js_nm_install_tty|js_nm_install_worker_threads|js_nm_install_zlib|js_node_submod_install_all|js_node_submod_install_fs_promises|js_node_submod_install_readline_promises)$ => exact perry_runtime::async_hooks::register_roots -- these exact installer bodies inline the same private async root-registration slot; follow its sole actual callback rather than exempting an indirect call
+indirect exact js_runtime_install_compiled => exact perry_runtime::async_hooks::register_roots -- the compiled installer inlines REGISTER_ROOTS; follow the sole actual callback
+
+indirect exact perry_runtime::gc::gc_init => exact perry_runtime::fs::register_roots -- FS_REGISTER_ROOTS is filled by the native fs installer; follow the actual root-registration callback
+indirect exact perry_runtime::fs_hook_slots::try_clone_registered_fd => exact perry_runtime::fs::try_clone_registered_fd -- the fs installer fills the state probe; empty means no filesystem-owned state
+indirect exact perry_runtime::fs_hook_slots::is_fs_stream_instance_value => exact perry_runtime::fs::is_fs_stream_instance_value -- the fs installer fills the state probe; empty means no filesystem-owned state
+indirect exact perry_runtime::fs_hook_slots::resolve_watch_queue => exact perry_runtime::fs::dir_glob_watch::watch_backend::watch_queue_tls::resolve -- fs installer fills the unchanged TLS storage resolver
+indirect exact perry_runtime::fs_hook_slots::resolve_watch_shared => exact perry_runtime::fs::dir_glob_watch::watch_backend::watch_shared_tls::resolve -- fs installer fills the unchanged TLS storage resolver
+
+indirect exact perry_runtime::thread_hook_slots::js_thread_process_pending => exact js_thread_process_pending -- thread installer fills the concrete completion/clone target
+indirect exact perry_runtime::thread_hook_slots::js_thread_has_pending => exact js_thread_has_pending -- thread installer fills the concrete completion/clone target
+indirect exact perry_runtime::thread_hook_slots::purge_agent_thread_results => exact perry_runtime::thread::pending_results::purge_agent_thread_results -- thread installer fills the concrete completion/clone target
+indirect exact perry_runtime::thread_hook_slots::clone_with_transfers => exact perry_runtime::builtins::globals::clone_with_transfers -- thread installer fills the concrete completion/clone target
+indirect exact perry_runtime::thread_hook_slots::diagnostics_channel_process_pending => exact perry_runtime::node_submodules::diagnostics::diagnostics_channel_process_pending -- thread installer fills the concrete completion/clone target
+indirect exact perry_runtime::thread_hook_slots::diagnostics_channel_has_pending_publishes => exact perry_runtime::node_submodules::diagnostics::diagnostics_channel_has_pending_publishes -- thread installer fills the concrete completion/clone target
+indirect exact perry_runtime::thread_hook_slots::enqueue_cross_thread_publish => exact perry_runtime::node_submodules::diagnostics::enqueue_cross_thread_publish -- the thread installer selects serialization for cross-thread diagnostic delivery
+indirect exact js_microtasks_pending => exact js_thread_has_pending -- inlined HAS_PENDING slot, actual C ABI target
+indirect exact js_microtasks_pending => exact perry_runtime::node_submodules::diagnostics::diagnostics_channel_has_pending_publishes -- inlined DIAG_PENDING slot, actual Rust target
+
+indirect exact perry_runtime::date_hook_slots::alloc_date_cell => exact perry_runtime::date::alloc_date_cell -- Date installer fills the concrete operation; ordinary programs have no Date receiver
+indirect exact perry_runtime::date_hook_slots::date_cell_prototype => exact perry_runtime::date::date_cell_prototype -- Date installer fills the concrete operation; ordinary programs have no Date receiver
+indirect exact perry_runtime::date_hook_slots::js_date_apply_setter => exact js_date_apply_setter -- Date installer fills the concrete operation; ordinary programs have no Date receiver
+indirect exact perry_runtime::date_hook_slots::js_date_coerce_number => exact js_date_coerce_number -- Date installer fills the concrete operation; ordinary programs have no Date receiver
+indirect exact perry_runtime::date_hook_slots::js_date_get_date => exact js_date_get_date -- Date installer fills the concrete operation; ordinary programs have no Date receiver
+indirect exact perry_runtime::date_hook_slots::js_date_get_day => exact js_date_get_day -- Date installer fills the concrete operation; ordinary programs have no Date receiver
+indirect exact perry_runtime::date_hook_slots::js_date_get_full_year => exact js_date_get_full_year -- Date installer fills the concrete operation; ordinary programs have no Date receiver
+indirect exact perry_runtime::date_hook_slots::js_date_get_hours => exact js_date_get_hours -- Date installer fills the concrete operation; ordinary programs have no Date receiver
+indirect exact perry_runtime::date_hook_slots::js_date_get_milliseconds => exact js_date_get_milliseconds -- Date installer fills the concrete operation; ordinary programs have no Date receiver
+indirect exact perry_runtime::date_hook_slots::js_date_get_minutes => exact js_date_get_minutes -- Date installer fills the concrete operation; ordinary programs have no Date receiver
+indirect exact perry_runtime::date_hook_slots::js_date_get_month => exact js_date_get_month -- Date installer fills the concrete operation; ordinary programs have no Date receiver
+indirect exact perry_runtime::date_hook_slots::js_date_get_seconds => exact js_date_get_seconds -- Date installer fills the concrete operation; ordinary programs have no Date receiver
+indirect exact perry_runtime::date_hook_slots::js_date_get_time => exact js_date_get_time -- Date installer fills the concrete operation; ordinary programs have no Date receiver
+indirect exact perry_runtime::date_hook_slots::js_date_get_timezone_offset => exact js_date_get_timezone_offset -- Date installer fills the concrete operation; ordinary programs have no Date receiver
+indirect exact perry_runtime::date_hook_slots::js_date_get_utc_date => exact js_date_get_utc_date -- Date installer fills the concrete operation; ordinary programs have no Date receiver
+indirect exact perry_runtime::date_hook_slots::js_date_get_utc_day => exact js_date_get_utc_day -- Date installer fills the concrete operation; ordinary programs have no Date receiver
+indirect exact perry_runtime::date_hook_slots::js_date_get_utc_full_year => exact js_date_get_utc_full_year -- Date installer fills the concrete operation; ordinary programs have no Date receiver
+indirect exact perry_runtime::date_hook_slots::js_date_get_utc_hours => exact js_date_get_utc_hours -- Date installer fills the concrete operation; ordinary programs have no Date receiver
+indirect exact perry_runtime::date_hook_slots::js_date_get_utc_milliseconds => exact js_date_get_utc_milliseconds -- Date installer fills the concrete operation; ordinary programs have no Date receiver
+indirect exact perry_runtime::date_hook_slots::js_date_get_utc_minutes => exact js_date_get_utc_minutes -- Date installer fills the concrete operation; ordinary programs have no Date receiver
+indirect exact perry_runtime::date_hook_slots::js_date_get_utc_month => exact js_date_get_utc_month -- Date installer fills the concrete operation; ordinary programs have no Date receiver
+indirect exact perry_runtime::date_hook_slots::js_date_get_utc_seconds => exact js_date_get_utc_seconds -- Date installer fills the concrete operation; ordinary programs have no Date receiver
+indirect exact perry_runtime::date_hook_slots::js_date_new => exact js_date_new -- Date installer fills the concrete operation; ordinary programs have no Date receiver
+indirect exact perry_runtime::date_hook_slots::js_date_new_from_timestamp => exact js_date_new_from_timestamp -- Date installer fills the concrete operation; ordinary programs have no Date receiver
+indirect exact perry_runtime::date_hook_slots::js_date_new_from_value => exact js_date_new_from_value -- Date installer fills the concrete operation; ordinary programs have no Date receiver
+indirect exact perry_runtime::date_hook_slots::js_date_new_local_components => exact js_date_new_local_components -- Date installer fills the concrete operation; ordinary programs have no Date receiver
+indirect exact perry_runtime::date_hook_slots::js_date_parse => exact js_date_parse -- Date installer fills the concrete operation; ordinary programs have no Date receiver
+indirect exact perry_runtime::date_hook_slots::js_date_to_iso_string => exact js_date_to_iso_string -- Date installer fills the concrete operation; ordinary programs have no Date receiver
+indirect exact perry_runtime::date_hook_slots::js_date_to_iso_string_or_throw => exact js_date_to_iso_string_or_throw -- Date installer fills the concrete operation; ordinary programs have no Date receiver
+indirect exact perry_runtime::date_hook_slots::js_date_to_locale_string => exact js_date_to_locale_string -- Date installer fills the concrete operation; ordinary programs have no Date receiver
+indirect exact perry_runtime::date_hook_slots::js_date_to_string => exact js_date_to_string -- Date installer fills the concrete operation; ordinary programs have no Date receiver
+indirect exact perry_runtime::date_hook_slots::js_date_to_utc_string => exact js_date_to_utc_string -- Date installer fills the concrete operation; ordinary programs have no Date receiver
+indirect exact perry_runtime::date_hook_slots::js_date_utc => exact js_date_utc -- Date installer fills the concrete operation; ordinary programs have no Date receiver
+
+indirect exact perry_runtime::perf_hook_slots::histogram_method => exact perry_runtime::perf_histogram::histogram_method -- performance installer fills the concrete backend operation
+indirect exact perry_runtime::perf_hook_slots::histogram_property => exact perry_runtime::perf_histogram::histogram_property -- performance installer fills the concrete backend operation
+indirect exact perry_runtime::perf_hook_slots::attach_perf_hooks_constructor => exact perry_runtime::perf_hooks::prototypes::attach_perf_hooks_constructor -- performance installer fills the concrete backend operation
+indirect exact perry_runtime::perf_hook_slots::construct_perf_hooks_class => exact perry_runtime::perf_hooks::construct_perf_hooks_class -- performance installer fills the concrete backend operation
+indirect exact perry_runtime::perf_hook_slots::current_list_get_by_name => exact perry_runtime::perf_hooks::current_list_get_by_name -- performance installer fills the concrete backend operation
+indirect exact perry_runtime::perf_hook_slots::current_list_get_by_type => exact perry_runtime::perf_hooks::current_list_get_by_type -- performance installer fills the concrete backend operation
+indirect exact perry_runtime::perf_hook_slots::current_list_get_entries => exact perry_runtime::perf_hooks::current_list_get_entries -- performance installer fills the concrete backend operation
+indirect exact perry_runtime::perf_hook_slots::is_node_timing_object => exact perry_runtime::perf_hooks::is_node_timing_object -- performance installer fills the concrete backend operation
+indirect exact perry_runtime::perf_hook_slots::is_perf_entry_object => exact perry_runtime::perf_hooks::is_perf_entry_object -- performance installer fills the concrete backend operation
+indirect exact perry_runtime::perf_hook_slots::is_perf_entry_object_instance_of => exact perry_runtime::perf_hooks::is_perf_entry_object_instance_of -- performance installer fills the concrete backend operation
+indirect exact perry_runtime::perf_hook_slots::is_perf_hooks_shape_instance_of => exact perry_runtime::perf_hooks::is_perf_hooks_shape_instance_of -- performance installer fills the concrete backend operation
+indirect exact perry_runtime::perf_hook_slots::is_perf_observer_list_value => exact perry_runtime::perf_hooks::is_perf_observer_list_value -- performance installer fills the concrete backend operation
+indirect exact perry_runtime::perf_hook_slots::is_performance_namespace_value => exact perry_runtime::perf_hooks::is_performance_namespace_value -- performance installer fills the concrete backend operation
+indirect exact perry_runtime::perf_hook_slots::js_perf_clear_marks => exact js_perf_clear_marks -- performance installer fills the concrete backend operation
+indirect exact perry_runtime::perf_hook_slots::js_perf_clear_measures => exact js_perf_clear_measures -- performance installer fills the concrete backend operation
+indirect exact perry_runtime::perf_hook_slots::js_perf_clear_resource_timings => exact js_perf_clear_resource_timings -- performance installer fills the concrete backend operation
+indirect exact perry_runtime::perf_hook_slots::js_perf_event_loop_utilization => exact js_perf_event_loop_utilization -- performance installer fills the concrete backend operation
+indirect exact perry_runtime::perf_hook_slots::js_perf_get_entries => exact js_perf_get_entries -- performance installer fills the concrete backend operation
+indirect exact perry_runtime::perf_hook_slots::js_perf_get_entries_by_name => exact js_perf_get_entries_by_name -- performance installer fills the concrete backend operation
+indirect exact perry_runtime::perf_hook_slots::js_perf_get_entries_by_type => exact js_perf_get_entries_by_type -- performance installer fills the concrete backend operation
+indirect exact perry_runtime::perf_hook_slots::js_perf_illegal_constructor => exact js_perf_illegal_constructor -- performance installer fills the concrete backend operation
+indirect exact perry_runtime::perf_hook_slots::js_perf_mark => exact js_perf_mark -- performance installer fills the concrete backend operation
+indirect exact perry_runtime::perf_hook_slots::js_perf_mark_resource_timing => exact js_perf_mark_resource_timing -- performance installer fills the concrete backend operation
+indirect exact perry_runtime::perf_hook_slots::js_perf_measure => exact js_perf_measure -- performance installer fills the concrete backend operation
+indirect exact perry_runtime::perf_hook_slots::js_perf_node_timing => exact js_perf_node_timing -- performance installer fills the concrete backend operation
+indirect exact perry_runtime::perf_hook_slots::js_perf_observer_disconnect => exact js_perf_observer_disconnect -- performance installer fills the concrete backend operation
+indirect exact perry_runtime::perf_hook_slots::js_perf_observer_observe => exact js_perf_observer_observe -- performance installer fills the concrete backend operation
+indirect exact perry_runtime::perf_hook_slots::js_perf_observer_take_records => exact js_perf_observer_take_records -- performance installer fills the concrete backend operation
+indirect exact perry_runtime::perf_hook_slots::js_perf_set_resource_timing_buffer_size => exact js_perf_set_resource_timing_buffer_size -- performance installer fills the concrete backend operation
+indirect exact perry_runtime::perf_hook_slots::js_perf_timerify => exact js_perf_timerify -- performance installer fills the concrete backend operation
+indirect exact perry_runtime::perf_hook_slots::js_perf_to_json => exact js_perf_to_json -- performance installer fills the concrete backend operation
+indirect exact perry_runtime::perf_hook_slots::node_timing_to_json => exact perry_runtime::perf_hooks::node_timing_to_json -- performance installer fills the concrete backend operation
+indirect exact perry_runtime::perf_hook_slots::note_event_loop_start => exact perry_runtime::perf_hooks::note_event_loop_start -- performance installer fills the concrete backend operation
+indirect exact perry_runtime::perf_hook_slots::perf_entry_to_json => exact perry_runtime::perf_hooks::perf_entry_to_json -- performance installer fills the concrete backend operation
+indirect exact perry_runtime::perf_hook_slots::perf_supported_entry_types_value => exact perry_runtime::perf_hooks::prototypes::perf_supported_entry_types_value -- performance installer fills the concrete backend operation
+indirect exact perry_runtime::perf_hook_slots::performance_namespace => exact perry_runtime::perf_hooks::performance_namespace -- performance installer fills the concrete backend operation
+indirect exact perry_runtime::perf_hook_slots::performance_prototype_method_value => exact perry_runtime::perf_hooks::prototypes::performance_prototype_method_value -- performance installer fills the concrete backend operation
+indirect exact perry_runtime::perf_hook_slots::validate_perf_list_filter_arg => exact perry_runtime::perf_hooks::validate_perf_list_filter_arg -- performance installer fills the concrete backend operation
+indirect exact perry_runtime::perf_hook_slots::register_installed_roots => exact perry_runtime::perf_hook_slots::register_roots -- selected performance root-registration callback
+indirect exact perry_runtime::gc::gc_init => exact perry_runtime::perf_hook_slots::register_roots -- per-thread initialization follows the installed performance roots
+
+indirect exact perry_runtime::perf_hook_slots::resolve_histograms => exact perry_runtime::perf_histogram::histogram_tls::resolve -- installer owns the histogram TLS resolver
+indirect exact js_runtime_install_perf_hooks => exact perry_runtime::perf_hook_slots::register_roots -- the inlined REGISTER_ROOTS slot invokes the selected performance root-registration callback
+
+indirect exact perry_runtime::os_hook_slots::add_internal_process_listener => exact perry_runtime::os::os_process_emitter::add_internal_process_listener -- process/OS installer selects the concrete operation
+indirect exact perry_runtime::os_hook_slots::emit_process_event => exact perry_runtime::os::os_process_emitter::emit_process_event -- process/OS installer selects the concrete operation
+indirect exact perry_runtime::os_hook_slots::emit_process_uncaught_exception => exact perry_runtime::os::os_process_emitter::emit_process_uncaught_exception -- process/OS installer selects the concrete operation
+indirect exact perry_runtime::os_hook_slots::enable_process_stdin_keypress_events => exact perry_runtime::os::process_streams::enable_process_stdin_keypress_events -- process/OS installer selects the concrete operation
+indirect exact perry_runtime::os_hook_slots::is_process_stdin_handle => exact perry_runtime::os::process_streams::is_process_stdin_handle -- process/OS installer selects the concrete operation
+indirect exact perry_runtime::os_hook_slots::js_process_add_listener => exact js_process_add_listener -- process/OS installer selects the concrete operation
+indirect exact perry_runtime::os_hook_slots::js_process_emit => exact js_process_emit -- process/OS installer selects the concrete operation
+indirect exact perry_runtime::os_hook_slots::js_process_emit_exit => exact js_process_emit_exit -- process/OS installer selects the concrete operation
+indirect exact perry_runtime::os_hook_slots::js_process_event_names => exact js_process_event_names -- process/OS installer selects the concrete operation
+indirect exact perry_runtime::os_hook_slots::js_process_get_max_listeners => exact js_process_get_max_listeners -- process/OS installer selects the concrete operation
+indirect exact perry_runtime::os_hook_slots::js_process_kill => exact js_process_kill -- process/OS installer selects the concrete operation
+indirect exact perry_runtime::os_hook_slots::js_process_listener_count => exact js_process_listener_count -- process/OS installer selects the concrete operation
+indirect exact perry_runtime::os_hook_slots::js_process_listeners => exact js_process_listeners -- process/OS installer selects the concrete operation
+indirect exact perry_runtime::os_hook_slots::js_process_off => exact js_process_off -- process/OS installer selects the concrete operation
+indirect exact perry_runtime::os_hook_slots::js_process_on => exact js_process_on -- process/OS installer selects the concrete operation
+indirect exact perry_runtime::os_hook_slots::js_process_once => exact js_process_once -- process/OS installer selects the concrete operation
+indirect exact perry_runtime::os_hook_slots::js_process_prepend_listener => exact js_process_prepend_listener -- process/OS installer selects the concrete operation
+indirect exact perry_runtime::os_hook_slots::js_process_prepend_once_listener => exact js_process_prepend_once_listener -- process/OS installer selects the concrete operation
+indirect exact perry_runtime::os_hook_slots::js_process_raw_listeners => exact js_process_raw_listeners -- process/OS installer selects the concrete operation
+indirect exact perry_runtime::os_hook_slots::js_process_remove_all_listeners => exact js_process_remove_all_listeners -- process/OS installer selects the concrete operation
+indirect exact perry_runtime::os_hook_slots::js_process_remove_listener => exact js_process_remove_listener -- process/OS installer selects the concrete operation
+indirect exact perry_runtime::os_hook_slots::js_process_set_max_listeners => exact js_process_set_max_listeners -- process/OS installer selects the concrete operation
+indirect exact perry_runtime::os_hook_slots::js_process_signal_drain => exact perry_runtime::os::os_process_emitter::js_process_signal_drain -- process/OS installer selects the concrete operation
+indirect exact perry_runtime::os_hook_slots::js_process_signal_has_active => exact perry_runtime::os::os_process_emitter::js_process_signal_has_active -- process/OS installer selects the concrete operation
+indirect exact perry_runtime::os_hook_slots::js_process_stderr => exact js_process_stderr -- process/OS installer selects the concrete operation
+indirect exact perry_runtime::os_hook_slots::js_process_stdin => exact js_process_stdin -- process/OS installer selects the concrete operation
+indirect exact perry_runtime::os_hook_slots::js_process_stdout => exact js_process_stdout -- process/OS installer selects the concrete operation
+indirect exact perry_runtime::os_hook_slots::js_util_convert_process_signal_to_exit_code => exact js_util_convert_process_signal_to_exit_code -- process/OS installer selects the concrete operation
+indirect exact perry_runtime::os_hook_slots::on_signal_completion => exact perry_runtime::os::signal::on_signal_completion -- process/OS installer selects the concrete operation
+indirect exact perry_runtime::os_hook_slots::process_stdin_needs_pump => exact perry_runtime::os::process_streams::process_stdin_needs_pump -- process/OS installer selects the concrete operation
+indirect exact perry_runtime::os_hook_slots::pump_process_stdin => exact perry_runtime::os::process_streams::pump_process_stdin -- process/OS installer selects the concrete operation
+indirect exact perry_runtime::os_hook_slots::refresh_tty_stream_sizes => exact perry_runtime::os::process_streams::refresh_tty_stream_sizes -- process/OS installer selects the concrete operation
+indirect exact perry_runtime::os_hook_slots::remove_internal_process_listener => exact perry_runtime::os::os_process_emitter::remove_internal_process_listener -- process/OS installer selects the concrete operation
+indirect exact perry_runtime::os_hook_slots::signals_on_turnloop => exact perry_runtime::os::signal::signals_on_turnloop -- process/OS installer selects the concrete operation
+indirect exact perry_runtime::os_hook_slots::stdin_listeners_keep_loop_alive => exact perry_runtime::os::process_streams::stdin_listeners_keep_loop_alive -- process/OS installer selects the concrete operation
+indirect exact perry_runtime::os_hook_slots::stdin_push_bytes => exact perry_runtime::os::process_streams::stdin_push_bytes -- process/OS installer selects the concrete operation
+indirect exact perry_runtime::os_hook_slots::register_installed_roots => exact perry_runtime::os_hook_slots::register_roots -- selected process root-registration callback
+indirect exact perry_runtime::gc::gc_init => exact perry_runtime::os_hook_slots::register_roots -- per-thread initialization follows selected process roots
+
+indirect exact perry_runtime::fs_hook_slots::utf8_stream_destroy_value => exact perry_runtime::fs::stream::utf8_stream::utf8_stream_destroy_value -- FS installer fills generic-stream identity probes; no FS stream exists otherwise
+indirect exact perry_runtime::fs_hook_slots::utf8_stream_emit_value => exact perry_runtime::fs::stream::utf8_stream::utf8_stream_emit_value -- FS installer fills generic-stream identity probes; no FS stream exists otherwise
+indirect exact perry_runtime::fs_hook_slots::utf8_stream_end_value => exact perry_runtime::fs::stream::utf8_stream::utf8_stream_end_value -- FS installer fills generic-stream identity probes; no FS stream exists otherwise
+indirect exact perry_runtime::fs_hook_slots::utf8_stream_listener_count_value => exact perry_runtime::fs::stream::utf8_stream::utf8_stream_listener_count_value -- FS installer fills generic-stream identity probes; no FS stream exists otherwise
+indirect exact perry_runtime::fs_hook_slots::utf8_stream_off_value => exact perry_runtime::fs::stream::utf8_stream::utf8_stream_off_value -- FS installer fills generic-stream identity probes; no FS stream exists otherwise
+indirect exact perry_runtime::fs_hook_slots::utf8_stream_on_value => exact perry_runtime::fs::stream::utf8_stream::utf8_stream_on_value -- FS installer fills generic-stream identity probes; no FS stream exists otherwise
+indirect exact perry_runtime::fs_hook_slots::utf8_stream_remove_all_value => exact perry_runtime::fs::stream::utf8_stream::utf8_stream_remove_all_value -- FS installer fills generic-stream identity probes; no FS stream exists otherwise
+indirect exact perry_runtime::fs_hook_slots::utf8_stream_write_value => exact perry_runtime::fs::stream::utf8_stream::utf8_stream_write_value -- FS installer fills generic-stream identity probes; no FS stream exists otherwise
+
+indirect exact perry_runtime::os_hook_slots::resolve_process_exit_guard => exact perry_runtime::os::os_process_emitter::process_exit_tls::resolve -- process installer owns the exit guard storage resolver
+indirect exact js_runtime_install_os => exact perry_runtime::os_hook_slots::register_roots -- inlined process root-registration callback
+indirect exact js_runtime_install_node_api_host => exact perry_runtime::os_hook_slots::register_roots -- the inlined OS REGISTER_ROOTS slot invokes its selected root-registration callback
+
+indirect exact perry_runtime::messaging_hook_slots::js_broadcast_channel_constructor_call_error => exact perry_runtime::messaging::js_broadcast_channel_constructor_call_error -- messaging installer fills the concrete constructor/prototype operation
+indirect exact perry_runtime::messaging_hook_slots::js_broadcast_channel_new => exact js_broadcast_channel_new -- messaging installer fills the concrete constructor/prototype operation
+indirect exact perry_runtime::messaging_hook_slots::js_message_channel_constructor_call_error => regex ^perry_runtime::messaging::js_message_(channel|port)_constructor_call_error$ -- messaging installer fills the concrete constructor/prototype operation
+indirect exact perry_runtime::messaging_hook_slots::js_message_channel_new => exact js_message_channel_new -- messaging installer fills the concrete constructor/prototype operation
+indirect exact perry_runtime::messaging_hook_slots::js_message_port_constructor_call_error => regex ^perry_runtime::messaging::js_message_(channel|port)_constructor_call_error$ -- messaging installer fills the concrete constructor/prototype operation
+indirect exact perry_runtime::messaging_hook_slots::js_message_port_constructor_error => exact js_message_port_constructor_error -- messaging installer fills the concrete constructor/prototype operation
+indirect exact perry_runtime::messaging_hook_slots::populate_messaging_prototype => exact perry_runtime::messaging::populate_messaging_prototype -- messaging installer fills the concrete constructor/prototype operation
+
+# LLVM may fold the identical two-argument MessageChannel/MessagePort call-error bodies; the callback rule follows either emitted alias.
+
+indirect exact perry_runtime::messaging_hook_slots::resolve_root_guard => exact perry_runtime::messaging::root_guard_tls::resolve -- messaging installer owns the existing root guard storage resolver
+
+indirect exact perry_runtime::wasi_hook_slots::attach_wasi_constructor_prototype => exact perry_runtime::wasi::attach_wasi_constructor_prototype -- WASI installer fills the concrete operation; no WASI values exist otherwise
+indirect exact perry_runtime::wasi_hook_slots::call_import => exact perry_runtime::wasi::host::call_import -- WASI installer fills the concrete operation; no WASI values exist otherwise
+indirect exact perry_runtime::wasi_hook_slots::emit_wasi_static_warning => exact perry_runtime::wasi::emit_wasi_static_warning -- WASI installer fills the concrete operation; no WASI values exist otherwise
+indirect exact perry_runtime::wasi_hook_slots::ensure_wasi_prototype_for_subclass => exact perry_runtime::wasi::ensure_wasi_prototype_for_subclass -- WASI installer fills the concrete operation; no WASI values exist otherwise
+indirect exact perry_runtime::wasi_hook_slots::is_exit_marker => exact perry_runtime::wasi::host::is_exit_marker -- WASI installer fills the concrete operation; no WASI values exist otherwise
+indirect exact perry_runtime::wasi_hook_slots::is_wasi_import_object => exact perry_runtime::wasi::is_wasi_import_object -- WASI installer fills the concrete operation; no WASI values exist otherwise
+indirect exact perry_runtime::wasi_hook_slots::is_wasi_instance => exact perry_runtime::wasi::is_wasi_instance -- WASI installer fills the concrete operation; no WASI values exist otherwise
+indirect exact perry_runtime::wasi_hook_slots::js_wasi_constructor_call => exact js_wasi_constructor_call -- WASI installer fills the concrete operation; no WASI values exist otherwise
+indirect exact perry_runtime::wasi_hook_slots::js_wasi_init_subclass => exact perry_runtime::wasi::js_wasi_init_subclass -- WASI installer fills the concrete operation; no WASI values exist otherwise
+indirect exact perry_runtime::wasi_hook_slots::js_wasi_new => exact js_wasi_new -- WASI installer fills the concrete operation; no WASI values exist otherwise
+indirect exact perry_runtime::wasi_hook_slots::pending_exit_code => exact perry_runtime::wasi::pending_exit_code -- WASI installer fills the concrete operation; no WASI values exist otherwise
+
+indirect exact perry_runtime::event_target_hook_slots::abort_dom_exception_value => exact perry_runtime::event_target::abort_dom_exception_value -- Web-event installer fills the concrete operation; no matching receiver exists otherwise
+indirect exact perry_runtime::event_target_hook_slots::install_web_event_proto_methods => exact perry_runtime::event_target::install_web_event_proto_methods -- Web-event installer fills the concrete operation; no matching receiver exists otherwise
+indirect exact perry_runtime::event_target_hook_slots::is_dom_exception_error => exact perry_runtime::event_target::is_dom_exception_error -- Web-event installer fills the concrete operation; no matching receiver exists otherwise
+indirect exact perry_runtime::event_target_hook_slots::is_dom_exception_object => exact perry_runtime::event_target::is_dom_exception_object -- Web-event installer fills the concrete operation; no matching receiver exists otherwise
+indirect exact perry_runtime::event_target_hook_slots::js_custom_event_new => exact js_custom_event_new -- Web-event installer fills the concrete operation; no matching receiver exists otherwise
+indirect exact perry_runtime::event_target_hook_slots::js_dom_exception_new => exact js_dom_exception_new -- Web-event installer fills the concrete operation; no matching receiver exists otherwise
+indirect exact perry_runtime::event_target_hook_slots::js_dom_exception_subclass_init => exact js_dom_exception_subclass_init -- Web-event installer fills the concrete operation; no matching receiver exists otherwise
+indirect exact perry_runtime::event_target_hook_slots::js_event_new => exact js_event_new -- Web-event installer fills the concrete operation; no matching receiver exists otherwise
+indirect exact perry_runtime::event_target_hook_slots::js_event_subclass_init => exact js_event_subclass_init -- Web-event installer fills the concrete operation; no matching receiver exists otherwise
+indirect exact perry_runtime::event_target_hook_slots::js_event_target_add_event_listener => exact js_event_target_add_event_listener -- Web-event installer fills the concrete operation; no matching receiver exists otherwise
+indirect exact perry_runtime::event_target_hook_slots::js_event_target_get_event_listeners => exact js_event_target_get_event_listeners -- Web-event installer fills the concrete operation; no matching receiver exists otherwise
+indirect exact perry_runtime::event_target_hook_slots::js_event_target_get_max_listeners => exact js_event_target_get_max_listeners -- Web-event installer fills the concrete operation; no matching receiver exists otherwise
+indirect exact perry_runtime::event_target_hook_slots::js_event_target_is_event_target => exact js_event_target_is_event_target -- Web-event installer fills the concrete operation; no matching receiver exists otherwise
+indirect exact perry_runtime::event_target_hook_slots::js_event_target_new => exact js_event_target_new -- Web-event installer fills the concrete operation; no matching receiver exists otherwise
+indirect exact perry_runtime::event_target_hook_slots::js_event_target_remove_event_listener => exact js_event_target_remove_event_listener -- Web-event installer fills the concrete operation; no matching receiver exists otherwise
+indirect exact perry_runtime::event_target_hook_slots::js_event_target_set_max_listeners => exact js_event_target_set_max_listeners -- Web-event installer fills the concrete operation; no matching receiver exists otherwise
+indirect exact perry_runtime::event_target_hook_slots::js_event_target_subclass_init => exact js_event_target_subclass_init -- Web-event installer fills the concrete operation; no matching receiver exists otherwise
+indirect exact perry_runtime::event_target_hook_slots::native_class_name => exact perry_runtime::event_target::native_class_name -- Web-event installer fills the concrete operation; no matching receiver exists otherwise
+indirect exact perry_runtime::event_target_hook_slots::abort_signal_ptr_from_value => exact perry_runtime::event_target::abort::abort_signal_ptr_from_value -- Web-event installer fills the concrete operation; no matching receiver exists otherwise
+indirect exact perry_runtime::event_target_hook_slots::is_abort_signal_value => exact perry_runtime::event_target::abort::is_abort_signal_value -- Web-event installer fills the concrete operation; no matching receiver exists otherwise
+indirect exact perry_runtime::event_target_hook_slots::js_abort_controller_new => exact js_abort_controller_new -- Web-event installer fills the concrete operation; no matching receiver exists otherwise
+indirect exact perry_runtime::event_target_hook_slots::js_abort_controller_signal => exact js_abort_controller_signal -- Web-event installer fills the concrete operation; no matching receiver exists otherwise
+indirect exact perry_runtime::event_target_hook_slots::js_abort_error_value => exact js_abort_error_value -- Web-event installer fills the concrete operation; no matching receiver exists otherwise
+indirect exact perry_runtime::event_target_hook_slots::js_abort_signal_abort => exact js_abort_signal_abort -- Web-event installer fills the concrete operation; no matching receiver exists otherwise
+indirect exact perry_runtime::event_target_hook_slots::js_abort_signal_add_listener => exact js_abort_signal_add_listener -- Web-event installer fills the concrete operation; no matching receiver exists otherwise
+indirect exact perry_runtime::event_target_hook_slots::js_abort_signal_any => exact js_abort_signal_any -- Web-event installer fills the concrete operation; no matching receiver exists otherwise
+indirect exact perry_runtime::event_target_hook_slots::js_abort_signal_is_aborted => exact js_abort_signal_is_aborted -- Web-event installer fills the concrete operation; no matching receiver exists otherwise
+indirect exact perry_runtime::event_target_hook_slots::js_abort_signal_listener_count => exact js_abort_signal_listener_count -- Web-event installer fills the concrete operation; no matching receiver exists otherwise
+indirect exact perry_runtime::event_target_hook_slots::js_abort_signal_listeners_copy => exact js_abort_signal_listeners_copy -- Web-event installer fills the concrete operation; no matching receiver exists otherwise
+indirect exact perry_runtime::event_target_hook_slots::js_abort_signal_remove_listener => exact js_abort_signal_remove_listener -- Web-event installer fills the concrete operation; no matching receiver exists otherwise
+indirect exact perry_runtime::event_target_hook_slots::js_abort_signal_resolve_ptr => exact js_abort_signal_resolve_ptr -- Web-event installer fills the concrete operation; no matching receiver exists otherwise
+indirect exact perry_runtime::event_target_hook_slots::js_abort_signal_timeout => exact js_abort_signal_timeout -- Web-event installer fills the concrete operation; no matching receiver exists otherwise
+indirect exact perry_runtime::event_target_hook_slots::prototype_install_constructor_constants => exact perry_runtime::event_target::prototype::install_constructor_constants -- Web-event installer fills the concrete operation; no matching receiver exists otherwise
+indirect exact perry_runtime::event_target_hook_slots::state_transfer_family => exact perry_runtime::event_target::state::transfer_family -- Web-event installer fills the concrete operation; no matching receiver exists otherwise
+indirect exact perry_runtime::event_target_hook_slots::register_installed_roots => exact perry_runtime::event_target_hook_slots::register_roots -- installed Web-event root-registration callback
+indirect exact perry_runtime::gc::gc_init => exact perry_runtime::event_target_hook_slots::register_roots -- per-thread Web-event root registration
+indirect exact js_runtime_install_event_target => exact perry_runtime::event_target_hook_slots::register_roots -- inlined Web-event root-registration callback
+
+indirect exact perry_runtime::typedarray_hook_slots::coerce_for_kind => exact perry_runtime::typedarray::bigint::coerce_for_kind -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::format_typed_array => exact perry_runtime::typedarray::format::format_typed_array -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::js_native_memory_copy => exact js_native_memory_copy -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::js_native_memory_fill_u32 => exact js_native_memory_fill_u32 -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::js_typed_array_at => exact js_typed_array_at -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::js_typed_array_copy_within => exact js_typed_array_copy_within -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::js_typed_array_every => exact js_typed_array_every -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::js_typed_array_fill => exact js_typed_array_fill -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::js_typed_array_filter => exact js_typed_array_filter -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::js_typed_array_find => exact js_typed_array_find -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::js_typed_array_find_index => exact js_typed_array_find_index -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::js_typed_array_find_last => exact js_typed_array_find_last -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::js_typed_array_find_last_index => exact js_typed_array_find_last_index -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::js_typed_array_for_each => exact js_typed_array_for_each -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::js_typed_array_get => exact js_typed_array_get -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::js_typed_array_index_get_dynamic => exact js_typed_array_index_get_dynamic -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::js_typed_array_index_set_dynamic => exact js_typed_array_index_set_dynamic -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::js_typed_array_join => exact js_typed_array_join -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::js_typed_array_join_value => exact js_typed_array_join_value -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::js_typed_array_length => exact js_typed_array_length -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::js_typed_array_map => exact js_typed_array_map -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::js_typed_array_new => exact js_typed_array_new -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::js_typed_array_new_empty => exact js_typed_array_new_empty -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::js_typed_array_new_from_array => exact js_typed_array_new_from_array -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::js_typed_array_reduce => exact js_typed_array_reduce -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::js_typed_array_reduce_right => exact js_typed_array_reduce_right -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::js_typed_array_reverse => exact js_typed_array_reverse -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::js_typed_array_set => exact js_typed_array_set -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::js_typed_array_set_from => exact js_typed_array_set_from -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::js_typed_array_slice => exact js_typed_array_slice -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::js_typed_array_some => exact js_typed_array_some -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::js_typed_array_sort_default => exact js_typed_array_sort_default -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::js_typed_array_sort_with_comparator => exact js_typed_array_sort_with_comparator -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::js_typed_array_subarray => exact js_typed_array_subarray -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::js_typed_array_to_reversed => exact js_typed_array_to_reversed -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::js_typed_array_to_sorted_default => exact js_typed_array_to_sorted_default -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::js_typed_array_to_sorted_with_comparator => exact js_typed_array_to_sorted_with_comparator -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::js_typed_array_view => exact js_typed_array_view -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::js_typed_array_with => exact js_typed_array_with -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::js_uint8array_get => exact js_uint8array_get -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::js_uint8array_set => exact js_uint8array_set -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::load_at => exact perry_runtime::typedarray::load_at -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::prototype_constructor_patch => exact perry_runtime::typedarray::species::prototype_constructor_patch -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::store_coerced => exact perry_runtime::typedarray::species::store_coerced -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::to_bigint_for_store => exact perry_runtime::typedarray::bigint::to_bigint_for_store -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::to_number => exact perry_runtime::typedarray::species::to_number -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::typed_array_alloc => exact perry_runtime::typedarray::typed_array_alloc -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::typed_array_fast_index_get => exact perry_runtime::typedarray::typed_array_fast_index_get -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::typed_array_fast_index_set => exact perry_runtime::typedarray::typed_array_fast_index_set -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::typed_array_from_source_raw_values => exact perry_runtime::typedarray::construct::typed_array_from_source_raw_values -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::typed_array_length_or_throw => exact perry_runtime::typedarray::typed_array_length_or_throw -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::typed_array_to_array => exact perry_runtime::typedarray::transform::typed_array_to_array -- typed-array installer fills the concrete operation
+
+indirect exact perry_runtime::process::ipc_hooks::process_ipc_property => exact perry_runtime::process::ipc::process_ipc_property_impl -- IPC installer fills concrete operation; uninstalled channel cannot produce work
+indirect exact perry_runtime::process::ipc_hooks::process_ipc_note_listener => exact perry_runtime::process::ipc::process_ipc_note_listener_impl -- IPC installer fills concrete operation; uninstalled channel cannot produce work
+indirect exact js_process_ipc_drain => exact perry_runtime::process::ipc::js_process_ipc_drain_impl -- IPC installer fills concrete operation; uninstalled channel cannot produce work
+indirect exact js_process_ipc_has_active => exact perry_runtime::process::ipc::js_process_ipc_has_active_impl -- IPC installer fills concrete operation; uninstalled channel cannot produce work
+indirect exact perry_runtime::process::ipc_hooks::process_ipc_send_call => exact perry_runtime::process::ipc::process_ipc_send_call_impl -- IPC installer fills concrete operation; uninstalled channel cannot produce work
+indirect exact perry_runtime::process::ipc_hooks::process_ipc_disconnect_call => exact perry_runtime::process::ipc::process_ipc_disconnect_call_impl -- IPC installer fills concrete operation; uninstalled channel cannot produce work
+indirect exact perry_runtime::process::ipc_hooks::process_ipc_send_raw_json => exact perry_runtime::process::ipc::process_ipc_send_raw_json_impl -- IPC installer fills concrete operation; uninstalled channel cannot produce work
+indirect exact perry_runtime::process::ipc_hooks::initialize_channel => regex ^perry_runtime::process::ipc::initialize_(unix|windows)_ipc$ -- IPC installer fills platform channel adoption; common bootstrap keeps its original mutex and environment cleanup
+
+indirect exact perry_runtime::process::ipc_bootstrap::process_ipc_ensure_initialized => regex ^perry_runtime::process::ipc::initialize_(unix|windows)_ipc$ -- objdump-verified INITIALIZE_CHANNEL load at +0x271 and call at +0x2a2 after inlining
+
+indirect exact perry_runtime::bun_hook_slots::js_bun_stdin => exact js_bun_stdin -- Bun CLI installer fills the concrete object or decorator
+indirect exact perry_runtime::bun_hook_slots::js_bun_stdout => exact js_bun_stdout -- Bun CLI installer fills the concrete object or decorator
+indirect exact perry_runtime::bun_hook_slots::js_bun_stderr => exact js_bun_stderr -- Bun CLI installer fills the concrete object or decorator
+indirect exact perry_runtime::bun_hook_slots::decorate_bun_plugin => exact perry_runtime::bun_compat::plugin::decorate_bun_plugin -- Bun CLI installer fills the concrete object or decorator
+
+indirect exact perry_runtime::bun_hook_slots::resolve_self_guard => exact perry_runtime::bun_compat::self_global::installed_tls::resolve -- Bun platform bootstrap installs existing TLS storage resolver before its original once guard
+
+indirect exact perry_runtime::node_test_hook_slots::property => exact perry_runtime::node_test::property -- test installer fills namespace lookup
+indirect exact perry_runtime::node_test_hook_slots::dispatch_object_method => exact perry_runtime::node_test::dispatch_object_method -- test installer fills object dispatch
+
+indirect exact perry_runtime::temporal_hook_slots::from_epoch_milliseconds => exact perry_runtime::temporal::instant::from_epoch_milliseconds_static -- Temporal installer fills Date conversion
+
+indirect regex ^perry_runtime::dgram_registry_owner::DGRAM_REGISTRY.* => exact perry_runtime::dgram::register_thread_exit_hook -- UDP installer fills existing registry initializer callback
+
+indirect exact perry_runtime::wasm_hook_slots::set_memory_buffer => exact perry_runtime::webassembly::set_memory_buffer -- WebAssembly installer fills backing buffer update
+
+indirect exact perry_runtime::segmenter_hook_roots::register_installed_roots => exact perry_runtime::segmenter_hook_roots::register_roots -- Segmenter installer registers its existing scanner per thread
+
+indirect exact perry_runtime::native_finalizer_hook::enqueue => exact perry_runtime::node_api_host::metadata::enqueue_finalizer -- host installer fills external-buffer finalizer queue; only host values carry a callback
+
+indirect exact perry_runtime::native_finalizer_hook::resolve_env_storage => exact perry_runtime::node_api_host::env_storage::resolve -- host installer fills existing storage resolver before first use
+
+indirect exact perry_runtime::native_finalizer_hook::resolve_legacy_storage => exact perry_runtime::node_api_host::loader::legacy_storage::resolve -- host installer fills existing storage resolver before first use
+
+indirect exact perry_runtime::native_finalizer_hook::resolve_finalizer_storage => exact perry_runtime::node_api_host::metadata::finalizer_storage::resolve -- host installer fills existing storage resolver before first use
+
+indirect exact perry_runtime::native_finalizer_hook::new_completion_queue => exact perry_runtime::node_api_host::async_work::new_completion_queue -- host installer supplies the existing queue initializer; first-force timing unchanged
+
+indirect exact perry_runtime::diagnostic_report_roots::register_installed_roots => exact perry_runtime::diagnostic_report_roots::register_roots -- diagnostics installer registers existing report-controller scanner per thread
+
+indirect exact perry_runtime::diagnostic_report_roots::report_value => exact perry_runtime::process::report::process_report_value -- diagnostics installer fills generic process report lookup
+
+indirect exact perry_runtime::dyn_eval_hook_roots::register_installed_roots => exact perry_runtime::dyn_eval_hooks::install::register_roots -- evaluator installer registers its existing root scanner per thread
+
+indirect exact perry_runtime::dyn_eval_hook_roots::resolve_active_functions_storage => exact perry_runtime::dyn_eval::function_owner::active_functions_storage::resolve -- evaluator installer fills existing function pin TLS resolver
+
+indirect exact perry_runtime::dyn_eval_hook_roots::resolve_pin_top_storage => exact perry_runtime::dyn_eval::function_owner::pin_top_storage::resolve -- evaluator installer fills existing function pin TLS resolver

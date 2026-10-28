@@ -53,9 +53,9 @@ fn typed_array_view_info(value: f64) -> Option<(usize, bool, u32)> {
         let len = crate::buffer::js_buffer_length(addr as *const crate::buffer::BufferHeader);
         return Some((addr, true, len.max(0) as u32));
     }
-    if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
-        let len = crate::typedarray::js_typed_array_length(
-            addr as *const crate::typedarray::TypedArrayHeader,
+    if crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some() {
+        let len = crate::typedarray_hook_slots::js_typed_array_length(
+            addr as *const crate::typedarray_hook_slots::TypedArrayHeader,
         );
         return Some((addr, false, len.max(0) as u32));
     }
@@ -169,8 +169,8 @@ pub(crate) unsafe fn typed_array_own_index(obj_value: f64, key_value: f64) -> Ty
     let value = if is_buf {
         crate::buffer::js_buffer_get(addr as *const crate::buffer::BufferHeader, idx) as f64
     } else {
-        crate::typedarray::js_typed_array_get(
-            addr as *const crate::typedarray::TypedArrayHeader,
+        crate::typedarray_hook_slots::js_typed_array_get(
+            addr as *const crate::typedarray_hook_slots::TypedArrayHeader,
             idx,
         )
     };
@@ -252,8 +252,8 @@ pub(crate) unsafe fn typed_array_define_own_property(
                 n as i32,
             );
         } else {
-            crate::typedarray::js_typed_array_set(
-                addr as *mut crate::typedarray::TypedArrayHeader,
+            crate::typedarray_hook_slots::js_typed_array_set(
+                addr as *mut crate::typedarray_hook_slots::TypedArrayHeader,
                 idx as i32,
                 primitive,
             );

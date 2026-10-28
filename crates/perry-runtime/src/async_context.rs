@@ -440,7 +440,9 @@ pub fn apply_context_guard(action: ContextGuardAction) {
         ContextGuardAction::RestoreJobDomain(domain) => {
             job_domain::replace_current(domain);
         }
-        ContextGuardAction::RestoreExecutionIds => crate::async_hooks::unwind_execution_scope(),
+        ContextGuardAction::RestoreExecutionIds => {
+            crate::async_hook_slots::unwind_execution_scope()
+        }
         #[cfg(test)]
         ContextGuardAction::TestNoop => {}
     }

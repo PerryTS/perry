@@ -665,7 +665,7 @@ pub extern "C" fn js_zlib_validate_buffer_arg(data_bits: i64) {
     // word must be one the allocator owns; `object_ref_addr` vouches for it.
     let raw = crate::value::addr_class::object_ref_addr(value);
     if raw >= 0x1000 {
-        if crate::typedarray::lookup_typed_array_kind(raw).is_some() {
+        if crate::typedarray_hook_slots::lookup_typed_array_kind(raw).is_some() {
             return;
         }
         if crate::buffer::is_registered_buffer(raw) {

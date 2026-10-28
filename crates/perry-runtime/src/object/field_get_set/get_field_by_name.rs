@@ -45,11 +45,11 @@ fn handle_proto_inherited_field(
 #[inline(never)]
 fn proxy_receiver_get(raw_addr: u64, key: *const crate::StringHeader) -> Option<JSValue> {
     let boxed = f64::from_bits(crate::value::POINTER_TAG | (raw_addr & 0x0000_FFFF_FFFF_FFFF));
-    if crate::proxy::js_proxy_is_proxy(boxed) == 0 {
+    if crate::proxy_hooks::proxy_is_proxy(boxed) == 0 {
         return None;
     }
     let key_f64 = f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
-    let v = crate::proxy::js_proxy_get(boxed, key_f64);
+    let v = crate::proxy_hooks::proxy_get(boxed, key_f64);
     Some(JSValue::from_bits(v.to_bits()))
 }
 
@@ -550,14 +550,14 @@ mod primitive_proto_accessor_tests_10648 {
                 "positive bigint",
                 "BigInt",
                 scope.root_nanbox_f64(crate::value::js_nanbox_bigint(
-                    crate::bigint::js_bigint_from_i64(1) as i64,
+                    crate::bigint_hooks::js_bigint_from_i64(1) as i64,
                 )),
             ),
             (
                 "negative bigint",
                 "BigInt",
                 scope.root_nanbox_f64(crate::value::js_nanbox_bigint(
-                    crate::bigint::js_bigint_from_i64(-1) as i64,
+                    crate::bigint_hooks::js_bigint_from_i64(-1) as i64,
                 )),
             ),
         ];
@@ -1061,7 +1061,7 @@ fn get_field_by_name_past_data_probe(
                     let key_ptr = crate::string::string_data(key);
                     let key_len = (*key).byte_len as usize;
                     let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
-                    let ta = addr as *const crate::typedarray::TypedArrayHeader;
+                    let ta = addr as *const crate::typedarray_hook_slots::TypedArrayHeader;
                     if let Some(value) = crypto_key_property_value(addr, key_bytes) {
                         return value;
                     }
@@ -1070,15 +1070,16 @@ fn get_field_by_name_past_data_probe(
                     {
                         return JSValue::from_bits(value.to_bits());
                     }
-                    if let Some(kind) = crate::typedarray::lookup_typed_array_kind(addr) {
-                        let elem_size = crate::typedarray::elem_size_for_kind(kind);
+                    if let Some(kind) = crate::typedarray_hook_slots::lookup_typed_array_kind(addr)
+                    {
+                        let elem_size = crate::typedarray_hook_slots::elem_size_for_kind(kind);
                         match key_bytes {
                             b"length" => {
-                                let len = crate::typedarray::js_typed_array_length(ta);
+                                let len = crate::typedarray_hook_slots::js_typed_array_length(ta);
                                 return JSValue::number(len as f64);
                             }
                             b"byteLength" => {
-                                let len = crate::typedarray::js_typed_array_length(ta);
+                                let len = crate::typedarray_hook_slots::js_typed_array_length(ta);
                                 return JSValue::number((len as usize * elem_size) as f64);
                             }
                             b"buffer" => {
@@ -1131,13 +1132,13 @@ fn get_field_by_name_past_data_probe(
                                 // speciesctor-get-ctor-inherited reads
                                 // `result.constructor` and counts calls).
                                 if let Some(v) =
-                                    crate::typedarray::species::prototype_constructor_patch(
+                                    crate::typedarray_hook_slots::species::prototype_constructor_patch(
                                         kind, addr,
                                     )
                                 {
                                     return JSValue::from_bits(v.to_bits());
                                 }
-                                let name = crate::typedarray::name_for_kind(kind);
+                                let name = crate::typedarray_hook_slots::name_for_kind(kind);
                                 let ctor = super::super::js_get_global_this_builtin_value(
                                     name.as_ptr(),
                                     name.len(),
@@ -1168,7 +1169,7 @@ fn get_field_by_name_past_data_probe(
                             }
                             None => {
                                 let proto = crate::object::builtin_prototype_value(
-                                    crate::typedarray::name_for_kind(kind),
+                                    crate::typedarray_hook_slots::name_for_kind(kind),
                                 );
                                 if let Some(inherited) = super::super::prototype_chain::
                                 resolve_inherited_field_from_prototype(
@@ -1594,7 +1595,7 @@ fn get_field_by_name_past_data_probe(
                         let receiver = f64::from_bits(
                             crate::value::JSValue::pointer(addr as *const u8).bits(),
                         );
-                        let proto = crate::date::date_cell_prototype(receiver);
+                        let proto = crate::date_hook_slots::date_cell_prototype(receiver);
                         let pv = JSValue::from_bits(proto.to_bits());
                         if pv.is_pointer() {
                             let proto_ptr = pv.as_pointer::<ObjectHeader>();
@@ -1753,7 +1754,7 @@ fn get_field_by_name_past_data_probe(
                     // genuine buffer metadata read would early-return undefined.
                     if (*gc_header).obj_type == crate::gc::GC_TYPE_PROMISE
                         && !crate::buffer::is_registered_buffer(raw)
-                        && crate::typedarray::lookup_typed_array_kind(raw).is_none()
+                        && crate::typedarray_hook_slots::lookup_typed_array_kind(raw).is_none()
                     {
                         let name_ptr =
                             (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());

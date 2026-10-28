@@ -688,6 +688,13 @@ pub struct CompilationContext {
     /// a string literal, or constructs a Worker). Gates worker entries named
     /// by URL literals (`collect_modules/worker_url.rs`).
     pub(crate) uses_worker_threads: bool,
+    pub(crate) uses_thread_codec: bool,
+    pub(crate) uses_date: bool,
+    pub(crate) uses_perf_hooks: bool,
+    pub(crate) uses_os: bool,
+    pub(crate) uses_messaging: bool,
+    pub(crate) uses_event_target: bool,
+    pub(crate) uses_typedarray: bool,
     /// `new URL("<script>", import.meta.url)` targets not yet accepted.
     pub(crate) worker_url_candidates: Vec<super::collect_modules::worker_url::WorkerUrlCandidate>,
     /// Accepted URL-literal targets, linked once collection ends.
@@ -970,6 +977,15 @@ pub struct CompilationContext {
     /// intrinsics, so a mention means it may be used as a VALUE).
     pub uses_global_math: bool,
     pub uses_global_json: bool,
+    pub uses_json_format: bool,
+    pub uses_json_engine: bool,
+    /// Native capabilities and computed member keys may occur in different modules.
+    pub uses_computed_member_keys: bool,
+    pub uses_file_handle_capability: bool,
+    pub uses_bun_file_capability: bool,
+    pub uses_turnloop: bool,
+    pub uses_bigint: bool,
+    pub uses_proxy: bool,
     pub uses_global_reflect: bool,
     pub uses_global_atomics: bool,
     /// Per-group `globalThis` web-platform member tables (URL / Text* /
@@ -1351,6 +1367,13 @@ impl CompilationContext {
             native_modules: BTreeMap::new(),
             reexport_pruner: Default::default(),
             uses_worker_threads: false,
+            uses_thread_codec: false,
+            uses_date: false,
+            uses_perf_hooks: false,
+            uses_os: false,
+            uses_messaging: false,
+            uses_event_target: false,
+            uses_typedarray: false,
             worker_url_candidates: Vec::new(),
             worker_url_accepted: Vec::new(),
             worker_url_entries: Vec::new(),
@@ -1417,6 +1440,14 @@ impl CompilationContext {
             uses_intl_namespace: false,
             uses_global_math: false,
             uses_global_json: false,
+            uses_json_format: false,
+            uses_json_engine: false,
+            uses_computed_member_keys: false,
+            uses_file_handle_capability: false,
+            uses_bun_file_capability: false,
+            uses_turnloop: false,
+            uses_bigint: false,
+            uses_proxy: false,
             uses_global_reflect: false,
             uses_global_atomics: false,
             uses_global_url: false,

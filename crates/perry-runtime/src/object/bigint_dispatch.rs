@@ -26,7 +26,7 @@ pub(crate) unsafe fn dispatch_bigint_binary_method(
             )
         } else {
             // Try to convert number to BigInt
-            crate::bigint::js_bigint_from_f64(arg_f64)
+            crate::bigint_hooks::js_bigint_from_f64(arg_f64)
         }
     } else {
         std::ptr::null()
@@ -38,77 +38,77 @@ pub(crate) unsafe fn dispatch_bigint_binary_method(
     match method {
         // Binary arithmetic → returns BigInt
         "add" => {
-            let result = crate::bigint::js_bigint_add(a_ptr(), b_ptr());
+            let result = crate::bigint_hooks::js_bigint_add(a_ptr(), b_ptr());
             f64::from_bits(JSValue::bigint_ptr(result).bits())
         }
         "sub" => {
-            let result = crate::bigint::js_bigint_sub(a_ptr(), b_ptr());
+            let result = crate::bigint_hooks::js_bigint_sub(a_ptr(), b_ptr());
             f64::from_bits(JSValue::bigint_ptr(result).bits())
         }
         "mul" => {
-            let result = crate::bigint::js_bigint_mul(a_ptr(), b_ptr());
+            let result = crate::bigint_hooks::js_bigint_mul(a_ptr(), b_ptr());
             f64::from_bits(JSValue::bigint_ptr(result).bits())
         }
         "div" => {
-            let result = crate::bigint::js_bigint_div(a_ptr(), b_ptr());
+            let result = crate::bigint_hooks::js_bigint_div(a_ptr(), b_ptr());
             f64::from_bits(JSValue::bigint_ptr(result).bits())
         }
         "mod" | "umod" => {
-            let result = crate::bigint::js_bigint_mod(a_ptr(), b_ptr());
+            let result = crate::bigint_hooks::js_bigint_mod(a_ptr(), b_ptr());
             f64::from_bits(JSValue::bigint_ptr(result).bits())
         }
         "pow" => {
-            let result = crate::bigint::js_bigint_pow(a_ptr(), b_ptr());
+            let result = crate::bigint_hooks::js_bigint_pow(a_ptr(), b_ptr());
             f64::from_bits(JSValue::bigint_ptr(result).bits())
         }
         "and" => {
-            let result = crate::bigint::js_bigint_and(a_ptr(), b_ptr());
+            let result = crate::bigint_hooks::js_bigint_and(a_ptr(), b_ptr());
             f64::from_bits(JSValue::bigint_ptr(result).bits())
         }
         "or" => {
-            let result = crate::bigint::js_bigint_or(a_ptr(), b_ptr());
+            let result = crate::bigint_hooks::js_bigint_or(a_ptr(), b_ptr());
             f64::from_bits(JSValue::bigint_ptr(result).bits())
         }
         "xor" => {
-            let result = crate::bigint::js_bigint_xor(a_ptr(), b_ptr());
+            let result = crate::bigint_hooks::js_bigint_xor(a_ptr(), b_ptr());
             f64::from_bits(JSValue::bigint_ptr(result).bits())
         }
         "shln" => {
-            let result = crate::bigint::js_bigint_shl(a_ptr(), b_ptr());
+            let result = crate::bigint_hooks::js_bigint_shl(a_ptr(), b_ptr());
             f64::from_bits(JSValue::bigint_ptr(result).bits())
         }
         "shrn" => {
-            let result = crate::bigint::js_bigint_shr(a_ptr(), b_ptr());
+            let result = crate::bigint_hooks::js_bigint_shr(a_ptr(), b_ptr());
             f64::from_bits(JSValue::bigint_ptr(result).bits())
         }
         "maskn" => {
             // maskn(bits) — mask to lowest N bits
-            let result = crate::bigint::js_bigint_and(a_ptr(), b_ptr()); // approximate
+            let result = crate::bigint_hooks::js_bigint_and(a_ptr(), b_ptr()); // approximate
             f64::from_bits(JSValue::bigint_ptr(result).bits())
         }
         // Comparison → returns boolean/number
         "eq" => {
-            let result = crate::bigint::js_bigint_eq(a_ptr(), b_ptr());
+            let result = crate::bigint_hooks::js_bigint_eq(a_ptr(), b_ptr());
             f64::from_bits(JSValue::bool(result != 0).bits())
         }
         "lt" => {
-            let result = crate::bigint::js_bigint_cmp(a_ptr(), b_ptr());
+            let result = crate::bigint_hooks::js_bigint_cmp(a_ptr(), b_ptr());
             f64::from_bits(JSValue::bool(result < 0).bits())
         }
         "lte" => {
-            let result = crate::bigint::js_bigint_cmp(a_ptr(), b_ptr());
+            let result = crate::bigint_hooks::js_bigint_cmp(a_ptr(), b_ptr());
             f64::from_bits(JSValue::bool(result <= 0).bits())
         }
         "gt" => {
-            let result = crate::bigint::js_bigint_cmp(a_ptr(), b_ptr());
+            let result = crate::bigint_hooks::js_bigint_cmp(a_ptr(), b_ptr());
             f64::from_bits(JSValue::bool(result > 0).bits())
         }
         "gte" => {
-            let result = crate::bigint::js_bigint_cmp(a_ptr(), b_ptr());
+            let result = crate::bigint_hooks::js_bigint_cmp(a_ptr(), b_ptr());
             f64::from_bits(JSValue::bool(result >= 0).bits())
         }
         "cmp" => {
-            let result = crate::bigint::js_bigint_cmp(a_ptr(), b_ptr());
+            let result = crate::bigint_hooks::js_bigint_cmp(a_ptr(), b_ptr());
             result as f64
         }
         "fromTwos" | "toTwos" => {
@@ -124,7 +124,7 @@ pub(crate) unsafe fn dispatch_bigint_binary_method(
                 let limbs = crate::bigint::BigIntHeader::all_limbs(a);
                 let bit = width - 1;
                 let word = limbs.get((bit / 64) as usize).copied().unwrap_or_else(|| {
-                    if crate::bigint::js_bigint_is_negative(a) != 0 {
+                    if crate::bigint_hooks::js_bigint_is_negative(a) != 0 {
                         u64::MAX
                     } else {
                         0
@@ -138,9 +138,9 @@ pub(crate) unsafe fn dispatch_bigint_binary_method(
             }
             let bits = width.min(u32::MAX as u64) as u32;
             let result = if method == "fromTwos" {
-                crate::bigint::js_bigint_as_int_n(bits, a)
-            } else if crate::bigint::js_bigint_is_negative(a) != 0 {
-                crate::bigint::js_bigint_as_uint_n(bits, a)
+                crate::bigint_hooks::js_bigint_as_int_n(bits, a)
+            } else if crate::bigint_hooks::js_bigint_is_negative(a) != 0 {
+                crate::bigint_hooks::js_bigint_as_uint_n(bits, a)
             } else {
                 return f64::from_bits(
                     JSValue::bigint_ptr(a as *mut crate::bigint::BigIntHeader).bits(),

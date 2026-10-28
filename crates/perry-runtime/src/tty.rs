@@ -1267,7 +1267,7 @@ pub extern "C" fn js_process_stdout_rows() -> f64 {
 #[no_mangle]
 pub extern "C" fn js_process_stdout_on(event_ptr: *const StringHeader, callback: i64) -> f64 {
     if event_ptr.is_null() {
-        return crate::os::js_process_stdout();
+        return crate::os_hook_slots::js_process_stdout();
     }
     let event = unsafe {
         let len = (*event_ptr).byte_len as usize;
@@ -1278,7 +1278,7 @@ pub extern "C" fn js_process_stdout_on(event_ptr: *const StringHeader, callback:
     if event == "resize" {
         register_resize_callback(callback);
     }
-    crate::os::js_process_stdout()
+    crate::os_hook_slots::js_process_stdout()
 }
 
 /// Drain the resize-pending flag and fire the registered resize
@@ -1296,7 +1296,7 @@ pub extern "C" fn js_tty_resize_drain() -> i32 {
         CACHED_COLS.store(cols, Ordering::Relaxed);
         CACHED_ROWS.store(rows, Ordering::Relaxed);
     }
-    crate::os::refresh_tty_stream_sizes();
+    crate::os_hook_slots::refresh_tty_stream_sizes();
     let cb = RESIZE_CALLBACK.with(|c| *c.borrow());
     if let Some(cb_i64) = cb {
         let closure = cb_i64 as *const ClosureHeader;

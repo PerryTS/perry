@@ -36,6 +36,8 @@ struct Cache {
 }
 
 crate::perry_thread_local! {
+    // Keep this resolver record out of Mach-O globals merged with the core.
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_regex")]
     static REGEX_CACHE: RefCell<Cache> = RefCell::new(Cache::default());
 }
 

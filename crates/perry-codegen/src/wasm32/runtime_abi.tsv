@@ -5142,6 +5142,7 @@ perry_component_frame_resource_commit	void	ptr
 perry_component_frame_resource_destroy	void	ptr,i32u,i32u
 perry_component_frame_resource_lift	i32u	ptr,i32u,i32u,i32u,i32s
 perry_component_frame_resource_lower	i32u	ptr,i32u,i32u,i32s,i32s
+perry_component_frame_resource_scope_end	i32s	ptr
 perry_component_frame_s64	i32u	ptr,i64
 perry_component_frame_set	void	ptr,i32u,ptr,usize,i32u
 perry_component_frame_string	i32u	ptr,ptr,usize

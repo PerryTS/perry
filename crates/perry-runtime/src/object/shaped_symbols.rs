@@ -6,7 +6,7 @@ pub(crate) const PRIVATE_ENTRY: u8 = 0x40;
 
 pub(crate) unsafe fn owner(addr: usize) -> Option<*mut ObjectHeader> {
     let bag = if crate::value::addr_class::is_proxy_cell(addr) {
-        crate::proxy::property_bag(addr)
+        crate::proxy_hooks::property_bag(addr)
     } else if crate::value::addr_class::try_read_tracked_gc_header(addr).is_some() {
         descriptor_state::descriptor_holder(addr)
     } else {

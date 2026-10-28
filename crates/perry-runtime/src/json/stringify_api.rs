@@ -360,31 +360,7 @@ pub unsafe extern "C" fn js_json_stringify(value: f64, type_hint: u32) -> *mut S
 pub unsafe extern "C" fn js_json_stringify_string(
     str_ptr: *const StringHeader,
 ) -> *mut StringHeader {
-    if let Some(ptr) =
-        super::stringify_string::try_heap_string(JSValue::string_ptr(str_ptr as *mut _).bits())
-    {
-        return ptr;
-    }
-    if !crate::value::addr_class::is_plausible_heap_addr(str_ptr as usize) {
-        return std::ptr::null_mut();
-    }
-    let len = (*str_ptr).byte_len as usize;
-    let mut buf = String::with_capacity(len + 16);
-    {
-        let bytes = std::slice::from_raw_parts(crate::string::string_data(str_ptr), len);
-        // Runtime strings may contain lone UTF-16 surrogates encoded as WTF-8.
-        // Only validated UTF-8 may become &str; the byte emitter validates WTF-8
-        // before quoting it. Finish the owned copy before managed allocation.
-        match std::str::from_utf8(bytes) {
-            Ok(s) => write_escaped_string(&mut buf, s),
-            Err(_) => {
-                if !super::stringify_scalars::write_wtf8_key(&mut buf, bytes) {
-                    return std::ptr::null_mut();
-                }
-            }
-        }
-    }
-    js_string_from_bytes(buf.as_ptr(), buf.len() as u32)
+    crate::string::quote::quote_header(str_ptr)
 }
 
 /// Stringify a number

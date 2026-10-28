@@ -54,10 +54,10 @@ pub(crate) fn web_builtin_to_string_tag(value: f64) -> Option<&'static str> {
         Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT => addr as *const ObjectHeader,
         _ => return None,
     };
-    if crate::url::is_url_object_shape(obj as *mut ObjectHeader) {
+    if crate::object::url_layout::is_url_object_shape(obj as *mut ObjectHeader) {
         return Some("URL");
     }
-    if crate::url::search_params::shape_is_url_search_params(obj) {
+    if crate::url_hooks::shape_is_url_search_params(obj) {
         return Some("URLSearchParams");
     }
     None
@@ -125,8 +125,8 @@ pub(crate) fn typed_array_to_string_tag_name(value: f64) -> Option<&'static str>
     if raw_addr < 0x1000 {
         return None;
     }
-    if let Some(kind) = crate::typedarray::lookup_typed_array_kind(raw_addr) {
-        return Some(crate::typedarray::name_for_kind(kind));
+    if let Some(kind) = crate::typedarray_hook_slots::lookup_typed_array_kind(raw_addr) {
+        return Some(crate::typedarray_hook_slots::name_for_kind(kind));
     }
     // Buffer-backed `Uint8Array` (and Node `Buffer`) — registered as a buffer
     // but still a TypedArray. Exclude the non-TypedArray buffer flavours.
@@ -201,13 +201,13 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
     // test262 proxy-revoked-during-get-call).
     if jsv.is_pointer()
         && crate::value::addr_class::is_proxy_cell(raw_addr)
-        && crate::proxy::js_proxy_is_proxy(value) != 0
+        && crate::proxy_hooks::proxy_is_proxy(value) != 0
     {
         const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
         let is_array = crate::array::js_array_is_array(value).to_bits() == TAG_TRUE;
         let builtin_tag = if is_array {
             "Array"
-        } else if crate::proxy::proxy_wraps_callable(value) {
+        } else if crate::proxy_hooks::proxy_wraps_callable(value) {
             "Function"
         } else {
             "Object"
@@ -217,7 +217,7 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
             None
         } else {
             let sym_f64 = f64::from_bits(POINTER_TAG | (sym as u64 & POINTER_MASK));
-            string_value_to_owned(crate::proxy::js_proxy_get(value, sym_f64))
+            string_value_to_owned(crate::proxy_hooks::proxy_get(value, sym_f64))
         };
         let formatted = match tag {
             Some(tag) => format!("[object {}]", tag),
@@ -268,11 +268,11 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
             Some("RegExp")
         } else if crate::symbol::is_registered_symbol(raw_addr) {
             Some("Symbol")
-        } else if let Some(kind) = crate::typedarray::lookup_typed_array_kind(raw_addr) {
+        } else if let Some(kind) = crate::typedarray_hook_slots::lookup_typed_array_kind(raw_addr) {
             // Typed arrays are raw-i64 pointers with no brand arm; without this
             // they fall through to the `is_number()` fallback below (a small
             // raw-pointer bit pattern reads as a finite f64) → `[object Number]`.
-            Some(crate::typedarray::name_for_kind(kind))
+            Some(crate::typedarray_hook_slots::name_for_kind(kind))
         } else {
             None
         };

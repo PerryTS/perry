@@ -21,9 +21,9 @@ pub fn canonical_guest(path: &Path, selected: Option<&str>) -> Result<BTreeMap<S
     generate_guest(path, selected, false)
 }
 
-/// Internal acceptance probe for generated async functions. This deliberately
-/// does not enable --guest-c async output: resources, cooperative cancellation
-/// and async values need qualification before the public guard can be removed.
+/// Experimental async generation, including the Linux-qualified resource
+/// ownership/cancellation profile. Public --guest-c async output and guest
+/// future/stream values remain guarded pending their complete qualification.
 #[doc(hidden)]
 pub fn experimental_async_guest(
     path: &Path,
@@ -62,7 +62,6 @@ fn generate_guest(
         "async guest functions require the P3 rooted-frame adapter"
     );
     let anchor = if experimental {
-        asynchronous::check_profile(&world)?;
         Some(asynchronous::add_wake_anchor(&mut resolve, id)?)
     } else {
         None
@@ -79,7 +78,11 @@ fn generate_resolved(
     let mut files = Files::default();
     wit_bindgen_c::Opts {
         no_sig_flattening: true,
-        autodrop_borrows: wit_bindgen_c::Enabled::Yes,
+        autodrop_borrows: if anchor.is_some() {
+            wit_bindgen_c::Enabled::No
+        } else {
+            wit_bindgen_c::Enabled::Yes
+        },
         ..Default::default()
     }
     .build()
@@ -113,6 +116,7 @@ fn generate_resolved(
 struct Resource {
     id: u32,
     own_name: String,
+    borrow_name: String,
     name: String,
     local: bool,
 }
@@ -161,6 +165,7 @@ impl Generator<'_> {
                     id: u32::try_from(id.index() * 2 + usize::from(!import))
                         .expect("resource type index"),
                     own_name: format!("{namespace}_own_{encoded}_t"),
+                    borrow_name: format!("{namespace}_borrow_{encoded}_t"),
                     name: name.clone(),
                     local: !import,
                 };
@@ -295,6 +300,10 @@ static void *perry_initialize(void) {
             let stem = resource.name.strip_suffix("_t").unwrap();
             let own = &resource.own_name;
             writeln!(self.source, "case {}:\nif (operation == 1) {{ {stem}_drop_own(({own}){{ (int32_t)value }}); return 0; }}", id)?;
+            if !resource.local && self.anchor.is_some() {
+                let borrow = &resource.borrow_name;
+                writeln!(self.source, "if (operation == 2) {{ {stem}_drop_borrow(({borrow}){{ (int32_t)value }}); return 0; }}")?;
+            }
             if resource.local {
                 writeln!(self.source, "if (operation == 0) return (uint32_t){stem}_new(({} *)(uintptr_t)value).__handle;", resource.name)?;
             }

@@ -129,18 +129,18 @@ pub(crate) fn js_jsvalue_to_string_impl(
     } else if jsval.is_bigint() {
         // BigInt - convert to decimal string
         let ptr = jsval.as_bigint_ptr();
-        crate::bigint::js_bigint_to_string(ptr)
+        crate::bigint_hooks::js_bigint_to_string(ptr)
     } else if jsval.is_reference() {
         // Arrays stringify via join; other objects use their own conversion.
         let ptr = (jsval.bits() & POINTER_MASK) as *const u8;
         // Proxy ids can be SMALLER than the 0x10000 heap floor — check the
         // registry (a by-value lookup, no deref) before the gate.
-        if crate::proxy::js_proxy_is_proxy(value) != 0 {
-            if crate::proxy::proxy_wraps_callable(value) {
+        if crate::proxy_hooks::proxy_is_proxy(value) != 0 {
+            if crate::proxy_hooks::proxy_wraps_callable(value) {
                 let s = "function () { [native code] }";
                 return crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
             }
-            let target = crate::proxy::js_proxy_target(value);
+            let target = crate::proxy_hooks::proxy_target(value);
             if target.to_bits() != value.to_bits() {
                 return js_jsvalue_to_string_impl(target, reject_symbol);
             }
@@ -159,17 +159,17 @@ pub(crate) fn js_jsvalue_to_string_impl(
             // toString/valueOf trap of its own, so resolve to the target and
             // stringify that ("[object Object]" for an ordinary object target),
             // which matches Node for the trap-less case. (Proxy crash cluster.)
-            if crate::proxy::js_proxy_is_proxy(value) != 0 {
+            if crate::proxy_hooks::proxy_is_proxy(value) != 0 {
                 // A callable-target proxy's default ToString runs
                 // Function.prototype.toString with the PROXY as receiver —
                 // never introspectable, so the NativeFunction form (matches
                 // Node: `String(new Proxy(fn, {}))`). Non-callable targets
                 // resolve through the target.
-                if crate::proxy::proxy_wraps_callable(value) {
+                if crate::proxy_hooks::proxy_wraps_callable(value) {
                     let s = "function () { [native code] }";
                     return crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
                 }
-                let target = crate::proxy::js_proxy_target(value);
+                let target = crate::proxy_hooks::proxy_target(value);
                 if target.to_bits() != value.to_bits() {
                     return js_jsvalue_to_string_impl(target, reject_symbol);
                 }
@@ -251,9 +251,9 @@ pub(crate) fn js_jsvalue_to_string_impl(
             // garbage. Covers `String(ta)`, `` `${ta}` ``, and the `+` add
             // fallback. (`Symbol.toPrimitive` overrides were already consulted
             // above via `js_to_primitive`.)
-            if crate::typedarray::lookup_typed_array_kind(ptr as usize).is_some() {
-                return crate::typedarray::js_typed_array_join(
-                    ptr as *const crate::typedarray::TypedArrayHeader,
+            if crate::typedarray_hook_slots::lookup_typed_array_kind(ptr as usize).is_some() {
+                return crate::typedarray_hook_slots::js_typed_array_join(
+                    ptr as *const crate::typedarray_hook_slots::TypedArrayHeader,
                     std::ptr::null(),
                 );
             }
@@ -278,7 +278,7 @@ pub(crate) fn js_jsvalue_to_string_impl(
                     }
                     ExoticOwnToString::UseBuiltin => {}
                 }
-                return crate::date::js_date_to_string(value);
+                return crate::date_hook_slots::js_date_to_string(value);
             }
             // Temporal (#4686): `String(temporal)`, `` `${temporal}` ``, and
             // `temporal.toString()` produce the value's canonical ISO-8601 /
@@ -347,16 +347,16 @@ pub(crate) fn js_jsvalue_to_string_impl(
                 #[cfg(feature = "url-engine")]
                 {
                     let boxed = f64::from_bits(POINTER_TAG | ((ptr as u64) & POINTER_MASK));
-                    let url_href = crate::url::url_class::js_url_href_if_url(boxed);
+                    let url_href = crate::url_hooks::url_href_if_url(boxed);
                     if url_href.to_bits() != crate::value::TAG_UNDEFINED {
                         return js_jsvalue_to_string_impl(url_href, reject_symbol);
                     }
-                    if crate::url::try_read_as_search_params(
+                    if crate::url_hooks::try_read_as_search_params(
                         ptr as *mut crate::object::ObjectHeader,
                     )
                     .is_some()
                     {
-                        return crate::url::search_params::js_url_search_params_to_string(
+                        return crate::url_hooks::url_search_params_to_string(
                             ptr as *mut crate::object::ObjectHeader,
                         );
                     }

@@ -251,8 +251,8 @@ pub(crate) fn global_builtin_constructor_class_id(name: &str) -> u32 {
         // ids the compile-time `instanceof Float64Array` operator resolves.
         "Int8Array" | "Uint8Array" | "Uint8ClampedArray" | "Int16Array" | "Uint16Array"
         | "Int32Array" | "Uint32Array" | "Float16Array" | "Float32Array" | "Float64Array"
-        | "BigInt64Array" | "BigUint64Array" => crate::typedarray::kind_for_name(name)
-            .map(crate::typedarray::class_id_for_kind)
+        | "BigInt64Array" | "BigUint64Array" => crate::typedarray_hook_slots::kind_for_name(name)
+            .map(crate::typedarray_hook_slots::class_id_for_kind)
             .unwrap_or(0),
         _ => 0,
     }
@@ -523,7 +523,7 @@ pub(crate) extern "C" fn function_prototype_has_instance_thunk(
 fn ordinary_has_instance(constructor: f64, value: f64) -> bool {
     // The inherited Function.prototype hook must perform OrdinaryHasInstance
     // on the proxy itself, without consulting @@hasInstance a second time.
-    if crate::proxy::js_proxy_is_proxy(constructor) != 0 {
+    if crate::proxy_hooks::proxy_is_proxy(constructor) != 0 {
         return proxy_rhs::ordinary_proxy_has_instance(constructor, value);
     }
     let prev = SUPPRESS_INSTANCEOF_RHS_THROW.with(|c| c.replace(true));
@@ -579,7 +579,7 @@ fn rhs_is_object_value(value: f64) -> bool {
         return crate::buffer::buffer_family_type_owned(addr).is_some()
             || crate::set::is_registered_set(addr)
             || crate::map::is_registered_map(addr)
-            || crate::typedarray::lookup_typed_array_kind(addr).is_some()
+            || crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some()
             || addr >= crate::gc::GC_HEADER_SIZE;
     }
     false
@@ -642,7 +642,7 @@ fn is_event_emitter_instance_value(value: f64) -> bool {
         return false;
     }
 
-    if crate::node_stream::is_classic_stream_instance_value(value) {
+    if crate::stream_hooks::is_classic_stream_instance_value(value) {
         return true;
     }
     let constructor = crate::object::bound_native_callable_export_value("events", "EventEmitter");

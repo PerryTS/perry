@@ -284,6 +284,8 @@ crate::perry_thread_local! {
     /// `perry_thread_local!` rather than the raw macro (#7469): every search on
     /// this thread reads it, so the address belongs in the hot cache instead of
     /// costing a `_tlv_get_addr` call — the opposite of what this change is for.
+    // Keep this resolver record out of Mach-O globals merged with the core.
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_regex")]
     static LENT_SCRATCH: std::cell::RefCell<ScratchCell> = const {
         std::cell::RefCell::new(ScratchCell {
             registers: Vec::new(),
@@ -311,6 +313,8 @@ pub(crate) const PRE_SEARCH_POLL_STRIDE: usize = 64;
 
 crate::perry_thread_local! {
     /// Counts searches for the stride above. A tick count, never an address.
+    // Keep this resolver record out of Mach-O globals merged with the core.
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_regex")]
     static PRE_SEARCH_POLL_TICK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 

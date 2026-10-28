@@ -100,7 +100,7 @@ pub(super) fn is_pipeline_stream(value: f64) -> bool {
 /// classic-stream flags, so the flag checks alone cannot tell one from an
 /// options object.
 pub(super) fn is_fs_write_stream(value: f64) -> bool {
-    crate::fs::is_fs_stream_instance_value(value, "WriteStream")
+    crate::fs_hook_slots::is_fs_stream_instance_value(value, "WriteStream")
 }
 
 /// Register a pipeline completion listener. An fs write stream keeps its
@@ -212,7 +212,10 @@ pub(super) fn add_pipeline_callback_listeners(
     let state = scope.root_nanbox_f64(new_pipeline_callback_state());
     let error_event = scope.root_nanbox_f64(literal_string_value(b"error"));
     let close_event = scope.root_nanbox_f64(literal_string_value(b"close"));
-    let signal = options.signal.map(|signal| scope.root_nanbox_f64(signal));
+    let signal = match options.signal {
+        Some(signal) => Some(scope.root_nanbox_f64(signal)),
+        None => None,
+    };
     let len = rooted_array_len(stages);
     for i in 0..len {
         let stage = scope.root_nanbox_f64(rooted_array_at(stages, i));
@@ -1379,7 +1382,10 @@ fn prime_composed_duplex_from_source(composite: f64, source: f64, stages: f64) -
 fn new_composed_duplex(stages: &[f64], source: Option<f64>, writable: bool) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let stages = scope.root_nanbox_f64_slice(stages);
-    let source = source.map(|source| scope.root_nanbox_f64(source));
+    let source = match source {
+        Some(source) => Some(scope.root_nanbox_f64(source)),
+        None => None,
+    };
     let composite = scope.root_nanbox_f64(js_node_stream_duplex_new(readable_from_options(
         f64::from_bits(TAG_UNDEFINED),
     )));

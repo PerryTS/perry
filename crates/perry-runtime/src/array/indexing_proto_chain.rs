@@ -120,7 +120,7 @@ pub(crate) unsafe fn array_custom_prototype(arr: *const ArrayHeader) -> Option<A
     // Indexed reads and array algorithms must dispatch the Proxy's internal
     // methods too. Returning None here incorrectly restored the default
     // Array.prototype chain and skipped the traps (#9786).
-    if crate::proxy::js_proxy_is_proxy(f64::from_bits(bits)) != 0 {
+    if crate::proxy_hooks::proxy_is_proxy(f64::from_bits(bits)) != 0 {
         return Some(ArrayCustomProto::Other(bits));
     }
     // A pointer-shaped record that is not a real array is the #9192 case. A
@@ -160,7 +160,7 @@ unsafe fn array_custom_array_prototype_from_bits(
     }
     // A Proxy prototype is a small registered id, not a heap allocation — the
     // GC-header read below would deref a fake pointer.
-    if crate::proxy::js_proxy_is_proxy(f64::from_bits(bits)) != 0 {
+    if crate::proxy_hooks::proxy_is_proxy(f64::from_bits(bits)) != 0 {
         return None;
     }
     // #5625: the recorded prototype may be a *grown* array whose stored pointer
@@ -228,7 +228,7 @@ pub(crate) unsafe fn array_object_proto_index_owner(proto_bits: u64, key: &str) 
     for _ in 0..64 {
         let bits = proto.get_nanbox_u64();
         if bits == crate::value::TAG_NULL
-            || crate::proxy::js_proxy_is_proxy(f64::from_bits(bits)) != 0
+            || crate::proxy_hooks::proxy_is_proxy(f64::from_bits(bits)) != 0
         {
             return 0;
         }

@@ -1266,9 +1266,9 @@ pub extern "C" fn js_array_like_to_array(value: f64) -> *mut ArrayHeader {
             return arr;
         }
         let addr = raw as usize;
-        if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
-            return crate::typedarray::typed_array_to_array(
-                raw as *const crate::typedarray::TypedArrayHeader,
+        if crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some() {
+            return crate::typedarray_hook_slots::typed_array_to_array(
+                raw as *const crate::typedarray_hook_slots::TypedArrayHeader,
             );
         }
         if crate::buffer::is_registered_buffer(addr) {

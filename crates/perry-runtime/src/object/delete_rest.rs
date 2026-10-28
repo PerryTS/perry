@@ -65,9 +65,9 @@ pub extern "C" fn js_object_delete_field(
         let addr = obj as u64;
         if crate::value::addr_class::is_proxy_cell(addr as usize) {
             let boxed = f64::from_bits(crate::value::POINTER_TAG | (addr & 0x0000_FFFF_FFFF_FFFF));
-            if crate::proxy::js_proxy_is_proxy(boxed) != 0 {
+            if crate::proxy_hooks::proxy_is_proxy(boxed) != 0 {
                 let key_f64 = f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
-                let r = crate::proxy::js_proxy_delete(boxed, key_f64);
+                let r = crate::proxy_hooks::proxy_delete(boxed, key_f64);
                 return if crate::value::js_is_truthy(r) != 0 {
                     1
                 } else {
@@ -109,7 +109,7 @@ pub extern "C" fn js_object_delete_field(
             crate::typedarray_props::typed_array_addr_from_value(f64::from_bits(obj as u64))
         {
             return crate::typedarray_props::typed_array_delete_own_property(
-                addr as *mut crate::typedarray::TypedArrayHeader,
+                addr as *mut crate::typedarray_hook_slots::TypedArrayHeader,
                 key,
             );
         }
@@ -957,7 +957,7 @@ unsafe fn try_delete_stable_sso(obj: *mut ObjectHeader, key: JSValue) -> Option<
         || gc._reserved & BLOCKING_FLAGS != 0
         || !super::object_is_regular(obj)
         || crate::array::object_prototype_addr_matches(obj as usize)
-        || ((*obj).class_id == 0 && crate::url::is_url_object_shape(obj))
+        || ((*obj).class_id == 0 && crate::object::url_layout::is_url_object_shape(obj))
     {
         return None;
     }
@@ -1139,8 +1139,8 @@ pub extern "C" fn js_object_delete_dynamic(obj: *mut ObjectHeader, key: f64) -> 
         let addr = obj as u64;
         if crate::value::addr_class::is_proxy_cell(addr as usize) {
             let boxed = f64::from_bits(crate::value::POINTER_TAG | (addr & 0x0000_FFFF_FFFF_FFFF));
-            if crate::proxy::js_proxy_is_proxy(boxed) != 0 {
-                let r = crate::proxy::js_proxy_delete(boxed, key);
+            if crate::proxy_hooks::proxy_is_proxy(boxed) != 0 {
+                let r = crate::proxy_hooks::proxy_delete(boxed, key);
                 return if crate::value::js_is_truthy(r) != 0 {
                     1
                 } else {

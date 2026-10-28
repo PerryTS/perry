@@ -635,8 +635,8 @@ unsafe fn node_sqlite_path_bytes(value: f64) -> Option<Vec<u8>> {
         return None;
     }
     if (is_registered_buffer(raw) && is_uint8array_buffer(raw))
-        || perry_runtime::typedarray::lookup_typed_array_kind(raw)
-            == Some(perry_runtime::typedarray::KIND_UINT8)
+        || perry_runtime::typedarray_hook_slots::lookup_typed_array_kind(raw)
+            == Some(perry_runtime::typedarray_hook_slots::KIND_UINT8)
     {
         return perry_runtime::buffer::bytes::no_gc(|scope| {
             let value = f64::from_bits(JSValue::pointer(raw as *const u8).bits());

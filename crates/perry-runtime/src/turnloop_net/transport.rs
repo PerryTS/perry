@@ -288,9 +288,11 @@ crate::perry_thread_local! {
     /// Set by agent teardown: link completions are discarded, never
     /// dereferenced (LIFECYCLE-DESIGN L8). The thread's loop is dropped next
     /// and its heap teardown finalizes the cells.
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_tlnet")]
     static TEARDOWN: Cell<bool> = const { Cell::new(false) };
     /// Driver resources this thread's link routes still hold a ref for:
     /// installed handles, pending resolves, deadline timers and pipe jobs.
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_tlnet")]
     static LINK_RESOURCES: Cell<usize> = const { Cell::new(0) };
 }
 

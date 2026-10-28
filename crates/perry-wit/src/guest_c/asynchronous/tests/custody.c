@@ -44,6 +44,9 @@ int32_t perry_component_frame_task_cancel(void *f) {
     assert(f == parent_frame && !acknowledged); ++cancelled; return 0;
 }
 int32_t perry_component_frame_task_ready(void *f) { (void)f; return 0; }
+int32_t perry_component_frame_resource_scope_end(void *f) {
+    assert(f == parent_frame && acknowledged && child_frames == 1); return 0;
+}
 int32_t perry_component_frame_task_resume(void *f, void (*cb)(void *), void *data) {
     assert(f == parent_frame && acknowledged); cb(data); return 0;
 }
