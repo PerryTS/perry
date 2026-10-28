@@ -291,10 +291,7 @@ pub(crate) fn class_method_declaration_value_bytes(
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     let entry_code = unsafe { (*f).code() } as usize;
-    if entry != 0
-        && !name.is_empty()
-        && crate::builtins::function_name_for_ptr(entry_code).is_none()
-    {
+    if entry != 0 && !name.is_empty() && !crate::builtins::has_nonempty_function_name(entry_code) {
         unsafe {
             crate::builtins::js_register_function_name(
                 entry_code as *const u8,
@@ -312,8 +309,7 @@ pub(crate) fn class_method_declaration_value_bytes(
     // A computed or differing name is defined as an own property.
     let intrinsic_name = entry != 0
         && !computed_name
-        && unsafe { crate::builtins::function_name_for_closure(f) }
-            .is_some_and(|n| n.as_bytes() == name);
+        && unsafe { crate::builtins::function_name_matches_closure(f, name) };
     let facts = u64::from(params) | (u64::from(synthetic) << 32) | (u64::from(rest) << 33);
     unsafe {
         crate::closure::closure_install_boxed_captures(
@@ -374,7 +370,14 @@ pub(crate) fn class_method_entry_declaration_value(class_id: u32, entry: usize, 
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     };
     class_method_declaration_value_bytes(
-        home, &name, body, params, synthetic, rest, entry, computed_name,
+        home,
+        &name,
+        body,
+        params,
+        synthetic,
+        rest,
+        entry,
+        computed_name,
     )
 }
 

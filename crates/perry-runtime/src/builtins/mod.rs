@@ -150,7 +150,10 @@ pub(crate) use console::{
 };
 
 pub(crate) use fn_metadata::with_bundle_function_names;
-pub(crate) use fn_metadata::{function_name_for_closure, function_name_image};
+pub(crate) use fn_metadata::{
+    function_name_for_closure, function_name_image, function_name_matches_closure,
+    has_nonempty_function_name,
+};
 
 pub use fn_metadata::{
     function_is_non_strict_ordinary_for_ptr, function_name_for_ptr, function_name_registry_entries,

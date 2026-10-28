@@ -158,6 +158,12 @@ pub(super) fn registered_name_string(func_ptr: usize) -> Option<String> {
     with_registered_name(func_ptr, str::to_owned)
 }
 
+/// Whether the ordinary name reader would return a non-empty name, without
+/// making an owned copy just to test its presence.
+pub(crate) fn has_nonempty_function_name(func_ptr: usize) -> bool {
+    func_ptr != 0 && with_registered_name(func_ptr, |name| !name.is_empty()).unwrap_or(false)
+}
+
 /// Read the canonical metadata under its owner lock. Presence checks need the
 /// same UTF-8/precedence rules as reflection, but do not need an owned String.
 fn with_registered_name<T>(func_ptr: usize, read: impl FnOnce(&str) -> T) -> Option<T> {
@@ -412,6 +418,22 @@ const _: () = assert!(
 pub(crate) unsafe fn function_name_for_closure(
     closure: *const crate::closure::ClosureHeader,
 ) -> Option<String> {
+    with_function_name_for_closure(closure, str::to_owned)
+}
+
+/// Compare the same canonical name as reflection, without a temporary String.
+/// The closure must be live, as for function_name_for_closure.
+pub(crate) unsafe fn function_name_matches_closure(
+    closure: *const crate::closure::ClosureHeader,
+    expected: &[u8],
+) -> bool {
+    with_function_name_for_closure(closure, |name| name.as_bytes() == expected).unwrap_or(false)
+}
+
+unsafe fn with_function_name_for_closure<T>(
+    closure: *const crate::closure::ClosureHeader,
+    read: impl FnOnce(&str) -> T,
+) -> Option<T> {
     let closure = closure.as_ref()?;
     let info = closure.info.as_ref()?;
     if info.flags & crate::codegen_abi::FN_HAS_NAME != 0 {
@@ -422,9 +444,22 @@ pub(crate) unsafe fn function_name_for_closure(
         let len = tail.add(4).cast::<u32>().read_unaligned() as usize;
         // Compiler names originate as UTF-8 strings in immutable image bytes.
         let bytes = std::slice::from_raw_parts(descriptor_pointer(base, delta), len);
-        return Some(String::from_utf8_unchecked(bytes.to_vec()));
+        return Some(read(std::str::from_utf8_unchecked(bytes)));
     }
-    function_name_for_ptr(info.code as usize)
+    let code = info.code as usize;
+    if code == 0 {
+        return None;
+    }
+    // Preserve the ptr reader's non-empty filter after canonical lookup:
+    // a valid empty override still shadows a usable image registration.
+    with_registered_name(code, |name| {
+        if name.is_empty() {
+            None
+        } else {
+            Some(read(name))
+        }
+    })
+    .flatten()
 }
 
 /// Returns the name registered by `js_register_function_name{,_static}` (keyed
@@ -834,6 +869,15 @@ mod descriptor_name_tests {
                 unsafe { function_name_for_closure(&closure) }.as_deref(),
                 Some("named")
             );
+            assert!(unsafe { function_name_matches_closure(&closure, b"named") });
+            assert!(!unsafe { function_name_matches_closure(&closure, b"other") });
+            // An image may deliberately name an anonymous function with "".
+            image.tail[slot + 1] = 0;
+            assert_eq!(
+                unsafe { function_name_for_closure(&closure) }.as_deref(),
+                Some("")
+            );
+            assert!(unsafe { function_name_matches_closure(&closure, b"") });
         }
     }
 }
@@ -858,6 +902,54 @@ mod tests {
     const KEY_NAME_IF_ABSENT: *const u8 = 0x9188_0004 as *const u8;
     const KEY_SOURCE_COPIED: *const u8 = 0x9188_0005 as *const u8;
     const KEY_SOURCE_STATIC: *const u8 = 0x9188_0006 as *const u8;
+
+    #[test]
+    fn name_predicates_preserve_empty_invalid_and_owned_precedence() {
+        let key = 0x9188_0030usize;
+        extern "C" fn body(
+            _: *const crate::closure::ClosureHeader,
+            _: crate::closure::JsThis,
+        ) -> f64 {
+            91880030.0
+        }
+        let mut info = crate::closure::JsFunctionInfo::of(
+            body as crate::codegen_abi::JsBody0<crate::closure::ClosureHeader>,
+        );
+        info.code = key as *const u8; // metadata key only, never called
+        let closure = crate::closure::ClosureHeader {
+            capture_count: 0,
+            info: &info,
+            props: std::ptr::null_mut(),
+        };
+        assert!(!has_nonempty_function_name(0));
+        assert!(!has_nonempty_function_name(key));
+        assert!(!unsafe { function_name_matches_closure(&closure, b"") });
+        unsafe {
+            js_register_function_name_static(
+                key as *const u8,
+                "image世界".as_ptr(),
+                "image世界".len() as u32,
+            );
+            // An invalid override falls through to the usable image name.
+            js_register_function_name(key as *const u8, [0xffu8].as_ptr(), 1);
+        }
+        assert!(has_nonempty_function_name(key));
+        assert!(unsafe { function_name_matches_closure(&closure, "image世界".as_bytes()) });
+        unsafe { js_register_function_name(key as *const u8, b"owned".as_ptr(), 5) };
+        assert!(unsafe { function_name_matches_closure(&closure, b"owned") });
+        assert!(!unsafe { function_name_matches_closure(&closure, "image世界".as_bytes()) });
+        // A valid empty override shadows image bytes but the ordinary ptr
+        // reader filters it out. Presence/comparison must keep that rule.
+        function_name_overrides()
+            .lock()
+            .unwrap()
+            .insert(key, std::sync::Arc::from(&b""[..]));
+        assert!(function_name_for_ptr(key).is_none());
+        assert!(!has_nonempty_function_name(key));
+        assert!(!unsafe { function_name_matches_closure(&closure, b"") });
+        function_name_overrides().lock().unwrap().remove(&key);
+        function_name_registry().lock().unwrap().remove(&key);
+    }
 
     /// The copying entry point must not be reachable by a caller whose bytes
     /// die after the call — so prove it copies, without writing the
