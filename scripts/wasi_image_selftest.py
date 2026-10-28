@@ -81,7 +81,7 @@ def main() -> int:
                                   cwd=work, env=compile_env, capture_output=True, text=True)
         if compiled.returncode or not wasm.is_file():
             sys.exit(f"compile failed ({compiled.returncode}):\n{compiled.stdout}{compiled.stderr}")
-        if args.flavour == "p1" and wasi_imports_check.check(wasm, {wasi_imports_check.PREVIEW1}):
+        if args.flavour == "p1" and wasi_imports_check.check(wasm):
             sys.exit("the linked wasip1 module imports more than wasi_snapshot_preview1")
         definitions = sum(
             '@perry_atom_77727432635368617265644b6579 = weak_odr' in ir.read_text()

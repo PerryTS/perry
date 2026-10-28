@@ -5271,12 +5271,14 @@ jobs:
       run: python scripts/wasi_build_runtime.py
     - name: Image classifier checks as a wasm program
       run: python scripts/wasi_image_selftest.py target/perry-dev/perry
-    - name: Build the bundled runtime for wasm32-wasip1 and check it imports only preview 1
+    - name: Build the bundled runtime for wasm32-wasip1 and check its imports
       shell: bash
       run: |
         python scripts/wasi_imports_check.py --self-test
         archive="$(python scripts/wasi_build_runtime.py wasm32-wasip1 | sed -n 's/^WASI archive: //p' | tail -n 1)"
-        python scripts/wasi_imports_check.py "$archive"
+        # The archive carries the opt-in perry_net imports in their own member; a
+        # linked module has them only when built with PERRY_WASM_NET=1.
+        python scripts/wasi_imports_check.py "$archive" --allow-perry-net
     - name: Image classifier checks as a wasip1 program
       run: python scripts/wasi_image_selftest.py target/perry-dev/perry --flavour p1
     - name: WASI smoke and complete issue 11375 acceptance
@@ -5307,10 +5309,10 @@ jobs:
         cargo build --locked --manifest-path "$manifest"
         cargo test --locked --manifest-path "$manifest" 2>&1 | tee target/wasi-validation/p1-host-unit.log
         ran=$(awk '/^test result: ok\./ { n += $4 } END { print n + 0 }' target/wasi-validation/p1-host-unit.log)
-        test "$ran" -ge 8 || { echo "the host crate ran $ran tests, expected at least 8"; exit 1; }
+        test "$ran" -ge 17 || { echo "the host crate ran $ran tests, expected at least 17"; exit 1; }
         python test-wasi/p1-host/suite.py target/perry-dev/perry \
           --host test-wasi/p1-host/target/debug/perry-p1-host \
-          --output target/wasi-validation/p1-host --min-cases 12
+          --output target/wasi-validation/p1-host --min-cases 22
     - name: Typed components, resources, moving GC and cross-language composition
       run: ./scripts/component_check.sh
     - name: Retain WASI and component execution evidence
