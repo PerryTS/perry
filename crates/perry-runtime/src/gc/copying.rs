@@ -1093,15 +1093,24 @@ pub(super) fn run_copied_minor_attempt(
     // every dead holder's buffers into old-gen until the next full sweep. That
     // is the retention `malloc_registry_empty_at_start` already rules out for
     // malloc-owned payloads, so both preconditions read the same way.
-    let speculate_first_cycle = may_speculate
+    // The parent probe has the same rollback obligations as the first-cycle
+    // attempt: no malloc payloads or young native-buffer owners, no instrument
+    // requiring movement, and no previous rollback in this collection.
+    let can_speculate = may_speculate
         && young_large_bytes == 0
         && ptrs.malloc_registry_empty_at_start
         && !crate::arena::young_owned_stores_may_exist()
-        && untraced_promotion_instrument_veto().is_none()
-        && super::should_attempt_first_cycle_promotion();
+        && untraced_promotion_instrument_veto().is_none();
+    let speculate_first_cycle = can_speculate && super::should_attempt_first_cycle_promotion();
+    let speculate_parent_probe = can_speculate
+        && !super::should_promote_young_in_place()
+        && super::should_attempt_parent_probe_promotion(
+            super::tenuring::PromotionPolicy::snapshot(),
+        );
+    let speculate = speculate_first_cycle || speculate_parent_probe;
     let promotion_phase_start = PhaseDiag::start(&phase_diag);
-    let promotion = if super::should_promote_young_in_place() || speculate_first_cycle {
-        crate::arena::retag_young_for_in_place_promotion(speculate_first_cycle)
+    let promotion = if super::should_promote_young_in_place() || speculate {
+        crate::arena::retag_young_for_in_place_promotion(speculate)
     } else {
         crate::arena::InPlacePromotion::default()
     };
@@ -1117,11 +1126,12 @@ pub(super) fn run_copied_minor_attempt(
     collector.stats.malloc_sweep_due = malloc_sweep_due;
     collector.stats.preflight_skipped = preflight_skipped;
     collector.stats.in_place_promotion = promoting_in_place;
-    // `may_speculate` is false on exactly one path: the retry the wrapper runs
-    // after a rollback. So this pair is exact without threading extra state
-    // through, and it survives the retry overwriting the trace.
-    collector.stats.first_cycle_promotion_attempted = speculate_first_cycle || !may_speculate;
-    collector.stats.first_cycle_promotion_rolled_back = !may_speculate;
+    // A retry still has the previous survival measurement: None identifies
+    // a first-cycle rollback, while a parent-probe rollback has a measurement.
+    // Keep these first-cycle counters specific to their original subject.
+    let first_cycle_rollback = !may_speculate && super::last_young_survival_permille().is_none();
+    collector.stats.first_cycle_promotion_attempted = speculate_first_cycle || first_cycle_rollback;
+    collector.stats.first_cycle_promotion_rolled_back = first_cycle_rollback;
     collector.stats.in_place_promoted_blocks = promotion.block_count();
     // See `CopyingNurseryCollector::skip_remembering` for the proof.
     collector.skip_remembering =
@@ -1164,6 +1174,7 @@ pub(super) fn run_copied_minor_attempt(
     // is what `should_promote_young_untraced`'s budget bounds.
     let instrument_veto = untraced_promotion_instrument_veto();
     let untraced = promoting_in_place
+        && !speculate
         && collector.ptrs.malloc_registry_empty_at_start
         && !crate::weakref::weak_target_holders_allocated()
         && instrument_veto.is_none()
@@ -1452,10 +1463,21 @@ pub(super) fn run_copied_minor_attempt(
     // and slot rewrite is a no-op, and `skip_remembering` (a precondition of
     // attempting) means no remembered-set entry was created or consumed.
     // `remembered_set_clear()` and the from-space reset are both below here.
-    if speculate_first_cycle && promoting_in_place {
-        let holds_up =
-            super::first_cycle_promotion_holds_up(from_space_bytes, collector.live_from_bytes);
-        super::note_first_cycle_promotion(!holds_up);
+    if speculate && promoting_in_place {
+        let holds_up = if speculate_parent_probe {
+            super::parent_probe_promotion_holds_up(from_space_bytes, collector.live_from_bytes)
+        } else {
+            super::first_cycle_promotion_holds_up(from_space_bytes, collector.live_from_bytes)
+        };
+        if speculate_first_cycle {
+            super::note_first_cycle_promotion(!holds_up);
+        }
+        if speculate_parent_probe && crate::gc::gc_diag_enabled() {
+            eprintln!(
+                "[gc-parent-probe] committed={} young_bytes={} live_bytes={}",
+                holds_up, from_space_bytes, collector.live_from_bytes
+            );
+        }
         if !holds_up {
             unsafe {
                 collector.clear_marks();

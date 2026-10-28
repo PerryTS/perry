@@ -4885,7 +4885,7 @@ js_zlib_brotli_decompress_init	f64	f64,f64
 js_zlib_brotli_decompress_sync	f64	i64,f64
 js_zlib_brotli_dictionary	f64	f64
 js_zlib_brotli_max_output_length	usize	f64
-js_zlib_brotli_quality	i32	f64
+js_zlib_brotli_quality	i32s	f64
 js_zlib_crc32	f64	f64,f64
 js_zlib_create_brotli_compress	f64	f64
 js_zlib_create_brotli_decompress	f64	f64

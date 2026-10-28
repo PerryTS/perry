@@ -7,6 +7,9 @@ fn copied_leaves_are_not_queued_but_keep_their_survivor_and_clear_marks() {
     std::thread::spawn(|| unsafe {
         let _guard = CopyingNurseryTestGuard::new(1);
         let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let _heap_change = crate::gc::heap_generation::HeapChange::begin(
+            crate::gc::heap_generation::HeapChangeKind::CopyingMinor,
+        );
         let leaf = young_leaf();
         let mut collector = CopyingNurseryCollector::new(CopyingPointerSet::new());
         let moved = collector.mark_addr(leaf).unwrap();
@@ -69,6 +72,9 @@ fn a_forwarded_leaf_still_marks_and_scans_its_nonleaf_target() {
     std::thread::spawn(|| unsafe {
         let _guard = CopyingNurseryTestGuard::new(1);
         let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let _heap_change = crate::gc::heap_generation::HeapChange::begin(
+            crate::gc::heap_generation::HeapChangeKind::CopyingMinor,
+        );
         let stub = young_leaf();
         let (target, fields) = alloc_nursery_test_object(1);
         let child = young_leaf();
