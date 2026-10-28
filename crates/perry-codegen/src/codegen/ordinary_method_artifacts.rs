@@ -31,7 +31,7 @@ pub(super) struct OrdinaryMethodArtifactsCtx<'a> {
     pub func_synthetic_arguments: &'a HashSet<u32>,
     pub module_boxed_vars: &'a HashSet<u32>,
     pub closure_rest_params: &'a HashMap<u32, usize>,
-    pub cross_module: &'a CrossModuleCtx,
+    pub cross_module: &'a CrossModuleCtx<'a>,
 }
 
 pub(super) fn compile_ordinary_method_artifacts(
