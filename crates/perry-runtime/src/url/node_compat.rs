@@ -112,7 +112,11 @@ mod tests {
             format!("{cwd}/relative/")
         );
         assert_eq!(resolve_path_to_file_url_posix("./"), format!("{cwd}/"));
-        assert_eq!(resolve_path_to_file_url_posix("../"), format!("{parent}/"));
+        // The parent can be the filesystem root, which already ends in '/'.
+        assert_eq!(
+            resolve_path_to_file_url_posix("../"),
+            format!("{}/", parent.trim_end_matches('/'))
+        );
     }
 
     #[test]

@@ -62,8 +62,13 @@ fn eager_fn_metadata_validation() -> bool {
 /// for metadata something actually reads. Invalid bytes yield `None`, which is
 /// what the caller saw before when registration rejected them up front.
 fn decode_registered(slot: Option<&[u8]>) -> Option<String> {
-    let bytes = slot?;
-    std::str::from_utf8(bytes).ok().map(str::to_owned)
+    decode_registered_with(slot, str::to_owned)
+}
+
+/// Consume a validated view while its registry owner is locked. The caller
+/// chooses whether the result needs owned bytes; presence checks do not.
+fn decode_registered_with<R>(slot: Option<&[u8]>, read: impl FnOnce(&str) -> R) -> Option<R> {
+    std::str::from_utf8(slot?).ok().map(read)
 }
 
 /// Link-time-relative descriptor emitted by codegen. Keeping offsets instead
@@ -152,16 +157,23 @@ fn function_name_overrides(
 ///
 /// The two locks are never held at the same time, here or anywhere else in
 /// this module, so there is no acquisition order to get wrong.
-pub(super) fn registered_name_string(func_ptr: usize) -> Option<String> {
+fn registered_name_with<R>(func_ptr: usize, read: impl FnOnce(&str) -> R) -> Option<R> {
     if let Ok(overrides) = function_name_overrides().lock() {
-        if let Some(name) = decode_registered(overrides.get(&func_ptr).map(|b| &**b)) {
-            return Some(name);
+        if let Some(name) = overrides
+            .get(&func_ptr)
+            .and_then(|bytes| std::str::from_utf8(bytes).ok())
+        {
+            return Some(read(name));
         }
     }
     function_name_registry()
         .lock()
         .ok()
-        .and_then(|map| decode_registered(map.get(&func_ptr).copied()))
+        .and_then(|map| decode_registered_with(map.get(&func_ptr).copied(), read))
+}
+
+pub(super) fn registered_name_string(func_ptr: usize) -> Option<String> {
+    registered_name_with(func_ptr, str::to_owned)
 }
 
 /// Register `func_ptr` as the compiled address of a JS function called
@@ -294,7 +306,7 @@ pub fn register_function_name_if_absent(func_ptr: usize, name: &str) {
     // "Absent" means "neither map holds bytes that DECODE" — which is exactly
     // the question the read side answers, so ask it rather than restating it
     // and letting the two drift.
-    if registered_name_string(func_ptr).is_some() {
+    if registered_name_with(func_ptr, |_| ()).is_some() {
         return;
     }
     if let Ok(mut overrides) = function_name_overrides().lock() {
