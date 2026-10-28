@@ -43,7 +43,7 @@ fn ensure_process_finalization_before_exit_listener() {
         if installed.replace(true) {
             return;
         }
-        crate::os::add_internal_process_listener("beforeExit", callback);
+        crate::os_hook_slots::add_internal_process_listener("beforeExit", callback);
     });
 }
 
@@ -57,7 +57,7 @@ fn sync_process_finalization_before_exit_listener() {
         if !installed.replace(false) {
             return;
         }
-        crate::os::remove_internal_process_listener("beforeExit", callback);
+        crate::os_hook_slots::remove_internal_process_listener("beforeExit", callback);
     });
 }
 

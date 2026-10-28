@@ -116,7 +116,10 @@ pub(crate) fn regexp(receiver: f64, argument: f64) -> Result<f64, EngineError> {
     let receiver = scope.root_nanbox_f64(receiver);
     let argument = scope.root_nanbox_f64(argument);
     let input = scope.root_string_ptr(dispatch::to_string(&argument)?);
-    let constructor = species(&receiver)?.map(|value| scope.root_nanbox_f64(value));
+    let constructor = match species(&receiver)? {
+        Some(value) => Some(scope.root_nanbox_f64(value)),
+        None => None,
+    };
     let flags_value = scope.root_nanbox_f64(dispatch::get(&receiver, b"flags")?);
     let flags = scope.root_string_ptr(dispatch::to_string(&flags_value)?);
     let flags_argument = scope.root_nanbox_f64(js_nanbox_string(
@@ -173,7 +176,7 @@ fn string(receiver: f64, pattern: f64) -> Result<f64, EngineError> {
         }
         let method = scope.root_nanbox_f64(dispatch::get_symbol(&pattern, "matchAll")?);
         if !matches!(method.get_nanbox_f64().to_bits(), TAG_NULL | TAG_UNDEFINED) {
-            if !crate::proxy::proxy_wraps_callable(method.get_nanbox_f64()) {
+            if !crate::proxy_hooks::proxy_wraps_callable(method.get_nanbox_f64()) {
                 return Err(EngineError::Type("RegExp matchAll method is not callable"));
             }
             return dispatch::call_one(&method, &pattern, &receiver);
@@ -194,7 +197,7 @@ fn string(receiver: f64, pattern: f64) -> Result<f64, EngineError> {
     })??;
     let re = scope.root_nanbox_f64(js_nanbox_pointer(re as i64));
     let method = scope.root_nanbox_f64(dispatch::get_symbol(&re, "matchAll")?);
-    if !crate::proxy::proxy_wraps_callable(method.get_nanbox_f64()) {
+    if !crate::proxy_hooks::proxy_wraps_callable(method.get_nanbox_f64()) {
         return Err(EngineError::Type("RegExp matchAll method is not callable"));
     }
     let argument = scope.root_nanbox_f64(js_nanbox_string(

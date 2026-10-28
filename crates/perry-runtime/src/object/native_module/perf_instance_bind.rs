@@ -64,8 +64,10 @@ pub(crate) fn performance_namespace_method(
     property_name: &str,
     receiver: f64,
 ) -> Option<f64> {
-    if module_name != "perf_hooks" || !crate::perf_hooks::is_performance_namespace_value(receiver) {
+    if module_name != "perf_hooks"
+        || !crate::perf_hook_slots::is_performance_namespace_value(receiver)
+    {
         return None;
     }
-    crate::perf_hooks::performance_prototype_method_value(property_name)
+    crate::perf_hook_slots::performance_prototype_method_value(property_name)
 }

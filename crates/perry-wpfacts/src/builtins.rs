@@ -957,6 +957,37 @@ fn any_written(m: &mut Model, dst: NodeId) {
     }
 }
 
+/// An intrinsic prototype on `origin`'s chain read or called under a key
+/// that names none of its members (a number, DECISIONS 217): only what a
+/// store into ⊤ wrote there, now or later in the solve.
+pub fn plain_key(m: &mut Model, origin: Tok, act: ChainAct) {
+    let star = m.atom(crate::STAR_KEY);
+    match act {
+        ChainAct::Load(dst) => any_written(m, dst),
+        ChainAct::Call(call) => {
+            if !intrinsic_miss(m, star, NativeMiss::Call(origin, call)) {
+                let prev = m.cur_this.replace(origin);
+                unknown_method(m, call, "argument of a written intrinsic key");
+                m.cur_this = prev;
+            }
+        }
+        ChainAct::Store(_) => {}
+    }
+}
+
+/// `p[n](...)` on primitives of kinds `prim` under a number key: an index
+/// of a string is a one-character string, of anything else absent; only a
+/// key a store into ⊤ wrote on the prototype is a method (DECISIONS 217).
+pub fn prim_plain_key(m: &mut Model, prim: u16, call: CallId) {
+    if prim & (prim::NULL | prim::UNDEF) == prim {
+        return;
+    }
+    let star = m.atom(crate::STAR_KEY);
+    if !intrinsic_miss(m, star, NativeMiss::PrimCall(prim, call)) {
+        unknown_method(m, call, "argument of a written primitive method");
+    }
+}
+
 pub fn tok_store(m: &mut Model, t: Tok, _key: Key, src: NodeId) {
     match m.toks[t as usize] {
         // Object.prototype members are reachable from every object the

@@ -665,6 +665,9 @@ pub(crate) fn become_the_owner_for_test() -> OwnerLease {
         agent: perry_runtime::agent::enter_worker_agent(),
         guard: Some(guard),
     };
+    // Rust fixtures bypass the compiler's selected runtime/native installs.
+    perry_runtime::feature_hooks::js_runtime_install_turnloop();
+    perry_runtime::turnloop_net::install();
     let limit = std::time::Instant::now() + Duration::from_secs(10);
     loop {
         perry_runtime::event_pump::js_loop_turn_bounded(0);

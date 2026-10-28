@@ -22,6 +22,7 @@ struct JsonOutputDebt {
 crate::perry_thread_local! {
     /// Unretired completed-byte debt and the last deferred request's cutoff.
     /// These are byte counts only; this state owns no managed pointer.
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_json")]
     static JSON_OUTPUT_BYTES_SINCE_SWEEP: std::cell::Cell<JsonOutputDebt> =
         const { std::cell::Cell::new(JsonOutputDebt { completed: 0, requested: 0 }) };
 }

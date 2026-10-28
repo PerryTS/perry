@@ -53,12 +53,11 @@ fn lower_typed_f64_expr_with_env(
                 BinaryOp::Sub => blk.fsub(&l, &r),
                 BinaryOp::Mul => blk.fmul(&l, &r),
                 BinaryOp::Div => blk.fdiv(&l, &r),
-                // The typed entry proves Number operands, not integer or range
-                // facts. Reuse the exact checked-integer helper instead of
-                // bypassing it with a libm call for every typed remainder.
-                BinaryOp::Mod => blk.call(
+                // Integer admission lives in the LLVM unit, so inlining can
+                // consume constants and the entry's guarded scalar facts.
+                BinaryOp::Mod => blk.call_gc_leaf(
                     crate::types::DOUBLE,
-                    "js_number_mod",
+                    super::super::numeric_remainder::CHECKED_NUMBER_REMAINDER,
                     &[(crate::types::DOUBLE, &l), (crate::types::DOUBLE, &r)],
                 ),
                 _ => {
@@ -437,12 +436,11 @@ fn lower_typed_f64_receiver_expr_with_env(
                 BinaryOp::Sub => blk.fsub(&l, &r),
                 BinaryOp::Mul => blk.fmul(&l, &r),
                 BinaryOp::Div => blk.fdiv(&l, &r),
-                // The typed entry proves Number operands, not integer or range
-                // facts. Reuse the exact checked-integer helper instead of
-                // bypassing it with a libm call for every typed remainder.
-                BinaryOp::Mod => blk.call(
+                // Integer admission lives in the LLVM unit, so inlining can
+                // consume constants and the entry's guarded scalar facts.
+                BinaryOp::Mod => blk.call_gc_leaf(
                     crate::types::DOUBLE,
-                    "js_number_mod",
+                    super::super::numeric_remainder::CHECKED_NUMBER_REMAINDER,
                     &[(crate::types::DOUBLE, &l), (crate::types::DOUBLE, &r)],
                 ),
                 _ => {

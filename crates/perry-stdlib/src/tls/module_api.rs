@@ -254,7 +254,7 @@ pub unsafe extern "C" fn js_tls_convert_alpn_protocols(protocols: f64, out: f64)
                     encoded.extend_from_slice(bytes);
                 }
             });
-        } else if perry_runtime::typedarray::lookup_typed_array_kind(addr).is_some() {
+        } else if perry_runtime::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some() {
             perry_runtime::buffer::bytes::no_gc(|scope| {
                 if let Ok(bytes) = perry_runtime::buffer::bytes::bytes(protocols, scope) {
                     encoded.extend_from_slice(bytes);

@@ -41,5 +41,17 @@ const mutable = new Remainder(3);
 console.log(show(mutable.apply(8)));
 (mutable as any).divisor = "5";
 console.log(show(mutable.apply(8)));
+// Typed Number entry candidates must still reject BigInt values and route
+// them through the generic ToNumeric implementation.
+const bigLeft: any = -17n;
+const bigRight: any = 5n;
+console.log("bigint", String(remainder(bigLeft, bigRight)),
+  String(capturedRemainder(bigRight)(bigLeft)),
+  String(new Remainder(bigRight).apply(bigLeft)));
+try {
+  remainder(bigLeft, 2);
+} catch (error) {
+  console.log("mixed-bigint", error instanceof TypeError);
+}
 (Remainder.prototype as any).apply = function (a: number) { return a + 100; };
 console.log(show(mutable.apply(8)));

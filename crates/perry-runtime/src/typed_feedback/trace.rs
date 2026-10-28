@@ -141,7 +141,9 @@ fn observed_kind_json(obs: &Observation) -> serde_json::Value {
         if layout_kind == ARRAY_LAYOUT_TYPED_ARRAY {
             row.insert(
                 "typed_array_kind".to_string(),
-                serde_json::Value::String(crate::typedarray::name_for_kind(typed_kind).to_string()),
+                serde_json::Value::String(
+                    crate::typedarray_hook_slots::name_for_kind(typed_kind).to_string(),
+                ),
             );
         }
     }

@@ -1074,8 +1074,10 @@ pub(crate) fn attrs_live_in_keys_of_bits(bits: u64) -> bool {
     let header = unsafe { header.as_ref() };
     header.obj_type == crate::gc::GC_TYPE_OBJECT
         && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
-        && crate::typedarray::lookup_typed_array_kind((bits & crate::value::POINTER_MASK) as usize)
-            .is_none()
+        && crate::typedarray_hook_slots::lookup_typed_array_kind(
+            (bits & crate::value::POINTER_MASK) as usize,
+        )
+        .is_none()
 }
 
 /// [`attrs_live_in_keys_of_bits`] for a raw owner address of unknown

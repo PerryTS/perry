@@ -113,7 +113,7 @@ pub(crate) unsafe fn object_alias(obj: *const super::ObjectHeader) -> Option<(f6
     }
     let word = (*meta).native_state;
     decode_alias_word(word)
-        .or_else(|| decode_alias_word(crate::node_stream::record_alias_word(word)))
+        .or_else(|| decode_alias_word(crate::stream_hooks::record_alias_word(word)))
 }
 
 /// Look up the forwarding handle for an arbitrary receiver (NaN-boxed or raw
@@ -196,7 +196,7 @@ pub(crate) fn register_this_to_handle_alias(this_arg: f64, result: f64, composit
                 crate::value::js_nanbox_pointer(r as i64)
             })
             .to_bits();
-        if crate::node_stream::store_record_alias_word(word, alias) {
+        if crate::stream_hooks::store_record_alias_word(word, alias) {
             return true;
         }
         if word != 0 && !is_alias_word(word) {

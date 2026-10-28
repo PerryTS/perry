@@ -777,7 +777,7 @@ pub extern "C" fn js_v8_gc_profiler_stop(recv: f64) -> f64 {
 /// `(new v8.GCProfiler()).stop()` report object.
 #[no_mangle]
 pub extern "C" fn js_v8_gc_profiler_report() -> f64 {
-    let now = crate::date::js_date_now();
+    let now = crate::clock::wall_millis();
     let statistics = crate::array::js_array_alloc(0);
     let stats_val = f64::from_bits(JSValue::pointer(statistics as *const u8).bits());
     unsafe {

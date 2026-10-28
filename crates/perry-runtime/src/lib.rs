@@ -96,9 +96,11 @@ pub mod arena;
 pub mod array;
 pub mod async_context;
 pub mod async_hooks;
+pub mod async_local_storage;
 pub mod atomics;
 pub mod atomics_futex;
 pub mod bigint;
+mod bigint_hooks;
 pub mod r#box;
 pub mod buffer;
 mod build_stamp;
@@ -185,6 +187,7 @@ pub mod wpfacts_check;
 // #6468: the `node:http2` constant tables are only reachable through the
 // `http2` native-module namespace (via `module_hooks`), so a program that never
 // imports `node:http2` links none of them.
+mod json_hooks;
 pub mod node_http2_constants;
 pub mod node_inspector;
 pub mod node_repl;
@@ -192,6 +195,7 @@ pub mod node_sea;
 pub mod node_stream;
 pub mod node_submodules;
 pub mod node_test;
+mod stream_hooks;
 pub mod yoga;
 pub(crate) mod zeroed_cache;
 // #3137/#3138/#3142: public `node:v8` serialize/deserialize + heap stats + GCProfiler.
@@ -867,7 +871,7 @@ pub(crate) mod stdlib_pump {
         debug_assert!(!outermost || ACTIVE_OUTER_PUMPS.load(Ordering::Acquire) > 0);
         crate::promise::js_native_async_process_pending();
         crate::node_api_host::hooks::process_pending();
-        crate::os::js_process_signal_drain();
+        crate::os_hook_slots::js_process_signal_drain();
         // Drain the tty resize-pending flag (#347 Phase 3). Lives in
         // perry-runtime, not stdlib, so it runs even when stdlib isn't
         // linked — a TUI program that uses process.stdout.on('resize')
@@ -970,13 +974,13 @@ pub(crate) mod stdlib_pump {
         // once stdin is detached (`pause`/`unref`/`destroy`), and false again
         // after EOF has been seen and the terminal `'end'`/`'close'` dispatch
         // has run.
-        if crate::os::stdin_listeners_keep_loop_alive() {
+        if crate::os_hook_slots::stdin_listeners_keep_loop_alive() {
             return 1;
         }
         if crate::process::js_process_ipc_has_active() != 0 {
             return 1;
         }
-        if crate::os::js_process_signal_has_active() != 0 {
+        if crate::os_hook_slots::js_process_signal_has_active() != 0 {
             return 1;
         }
         // #9591: a ref'd `fs.watch` handle / started `fsPromises.watch`
@@ -1357,3 +1361,60 @@ pub extern "C" fn perry_runtime_widget_init() {
 mod hot_text;
 
 mod source_read_log;
+
+pub mod proxy_hooks;
+
+pub mod url_hooks;
+
+pub mod async_hook_slots;
+
+mod fs_hook_slots;
+mod io_error;
+
+mod thread_hook_slots;
+
+mod calendar;
+mod clock;
+pub mod date_hook_slots;
+mod date_layout;
+
+mod perf_clock;
+mod perf_hook_slots;
+
+mod event_emitter_error;
+mod os_hook_slots;
+mod process_startup;
+
+mod messaging_hook_slots;
+
+mod wasi_hook_slots;
+
+pub mod event_target_hook_slots;
+
+mod byte_cell_support;
+pub mod typedarray_hook_slots;
+
+mod builtin_value_support;
+mod bun_hook_slots;
+
+mod node_test_hook_slots;
+
+#[path = "temporal/hooked.rs"]
+pub mod temporal_hook_slots;
+mod temporal_layout;
+
+#[cfg(not(target_arch = "wasm32"))]
+mod dgram_registry_owner;
+
+mod wasm_hook_slots;
+
+mod segmenter_hook_roots;
+
+mod native_finalizer_hook;
+
+mod string_combining_class;
+
+mod diagnostic_report_roots;
+
+mod dyn_eval_hook_roots;
+mod interp_proto_guard;

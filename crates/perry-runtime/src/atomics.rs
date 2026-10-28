@@ -1,7 +1,7 @@
 //! Minimal `Atomics` namespace operations for integer TypedArray views.
 
 use crate::closure::ClosureHeader;
-use crate::typedarray::{
+use crate::typedarray_hook_slots::{
     clean_ta_ptr, js_typed_array_get, js_typed_array_length, js_typed_array_set,
     lookup_typed_array_kind, TypedArrayHeader, KIND_BIGINT64, KIND_BIGUINT64, KIND_INT16,
     KIND_INT32, KIND_INT8, KIND_UINT16, KIND_UINT32, KIND_UINT8,
@@ -120,7 +120,7 @@ impl AtomicView {
     fn has_shared_backing(&self) -> bool {
         match self {
             AtomicView::TypedArray { ptr, .. } => {
-                crate::typedarray::typed_array_has_shared_backing(*ptr)
+                crate::typedarray_hook_slots::typed_array_has_shared_backing(*ptr)
             }
             AtomicView::Uint8ArrayBuffer(ptr) => {
                 crate::buffer::is_shared_array_buffer(*ptr as usize)
@@ -327,7 +327,7 @@ fn bitwise_result_for_kind(kind: u8, bits: u32) -> f64 {
 /// `toString` on objects and throws the spec TypeErrors (Number/undefined/null/
 /// Symbol → "Cannot convert … to a BigInt").
 fn bigint_value(value: f64) -> f64 {
-    crate::typedarray::bigint::to_bigint_for_store(value)
+    crate::typedarray_hook_slots::bigint::to_bigint_for_store(value)
 }
 
 /// Low 64 bits of an already-coerced BigInt value (its limb-0 magnitude bits).
@@ -346,9 +346,9 @@ fn bigint_bits(value: f64) -> u64 {
 
 fn bigint_result_for_kind(kind: u8, bits: u64) -> f64 {
     let ptr = match kind {
-        KIND_BIGINT64 => crate::bigint::js_bigint_from_i64(bits as i64),
-        KIND_BIGUINT64 => crate::bigint::js_bigint_from_u64(bits),
-        _ => crate::bigint::js_bigint_from_i64(bits as i64),
+        KIND_BIGINT64 => crate::bigint_hooks::js_bigint_from_i64(bits as i64),
+        KIND_BIGUINT64 => crate::bigint_hooks::js_bigint_from_u64(bits),
+        _ => crate::bigint_hooks::js_bigint_from_i64(bits as i64),
     };
     f64::from_bits(JSValue::bigint_ptr(ptr).bits())
 }
@@ -364,16 +364,17 @@ fn typed_array_bigint_bits(ta: *const TypedArrayHeader, index: i32) -> u64 {
                 crate::native_arena::native_view_from_typed_array(ta),
             );
         }
-        if index as u32 >= crate::typedarray::element_length(ta) {
+        if index as u32 >= crate::typedarray_hook_slots::element_length(ta) {
             return 0;
         }
         crate::buffer::bytes::no_gc(|scope| {
             let data =
                 crate::buffer::bytes::bytes(crate::value::js_nanbox_pointer(ta as i64), scope)
                     .unwrap_or(&[]);
-            let off = (index as usize).saturating_mul(crate::typedarray::elem_size_for_kind(
-                crate::typedarray::element_kind(ta),
-            ) as usize);
+            let off =
+                (index as usize).saturating_mul(crate::typedarray_hook_slots::elem_size_for_kind(
+                    crate::typedarray_hook_slots::element_kind(ta),
+                ) as usize);
             let Some(bytes) = data.get(off..off + 8) else {
                 return 0;
             };
@@ -393,7 +394,7 @@ fn typed_array_set_bigint_bits(ta: *mut TypedArrayHeader, index: i32, value: u64
                 crate::native_arena::native_view_from_typed_array(ta as *const TypedArrayHeader),
             );
         }
-        if index as u32 >= crate::typedarray::element_length(ta) {
+        if index as u32 >= crate::typedarray_hook_slots::element_length(ta) {
             return;
         }
         crate::buffer::bytes::no_gc(|scope| {
@@ -402,9 +403,10 @@ fn typed_array_set_bigint_bits(ta: *mut TypedArrayHeader, index: i32, value: u64
             else {
                 return;
             };
-            let off = (index as usize).saturating_mul(crate::typedarray::elem_size_for_kind(
-                crate::typedarray::element_kind(ta),
-            ) as usize);
+            let off =
+                (index as usize).saturating_mul(crate::typedarray_hook_slots::elem_size_for_kind(
+                    crate::typedarray_hook_slots::element_kind(ta),
+                ) as usize);
             if let Some(slot) = data.get_mut(off..off + 8) {
                 slot.copy_from_slice(&value.to_ne_bytes());
             }

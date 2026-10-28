@@ -25,6 +25,16 @@ pub const NUM_KEY: &str = "#num";
 /// The atom of the iteration key (`Model::iter_key`).
 pub const ITER_ELEM: &str = "#iter";
 
+/// `Model::idx_done` rules of DECISIONS 217 (`IdxKey` uses 0-18): a
+/// prototype read as a value, a number key's chain (read, call), a
+/// computed call's full lookup, and (plus the primitive bit) a call under
+/// ToPropertyKey of `true`/`null`/`undefined`.
+pub const IDX_PROTO_VALUE: u8 = 32;
+pub const IDX_PLAIN_LOAD: u8 = 33;
+pub const IDX_PLAIN_CALL: u8 = 34;
+pub const IDX_CALL_ANY: u8 = 36;
+pub const IDX_CALL_NAMED: u8 = 64;
+
 /// Token 0 is ⊤: a value produced or touched by code the analysis does not
 /// model. Its presence in a node means "any escaped object or anything else".
 pub const TOP: Tok = 0;
@@ -189,6 +199,9 @@ impl SharedReads {
                     }
             }
             SharedWrite::Unmodeled(s) => self.objects.contains_key(s) || !self.keys.is_empty(),
+            // Every chain reaches Object.prototype.
+            SharedWrite::Hard(Shared::ObjectProto, _) => true,
+            SharedWrite::Hard(s, _) => self.objects.contains_key(s),
         }
     }
 }
@@ -210,6 +223,10 @@ pub enum SharedWrite {
     /// unit that includes the other units' code. It is ⊤ there, so every
     /// unit's store into ⊤ may be a store into it (`units::shared_closure`).
     Handed(Shared),
+    /// A HARD mark (`Model::mark_hard`: `defineProperty`, `delete`,
+    /// `setPrototypeOf` ...) on the object: on `Object.prototype` every
+    /// chain through it is HARD, as the whole program derives it.
+    Hard(Shared, Hard),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -740,8 +757,18 @@ pub enum Cons {
     AccessorInstall { key: Atom, f: Tok, setter: bool },
     /// The node holds objects whose prototype set includes `src`'s values.
     ProtoFrom { src: NodeId },
-    /// dst ⊇ prototypes of the node's objects (`Object.getPrototypeOf`).
+    /// dst ⊇ prototypes of the node's objects (`Object.getPrototypeOf`), as
+    /// values (`Model::proto_value`).
     ProtoOf { dst: NodeId },
+    /// The node is `ProtoNode(t)`: dst ⊇ its prototypes as the runtime has
+    /// them (DECISIONS 217): a literal's class prototype is its layout, no
+    /// object; that layout's own prototypes stand in its place.
+    ProtoValues { dst: NodeId },
+    /// The node is the prototype closure of receiver `origin`, read or
+    /// called under a key that names no intrinsic member and not
+    /// `__proto__` (a number; DECISIONS 217): every program prototype's
+    /// fields under any key, what a store into ⊤ wrote on an intrinsic one.
+    PlainKey { origin: Tok, act: ChainAct },
     /// dst ⊇ the `next` method of each iterator in the node.
     IterNext { dst: NodeId },
     /// The node holds `Reflect.construct` new-targets (E11).
@@ -751,8 +778,18 @@ pub enum Cons {
     /// members) runs only if `idx` can hold a non-number key (`IdxKey`).
     IdxLoad { idx: NodeId, dst: NodeId },
     /// The node is the key of `o[k]` for object token `obj`: a string,
-    /// symbol or object key runs the full lookup.
+    /// symbol or object key runs the full lookup. It is never taken to be
+    /// `"__proto__"` (DECISIONS 217: no program reaches a prototype through
+    /// an unknown string key; only the named forms read it).
     IdxKey { obj: Tok, dst: NodeId },
+    /// The node is the receiver of `o[idx](...)` with a computed key: its
+    /// objects' own and program members under a number key; the full
+    /// method lookup only if `idx` can hold another key (`IdxKeyCall`).
+    IdxMCall { idx: NodeId, call: CallId },
+    /// The node is the key of `o[k](...)` for receiver token `obj`: a
+    /// string, symbol or object key calls `Key::Any`'s methods.
+    /// `obj` ⊤ with `prim`: the receiver's primitives of those kinds.
+    IdxKeyCall { obj: Tok, prim: u16, call: CallId },
     /// The node is the value of a for-in body (FVA 4.3b, `gen/for_in.rs`):
     /// each body token runs per value of `obj` (`ForInKeys`), its runs bound
     /// through the template call `call` (one argument: the key).
@@ -895,12 +932,16 @@ impl Cons {
             Cons::AccessorInstall { .. } => "accinstall",
             Cons::ProtoFrom { .. } => "protofrom",
             Cons::ProtoOf { .. } => "protoof",
+            Cons::ProtoValues { .. } => "protovalues",
+            Cons::PlainKey { .. } => "plainkey",
             Cons::IterNext { .. } => "iternext",
             Cons::NewTargetHard { .. } => "newtargethard",
             Cons::Arith { .. } => "arith",
             Cons::ArrayLenArg { .. } => "arraylenarg",
             Cons::IdxLoad { .. } => "idxload",
             Cons::IdxKey { .. } => "idxkey",
+            Cons::IdxMCall { .. } => "idxmcall",
+            Cons::IdxKeyCall { .. } => "idxkeycall",
             Cons::ForInBody { .. } => "forinbody",
             Cons::ForInKeys { .. } => "forinkeys",
             Cons::DefineKeyed { .. } => "definekeyed",
@@ -1074,6 +1115,8 @@ pub struct Model {
     pub star_from: FxHashMap<Tok, Vec<Tok>>,
     pub ns_own: crate::pts::FxHashSet<(Tok, Atom)>,
     pub all_fields: FxHashMap<Tok, NodeId>,
+    /// `Model::num_fields`: the fields a number key may name.
+    pub num_fields: FxHashMap<Tok, NodeId>,
     pub proto_node: FxHashMap<Tok, NodeId>,
     pub field_keys: FxHashMap<Tok, Vec<Atom>>,
     /// accessors[(proto-or-object tok, key)] = (getter fns, setter fns)
@@ -1105,6 +1148,8 @@ pub struct Model {
     pub given_proto: crate::pts::FxHashSet<(NodeId, NodeId)>,
     pub implicit_done: crate::pts::FxHashSet<(Tok, Protocol)>,
     pub construct_done: crate::pts::FxHashSet<(CallId, Tok)>,
+    /// (key or prototype node, object, dst or call, rule): `IdxLoad` /
+    /// `IdxKey` use 0-18; the `IDX_*` rules of DECISIONS 217 the rest.
     pub idx_done: crate::pts::FxHashSet<(NodeId, Tok, NodeId, u8)>,
     pub callthis_done: crate::pts::FxHashSet<(NodeId, CallId, Tok)>,
     /// `CallThis` split (see `Model::bind_via`): `ThisTo` per (method node,
@@ -1163,6 +1208,9 @@ pub struct Model {
     /// Keys some accessor may be defined under (known at generation): only
     /// lookups of these keys walk the chain per receiver.
     pub accessor_atoms: crate::pts::FxHashSet<Atom>,
+    /// One of `accessor_atoms` is a numeric string: a read under a number
+    /// key walks accessors (`Model::plain_key`, DECISIONS 217).
+    pub numeric_accessor: bool,
 
     /// The relations dump, if requested: one line per primitive relation.
     pub relations: Option<Vec<String>>,

@@ -1375,7 +1375,10 @@ pub(crate) fn bind_lowered_value_to_local(
     let fixed_slot = ctx.fixed_generator_state
         && ctx.closure_captures.contains_key(&id)
         && !ctx.boxed_vars.contains(&id);
-    if string_alias && !fixed_slot {
+    // A guarded scalar lane or the all-writes numeric fixed point proves
+    // this alias cannot share a string buffer. An annotation alone never
+    // satisfies is_numeric_expr for a local read.
+    if string_alias && !fixed_slot && !crate::type_analysis::is_numeric_expr(ctx, value) {
         super::helpers::emit_string_addref_if_heap_string(ctx, v);
     }
     if crate::array_record_stack::write_local(ctx, id, v, value) {

@@ -12,7 +12,6 @@ use super::{
 /// # Safety
 /// type_ptr/type_len is UTF-8 valid for this call. MAX selects the current
 /// execution id; every other trigger is passed through unchanged.
-#[no_mangle]
 pub unsafe extern "C" fn js_async_hooks_owned_provider_new(
     type_ptr: *const u8,
     type_len: usize,
@@ -64,7 +63,6 @@ pub unsafe extern "C" fn js_async_hooks_owned_provider_new(
 /// Emit init after the binding has published the provider as an ordinary JS
 /// edge and copied its ids into native fields. An init hook can then close or
 /// reopen the owner without leaving work that mutates its old native state.
-#[no_mangle]
 pub extern "C" fn js_async_hooks_owned_provider_emit_init(resource: f64) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let resource = scope.root_nanbox_f64(resource);
@@ -130,7 +128,6 @@ pub(crate) fn owned_provider_scope_rooted(
 
 /// End a JS-owned native provider after its terminal event. A hook exception
 /// cannot retain its metadata; like other async-hook exceptions it is fatal.
-#[no_mangle]
 pub extern "C" fn js_async_hooks_owned_provider_destroy(resource: f64) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let owner = scope.root_nanbox_f64(resource);
@@ -215,7 +212,6 @@ fn provider_ids(async_id: u64) -> AsyncResourceIds {
 }
 
 /// C ABI used by separately-linked native providers such as perry-ext-zlib.
-#[no_mangle]
 pub unsafe extern "C" fn js_async_hooks_provider_init(type_ptr: *const u8, type_len: usize) -> u64 {
     if type_ptr.is_null() {
         return 0;
@@ -232,7 +228,6 @@ pub unsafe extern "C" fn js_async_hooks_provider_init(type_ptr: *const u8, type_
     id
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn js_async_hooks_provider_init_with_trigger(
     type_ptr: *const u8,
     type_len: usize,
@@ -254,26 +249,22 @@ pub unsafe extern "C" fn js_async_hooks_provider_init_with_trigger(
     id
 }
 
-#[no_mangle]
 pub extern "C" fn js_async_hooks_provider_enter(async_id: u64) {
     if let Err(error) = try_enter_resource_scope(provider_ids(async_id)) {
         crate::exception::js_throw(error);
     }
 }
 
-#[no_mangle]
 pub extern "C" fn js_async_hooks_provider_leave(async_id: u64) {
     if let Err(error) = try_leave_resource_scope(async_id) {
         crate::exception::js_throw(error);
     }
 }
 
-#[no_mangle]
 pub extern "C" fn js_async_hooks_provider_destroy(async_id: u64) {
     destroy(async_id);
 }
 
-#[no_mangle]
 pub extern "C" fn js_async_hooks_provider_defer_destroy(async_id: u64, check_turns: u32) {
     defer_destroy_after_check_turns(async_id, check_turns);
 }
@@ -282,7 +273,6 @@ pub extern "C" fn js_async_hooks_provider_defer_destroy(async_id: u64, check_tur
 /// scope is restored before a JS exception resumes unwinding into generated
 /// code. Rust `Drop` guards cannot provide this guarantee because Perry's JS
 /// exception transport deliberately skips runtime Rust cleanup frames.
-#[no_mangle]
 pub unsafe extern "C" fn js_async_hooks_provider_run_catching(
     async_id: u64,
     callback: unsafe extern "C" fn(*mut std::ffi::c_void) -> f64,
@@ -301,7 +291,6 @@ enum DestroyPolicy {
 /// Variant used by terminal external-provider events. Teardown is scheduled
 /// after scope restoration and before a caught JavaScript exception is
 /// rethrown, so a throwing listener cannot strand the resource.
-#[no_mangle]
 pub unsafe extern "C" fn js_async_hooks_provider_run_catching_deferred_destroy(
     async_id: u64,
     check_turns: u32,
@@ -314,7 +303,6 @@ pub unsafe extern "C" fn js_async_hooks_provider_run_catching_deferred_destroy(
 /// Schedule terminal teardown only when scope entry, the callback, or scope
 /// exit throws. This lets a multi-phase provider protect an early phase while
 /// leaving its normal destroy timing to the final phase.
-#[no_mangle]
 pub unsafe extern "C" fn js_async_hooks_provider_run_catching_deferred_destroy_on_error(
     async_id: u64,
     check_turns: u32,
@@ -377,7 +365,6 @@ unsafe fn provider_run_catching(
 /// and can retire a one-shot provider before propagating a JavaScript
 /// exception. `callback` makes its own JS calls and passes them the receiver
 /// itself: nothing here binds `this` for it.
-#[no_mangle]
 pub unsafe extern "C" fn js_async_hooks_provider_run_catching_with_this(
     async_id: u64,
     this_value: f64,
@@ -433,4 +420,10 @@ pub unsafe extern "C" fn js_async_hooks_provider_run_catching_with_this(
         crate::exception::js_throw(destroy_result.get_nanbox_f64());
     }
     result.get_nanbox_f64()
+}
+
+pub(crate) fn provider_enter_at(mark: usize, async_id: u64) {
+    if let Err(error) = super::scopes::try_enter_resource_scope_at(mark, provider_ids(async_id)) {
+        crate::exception::js_throw(error);
+    }
 }

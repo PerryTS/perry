@@ -244,9 +244,9 @@ pub(crate) fn get_field_miss(obj: *const ObjectHeader, key: *const crate::String
         let addr = obj as u64;
         if crate::value::addr_class::is_proxy_cell(addr as usize) {
             let boxed = f64::from_bits(crate::value::POINTER_TAG | (addr & 0x0000_FFFF_FFFF_FFFF));
-            if crate::proxy::js_proxy_is_proxy(boxed) != 0 {
+            if crate::proxy_hooks::proxy_is_proxy(boxed) != 0 {
                 let key_f64 = f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
-                return crate::proxy::js_proxy_get(boxed, key_f64);
+                return crate::proxy_hooks::proxy_get(boxed, key_f64);
             }
         }
     }
@@ -292,10 +292,12 @@ pub(crate) fn get_field_miss(obj: *const ObjectHeader, key: *const crate::String
                 if super::has_property::closure_get_is_complete(obj as usize, key) {
                     return f64::from_bits(crate::value::TAG_UNDEFINED);
                 }
-                let binary_receiver = crate::typedarray::is_offheap_sidetable_alloc(obj as usize);
+                let binary_receiver =
+                    crate::typedarray_hook_slots::is_offheap_sidetable_alloc(obj as usize);
                 if binary_receiver
                     && (crate::buffer::is_registered_buffer(obj as usize)
-                        || crate::typedarray::lookup_typed_array_kind(obj as usize).is_some())
+                        || crate::typedarray_hook_slots::lookup_typed_array_kind(obj as usize)
+                            .is_some())
                 {
                     let value = js_object_get_field_by_name(obj, key);
                     return f64::from_bits(value.bits());
@@ -307,9 +309,9 @@ pub(crate) fn get_field_miss(obj: *const ObjectHeader, key: *const crate::String
         {
             let boxed =
                 f64::from_bits(crate::value::POINTER_TAG | ((obj as u64) & 0x0000_FFFF_FFFF_FFFF));
-            if crate::proxy::js_proxy_is_proxy(boxed) != 0 {
+            if crate::proxy_hooks::proxy_is_proxy(boxed) != 0 {
                 let key_f64 = f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
-                return crate::proxy::js_proxy_get(boxed, key_f64);
+                return crate::proxy_hooks::proxy_get(boxed, key_f64);
             }
         }
         unsafe {
@@ -390,13 +392,13 @@ mod ladder_skip_tests {
         // The OWN-key miss — the read every megamorphic site takes, and the
         // one the ladder skip was measured on. It resolves in the keys scan
         // and returns before the handler's by-name tail.
-        let before = crate::typedarray::test_typed_array_registry_probe_count();
+        let before = crate::typedarray_hook_slots::test_typed_array_registry_probe_count();
         let hit = obj.with_mut_ptr(|o: *mut ObjectHeader| {
             present.with_const_ptr(|k| super::get_field_miss(o, k))
         });
         assert_eq!(hit, 3.0, "test premise: the own key is answered");
         assert_eq!(
-            crate::typedarray::test_typed_array_registry_probe_count(),
+            crate::typedarray_hook_slots::test_typed_array_registry_probe_count(),
             before,
             "a GC_TYPE_OBJECT receiver must skip the closure/buffer/typed-array \
              ladder: its kind byte already rules all three out (#10828, rule 3)"
@@ -413,11 +415,11 @@ mod ladder_skip_tests {
         // The ladder still runs for a receiver that is not an object: a dense
         // array asked for a non-`length` key reaches the typed-array probe.
         let arr = crate::array::js_array_alloc(2);
-        let before = crate::typedarray::test_typed_array_registry_probe_count();
+        let before = crate::typedarray_hook_slots::test_typed_array_registry_probe_count();
         let v = absent.with_const_ptr(|k| super::get_field_miss(arr as *const ObjectHeader, k));
         assert_eq!(v.to_bits(), crate::value::TAG_UNDEFINED);
         assert!(
-            crate::typedarray::test_typed_array_registry_probe_count() > before,
+            crate::typedarray_hook_slots::test_typed_array_registry_probe_count() > before,
             "test premise: a non-object receiver still walks the ladder, so the \
              counter this test reads is live"
         );
@@ -1128,7 +1130,7 @@ fn private_guard_checked(
     let brand_owner_root = scope.root_nanbox_f64(brand_owner);
     let field_name = interned.unwrap_or("");
     if is_static
-        && (crate::proxy::js_proxy_is_proxy(obj) != 0
+        && (crate::proxy_hooks::proxy_is_proxy(obj) != 0
             || !private_static_receiver_is_constructor(obj))
     {
         throw_private_brand_mismatch(

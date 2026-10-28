@@ -114,7 +114,7 @@ pub extern "C" fn js_promise_run_microtasks_event_loop() -> i32 {
     // this pump reached through its timer phase; turnloop P3 moved that phase
     // into the generated loop, so the pump stamps it directly rather than
     // depending on which phase happens to run first.
-    crate::perf_hooks::note_event_loop_start();
+    crate::perf_hook_slots::note_event_loop_start();
     run_microtasks(MicrotaskDrainMode::EventLoop)
 }
 
@@ -285,7 +285,7 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
         // The ordinary callback-timer phase stamps this even with no timers.
         // Keep nodeTiming.loopStart/eventLoopUtilization observable on beforeExit.
         if matches!(mode, MicrotaskDrainMode::EventLoop) {
-            crate::perf_hooks::note_event_loop_start();
+            crate::perf_hook_slots::note_event_loop_start();
         }
         finish_gc_boundary();
         MICROTASK_RUN_DEPTH.with(|depth| depth.set(MicrotaskRunDepths { pump: 0, jobs: 0 }));
@@ -309,7 +309,7 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
         ran += crate::bun_ffi::callback::drain_threadsafe_callbacks();
     }
 
-    ran += crate::async_hooks::drain_gc_destroy_queue();
+    ran += crate::async_hook_slots::drain_gc_destroy_queue();
 
     // FinalizationRegistry cleanup jobs recorded by AUTOMATIC collection
     // cycles (the explicit-`gc()` path delivers its own immediately). This
@@ -330,10 +330,10 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
 
     // Process diagnostics_channel publishes queued by perry/thread workers.
     if !guest_task && !matches!(mode, MicrotaskDrainMode::BeforeExit) {
-        ran += crate::node_submodules::diagnostics_channel_process_pending();
+        ran += crate::thread_hook_slots::diagnostics_channel_process_pending();
 
         // Process pending thread results (from perry/thread spawn)
-        ran += crate::thread::js_thread_process_pending();
+        ran += crate::thread_hook_slots::js_thread_process_pending();
     }
 
     // Then process the task queue.
@@ -493,7 +493,7 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
     let mid_promise_job = CURRENT_MICROTASK_CALLBACK.with(|c| !c.get().is_null());
     let esm_checkpoint = ticks_allowed && consume_esm_eval_checkpoint();
     if esm_checkpoint {
-        crate::async_hooks::init_esm_evaluation_promise();
+        crate::async_hook_slots::init_esm_evaluation_promise();
     }
     let mut esm_defer_tick_drain = if ticks_allowed {
         esm_checkpoint || (reentrant && mid_promise_job)
@@ -557,7 +557,7 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
                             CURRENT_MICROTASK_PROMISE.with(|c| c.set(promise));
                             CURRENT_MICROTASK_VALUE.with(|c| c.set(value));
                             CURRENT_MICROTASK_NEXT.with(|c| c.set((*promise).next));
-                            crate::async_hooks::before_promise(async_id, trigger_async_id);
+                            crate::async_hook_slots::before_promise(async_id, trigger_async_id);
                             let promise = rooted_promise(&task_promise_handle);
                             let value = task_value_handle.get_nanbox_f64();
                             let next = (*promise).next;
@@ -568,7 +568,7 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
                                     js_promise_reject(next, value);
                                 }
                             }
-                            crate::async_hooks::after_promise(async_id);
+                            crate::async_hook_slots::after_promise(async_id);
                             let promise =
                                 CURRENT_MICROTASK_PROMISE.with(|c| c.replace(std::ptr::null_mut()));
                             CURRENT_MICROTASK_VALUE.with(|c| c.set(0.0));
@@ -646,7 +646,7 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
                         } else {
                             (*(*promise).next).trigger_async_id
                         };
-                        crate::async_hooks::before_promise(async_id, trigger_async_id);
+                        crate::async_hook_slots::before_promise(async_id, trigger_async_id);
                         let promise = promise_handle.get_raw_mut_ptr::<Promise>();
                         crate::v8::promise_hook_before(promise);
                         // #7497: re-read BOTH from their handles — the two calls
@@ -667,7 +667,7 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
                         let promise = promise_handle.get_raw_mut_ptr::<Promise>();
                         let next = next_handle.get_raw_mut_ptr::<Promise>();
                         crate::v8::promise_hook_after(promise);
-                        crate::async_hooks::after_promise(async_id);
+                        crate::async_hook_slots::after_promise(async_id);
                         if let Some(t) = t1 {
                             MT_TIME_NS_CALLBACK
                                 .fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
@@ -751,7 +751,7 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
                     } else {
                         unsafe { (*next).trigger_async_id }
                     };
-                    crate::async_hooks::before_promise(async_id, trigger_async_id);
+                    crate::async_hook_slots::before_promise(async_id, trigger_async_id);
                     // Inline tasks are produced by `js_promise_resolved_then`
                     // (the `Promise.resolve(<primitive>).then(cb_f, cb_e)`
                     // fast path). We've already skipped allocating the
@@ -767,7 +767,7 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
                                 js_promise_reject(next, value);
                             }
                         }
-                        crate::async_hooks::after_promise(async_id);
+                        crate::async_hook_slots::after_promise(async_id);
                         restore_microtask_context();
                         *ran += 1;
                         continue;
@@ -817,7 +817,7 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
                     CURRENT_MICROTASK_VALUE.with(|c| c.set(result));
                     let next_for_after = CURRENT_MICROTASK_NEXT.with(|c| c.get());
                     crate::v8::promise_hook_after(next_for_after);
-                    crate::async_hooks::after_promise(async_id);
+                    crate::async_hook_slots::after_promise(async_id);
                     if let Some(t) = t1 {
                         MT_TIME_NS_CALLBACK
                             .fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
@@ -865,7 +865,7 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
                     // Task::AsyncStep arm. The popped entry no longer owns the
                     // job's state: this scope does until its destroy.
                     let scope = crate::gc::RuntimeHandleScope::new();
-                    if let Some(state) = crate::async_hooks::resource_state::get(async_id) {
+                    if let Some(state) = crate::async_hook_slots::resource_state::get(async_id) {
                         scope.root_raw_mut_ptr(state);
                     }
                     let resource_handle = scope.root_nanbox_f64(resource);
@@ -882,7 +882,7 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
                     CURRENT_MICROTASK_CALLBACK.with(|c| c.set(callback));
                     CURRENT_MICROTASK_VALUE.with(|c| c.set(0.0));
                     CURRENT_MICROTASK_NEXT.with(|c| c.set(std::ptr::null_mut()));
-                    crate::async_hooks::before_scheduled(
+                    crate::async_hook_slots::before_scheduled(
                         async_id,
                         trigger_async_id,
                         resource_handle.get_nanbox_f64(),
@@ -891,8 +891,8 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
                         rooted_closure(&callback_handle),
                         crate::closure::plain_call_receiver(),
                     );
-                    crate::async_hooks::after(async_id);
-                    crate::async_hooks::destroy_scheduled(async_id);
+                    crate::async_hook_slots::after(async_id);
+                    crate::async_hook_slots::destroy_scheduled(async_id);
                     CURRENT_MICROTASK_PROMISE
                         .with(|c| c.set(prev_promise_handle.get_raw_mut_ptr::<Promise>()));
                     CURRENT_MICROTASK_CALLBACK.with(|c| c.set(prev_callback));
@@ -945,7 +945,7 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
                     // here with two fewer indirections (closure alloc +
                     // closure call).
                     if step_closure.is_null() {
-                        crate::async_hooks::before_promise(step_async_id, step_trigger_id);
+                        crate::async_hook_slots::before_promise(step_async_id, step_trigger_id);
                         let next = rooted_promise(&next_handle);
                         let value = value_handle.get_nanbox_f64();
                         if !next.is_null() {
@@ -955,7 +955,7 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
                                 js_promise_resolve(next, value);
                             }
                         }
-                        crate::async_hooks::after_promise(step_async_id);
+                        crate::async_hook_slots::after_promise(step_async_id);
                         restore_microtask_context();
                         if !box_activation.is_null() {
                             pop_async_box_execution_ref(box_activation);
@@ -1048,7 +1048,7 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
                     // `next` via GC, #1663) and feed the same id to `after()`.
                     // `before`/`after` early-return on id 0, so this is a no-op
                     // when async_hooks are inactive.
-                    crate::async_hooks::before_promise(step_async_id, step_trigger_id);
+                    crate::async_hook_slots::before_promise(step_async_id, step_trigger_id);
                     let next = rooted_promise(&next_handle);
                     crate::v8::promise_hook_before(next);
                     // #7497: re-read both across the two calls above.
@@ -1076,7 +1076,7 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
                     // pops the execution-id stack using the captured id.
                     let next_for_after = CURRENT_MICROTASK_NEXT.with(|c| c.get());
                     crate::v8::promise_hook_after(next_for_after);
-                    crate::async_hooks::after_promise(step_async_id);
+                    crate::async_hook_slots::after_promise(step_async_id);
                     CURRENT_MICROTASK_CALLBACK.with(|c| c.set(std::ptr::null()));
 
                     let t2 = if prof {

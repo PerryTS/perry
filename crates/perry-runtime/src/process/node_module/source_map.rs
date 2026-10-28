@@ -731,7 +731,7 @@ fn source_map_normalize_inline_sources(payload: f64, generated_file: &std::path:
         // fail. Components still removes lexical `.` segments in that case.
         let normalized: std::path::PathBuf = path.components().collect();
         let path = std::fs::canonicalize(&path).unwrap_or(normalized);
-        let url = crate::url::node_compat::path_to_file_url_string(
+        let url = crate::module_require::file_url_text::path_to_file_url_string(
             &path.to_string_lossy(),
             cfg!(windows),
         );

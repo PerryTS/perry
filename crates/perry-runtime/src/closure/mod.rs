@@ -125,3 +125,23 @@ pub(crate) use alloc::{
     test_seed_captured_singleton_closure_cache, test_seed_singleton_closure_cache,
     test_singleton_closure_cache_entry,
 };
+
+/// Extract a raw ClosureHeader pointer from a NaN-boxed f64.
+pub(crate) fn extract_closure_ptr(v: f64) -> *const ClosureHeader {
+    let bits = v.to_bits();
+    let top16 = bits >> 48;
+    // An inline SSO string (0x7FF9) carries characters, not an address: its
+    // masked bits used to reach `is_closure_ptr` as a pointer (#11519).
+    let raw = if (0x7FF8..=0x7FFF).contains(&top16) && top16 != 0x7FF9 {
+        (bits & 0x0000_FFFF_FFFF_FFFF) as usize
+    } else if top16 == 0 {
+        bits as usize
+    } else {
+        return std::ptr::null();
+    };
+    if raw < 0x1000 || !crate::closure::is_closure_ptr(raw) {
+        std::ptr::null()
+    } else {
+        raw as *const ClosureHeader
+    }
+}

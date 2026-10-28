@@ -393,3 +393,11 @@ pub(crate) unsafe fn call_entry_slice(
         call_entry_cells(callee, entry, this, &cells)
     }
 }
+
+/// A native closure body with no observable action. Shared by builtin families.
+pub(crate) extern "C" fn native_noop0(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}

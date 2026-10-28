@@ -1473,7 +1473,7 @@ pub fn count_array_length(tape: &[TapeEntry], root_idx: usize) -> u32 {
 /// arena allocator and may trigger GC (its `hdr` argument is
 /// walked-through by the tracer if so, so the header survives).
 #[inline(never)]
-unsafe fn lazy_get_rooted(hdr: *mut LazyArrayHeader, i: u32) -> JSValue {
+pub(crate) unsafe fn lazy_get_rooted_impl(hdr: *mut LazyArrayHeader, i: u32) -> JSValue {
     if hdr.is_null() {
         return JSValue::from_bits(crate::value::TAG_UNDEFINED);
     }
@@ -1636,7 +1636,7 @@ unsafe fn lazy_get_rooted(hdr: *mut LazyArrayHeader, i: u32) -> JSValue {
     let scan_flip = streak >= scan_flip_threshold(cached_length)
         && lazy_cached_count(hdr) * 2 < cached_length as u64;
     let flip = (*hdr).cumulative_walk_steps > (cached_length as u64) * 2 || scan_flip;
-    crate::json::traversal_feedback::after_cold_read(hdr, flip, streak == cached_length);
+    crate::json_hooks::after_cold_read(hdr, flip, streak == cached_length);
 
     JSValue::from_bits(value_handle.get_nanbox_u64())
 }
@@ -1788,7 +1788,9 @@ unsafe fn reparse_materialize(
 /// Idempotent: subsequent calls return the cached `materialized`
 /// pointer. Callers of array accessors that don't have a lazy path
 /// invoke this first.
-pub unsafe fn force_materialize_lazy(hdr: *mut LazyArrayHeader) -> *mut crate::array::ArrayHeader {
+pub(crate) unsafe fn force_materialize_lazy_impl(
+    hdr: *mut LazyArrayHeader,
+) -> *mut crate::array::ArrayHeader {
     if hdr.is_null() {
         return std::ptr::null_mut();
     }
@@ -1929,3 +1931,6 @@ unsafe fn materialize_from_idx_source(
     let mut idx = start_idx;
     materialize_value_source(source, scope, &mut idx)
 }
+
+pub use crate::json_hooks::force_materialize_lazy;
+use crate::json_hooks::lazy_get_rooted;

@@ -71,7 +71,7 @@ fn run(inherited_proxy: bool, descriptor_trap: bool) {
     };
     let callback = crate::closure::js_closure_alloc(function, 0);
     set(handler, name, f64::from_bits(ptr_bits(callback as usize)));
-    let proxy = scope.root_nanbox_f64(crate::proxy::js_proxy_new(boxed(target), boxed(handler)));
+    let proxy = scope.root_nanbox_f64(crate::proxy_hooks::proxy_new(boxed(target), boxed(handler)));
     let receiver = object(&scope);
     if inherited_proxy {
         // These entries grow the result before reaching the Proxy prototype.
@@ -215,7 +215,7 @@ fn descriptor_completion_reloads_after_field_getter_collection() {
         "getOwnPropertyDescriptor",
         f64::from_bits(ptr_bits(callback as usize)),
     );
-    let proxy = scope.root_nanbox_f64(crate::proxy::js_proxy_new(boxed(target), boxed(handler)));
+    let proxy = scope.root_nanbox_f64(crate::proxy_hooks::proxy_new(boxed(target), boxed(handler)));
     let key = crate::string::js_string_from_bytes(b"property_name".as_ptr(), 13);
     let before = boxed(target).to_bits();
     let result = crate::proxy::js_reflect_get_own_property_descriptor(

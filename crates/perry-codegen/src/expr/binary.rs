@@ -103,7 +103,11 @@ fn lower_checked_i32_modulo(ctx: &mut FnCtx<'_>, left: &str, right: &str) -> Str
         .cond_br(&can_use_integer, &integer_label, &fallback_label);
 
     ctx.current_block = integer_idx;
-    let remainder = ctx.block().srem(I32, &li, &ri);
+    // LLVM srem(INT_MIN, -1) is poison, although JS returns -0.
+    // Both divisors have zero integer remainder; retain the sign fix below.
+    let minus_one = ctx.block().icmp_eq(I32, &ri, "-1");
+    let divisor = ctx.block().select(I1, &minus_one, I32, "1", &ri);
+    let remainder = ctx.block().srem(I32, &li, &divisor);
     let result = ctx.block().sitofp(I32, &remainder, DOUBLE);
 
     // Integer remainder loses the sign of a zero result. Test the dividend's

@@ -33,7 +33,7 @@ fn check_own_method_dispatch(proxy: bool) {
             let handler = scope.root_nanbox_f64(value::js_nanbox_pointer(
                 crate::object::js_object_alloc(0, 0) as i64,
             ));
-            implementation.set_nanbox_f64(crate::proxy::js_proxy_new(
+            implementation.set_nanbox_f64(crate::proxy_hooks::proxy_new(
                 implementation.get_nanbox_f64(),
                 handler.get_nanbox_f64(),
             ));

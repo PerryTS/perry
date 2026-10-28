@@ -504,7 +504,13 @@ mod tests {
                     continue;
                 }
                 let text = std::fs::read_to_string(&path).expect("read source file");
-                if text.contains("$spec_") {
+                // This gate checks symbol use in code; a documentation example
+                // cannot expose a raw ABI entry through a wrapper.
+                if text
+                    .lines()
+                    .filter(|line| !line.trim_start().starts_with("//"))
+                    .any(|line| line.contains("$spec_"))
+                {
                     out.push(rel);
                 }
             }

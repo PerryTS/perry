@@ -876,7 +876,7 @@ fn is_dont_contextify(value: f64) -> bool {
 fn value_is_object_like(value: f64) -> bool {
     object_ptr_from_value(value).is_some()
         || array_ptr_from_value(value).is_some()
-        || crate::proxy::js_proxy_is_proxy(value) != 0
+        || crate::proxy_hooks::proxy_is_proxy(value) != 0
 }
 
 fn context_key(value: f64) -> usize {
@@ -920,7 +920,7 @@ fn new_context_state(sandbox: f64, dont_contextify: bool, options: ContextOption
         sandbox.get_nanbox_f64()
     } else {
         let handler = scope.root_nanbox_f64(object_value(crate::object::js_object_alloc(0, 0)));
-        crate::proxy::js_proxy_new(sandbox.get_nanbox_f64(), handler.get_nanbox_f64())
+        crate::proxy_hooks::proxy_new(sandbox.get_nanbox_f64(), handler.get_nanbox_f64())
     };
     let global_this = scope.root_nanbox_f64(global_this);
     let intrinsics = scope.root_nanbox_f64(fresh_intrinsic_global());

@@ -16,7 +16,9 @@ its artifacts include compile logs, Node/native output and `report.json`.
 
 `without_math.ts` uses stdout to prove Math absence independently of the
 compiler's conservative `log` property detection. `hello.ts` reads argv to exercise the normal runtime rather than the tiny
-program path. Every runtime hook in `stdlib_installs.rs::RUNTIME_INSTALLS` must
+program path. `without_regex.ts` checks literal replacement, callbacks, custom
+symbol methods and UTF-16 splitting with no regex install. Deserializers that can
+receive a RegExp from another program (V8, IPC and workers) select that install. Every runtime hook in `stdlib_installs.rs::RUNTIME_INSTALLS` must
 have a positive fixture. Each fixture declares its hook and symbol prefixes;
 explicit unhooked fixtures say `none (no hook yet)`. Prefixes match demangled
 text symbols, including C entry points. Text bytes are section size; attributed
@@ -42,3 +44,63 @@ for the subsystem's largest symbol and prints the real linker chain. Full
 build logs stay in the output directory. `--record-known-failures` is only for
 reviewed baseline measurement; CI never passes it. `--negative-only` is a diagnostic
 and sabotage shortcut; CI always executes all positive witnesses.
+
+The explicit stdlib witnesses `bundled_web_streams.ts` and `brotli_streams.ts`
+exercise FileHandle streams (including native property bags) and Brotli output.
+`fs_promises_without_streams.ts` reads a file without a stream API. Its required
+absence checks also reject a wrongly selected streams installer, so compiler
+over-selection cannot silently exempt that negative from the symbol check.
+A `HWS companion` declaration adds an independent positive for an existing
+absence rule. Its prefixes, including its hook, must all be covered by that rule. This keeps the FileHandle API-selection test independent of the
+Brotli constructor test while requiring both engines absent in the file read.
+
+Native-module installers are selected in namespace-creation code rather than the runtime feature object. The gate reads their undefined symbols from the compiler-generated objects in the actual link invocation. References originating inside an archive cannot exempt a negative; native positives must both name their installer in a program object and exercise its API. `without_node_stream.ts` checks Array subclasses and ordinary objects with no stream install, while the stream and events-only positives exercise both owning installers.
+
+The JSON installer also owns the tape parser: generic array reads and writes
+enter it only through its filled slots. The json_tape positive uses a large
+array, sparse reads, indexed extension and length truncation to exercise the
+existing lazy route. Positives must retain implementation symbols in addition
+to an installer symbol; the hook alone cannot satisfy a witness.
+
+The existing network installer fills the agent-loop service slots for
+completion dispatch, teardown and diagnostics. A timer-only negative keeps
+the driver live while requiring the network service absent; independent
+listen/close and echo positives exercise installed dispatch and teardown.
+
+A JSON string list in `HWS argv` supplies identical arguments to Node and the
+native witness. Computed API names can then come from argv without appearing
+as literals in the compiled program. FileHandle capabilities and opaque
+member accesses accumulate across modules; an ordinary indexed readFile path
+still requires Web Streams and Brotli absence.
+
+A `HWS node` sibling source supplies the explicit Node equivalent of a native-
+only Bun API. The gate copies and runs that oracle separately, keeping its
+JSON.parse out of the native compilation. Bun JSON positives include computed
+and extracted methods, TOML and JSONL adapters; a text-only Bun file read
+requires both the JSON engine and tape parser absent.
+
+The turnloop driver is installed for native I/O, timers, agents and process
+listeners. Generic event-pump operations call its installer-filled slots.
+A promise-only negative requires the driver absent, while timers and a real
+self-delivered process signal exercise installed waits and signal dispatch.
+
+Generic BigInt arithmetic, formatting, equality and querystring formatting
+use the BigInt installer slots. Literals, constructors and native producers
+select the installer. Number-only arithmetic and querystring negatives
+require absence; independent constructor, clock, crypto and operator positives
+exercise installed paths, including constructor names supplied through argv.
+
+The performance rule covers both timeline and histogram implementations and their `js_perf_` C entry points. The old `js_performance_` prefix named only the shared numeric `performance.now()` clock, which remains Core. `without_perf_hooks.ts` executes that clock and promises while requiring every timeline/histogram implementation absent. Timerify, histogram recording and mark detail remain covered by the installed positive. Shared clock relocation receives no size credit.
+
+A JSON string in `HWS stdin` supplies identical bytes and EOF to Node and the compiled witness. `os_stdin.ts` requires its installed stdin pump to deliver the data and end events before a failing timeout. `without_os.ts` keeps argv, environment, pid, nextTick and promise paths live while requiring the OS backend absent.
+
+A `HWS ipc` JSON object creates an inherited Node-compatible IPC socket and sends
+one framed message to both runtimes. The message witness must deliver its callback
+before its deadline; the environment-only negative checks Node's bootstrap-only
+variable removal while requiring the IPC implementation absent. A `HWS ipc reply`
+object also requires one matching outgoing JSON frame, alongside the send callback
+and disconnect event.
+
+A `HWS ipc driver` sibling `.mjs` runs the supplied command through Node's
+advanced IPC transport. Its receiving program names no typed-array constructor,
+so successful deserialization checks the IPC installer's transitive dependency.

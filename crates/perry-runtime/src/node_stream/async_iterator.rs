@@ -63,17 +63,7 @@ extern "C" fn ns_readable_iterator_chunk_fulfilled(
     f64::from_bits(TAG_UNDEFINED)
 }
 
-extern "C" fn ns_readable_iterator_chunk_rejected(
-    closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
-    reason: f64,
-) -> f64 {
-    let outer = js_closure_get_capture_ptr(closure, 0) as *mut crate::promise::Promise;
-    if !outer.is_null() {
-        crate::promise::js_promise_reject(outer, reason);
-    }
-    f64::from_bits(TAG_UNDEFINED)
-}
+use crate::promise::then::finally_cleanup_reject as ns_readable_iterator_chunk_rejected;
 
 extern "C" fn ns_readable_source_iterator_fulfilled(
     closure: *const ClosureHeader,
