@@ -135,7 +135,7 @@ jobs:
           # deliberately broad; it exists only to spare docs-only PRs a build.
           # If the listing is empty or the API failed, `set -e` already aborted
           # — the job does not silently fall through to "not relevant".
-          if grep -qE '^(crates/|benchmarks/gc_ratchet/|Cargo\.(toml|lock)$|\.github/workflows/(gc-ratchet|gc)\.yml$|scripts/(actions_catalog\.json|actions_plan\.py|check_actions_topology\.py|test_actions_plan\.py)$|tests/(test_gc_ratchet|test_large_eden_gc_ratchet)\.py$)' changed.txt; then
+          if grep -qE '^(crates/|benchmarks/gc_ratchet/|Cargo\.(toml|lock)$|\.github/workflows/(gc-ratchet|gc)\.yml$|scripts/(actions_catalog\.json|actions_plan\.py|check_actions_topology\.py|test_actions_plan\.py)$|tests/(test_gc_ratchet|test_large_eden_gc_ratchet|test_measurement_runtime_gc_ratchet)\.py$)' changed.txt; then
             echo "run=true" >> "$GITHUB_OUTPUT"
             echo "Change touches collector-relevant paths; measuring."
           else
@@ -172,6 +172,8 @@ jobs:
           # is identical to the set used to capture the baseline.
           cargo build-perry --release
           scripts/gc_call_effects/sidecars.sh target/release
+          # Timing uses ordinary archives; separate trace runs need instruments.
+          PERRY_INSTR_PACKAGES=runtime scripts/build_instr_runtime.sh
           for artifact in perry libperry_runtime.a libperry_stdlib.a libperry_runtime.a.gc-effects; do
             test -s "target/release/$artifact" \
               || { echo "::error::target/release/$artifact was not produced"; exit 1; }
