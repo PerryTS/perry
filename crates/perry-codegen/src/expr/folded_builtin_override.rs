@@ -779,7 +779,7 @@ fn folded_array_entry(
     // guard. The shared checked entry would erase the HIR certificate and
     // always call comparator sorting, just as it would erase an inline some.
     if let Expr::ArraySort { comparator, .. } = expr {
-        if perry_hir::analysis::pure_numeric_order(comparator).is_some() {
+        if super::numeric_order::numeric_order(ctx, comparator).is_some() {
             return None;
         }
     }

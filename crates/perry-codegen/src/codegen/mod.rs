@@ -2991,7 +2991,21 @@ fn lower_module(
             .into_iter()
             .filter(|id| !funcs_reading_dynamic_this.contains(id))
             .collect();
+    // Closure collection + derived per-closure dispatch maps. See
+    // `closure_collect::collect_module_closures`.
+    let closure_collect::ModuleClosures {
+        closures,
+        direct_call_closures,
+        closure_rest_params,
+        closure_synthetic_arguments,
+        closure_rest_and_arguments,
+        closure_arities,
+        closure_lengths,
+        closure_arrow_functions,
+    } = closure_collect::collect_module_closures(hir);
     let mut cross_module = CrossModuleCtx {
+        numeric_order_functions: &hir.functions,
+        numeric_order_closures: &closures,
         region_closures: hir
             .closure_display_names
             .iter()
@@ -3478,18 +3492,6 @@ fn lower_module(
     // inside an arrow callback. Lazy emission tracks declares at the
     // actual emission point so any path the lowering reaches is covered.
 
-    // Closure collection + derived per-closure dispatch maps. See
-    // `closure_collect::collect_module_closures`.
-    let closure_collect::ModuleClosures {
-        closures,
-        direct_call_closures,
-        closure_rest_params,
-        closure_synthetic_arguments,
-        closure_rest_and_arguments,
-        closure_arities,
-        closure_lengths,
-        closure_arrow_functions,
-    } = closure_collect::collect_module_closures(hir);
     crate::layout_desc::function_families::collect(
         hir,
         &module_prefix,

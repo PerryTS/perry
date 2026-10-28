@@ -32,7 +32,7 @@ pub mod fn_infer;
 #[cfg(test)]
 mod fn_infer_tests;
 mod numeric_order;
-pub use numeric_order::{pure_numeric_order, NumericOrder};
+pub use numeric_order::{numeric_order_with, pure_numeric_order, NumericCallable, NumericOrder};
 mod value_types;
 pub(crate) use value_types::coalesce_type;
 pub use value_types::{infer_expr_type, infer_refinable_expr_type, HirTypeEnv, HirTypeFacts};

@@ -1274,6 +1274,9 @@ pub(super) fn compile_function(
     };
 
     let mut ctx = FnCtx {
+        numeric_order_functions: cross_module.numeric_order_functions,
+        numeric_order_closures: cross_module.numeric_order_closures,
+        numeric_order_ready: Default::default(),
         program_has_worker: cross_module.program_has_worker,
         program_has_thread_agents: cross_module.program_has_thread_agents,
         program_class_accessor_names: cross_module.program_class_accessor_names.clone(),
@@ -1758,6 +1761,7 @@ pub(super) fn compile_function(
     }
 
     // #10812: throw a catchable RangeError before the native stack runs out.
+    crate::expr::numeric_order::parameters_ready(&mut ctx, &f.params);
     crate::expr::stack_guard::emit_stack_guard(&mut ctx);
     if f.is_async {
         stmt::lower_async_rejecting_top_level_stmts(&mut ctx, &f.body)

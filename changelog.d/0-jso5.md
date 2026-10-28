@@ -1,0 +1,1 @@
+Array sorting can now prove pure numeric comparator order from return signs and control flow, including closed helpers, named functions, key projections and numeric coercions. Unresolved effects and inconsistent ties retain callback sorting; live numeric and object admission checks remain unchanged.

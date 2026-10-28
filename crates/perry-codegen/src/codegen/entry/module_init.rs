@@ -271,6 +271,9 @@ pub(super) fn compile_module_init(
         crate::boxed_vars::collect_let_types_in_stmts(&hir.init, &mut init_local_types);
     }
     let mut ctx = FnCtx {
+        numeric_order_functions: cross_module.numeric_order_functions,
+        numeric_order_closures: cross_module.numeric_order_closures,
+        numeric_order_ready: Default::default(),
         program_has_worker: cross_module.program_has_worker,
         program_has_thread_agents: cross_module.program_has_thread_agents,
         program_class_accessor_names: cross_module.program_class_accessor_names.clone(),
