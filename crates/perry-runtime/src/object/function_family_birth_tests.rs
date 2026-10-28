@@ -18,6 +18,7 @@ static KEYS: [PerryLayoutKey; 1] = [PerryLayoutKey {
 }];
 static mut SYMBOL: u64 = crate::value::TAG_UNDEFINED;
 static mut LAYOUT: PerryLayoutDesc = PerryLayoutDesc {
+    image_keys: std::ptr::null_mut(),
     shape_id: 0,
     _layout_pad: 0,
     family: 0x464e4201,

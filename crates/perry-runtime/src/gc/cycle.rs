@@ -322,6 +322,10 @@ enum RootScanSubphase {
     MutableRegisteredScanners,
     LegacyRegisteredScanners,
     RememberedSet,
+    /// WRT: remembered realm-image cells are root objects in every cycle
+    /// (`gc::image_cells`). After `RememberedSet`, whose snapshot arms the
+    /// barrier and so runs the image reconstruct first.
+    ImageCells,
     Done,
 }
 
@@ -496,8 +500,13 @@ impl RootScanCycleState {
                     if let Some(trace) = trace.as_mut() {
                         trace.remembered_set = state.stats();
                     }
-                    self.subphase = RootScanSubphase::Done;
+                    self.subphase = RootScanSubphase::ImageCells;
                 }
+                false
+            }
+            RootScanSubphase::ImageCells => {
+                super::image_cells::mark_image_roots(valid_ptrs, self.minor_only);
+                self.subphase = RootScanSubphase::Done;
                 false
             }
             RootScanSubphase::Done => true,

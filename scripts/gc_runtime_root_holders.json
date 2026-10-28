@@ -292,7 +292,7 @@
       "file": "crates/perry-runtime/src/gc/census.rs",
       "name": "PASS1_MARKED",
       "verdict": "non_moving_snapshot",
-      "why": "Re-audited 2026-10-23 against the pinned-source diffs and current collection phases. Raw header-address snapshot exists only in a synchronous full run_to_completion: step_mark_propagation records it after tracing, then block persistence and weak/ephemeron processing only mark or clear existing edges. Full finalization skips the relocating minor prelude. step_sweep consumes the snapshot before census reporting and before reclamation; budgeted cycles and minors skip its creation and consumption. No JS callback, object relocation, or mutator window occurs between the boundaries. The added full-sweep honest-pointer verifier only reads heap slots and allocator metadata; it neither calls JS nor relocates. Scanner registration and optional feature installation occur in gc_init before this window. Trigger-watermark admission, promotion-policy estimates and test-only throw sabotage do not change the synchronous mark-to-sweep sequence; the production throw check aborts rather than calling JS or unwinding. Native Rust allocations do not collect. Removing the retired PIC census row changes reporting only. Re-audited b7f3d56fed: policy.rs adds old_gen_growth_since_last_full_bytes, a read-only query of existing pressure and post-full baseline counters for idle-reducer admission. It does not call JS, collect or relocate, and neither snapshot boundary nor the synchronous mark-to-sweep sequence changes. Re-audited DPA-R: js_gc_init_with_layouts binds immutable image metadata before runtime initialization; the compatibility wrapper and linker keepalive anchor do not touch collection, either snapshot boundary, or the synchronous mark-to-sweep sequence.",
+      "why": "Re-audited 2026-10-23 against the pinned-source diffs and current collection phases. Raw header-address snapshot exists only in a synchronous full run_to_completion: step_mark_propagation records it after tracing, then block persistence and weak/ephemeron processing only mark or clear existing edges. Full finalization skips the relocating minor prelude. step_sweep consumes the snapshot before census reporting and before reclamation; budgeted cycles and minors skip its creation and consumption. No JS callback, object relocation, or mutator window occurs between the boundaries. The added full-sweep honest-pointer verifier only reads heap slots and allocator metadata; it neither calls JS nor relocates. Scanner registration and optional feature installation occur in gc_init before this window. Trigger-watermark admission, promotion-policy estimates and test-only throw sabotage do not change the synchronous mark-to-sweep sequence; the production throw check aborts rather than calling JS or unwinding. Native Rust allocations do not collect. Removing the retired PIC census row changes reporting only. Re-audited b7f3d56fed: policy.rs adds old_gen_growth_since_last_full_bytes, a read-only query of existing pressure and post-full baseline counters for idle-reducer admission. It does not call JS, collect or relocate, and neither snapshot boundary nor the synchronous mark-to-sweep sequence changes. Re-audited DPA-R: js_gc_init_with_layouts binds immutable image metadata before runtime initialization; the compatibility wrapper and linker keepalive anchor do not touch collection, either snapshot boundary, or the synchronous mark-to-sweep sequence. Re-audited WRT2b: the added image-root scan precedes mark propagation and snapshot creation; image cells are immortal MARKED|PINNED and do not enter the moving arena set. The honest-pointer verifier enumerates those immutable image addresses read-only. The new module declarations change no snapshot boundary, JS callback, relocation, or synchronous mark-to-sweep window.",
       "window": {
         "start": {
           "file": "crates/perry-runtime/src/gc/census.rs",
@@ -308,14 +308,14 @@
         },
         "sources": {
           "crates/perry-runtime/src/gc/census.rs": "0cd91052df3a3dd884840e1365aae5e68ca07b20193d2e53049cf08388746fb4",
-          "crates/perry-runtime/src/gc/cycle.rs": "84ef67459e5013ca89ab79a77776837e27323502fd574535e944f43815843209",
-          "crates/perry-runtime/src/gc/mod.rs": "cc23276979cccbc031cc8264d17f7bb11a5cd9c0546c59206882fa46a1f4cd9a",
+          "crates/perry-runtime/src/gc/cycle.rs": "596af3b41a5c9923f0baa26b60d194ba3b770d30c3b38811a3261cd7657c7d77",
+          "crates/perry-runtime/src/gc/mod.rs": "8ecf4be0ab96e470031e5337d694bee87326cf79937d4d756b678b20d25827d0",
           "crates/perry-runtime/src/gc/policy.rs": "1591994044f5ef5e03a5a7922629074da48dfb845262bfbaa293e188cb6b709a",
           "crates/perry-runtime/src/gc/progress.rs": "acb439ba3c6a100f08ea4aa0ba4b96c30afb8cb5d84264436948524144b9342b",
           "crates/perry-runtime/src/gc/allocation_pacing.rs": "8457f4987805b2755f6d235e4c22ebbfd549ef011f5edea5ddad15c48daab5ef",
           "crates/perry-runtime/src/gc/ephemeron.rs": "b6a62662078caf02e5fa716e6bd8089f20e67efca8c9bb55ea234567e81adc06",
           "crates/perry-runtime/src/gc/cycle/weak_ephemerons.rs": "4c2183d3f5bff96acd2df6fbc1b0ad4d47eec23317ef378781e220b4700cf1f4",
-          "crates/perry-runtime/src/gc/verify_honest.rs": "7ce42efcd504e2a00a0ace2cd2df4eb113093c2e6d9710e2c39f6fb2f4d2f488"
+          "crates/perry-runtime/src/gc/verify_honest.rs": "81074a8f84874abdd395c09e8d5029930ec8bce1342dd8812721435061d408fb"
         }
       }
     },
@@ -2974,6 +2974,30 @@
       "name": "TEST_PASS_CHEAP_GATES",
       "verdict": "not_a_gc_pointer",
       "why": "Test-only Boolean allowing idle-compaction prediction fixtures to pass the cheap admission gates. It stores no heap state, block address, selected object or callback; compaction state and page selection remain separate."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/image_cells.rs",
+      "name": "IMAGE_REMEMBERED",
+      "verdict": "not_a_gc_pointer",
+      "why": "Header addresses only of immortal linker-image cells, never arena or malloc objects. remember_image_cell is entered only after RememberingParent::Image classification, and reconstruction enumerates the image. The cells themselves cannot move or die; mark_image_roots and the copying image-root visitor trace and rewrite their managed children."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/image_cells.rs",
+      "name": "TEST_IMAGE_HOLDER",
+      "verdict": "test_only",
+      "why": "cfg(test) Boolean ownership flag for the process-wide static fixture; it stores no address or JS value."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/layout_desc/registration.rs",
+      "name": "RUNTIME_LAYOUT_INSTALLS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Debug/test u32 count of runtime layout installations, reset or incremented for assertions. It stores no layout pointer, JS value or heap address."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/static_shapes.rs",
+      "name": "SEED_BY_NAMES_MINTS",
+      "verdict": "not_a_gc_pointer",
+      "why": "WASI image-selftest/test u32 count of by-names seed mints; the counter carries no key-list address or JS value."
     },
     {
       "file": "crates/perry-runtime/src/component/asynchronous.rs",

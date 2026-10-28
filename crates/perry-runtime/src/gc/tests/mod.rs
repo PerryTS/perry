@@ -60,6 +60,8 @@ mod helper_stores;
 mod host_safepoints;
 mod idle_compact;
 mod idle_reclaim;
+mod image_cells;
+mod image_seeds;
 mod incremental_sweep_reclaim;
 mod inline_generation_gate_contract;
 mod inline_pointer_bearing_contract;
