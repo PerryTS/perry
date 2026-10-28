@@ -1,1 +1,1 @@
-- Keep compiled class-method admission separate from the packed receiver identity, preserving receiver, shape, descriptor and prototype checks while branching directly into class selection.
+- Guard boxed class-method receivers with a fused tag/heap-range check, so positive subnormals take JavaScript method lookup instead of being dereferenced as raw addresses. Keep admission separate from the packed identity when selecting compiled methods, preserving all shape, descriptor and prototype checks.

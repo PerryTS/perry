@@ -1996,3 +1996,5 @@ fn a_dynamic_write_cases_behind_the_holder_shadow_bits() {
     let ir = emit_static(&tower_site_module(), false);
     assert!(!ir.contains("holder.page"), "{ir}");
 }
+#[path = "proven_this_boxed_receiver_tests.rs"]
+mod boxed_receiver_tests;

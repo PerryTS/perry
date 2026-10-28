@@ -240,7 +240,8 @@ fn method_inline_probe_enabled() -> bool {
 
 /// Resolve the live receiver identity and admission predicate for packed
 /// class selection, or the runtime probe's sanitized scalar field pair.
-/// Admission declines on a non-pointer, an address
+/// Packed selection requires a boxed POINTER; the legacy scalar ABI also
+/// accepts an internal raw address. Admission declines on an address
 /// outside the heap band, a non-`GC_TYPE_OBJECT` / forwarded /
 /// descriptor-bearing / packed-numeric-proof header, a zero class id
 /// or a zero ShapeId. Packed consumers must branch on the predicate before
@@ -260,34 +261,40 @@ fn emit_direct_method_probe(ctx: &mut FnCtx<'_>, recv_box: &str, packed: bool) -
     let merge_label = ctx.block_label(merge_idx);
     let floor = crate::target_layout::heap_addr_lower_bound_inclusive(ctx.target_triple);
     let ceiling = crate::target_layout::heap_addr_upper_bound_exclusive(ctx.target_triple);
-    let check_end = {
+    let (check_end, recv_handle) = {
         let blk = ctx.block();
         let recv_bits = blk.bitcast_double_to_i64(recv_box);
-        let recv_handle = blk.and(I64, &recv_bits, crate::nanbox::POINTER_MASK_I64);
-        let tag = blk.lshr(I64, &recv_bits, "48");
-        let is_tagged_ptr = blk.icmp_eq(I64, &tag, POINTER_TAG_HI16);
-        // `normalize_raw_object_addr` also accepts the top-word-zero raw
-        // address form internal method ABIs carry.
-        let is_raw_ptr = blk.icmp_eq(I64, &tag, "0");
-        let is_ptr = blk.or(I1, &is_tagged_ptr, &is_raw_ptr);
-        let in_heap_range = if packed {
-            let relative = blk.sub(I64, &recv_handle, &floor.to_string());
-            blk.icmp_ult(I64, &relative, &(ceiling - floor).to_string())
+        let (ptr_safe, recv_handle) = if packed {
+            // Packed selection consumes the stable boxed method ABI. A raw
+            // address bit pattern is also an ordinary positive subnormal:
+            // admitting it would dereference a Number before dynamic lookup.
+            // One unsigned range test proves the POINTER tag and the target's
+            // entire heap band. Its biased address also supplies the loads.
+            let biased = blk.sub(
+                I64,
+                &recv_bits,
+                &(crate::nanbox::POINTER_TAG | floor).to_string(),
+            );
+            let admitted = blk.icmp_ult(I64, &biased, &(ceiling - floor).to_string());
+            (admitted, blk.add(I64, &biased, &floor.to_string()))
         } else {
-            let above = blk.icmp_uge(I64, &recv_handle, &floor.to_string());
-            let below = blk.icmp_ult(I64, &recv_handle, &ceiling.to_string());
-            blk.and(I1, &above, &below)
+            // Keep the legacy scalar probe's internal raw-address ABI.
+            let handle = blk.and(I64, &recv_bits, crate::nanbox::POINTER_MASK_I64);
+            let tag = blk.lshr(I64, &recv_bits, "48");
+            let tagged = blk.icmp_eq(I64, &tag, POINTER_TAG_HI16);
+            let raw = blk.icmp_eq(I64, &tag, "0");
+            let pointer = blk.or(I1, &tagged, &raw);
+            let above = blk.icmp_uge(I64, &handle, &floor.to_string());
+            let below = blk.icmp_ult(I64, &handle, &ceiling.to_string());
+            let in_range = blk.and(I1, &above, &below);
+            (blk.and(I1, &pointer, &in_range), handle)
         };
-        let ptr_safe = blk.and(I1, &is_ptr, &in_heap_range);
-        let can_deref = ptr_safe;
-        blk.cond_br(&can_deref, &deref_label, &merge_label);
-        blk.label.clone()
+        blk.cond_br(&ptr_safe, &deref_label, &merge_label);
+        (blk.label.clone(), recv_handle)
     };
     ctx.current_block = deref_idx;
     let deref_end = {
         let blk = ctx.block();
-        let recv_bits = blk.bitcast_double_to_i64(recv_box);
-        let recv_handle = blk.and(I64, &recv_bits, crate::nanbox::POINTER_MASK_I64);
         let obj_ptr = blk.inttoptr(I64, &recv_handle);
         let gc_header_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-8")]);
         let gc_header = blk.load(I32, &gc_header_ptr);
@@ -299,8 +306,6 @@ fn emit_direct_method_probe(ctx: &mut FnCtx<'_>, recv_box: &str, packed: bool) -
     ctx.current_block = read_idx;
     let (first, second, read_end) = {
         let blk = ctx.block();
-        let recv_bits = blk.bitcast_double_to_i64(recv_box);
-        let recv_handle = blk.and(I64, &recv_bits, crate::nanbox::POINTER_MASK_I64);
         let obj_ptr = blk.inttoptr(I64, &recv_handle);
         let (first, second) = if packed {
             // The method site's authoritative class_id | ShapeId << 32 encoding.
