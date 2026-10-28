@@ -201,8 +201,8 @@ pub(crate) unsafe fn changeset_bytes_from_value(value: f64) -> Vec<u8> {
     let addr = raw_addr_from_value(value);
     if addr != 0 {
         if (is_registered_buffer(addr) && !is_any_array_buffer(addr) && !is_data_view(addr))
-            || perry_runtime::typedarray::lookup_typed_array_kind(addr)
-                == Some(perry_runtime::typedarray::KIND_UINT8)
+            || perry_runtime::typedarray_hook_slots::lookup_typed_array_kind(addr)
+                == Some(perry_runtime::typedarray_hook_slots::KIND_UINT8)
         {
             let bytes = perry_runtime::buffer::bytes::no_gc(|scope| {
                 let value =

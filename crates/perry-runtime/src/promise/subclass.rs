@@ -61,7 +61,7 @@ unsafe fn instance_object_ptr(this: f64) -> Option<*mut ObjectHeader> {
     if crate::map::is_registered_map(raw)
         || crate::set::is_registered_set(raw)
         || crate::buffer::is_registered_buffer(raw)
-        || crate::typedarray::lookup_typed_array_kind(raw).is_some()
+        || crate::typedarray_hook_slots::lookup_typed_array_kind(raw).is_some()
     {
         return None;
     }

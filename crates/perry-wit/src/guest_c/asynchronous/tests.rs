@@ -14,27 +14,63 @@ interface api {
 world plugin { import api; export run: async func(); }
 "#;
 
-// Deliberately exercise code below the resource profile guard. There is no
-// public or experimental entry point which bypasses that guard.
+// Exercise the actual experimental generator, while ensuring the public CLI
+// still rejects async output. No resource-specific guard is bypassed here.
 fn custody_files(source: &str) -> BTreeMap<String, Vec<u8>> {
+    custody_world_files(source, None)
+}
+
+fn custody_world_files(source: &str, selected: Option<&str>) -> BTreeMap<String, Vec<u8>> {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("world.wit");
     std::fs::write(&path, source).unwrap();
-    assert!(experimental_async_guest(&path, None)
+    assert!(canonical_guest(&path, selected)
         .unwrap_err()
         .to_string()
-        .contains("resources"));
-    let mut resolve = Resolve::default();
-    let (package, _) = resolve.push_path(&path).unwrap();
-    let id = resolve.select_world(&[package], None).unwrap();
-    resolve.generate_nominal_type_ids(id);
-    let world = crate::resolve::convert(&resolve, id).unwrap();
-    let anchor = add_wake_anchor(&mut resolve, id).unwrap();
-    generate_resolved(resolve, id, world, Some(anchor)).unwrap()
+        .contains("async guest functions"));
+    experimental_async_guest(&path, selected).unwrap()
+}
+
+/// Produce a real resource-bearing guest through the experimental entry point.
+/// The external acceptance harness compiles/executes it with matching tools;
+/// generating these files alone is never a passing component qualification.
+#[test]
+#[ignore = "fixture producer for source-matched WASI resource qualification"]
+fn async_resource_guest_fixture() {
+    resource_fixture("async-guest-resources", None);
 }
 
 #[test]
-fn guarded_async_resource_cleanup_compiles_with_imported_and_local_handles() {
+#[ignore = "fixture producer for source-matched compound resource qualification"]
+fn async_compound_resource_guest_fixture() {
+    resource_fixture("async-compound-resources", Some("plugin"));
+}
+
+fn resource_fixture(name: &str, selected: Option<&str>) {
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../test-wasi/components")
+        .join(name);
+    let source = std::fs::read_to_string(fixture.join("world.wit")).unwrap();
+    let files = custody_world_files(&source, selected);
+    let output = tempfile::tempdir().unwrap().keep();
+    let generated = output.join("generated");
+    std::fs::create_dir(&generated).unwrap();
+    for (name, bytes) in files {
+        std::fs::write(generated.join(name), bytes).unwrap();
+    }
+    std::fs::write(
+        generated.join("guest.ts"),
+        crate::typescript_guest(&crate::parse(&source, selected).unwrap()),
+    )
+    .unwrap();
+    for name in ["world.wit", "guest.ts"] {
+        std::fs::copy(fixture.join(name), output.join(name)).unwrap();
+    }
+    println!("PERRY_ASYNC_RESOURCE_FIXTURE={}", output.display());
+}
+
+#[test]
+fn experimental_async_resource_cleanup_compiles_with_imported_and_local_handles() {
     for source in [
         CUSTODY_WORLD.to_string(),
         // An exported interface retains imported resource identity, while its
@@ -131,4 +167,75 @@ fn canonical_child_ownership_survives_cancel_acknowledgement_and_return_races() 
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn async_export_commits_owned_results_and_retires_borrows_before_canonical_return() {
+    let source = "package test:return-resource; interface api { resource item; } world plugin { import api; use api.{item}; export give: async func() -> own<item>; }";
+    let dir = tempfile::tempdir().unwrap();
+    let files = custody_files(source);
+    let adapter = String::from_utf8(files["perry_adapter.c"].clone()).unwrap();
+    let return_function = adapter
+        .lines()
+        .find_map(|line| {
+            line.strip_suffix("(data.result);")
+                .filter(|name| name.ends_with("_return"))
+        })
+        .unwrap();
+    for (name, bytes) in files {
+        std::fs::write(dir.path().join(name), bytes).unwrap();
+    }
+    let harness =
+        include_str!("tests/export_resource.c").replace("$RETURN_FUNCTION", return_function);
+    let path = dir.path().join("export_resource.c");
+    std::fs::write(&path, harness).unwrap();
+    for negative in [false, true] {
+        if negative {
+            std::fs::write(
+                dir.path().join("perry_adapter.c"),
+                adapter.replace("perry_component_frame_resource_commit(data.frame);", ""),
+            )
+            .unwrap();
+        }
+        let exe = dir
+            .path()
+            .join(if negative { "negative" } else { "positive" });
+        let output = std::process::Command::new("clang")
+            .args([
+                "-std=c11",
+                "-Wall",
+                "-Werror",
+                "-Wno-unused-function",
+                "-ffunction-sections",
+                "-fdata-sections",
+                "-Wl,--gc-sections",
+                "-O1",
+            ])
+            .arg(&path)
+            .arg("-o")
+            .arg(&exe)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let output = std::process::Command::new(&exe).output().unwrap();
+        if negative {
+            assert!(
+                !output.status.success(),
+                "missing ownership commit must fail"
+            );
+            assert!(String::from_utf8_lossy(&output.stderr).contains("committed"));
+        } else {
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(String::from_utf8_lossy(&output.stdout).contains("PASS: async export commits"));
+        }
+    }
 }

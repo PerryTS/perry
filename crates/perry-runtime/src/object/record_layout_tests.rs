@@ -149,7 +149,7 @@ fn static_layout_image_results_keep_dimensions_after_gc() {
 fn static_layout_node_timing_snapshot_keeps_managed_values_after_gc() {
     crate::gc::initialize_runtime_fixture();
     let scope = crate::gc::RuntimeHandleScope::new();
-    let timing = scope.root_nanbox_f64(crate::perf_hooks::js_perf_node_timing());
+    let timing = scope.root_nanbox_f64(crate::perf_hook_slots::js_perf_node_timing());
     let name = scope.root_raw_mut_ptr(crate::string::js_string_from_bytes(
         b"snapshot-name".as_ptr(),
         13,
@@ -161,7 +161,7 @@ fn static_layout_node_timing_snapshot_keeps_managed_values_after_gc() {
         crate::JSValue::string_ptr(name.get_raw_mut_ptr()),
     );
     let result = scope.root_nanbox_f64(unsafe {
-        crate::perf_hooks::node_timing_to_json(timing.get_nanbox_f64())
+        crate::perf_hook_slots::node_timing_to_json(timing.get_nanbox_f64())
     });
     crate::gc::js_gc_collect();
     let pointer =

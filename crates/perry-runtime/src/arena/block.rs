@@ -694,7 +694,7 @@ impl Drop for Arena {
                     crate::gc::GC_TYPE_SET_STORE => crate::set::finalize_owned_store(user, false),
                     crate::gc::GC_TYPE_MAP_STORE => crate::map::finalize_owned_store(user, false),
                     crate::gc::GC_TYPE_ASYNC_RESOURCE_STATE => {
-                        crate::async_hooks::resource_state::finalize(user.cast(), false)
+                        crate::async_hook_slots::resource_state::finalize(user.cast(), false)
                     }
                     crate::gc::GC_TYPE_ASYNC_SNAPSHOT => {
                         crate::async_context::finalize_snapshot_holder(user.cast())
@@ -705,7 +705,7 @@ impl Drop for Arena {
             // #11463: a typed-array cache hit must not survive reuse of this
             // block as another thread's nursery (e.g. a fresh Promise). This
             // only touches atomics, so it is safe during TLS destruction.
-            crate::typedarray::invalidate_caches_in_range(
+            crate::typedarray_hook_slots::invalidate_caches_in_range(
                 block.data as usize,
                 block.data as usize + block.size,
             );

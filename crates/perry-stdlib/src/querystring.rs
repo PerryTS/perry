@@ -642,7 +642,7 @@ fn querystring_scalar_to_string(value_bits: u64) -> String {
         if ptr.is_null() {
             return String::new();
         }
-        let hdr = perry_runtime::bigint::js_bigint_to_string(ptr);
+        let hdr = perry_runtime::feature_hooks::bigint_to_string(ptr);
         if hdr.is_null() {
             return String::new();
         }

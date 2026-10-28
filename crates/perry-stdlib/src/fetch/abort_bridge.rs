@@ -70,11 +70,11 @@ pub(crate) enum SignalState {
 /// object).
 pub(crate) fn take_pending_signal_watch() -> SignalState {
     let signal_value = unsafe { js_fetch_take_pending_signal() };
-    let signal = perry_runtime::url::js_abort_signal_resolve_ptr(signal_value);
+    let signal = perry_runtime::event_target_hook_slots::js_abort_signal_resolve_ptr(signal_value);
     if signal.is_null() {
         return SignalState::None;
     }
-    if perry_runtime::url::js_abort_signal_is_aborted(signal) != 0 {
+    if perry_runtime::event_target_hook_slots::js_abort_signal_is_aborted(signal) != 0 {
         return SignalState::AlreadyAborted;
     }
     SignalState::Watch(FetchAbortWatch {
@@ -104,5 +104,5 @@ pub(crate) fn watch_or_reject(
 /// inside a `queue_deferred_resolution` converter so the error object is
 /// allocated on the main thread (never on a worker).
 pub(crate) fn abort_error_bits() -> u64 {
-    perry_runtime::url::js_abort_error_value().to_bits()
+    perry_runtime::event_target_hook_slots::js_abort_error_value().to_bits()
 }

@@ -70,7 +70,7 @@ pub(crate) fn call_one(
 ) -> Result<f64, EngineError> {
     let scope = RuntimeHandleScope::new();
     api::caught(|| {
-        if crate::proxy::js_proxy_is_proxy(method.get_nanbox_f64()) == 1 {
+        if crate::proxy_hooks::proxy_is_proxy(method.get_nanbox_f64()) == 1 {
             // The generic value-call bridge drops this for proxies. Supply
             // the actual receiver and an exact one-element GC argument array.
             let args = scope.root_raw_mut_ptr(crate::array::js_array_alloc(1));
@@ -81,7 +81,11 @@ pub(crate) fn call_one(
             let args = args.with_mut_ptr::<crate::array::ArrayHeader, _>(|args| {
                 js_nanbox_pointer(args as i64)
             });
-            crate::proxy::js_proxy_apply(method.get_nanbox_f64(), receiver.get_nanbox_f64(), args)
+            crate::proxy_hooks::proxy_apply(
+                method.get_nanbox_f64(),
+                receiver.get_nanbox_f64(),
+                args,
+            )
         } else {
             let args = [argument.get_nanbox_f64()];
             unsafe {
@@ -166,7 +170,7 @@ fn execute_override(
     receiver: &RuntimeHandle<'_>,
     input: &RuntimeHandle<'_>,
 ) -> Result<Option<Option<ExecResult>>, EngineError> {
-    let callable = crate::proxy::proxy_wraps_callable(method.get_nanbox_f64());
+    let callable = crate::proxy_hooks::proxy_wraps_callable(method.get_nanbox_f64());
     let builtin =
         crate::object::regex_proto_thunks::is_builtin_regexp_exec(method.get_nanbox_f64());
     if callable && !builtin {

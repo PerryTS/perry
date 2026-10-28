@@ -185,7 +185,7 @@ fn message_bytes_inner(value: f64, allow_list: bool) -> Option<Vec<u8>> {
     let raw = raw_ptr_from_value(value);
     if raw >= 0x10000
         && (crate::buffer::is_registered_buffer(raw)
-            || crate::typedarray::lookup_typed_array_kind(raw).is_some())
+            || crate::typedarray_hook_slots::lookup_typed_array_kind(raw).is_some())
     {
         return crate::buffer::bytes::no_gc(|scope| {
             crate::buffer::bytes::bytes(crate::value::js_nanbox_pointer(raw as i64), scope)

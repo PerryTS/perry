@@ -32,6 +32,7 @@ mod prototype_equality;
 mod strip_vt;
 mod typed_array_equality;
 mod util_format;
+pub(crate) use util_format::install_json_format;
 mod value_repr;
 pub(crate) use value_repr::{int32_or_class_repr, is_array_hole};
 
@@ -207,7 +208,7 @@ pub(crate) fn format_bigint_literal(val: f64) -> String {
         return "0n".to_string();
     }
     unsafe {
-        let str_ptr = crate::bigint::js_bigint_to_string(ptr);
+        let str_ptr = crate::bigint_hooks::js_bigint_to_string(ptr);
         if str_ptr.is_null() {
             return "0n".to_string();
         }
@@ -553,7 +554,7 @@ impl Drop for InspectCompactGuard {
 
 /// #2089: a Date's `util.inspect` rendering — ISO string (unquoted) or "Invalid Date". DateCell pointer only (gated by callers).
 unsafe fn date_inspect_string(value: f64) -> String {
-    let s_ptr = crate::date::js_date_to_iso_string(value);
+    let s_ptr = crate::date_hook_slots::js_date_to_iso_string(value);
     if s_ptr.is_null() {
         return "Invalid Date".to_string();
     }
@@ -612,7 +613,7 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
             if ptr.is_null() {
                 "null".to_string()
             } else {
-                let str_ptr = crate::bigint::js_bigint_to_string(ptr);
+                let str_ptr = crate::bigint_hooks::js_bigint_to_string(ptr);
                 if str_ptr.is_null() {
                     "0n".to_string()
                 } else {
@@ -641,10 +642,11 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                     let bytes = std::slice::from_raw_parts(data, len);
                     std::str::from_utf8(bytes).unwrap_or("Symbol()").to_string()
                 }
-            } else if crate::typedarray::lookup_typed_array_kind(ptr as usize).is_some() {
+            } else if crate::typedarray_hook_slots::lookup_typed_array_kind(ptr as usize).is_some()
+            {
                 // Typed array — Int32Array(N) [ a, b, c ] etc.
-                let ta = ptr as *const crate::typedarray::TypedArrayHeader;
-                crate::typedarray::format_typed_array(ta)
+                let ta = ptr as *const crate::typedarray_hook_slots::TypedArrayHeader;
+                crate::typedarray_hook_slots::format_typed_array(ta)
             } else if crate::buffer::is_data_view(ptr as usize) {
                 let buf_ptr = ptr as *const crate::buffer::BufferHeader;
                 array_buffer::format_data_view_value(buf_ptr)
@@ -672,7 +674,7 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                 // RegExp literals have their own GC kind and no enumerable
                 // keys; render `/source/flags` instead (#800).
                 collections::format_regexp(ptr as *const crate::regex::RegExpHeader)
-            } else if crate::proxy::js_proxy_is_proxy(value) != 0 {
+            } else if crate::proxy_hooks::proxy_is_proxy(value) != 0 {
                 format_proxy_value(value, depth, false)
             } else if crate::date::is_date_cell_addr(ptr as usize) {
                 // #2089: a Date is a NaN-boxed `DateCell` pointer. Node's
@@ -854,9 +856,11 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                 && (raw_bits >> 48) == 0
                 && crate::buffer::header_is_owned(raw_bits as usize)
             {
-                if crate::typedarray::lookup_typed_array_kind(raw_bits as usize).is_some() {
-                    let ta = raw_bits as *const crate::typedarray::TypedArrayHeader;
-                    return crate::typedarray::format_typed_array(ta);
+                if crate::typedarray_hook_slots::lookup_typed_array_kind(raw_bits as usize)
+                    .is_some()
+                {
+                    let ta = raw_bits as *const crate::typedarray_hook_slots::TypedArrayHeader;
+                    return crate::typedarray_hook_slots::format_typed_array(ta);
                 }
                 if crate::buffer::is_registered_buffer(raw_bits as usize) {
                     let buf_ptr = raw_bits as *const crate::buffer::BufferHeader;
@@ -932,7 +936,7 @@ unsafe fn format_buffer_value(buf_ptr: *const crate::buffer::BufferHeader) -> St
 }
 
 fn format_proxy_value(value: f64, depth: usize, json: bool) -> String {
-    let target = crate::proxy::js_proxy_target(value);
+    let target = crate::proxy_hooks::proxy_target(value);
     if !inspect_show_proxy() {
         let target_str = if json {
             format_jsvalue_for_json(target, depth)
@@ -942,7 +946,7 @@ fn format_proxy_value(value: f64, depth: usize, json: bool) -> String {
         return format!("Proxy({target_str})");
     }
 
-    let handler = crate::proxy::js_proxy_handler(value);
+    let handler = crate::proxy_hooks::proxy_handler(value);
     let target_str = if json {
         format_jsvalue_for_json(target, depth + 1)
     } else {
@@ -1427,7 +1431,7 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
             if ptr.is_null() {
                 "null".to_string()
             } else {
-                let str_ptr = crate::bigint::js_bigint_to_string(ptr);
+                let str_ptr = crate::bigint_hooks::js_bigint_to_string(ptr);
                 if str_ptr.is_null() {
                     "0n".to_string()
                 } else {
@@ -1457,7 +1461,7 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                 // A small registry-id handle (`< 0x200000`, e.g. a Web Fetch
                 // Request) carries no GC header, so reading `ptr - 8` would
                 // deref unmapped memory — print a placeholder instead.
-                if crate::proxy::js_proxy_is_proxy(value) != 0 {
+                if crate::proxy_hooks::proxy_is_proxy(value) != 0 {
                     format_proxy_value(value, depth, true)
                 } else if crate::date::is_date_cell_addr(ptr as usize) {
                     // #2089: Date inside an inspected object — ISO string
@@ -1475,7 +1479,7 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                     ))
                     .is_some()
                     || crate::buffer::is_registered_buffer(ptr as usize)
-                    || crate::typedarray::lookup_typed_array_kind(ptr as usize).is_some()
+                    || crate::typedarray_hook_slots::lookup_typed_array_kind(ptr as usize).is_some()
                 {
                     // Symbol / RegExp / Buffer / TypedArray field values need
                     // type-specific rendering this JSON-ish formatter never

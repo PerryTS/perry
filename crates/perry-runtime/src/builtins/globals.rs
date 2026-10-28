@@ -394,8 +394,10 @@ fn throw_data_clone_error(message: &str) -> ! {
         b"DataCloneError".as_ptr(),
         14,
     ) as i64));
-    let err =
-        crate::event_target::js_dom_exception_new(message.get_nanbox_f64(), name.get_nanbox_f64());
+    let err = crate::event_target_hook_slots::js_dom_exception_new(
+        message.get_nanbox_f64(),
+        name.get_nanbox_f64(),
+    );
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
@@ -485,7 +487,7 @@ fn collect_transfer_list(options: f64) -> std::collections::HashSet<usize> {
 /// structuredClone and worker messages use one Node-compatible codec.
 #[no_mangle]
 pub extern "C" fn js_structured_clone(value: f64) -> f64 {
-    clone_with_transfers(value, &[])
+    crate::thread_hook_slots::clone_with_transfers(value, &[])
 }
 
 #[no_mangle]
@@ -496,7 +498,7 @@ pub extern "C" fn js_structured_clone_with_options(value: f64, options: f64) -> 
         .into_iter()
         .collect::<Vec<_>>();
     let outcome = crate::exception::catch_js_throw(|| {
-        clone_with_transfers(value.get_nanbox_f64(), &transfer)
+        crate::thread_hook_slots::clone_with_transfers(value.get_nanbox_f64(), &transfer)
     });
     drop(transfer);
     drop(scope);
@@ -506,7 +508,7 @@ pub extern "C" fn js_structured_clone_with_options(value: f64, options: f64) -> 
     }
 }
 
-fn clone_with_transfers(value: f64, transfer: &[usize]) -> f64 {
+pub(crate) fn clone_with_transfers(value: f64, transfer: &[usize]) -> f64 {
     let message = match unsafe { crate::thread::serialize_message(value.to_bits(), transfer, None) }
     {
         Ok(message) => message,
@@ -566,10 +568,10 @@ fn queue_microtask_with_type(callback: i64, type_name: &str, args: Vec<f64>) {
     let resource_value = resource_handle
         .with_mut_ptr::<u8, _>(|resource| crate::value::js_nanbox_pointer(resource as i64));
     let (ids, callback) = callback_handle.across_const::<crate::closure::ClosureHeader, _>(|| {
-        crate::async_hooks::init_scheduled_resource(type_name, resource_value, None)
+        crate::async_hook_slots::init_scheduled_resource(type_name, resource_value, None)
     });
     // The queue entry owns the job's state; keep it reachable until queued.
-    if let Some(state) = crate::async_hooks::resource_state::get(ids.async_id) {
+    if let Some(state) = crate::async_hook_slots::resource_state::get(ids.async_id) {
         scope.root_raw_mut_ptr(state);
     }
     crate::async_context::refresh_snapshot_from_roots(&mut context, &context_roots);
@@ -653,7 +655,7 @@ pub(crate) fn drain_queued_microtasks_count() -> i32 {
                 let scope = crate::gc::RuntimeHandleScope::new();
                 // The popped entry no longer owns the job's state: this scope
                 // does until its destroy.
-                if let Some(state) = crate::async_hooks::resource_state::get(async_id) {
+                if let Some(state) = crate::async_hook_slots::resource_state::get(async_id) {
                     scope.root_raw_mut_ptr(state);
                 }
                 let resource_handle = scope.root_nanbox_f64(resource);
@@ -664,7 +666,7 @@ pub(crate) fn drain_queued_microtasks_count() -> i32 {
                 QUEUED_MICROTASK_PREV_CONTEXTS.with(|stack| {
                     stack.borrow_mut().push(previous);
                 });
-                crate::async_hooks::before_scheduled(
+                crate::async_hook_slots::before_scheduled(
                     async_id,
                     trigger_async_id,
                     resource_handle.get_nanbox_f64(),
@@ -760,8 +762,8 @@ pub(crate) fn drain_queued_microtasks_count() -> i32 {
                         );
                     },
                 }
-                crate::async_hooks::after(async_id);
-                crate::async_hooks::destroy_scheduled(async_id);
+                crate::async_hook_slots::after(async_id);
+                crate::async_hook_slots::destroy_scheduled(async_id);
                 QUEUED_MICROTASK_PREV_CONTEXTS.with(|stack| {
                     if let Some(previous) = stack.borrow_mut().pop() {
                         crate::async_context::restore_context(previous);
@@ -788,7 +790,7 @@ pub fn scan_queued_microtask_roots_mut(visitor: &mut crate::gc::RuntimeRootVisit
     QUEUED_MICROTASKS.with(|q| {
         for task in q.borrow_mut().iter_mut() {
             visitor.visit_i64_slot(&mut task.callback);
-            crate::async_hooks::resource_state::scan_token(&mut task.async_id, visitor);
+            crate::async_hook_slots::resource_state::scan_token(&mut task.async_id, visitor);
             visitor.visit_nanbox_f64_slot(&mut task.resource);
             crate::async_context::scan_snapshot_roots_mut(&mut task.context, visitor);
             // #1351: trailing nextTick args may be heap pointers — keep
@@ -888,12 +890,12 @@ mod structured_clone_tests {
 
     #[test]
     fn structured_clone_date_is_independent_and_preserves_nested_identity() {
-        let source = crate::date::alloc_date_cell(0.0);
+        let source = crate::date_hook_slots::alloc_date_cell(0.0);
         let direct = js_structured_clone(source);
         assert_ne!(direct.to_bits(), source.to_bits());
         assert_eq!(crate::date::date_cell_timestamp(direct), 0.0);
         let next_time = [5000.0];
-        crate::date::js_date_apply_setter(direct, 0, 7, next_time.as_ptr(), 1);
+        crate::date_hook_slots::js_date_apply_setter(direct, 0, 7, next_time.as_ptr(), 1);
         assert_eq!(crate::date::date_cell_timestamp(direct), 5000.0);
         assert_eq!(crate::date::date_cell_timestamp(source), 0.0);
 

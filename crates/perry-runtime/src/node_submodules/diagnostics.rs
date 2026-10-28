@@ -194,7 +194,7 @@ fn adjust_global_active_count_for_channel(id: i64, delta: isize) {
     }
 }
 
-fn enqueue_cross_thread_publish(key: DiagChannelKey, data: f64, local_delivered: bool) {
+pub(crate) fn enqueue_cross_thread_publish(key: DiagChannelKey, data: f64, local_delivered: bool) {
     let Some(key) = cross_thread_key(&key) else {
         return;
     };
@@ -774,7 +774,7 @@ pub fn diagnostics_channel_drain_uncaught() {
         .collect();
     drop(pending);
     for err in errors {
-        if !crate::os::emit_process_event("uncaughtException", &[err.get_nanbox_f64()]) {
+        if !crate::os_hook_slots::emit_process_event("uncaughtException", &[err.get_nanbox_f64()]) {
             crate::exception::exit_on_uncaught(err.get_nanbox_f64());
         }
     }
@@ -1046,7 +1046,7 @@ pub(crate) fn publish_channel(id: i64, data: f64) {
         return;
     };
     if global_active_count(&key) > local_active_count {
-        enqueue_cross_thread_publish(key, data, has_local_subscribers);
+        crate::thread_hook_slots::enqueue_cross_thread_publish(key, data, has_local_subscribers);
     }
 }
 

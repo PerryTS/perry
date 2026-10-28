@@ -159,7 +159,7 @@ pub extern "C" fn js_object_set_field_by_name(
         if crate::value::addr_class::is_proxy_cell(raw_addr as usize) && !key.is_null() {
             let boxed = f64::from_bits(crate::value::POINTER_TAG | raw_addr);
             let key_f64 = f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
-            crate::proxy::js_proxy_set(boxed, key_f64, value);
+            crate::proxy_hooks::proxy_set(boxed, key_f64, value);
             return;
         }
     }
@@ -440,7 +440,7 @@ pub extern "C" fn js_object_set_field_by_name(
         {
             unsafe {
                 crate::typedarray_props::typed_array_set_own_property(
-                    addr as *mut crate::typedarray::TypedArrayHeader,
+                    addr as *mut crate::typedarray_hook_slots::TypedArrayHeader,
                     key,
                     value,
                 );
@@ -666,9 +666,9 @@ pub extern "C" fn js_object_set_field_by_name(
         return;
     }
     unsafe {
-        if crate::typedarray::lookup_typed_array_kind(obj as usize).is_some() {
+        if crate::typedarray_hook_slots::lookup_typed_array_kind(obj as usize).is_some() {
             crate::typedarray_props::typed_array_set_own_property(
-                obj as *mut crate::typedarray::TypedArrayHeader,
+                obj as *mut crate::typedarray_hook_slots::TypedArrayHeader,
                 key,
                 value,
             );

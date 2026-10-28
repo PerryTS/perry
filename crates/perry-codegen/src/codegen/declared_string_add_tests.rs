@@ -693,3 +693,63 @@ fn two_numeric_operands_are_untouched() {
         "numeric `+` must not acquire a string guard:\n{ir}"
     );
 }
+
+#[test]
+fn loop_number_fixed_point_elides_assignment_string_alias_guard() {
+    let module = module_with(probe_fn_with_body(
+        vec![param(1, "again", Type::Boolean)],
+        vec![
+            Stmt::Let {
+                id: 10,
+                name: "x".into(),
+                ty: Type::Any,
+                mutable: true,
+                init: Some(Expr::Number(0.5)),
+            },
+            Stmt::Let {
+                id: 11,
+                name: "y".into(),
+                ty: Type::Any,
+                mutable: true,
+                init: Some(Expr::Number(1.5)),
+            },
+            Stmt::While {
+                condition: Expr::LocalGet(1),
+                body: vec![
+                    Stmt::Expr(Expr::LocalSet(
+                        10,
+                        Box::new(add(Expr::LocalGet(11), Expr::Number(0.5))),
+                    )),
+                    Stmt::Expr(Expr::LocalSet(11, Box::new(Expr::LocalGet(10)))),
+                ],
+            },
+            Stmt::Return(Some(Expr::LocalGet(11))),
+        ],
+    ));
+    let ir = function_ir(module);
+    assert!(ir.contains("fadd double"), "{ir}");
+    assert!(
+        !ir.contains("call void @js_string_addref_if_heap_string("),
+        "{ir}"
+    );
+    assert!(!ir.contains(", 9223090561878065152"), "{ir}");
+}
+
+#[test]
+fn annotation_only_numeric_assignment_keeps_string_alias_guard() {
+    let module = module_with(probe_fn_with_body(
+        vec![
+            param(1, "source", Type::Number),
+            param(2, "target", Type::Number),
+        ],
+        vec![
+            Stmt::Expr(Expr::LocalSet(2, Box::new(Expr::LocalGet(1)))),
+            Stmt::Return(Some(Expr::Number(0.0))),
+        ],
+    ));
+    let ir = function_ir(module);
+    assert!(
+        ir.contains("call void @js_string_addref_if_heap_string("),
+        "{ir}"
+    );
+}

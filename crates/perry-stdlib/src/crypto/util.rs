@@ -61,7 +61,7 @@ pub(super) unsafe fn bytes_from_ptr(ptr: i64) -> Vec<u8> {
         return Vec::new();
     }
     if perry_runtime::buffer::is_registered_buffer(addr)
-        || perry_runtime::typedarray::lookup_typed_array_kind(addr).is_some()
+        || perry_runtime::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some()
     {
         let data = perry_runtime::buffer::bytes::no_gc(|scope| {
             perry_runtime::buffer::bytes::bytes(

@@ -35,7 +35,7 @@ impl ViewBrand {
     #[inline]
     pub(crate) fn typed_array_kind(self) -> Option<u8> {
         match self {
-            Self::NodeBuffer => Some(crate::typedarray::KIND_UINT8),
+            Self::NodeBuffer => Some(crate::typedarray_hook_slots::KIND_UINT8),
             Self::TypedArray(kind) => Some(kind),
             Self::TypedArraySubclass | Self::DataView => None,
         }
@@ -59,12 +59,14 @@ pub(crate) fn view_brand(value: f64) -> Option<ViewBrand> {
     if let Some(brand) = crate::buffer::buffer_brand(addr) {
         return match brand {
             BufferBrand::NodeBuffer => Some(ViewBrand::NodeBuffer),
-            BufferBrand::Uint8Array => Some(ViewBrand::TypedArray(crate::typedarray::KIND_UINT8)),
+            BufferBrand::Uint8Array => Some(ViewBrand::TypedArray(
+                crate::typedarray_hook_slots::KIND_UINT8,
+            )),
             BufferBrand::DataView => Some(ViewBrand::DataView),
             BufferBrand::ArrayBuffer | BufferBrand::KeyMaterial => None,
         };
     }
-    if let Some(kind) = crate::typedarray::lookup_typed_array_kind(addr) {
+    if let Some(kind) = crate::typedarray_hook_slots::lookup_typed_array_kind(addr) {
         return Some(ViewBrand::TypedArray(kind));
     }
     extends_builtin_view(value)

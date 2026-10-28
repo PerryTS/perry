@@ -197,7 +197,7 @@ pub fn bound_native_callable_export_value(module_name: &str, property_name: &str
         // optional module hook. Their prototypes are intrinsic constructor
         // state, so install them at this common callable-creation seam.
         unsafe {
-            crate::perf_hooks::attach_perf_hooks_constructor(
+            crate::perf_hook_slots::attach_perf_hooks_constructor(
                 property_name,
                 value.get_nanbox_f64(),
                 crate::value::js_nanbox_get_pointer(value.get_nanbox_f64()) as usize,
@@ -206,7 +206,7 @@ pub fn bound_native_callable_export_value(module_name: &str, property_name: &str
     } else if export_module_name == "bun" && property_name == "plugin" {
         // Decorate once at creation so named imports, namespaces, and saved
         // Bun.plugin values share the same callable and clearAll property.
-        crate::bun_compat::decorate_bun_plugin(value.get_nanbox_f64());
+        crate::bun_hook_slots::decorate_bun_plugin(value.get_nanbox_f64());
     } else if let Some(attach) =
         super::super::native_module_registry::nm_attach_lookup(export_module_name)
     {
@@ -1360,7 +1360,7 @@ pub(crate) unsafe fn nm_attach_wasi(
     _closure_addr: usize,
 ) -> f64 {
     if property_name == "WASI" {
-        crate::wasi::attach_wasi_constructor_prototype(value);
+        crate::wasi_hook_slots::attach_wasi_constructor_prototype(value);
     }
     value
 }
@@ -1537,7 +1537,7 @@ pub(crate) unsafe fn nm_attach_async_hooks(
             ),
         );
         let bind = scope.root_nanbox_f64(async_hooks_static_method_value(
-            crate::fn_info!(crate::async_hooks::js_async_local_storage_static_bind_method, 2; with_rest(1)),
+            crate::fn_info!(crate::async_hook_slots::js_async_local_storage_static_bind_method, 2; with_rest(1)),
             "bind",
             1,
         ));
@@ -1552,7 +1552,7 @@ pub(crate) unsafe fn nm_attach_async_hooks(
             super::PropertyAttrs::new(true, false, true),
         );
         let snapshot = scope.root_nanbox_f64(async_hooks_static_method_value(
-            crate::fn_info!(crate::async_hooks::js_async_local_storage_static_snapshot_method, 1; with_rest(0)),
+            crate::fn_info!(crate::async_hook_slots::js_async_local_storage_static_snapshot_method, 1; with_rest(0)),
             "snapshot",
             0,
         ));
@@ -1575,7 +1575,7 @@ pub(crate) unsafe fn nm_attach_async_hooks(
             ),
         );
         let bind = scope.root_nanbox_f64(async_hooks_static_method_value(
-            crate::fn_info!(crate::async_hooks::js_async_resource_static_bind_method, 4; with_rest(3)),
+            crate::fn_info!(crate::async_hook_slots::js_async_resource_static_bind_method, 4; with_rest(3)),
             "bind",
             3,
         ));

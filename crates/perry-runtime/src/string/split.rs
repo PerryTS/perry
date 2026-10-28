@@ -339,7 +339,7 @@ pub extern "C" fn js_string_split_n(
     ))
     .is_some()
     {
-        return crate::regex::js_string_split_regex_n(
+        return crate::regex::hooked::js_string_split_regex_n(
             s,
             delimiter as *const crate::regex::RegExpHeader,
             limit,
@@ -818,7 +818,7 @@ pub extern "C" fn js_string_split_value(
                 })
             });
             let ptr = crate::value::js_nanbox_get_pointer(separator) as *const u8;
-            return crate::regex::js_string_split_regex_n(
+            return crate::regex::hooked::js_string_split_regex_n(
                 s,
                 ptr as *const crate::regex::RegExpHeader,
                 limit_i32,

@@ -15,6 +15,7 @@ mod compile;
 mod escape;
 #[cfg(feature = "regex-engine")]
 mod flags;
+pub mod hooked;
 #[cfg(feature = "regex-engine")]
 pub(crate) mod instance;
 #[cfg(feature = "regex-engine")]
@@ -22,11 +23,13 @@ pub(crate) use instance::intrinsic_prototype;
 #[cfg(feature = "regex-engine")]
 mod perex_split_compat;
 #[cfg(feature = "regex-engine")]
-pub use perex_split_compat::{js_string_split_n, js_string_split_regex, js_string_split_regex_n};
+pub use hooked::js_string_split_n;
+#[cfg(feature = "regex-engine")]
+pub use perex_split_compat::{js_string_split_regex, js_string_split_regex_n};
 #[cfg(feature = "regex-engine")]
 pub(crate) mod perex_split;
 #[cfg(feature = "regex-engine")]
-pub use perex_split::js_string_split_js;
+pub use hooked::js_string_split_js;
 #[cfg(feature = "regex-engine")]
 pub(crate) mod match_all;
 #[cfg(feature = "regex-engine")]
@@ -77,13 +80,11 @@ mod literal;
 #[cfg(feature = "regex-engine")]
 mod perex_substitution;
 #[cfg(feature = "regex-engine")]
+pub use hooked::{js_string_replace_all_js, js_string_replace_js};
+#[cfg(feature = "regex-engine")]
 pub use literal::js_regexp_literal;
 #[cfg(all(test, feature = "regex-engine"))]
 pub(crate) use literal::{from_parts as test_regexp_literal, LiteralSite};
-#[cfg(feature = "regex-engine")]
-pub use perex_replace::{js_string_replace_all_js, js_string_replace_js};
-#[cfg(feature = "regex-engine")]
-mod perex_replace_compat;
 #[cfg(feature = "regex-engine")]
 mod perex_results;
 #[cfg(feature = "regex-engine")]
@@ -92,6 +93,8 @@ pub(crate) mod perex_runtime;
 pub(crate) mod perex_strings;
 #[cfg(not(feature = "regex-engine"))]
 mod replace_fn;
+#[cfg(feature = "regex-engine")]
+mod string_compat;
 mod utf16;
 #[cfg(feature = "regex-engine")]
 pub use compile::js_regexp_compile_value;
@@ -149,16 +152,17 @@ pub(crate) unsafe fn hooked_iterator_method_builtin(
 /// The `regex-engine` install's hub half.
 #[cfg(feature = "regex-engine")]
 pub(crate) fn install_iterator_hooks() {
+    hooked::install();
     ITERATOR_METHOD.set(dispatch_regexp_string_iterator_method);
     ITERATOR_METHOD_BUILTIN.set(dispatch_regexp_string_iterator_method_builtin);
 }
-#[cfg(feature = "regex-engine")]
-pub use perex_replace_compat::*;
 #[cfg(not(feature = "regex-engine"))]
 pub use replace_fn::{
     js_string_replace_all_js, js_string_replace_all_string, js_string_replace_all_string_fn,
     js_string_replace_js, js_string_replace_string, js_string_replace_string_fn,
 };
+#[cfg(feature = "regex-engine")]
+pub use string_compat::*;
 // Engine-disabled builds still carry the String.prototype builtin entries
 // (`object::builtin_proto_entries`) that name these boxed bodies. A program
 // that uses regex forces the engine on, so they are unreachable there; they
@@ -618,7 +622,7 @@ pub(crate) fn test_last_exec_groups() -> usize {
 pub extern "C" fn js_regexp_get_source(re: *const RegExpHeader) -> *mut StringHeader {
     #[cfg(feature = "regex-engine")]
     {
-        return perex_api::finish(perex_display::source(re));
+        return hooked::source(re).unwrap_or_else(|| js_regexp_empty_source());
     }
     #[cfg(not(feature = "regex-engine"))]
     unsafe {
@@ -650,11 +654,10 @@ pub extern "C" fn js_regexp_empty_source() -> *mut StringHeader {
 pub extern "C" fn js_regexp_get_flags(re: *const RegExpHeader) -> *mut StringHeader {
     #[cfg(feature = "regex-engine")]
     {
-        return perex_api::finish(perex_match_search::flags(crate::value::js_nanbox_pointer(
-            re as i64,
-        )));
+        if let Some(value) = hooked::flags(re) {
+            return value;
+        }
     }
-    #[cfg(not(feature = "regex-engine"))]
     original_flags(re)
 }
 
@@ -681,9 +684,10 @@ pub(crate) fn original_flags(re: *const RegExpHeader) -> *mut StringHeader {
 pub extern "C" fn js_regexp_to_string(re: *const RegExpHeader) -> *mut StringHeader {
     #[cfg(feature = "regex-engine")]
     {
-        return perex_api::finish(perex_display::to_string(re));
+        if let Some(value) = hooked::to_string(re) {
+            return value;
+        }
     }
-    #[cfg(not(feature = "regex-engine"))]
     {
         let scope = crate::gc::RuntimeHandleScope::new();
         let re = scope.root_raw_const_ptr(re);

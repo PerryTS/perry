@@ -173,7 +173,7 @@ fn call_enabled_callback_once(scope: &crate::gc::RuntimeHandleScope, closure: *m
 
 fn write_stderr_line(line: &str) {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let stderr = crate::os::js_process_stderr();
+    let stderr = crate::os_hook_slots::js_process_stderr();
     let stderr_handle = scope.root_nanbox_f64(stderr);
     let line_value = boxed_string(line);
     let line_handle = scope.root_nanbox_f64(line_value);

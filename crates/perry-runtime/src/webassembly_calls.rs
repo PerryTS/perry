@@ -361,7 +361,7 @@ pub(crate) fn js_to_wasm_i64_bits(value: f64) -> Option<u64> {
 }
 
 pub(super) fn wasm_i64_to_js(bits: u64) -> f64 {
-    let bigint = crate::bigint::js_bigint_from_i64(bits as i64);
+    let bigint = crate::bigint_hooks::js_bigint_from_i64(bits as i64);
     f64::from_bits(JSValue::bigint_ptr(bigint).bits())
 }
 

@@ -309,6 +309,9 @@ pub unsafe extern "C" fn perry_component_frame_resource_lift(
     owned: i32,
 ) -> u32 {
     super::frame::frame(pointer).guard(|frame| {
+        if owned == 0 {
+            frame.retain_incoming_borrow(ty, handle);
+        }
         let lifetime = if owned != 0 {
             undefined()
         } else {

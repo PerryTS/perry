@@ -103,8 +103,8 @@ pub(super) fn bool_from_js(value: f64) -> bool {
 }
 
 fn default_abort_signal_value() -> f64 {
-    let controller = perry_runtime::url::js_abort_controller_new();
-    let signal = perry_runtime::url::js_abort_controller_signal(controller);
+    let controller = perry_runtime::event_target_hook_slots::js_abort_controller_new();
+    let signal = perry_runtime::event_target_hook_slots::js_abort_controller_signal(controller);
     f64::from_bits(JSValue::object_ptr(signal as *mut u8).bits())
 }
 

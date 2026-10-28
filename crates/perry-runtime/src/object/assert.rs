@@ -88,7 +88,7 @@ fn regex_test_value(pattern: f64, input: f64) -> Option<bool> {
     let input_string = value_to_string(input);
     let input_ptr =
         crate::string::js_string_from_bytes(input_string.as_ptr(), input_string.len() as u32);
-    Some(crate::regex::js_regexp_test(re, input_ptr) != 0)
+    Some(crate::regex::hooked::test(re, input_ptr) != 0)
 }
 
 /// Regex engine gated off: no RegExp value can exist, so `expected` is never a
@@ -103,7 +103,7 @@ fn regex_test_value(_pattern: f64, _input: f64) -> Option<bool> {
 fn regex_test_string(re: *const crate::regex::RegExpHeader, input: f64) -> bool {
     let input_ptr =
         crate::value::js_get_string_pointer_unified(input) as *const crate::StringHeader;
-    !input_ptr.is_null() && crate::regex::js_regexp_test(re, input_ptr) != 0
+    !input_ptr.is_null() && crate::regex::hooked::test(re, input_ptr) != 0
 }
 
 #[cfg(not(feature = "regex-engine"))]

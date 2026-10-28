@@ -379,7 +379,7 @@ pub(crate) fn is_intrinsic_regexp_constructor(value: f64) -> bool {
 /// prototype methods. `compile` is only installed here when the `regex-engine`
 /// feature is on; the fallback no-op (for builds without an engine) is installed
 /// by the caller.
-pub(super) fn install_regex_proto_methods(proto_obj: *mut ObjectHeader) {
+pub(crate) fn install_regex_proto_methods(proto_obj: *mut ObjectHeader) {
     use super::global_this::install_proto_method as ipm;
     #[cfg(feature = "regex-engine")]
     ipm(
@@ -487,7 +487,7 @@ fn install_regex_symbol_methods(proto: *mut crate::object::ObjectHeader) {
 }
 
 /// Install all RegExp.prototype accessor getters.
-pub(super) fn install_regex_proto_accessors(proto_obj: *mut ObjectHeader) {
+pub(crate) fn install_regex_proto_accessors(proto_obj: *mut ObjectHeader) {
     install_getter(
         proto_obj,
         "flags",

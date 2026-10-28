@@ -398,8 +398,9 @@ fn to_length(value: f64) -> usize {
 unsafe fn json_is_array(value: f64) -> bool {
     let mut current = value;
     for _ in 0..64 {
-        if crate::proxy::js_proxy_is_proxy(current) != 0 {
-            let Some(target) = crate::proxy::js_proxy_checked_target_for_is_array(current) else {
+        if crate::proxy_hooks::proxy_is_proxy(current) != 0 {
+            let Some(target) = crate::proxy_hooks::proxy_checked_target_for_is_array(current)
+            else {
                 return false;
             };
             current = target;
@@ -411,8 +412,8 @@ unsafe fn json_is_array(value: f64) -> bool {
 }
 
 unsafe fn json_is_object(value: f64) -> bool {
-    if crate::proxy::js_proxy_is_proxy(value) != 0 {
-        let _ = crate::proxy::js_proxy_checked_target(value);
+    if crate::proxy_hooks::proxy_is_proxy(value) != 0 {
+        let _ = crate::proxy_hooks::proxy_checked_target(value);
         return true;
     }
     if let Some(ptr) = extract_pointer(value.to_bits()) {
@@ -654,8 +655,8 @@ unsafe fn enumerable_keys_for_internalize(
     value_handle: &crate::gc::RuntimeHandle<'_>,
 ) -> *mut crate::ArrayHeader {
     let value = value_handle.get_nanbox_f64();
-    let keys_value = if crate::proxy::js_proxy_is_proxy(value) != 0 {
-        crate::proxy::js_proxy_own_keys_for_json(value)
+    let keys_value = if crate::proxy_hooks::proxy_is_proxy(value) != 0 {
+        crate::proxy_hooks::proxy_own_keys_for_json(value)
     } else {
         let keys = crate::object::js_object_keys_value(value);
         f64::from_bits(POINTER_TAG | ((keys as u64) & POINTER_MASK))

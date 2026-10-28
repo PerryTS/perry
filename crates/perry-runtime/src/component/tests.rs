@@ -174,7 +174,7 @@ fn proxy_arrays_are_not_read_as_array_headers() {
         crate::array::js_array_alloc_with_length(0) as i64,
     ));
     let handler = object(&scope);
-    let proxy = scope.root_nanbox_f64(crate::proxy::js_proxy_new(
+    let proxy = scope.root_nanbox_f64(crate::proxy_hooks::proxy_new(
         array.get_nanbox_f64(),
         handler.get_nanbox_f64(),
     ));

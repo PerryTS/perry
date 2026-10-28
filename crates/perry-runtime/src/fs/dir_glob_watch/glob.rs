@@ -175,24 +175,22 @@ fn decode_string_or_file_url(value: f64) -> Option<String> {
     if obj.is_null() {
         return None;
     }
-    let protocol = crate::url::get_string_content(crate::object::js_object_get_field_f64(
-        obj,
-        crate::url::parse::URL_PROTOCOL,
-    ));
+    let protocol = crate::value::boxed_text::get_string_content(
+        crate::object::js_object_get_field_f64(obj, crate::url::parse::URL_PROTOCOL),
+    );
     if protocol != "file:" {
         return None;
     }
     unsafe {
         crate::fs::validate::validate_file_url_path_object(obj);
     }
-    let pathname = crate::url::get_string_content(crate::object::js_object_get_field_f64(
-        obj,
-        crate::url::parse::URL_PATHNAME,
-    ));
+    let pathname = crate::value::boxed_text::get_string_content(
+        crate::object::js_object_get_field_f64(obj, crate::url::parse::URL_PATHNAME),
+    );
     if pathname.is_empty() {
         return None;
     }
-    Some(crate::url::search_params::url_decode(&pathname))
+    Some(crate::string::form_codec::url_decode(&pathname))
 }
 
 fn array_ptr_from_value(value: f64) -> Option<*const crate::array::ArrayHeader> {

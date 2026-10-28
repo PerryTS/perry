@@ -533,7 +533,7 @@ pub extern "C" fn js_buffer_read_bigint64_be(buf_ptr: f64, offset: i32) -> f64 {
     let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *const BufferHeader;
     let s = buffer_slice_at_or_throw_bounds(buf, offset, 8);
     let val = i64::from_be_bytes([s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]]);
-    let bi = crate::bigint::js_bigint_from_i64(val);
+    let bi = crate::bigint_hooks::js_bigint_from_i64(val);
     f64::from_bits(crate::JSValue::bigint_ptr(bi).bits())
 }
 
@@ -542,7 +542,7 @@ pub extern "C" fn js_buffer_read_bigint64_le(buf_ptr: f64, offset: i32) -> f64 {
     let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *const BufferHeader;
     let s = buffer_slice_at_or_throw_bounds(buf, offset, 8);
     let val = i64::from_le_bytes([s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]]);
-    let bi = crate::bigint::js_bigint_from_i64(val);
+    let bi = crate::bigint_hooks::js_bigint_from_i64(val);
     f64::from_bits(crate::JSValue::bigint_ptr(bi).bits())
 }
 
@@ -551,7 +551,7 @@ pub extern "C" fn js_buffer_read_biguint64_be(buf_ptr: f64, offset: i32) -> f64 
     let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *const BufferHeader;
     let s = buffer_slice_at_or_throw_bounds(buf, offset, 8);
     let val = u64::from_be_bytes([s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]]);
-    let bi = crate::bigint::js_bigint_from_u64(val);
+    let bi = crate::bigint_hooks::js_bigint_from_u64(val);
     f64::from_bits(crate::JSValue::bigint_ptr(bi).bits())
 }
 
@@ -560,7 +560,7 @@ pub extern "C" fn js_buffer_read_biguint64_le(buf_ptr: f64, offset: i32) -> f64 
     let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *const BufferHeader;
     let s = buffer_slice_at_or_throw_bounds(buf, offset, 8);
     let val = u64::from_le_bytes([s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]]);
-    let bi = crate::bigint::js_bigint_from_u64(val);
+    let bi = crate::bigint_hooks::js_bigint_from_u64(val);
     f64::from_bits(crate::JSValue::bigint_ptr(bi).bits())
 }
 

@@ -1185,7 +1185,7 @@ fn jsvalue_eq(a: f64, b: f64) -> bool {
             // A bigint never equals a non-bigint key.
             return false;
         }
-        return crate::bigint::js_bigint_eq(a_big, b_big) != 0;
+        return crate::bigint_hooks::js_bigint_eq(a_big, b_big) != 0;
     }
 
     if is_string_like(a_bits) && is_string_like(b_bits) {

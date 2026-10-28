@@ -53,7 +53,13 @@ fn lower_typed_f64_expr_with_env(
                 BinaryOp::Sub => blk.fsub(&l, &r),
                 BinaryOp::Mul => blk.fmul(&l, &r),
                 BinaryOp::Div => blk.fdiv(&l, &r),
-                BinaryOp::Mod => blk.frem(&l, &r),
+                // Integer admission lives in the LLVM unit, so inlining can
+                // consume constants and the entry's guarded scalar facts.
+                BinaryOp::Mod => blk.call_gc_leaf(
+                    crate::types::DOUBLE,
+                    super::super::numeric_remainder::CHECKED_NUMBER_REMAINDER,
+                    &[(crate::types::DOUBLE, &l), (crate::types::DOUBLE, &r)],
+                ),
                 _ => {
                     anyhow::bail!("typed-f64 clone cannot lower non-arithmetic expression")
                 }
@@ -430,7 +436,13 @@ fn lower_typed_f64_receiver_expr_with_env(
                 BinaryOp::Sub => blk.fsub(&l, &r),
                 BinaryOp::Mul => blk.fmul(&l, &r),
                 BinaryOp::Div => blk.fdiv(&l, &r),
-                BinaryOp::Mod => blk.frem(&l, &r),
+                // Integer admission lives in the LLVM unit, so inlining can
+                // consume constants and the entry's guarded scalar facts.
+                BinaryOp::Mod => blk.call_gc_leaf(
+                    crate::types::DOUBLE,
+                    super::super::numeric_remainder::CHECKED_NUMBER_REMAINDER,
+                    &[(crate::types::DOUBLE, &l), (crate::types::DOUBLE, &r)],
+                ),
                 _ => {
                     anyhow::bail!("typed-f64 receiver clone cannot lower non-arithmetic expression")
                 }

@@ -1,6 +1,6 @@
 use crate::array::ArrayHeader;
 use crate::closure::ClosureHeader;
-use crate::typedarray::{
+use crate::typedarray_hook_slots::{
     js_typed_array_get, js_typed_array_set, lookup_typed_array_kind, TypedArrayHeader,
 };
 
@@ -50,7 +50,7 @@ fn typed_array_owner_kind(owner: usize) -> Option<TypedArrayOwnerKind> {
 unsafe fn typed_array_owner_length_for(owner: usize, kind: TypedArrayOwnerKind) -> u32 {
     match kind {
         TypedArrayOwnerKind::TypedArray => {
-            crate::typedarray::element_length(owner as *const TypedArrayHeader)
+            crate::typedarray_hook_slots::element_length(owner as *const TypedArrayHeader)
         }
         TypedArrayOwnerKind::Uint8ArrayBuffer => {
             crate::buffer::js_buffer_length(owner as *const crate::buffer::BufferHeader) as u32
@@ -84,11 +84,11 @@ pub(crate) unsafe fn species_result_store(owner: usize, index: usize, raw: f64) 
     match typed_array_owner_kind(owner) {
         Some(TypedArrayOwnerKind::TypedArray) => {
             let ta = owner as *mut TypedArrayHeader;
-            let kind = crate::typedarray::element_kind(ta);
-            crate::typedarray::species::store_coerced(ta, index, kind, raw);
+            let kind = crate::typedarray_hook_slots::element_kind(ta);
+            crate::typedarray_hook_slots::species::store_coerced(ta, index, kind, raw);
         }
         Some(TypedArrayOwnerKind::Uint8ArrayBuffer) => {
-            let n = crate::typedarray::species::to_number(raw);
+            let n = crate::typedarray_hook_slots::species::to_number(raw);
             crate::buffer::js_buffer_set(
                 owner as *mut crate::buffer::BufferHeader,
                 index as i32,
@@ -542,14 +542,14 @@ pub(crate) unsafe fn typed_array_set_property_by_name(
 unsafe fn typed_array_coerce_element_for_side_effects(owner: usize, value: f64) {
     match typed_array_owner_kind(owner) {
         Some(TypedArrayOwnerKind::TypedArray) => {
-            let kind = crate::typedarray::element_kind(owner as *const TypedArrayHeader);
+            let kind = crate::typedarray_hook_slots::element_kind(owner as *const TypedArrayHeader);
             // `coerce_for_kind` performs ToBigInt for BigInt views (throwing on
             // a Number) and ToNumber otherwise; its result is discarded — only
             // the side effect / throw matters.
-            let _ = crate::typedarray::bigint::coerce_for_kind(kind, value);
+            let _ = crate::typedarray_hook_slots::bigint::coerce_for_kind(kind, value);
         }
         Some(TypedArrayOwnerKind::Uint8ArrayBuffer) => {
-            let _ = crate::typedarray::species::to_number(value);
+            let _ = crate::typedarray_hook_slots::species::to_number(value);
         }
         None => {}
     }
@@ -745,8 +745,8 @@ pub(crate) unsafe fn typed_array_index_get_dynamic(owner_bits: usize, key: f64) 
             // re-enters this function only when `lookup_typed_array_kind`
             // succeeds, which is precisely the case
             // `classify_element_read_receiver` keeps on the typed path.
-            match crate::typedarray::classify_element_read_receiver(owner_bits as u64) {
-                crate::typedarray::ElementReadReceiver::Ordinary(receiver) => {
+            match crate::typedarray_hook_slots::classify_element_read_receiver(owner_bits as u64) {
+                crate::typedarray_hook_slots::ElementReadReceiver::Ordinary(receiver) => {
                     return crate::value::js_dyn_index_get(receiver, key)
                 }
                 // #8116: the two receiver gates are NOT the same predicate.
@@ -779,10 +779,10 @@ pub(crate) unsafe fn typed_array_index_get_dynamic(owner_bits: usize, key: f64) 
                 // consistency, not a repair: it cannot regress a reachable
                 // read, and `element_read_receiver_tests.rs` pins it against a
                 // receiver built in exactly that state.
-                crate::typedarray::ElementReadReceiver::TypedArray(addr) => {
+                crate::typedarray_hook_slots::ElementReadReceiver::TypedArray(addr) => {
                     (addr, TypedArrayOwnerKind::TypedArray)
                 }
-                crate::typedarray::ElementReadReceiver::Absent => {
+                crate::typedarray_hook_slots::ElementReadReceiver::Absent => {
                     return f64::from_bits(crate::value::TAG_UNDEFINED)
                 }
             }
@@ -985,7 +985,7 @@ pub(crate) unsafe fn typed_array_prototype_chain_has(owner: usize, name: &str) -
         return true;
     }
     if let Some(kind) = typed_array_owner_kind_id(owner) {
-        let ctor_name = crate::typedarray::name_for_kind(kind);
+        let ctor_name = crate::typedarray_hook_slots::name_for_kind(kind);
         let ctor =
             crate::object::js_get_global_this_builtin_value(ctor_name.as_ptr(), ctor_name.len());
         let raw = crate::value::js_nanbox_get_pointer(ctor) as usize;

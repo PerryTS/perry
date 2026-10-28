@@ -11,7 +11,7 @@ pub(super) fn typed_array_lacks_array_method(name: &str) -> bool {
 /// intrinsic prototype lacks these methods, an own property or user-patched
 /// prototype may provide one and must win before the not-callable TypeError.
 pub(super) unsafe fn dispatch_absent_typed_array_array_method(
-    ta: *mut crate::typedarray::TypedArrayHeader,
+    ta: *mut crate::typedarray_hook_slots::TypedArrayHeader,
     method_name: &str,
     arg_handles: &[crate::gc::RuntimeHandle],
 ) -> f64 {
@@ -38,7 +38,7 @@ pub(super) unsafe fn dispatch_absent_typed_array_array_method(
 /// element-typed `js_typed_array_*` helpers regardless of how codegen boxed
 /// the receiver. Issues #2797 / #2798 / #2799 added the callback-bearing arms.
 pub(crate) unsafe fn dispatch_typed_array_method(
-    ta: *mut crate::typedarray::TypedArrayHeader,
+    ta: *mut crate::typedarray_hook_slots::TypedArrayHeader,
     method_name: &str,
     args_ptr: *const f64,
     args_len: usize,
@@ -71,8 +71,8 @@ pub(crate) unsafe fn dispatch_typed_array_method(
         p as *const crate::closure::ClosureHeader
     };
     let r = match method_name {
-        "length" => crate::typedarray::js_typed_array_length(ta) as f64,
-        "at" => crate::typedarray::js_typed_array_at(ta, arg0()),
+        "length" => crate::typedarray_hook_slots::js_typed_array_length(ta) as f64,
+        "at" => crate::typedarray_hook_slots::js_typed_array_at(ta, arg0()),
         "sort" => {
             // #2796: validate the comparator (function | undefined) before sorting.
             let cmp = if args_len >= 1 && !args_ptr.is_null() {
@@ -82,9 +82,9 @@ pub(crate) unsafe fn dispatch_typed_array_method(
                 std::ptr::null()
             };
             let result = if cmp.is_null() {
-                crate::typedarray::js_typed_array_sort_default(ta)
+                crate::typedarray_hook_slots::js_typed_array_sort_default(ta)
             } else {
-                crate::typedarray::js_typed_array_sort_with_comparator(ta, cmp)
+                crate::typedarray_hook_slots::js_typed_array_sort_with_comparator(ta, cmp)
             };
             f64::from_bits(JSValue::pointer(result as *mut u8).bits())
         }
@@ -96,14 +96,17 @@ pub(crate) unsafe fn dispatch_typed_array_method(
                 std::ptr::null()
             };
             let result = if cmp.is_null() {
-                crate::typedarray::js_typed_array_to_sorted_default(ta)
+                crate::typedarray_hook_slots::js_typed_array_to_sorted_default(ta)
             } else {
-                crate::typedarray::js_typed_array_to_sorted_with_comparator(ta, cmp)
+                crate::typedarray_hook_slots::js_typed_array_to_sorted_with_comparator(ta, cmp)
             };
             f64::from_bits(JSValue::pointer(result as *mut u8).bits())
         }
         "toReversed" => f64::from_bits(
-            JSValue::pointer(crate::typedarray::js_typed_array_to_reversed(ta) as *mut u8).bits(),
+            JSValue::pointer(
+                crate::typedarray_hook_slots::js_typed_array_to_reversed(ta) as *mut u8
+            )
+            .bits(),
         ),
         // #2879: bulk `set(source, offset?)` and `copyWithin`.
         "set" => {
@@ -113,7 +116,7 @@ pub(crate) unsafe fn dispatch_typed_array_method(
             } else {
                 0.0
             };
-            crate::typedarray::js_typed_array_set_from(ta, source, offset)
+            crate::typedarray_hook_slots::js_typed_array_set_from(ta, source, offset)
         }
         "copyWithin" => {
             let target = arg0();
@@ -128,7 +131,7 @@ pub(crate) unsafe fn dispatch_typed_array_method(
                 f64::from_bits(crate::value::TAG_UNDEFINED)
             };
             f64::from_bits(
-                JSValue::pointer(crate::typedarray::js_typed_array_copy_within(
+                JSValue::pointer(crate::typedarray_hook_slots::js_typed_array_copy_within(
                     ta, target, start, end,
                 ) as *mut u8)
                 .bits(),
@@ -142,13 +145,17 @@ pub(crate) unsafe fn dispatch_typed_array_method(
                 f64::NAN
             };
             f64::from_bits(
-                JSValue::pointer(crate::typedarray::js_typed_array_with(ta, idx, val) as *mut u8)
-                    .bits(),
+                JSValue::pointer(
+                    crate::typedarray_hook_slots::js_typed_array_with(ta, idx, val) as *mut u8,
+                )
+                .bits(),
             )
         }
-        "findLast" => crate::typedarray::js_typed_array_find_last(ta, validate_cb(false)),
+        "findLast" => {
+            crate::typedarray_hook_slots::js_typed_array_find_last(ta, validate_cb(false))
+        }
         "findLastIndex" => {
-            crate::typedarray::js_typed_array_find_last_index(ta, validate_cb(false))
+            crate::typedarray_hook_slots::js_typed_array_find_last_index(ta, validate_cb(false))
         }
         // #2797/#2798/#2799: callback-bearing %TypedArray% methods. The codegen
         // lowerers only fire for receivers it can statically prove are plain
@@ -156,18 +163,21 @@ pub(crate) unsafe fn dispatch_typed_array_method(
         // where these arms previously fell through to the undefined catch-all
         // (so `ta.map`/`ta.reduce`/`ta.find` silently no-op'd).
         "map" => {
-            let result = crate::typedarray::js_typed_array_map(ta, validate_cb(true));
+            let result = crate::typedarray_hook_slots::js_typed_array_map(ta, validate_cb(true));
             f64::from_bits(JSValue::pointer(result as *mut u8).bits())
         }
         "filter" => {
-            let result = crate::typedarray::js_typed_array_filter(ta, validate_cb(false));
+            let result =
+                crate::typedarray_hook_slots::js_typed_array_filter(ta, validate_cb(false));
             f64::from_bits(JSValue::pointer(result as *mut u8).bits())
         }
-        "forEach" => crate::typedarray::js_typed_array_for_each(ta, validate_cb(false)),
-        "some" => crate::typedarray::js_typed_array_some(ta, validate_cb(false)),
-        "every" => crate::typedarray::js_typed_array_every(ta, validate_cb(false)),
-        "find" => crate::typedarray::js_typed_array_find(ta, validate_cb(false)),
-        "findIndex" => crate::typedarray::js_typed_array_find_index(ta, validate_cb(false)),
+        "forEach" => crate::typedarray_hook_slots::js_typed_array_for_each(ta, validate_cb(false)),
+        "some" => crate::typedarray_hook_slots::js_typed_array_some(ta, validate_cb(false)),
+        "every" => crate::typedarray_hook_slots::js_typed_array_every(ta, validate_cb(false)),
+        "find" => crate::typedarray_hook_slots::js_typed_array_find(ta, validate_cb(false)),
+        "findIndex" => {
+            crate::typedarray_hook_slots::js_typed_array_find_index(ta, validate_cb(false))
+        }
         "values" | "Symbol.iterator" | "@@iterator" => {
             let iter =
                 crate::array::js_array_values_iter_obj(ta as *const crate::array::ArrayHeader);
@@ -203,9 +213,9 @@ pub(crate) unsafe fn dispatch_typed_array_method(
                 (0, f64::NAN)
             };
             if method_name == "reduce" {
-                crate::typedarray::js_typed_array_reduce(ta, cb, has_init, init)
+                crate::typedarray_hook_slots::js_typed_array_reduce(ta, cb, has_init, init)
             } else {
-                crate::typedarray::js_typed_array_reduce_right(ta, cb, has_init, init)
+                crate::typedarray_hook_slots::js_typed_array_reduce_right(ta, cb, has_init, init)
             }
         }
         // Non-callback search / view / join methods. These reach this tower
@@ -246,7 +256,7 @@ pub(crate) unsafe fn dispatch_typed_array_method(
         }
         "join" => {
             let sep = arg0();
-            let s = crate::typedarray::js_typed_array_join_value(ta, sep);
+            let s = crate::typedarray_hook_slots::js_typed_array_join_value(ta, sep);
             f64::from_bits(JSValue::string_ptr(s).bits())
         }
         // `%TypedArray%.prototype.toLocaleString` (§23.2.3.32): for each
@@ -261,16 +271,17 @@ pub(crate) unsafe fn dispatch_typed_array_method(
         "toLocaleString" => {
             let scope = crate::gc::RuntimeHandleScope::new();
             let ta_handle = scope.root_raw_mut_ptr(ta);
-            let kind = crate::typedarray::lookup_typed_array_kind(ta as usize);
+            let kind = crate::typedarray_hook_slots::lookup_typed_array_kind(ta as usize);
             let is_bigint = matches!(
                 kind,
-                Some(crate::typedarray::KIND_BIGINT64) | Some(crate::typedarray::KIND_BIGUINT64)
+                Some(crate::typedarray_hook_slots::KIND_BIGINT64)
+                    | Some(crate::typedarray_hook_slots::KIND_BIGUINT64)
             );
             let builtin: &[u8] = if is_bigint { b"BigInt" } else { b"Number" };
             // #5901: no primitive receiver here — the element values are
             // formatted individually below, so pass `undefined`.
-            let (patched, ta) =
-                ta_handle.across_mut::<crate::typedarray::TypedArrayHeader, _>(|| {
+            let (patched, ta) = ta_handle
+                .across_mut::<crate::typedarray_hook_slots::TypedArrayHeader, _>(|| {
                     builtin_proto_user_value(
                         builtin,
                         "toLocaleString",
@@ -279,7 +290,7 @@ pub(crate) unsafe fn dispatch_typed_array_method(
                 });
             match patched {
                 None => {
-                    let s = crate::typedarray::js_typed_array_join_value(
+                    let s = crate::typedarray_hook_slots::js_typed_array_join_value(
                         ta,
                         f64::from_bits(crate::value::TAG_UNDEFINED),
                     );
@@ -287,15 +298,16 @@ pub(crate) unsafe fn dispatch_typed_array_method(
                 }
                 Some(patched) => {
                     let patched_handle = scope.root_nanbox_u64(patched.bits());
-                    let len = crate::typedarray::js_typed_array_length(ta);
+                    let len = crate::typedarray_hook_slots::js_typed_array_length(ta);
                     let mut out = String::new();
                     let mut ta_now = ta;
                     for k in 0..len {
                         if k > 0 {
                             out.push(',');
                         }
-                        let (elem, patched_now) = patched_handle
-                            .across_nanbox(|| crate::typedarray::js_typed_array_get(ta_now, k));
+                        let (elem, patched_now) = patched_handle.across_nanbox(|| {
+                            crate::typedarray_hook_slots::js_typed_array_get(ta_now, k)
+                        });
                         let patched_now = JSValue::from_bits(patched_now.to_bits());
 
                         let (r, _) = patched_handle.across_nanbox(|| {
@@ -319,9 +331,9 @@ pub(crate) unsafe fn dispatch_typed_array_method(
                         });
 
                         let (s_hdr, ta_after) = ta_handle
-                            .across_mut::<crate::typedarray::TypedArrayHeader, _>(|| {
-                                crate::builtins::js_string_coerce(r)
-                            });
+                            .across_mut::<crate::typedarray_hook_slots::TypedArrayHeader, _>(
+                            || crate::builtins::js_string_coerce(r),
+                        );
                         ta_now = ta_after;
                         out.push_str(
                             super::has_own_helpers::str_from_string_header(s_hdr).unwrap_or(""),
@@ -361,7 +373,7 @@ pub(crate) unsafe fn dispatch_typed_array_method(
             } else {
                 i32::MAX
             };
-            let result = crate::typedarray::js_typed_array_slice(ta, start, end);
+            let result = crate::typedarray_hook_slots::js_typed_array_slice(ta, start, end);
             f64::from_bits(JSValue::pointer(result as *mut u8).bits())
         }
         "subarray" => {
@@ -375,12 +387,13 @@ pub(crate) unsafe fn dispatch_typed_array_method(
             } else {
                 (0, f64::NAN)
             };
-            let result =
-                crate::typedarray::js_typed_array_subarray(ta, has_begin, begin, has_end, end);
+            let result = crate::typedarray_hook_slots::js_typed_array_subarray(
+                ta, has_begin, begin, has_end, end,
+            );
             f64::from_bits(JSValue::pointer(result as *mut u8).bits())
         }
         "reverse" => {
-            let result = crate::typedarray::js_typed_array_reverse(ta);
+            let result = crate::typedarray_hook_slots::js_typed_array_reverse(ta);
             f64::from_bits(JSValue::pointer(result as *mut u8).bits())
         }
         "fill" => {
@@ -395,8 +408,9 @@ pub(crate) unsafe fn dispatch_typed_array_method(
             } else {
                 (0, f64::NAN)
             };
-            let result =
-                crate::typedarray::js_typed_array_fill(ta, value, has_start, start, has_end, end);
+            let result = crate::typedarray_hook_slots::js_typed_array_fill(
+                ta, value, has_start, start, has_end, end,
+            );
             f64::from_bits(JSValue::pointer(result as *mut u8).bits())
         }
         _ => return None,

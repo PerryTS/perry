@@ -154,7 +154,7 @@ pub(crate) fn is_callable(value: f64) -> bool {
     if raw >= 0x10000 {
         return true;
     }
-    crate::proxy::js_proxy_is_proxy(value) == 1
+    crate::proxy_hooks::proxy_is_proxy(value) == 1
 }
 
 pub(crate) fn require_callable(value: f64, name: &str) -> f64 {

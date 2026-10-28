@@ -1069,6 +1069,15 @@ impl Model {
             }
             self.add_top(fi.args_all, why);
             self.contract_rets.push((f, fi.ret));
+            // Beyond its publication (an export or a published literal's
+            // field, DECISIONS 210, or known closed callers, DECISIONS 19),
+            // unknown code calls it and retains its result.
+            if self.pub_reason != Some(reason)
+                && self.field_fn_reason != Some(reason)
+                && closed.is_none()
+            {
+                self.sink_node(fi.ret, reason);
+            }
             return;
         }
         self.add_top(fi.args_all, why);
@@ -1701,6 +1710,10 @@ impl Model {
         // prototype exotic object). A ⊤ target that may be it is no E6 on it.
         if kind == Hard::E6SetPrototypeOf && matches!(self.toks[t as usize], TokKind::ObjectProto) {
             return;
+        }
+        // DECISIONS 217: another unit's lookups see a HARD shared object.
+        if let Some(s) = self.shared_of(t) {
+            self.note_shared(SharedWrite::Hard(s, kind));
         }
         if self.hard.contains_key(&t) {
             return;

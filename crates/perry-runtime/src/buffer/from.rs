@@ -488,7 +488,7 @@ pub extern "C" fn js_uint8array_from_array(arr_ptr: *const ArrayHeader) -> *mut 
 
 /// Materialize non-Array Uint8Array sources through the shared TypedArray path.
 fn js_uint8array_from_source(source: f64) -> *mut BufferHeader {
-    let raw = unsafe { crate::typedarray::typed_array_from_source_raw_values(source) };
+    let raw = unsafe { crate::typedarray_hook_slots::typed_array_from_source_raw_values(source) };
 
     // Coercion can collect, so retain the snapshot in runtime roots.
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -635,15 +635,15 @@ pub extern "C" fn js_uint8array_new(val: f64) -> *mut BufferHeader {
             });
             return dst;
         }
-        if let Some(src_kind) = crate::typedarray::lookup_typed_array_kind(raw) {
-            if crate::typedarray::bigint::is_bigint_kind(src_kind) {
-                crate::typedarray::bigint::throw_bigint_number_mix();
+        if let Some(src_kind) = crate::typedarray_hook_slots::lookup_typed_array_kind(raw) {
+            if crate::typedarray_hook_slots::bigint::is_bigint_kind(src_kind) {
+                crate::typedarray_hook_slots::bigint::throw_bigint_number_mix();
             }
-            let src = raw as *const crate::typedarray::TypedArrayHeader;
+            let src = raw as *const crate::typedarray_hook_slots::TypedArrayHeader;
             unsafe {
                 let roots = crate::gc::RuntimeHandleScope::new();
                 let source = roots.root_raw_const_ptr(src);
-                let len = crate::typedarray::js_typed_array_length(src).max(0) as u32;
+                let len = crate::typedarray_hook_slots::js_typed_array_length(src).max(0) as u32;
                 let result = roots.root_raw_mut_ptr(super::store::store_alloc(
                     crate::gc::GC_TYPE_BUFFER_UINT8ARRAY,
                     len,
@@ -651,8 +651,9 @@ pub extern "C" fn js_uint8array_new(val: f64) -> *mut BufferHeader {
                 ));
                 super::store::set_length(result.get_raw_mut_ptr::<BufferHeader>() as usize, len);
                 for i in 0..len as usize {
-                    let value = source
-                        .with_const_ptr(|src| crate::typedarray::js_typed_array_get(src, i as i32));
+                    let value = source.with_const_ptr(|src| {
+                        crate::typedarray_hook_slots::js_typed_array_get(src, i as i32)
+                    });
                     let byte = buffer_byte_from_js_value(value);
                     js_buffer_set(result.get_raw_mut_ptr(), i as i32, byte as i32);
                 }
@@ -681,7 +682,7 @@ pub extern "C" fn js_uint8array_new(val: f64) -> *mut BufferHeader {
     if bits == crate::value::TAG_UNDEFINED {
         return js_uint8array_alloc(0);
     }
-    let len = uint8array_length_or_throw(crate::typedarray::jsvalue_to_f64(val));
+    let len = uint8array_length_or_throw(crate::typedarray_hook_slots::jsvalue_to_f64(val));
     js_uint8array_alloc(len as i32)
 }
 

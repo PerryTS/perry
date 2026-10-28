@@ -152,7 +152,7 @@ unsafe fn util_format_s_inspects(val: f64) -> bool {
     if crate::value::addr_class::is_handle_band(addr)
         || crate::symbol::is_registered_symbol(addr)
         || crate::buffer::is_registered_buffer(addr)
-        || crate::typedarray::lookup_typed_array_kind(addr).is_some()
+        || crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some()
     {
         return false;
     }
@@ -383,7 +383,7 @@ pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f
                         let f = if ptr.is_null() {
                             f64::NAN
                         } else {
-                            crate::bigint::js_bigint_to_f64(ptr)
+                            crate::bigint_hooks::js_bigint_to_f64(ptr)
                         };
                         if f.is_nan() {
                             out.push_str("NaN");
@@ -410,26 +410,10 @@ pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f
                     }
                 }
                 b'j' => {
-                    {
-                        if util_format_json_arg_has_cycle(val) {
-                            out.push_str("[Circular]");
-                            i += 2;
-                            continue;
-                        }
-                        // Real JSON.stringify — string-replace post-processing
-                        // of inspect output mangles strings that contain
-                        // ", ", ": ", "{ ", or " }".
-                        let s_ptr = crate::json::js_json_stringify(val, 0);
-                        if s_ptr.is_null() {
-                            out.push_str("undefined");
-                        } else {
-                            let len = (*s_ptr).byte_len as usize;
-                            let data = (s_ptr as *const u8)
-                                .add(std::mem::size_of::<crate::string::StringHeader>());
-                            let bytes = std::slice::from_raw_parts(data, len);
-                            out.push_str(std::str::from_utf8(bytes).unwrap_or(""));
-                        }
-                    }
+                    let formatted = crate::feature_hooks::JSON_FORMAT_ARG
+                        .get()
+                        .map_or_else(|| "undefined".to_owned(), |format| format(val));
+                    out.push_str(&formatted);
                 }
                 b'o' => {
                     // Node's `%o` overlays util.inspect options with
@@ -622,4 +606,27 @@ mod s_placeholder_policy_tests {
             );
         }
     }
+}
+
+/// Only the JSON installer names the serializer and its cycle preflight.
+pub(crate) fn install_json_format() {
+    crate::feature_hooks::JSON_FORMAT_ARG.set(format_json_arg);
+}
+
+unsafe fn format_json_arg(value: f64) -> String {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(value);
+    if util_format_json_arg_has_cycle(value.get_nanbox_f64()) {
+        return "[Circular]".to_owned();
+    }
+    let string = crate::json::js_json_stringify(value.get_nanbox_f64(), 0);
+    if string.is_null() {
+        return "undefined".to_owned();
+    }
+    let len = (*string).byte_len as usize;
+    let bytes = std::slice::from_raw_parts(
+        (string as *const u8).add(std::mem::size_of::<crate::string::StringHeader>()),
+        len,
+    );
+    std::str::from_utf8(bytes).unwrap_or("").to_owned()
 }

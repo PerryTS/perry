@@ -100,7 +100,7 @@ fn ptr_derefable(ptr: usize) -> bool {
 }
 
 unsafe fn apply_to_json(value: f64) -> f64 {
-    if crate::proxy::js_proxy_is_proxy(value) != 0 {
+    if crate::proxy_hooks::proxy_is_proxy(value) != 0 {
         return super::stringify_proxy::to_json(value).unwrap_or(value);
     }
     let bits = value.to_bits();
@@ -136,7 +136,7 @@ unsafe fn apply_to_json(value: f64) -> f64 {
         // as a GC_TYPE_ARRAY tag (see `stringify_value`'s matching guards).
         if gc_obj_type(ptr) == crate::gc::GC_TYPE_ARRAY
             && !crate::buffer::is_registered_buffer(ptr as usize)
-            && crate::typedarray::lookup_typed_array_kind(ptr as usize).is_none()
+            && crate::typedarray_hook_slots::lookup_typed_array_kind(ptr as usize).is_none()
         {
             if let Some(to_json_val) =
                 super::stringify::array_get_to_json(ptr as *const crate::ArrayHeader)
@@ -279,7 +279,7 @@ pub(super) unsafe fn dispatch_pointer_with_replacer(
     }
     // Issue #5111: TypedArray (no GcHeader on small ones) detection before
     // gc_obj_type, same rationale as the buffer check above.
-    if crate::typedarray::lookup_typed_array_kind(ptr as usize).is_some() {
+    if crate::typedarray_hook_slots::lookup_typed_array_kind(ptr as usize).is_some() {
         if indent.is_empty() {
             stringify_typed_array(ptr, buf);
         } else {
@@ -293,7 +293,7 @@ pub(super) unsafe fn dispatch_pointer_with_replacer(
     // structure detector. The href is a plain string, so the emit is identical
     // for compact and pretty walks. See `write_url_href_json`.
     #[cfg(feature = "url-engine")]
-    if crate::url::is_url_object_shape(ptr as *mut crate::ObjectHeader) {
+    if crate::object::url_layout::is_url_object_shape(ptr as *mut crate::ObjectHeader) {
         super::stringify::write_url_href_json(ptr as *mut crate::ObjectHeader, buf);
         return;
     }
@@ -835,7 +835,7 @@ pub(crate) unsafe fn stringify_value_pretty(
 
     if tag == BIGINT_TAG {
         let bigint_ptr = (bits & POINTER_MASK) as *const crate::BigIntHeader;
-        let str_ptr = crate::bigint::js_bigint_to_string(bigint_ptr);
+        let str_ptr = crate::bigint_hooks::js_bigint_to_string(bigint_ptr);
         if let Some(s) = str_from_header(str_ptr) {
             write_escaped_string(buf, s);
         } else {
@@ -892,7 +892,7 @@ pub(crate) unsafe fn stringify_value_pretty(
             return;
         }
         // Issue #5111: TypedArray detection before gc_obj_type (see above).
-        if crate::typedarray::lookup_typed_array_kind(ptr as usize).is_some() {
+        if crate::typedarray_hook_slots::lookup_typed_array_kind(ptr as usize).is_some() {
             stringify_typed_array_pretty(ptr, buf, indent, depth);
             return;
         }
@@ -913,7 +913,7 @@ pub(crate) unsafe fn stringify_value_pretty(
         // the circular-structure detector). Mirrors the compact-path branch in
         // `stringify_object_inner`; see `write_url_href_json`.
         #[cfg(feature = "url-engine")]
-        if crate::url::is_url_object_shape(ptr as *mut crate::ObjectHeader) {
+        if crate::object::url_layout::is_url_object_shape(ptr as *mut crate::ObjectHeader) {
             super::stringify::write_url_href_json(ptr as *mut crate::ObjectHeader, buf);
             return;
         }
@@ -1569,7 +1569,7 @@ pub unsafe extern "C" fn js_json_stringify_full(
         let value_after_to_json = apply_to_json(value);
         let after_bits = value_after_to_json.to_bits();
         if after_bits == TAG_UNDEFINED
-            || crate::proxy::proxy_wraps_callable(value_after_to_json)
+            || crate::proxy_hooks::proxy_wraps_callable(value_after_to_json)
             || is_closure_value(after_bits)
             || is_symbol_value(after_bits)
         {

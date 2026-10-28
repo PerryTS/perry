@@ -24,7 +24,7 @@ fn function_apply_reads_proxy_wrapped_arrays() {
         let handler = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
             crate::object::js_object_alloc(0, 0) as i64,
         ));
-        let proxy = scope.root_nanbox_f64(crate::proxy::js_proxy_new(
+        let proxy = scope.root_nanbox_f64(crate::proxy_hooks::proxy_new(
             array.with_mut_ptr(|p: *mut crate::array::ArrayHeader| {
                 crate::value::js_nanbox_pointer(p as i64)
             }),
@@ -34,7 +34,8 @@ fn function_apply_reads_proxy_wrapped_arrays() {
             super::function_apply_args(proxy.get_nanbox_f64()),
             vec![3.0, 4.0]
         );
-        let nested = crate::proxy::js_proxy_new(proxy.get_nanbox_f64(), handler.get_nanbox_f64());
+        let nested =
+            crate::proxy_hooks::proxy_new(proxy.get_nanbox_f64(), handler.get_nanbox_f64());
         let nested = scope.root_nanbox_f64(nested);
         assert_eq!(
             super::function_apply_args(nested.get_nanbox_f64()),

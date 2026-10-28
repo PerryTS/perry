@@ -74,18 +74,6 @@ pub(crate) fn register_process_emitter_root_scanner() {
     );
 }
 
-pub(crate) fn read_event_name(event_ptr: *const StringHeader) -> Option<String> {
-    if event_ptr.is_null() {
-        return None;
-    }
-    unsafe {
-        let len = (*event_ptr).byte_len as usize;
-        let data = (event_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-        let bytes = std::slice::from_raw_parts(data, len);
-        std::str::from_utf8(bytes).ok().map(|s| s.to_string())
-    }
-}
-
 fn process_namespace_value() -> f64 {
     crate::object::js_create_native_module_namespace(b"process".as_ptr(), "process".len())
 }
@@ -236,7 +224,20 @@ fn process_listener_count(event: &str) -> usize {
     })
 }
 
+static PROCESS_SIGNAL_SYNC: crate::feature_hooks::Hook<fn(&str)> =
+    crate::feature_hooks::Hook::empty();
+
+pub(crate) fn install_process_signal_sync() {
+    PROCESS_SIGNAL_SYNC.set(sync_process_signal_listener_impl);
+}
+
 fn sync_process_signal_listener(event: &str) {
+    if let Some(sync) = PROCESS_SIGNAL_SYNC.get() {
+        sync(event);
+    }
+}
+
+fn sync_process_signal_listener_impl(event: &str) {
     if super::signal::is_process_signal_name(event) {
         super::signal::set_process_signal_listener_count(event, process_listener_count(event));
     }
@@ -359,18 +360,6 @@ fn listener_array(event_bits: i64, raw: bool) -> *mut ArrayHeader {
     arr
 }
 
-fn collect_emit_args(args: *const ArrayHeader) -> Vec<f64> {
-    if args.is_null() {
-        return Vec::new();
-    }
-    let len = crate::array::js_array_length(args) as usize;
-    let mut values = Vec::with_capacity(len);
-    for i in 0..len {
-        values.push(crate::array::js_array_get_f64(args, i as u32));
-    }
-    values
-}
-
 pub(crate) fn emit_process_event(event: &str, args: &[f64]) -> bool {
     let listeners = PROCESS_EMITTER.with(|emitter| {
         let mut emitter = emitter.borrow_mut();
@@ -403,44 +392,6 @@ pub(crate) fn emit_process_event(event: &str, args: &[f64]) -> bool {
         }
     }
     true
-}
-
-/// Emit Node's special unhandled-`error`-event semantics (#3052).
-///
-/// `EventEmitter` (and therefore the `process` global) treats `emit("error", …)`
-/// with no registered `error` listener specially: if the first argument is an
-/// `Error` instance (or a subclass) it is re-thrown *as-is* — the same object,
-/// preserving its `code`, prototype, and identity. Otherwise Node constructs a
-/// fresh `Error` with `code: "ERR_UNHANDLED_ERROR"` and a message of
-/// `Unhandled error. (<util.inspect(arg)>)`, where a missing argument inspects
-/// to `undefined`. This replaces the previous behaviour of throwing the raw
-/// first argument (so `emit("error", "boom")` now throws an `ERR_UNHANDLED_ERROR`
-/// `Error` rather than the bare `"boom"` string).
-pub(crate) fn throw_unhandled_error_event(args: &[f64]) -> ! {
-    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
-    let first = args.first().copied().unwrap_or(undefined);
-
-    // `arg instanceof Error` → rethrow the original value untouched.
-    let is_error =
-        crate::value::js_is_truthy(crate::object::js_util_types_is_native_error(first)) != 0;
-    if is_error {
-        crate::exception::js_throw(first);
-    }
-
-    // Otherwise: `Unhandled error. (<inspected>)` with ERR_UNHANDLED_ERROR.
-    let inspected = unsafe { read_inspected(crate::builtins::js_util_inspect(first, undefined)) };
-    let message = format!("Unhandled error. ({inspected})");
-    let msg_ptr = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    crate::node_submodules::register_error_code_pub(msg_ptr, "ERR_UNHANDLED_ERROR");
-    let err_ptr = crate::error::js_error_new_with_message(msg_ptr);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err_ptr as i64));
-}
-
-/// Read the `util.inspect` result (a NaN-boxed string value) back into a Rust
-/// `String` for embedding in the unhandled-error message.
-unsafe fn read_inspected(value: f64) -> String {
-    let ptr = crate::value::js_get_string_pointer_unified(value) as *const StringHeader;
-    read_event_name(ptr).unwrap_or_default()
 }
 
 /// process.on(event, listener) — register an event listener.
@@ -487,19 +438,6 @@ pub extern "C" fn js_process_emit_before_exit(code: f64) {
     let _ = emit_process_event("beforeExit", &[code]);
 }
 
-/// `js_process_emit_before_exit` with the pending `process.exitCode` as the
-/// argument — the form the generated epilogue calls.
-///
-/// Node passes the code the process is *about* to exit with, not a constant:
-/// `process.exitCode = 5` with a `beforeExit` listener prints `5` there. The
-/// epilogue used to pass a literal `0`, so every `beforeExit` listener in a
-/// program that had set an exit code saw the wrong number (#9403).
-#[no_mangle]
-pub extern "C" fn js_process_emit_before_exit_pending() {
-    let code = crate::process::js_process_pending_exit_code();
-    js_process_emit_before_exit(code as f64);
-}
-
 // Codegen-only symbol: nothing inside the runtime calls it, so anchor it
 // against the auto-optimize whole-program dead-strip (#4876), like the other
 // epilogue hooks.
@@ -507,15 +445,30 @@ pub extern "C" fn js_process_emit_before_exit_pending() {
 #[used(compiler)]
 static KEEP_PROCESS_EMIT_BEFORE_EXIT_PENDING: extern "C" fn() = js_process_emit_before_exit_pending;
 
-crate::perry_thread_local! {
-    /// Node emits `exit` at most once per process, whichever way the process
-    /// leaves. The guard is load-bearing, not defensive: an `exit` listener is
-    /// allowed to call `process.exit()` itself, or to throw (taking the fatal
-    /// path) — both re-enter the emit, and without the guard the listeners
-    /// that already ran would run again. Node instead skips straight out,
-    /// which means the listeners *after* the one that exited never run at all.
-    static PROCESS_EXIT_EVENT_EMITTED: std::cell::Cell<bool> =
-        const { std::cell::Cell::new(false) };
+mod process_exit_tls {
+    type Value = std::cell::Cell<bool>;
+    type Storage = crate::tls_hot::HotCell<Value, { std::mem::needs_drop::<Value>() as usize }>;
+    crate::__perry_thread_local_storage!(Storage, const { Value::new(false) });
+    pub(super) fn resolve(idx: u32) -> Result<*mut u8, crate::tls_hot::AccessError> {
+        STORAGE.try_with(|cell| {
+            cell.arm_guard(idx);
+            cell.value_addr()
+        })
+    }
+    pub(super) static KEY: crate::tls_hot::HotKey<Value> = crate::tls_hot::HotKey::new(
+        crate::tls_hot::SlotId::named(concat!(
+            module_path!(),
+            "::PROCESS_EXIT_EVENT_EMITTED@",
+            line!(),
+            ":",
+            column!()
+        )),
+        crate::os_hook_slots::resolve_process_exit_guard,
+    );
+}
+use process_exit_tls::KEY as PROCESS_EXIT_EVENT_EMITTED;
+pub(crate) fn install_exit_tls_resolver() {
+    crate::os_hook_slots::install_exit_resolver(process_exit_tls::resolve);
 }
 
 /// Emit the `exit` event with `code`, at most once per process.
@@ -771,27 +724,9 @@ pub fn emit_process_uncaught_exception(error: f64) {
     }
 }
 
-/// process.nextTick(callback, ...args) — schedule callback as a tick,
-/// forwarding trailing args (#3046). `callback_bits`/`args` are raw
-/// NaN-boxed values. A non-callable callback throws Node's
-/// `TypeError [ERR_INVALID_ARG_TYPE]` (`"callback"` message) synchronously.
-/// Used by the method-value dispatch path (`const nt = process.nextTick`)
-/// and the zero-arg `process.nextTick()` call form; the direct lowered form
-/// with trailing args goes through codegen's `js_queue_next_tick_args`.
-///
-/// # Safety
-/// `args` must be a valid NaN-boxed args array pointer, or null.
-#[no_mangle]
-pub unsafe extern "C" fn js_process_next_tick(callback_bits: i64, args: *const ArrayHeader) {
-    // Mirror codegen's setTimeout/queueMicrotask validation: the timer
-    // validator always reports the `"callback"` argument name, which is the
-    // wording Node uses for `process.nextTick`.
-    let callback =
-        crate::timer::js_timer_validate_callback(f64::from_bits(callback_bits as u64), 3);
-    let values = collect_emit_args(args);
-    if values.is_empty() {
-        crate::builtins::js_queue_next_tick(callback);
-    } else {
-        crate::builtins::js_queue_next_tick_args(callback, values.as_ptr(), values.len() as i32);
-    }
-}
+use crate::process::tick_args::collect_emit_args;
+pub use crate::process::tick_args::js_process_next_tick;
+
+pub(crate) use crate::event_emitter_error::{read_event_name, throw_unhandled_error_event};
+
+pub use crate::os_hook_slots::js_process_emit_before_exit_pending;

@@ -58,7 +58,7 @@ pub unsafe extern "C" fn napi_create_bigint_words(
     if negative {
         twos_complement(&mut limbs);
     }
-    let bigint = crate::bigint::bigint_alloc_with_limbs(limbs);
+    let bigint = crate::bigint_hooks::bigint_alloc_with_limbs(limbs);
     match add_handle(env, JSValue::bigint_ptr(bigint).bits()) {
         Ok(handle) => {
             *result = handle;

@@ -58,68 +58,6 @@ pub use self::url_pattern::{
     js_url_pattern_constructor_call, js_url_pattern_exec, js_url_pattern_new, js_url_pattern_test,
 };
 
-// ---------------------------------------------------------------------------
-// Shared helpers used across the URL sub-modules. Promoted to `pub(crate)` so
-// the sibling modules (which `use super::*`) can reach them without going
-// back through the public re-export surface.
-// ---------------------------------------------------------------------------
-
-/// Create a string from a Rust str (returns a StringHeader pointer as f64)
-/// Uses proper NaN-boxing with STRING_TAG so is_string() will return true
-pub(crate) fn create_string_f64(s: &str) -> f64 {
-    let bytes = s.as_bytes();
-    let ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
-    // Use js_nanbox_string to properly tag the string pointer
-    crate::value::js_nanbox_string(ptr as i64)
-}
-
-/// Get string content from a NaN-boxed StringHeader pointer (passed as f64)
-#[inline]
-pub(crate) fn get_string_content(ptr_f64: f64) -> String {
-    let jsval = crate::value::JSValue::from_bits(ptr_f64.to_bits());
-    // Heap string first: the URL helpers call this once per stored field, and
-    // this arm is exactly the pre-#11519 body.
-    if jsval.is_string() {
-        let ptr = jsval.as_string_ptr();
-        if unsafe { crate::value::addr_class::try_read_string_header(ptr) }.is_none() {
-            return String::new();
-        }
-        unsafe {
-            let len = (*ptr).byte_len as usize;
-            let slice = std::slice::from_raw_parts(crate::string::string_data(ptr), len);
-            return String::from_utf8_lossy(slice).into_owned();
-        }
-    }
-    if jsval.is_short_string() {
-        return short_string_content(jsval);
-    }
-    String::new()
-}
-
-/// The inline-SSO arm of [`get_string_content`] (#11519): a short string built
-/// at runtime (`new URLSearchParams("a" + "=1")`, `url.parse(String(n))`) used
-/// to read as "" because only the heap tag was unboxed. Out of line so the
-/// heap path stays as small as it was.
-#[cold]
-#[inline(never)]
-fn short_string_content(jsval: crate::value::JSValue) -> String {
-    let mut buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-    let n = jsval.short_string_to_buf(&mut buf);
-    String::from_utf8_lossy(&buf[..n]).into_owned()
-}
-
-pub(crate) fn string_from_header(ptr: *mut crate::StringHeader) -> String {
-    if unsafe { crate::value::addr_class::try_read_string_header(ptr) }.is_none() {
-        return String::new();
-    }
-    unsafe {
-        let len = (*ptr).byte_len as usize;
-        let data_ptr = (ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-        let slice = std::slice::from_raw_parts(data_ptr, len);
-        String::from_utf8_lossy(slice).into_owned()
-    }
-}
-
 /// `String(value)` per Web-IDL / ECMAScript string conversion, used to
 /// normalize arguments to the WHATWG URL / URLSearchParams APIs (#3054,
 /// #3055). Numbers, `null`, `undefined`, booleans, BigInts, and objects with
@@ -144,93 +82,17 @@ pub extern "C" fn js_url_coerce_string(value: f64) -> *mut StringHeader {
     }
     crate::value::js_jsvalue_to_string(value)
 }
-
-pub(crate) fn object_from_f64(value: f64) -> Option<*mut ObjectHeader> {
-    let bits = value.to_bits();
-    if (bits & 0xFFFF_0000_0000_0000) == 0x7FFD_0000_0000_0000 {
-        let ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as *mut ObjectHeader;
-        if !ptr.is_null() {
-            return Some(ptr);
-        }
-    }
-    None
-}
-
-pub(crate) fn object_prop_string(obj: *mut ObjectHeader, key: &str) -> String {
-    let key_ptr = js_string_from_bytes(key.as_ptr(), key.len() as u32);
-    let val = crate::object::js_object_get_field_by_name_f64(obj, key_ptr);
-    get_string_content(val)
-}
-
-pub(crate) fn object_prop_f64(obj: *mut ObjectHeader, key: &str) -> f64 {
-    let key_ptr = js_string_from_bytes(key.as_ptr(), key.len() as u32);
-    crate::object::js_object_get_field_by_name_f64(obj, key_ptr)
-}
-
-/// WHATWG host canonicalization via the `url` crate (#3056, #3059).
-///
-/// Perry's URL uses a custom hostname parser that runs only IDNA
-/// (`idna::domain_to_ascii`) — it never applies the WHATWG IPv4 / numeric
-/// host parser, so `123` stayed `"123"` instead of canonicalizing to the
-/// IPv4 address `"0.0.0.123"`, and `0x7f.1` stayed `"0x7f.1"` instead of
-/// `"127.0.0.1"`. We borrow the `url` crate's full WHATWG host parser by
-/// reparsing `http://<host>/` and reading back `host_str()`:
-///
-/// * numeric / IPv4-shorthand hosts → canonical dotted-quad IPv4
-///   (`"123"` → `"0.0.0.123"`, `"0x7f.1"` → `"127.0.0.1"`),
-/// * ordinary registrable hostnames → returned unchanged
-///   (`"example.com"` → `"example.com"`),
-/// * already-punycode IDN labels → returned unchanged
-///   (`"xn--mnchen-3ya.de"` → `"xn--mnchen-3ya.de"`),
-/// * hosts the WHATWG parser rejects (out-of-range numeric like
-///   `"999999999999"`, `"256.256.256.256"`) → `None`.
-///
-/// `host` is expected to already be a candidate host string (post-IDNA for
-/// the domain helpers, or the raw setter value). Callers decide what `None`
-/// means for them (the hostname setter leaves the host unchanged; the
-/// `domainTo*` helpers return `""`), matching Node.
-pub(crate) fn whatwg_canonicalize_host(host: &str) -> Option<String> {
-    match CANONICALIZE_HOST.get() {
-        Some(canonicalize) => canonicalize(host),
-        // URL engine not installed: no WHATWG host parser, so pass the host
-        // through unchanged (the hand-rolled URL paths handle the common cases).
-        None => Some(host.to_string()),
-    }
-}
-
-// The WHATWG host parser and IDNA (`url` / `idna`) are reached only through
-// slots the `url-engine` install fills (see `crate::feature_hooks`): URL
-// property setters, `domainTo*` and TLS servername handling are live in every
-// program, and naming the crates directly would keep their tables in all of
-// them. Each caller keeps the fallback a build without the feature has.
-static CANONICALIZE_HOST: crate::feature_hooks::Hook<fn(&str) -> Option<String>> =
-    crate::feature_hooks::Hook::empty();
-static DOMAIN_TO_ASCII: crate::feature_hooks::Hook<fn(&str) -> Option<String>> =
-    crate::feature_hooks::Hook::empty();
-static DOMAIN_TO_UNICODE: crate::feature_hooks::Hook<fn(&str) -> String> =
-    crate::feature_hooks::Hook::empty();
-
-/// IDNA `domain_to_ascii`: `None` when the engine is not installed,
-/// `Some(None)` when IDNA rejects the domain.
-pub(crate) fn idna_domain_to_ascii(domain: &str) -> Option<Option<String>> {
-    DOMAIN_TO_ASCII.get().map(|f| f(domain))
-}
-
-/// IDNA `domain_to_unicode`; `None` when the engine is not installed.
-pub(crate) fn idna_domain_to_unicode(domain: &str) -> Option<String> {
-    DOMAIN_TO_UNICODE.get().map(|f| f(domain))
-}
-
-/// The `url-engine` install.
 #[cfg(feature = "url-engine")]
 pub(crate) fn install_engine() {
-    CANONICALIZE_HOST.set(|host| {
-        url::Url::parse(&format!("http://{host}/"))
-            .ok()
-            .and_then(|u| u.host_str().map(str::to_string))
-    });
-    DOMAIN_TO_ASCII.set(|domain| idna::domain_to_ascii(domain).ok());
-    DOMAIN_TO_UNICODE.set(|domain| idna::domain_to_unicode(domain).0);
+    crate::url_hooks::install_idna(
+        |host| {
+            url::Url::parse(&format!("http://{host}/"))
+                .ok()
+                .and_then(|u| u.host_str().map(str::to_string))
+        },
+        |domain| idna::domain_to_ascii(domain).ok(),
+        |domain| idna::domain_to_unicode(domain).0,
+    );
 }
 
 /// True when `host` is a canonical dotted-quad IPv4 literal. Used by
@@ -424,3 +286,12 @@ mod tests {
         );
     }
 }
+
+pub(crate) use crate::value::boxed_text::{
+    create_string_f64, get_string_content, object_from_f64, object_prop_f64, object_prop_string,
+    short_string_content, string_from_header,
+};
+
+pub(crate) use crate::url_hooks::{
+    idna_domain_to_ascii, idna_domain_to_unicode, whatwg_canonicalize_host,
+};
