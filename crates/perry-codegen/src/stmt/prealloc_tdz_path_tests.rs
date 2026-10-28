@@ -52,6 +52,7 @@ fn allocated_slots(ir: &str, seed: &str) -> Vec<String> {
 fn tdz_finally_allocates_on_normal_and_exception_paths() {
     let ir = emit(vec![Stmt::Try {
         body: vec![Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::LocalGet(99)),
             args: Vec::new(),
             type_args: Vec::new(),

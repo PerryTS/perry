@@ -25,7 +25,12 @@ fn read_ir_shape(class: &str, dedicated: bool, global: bool, key: Expr, addition
             index,
         }
     } else {
-        Expr::IndexGet { object, index }
+        Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
+            object,
+            index,
+        }
     };
     let read = if addition {
         Expr::Binary {
@@ -60,6 +65,7 @@ fn read_ir_shape(class: &str, dedicated: bool, global: bool, key: Expr, addition
                 condition: Expr::Bool(true),
                 body: vec![
                     Stmt::Expr(Expr::Call {
+                        byte_end: 0,
                         callee: Box::new(Expr::LocalGet(2)),
                         args: vec![],
                         type_args: vec![],
@@ -232,6 +238,7 @@ fn byte_scanning_reuses_the_number_loop_scope() {
                         unreachable!()
                     };
                     *right = Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         object: Box::new(Expr::LocalGet(1)),
                         property: "length".into(),
                         byte_offset: 0,

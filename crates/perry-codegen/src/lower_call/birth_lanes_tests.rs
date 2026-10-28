@@ -100,7 +100,9 @@ fn store(f: &str, value: Expr) -> Stmt {
 /// `this.m()`
 fn call_m() -> Stmt {
     Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::This),
             property: "m".to_string(),
             byte_offset: 0,
@@ -227,6 +229,7 @@ fn a_this_read_before_the_write_keeps_the_field_any() {
                 "a",
                 Type::Any,
                 Some(Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(Expr::This),
                     property: "b".to_string(),
                     byte_offset: 0,

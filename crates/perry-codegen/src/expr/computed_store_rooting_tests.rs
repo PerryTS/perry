@@ -363,6 +363,8 @@ fn typed_array_runtime_key_read_roots_receiver_only_when_key_collects() {
             label,
             vec![param(1, "ta", Type::Named("Int32Array".to_string()))],
             vec![Stmt::Return(Some(Expr::IndexGet {
+                byte_offset: 0,
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(1)),
                 index: Box::new(key),
             }))],
@@ -574,6 +576,8 @@ fn collecting_native_view_operands_decline_the_cached_pointer_fast_path() {
     let collecting_load = compile_body(
         "native_view_collecting_load",
         with_native_f64_view(Stmt::Return(Some(Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(11)),
             index: Box::new(collecting_index),
         }))),
@@ -686,6 +690,8 @@ fn masked_window_index_coercion_loop(key_ty: Type) -> String {
                 // A bare read isolates the property under test: whether the
                 // unary index coercion is non-collecting.
                 body: vec![Stmt::Expr(Expr::IndexGet {
+                    byte_offset: 0,
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(1)),
                     index: Box::new(masked_index),
                 })],
@@ -697,6 +703,8 @@ fn masked_window_index_coercion_loop(key_ty: Type) -> String {
 
 fn masked_window_rhs_coercion_loop(key_ty: Type) -> String {
     let read = |index| Expr::IndexGet {
+        byte_offset: 0,
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(1)),
         index: Box::new(Expr::Integer(index)),
     };
@@ -720,6 +728,8 @@ fn masked_window_rhs_coercion_loop(key_ty: Type) -> String {
 fn masked_window_rhs_coercion_region(key_ty: Type) -> String {
     let value = || {
         let read = |index| Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(1)),
             index: Box::new(Expr::Integer(index)),
         };
@@ -752,6 +762,8 @@ fn masked_window_rhs_coercion_region(key_ty: Type) -> String {
 
 fn masked_window_pair_sum() -> Expr {
     let read = |index| Expr::IndexGet {
+        byte_offset: 0,
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(1)),
         index: Box::new(Expr::Integer(index)),
     };
@@ -1009,6 +1021,7 @@ fn growing_array_store_uses_the_reallocated_head_for_its_barrier() {
 #[test]
 fn function_prototype_registration_roots_the_function_across_an_allocating_value() {
     let make_func = Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::LocalGet(1)),
         args: Vec::new(),
         type_args: Vec::new(),

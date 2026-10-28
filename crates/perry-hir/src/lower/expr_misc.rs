@@ -132,6 +132,8 @@ pub(super) fn lower_super_prop(
             } else {
                 let index = Box::new(lower_expr(ctx, &computed.expr)?);
                 Ok(Expr::IndexGet {
+                    byte_offset: 0,
+                    byte_end: 0,
                     object: Box::new(Expr::This),
                     index,
                 })
@@ -179,6 +181,7 @@ pub(super) fn lower_update(ctx: &mut LoweringContext, update: &ast::UpdateExpr) 
                 // never reaches the helper at runtime.
                 let is_increment = matches!(update.op, ast::UpdateOp::PlusPlus);
                 return Ok(Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::ExternFuncRef {
                         name: "js_global_update".to_string(),
                         param_types: vec![
@@ -215,6 +218,7 @@ pub(super) fn lower_update(ctx: &mut LoweringContext, update: &ast::UpdateExpr) 
                 // V8.
                 return Ok(Expr::Sequence(vec![
                     Expr::Call {
+                        byte_end: 0,
                         callee: Box::new(Expr::ExternFuncRef {
                             name: "js_to_numeric".to_string(),
                             param_types: vec![crate::types::Type::Any],

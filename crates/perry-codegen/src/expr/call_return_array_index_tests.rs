@@ -41,7 +41,9 @@ fn function(
 
 fn call_get_data(selector: i64) -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::This),
             property: "getData".to_string(),
             byte_offset: 0,

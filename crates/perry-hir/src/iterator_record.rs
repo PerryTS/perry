@@ -195,6 +195,8 @@ impl IteratorRecordPlan {
                 });
         }
         Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(self.array)),
             index: Box::new(runtime(
                 "arrayRecordIndex",

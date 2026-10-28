@@ -63,6 +63,7 @@ fn a_folded_array_method_with_an_observing_argument_tests_before_it() {
             Stmt::Expr(Expr::ArrayMap {
                 array: Box::new(Expr::LocalGet(1)),
                 callback: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 0,
                     object: Box::new(Expr::LocalGet(2)),
                     property: "f".to_string(),
@@ -138,7 +139,9 @@ fn a_proven_string_method_is_one_checked_entry_call() {
         vec![
             let_local(1, "s", Type::String, Expr::String("abcdef".to_string())),
             Stmt::Expr(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 0,
                     object: Box::new(Expr::LocalGet(1)),
                     property: "slice".to_string(),

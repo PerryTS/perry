@@ -4,7 +4,9 @@ use super::*;
 use crate::string::wtf8::{self, Wtf8Str};
 
 mod byte_eq;
+mod key_equal;
 mod keys;
+pub(crate) use key_equal::key_bytes_equal;
 #[cfg(test)]
 pub(crate) use keys::test_key_byte_reads;
 pub(crate) use keys::{js_string_key_bytes, js_string_key_matches, js_string_key_matches_bytes};

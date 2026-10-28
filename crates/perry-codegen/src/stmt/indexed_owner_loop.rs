@@ -12,10 +12,15 @@ use anyhow::Result;
 use perry_hir::{BinaryOp, CompareOp, Expr, Stmt, UnaryOp, UpdateOp};
 use std::collections::{BTreeMap, BTreeSet};
 
+#[path = "indexed_owner_string.rs"]
+mod string;
+const STRING_KIND: u8 = 12;
+
 #[derive(Default)]
 struct Plan {
     counter: u32,
     arrays: BTreeMap<u32, u8>,
+    strings: BTreeSet<u32>,
     aliases: BTreeMap<u32, u32>,
     defs: BTreeMap<u32, Expr>,
     inputs: BTreeSet<u32>,
@@ -58,7 +63,7 @@ impl Plan {
                     .and_then(crate::expr::typed_element::type_kind)
             })
             .or_else(|| crate::expr::ta_element_read::receiver_kind(ctx, &Expr::LocalGet(root)))?;
-        if matches!(kind, 9 | 10) {
+        if matches!(kind, 9 | 10) || self.strings.contains(&root) {
             return None;
         }
         self.arrays.insert(root, kind);
@@ -67,7 +72,7 @@ impl Plan {
 
     fn read<'a>(&mut self, ctx: &FnCtx<'_>, e: &'a Expr) -> Option<(u32, &'a Expr)> {
         let (object, index) = match e {
-            Expr::IndexGet { object, index } => (object.as_ref(), index.as_ref()),
+            Expr::IndexGet { object, index, .. } => (object.as_ref(), index.as_ref()),
             Expr::Uint8ArrayGet { array, index } => (array.as_ref(), index.as_ref()),
             Expr::BufferIndexGet { buffer, index } => (buffer.as_ref(), index.as_ref()),
             _ => return None,
@@ -75,7 +80,36 @@ impl Plan {
         Some((self.receiver(ctx, object)?, index))
     }
 
+    fn string_read<'a>(&mut self, ctx: &FnCtx<'_>, e: &'a Expr) -> Option<(u32, &'a Expr)> {
+        let (id, index) = string::read(e)?;
+        if self.body_bindings.contains(&id)
+            || !plain_binding(ctx, id)
+            || self.arrays.contains_key(&id)
+        {
+            return None;
+        }
+        self.strings.insert(id);
+        Some((id, index))
+    }
+
+    fn condition(&mut self, ctx: &FnCtx<'_>, e: &Expr) -> bool {
+        match e {
+            Expr::Bool(_) => true,
+            Expr::Compare { left, right, .. } => {
+                self.numeric(ctx, left) && self.numeric(ctx, right)
+            }
+            _ => false,
+        }
+    }
+
     fn numeric(&mut self, ctx: &FnCtx<'_>, e: &Expr) -> bool {
+        if let Some((root, index)) = self.string_read(ctx, e) {
+            if !self.numeric(ctx, index) {
+                return false;
+            }
+            self.indices.push((root, index.clone()));
+            return true;
+        }
         if let Some((root, index)) = self.read(ctx, e) {
             if !self.numeric(ctx, index) {
                 return false;
@@ -110,9 +144,26 @@ impl Plan {
 
     fn expression(&mut self, ctx: &FnCtx<'_>, e: &Expr) -> bool {
         match e {
+            Expr::Update { id, op, .. } => self.expression(
+                ctx,
+                &Expr::LocalSet(
+                    *id,
+                    Box::new(Expr::Binary {
+                        op: if matches!(op, UpdateOp::Increment) {
+                            BinaryOp::Add
+                        } else {
+                            BinaryOp::Sub
+                        },
+                        left: Box::new(Expr::LocalGet(*id)),
+                        right: Box::new(Expr::Integer(1)),
+                    }),
+                ),
+            ),
             Expr::LocalSet(id, value)
                 if *id != self.counter
                     && !self.aliases.contains_key(id)
+                    && !self.strings.contains(id)
+                    && (self.locals.contains(id) || !self.body_bindings.contains(id))
                     && !self.defs.contains_key(id)
                     && (self.locals.contains(id)
                         || (plain_binding(ctx, *id)
@@ -240,6 +291,32 @@ impl Plan {
                     else_branch: None,
                 } => {
                     if !self.body(ctx, then_branch) {
+                        return false;
+                    }
+                }
+                Stmt::If {
+                    condition,
+                    then_branch,
+                    else_branch,
+                } => {
+                    let has_bindings = |branch: &[Stmt]| {
+                        let mut found = false;
+                        perry_hir::tdz_check::for_each_stmt_deep(branch, &mut |s| {
+                            found |= matches!(s, Stmt::Let { .. });
+                        });
+                        found
+                    };
+                    if has_bindings(then_branch)
+                        || else_branch.as_ref().is_some_and(|b| has_bindings(b))
+                        || !self.condition(ctx, condition)
+                    {
+                        return false;
+                    }
+                    self.depth += 1;
+                    let accepted = self.body(ctx, then_branch)
+                        && else_branch.as_ref().is_none_or(|b| self.body(ctx, b));
+                    self.depth -= 1;
+                    if !accepted {
                         return false;
                     }
                 }
@@ -606,7 +683,7 @@ fn disjoint_storage(ctx: &mut FnCtx<'_>, storage: &mut BTreeMap<u32, Storage>, s
     for (id, s) in storage.iter() {
         let wide = ctx.block().zext(I32, &s.len, I64);
         let shift = match s.kind {
-            0 | 1 | 8 => 0,
+            0 | 1 | 8 | STRING_KIND => 0,
             2 | 3 | 11 => 1,
             4..=6 => 2,
             _ => 3,
@@ -779,7 +856,7 @@ fn index_value(
 }
 fn address(ctx: &mut FnCtx<'_>, storage: &Storage, idx: &str) -> String {
     let shift = match storage.kind {
-        0 | 1 | 8 => 0,
+        0 | 1 | 8 | STRING_KIND => 0,
         2 | 3 | 11 => 1,
         4..=6 => 2,
         _ => 3,
@@ -814,8 +891,15 @@ fn numeric(
     values: &mut BTreeMap<u32, Number>,
     storage: &BTreeMap<u32, Storage>,
 ) -> Number {
+    if let Some((id, index)) = string::read(e) {
+        let s = &storage[&id];
+        let index = index_value(ctx, p, index, values, storage);
+        let ptr = address(ctx, s, &index);
+        let byte = lane_load(ctx, I8, &ptr, &s.metadata);
+        return Number::U(ctx.block().zext(I8, &byte, I32));
+    }
     let read = match e {
-        Expr::IndexGet { object, index } => Some((object.as_ref(), index.as_ref())),
+        Expr::IndexGet { object, index, .. } => Some((object.as_ref(), index.as_ref())),
         Expr::Uint8ArrayGet { array, index } => Some((array.as_ref(), index.as_ref())),
         Expr::BufferIndexGet { buffer, index } => Some((buffer.as_ref(), index.as_ref())),
         _ => None,
@@ -988,6 +1072,32 @@ fn expression(
     storage: &BTreeMap<u32, Storage>,
 ) -> Number {
     match e {
+        Expr::Update { id, op, prefix } => {
+            let old = values[id].clone();
+            let new = expression(
+                ctx,
+                p,
+                &Expr::LocalSet(
+                    *id,
+                    Box::new(Expr::Binary {
+                        op: if matches!(op, UpdateOp::Increment) {
+                            BinaryOp::Add
+                        } else {
+                            BinaryOp::Sub
+                        },
+                        left: Box::new(Expr::LocalGet(*id)),
+                        right: Box::new(Expr::Integer(1)),
+                    }),
+                ),
+                values,
+                storage,
+            );
+            if *prefix {
+                new
+            } else {
+                old
+            }
+        }
         Expr::LocalSet(id, value) => {
             let v = numeric(ctx, p, value, values, storage);
             values.insert(*id, v.clone());
@@ -1109,7 +1219,7 @@ fn emit_body(
             Stmt::Let { .. } => {}
             Stmt::Expr(e) => {
                 expression(ctx, p, e, values, storage);
-                if let Expr::LocalSet(id, _) = e {
+                if let Expr::LocalSet(id, _) | Expr::Update { id, .. } = e {
                     if let Some((slot, int)) = slots.get(id) {
                         let v = if *int {
                             values[id].i32(ctx)
@@ -1126,6 +1236,70 @@ fn emit_body(
                 else_branch: None,
             } => {
                 emit_body(ctx, p, then_branch, values, storage, slots, native_indices);
+            }
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                let condition = match condition {
+                    Expr::Bool(b) => b.to_string(),
+                    Expr::Compare { op, left, right } => {
+                        let l = numeric(ctx, p, left, values, storage).f64(ctx);
+                        let r = numeric(ctx, p, right, values, storage).f64(ctx);
+                        let predicate = match op {
+                            CompareOp::Eq | CompareOp::LooseEq => "oeq",
+                            CompareOp::Ne | CompareOp::LooseNe => "une",
+                            CompareOp::Lt => "olt",
+                            CompareOp::Le => "ole",
+                            CompareOp::Gt => "ogt",
+                            CompareOp::Ge => "oge",
+                        };
+                        ctx.block().fcmp(predicate, &l, &r)
+                    }
+                    _ => unreachable!("validated numeric comparison"),
+                };
+                let yes = ctx.new_block("indexed.owner.if");
+                let no = ctx.new_block("indexed.owner.else");
+                let merge = ctx.new_block("indexed.owner.if.end");
+                let yes_l = ctx.block_label(yes);
+                let no_l = ctx.block_label(no);
+                let merge_l = ctx.block_label(merge);
+                ctx.block().cond_br(&condition, &yes_l, &no_l);
+                let before = values.clone();
+                ctx.current_block = yes;
+                emit_body(
+                    ctx,
+                    p,
+                    then_branch,
+                    &mut before.clone(),
+                    storage,
+                    slots,
+                    native_indices,
+                );
+                ctx.block().br(&merge_l);
+                ctx.current_block = no;
+                if let Some(body) = else_branch {
+                    emit_body(
+                        ctx,
+                        p,
+                        body,
+                        &mut before.clone(),
+                        storage,
+                        slots,
+                        native_indices,
+                    );
+                }
+                ctx.block().br(&merge_l);
+                ctx.current_block = merge;
+                // Only scalar writes use shared native slots. Branch-local
+                // SSA values never escape their block, and promotion forms phis.
+                for (id, (slot, int)) in slots {
+                    if before.contains_key(id) {
+                        let v = ctx.block().load(if *int { I32 } else { DOUBLE }, slot);
+                        values.insert(*id, if *int { Number::I(v) } else { Number::F(v) });
+                    }
+                }
             }
             Stmt::For {
                 init: Some(init),
@@ -1227,7 +1401,17 @@ pub(super) fn lower(
     let length_receiver = match bound_expr {
         Expr::PropertyGet {
             object, property, ..
-        } if property == "length" => p.receiver(ctx, object),
+        } if property == "length" => {
+            if let Expr::LocalGet(id) = object.as_ref() {
+                if p.strings.contains(id) {
+                    Some(*id)
+                } else {
+                    p.receiver(ctx, object)
+                }
+            } else {
+                None
+            }
+        }
         Expr::Uint8ArrayLength(array) => p.receiver(ctx, array),
         _ => None,
     };
@@ -1257,6 +1441,22 @@ pub(super) fn lower(
     }
     // Writes to scalar inputs are kept in private slots, never to globals or
     // captured cells. The raw binding and any i32 shadow are flushed on exit.
+    if p.strings
+        .iter()
+        .any(|id| p.inputs.contains(id) || p.writes.contains(id))
+    {
+        return Ok(false);
+    }
+    if !p.strings.is_empty() {
+        // The original condition/body can drain work deferred by a preceding
+        // allocation even though this admitted region cannot allocate. Keep
+        // that entry safepoint before loading any owner or raw string bytes;
+        // removing it can retain the previous allocation cohort through the
+        // next allocating operation. The ordinary effect/arming checks still
+        // decide whether the poll exists and whether it calls the collector.
+        let controls: Vec<_> = condition.into_iter().chain(update).collect();
+        super::loops::emit_gc_loop_safepoint(ctx, body, &controls);
+    }
     let slow_idx = ctx.new_block("indexed.owner.slow");
     let slow_l = ctx.block_label(slow_idx);
     let done_idx = ctx.new_block("indexed.owner.done");
@@ -1276,9 +1476,15 @@ pub(super) fn lower(
         }
         values.insert(*id, Number::F(v));
     }
+    if !p.strings.is_empty() {
+        string::prove_pristine(ctx, &slow_l);
+    }
     let mut storage = BTreeMap::new();
     for (id, kind) in &p.arrays {
         storage.insert(*id, admit_owner(ctx, *id, *kind, &slow_l));
+    }
+    for id in &p.strings {
+        storage.insert(*id, string::admit(ctx, *id, &slow_l));
     }
     // Read-only regions require no alias separation. For writes, allocation
     // identities can prove separation before falling back to live spans.
@@ -1286,8 +1492,9 @@ pub(super) fn lower(
         disjoint_storage(ctx, &mut storage, &slow_l);
     }
     if let Some(id) = length_receiver.filter(|id| {
-        !(ctx.wpfacts.indexed_metadata_pristine
-            && owner_proof(ctx, *id, storage[id].kind).is_some())
+        storage[id].kind != STRING_KIND
+            && !(ctx.wpfacts.indexed_metadata_pristine
+                && owner_proof(ctx, *id, storage[id].kind).is_some())
     }) {
         // Reuse the ordinary typed metadata-accessor contract. An owner
         // brand alone does not prove an observable `.length` property read:
@@ -1496,7 +1703,7 @@ pub(super) fn lower(
             false,
             false,
             vec![
-                format!("owners={:?}", p.arrays),
+                format!("owners={:?};ascii_strings={:?}", p.arrays, p.strings),
                 format!("index_windows={}", indices.len()),
                 format!(
                     "dynamic_entry_guards={dynamic_entry_guards};nested_loops={}",

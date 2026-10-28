@@ -891,6 +891,7 @@ fn collect_module_one(
             0,
             perry_hir::Stmt::Expr(perry_hir::Expr::PropertySet {
                 object: Box::new(perry_hir::Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(perry_hir::Expr::GlobalGet(0)),
                     property: "globalThis".to_string(),
                     byte_offset: 0,

@@ -218,6 +218,7 @@ fn cell_loop_module() -> Module {
             ty: Type::Named("Cell".to_string()),
             mutable: false,
             init: Some(Expr::New {
+                byte_end: 0,
                 class_name: "Cell".to_string(),
                 args: vec![Expr::Number(1.0)],
                 type_args: Vec::new(),

@@ -301,6 +301,7 @@ fn lower_enum_image(
         }
     }
     let image = Expr::New {
+        byte_end: 0,
         class_name: class_name.to_string(),
         args: order.iter().map(|key| value_expr(last[key])).collect(),
         type_args: Vec::new(),

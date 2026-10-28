@@ -541,6 +541,7 @@ fn proxy_function_apply_uses_argument_validation_bridge() {
     let ir = compile_body(
         "proxy_function_apply",
         vec![Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::ProxyGet {
                 proxy: Box::new(allocating("p")),
                 key: Box::new(Expr::String("apply".to_string())),

@@ -421,15 +421,39 @@ impl HirTypeEnv {
         None
     }
 
-    fn collect_function_declarations(&mut self, function: &Function) {
-        self.function_returns
-            .insert(function.id, function.return_type.clone());
-        for param in &function.params {
-            self.locals.insert(param.id, param.ty.clone());
+    fn collect_params(&mut self, params: &[Param], body: &[Stmt]) {
+        fn assigned(body: &[Stmt], id: LocalId) -> bool {
+            body.iter().any(|stmt| {
+                crate::walker::stmt_any_expr(stmt, &mut |expr| match expr {
+                    Expr::LocalSet(local, _) | Expr::Update { id: local, .. } => *local == id,
+                    Expr::Closure { body, .. } => assigned(body, id),
+                    _ => false,
+                })
+            })
+        }
+        for param in params {
+            // An unannotated rest binding is born as an Array. Keep that
+            // fact only while no assignment (including a captured write)
+            // can replace it with an arbitrary value.
+            let ty = if param.is_rest
+                && matches!(param.ty, Type::Any | Type::Unknown)
+                && !assigned(body, param.id)
+            {
+                Type::Array(Box::new(Type::Any))
+            } else {
+                param.ty.clone()
+            };
+            self.locals.insert(param.id, ty);
             if let Some(default) = &param.default {
                 self.collect_expr_declarations(default);
             }
         }
+    }
+
+    fn collect_function_declarations(&mut self, function: &Function) {
+        self.function_returns
+            .insert(function.id, function.return_type.clone());
+        self.collect_params(&function.params, &function.body);
         self.collect_stmts_declarations(&function.body);
     }
 
@@ -533,12 +557,7 @@ impl HirTypeEnv {
         } = expr
         {
             self.function_returns.insert(*func_id, return_type.clone());
-            for param in params {
-                self.locals.insert(param.id, param.ty.clone());
-                if let Some(default) = &param.default {
-                    self.collect_expr_declarations(default);
-                }
-            }
+            self.collect_params(params, body);
             self.collect_stmts_declarations(body);
             return;
         }
@@ -719,7 +738,7 @@ pub fn infer_expr_type<F: HirTypeFacts + ?Sized>(expr: &Expr, env: &F) -> Type {
         } => infer_property_get_type(object, property, env),
         Expr::PropertySet { value, .. } => infer_expr_type(value, env),
         Expr::PropertyUpdate { .. } => Type::Number,
-        Expr::IndexGet { object, .. } => match infer_expr_type(object, env) {
+        Expr::IndexGet { object, index, .. } => match infer_expr_type(object, env) {
             Type::Array(elem) => *elem,
             Type::Tuple(elems) => {
                 if elems.len() == 1 {
@@ -728,6 +747,20 @@ pub fn infer_expr_type<F: HirTypeFacts + ?Sized>(expr: &Expr, env: &F) -> Type {
                     Type::Any
                 }
             }
+            Type::Object(object) => {
+                if let Expr::String(name) = index.as_ref() {
+                    if let Some(property) = object.properties.get(name) {
+                        return property.ty.clone();
+                    }
+                }
+                member_types(
+                    object
+                        .properties
+                        .into_values()
+                        .map(|property| property.ty)
+                        .chain(object.index_signature.map(|ty| *ty)),
+                )
+            }
             Type::String => Type::String,
             _ => Type::Any,
         },
@@ -735,6 +768,22 @@ pub fn infer_expr_type<F: HirTypeFacts + ?Sized>(expr: &Expr, env: &F) -> Type {
         Expr::IndexUpdate { .. } => Type::Number,
 
         Expr::Object(entries) => Type::Object(object_type_from_entries(entries, env)),
+        Expr::EnumImage { stores, .. } => Type::Object(ObjectType {
+            properties: stores
+                .iter()
+                .map(|(name, value)| {
+                    (
+                        name.clone(),
+                        PropertyInfo {
+                            ty: enum_member_value_type(value),
+                            optional: false,
+                            readonly: false,
+                        },
+                    )
+                })
+                .collect(),
+            ..ObjectType::default()
+        }),
         Expr::ObjectSpread { .. } | Expr::ObjectAssign { .. } => Type::Object(ObjectType {
             properties: HashMap::new(),
             index_signature: Some(Box::new(Type::Any)),
@@ -1379,6 +1428,24 @@ pub fn infer_expr_type<F: HirTypeFacts + ?Sized>(expr: &Expr, env: &F) -> Type {
         | Expr::WebCryptoUnwrapKey { .. } => Type::Promise(Box::new(Type::Any)),
 
         _ => Type::Any,
+    }
+}
+
+// A computed read can yield any member of the existing object/tuple shape.
+fn member_types(types: impl IntoIterator<Item = Type>) -> Type {
+    let mut members = Vec::new();
+    for ty in types {
+        if matches!(ty, Type::Any | Type::Unknown) {
+            return ty;
+        }
+        if !members.contains(&ty) {
+            members.push(ty);
+        }
+    }
+    match members.len() {
+        0 => Type::Any,
+        1 => members.pop().unwrap(),
+        _ => Type::Union(members),
     }
 }
 

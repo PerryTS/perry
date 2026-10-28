@@ -30,7 +30,10 @@ use for_await_targets::{
 
 fn async_iterator_method_call(iterable: Expr) -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(iterable),
             index: Box::new(Expr::SymbolFor(Box::new(Expr::String(
                 "@@__perry_wk_asyncIterator".to_string(),
@@ -54,6 +57,8 @@ pub(crate) fn lazy_or_index_elem(
         Expr::LocalGet(result_id)
     } else {
         Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(arr_id)),
             index: Box::new(Expr::LocalGet(idx_id)),
         }
@@ -77,6 +82,7 @@ fn iter_driver_while_stmt(result_id: LocalId, next_call: Expr, rest: Vec<Stmt>) 
         Stmt::Expr(Expr::LocalSet(result_id, Box::new(next_call))),
         Stmt::If {
             condition: Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(result_id)),
                 property: "done".to_string(),
@@ -580,7 +586,9 @@ fn lower_runtime_for_await_iterator(
     ctx.locals
         .push((format!("__result_{}", result_id), result_id, Type::Any));
     let raw_next_call = Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(Expr::LocalGet(iter_id)),
             property: "next".to_string(),
@@ -619,6 +627,7 @@ fn lower_runtime_for_await_iterator(
         ctx,
         binding_pat,
         Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(Expr::LocalGet(result_id)),
             property: "value".to_string(),
@@ -787,7 +796,9 @@ pub(super) fn lower_stmt_for_of_inner(
             async_iterator_method_call(iter_expr)
         } else if is_node_readable_for_await {
             Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 0,
                     object: Box::new(iter_expr),
                     property: "iterator".to_string(),
@@ -834,7 +845,9 @@ pub(super) fn lower_stmt_for_of_inner(
         // call in `Expr::Await` so the resolved iter-result
         // (`{value, done}`) is what's stored, not the Promise.
         let raw_next_call = Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(iter_id)),
                 property: "next".to_string(),
@@ -871,6 +884,7 @@ pub(super) fn lower_stmt_for_of_inner(
             };
         let value_expr = if needs_await {
             Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(result_id)),
                 property: "value".into(),
@@ -1118,6 +1132,7 @@ pub(super) fn lower_stmt_for_of_inner(
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 0,
                     object: Box::new(Expr::LocalGet(res_id)),
                     property: "value".to_string(),
@@ -1619,6 +1634,8 @@ pub(super) fn lower_stmt_for_of_inner(
                     }
                 } else {
                     let raw_item_expr = Expr::IndexGet {
+                        byte_offset: 0,
+                        byte_end: 0,
                         object: Box::new(Expr::LocalGet(arr_id)),
                         index: Box::new(Expr::LocalGet(idx_id)),
                     };
@@ -1825,6 +1842,7 @@ pub(super) fn lower_stmt_for_of_inner(
             op: CompareOp::Lt,
             left: Box::new(Expr::LocalGet(idx_id)),
             right: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(arr_id)),
                 property: "length".to_string(),
@@ -1916,6 +1934,8 @@ pub(crate) fn lower_stmt_for_in(
 
     // Prepend the key binding/assignment: <head> = __keys[__i]
     let key_source = Expr::IndexGet {
+        byte_offset: 0,
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(keys_id)),
         index: Box::new(Expr::LocalGet(idx_id)),
     };
@@ -1941,6 +1961,7 @@ pub(crate) fn lower_stmt_for_in(
             op: CompareOp::Lt,
             left: Box::new(Expr::LocalGet(idx_id)),
             right: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(keys_id)),
                 property: "length".to_string(),

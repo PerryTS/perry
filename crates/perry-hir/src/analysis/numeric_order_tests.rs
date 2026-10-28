@@ -32,6 +32,7 @@ fn key(id: u32, property: &str) -> Expr {
         object: Box::new(local(id)),
         property: property.into(),
         byte_offset: 0,
+        byte_end: 0,
     }
 }
 fn call(callee: Expr, args: Vec<Expr>) -> Expr {
@@ -40,6 +41,7 @@ fn call(callee: Expr, args: Vec<Expr>) -> Expr {
         args,
         type_args: vec![],
         byte_offset: 0,
+        byte_end: 0,
     }
 }
 fn callback(body: Vec<Stmt>) -> Expr {

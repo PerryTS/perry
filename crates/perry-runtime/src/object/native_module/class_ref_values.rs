@@ -308,13 +308,7 @@ pub(crate) fn class_method_declaration_value_bytes(
             && !name.is_empty()
             && !crate::builtins::function_has_registered_name(entry_code)
         {
-            unsafe {
-                crate::builtins::js_register_function_name(
-                    entry_code as *const u8,
-                    name.as_ptr(),
-                    name.len() as u32,
-                );
-            }
+            crate::builtins::register_function_name_bytes(entry_code, name);
         }
         entry != 0
             && !computed_name

@@ -418,7 +418,7 @@ fn collect_used_new_fields_in_expr(
                 collect_used_new_fields_in_expr(arg, non_escaping_news, used);
             }
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             collect_used_new_fields_in_expr(object, non_escaping_news, used);
             collect_used_new_fields_in_expr(index, non_escaping_news, used);
         }

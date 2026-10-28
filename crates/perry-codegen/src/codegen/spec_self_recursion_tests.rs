@@ -62,12 +62,14 @@ fn recursive_module(lhs: Expr, rhs: Expr) -> Module {
             else_expr: Box::new(Expr::Binary {
                 op: BinaryOp::Add,
                 left: Box::new(Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::FuncRef(1)),
                     args: vec![lhs],
                     type_args: Vec::new(),
                     byte_offset: 0,
                 }),
                 right: Box::new(Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::FuncRef(1)),
                     args: vec![rhs],
                     type_args: Vec::new(),
@@ -87,6 +89,7 @@ fn recursive_module(lhs: Expr, rhs: Expr) -> Module {
     let mut module = Module::new("spec_self_recursion.ts");
     module.functions.push(f);
     module.init.push(Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(1)),
         args: vec![Expr::Integer(40)],
         type_args: Vec::new(),
@@ -110,6 +113,7 @@ fn guarded_recursive_module(lhs: Expr, rhs: Expr) -> Module {
         init: Some(Expr::NumberCoerce(Box::new(Expr::Undefined))),
     });
     module.init.push(Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(1)),
         args: vec![Expr::LocalGet(20)],
         type_args: Vec::new(),
@@ -155,6 +159,7 @@ fn bigint_capable_guarded_recursive_module() -> Module {
             }),
             then_expr: Box::new(Expr::LocalGet(10)),
             else_expr: Box::new(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::FuncRef(1)),
                 args: vec![
                     Expr::Binary {
@@ -180,6 +185,7 @@ fn bigint_capable_guarded_recursive_module() -> Module {
     let mut module = Module::new("spec_self_recursion_bigint.ts");
     module.functions.push(f);
     module.init.push(Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(1)),
         args: vec![Expr::Undefined, Expr::Undefined],
         type_args: Vec::new(),
@@ -291,6 +297,7 @@ fn an_unproven_local_recursive_argument_keeps_the_boxed_call() {
         Expr::Binary {
             op: BinaryOp::Sub,
             left: Box::new(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::FuncRef(1)),
                 args: vec![Expr::Integer(3)],
                 type_args: Vec::new(),
@@ -455,6 +462,7 @@ fn integer_contract_handles_unary_forcing_and_three_recursive_edges() {
     let mut module = guarded_recursive_module(arith(BinaryOp::Sub, 1), arith(BinaryOp::Sub, 2));
     let f = &mut module.functions[0];
     let call = |step| Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(1)),
         args: vec![arith(BinaryOp::Sub, step)],
         type_args: Vec::new(),

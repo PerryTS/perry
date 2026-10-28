@@ -33,6 +33,7 @@ pub(crate) fn lower_process_named_property(prop: &str) -> Option<Expr> {
 
 pub(crate) fn process_native_property(prop: &str) -> Expr {
     Expr::PropertyGet {
+        byte_end: 0,
         byte_offset: 0,
         object: Box::new(Expr::NativeModuleRef("process".to_string())),
         property: prop.to_string(),

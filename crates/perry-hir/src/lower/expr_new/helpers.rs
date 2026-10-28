@@ -127,6 +127,7 @@ pub(crate) fn nonconstructable_builtin_throw_expr(name: &str, mut args: Vec<Expr
         _ => "js_throw_not_a_constructor",
     };
     let throw_expr = Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::ExternFuncRef {
             name: helper.to_string(),
             param_types: Vec::new(),
@@ -408,7 +409,9 @@ pub(crate) fn global_name_has_user_binding(ctx: &LoweringContext, name: &str) ->
 /// reads the property and constructs its runtime value.
 pub(crate) fn global_property_new_dynamic(name: &str, args: Vec<Expr>, byte_offset: u32) -> Expr {
     Expr::NewDynamic {
+        byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(Expr::GlobalGet(0)),
             property: name.to_string(),

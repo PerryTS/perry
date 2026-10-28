@@ -340,6 +340,7 @@ mod tests {
             was_unrolled: false,
         });
         m.init = vec![Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::FuncRef(0)),
             args: vec![],
             type_args: vec![],
@@ -447,6 +448,7 @@ mod tests {
                         arguments_object: None,
                     });
                     m.functions[0].body.push(Stmt::Expr(Expr::Call {
+                        byte_end: 0,
                         callee: Box::new(Expr::LocalGet(91)),
                         args: vec![],
                         type_args: vec![],

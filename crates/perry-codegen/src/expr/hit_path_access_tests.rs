@@ -91,6 +91,7 @@ fn declared_typed_array_length_reads_the_header_inline() {
         "ta_length",
         vec![param(1, named("Float64Array"))],
         vec![Stmt::Return(Some(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(1)),
             property: "length".into(),
             byte_offset: 0,
@@ -152,6 +153,8 @@ fn declared_typed_array_unproven_index_access_is_inline() {
         "ta_dynamic_get",
         vec![param(1, named("Float64Array")), param(2, Type::Number)],
         vec![Stmt::Return(Some(Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(1)),
             index: Box::new(Expr::LocalGet(2)),
         }))],
@@ -216,6 +219,8 @@ fn owner_element_store_join_has_no_bag_arm() {
                 value: Box::new(Expr::LocalGet(3)),
             }),
             Stmt::Return(Some(Expr::IndexGet {
+                byte_offset: 0,
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(1)),
                 index: Box::new(Expr::LocalGet(2)),
             })),
@@ -385,6 +390,7 @@ fn class_field_read_is_the_shape_site_read() {
         "class_field_fused",
         vec![param(1, named("Point"))],
         vec![Stmt::Return(Some(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(1)),
             property: "x".into(),
             byte_offset: 0,

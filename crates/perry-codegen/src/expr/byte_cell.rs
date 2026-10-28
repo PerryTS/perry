@@ -578,6 +578,8 @@ mod tests {
         body.insert(
             0,
             Stmt::Expr(Expr::IndexGet {
+                byte_offset: 0,
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(1)),
                 index: Box::new(Expr::Integer(0)),
             }),
@@ -616,12 +618,15 @@ mod tests {
                             condition: Expr::Integer(1),
                             body: vec![
                                 Stmt::Expr(Expr::Call {
+                                    byte_end: 0,
                                     callee: Box::new(Expr::GlobalGet(100)),
                                     args: vec![],
                                     type_args: vec![],
                                     byte_offset: 0,
                                 }),
                                 Stmt::Expr(Expr::IndexGet {
+                                    byte_offset: 0,
+                                    byte_end: 0,
                                     object: Box::new(Expr::LocalGet(if alias { 2 } else { 1 })),
                                     index: Box::new(Expr::Integer(0)),
                                 }),
@@ -678,13 +683,16 @@ mod tests {
                 return_type: Type::Number,
                 body: vec![
                     Stmt::Expr(Expr::Call {
+                        byte_end: 0,
                         callee: Box::new(Expr::GlobalGet(100)),
                         args: vec![],
                         type_args: vec![],
                         byte_offset: 0,
                     }),
                     Stmt::Return(Some(Expr::Call {
+                        byte_end: 0,
                         callee: Box::new(Expr::PropertyGet {
+                            byte_end: 0,
                             object: Box::new(Expr::LocalGet(1)),
                             property: "readInt32BE".into(),
                             byte_offset: 0,
@@ -808,13 +816,16 @@ mod tests {
             return_type: Type::Number,
             body: vec![
                 Stmt::Expr(Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::GlobalGet(100)),
                     args: vec![],
                     type_args: vec![],
                     byte_offset: 0,
                 }),
                 Stmt::Return(Some(Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         object: Box::new(Expr::LocalGet(1)),
                         property: "readInt32BE".into(),
                         byte_offset: 0,

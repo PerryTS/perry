@@ -62,14 +62,57 @@ unsafe fn heap_eq_short(ptr: *const u8, data: u64, len: u32) -> bool {
 /// slice comparison lowers to. The two words cover every key up to 16 bytes.
 #[inline(always)]
 unsafe fn heap_bytes_eq(a: *const u8, b: *const u8, len: usize) -> bool {
-    if len < 8 {
-        return (0..len).all(|i| *a.add(i) == *b.add(i));
+    if len < std::mem::size_of::<u64>() {
+        // Every load stays inside the proven byte extent. Overlapping head
+        // and tail words cover short strings without a byte-loop backedge.
+        if len >= std::mem::size_of::<u32>() {
+            let tail = len - std::mem::size_of::<u32>();
+            return a.cast::<u32>().read_unaligned() == b.cast::<u32>().read_unaligned()
+                && a.add(tail).cast::<u32>().read_unaligned()
+                    == b.add(tail).cast::<u32>().read_unaligned();
+        }
+        if len >= std::mem::size_of::<u16>() {
+            let tail = len - std::mem::size_of::<u16>();
+            return a.cast::<u16>().read_unaligned() == b.cast::<u16>().read_unaligned()
+                && a.add(tail).cast::<u16>().read_unaligned()
+                    == b.add(tail).cast::<u16>().read_unaligned();
+        }
+        return len == 0 || *a == *b;
     }
     let word = |p: *const u8, at: usize| (p.add(at) as *const u64).read_unaligned();
     if word(a, 0) != word(b, 0) || word(a, len - 8) != word(b, len - 8) {
         return false;
     }
     len <= 16 || std::slice::from_raw_parts(a, len) == std::slice::from_raw_parts(b, len)
+}
+
+/// Map-local content digest. Read only complete words inside the validated
+/// extent; short strings combine overlapping head/tail words. Every byte is
+/// covered, and the length separates padded prefixes. The existing index still
+/// compares authoritative key bytes, including for complete hash collisions.
+#[inline(always)]
+pub(super) unsafe fn map_content_hash(data: *const u8, len: u32) -> u64 {
+    const MIX: u64 = 0x9e37_79b9_7f4a_7c15;
+    let len = len as usize;
+    let mut hash = (len as u64).wrapping_mul(MIX);
+    if len >= 8 {
+        let mut at = 0;
+        while at + 8 < len {
+            hash = (hash ^ data.add(at).cast::<u64>().read_unaligned().to_le())
+                .rotate_left(27)
+                .wrapping_mul(MIX);
+            at += 8;
+        }
+        hash ^= data.add(len - 8).cast::<u64>().read_unaligned().to_le();
+    } else if len >= 4 {
+        let head = data.cast::<u32>().read_unaligned().to_le() as u64;
+        let tail = data.add(len - 4).cast::<u32>().read_unaligned().to_le() as u64;
+        hash ^= head | (tail << 32);
+    } else if len != 0 {
+        hash ^=
+            *data as u64 | ((*data.add(len / 2) as u64) << 8) | ((*data.add(len - 1) as u64) << 16);
+    }
+    hash
 }
 
 impl StrKey {
@@ -145,22 +188,99 @@ impl StrKey {
         }
     }
 
-    /// The key's content hash, the same `string_content_hash` computes from
-    /// the NaN-boxed value, without decoding it a second time: a heap key
-    /// that is a property atom reads the hash it was born with
-    /// (`string_key_hash`).
+    /// Match a candidate supplied by the authoritative StringIndex. Unlike
+    /// an arbitrary entry, an indexed STRING_TAG key was validated when its
+    /// content hash was inserted. Compaction revalidates and GC rewrites the
+    /// traced entry key, so this exact membership proves its live payload.
+    ///
+    /// # Safety
+    /// `entry_bits` comes from a live StringIndex candidate's bounded entry
+    /// slot with the query's full `map_content_hash`. This is not valid for
+    /// an arbitrary linear-scan entry or a candidate from another digest.
+    #[inline(always)]
+    pub(super) unsafe fn matches_indexed(self, key_bits: u64, entry_bits: u64) -> bool {
+        if entry_bits == key_bits {
+            return true;
+        }
+        if entry_bits >> 48 == STRING_UPPER {
+            let header =
+                (entry_bits & crate::value::POINTER_MASK) as *const crate::string::StringHeader;
+            let data = header
+                .cast::<u8>()
+                .add(std::mem::size_of::<crate::string::StringHeader>());
+            let stored_len = (*header).byte_len;
+            let query_len = match self {
+                StrKey::Short { len, .. } | StrKey::Heap { len, .. } => len,
+            };
+            if stored_len != query_len {
+                return false;
+            }
+            // At a fixed length <= one word, the complete digest contains
+            // every byte injectively (including overlapping short words).
+            // Full-digest membership plus equal length proves equality;
+            // different lengths can collide and were rejected above.
+            return query_len <= 8 || self.eq_heap(data, stored_len);
+        }
+        // SSO keeps masked-tail equality; legacy pointer strings and Symbols
+        // retain the generic representation and identity guards.
+        self.matches(key_bits, entry_bits)
+    }
+
+    /// Map-local digest shared by all supported string representations.
     #[inline(always)]
     pub(super) fn content_hash(self) -> u64 {
         match self {
             StrKey::Short { len, data } => {
                 let bytes = data.to_le_bytes();
                 let len = len.min(SHORT_STRING_MAX_LEN as u32);
-                // SAFETY: `len` is at most the inline capacity, inside `bytes`.
-                unsafe { super::string_key_hash(bytes.as_ptr(), len, false) }
+                unsafe { map_content_hash(bytes.as_ptr(), len) }
             }
-            // SAFETY: `decode` validated a heap string; `ptr` is its payload.
-            StrKey::Heap { ptr, len } => unsafe { super::string_key_hash(ptr, len, true) },
+            StrKey::Heap { ptr, len } => unsafe { map_content_hash(ptr, len) },
         }
+    }
+}
+
+/// Lookup for an admitted canonical string in an existing large Map. The
+/// query is validated once; indexed candidates carry their insertion proof.
+/// A missing layout or invalid query is still decided by the general path.
+#[inline(never)]
+pub(super) unsafe fn find_indexed(map: *const super::MapHeader, key_bits: u64) -> i32 {
+    let Some(key) = StrKey::decode(key_bits) else {
+        return super::find_key_index_cold(map, f64::from_bits(key_bits));
+    };
+    let Some(store) = (*map).store.as_ref() else {
+        return super::find_key_index_cold(map, f64::from_bits(key_bits));
+    };
+    let used = (*map).used;
+    let entries = super::entries_ptr(map);
+    let hash = key.content_hash();
+    // The query representation is fixed before checking any candidate. Each
+    // callback carries only that representation's real fields.
+    match key {
+        StrKey::Heap { ptr, len } => store
+            .strings
+            .find(
+                hash,
+                #[inline(always)]
+                |i| {
+                    i < used
+                        && (StrKey::Heap { ptr, len })
+                            .matches_indexed(key_bits, entries.add(i as usize * 2).read().to_bits())
+                },
+            )
+            .map_or(-1, |i| i as i32),
+        StrKey::Short { len, data } => store
+            .strings
+            .find(
+                hash,
+                #[inline(always)]
+                |i| {
+                    i < used
+                        && (StrKey::Short { len, data })
+                            .matches_indexed(key_bits, entries.add(i as usize * 2).read().to_bits())
+                },
+            )
+            .map_or(-1, |i| i as i32),
     }
 }
 
@@ -177,6 +297,121 @@ mod tests {
 
     fn sso(s: &str) -> f64 {
         f64::from_bits(JSValue::try_short_string(s.as_bytes()).unwrap().bits())
+    }
+
+    #[test]
+    fn map_digest_covers_every_byte_and_matches_all_representations() {
+        for offset in 0..8 {
+            for len in 0..130 {
+                let bytes: Vec<u8> = (0..offset + len + 8)
+                    .map(|i| (i * 37 + 128) as u8)
+                    .collect();
+                let key = &bytes[offset..offset + len];
+                let digest = unsafe { super::map_content_hash(key.as_ptr(), len as u32) };
+                let heap = js_string_from_bytes(key.as_ptr(), len as u32);
+                let boxed = boxed_heap_string_key(heap);
+                assert_eq!(
+                    StrKey::decode(boxed.to_bits()).unwrap().content_hash(),
+                    digest
+                );
+                if let Some(short) = JSValue::try_short_string(key) {
+                    assert_eq!(StrKey::decode(short.bits()).unwrap().content_hash(), digest);
+                }
+                for changed in 0..len {
+                    let mut other = key.to_vec();
+                    other[changed] ^= 0x80;
+                    assert_ne!(
+                        unsafe { super::map_content_hash(other.as_ptr(), len as u32) },
+                        digest,
+                        "offset={offset} len={len} byte={changed}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn indexed_digest_collisions_at_different_lengths_keep_exact_equality() {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let map = scope.root_raw_mut_ptr(js_map_alloc(16));
+        for i in 0..16 {
+            js_map_set(map.get_raw_mut_ptr::<MapHeader>(), i as f64, i as f64);
+        }
+        // The empty digest is zero. At eight bytes, the length seed xor
+        // this full word is also zero, but the strings are different.
+        let bytes = (8u64.wrapping_mul(0x9e37_79b9_7f4a_7c15)).to_le_bytes();
+        let other = scope.root_nanbox_f64(boxed_heap_string_key(js_string_from_bytes(
+            bytes.as_ptr(),
+            8,
+        )));
+        assert_eq!(
+            string_content_hash(sso("").to_bits()),
+            string_content_hash(other.get_nanbox_f64().to_bits())
+        );
+        js_map_set(map.get_raw_mut_ptr::<MapHeader>(), sso(""), 11.0);
+        js_map_set(
+            map.get_raw_mut_ptr::<MapHeader>(),
+            other.get_nanbox_f64(),
+            12.0,
+        );
+        assert_eq!(
+            js_map_get(map.get_raw_mut_ptr::<MapHeader>(), heap("")),
+            11.0
+        );
+        let fresh = boxed_heap_string_key(js_string_from_bytes(bytes.as_ptr(), 8));
+        assert_eq!(js_map_get(map.get_raw_mut_ptr::<MapHeader>(), fresh), 12.0);
+        assert_eq!(
+            js_map_delete(map.get_raw_mut_ptr::<MapHeader>(), sso("")),
+            1
+        );
+        assert_eq!(js_map_get(map.get_raw_mut_ptr::<MapHeader>(), fresh), 12.0);
+        assert_eq!(js_map_has(map.get_raw_mut_ptr::<MapHeader>(), heap("")), 0);
+    }
+
+    #[test]
+    fn map_digest_keeps_atom_and_data_keys_equal_through_mutation() {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let map = scope.root_raw_mut_ptr(js_map_alloc(16));
+        for i in 0..16 {
+            js_map_set(map.get_raw_mut_ptr::<MapHeader>(), i as f64, i as f64);
+        }
+        for name in [
+            "",
+            "a",
+            "abcd",
+            "abcde",
+            "abcdef",
+            "abcdefgh",
+            "abcdefghijklmno",
+            "abcdefghijklmnoP",
+            "abcdefghijklmnoPQ",
+            "abcdefghijklmnoPQR-still-longer",
+            "é-💡-日本語",
+            "nul\0inside",
+        ] {
+            let value = heap(name);
+            let atom = unsafe {
+                crate::string::property_atom(JSValue::from_bits(value.to_bits()).as_string_ptr())
+            };
+            let atom_value = boxed_heap_string_key(atom);
+            let fresh = heap(name);
+            assert_eq!(
+                string_content_hash(atom_value.to_bits()),
+                string_content_hash(fresh.to_bits())
+            );
+            js_map_set(map.get_raw_mut_ptr::<MapHeader>(), atom_value, 91.0);
+            assert_eq!(js_map_get(map.get_raw_mut_ptr::<MapHeader>(), fresh), 91.0);
+            js_map_set(map.get_raw_mut_ptr::<MapHeader>(), fresh, 92.0);
+            assert_eq!(
+                js_map_get(map.get_raw_mut_ptr::<MapHeader>(), atom_value),
+                92.0
+            );
+            assert_eq!(js_map_delete(map.get_raw_mut_ptr::<MapHeader>(), fresh), 1);
+            assert_eq!(
+                js_map_has(map.get_raw_mut_ptr::<MapHeader>(), atom_value),
+                0
+            );
+        }
     }
 
     /// A small map answers a lookup made with the very key value it stored,
@@ -338,6 +573,92 @@ mod tests {
             assert_eq!(js_map_get(map, sso("7")).to_bits(), TAG_UNDEFINED);
             let typed = js_string_from_bytes(b"k1".as_ptr(), 2);
             assert_eq!(js_map_get_string_key(map, typed), 1.0);
+        }
+    }
+    #[test]
+    fn indexed_strings_keep_content_and_identity_after_mutation() {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let handle = scope.root_raw_mut_ptr(js_map_alloc(16));
+        for i in 0..16 {
+            js_map_set(handle.get_raw_mut_ptr::<MapHeader>(), i as f64, i as f64);
+        }
+        for (name, value) in [("target-value", 41.0), ("", 42.0), ("short", 43.0)] {
+            let key = heap(name);
+            js_map_set(handle.get_raw_mut_ptr::<MapHeader>(), key, value);
+        }
+        let symbol = unsafe { crate::symbol::js_symbol_new_empty() };
+        let symbol_handle = scope.root_nanbox_f64(symbol);
+        js_map_set(
+            handle.get_raw_mut_ptr::<MapHeader>(),
+            symbol_handle.get_nanbox_f64(),
+            44.0,
+        );
+        {
+            let before = super::super::COLD_LOOKUPS.with(std::cell::Cell::get);
+            for (name, value) in [("target-value", 41.0), ("", 42.0), ("short", 43.0)] {
+                let key = heap(name);
+                let map = handle.get_raw_mut_ptr::<MapHeader>();
+                assert_eq!(js_map_get(map, key), value);
+                assert_eq!(js_map_has(map, key), 1);
+            }
+            assert_eq!(
+                js_map_get(handle.get_raw_mut_ptr::<MapHeader>(), sso("")),
+                42.0
+            );
+            assert_eq!(
+                js_map_get(handle.get_raw_mut_ptr::<MapHeader>(), sso("short")),
+                43.0
+            );
+            let missing = heap("absent-value");
+            assert_eq!(
+                js_map_get(handle.get_raw_mut_ptr::<MapHeader>(), missing).to_bits(),
+                TAG_UNDEFINED
+            );
+            assert_eq!(
+                super::super::COLD_LOOKUPS.with(std::cell::Cell::get),
+                before,
+                "canonical indexed queries should not enter the general cold frame"
+            );
+            assert_eq!(
+                js_map_get(
+                    handle.get_raw_mut_ptr::<MapHeader>(),
+                    symbol_handle.get_nanbox_f64()
+                ),
+                44.0
+            );
+        }
+        let key = heap("target-value");
+        assert_eq!(js_map_delete(handle.get_raw_mut_ptr::<MapHeader>(), key), 1);
+        let key = heap("target-value");
+        assert_eq!(
+            js_map_get(handle.get_raw_mut_ptr::<MapHeader>(), key).to_bits(),
+            TAG_UNDEFINED
+        );
+        js_map_set(handle.get_raw_mut_ptr::<MapHeader>(), key, 99.0);
+        let key = heap("target-value");
+        assert_eq!(js_map_get(handle.get_raw_mut_ptr::<MapHeader>(), key), 99.0);
+        assert_eq!(js_map_size(handle.get_raw_mut_ptr::<MapHeader>()), 20);
+    }
+    #[test]
+    fn heap_equality_preserves_every_byte_for_aligned_and_unaligned_extents() {
+        for offset in 0..8 {
+            for len in 0..65 {
+                let a: Vec<u8> = (0..len + offset + 8)
+                    .map(|i| (i * 37 + 128) as u8)
+                    .collect();
+                let mut b = a.clone();
+                let pa = unsafe { a.as_ptr().add(offset) };
+                let pb = unsafe { b.as_ptr().add(offset) };
+                assert!(unsafe { super::heap_bytes_eq(pa, pb, len) });
+                for changed in 0..len {
+                    b[offset + changed] ^= 0x80;
+                    assert!(
+                        !unsafe { super::heap_bytes_eq(pa, pb, len) },
+                        "offset={offset} len={len} changed={changed}"
+                    );
+                    b[offset + changed] ^= 0x80;
+                }
+            }
         }
     }
 }

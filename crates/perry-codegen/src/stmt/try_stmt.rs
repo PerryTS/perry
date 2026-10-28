@@ -384,6 +384,7 @@ mod tests {
         let mut catch = perry_hir::CatchClause {
             param: Some((1, "__forof_err_1".into())),
             body: vec![perry_hir::Stmt::Throw(perry_hir::Expr::Call {
+                byte_end: 0,
                 callee: Box::new(perry_hir::Expr::ExternFuncRef {
                     name: "js_iterator_close_on_throw".into(),
                     param_types: vec![perry_hir::types::Type::Any; 3],

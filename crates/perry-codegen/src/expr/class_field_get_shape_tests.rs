@@ -92,6 +92,7 @@ fn probe_module(field_ty: Type) -> Module {
         }],
         return_type: Type::Any,
         body: vec![Stmt::Return(Some(Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(Expr::LocalGet(PARAM_ID)),
             property: "x".to_string(),
@@ -136,6 +137,7 @@ fn probe_bodies(ir: &str) -> String {
 fn memo_hits_share_a_managed_receiver_handle() {
     let mut m = probe_module(Type::Any);
     let get = Expr::PropertyGet {
+        byte_end: 0,
         byte_offset: 0,
         object: Box::new(Expr::LocalGet(PARAM_ID)),
         property: "x".into(),

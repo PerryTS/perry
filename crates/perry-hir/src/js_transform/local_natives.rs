@@ -602,7 +602,7 @@ pub fn fix_class_field_expr(
             fix_class_field_expr(object, class_field_natives, user_classes, current_class);
             fix_class_field_expr(value, class_field_natives, user_classes, current_class);
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             fix_class_field_expr(object, class_field_natives, user_classes, current_class);
             fix_class_field_expr(index, class_field_natives, user_classes, current_class);
         }
@@ -1267,7 +1267,7 @@ pub fn fix_native_instance_expr_with_locals(
             fix_native_instance_expr_with_locals(object, native_instances, local_id_instances);
             fix_native_instance_expr_with_locals(value, native_instances, local_id_instances);
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             fix_native_instance_expr_with_locals(object, native_instances, local_id_instances);
             fix_native_instance_expr_with_locals(index, native_instances, local_id_instances);
         }
