@@ -783,7 +783,8 @@ pub(super) fn detect_optional_feature_usage(
             || hir_debug.contains(r#"property: "process""#)
             || hir_debug.contains(r#"NativeModuleRef("process")"#)
             || hir_debug.contains(r#"module: "process""#));
-    ctx.uses_temporal |= ctx.uses_date && computed.opaque_members;
+    ctx.uses_date_computed_member_keys |= computed.date_members;
+    ctx.uses_temporal |= ctx.uses_date && ctx.uses_date_computed_member_keys;
     ctx.uses_computed_member_keys |= computed.opaque_members;
     ctx.uses_file_handle_capability |= computed.file_handles;
     ctx.uses_bun_file_capability |= computed.bun_files;
