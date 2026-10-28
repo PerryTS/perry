@@ -555,7 +555,7 @@ use literal_atoms::ATOM_9;
 #[cfg(test)]
 use literal_atoms::IMAGE_0;
 
-#[cfg(all(test, target_os = "windows"))]
+#[cfg(all(test, not(target_family = "wasm")))]
 pub(crate) fn test_image_atom() -> *const StaticAtom {
     std::ptr::addr_of!(ATOM_0)
 }

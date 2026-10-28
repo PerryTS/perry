@@ -34,8 +34,7 @@ fn linked_layout_section_contains_runtime_prototypes() {
 #[test]
 #[cfg(not(target_family = "wasm"))]
 fn linked_atom_sections_include_readonly_and_writable_records() {
-    let descriptor = std::ptr::addr_of!(crate::object::runtime_layouts::OBJECT_PROTOTYPE);
-    let readonly = unsafe { (*(*descriptor).keys).atom };
+    let readonly = crate::object::runtime_layouts::test_image_atom();
     let writable = std::ptr::addr_of!(WRITABLE_ATOM);
     let atoms: Vec<_> = image_atoms().map(|p| p.cast_const()).collect();
     assert_eq!(atoms.iter().filter(|&&p| p == readonly).count(), 1);
