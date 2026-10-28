@@ -323,7 +323,11 @@ fn regenerate_wpfacts_cjs_fixtures() {
     let sets: [(&str, &[&str], bool); 6] = [
         ("t1", &["b.js", "a.js", "m.js"], false),
         ("t2", &["r.js", "m.js"], false),
-        ("t3", &["benchmark.js", "richards.js", "sa_Richards.js"], false),
+        (
+            "t3",
+            &["benchmark.js", "richards.js", "sa_Richards.js"],
+            false,
+        ),
         ("t5", &["b.js", "r.js", "m.js"], false),
         ("t6", &["benchmark.js", "som.js", "cd.js", "sa_CD.js"], true),
         ("t7", &["a.js", "b.js", "m.js"], true),
@@ -349,8 +353,7 @@ fn regenerate_wpfacts_cjs_fixtures() {
             let text = resolve_open(&wrapped, open).replace(&root_text, &short);
             std::fs::write(out.join(f), text).expect("write fixture");
         }
-        let support =
-            resolve_open(&support::source(&keys, true), open).replace(&root_text, &short);
+        let support = resolve_open(&support::source(&keys, true), open).replace(&root_text, &short);
         std::fs::write(out.join("perry_cjs.js"), support).expect("write support fixture");
     }
 }
@@ -371,9 +374,19 @@ fn resolve_open(text: &str, open_program: bool) -> String {
             let else_open = text.len() - rest.len() - 1;
             let else_close = matching_brace(&text, else_open);
             let else_arm = text[else_open + 1..else_close].to_string();
-            (else_close + 1, if open_program { then_arm } else { else_arm })
+            (
+                else_close + 1,
+                if open_program { then_arm } else { else_arm },
+            )
         } else {
-            (close + 1, if open_program { then_arm } else { String::new() })
+            (
+                close + 1,
+                if open_program {
+                    then_arm
+                } else {
+                    String::new()
+                },
+            )
         };
         text.replace_range(start..end, &replacement);
     }

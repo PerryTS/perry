@@ -17,16 +17,9 @@ fn raw_ptr_from_value(value: f64) -> usize {
 
 #[inline]
 unsafe fn gc_type_for_ptr(raw: usize) -> Option<u8> {
-    if raw < crate::gc::GC_HEADER_SIZE + 0x1000 {
-        return None;
-    }
-    let header = (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    let gc_type = (*header).obj_type;
-    if gc_type <= crate::gc::GC_TYPE_MAX {
-        Some(gc_type)
-    } else {
-        None
-    }
+    let header = crate::value::addr_class::try_read_gc_header(raw)?;
+    let gc_type = header.obj_type;
+    (gc_type <= crate::gc::GC_TYPE_MAX).then_some(gc_type)
 }
 
 fn this_value(closure: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
