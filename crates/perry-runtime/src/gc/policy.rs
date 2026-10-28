@@ -3831,8 +3831,10 @@ fn gc_budgeted_due_trigger_probe() -> (Option<BudgetedGcTrigger>, bool, TriggerW
     // they must not share a basis): the adaptive base trigger against the
     // whole arena, and the scavenge nursery cap against the young generation
     // only.
-    let total = crate::arena::copying_capacity_bytes();
-    if total >= next_arena_trigger_base() {
+    // Copying capacity never exceeds the gross arena bytes, so the leaf
+    // exclusion (a block walk) is owed only once the gross figure is at the base.
+    let base = next_arena_trigger_base();
+    if crate::arena::arena_total_bytes() >= base && crate::arena::copying_capacity_bytes() >= base {
         return (Some(BudgetedGcTrigger::ArenaBytes), true, RETIRED);
     }
     // Old-gen is untouched since the read above: the arms in between only

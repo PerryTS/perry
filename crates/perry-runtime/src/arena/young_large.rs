@@ -49,6 +49,7 @@ pub(super) fn allocate(total: usize, align: usize) -> *mut u8 {
         block.object_starts_ptr(),
         Kind::LargeObject,
     );
+    YOUNG_LARGE_BYTES.with(|bytes| bytes.set(bytes.get() + block.offset));
     // Allocation cannot select this block as the ordinary bump target.
     ARENA.with(|arena| unsafe {
         let arena = &mut *arena.get();
@@ -76,15 +77,36 @@ fn install(arena: &mut Arena, block: ArenaBlock) {
     }
 }
 
-pub(crate) fn young_large_in_use_bytes() -> usize {
+crate::perry_thread_local! {
+    /// Bytes in use across this thread's young dedicated-leaf extents. Exact
+    /// accounting, like `ARENA_TOTAL_BYTES`: `allocate` adds a leaf's bytes and
+    /// `finish` subtracts them when the extent retires or is promoted, so the
+    /// trigger probes read it in O(1) instead of walking every block.
+    static YOUNG_LARGE_BYTES: Cell<usize> = const { Cell::new(0) };
+}
+
+#[cfg(debug_assertions)]
+fn young_large_in_use_bytes_walked() -> usize {
     ARENA.with(|arena| unsafe {
         (&*arena.get())
             .blocks
             .iter()
-            .filter(|b| b.extent_kind == Kind::LargeObject)
+            .filter(|b| !b.data.is_null() && b.extent_kind == Kind::LargeObject)
             .map(|b| b.offset)
             .sum()
     })
+}
+
+#[inline]
+pub(crate) fn young_large_in_use_bytes() -> usize {
+    let bytes = YOUNG_LARGE_BYTES.with(Cell::get);
+    #[cfg(debug_assertions)]
+    debug_assert_eq!(
+        bytes,
+        young_large_in_use_bytes_walked(),
+        "young leaf accounting drifted from the block walk"
+    );
+    bytes
 }
 
 /// The nursery budget includes large ownership. The copying/reset quantity
@@ -220,6 +242,7 @@ fn finish(snapshots: Option<&[ArenaBlockSnapshot]>, live: Option<&[bool]>) -> Ar
                 },
             );
             let (base, size, used) = (block.data as usize, block.size, block.offset);
+            YOUNG_LARGE_BYTES.with(|bytes| bytes.set(bytes.get().saturating_sub(used)));
             if alive {
                 // The escape bit shares HAS_SURVIVED (0x40); it never outlives
                 // the young generation of its leaf.
