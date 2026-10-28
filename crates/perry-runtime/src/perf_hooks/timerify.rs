@@ -14,7 +14,7 @@ unsafe fn function_value_name(value: f64) -> String {
     let Some(closure) = closure_ptr_from_value(value) else {
         return String::new();
     };
-    crate::builtins::function_name_for_ptr((*closure).code() as usize)
+    crate::builtins::registered_name_for_closure(closure)
         .or_else(|| {
             let name_value = crate::closure::closure_get_dynamic_prop(closure as usize, "name");
             string_of(JSValue::from_bits(name_value.to_bits()))

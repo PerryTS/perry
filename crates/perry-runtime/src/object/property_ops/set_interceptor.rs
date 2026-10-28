@@ -145,9 +145,7 @@ pub(crate) fn set_interceptor(target: f64, key: f64, value: f64, receiver: f64) 
                             {
                                 info.flags & crate::codegen_abi::FN_NON_STRICT_ORDINARY != 0
                             } else {
-                                crate::builtins::function_is_non_strict_ordinary_for_ptr(
-                                    info.code as usize,
-                                )
+                                crate::builtins::function_is_non_strict_ordinary_for_info(info)
                             }
                         });
                     if is_non_strict_ordinary_function {

@@ -82,6 +82,9 @@ pub struct LlFunction {
     /// proofs. Let LLVM optimize its counted loops for execution rather than
     /// applying the default application-size policy to the containing body.
     pub has_indexed_owner_region: bool,
+    /// The private resumption ABI denotes a protocol continuation. Optimize
+    /// its dispatch/loops for execution, while honoring explicit minsize.
+    pub private_resume_entry: bool,
     /// #7871: `collectors::collect_alloc_hot_functions` admitted this function
     /// — it has an in-loop direct call site (uncapped) or calls itself. Read
     /// ONLY by `lower_call/new_alloc.rs::new_site_is_in_loop`; it must not be
@@ -309,6 +312,7 @@ impl LlFunction {
             inline_hint: false,
             hot_loop_callee: false,
             has_indexed_owner_region: false,
+            private_resume_entry: false,
             alloc_hot: false,
             personality: None,
             blocks: Vec::new(),
@@ -1038,7 +1042,9 @@ impl LlFunction {
     /// `render_fn_external`).
     pub fn define_header(&self, force_external: bool) -> String {
         let attrs = crate::linker::application_size_function_attrs();
-        let attrs = if self.has_indexed_owner_region && attrs == " optsize" {
+        let attrs = if (self.has_indexed_owner_region || self.private_resume_entry)
+            && attrs == " optsize"
+        {
             ""
         } else {
             attrs

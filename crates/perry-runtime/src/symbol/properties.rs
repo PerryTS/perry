@@ -235,7 +235,7 @@ unsafe fn register_closure_name_if_absent(val_bits: u64, name: &str) {
     if func_ptr.is_null() {
         return;
     }
-    crate::builtins::register_function_name_if_absent(func_ptr as usize, name);
+    crate::builtins::register_function_name_if_absent(&*(*closure_ptr).info, name);
 }
 
 unsafe fn infer_symbol_function_name(sym_key: usize, val_bits: u64) {

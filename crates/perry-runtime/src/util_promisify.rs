@@ -140,6 +140,10 @@ fn custom_promisified_value(fn_value: f64) -> Option<f64> {
     Some(custom_handle.get_nanbox_f64())
 }
 
+fn deprecate_info() -> *const crate::closure::JsFunctionInfo {
+    crate::fn_info!(deprecate_outer_thunk, 1; with_rest(0))
+}
+
 fn register_thunks_once() {
     thread_local! {
         static REGISTERED: Cell<bool> = const { Cell::new(false) };
@@ -157,7 +161,7 @@ fn register_thunks_once() {
         // crypto.generateKeyPair promisify wrapper: outer is a rest function;
         // inner callback takes `(err, publicKey, privateKey)`.
         crate::builtins::register_function_name_if_absent(
-            deprecate_outer_thunk as *const () as usize,
+            unsafe { &*deprecate_info() },
             "deprecated",
         );
         flag.set(true);
@@ -255,7 +259,7 @@ pub extern "C" fn js_util_deprecate(fn_value: f64, msg: f64, code: f64) -> f64 {
     let fn_handle = scope.root_nanbox_f64(fn_value);
     let msg_handle = scope.root_nanbox_f64(msg);
     let code_handle = scope.root_nanbox_f64(code);
-    let closure = js_closure_alloc(crate::fn_info!(deprecate_outer_thunk, 1; with_rest(0)), 4);
+    let closure = js_closure_alloc(deprecate_info(), 4);
     if closure.is_null() {
         return TAG_UNDEFINED_F64;
     }

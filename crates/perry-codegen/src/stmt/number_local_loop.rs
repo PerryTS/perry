@@ -51,6 +51,7 @@
 //! Other receiver accesses belong to the region tier that follows.
 
 mod bounded_counter;
+pub(crate) mod numeric_callbacks;
 
 use std::collections::{BTreeSet, HashSet};
 
@@ -96,6 +97,9 @@ struct LoopFacts<'a> {
     numeric_consumers: HashSet<u32>,
     byte_receivers: BTreeSet<u32>,
     nodes: usize,
+    callbacks: std::collections::BTreeMap<u32, numeric_callbacks::Plan>,
+    callback_sites: Vec<(u32, &'a [Expr])>,
+    reads: HashSet<u32>,
 }
 
 impl<'a> LoopFacts<'a> {
@@ -165,6 +169,23 @@ impl<'a> LoopFacts<'a> {
             return false;
         }
         match expr {
+            Expr::LocalGet(id) => {
+                self.reads.insert(*id);
+            }
+            Expr::Call { callee, args, .. } => {
+                if let Expr::LocalGet(id) = callee.as_ref() {
+                    self.callback_sites.push((*id, args));
+                }
+                if let Some(plan) = numeric_callbacks::candidate(ctx, callee, args.len()) {
+                    self.callbacks.insert(plan.local, plan);
+                    for arg in args {
+                        crate::collectors::collect_ref_ids_in_expr(
+                            arg,
+                            &mut self.numeric_consumers,
+                        );
+                    }
+                }
+            }
             // A closure could capture, an `await`/`yield` suspends with the
             // frame's storage protocol, and other receiver accesses belong to the
             // region tier that runs after this one.
@@ -299,6 +320,11 @@ fn produces_number(ctx: &FnCtx<'_>, expr: &Expr, numbers: &BTreeSet<u32>) -> boo
             UnaryOp::Not => false,
         },
         Expr::NumberCoerce(_) => true,
+        Expr::Call { callee, args, .. }
+            if numeric_callbacks::candidate(ctx, callee, args.len()).is_some() =>
+        {
+            args.iter().all(|arg| produces_number(ctx, arg, numbers))
+        }
         Expr::Conditional {
             then_expr,
             else_expr,
@@ -315,7 +341,13 @@ fn match_number_locals(
     condition: Option<&Expr>,
     update: Option<&Expr>,
     body: &[Stmt],
-) -> Option<(Vec<u32>, Vec<u32>)> {
+) -> Option<(
+    Vec<u32>,
+    Vec<u32>,
+    Vec<numeric_callbacks::Plan>,
+    Vec<u32>,
+    Vec<u32>,
+)> {
     if !ctx.pending_labels.is_empty() || ctx.try_depth != 0 || ctx.is_async_fn {
         return None;
     }
@@ -331,6 +363,22 @@ fn match_number_locals(
     if !walked {
         return None;
     }
+    let input_numbers: BTreeSet<u32> = if facts.callbacks.is_empty() {
+        BTreeSet::new()
+    } else {
+        facts
+            .reads
+            .iter()
+            .copied()
+            .filter(|id| {
+                !facts.writes.contains_key(id)
+                    && !facts.declared.contains(id)
+                    && !facts.callbacks.contains_key(id)
+                    && numeric_callbacks::plain_local(ctx, *id)
+                    && !crate::type_analysis::is_numeric_expr(ctx, &Expr::LocalGet(*id))
+            })
+            .collect()
+    };
     let mut numbers: BTreeSet<u32> = facts
         .writes
         .keys()
@@ -349,12 +397,13 @@ fn match_number_locals(
         })
         .collect();
     loop {
+        let assumed: BTreeSet<u32> = numbers.union(&input_numbers).copied().collect();
         let rejected: Vec<u32> = numbers
             .iter()
             .copied()
             .filter(|id| {
                 !facts.writes[id].iter().all(|write| match write {
-                    Some(rhs) => produces_number(ctx, rhs, &numbers),
+                    Some(rhs) => produces_number(ctx, rhs, &assumed),
                     // `x++` on a Number is a Number.
                     None => true,
                 })
@@ -367,15 +416,50 @@ fn match_number_locals(
             numbers.remove(&id);
         }
     }
+    let assumed: BTreeSet<u32> = numbers.union(&input_numbers).copied().collect();
+    if !facts.callbacks.is_empty()
+        && !numeric_callbacks::scalar_loop(ctx, init, condition, update, body, &assumed)
+    {
+        return None;
+    }
+    for (id, plan) in &facts.callbacks {
+        if facts.writes.contains_key(id)
+            || facts.declared.contains(id)
+            || facts.callback_sites.iter().any(|(called, args)| {
+                *called == *id
+                    && (args.len() != plan.arity
+                        || !args.iter().all(|a| produces_number(ctx, a, &assumed)))
+            })
+        {
+            return None;
+        }
+    }
     if !numbers
         .iter()
         .any(|id| facts.numeric_consumers.contains(id))
     {
         return None;
     }
+    // Entry tests admit only plain IEEE Numbers. A private F64 callback
+    // returns that same raw representation; every write must have this
+    // producer before argument normalization may disappear from the cycle.
+    let raw_callback_locals = numbers
+        .iter()
+        .copied()
+        .filter(|id| {
+            facts.writes[id].iter().all(|write| {
+                matches!(write,
+            Some(Expr::Call { callee, args, .. })
+                if numeric_callbacks::candidate(ctx, callee, args.len()).is_some())
+            })
+        })
+        .collect();
     Some((
         numbers.into_iter().collect(),
         facts.byte_receivers.into_iter().collect(),
+        facts.callbacks.into_values().collect(),
+        raw_callback_locals,
+        input_numbers.into_iter().collect(),
     ))
 }
 
@@ -390,7 +474,8 @@ pub(super) fn lower(
     if !enabled() {
         return Ok(false);
     }
-    let Some((numbers, byte_receivers)) = match_number_locals(ctx, init, condition, update, body)
+    let Some((numbers, byte_receivers, callbacks, mut raw_callback_locals, input_numbers)) =
+        match_number_locals(ctx, init, condition, update, body)
     else {
         return Ok(false);
     };
@@ -401,7 +486,7 @@ pub(super) fn lower(
     // the ordinary `LocalGet` lowering so every storage protocol is honoured.
     let mut all_numbers: Option<String> = None;
     let mut entry_values: Vec<(u32, String)> = Vec::with_capacity(numbers.len());
-    for id in &numbers {
+    for id in numbers.iter().chain(&input_numbers) {
         let value = lower_expr(ctx, &Expr::LocalGet(*id))?;
         entry_values.push((*id, value.clone()));
         let is_number = emit_js_value_is_number(ctx, &value);
@@ -411,6 +496,8 @@ pub(super) fn lower(
         });
     }
     let mut all_numbers = all_numbers.expect("the matcher admits at least one local");
+    let (capture_ok, callback_admissions) = numeric_callbacks::capture_guard(ctx, &callbacks)?;
+    all_numbers = ctx.block().and(I1, &all_numbers, &capture_ok);
     // Reuse B4 admission before publishing numeric byte-result facts. A lying
     // receiver runs the original loop; detach/resize still invalidate storage.
     let mut receiver_proofs = Vec::new();
@@ -469,8 +556,14 @@ pub(super) fn lower(
         );
     }
     let scope_id = ctx.next_loop_proof_scope_id();
+    let mut scope_numbers = numbers.clone();
+    scope_numbers.extend(input_numbers.iter().copied());
+    raw_callback_locals.extend(input_numbers.iter().copied());
     ctx.receiver_descriptors
-        .materialize_number_locals(scope_id, &numbers);
+        .materialize_number_locals(scope_id, &scope_numbers);
+    numeric_callbacks::materialize(ctx, scope_id, callback_admissions);
+    ctx.receiver_descriptors
+        .materialize_raw_callback_locals(scope_id, raw_callback_locals);
     // Inside the clone each admitted local lives in a plain F64 alloca — the
     // packed tiers' unboxed-accumulator redirect (`LocalGet`/`LocalSet` read
     // and write `numeric_accumulator_f64_slots`), so LLVM keeps the value in

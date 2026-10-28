@@ -508,7 +508,7 @@ fn additive_property_callback_gets_a_cold_deopting_private_body() {
         info.contains(
             "ptr @perry_closure_versioned_loop_callback_ts__100$trusted_boxes$versioned_loop, i32 1, i16"
         ) && info.contains("i64 1 }")
-            && info.ends_with("ptr @perry_closure_versioned_loop_callback_ts__100$call_entry }"),
+            && info.contains("ptr @perry_closure_versioned_loop_callback_ts__100$call_entry, { ptr, i32 }"),
         "{info}"
     );
 }

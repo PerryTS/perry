@@ -745,11 +745,7 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
             continue;
         }
         unsafe {
-            crate::builtins::js_register_function_name(
-                (*info).code,
-                name.as_ptr(),
-                name.len() as u32,
-            );
+            crate::builtins::register_function_name(&*info, name.as_bytes());
         }
         super::super::native_module::set_builtin_closure_length(closure_ptr as usize, arity);
         // Every global helper installed here (parseInt/parseFloat/isNaN/

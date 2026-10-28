@@ -1778,7 +1778,7 @@ pub extern "C" fn js_async_resource_static_bind_value(
                 let name = js_string_value_to_string(f64::from_bits(own_name.bits()));
                 (!name.is_empty()).then_some(name)
             } else {
-                unsafe { crate::builtins::function_name_for_ptr((*callback).code() as usize) }
+                unsafe { crate::builtins::registered_name_for_closure(callback) }
                     .filter(|name| !name.is_empty())
             }
         };

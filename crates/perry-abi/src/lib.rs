@@ -6,6 +6,8 @@
 //! compile until the number is right — so emitted code can never disagree
 //! with the struct it indexes. No dependencies.
 
+pub mod function_metadata;
+pub use function_metadata::*;
 pub mod accessor_guards;
 pub mod layouts;
 pub use layouts::*;
