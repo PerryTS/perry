@@ -629,3 +629,70 @@ fn owned_edge_witness(erase: bool) {
         "no allocation registry roots a dead owner"
     );
 }
+
+#[test]
+fn indexed_string_candidates_survive_a_proven_copying_collection() {
+    let _guard = CopyingNurseryTestGuard::new(2);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let map = js_map_alloc(32);
+    js_shadow_slot_set(0, ptr_bits(map as usize));
+    for i in 0..16 {
+        js_map_set(map, i as f64, i as f64);
+    }
+    let heap_key = |name: &str| {
+        let ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        f64::from_bits(crate::value::STRING_TAG | ptr as u64)
+    };
+    for (name, value) in [("target-value", 41.0), ("", 42.0), ("short", 43.0)] {
+        js_map_set(map, heap_key(name), value);
+    }
+    let symbol = unsafe { crate::symbol::js_symbol_new_empty() };
+    js_shadow_slot_set(1, symbol.to_bits());
+    js_map_set(map, symbol, 44.0);
+    let stored_key_before = js_map_entry_key_at(map, 16).to_bits();
+    let trace = collect_minor_trace(GcTriggerKind::Direct);
+    assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+    let moved = ptr_from_slot(0);
+    assert_ne!(map, moved, "the Map must really move");
+    assert_ne!(
+        stored_key_before,
+        js_map_entry_key_at(moved, 16).to_bits(),
+        "the indexed heap key must really move"
+    );
+    let before = crate::map::COLD_LOOKUPS.with(std::cell::Cell::get);
+    for (name, value) in [("target-value", 41.0), ("", 42.0), ("short", 43.0)] {
+        let key = heap_key(name);
+        assert_eq!(js_map_get(ptr_from_slot(0), key), value);
+        assert_eq!(js_map_has(ptr_from_slot(0), key), 1);
+    }
+    for (name, value) in [("", 42.0), ("short", 43.0)] {
+        let key = crate::value::JSValue::try_short_string(name.as_bytes()).unwrap();
+        assert_eq!(
+            js_map_get(ptr_from_slot(0), f64::from_bits(key.bits())),
+            value
+        );
+    }
+    let missing = heap_key("absent-value");
+    assert_eq!(
+        js_map_get(ptr_from_slot(0), missing).to_bits(),
+        crate::value::TAG_UNDEFINED
+    );
+    assert_eq!(
+        crate::map::COLD_LOOKUPS.with(std::cell::Cell::get),
+        before,
+        "validated indexed queries must retain their admitted path after moving"
+    );
+    assert_eq!(
+        js_map_get(ptr_from_slot(0), f64::from_bits(js_shadow_slot_get(1))),
+        44.0
+    );
+    let key = heap_key("target-value");
+    assert_eq!(js_map_delete(ptr_from_slot(0), key), 1);
+    assert_eq!(
+        js_map_get(ptr_from_slot(0), key).to_bits(),
+        crate::value::TAG_UNDEFINED
+    );
+    js_map_set(ptr_from_slot(0), key, 99.0);
+    assert_eq!(js_map_get(ptr_from_slot(0), heap_key("target-value")), 99.0);
+    assert_eq!(js_map_size(ptr_from_slot(0)), 20);
+}
