@@ -272,8 +272,8 @@ fn retired_growth_payload_pages_are_dead_but_alias_and_gc_reachability_survive()
             "the kernel must release the actual retired payload pages"
         );
     }
-    crate::gc::test_collect_synchronous_full_trace();
-    let live = clean_arr_ptr_mut(alias.get_raw_mut_ptr());
+    let (_, live) = alias.across_mut(crate::gc::test_collect_synchronous_full_trace);
+    let live = clean_arr_ptr_mut(live);
     for i in 0..capacity {
         assert_eq!(js_array_get_f64(live, i), i as f64 + 0.25);
     }

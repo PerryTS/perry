@@ -138,6 +138,7 @@ pub(super) extern "C" fn proxy_revoke_trampoline(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::object::property_ops::reflect_misc::array_from_args;
 
     extern "C" fn weighted_six(
         _: *const crate::closure::ClosureHeader,
@@ -254,5 +255,3 @@ pub use crate::object::property_ops::reflect_misc::{
     js_reflect_get_prototype_of, js_reflect_is_extensible, js_reflect_own_keys,
     js_reflect_prevent_extensions,
 };
-
-pub(crate) use crate::object::property_ops::reflect_misc::array_from_args;

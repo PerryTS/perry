@@ -1,4 +1,5 @@
 use super::*;
+use crate::string::StringHeader;
 
 fn text(value: &str) -> f64 {
     crate::value::js_nanbox_string(js_string_from_bytes(value.as_ptr(), value.len() as u32) as i64)

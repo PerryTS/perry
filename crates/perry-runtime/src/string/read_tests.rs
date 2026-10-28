@@ -81,12 +81,14 @@ fn short_reads_eintr_hints_and_split_utf8_match_lossy_decoding() {
 #[test]
 fn read_chunk_boundaries_and_final_storage_are_preserved() {
     let _global = crate::gc::global_side_table_test_lock();
-    for split in 0..4 {
-        let mut bytes = vec![b'a'; READ_CHUNK - split];
-        bytes.extend_from_slice("🙂é".as_bytes());
-        bytes.extend_from_slice(&vec![b'z'; READ_CHUNK + 1]);
-        check(&bytes, bytes.len() as u64, READ_CHUNK);
-        check(&bytes, 7, READ_CHUNK);
+    for quantum in [READ_CHUNK, READ_WINDOW] {
+        for split in 0..4 {
+            let mut bytes = vec![b'a'; quantum - split];
+            bytes.extend_from_slice("🙂é".as_bytes());
+            bytes.extend_from_slice(&vec![b'z'; quantum + 1]);
+            check(&bytes, bytes.len() as u64, quantum);
+            check(&bytes, 7, quantum);
+        }
     }
 }
 

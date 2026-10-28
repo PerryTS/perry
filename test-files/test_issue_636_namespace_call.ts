@@ -6,7 +6,7 @@
 //      Call { callee: PropertyGet { ExternFuncRef(ns), method } }
 //      where ns is in namespace_imports — routes to zero-arg getter +
 //      closure call (var-shaped) or direct fn call (decl-shaped).
-import * as inner from "./test_issue_636_inner.ts";
+import * as inner from "./fixtures/issue_636_inner.ts";
 const a = inner.make("hello");
 console.log("var-shaped:", a);
 const b = inner.decl(7);

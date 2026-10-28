@@ -12,15 +12,17 @@ use crate::stmt;
 use crate::strings::StringPool;
 use crate::types::{LlvmType, DOUBLE, I1, I32, I64, PTR};
 
+pub(crate) use super::closure_captures::emit_typed_capture_guard;
+use super::closure_captures::{load_typed_capture, supports as capture_values_supported};
 use super::opts::CrossModuleCtx;
 use super::typed_abi::{
-    emit_typed_arg_guard, emit_typed_arg_to_raw, generic_closure_body_name,
-    lower_typed_f64_body_with_seed_locals_and_reps, lower_typed_i1_body_with_seed_locals,
-    lower_typed_i32_body_with_seed_locals, lower_typed_string_body_with_seed_locals,
-    typed_f64_closure_capture_reps, typed_f64_closure_name, typed_i1_closure_capture_reps,
-    typed_i1_closure_name, typed_i32_closure_capture_reps, typed_i32_closure_name,
-    typed_param_reps_for_params, typed_string_closure_capture_reps, typed_string_closure_name,
-    TypedFunctionTrampolineKind, TypedParamRep,
+    generic_closure_body_name, lower_typed_f64_body_with_seed_locals_and_reps,
+    lower_typed_i1_body_with_seed_locals, lower_typed_i32_body_with_seed_locals,
+    lower_typed_string_body_with_seed_locals, typed_f64_closure_capture_reps,
+    typed_f64_closure_name, typed_i1_closure_capture_reps, typed_i1_closure_name,
+    typed_i32_closure_capture_reps, typed_i32_closure_name, typed_param_reps_for_params,
+    typed_string_closure_capture_reps, typed_string_closure_name, TypedFunctionTrampolineKind,
+    TypedParamRep,
 };
 use super::typed_entry::{
     emit_tiered_entry_dispatch, emit_typed_arg_to_raw_after_entry_tier, typed_entry_arg_guard,
@@ -33,6 +35,7 @@ fn emit_typed_closure_trampoline_fast_value(
     typed_name: &str,
     arg_names: &[String],
     arg_reps: &[TypedParamRep],
+    capture_values: &[String],
 ) -> String {
     match kind {
         TypedFunctionTrampolineKind::F64 => {
@@ -49,6 +52,7 @@ fn emit_typed_closure_trampoline_fast_value(
                     .zip(arg_reps.iter())
                     .map(|(arg, rep)| (rep.llvm_ty(), arg.as_str())),
             );
+            typed_args.extend(capture_values.iter().map(|v| (DOUBLE, v.as_str())));
             blk.call(DOUBLE, typed_name, &typed_args)
         }
         TypedFunctionTrampolineKind::I32 => {
@@ -140,6 +144,13 @@ fn emit_public_typed_closure_trampoline(
         TypedFunctionTrampolineKind::StringRef => typed_param_reps_for_params(params)
             .unwrap_or_else(|| vec![TypedParamRep::StringRef; params.len()]),
     };
+    let raw_captures = matches!(kind, TypedFunctionTrampolineKind::F64)
+        && capture_values_supported(params, capture_reps);
+    let typed_name = if raw_captures {
+        super::closure_captures::name(&typed_name)
+    } else {
+        typed_name
+    };
     let arg_names: Vec<String> = params.iter().map(|p| format!("%arg{}", p.id)).collect();
     let llvm_params = crate::expr::body_call::js_body_params(arg_names.iter().cloned());
     let capture_header = crate::target_layout::closure_header_size_bytes(&llmod.target_triple);
@@ -178,6 +189,11 @@ fn emit_public_typed_closure_trampoline(
                 &typed_name,
                 &values[..arg_names.len()],
                 &arg_reps,
+                if raw_captures {
+                    &values[arg_names.len()..]
+                } else {
+                    &[]
+                },
             )
         },
         &mut |blk| {
@@ -199,7 +215,7 @@ fn emit_public_typed_closure_trampoline(
 /// load at entry. The body's own capture layout puts `index` in range: every
 /// closure that reaches this body was born for it with every slot filled
 /// (`crate::stmt::binding_cell`).
-fn load_entry_capture_word(
+pub(super) fn load_entry_capture_word(
     blk: &mut crate::block::LlBlock,
     header_size: u64,
     index: usize,
@@ -208,42 +224,6 @@ fn load_entry_capture_word(
     let addr = blk.add(I64, "%this_closure", &offset.to_string());
     let ptr = blk.inttoptr(I64, &addr);
     blk.load(I64, &ptr)
-}
-
-fn load_typed_capture(
-    blk: &mut crate::block::LlBlock,
-    header_size: u64,
-    capture_index: usize,
-    rep: TypedParamRep,
-) -> String {
-    let captured_bits = load_entry_capture_word(blk, header_size, capture_index);
-    let captured = blk.bitcast_i64_to_double(&captured_bits);
-    // The public entry's capture guard admitted this value, so the inline
-    // conversions are exact (string materialization stays a call).
-    emit_typed_arg_to_raw(blk, rep, &captured)
-}
-
-pub(crate) fn emit_typed_capture_guard(
-    blk: &mut crate::block::LlBlock,
-    closure_handle: &str,
-    capture_reps: &[TypedParamRep],
-) -> Option<String> {
-    let mut guard: Option<String> = None;
-    for (idx, rep) in capture_reps.iter().enumerate() {
-        let idx = idx.to_string();
-        let captured_bits = blk.call(
-            I64,
-            "js_closure_get_capture_bits",
-            &[(I64, closure_handle), (I32, &idx)],
-        );
-        let captured = blk.bitcast_i64_to_double(&captured_bits);
-        let ok = emit_typed_arg_guard(blk, *rep, &captured);
-        guard = Some(match guard {
-            Some(prev) => blk.and(I1, &prev, &ok),
-            None => ok,
-        });
-    }
-    guard
 }
 
 pub(super) fn compile_typed_string_closure(
@@ -311,6 +291,13 @@ pub(super) fn compile_typed_f64_closure(
         _ => return Err(anyhow!("compile_typed_f64_closure: expected Expr::Closure")),
     };
 
+    super::closure_captures::compile(
+        llmod,
+        func_id,
+        closure_expr,
+        module_prefix,
+        module_local_types,
+    )?;
     let generic_name = crate::fn_info::closure_body_symbol(module_prefix, func_id);
     let llvm_name = typed_f64_closure_name(&generic_name);
     let mut llvm_params: Vec<(LlvmType, String)> = Vec::with_capacity(params.len() + 1);
@@ -1158,6 +1145,9 @@ pub(super) fn compile_closure(
         });
 
     let mut ctx = FnCtx {
+        numeric_order_functions: cross_module.numeric_order_functions,
+        numeric_order_closures: cross_module.numeric_order_closures,
+        numeric_order_ready: Default::default(),
         program_has_worker: cross_module.program_has_worker,
         program_has_thread_agents: cross_module.program_has_thread_agents,
         program_class_accessor_names: cross_module.program_class_accessor_names.clone(),
@@ -1575,6 +1565,7 @@ pub(super) fn compile_closure(
     }
 
     // #10812: throw a catchable RangeError before the native stack runs out.
+    crate::expr::numeric_order::parameters_ready(&mut ctx, params);
     crate::expr::stack_guard::emit_stack_guard(&mut ctx);
     if is_async {
         stmt::lower_async_rejecting_stmts(&mut ctx, body)

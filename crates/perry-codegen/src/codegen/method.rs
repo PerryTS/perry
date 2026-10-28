@@ -573,6 +573,9 @@ pub(super) fn compile_method(
         reassigned_locals.remove(&method.params[index].id);
     }
     let mut ctx = FnCtx {
+        numeric_order_functions: cross_module.numeric_order_functions,
+        numeric_order_closures: cross_module.numeric_order_closures,
+        numeric_order_ready: Default::default(),
         program_has_worker: cross_module.program_has_worker,
         program_has_thread_agents: cross_module.program_has_thread_agents,
         program_class_accessor_names: cross_module.program_class_accessor_names.clone(),
@@ -1137,6 +1140,7 @@ pub(super) fn compile_method(
                             (ctor.symbol, ctor.param_count)
                         } else {
                             // No callable ctor symbol — bail.
+                            crate::expr::numeric_order::parameters_ready(&mut ctx, &method.params);
                             stmt::lower_stmts(&mut ctx, method_body).with_context(|| {
                                 format!("lowering body of method '{}::{}'", class.name, method.name)
                             })?;
@@ -1604,6 +1608,7 @@ pub(super) fn compile_method(
         None
     };
     // #10812: throw a catchable RangeError before the native stack runs out.
+    crate::expr::numeric_order::parameters_ready(&mut ctx, &method.params);
     crate::expr::stack_guard::emit_stack_guard(&mut ctx);
     if ctor_no_super_throw {
         ctx.block()

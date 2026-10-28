@@ -16,7 +16,6 @@ on:
   - cron: 52 4 * * *
   - cron: 17 3 * * *
   - cron: 25 5 * * *
-  - cron: 37 4 * * *
   - cron: 41 2 * * *
   - cron: 43 4 * * *
   - cron: 57 4 * * *
@@ -2000,7 +1999,7 @@ jobs:
           sudo rm -rf ~/Library/Developer/CoreSimulator/Caches/* || true
           df -h / | tail -1
       - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal --component rustfmt --component clippy
       - uses: ./.github/actions/setup-llvm22
       - name: Cache cargo registry
         uses: ./.github/actions/perry/actions/cache

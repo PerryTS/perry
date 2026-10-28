@@ -3,17 +3,31 @@
 /* wasm32-wasip1 has no socket creation, connect, bind or name resolution in
  * wasi_snapshot_preview1. Inbound TCP works on listeners the embedder
  * pre-opens (`PERRY_LISTEN_FDS`), through sock_accept, sock_recv, sock_send and
- * sock_shutdown; outbound connects and name resolution report "not supported",
- * so the module imports nothing beyond preview 1. A listener that no host
- * pre-opened reports EADDRNOTAVAIL. Negative results are WASI errno values,
- * as in the WASIp2 arm below. */
+ * sock_shutdown. Outbound connects and name resolution need three `perry_net`
+ * host functions, which a module imports only when the link asks for them
+ * (`-u perry_net_host`, from PERRY_WASM_NET=1; `perry_net_import.c` holds the
+ * imports). Without them both report "not supported" and the module imports
+ * nothing beyond preview 1. A listener that no host pre-opened reports
+ * EADDRNOTAVAIL. Negative results are WASI errno values, as in the WASIp2 arm
+ * below. */
 #if defined(__wasip1__)
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 #include <wasi/api.h>
 
 #define MAX_LISTENERS 16
+
+/* `perry_net_host` is a weak undefined reference, so it neither pulls
+ * `perry_net_import.c` out of the runtime archive nor fails the link when the
+ * member is left out. A link that passes `-u perry_net_host` loads the member,
+ * and with it the three wrappers below and the `perry_net` imports. */
+int perry_net_host(void) __attribute__((weak));
+int perry_net_tcp_connect(const char *addr, unsigned len, unsigned *fd) __attribute__((weak));
+int perry_net_sock_error(unsigned fd, unsigned *err) __attribute__((weak));
+int perry_net_resolve(const char *host, unsigned len, unsigned family, unsigned *fd)
+    __attribute__((weak));
 
 /* Listener discovery. The embedder pre-opens listeners and names them in
  * PERRY_LISTEN_FDS (comma separated fd numbers) and, optionally, their bound
@@ -90,10 +104,54 @@ int perry_wasi_stream_read(int fd, unsigned char *bytes, unsigned len) {
     return e ? -(int)e : (int)n;
 }
 
+/* The host answers a lookup with a readable stream: one status byte (0 ok,
+ * 1 not found, 2 temporary failure, 3 other), then 17-byte records of
+ * [family 4|6][16 address bytes], ended by EOF. Returns 0, the status, or
+ * ENOTSUP when the module was linked without `perry_net`. */
 int perry_wasi_resolve(const char *hostname, int family, void *ctx,
                        void (*push)(void *, int, const unsigned char *)) {
-    (void)hostname; (void)family; (void)ctx; (void)push;
-    return ENOTSUP;
+    if (!perry_net_host) return ENOTSUP;
+    unsigned fd;
+    __wasi_errno_t e = (__wasi_errno_t)perry_net_resolve(
+        hostname, (unsigned)strlen(hostname), (unsigned)family, &fd);
+    if (e) return (int)e;
+    enum { RECORD = 17 };
+    unsigned cap = 1 + 64 * RECORD, have = 0;
+    unsigned char *reply = malloc(cap);
+    if (!reply) { __wasi_fd_close((__wasi_fd_t)fd); return ENOMEM; }
+    for (;;) {
+        if (have == cap) {
+            if (cap > 0x7fffffffu / 2) { e = __WASI_ERRNO_NOMEM; break; }
+            unsigned char *grown = realloc(reply, cap * 2);
+            if (!grown) { e = __WASI_ERRNO_NOMEM; break; }
+            reply = grown;
+            cap *= 2;
+        }
+        __wasi_iovec_t iov = {reply + have, cap - have};
+        __wasi_size_t n;
+        e = __wasi_fd_read((__wasi_fd_t)fd, &iov, 1, &n);
+        if (e == __WASI_ERRNO_AGAIN) {
+            __wasi_subscription_t sub = {0};
+            __wasi_event_t ev;
+            __wasi_size_t ne;
+            sub.u.tag = __WASI_EVENTTYPE_FD_READ;
+            sub.u.u.fd_read.file_descriptor = (__wasi_fd_t)fd;
+            if (__wasi_poll_oneoff(&sub, &ev, 1, &ne)) { e = __WASI_ERRNO_IO; break; }
+            continue;
+        }
+        if (e) break;
+        have += n;
+        if (n == 0) break;
+    }
+    __wasi_fd_close((__wasi_fd_t)fd);
+    int result = 0;
+    if (e) result = (int)e;
+    else if (have == 0) result = 3;
+    else if (reply[0]) result = reply[0];
+    else for (unsigned at = 1; at + RECORD <= have; at += RECORD)
+        push(ctx, reply[at], reply + at + 1);
+    free(reply);
+    return result;
 }
 
 /* Sockets the embedder hands out are not created non-blocking; without the
@@ -105,9 +163,25 @@ int perry_wasi_socket_nonblock(int fd) {
 
 int perry_wasi_tcp_open(const char *host, unsigned short port, int listening,
                         int backlog, int reuse_port, int nodelay, int *pending) {
-    (void)host; (void)port; (void)backlog; (void)reuse_port; (void)nodelay;
-    if (!listening) return -ENOTSUP;
+    (void)backlog; (void)reuse_port; (void)nodelay;
+    /* Find the listeners before anything else opens a socket: the scan below
+     * takes every open stream socket for one. */
     if (listener_count < 0) discover_listeners();
+    if (!listening) {
+        if (!perry_net_host) return -ENOTSUP;
+        /* The host takes `host:port`, with an IPv6 literal in brackets. It
+         * resolves and connects off the guest's thread; the descriptor is
+         * pending until sock_error says otherwise. */
+        char target[320];
+        int len = strchr(host, ':') ? snprintf(target, sizeof(target), "[%s]:%u", host, (unsigned)port)
+                                    : snprintf(target, sizeof(target), "%s:%u", host, (unsigned)port);
+        if (len <= 0 || (size_t)len >= sizeof(target)) return -EINVAL;
+        unsigned fd;
+        __wasi_errno_t e = (__wasi_errno_t)perry_net_tcp_connect(target, (unsigned)len, &fd);
+        if (e) return -(int)e;
+        *pending = 1;
+        return (int)fd;
+    }
     if (listener_next >= listener_count) return -EADDRNOTAVAIL;
     int fd = listener_fds[listener_next++];
     int nb = perry_wasi_socket_nonblock(fd);
@@ -116,7 +190,16 @@ int perry_wasi_tcp_open(const char *host, unsigned short port, int listening,
     return fd;
 }
 
-int perry_wasi_socket_connect_ready(int fd) { (void)fd; return -ENOTSUP; }
+/* 0 while the host is still resolving or connecting, 1 when connected, or a
+ * negative errno. Only descriptors from tcp_connect get here. */
+int perry_wasi_socket_connect_ready(int fd) {
+    if (!perry_net_host) return -ENOTSUP;
+    unsigned err = 0;
+    __wasi_errno_t e = (__wasi_errno_t)perry_net_sock_error((unsigned)fd, &err);
+    if (e == __WASI_ERRNO_INPROGRESS) return 0;
+    if (e) return -(int)e;
+    return err ? -(int)err : 1;
+}
 
 /* The flags apply to the accepted socket, not to the listener. */
 int perry_wasi_socket_accept(int fd, int nodelay) {

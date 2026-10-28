@@ -1146,6 +1146,23 @@ const INERT_TYPE_INFO: GcTypeInfo = gc_type_info_entry(
     GcFinalizeHookKind::None,
 );
 
+// Direct descriptor projection must preserve unknown-kind semantics for
+// EVERY unused row, including any future catalog changes.
+const _: () = {
+    let rows = byte_type_infos();
+    let mut kind = 0;
+    while kind < rows.len() {
+        assert!(
+            rows[kind].type_id != 0
+                || matches!(
+                    rows[kind].rewrite_descriptor_kind,
+                    GcRewriteDescriptorKind::Leaf
+                )
+        );
+        kind += 1;
+    }
+};
+
 const fn byte_type_infos() -> [GcTypeInfo; MALLOC_KIND_BUCKET_COUNT] {
     // Unused ids have fully initialized inert fields. A layout note can read
     // its field directly from the sole descriptor authority; admission still
@@ -1243,11 +1260,23 @@ pub(crate) fn gc_type_is_arena_walkable(obj_type: u8) -> bool {
     gc_type_info(obj_type).is_some_and(|info| info.arena_walkable)
 }
 
-#[inline]
+#[inline(always)]
 pub(crate) fn gc_type_rewrite_descriptor_kind(obj_type: u8) -> GcRewriteDescriptorKind {
-    gc_type_info(obj_type).map_or(GcRewriteDescriptorKind::Leaf, |info| {
-        info.rewrite_descriptor_kind
-    })
+    #[cfg(test)]
+    if obj_type == GC_TYPE_ARRAY
+        && header_admission_tests::DENSE_DESCRIPTOR_FAULT.with(std::cell::Cell::get)
+    {
+        return GC_TYPE_INFO_BY_ID[GC_TYPE_OBJECT as usize].rewrite_descriptor_kind;
+    }
+    // Unused rows are canonical inert descriptors with Leaf rewrite kind,
+    // exactly the unknown-kind answer. Project the field from the one table;
+    // repeating type admission changes no answer and costs every child trace.
+    // Header/pointer admission remains gc_type_is_known's independent job.
+    GC_TYPE_INFO_BY_ID
+        .get(obj_type as usize)
+        .map_or(GcRewriteDescriptorKind::Leaf, |info| {
+            info.rewrite_descriptor_kind
+        })
 }
 
 #[inline]

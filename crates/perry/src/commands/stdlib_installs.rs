@@ -143,6 +143,7 @@ pub fn install_symbols(features: &BTreeSet<String>) -> Vec<String> {
 /// program that imports `node:http` or `node:zlib` would otherwise find no
 /// dispatch for the bundled wrapper crates. A test keeps this list equal to
 /// the `external-*` features that Cargo feature forwards.
+#[cfg(any(test, feature = "target-wasi"))]
 const WASIP1_ADAPTERS: &[&str] = &[
     "external-http-client-pump",
     "external-http-server-pump",
@@ -159,6 +160,7 @@ const WASIP1_ADAPTERS: &[&str] = &[
 /// The bundle serves zlib through perry-ext-zlib and `external-zlib-pump`, as a
 /// routed native link does, so the `compression*` features an import selects
 /// are not installed: the bundle does not compile perry-stdlib's copy.
+#[cfg(any(test, feature = "target-wasi"))]
 pub fn wasip1_stdlib_installs(program_features: &BTreeSet<String>) -> FeatureInstalls {
     FeatureInstalls::Selected(
         program_features

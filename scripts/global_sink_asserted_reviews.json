@@ -17,41 +17,41 @@
     }
   },
   "crates/perry-runtime/src/object/class_family_birth.rs::LAYOUT": {
-    "claim": "Both image descriptors use LAYOUT_ID_CARRIED and immutable keys/index/prototype fields; registration carries per-agent shape identity without modifying these static descriptors.",
+    "claim": "Release re-audit 2026-10-28: descriptor layout_id, keys, index and prototype metadata are immutable image facts. load_layout_id reads the template word; descriptor shape identity is allocated atomically and per-agent shape installation does not mutate these fields. Birth and store paths use the agent shape table. The tests assert semantic layout/shape behavior without resetting a shared identity.",
     "source_sha256": {
-      "crates/perry-runtime/src/object/class_family_birth.rs": "5476e6bc6f415cf10ea22af0dc0ae5979d4d0b2a4cfb69475d220738735a9dcf",
-      "crates/perry-runtime/src/object/layout_desc.rs": "efc8552bfc1493cf4ad705930a55e09b4ef2bde45a55fb2cb5b614f44bfbf1ad",
-      "crates/perry-runtime/src/object/layout_desc/registration.rs": "bd6bd0f940ecd09ca03786d9385f534bd356b71e683ad21ad4eb7e33274b34ae",
+      "crates/perry-runtime/src/object/class_family_birth.rs": "6dd0e24c33d3b73d3fe79b799ea14171b352bf9598853d91c559fd1b632521fb",
+      "crates/perry-runtime/src/object/layout_desc.rs": "39cd67205ce2b03c53d693ad19a9415f9e938476cf51557a3a25cbe826eab9df",
+      "crates/perry-runtime/src/object/layout_desc/registration.rs": "07c93c3c65f2575ec13692ff8d29abe20a72e97c1b0b348bfdb9022747938e89",
       "crates/perry-runtime/src/object/layout_desc/diagnostics.rs": "d9addb82c0bd301f11684388586bd30a80d25785f65631b4092cb9dd7797f36f",
-      "crates/perry-runtime/src/object/layout_desc/store.rs": "b984c61287a05b267a5874976316415767222c94953f2e1fe907f08dc7d1456f"
+      "crates/perry-runtime/src/object/layout_desc/store.rs": "f8cda8a84357b40450d0db58a4b7d8ce6b5398a402a833d85ed6a3e5b24e8b27"
     }
   },
   "crates/perry-runtime/src/object/function_family_birth_tests.rs::LAYOUT": {
-    "claim": "Image descriptor address is embedded in function birth metadata; LAYOUT_ID_CARRIED remains unchanged while per-agent bindings and semantic checks vary.",
+    "claim": "Release re-audit 2026-10-28: descriptor layout_id, keys, index and prototype metadata are immutable image facts. load_layout_id reads the template word; descriptor shape identity is allocated atomically and per-agent shape installation does not mutate these fields. Birth and store paths use the agent shape table. The tests assert semantic layout/shape behavior without resetting a shared identity.",
     "source_sha256": {
-      "crates/perry-runtime/src/object/function_family_birth_tests.rs": "3010644c11a939622c8bff625e04d3dc383a4f764aa68fca887f2ab2ed23ab8a",
-      "crates/perry-runtime/src/object/layout_desc.rs": "efc8552bfc1493cf4ad705930a55e09b4ef2bde45a55fb2cb5b614f44bfbf1ad",
-      "crates/perry-runtime/src/object/layout_desc/registration.rs": "bd6bd0f940ecd09ca03786d9385f534bd356b71e683ad21ad4eb7e33274b34ae",
+      "crates/perry-runtime/src/object/function_family_birth_tests.rs": "1ecfe5adbc2c09ab0c9dbfdbee7f1035476dd072ca50dafa2a038c79470bfb33",
+      "crates/perry-runtime/src/object/layout_desc.rs": "39cd67205ce2b03c53d693ad19a9415f9e938476cf51557a3a25cbe826eab9df",
+      "crates/perry-runtime/src/object/layout_desc/registration.rs": "07c93c3c65f2575ec13692ff8d29abe20a72e97c1b0b348bfdb9022747938e89",
       "crates/perry-runtime/src/object/layout_desc/diagnostics.rs": "d9addb82c0bd301f11684388586bd30a80d25785f65631b4092cb9dd7797f36f",
-      "crates/perry-runtime/src/object/layout_desc/store.rs": "b984c61287a05b267a5874976316415767222c94953f2e1fe907f08dc7d1456f"
+      "crates/perry-runtime/src/object/layout_desc/store.rs": "f8cda8a84357b40450d0db58a4b7d8ce6b5398a402a833d85ed6a3e5b24e8b27"
     }
   },
   "crates/perry-runtime/src/object/own_override.rs::PERRY_OWN_NAMED_PROP_INSTALLED": {
-    "claim": "Exported monotonic ABI latch is intentionally process-wide; the fixture forcing it runs in an isolated child process.",
+    "claim": "Exported monotonic ABI latch is intentionally process-wide; the fixture forcing it runs in an isolated child process. Rechecked the current interned_key_abi_tests fixture: isolated_process_guard still re-execs the assertion in a fresh process; prototype modifications only set the monotonic flag.",
     "source_sha256": {
-      "crates/perry-runtime/src/object/own_override.rs": "b645f3cc013ba853b214497aed9ef28c3c72d2f3e57343946d40e9f0cb1b31e1",
+      "crates/perry-runtime/src/object/own_override.rs": "6c112095932e32ce0d165850b73813bf530adbf494c22c17e2ad12d36b49f8b0",
       "crates/perry-runtime/src/test_support.rs": "fad16754c572eef842c567ec3c08d1a5ab1860dd8cc3bdfae595161cda8d742a"
     }
   },
   "crates/perry-runtime/src/object/runtime_layouts.rs::READABLE_STATE": {
-    "claim": "Image descriptor uses LAYOUT_ID_CARRIED with static prototype/keys/index; tests inspect immutable fields and registration does not rewrite its carried ID.",
+    "claim": "Release re-audit 2026-10-28: descriptor layout_id, keys, index and prototype metadata are immutable image facts. load_layout_id reads the template word; descriptor shape identity is allocated atomically and per-agent shape installation does not mutate these fields. Birth and store paths use the agent shape table. The tests assert semantic layout/shape behavior without resetting a shared identity.",
     "source_sha256": {
-      "crates/perry-runtime/src/object/runtime_layouts.rs": "aa476d269eca1ce21102f7625ab4a0dac6e043063c5a893373606d2b0c197852",
-      "crates/perry-runtime/src/object/layout_desc.rs": "efc8552bfc1493cf4ad705930a55e09b4ef2bde45a55fb2cb5b614f44bfbf1ad",
-      "crates/perry-runtime/src/object/layout_desc_tests.rs": "b119ba3ebaea0423b66ff1590d88528a5da4a359d8020088d3c8cc500455a170",
-      "crates/perry-runtime/src/object/layout_desc/registration.rs": "bd6bd0f940ecd09ca03786d9385f534bd356b71e683ad21ad4eb7e33274b34ae",
+      "crates/perry-runtime/src/object/runtime_layouts.rs": "a9d6928788e97ef4730e58c57174f3bdb1c84ce5e5c449d07b38709c50c41591",
+      "crates/perry-runtime/src/object/layout_desc.rs": "39cd67205ce2b03c53d693ad19a9415f9e938476cf51557a3a25cbe826eab9df",
+      "crates/perry-runtime/src/object/layout_desc_tests.rs": "bd26b3fabeb7f9d0bd41266e08a5ee4dedc383a9b0155c860a9401eb22fc64ac",
+      "crates/perry-runtime/src/object/layout_desc/registration.rs": "07c93c3c65f2575ec13692ff8d29abe20a72e97c1b0b348bfdb9022747938e89",
       "crates/perry-runtime/src/object/layout_desc/diagnostics.rs": "d9addb82c0bd301f11684388586bd30a80d25785f65631b4092cb9dd7797f36f",
-      "crates/perry-runtime/src/object/layout_desc/store.rs": "b984c61287a05b267a5874976316415767222c94953f2e1fe907f08dc7d1456f",
+      "crates/perry-runtime/src/object/layout_desc/store.rs": "f8cda8a84357b40450d0db58a4b7d8ce6b5398a402a833d85ed6a3e5b24e8b27",
       "crates/perry-runtime/src/object/runtime_layouts/literal_atoms.rs": "2ecc5215cc794d9a3e842240915f6e4de4e9e986a00b58116355504a41d108ec"
     }
   },
@@ -59,6 +59,19 @@
     "claim": "Function-local counter and nested destructor belong exclusively to one test; it joins each of 32 workers before asserting 32 drops. TLS would erase the cross-thread lifetime witness.",
     "source_sha256": {
       "crates/perry-runtime/src/tls_os_pool/tests.rs": "62326d71ae8da425342d9cf6011ceb42f199ac2b2c07e392d38169ab5e7febbe"
+    }
+  },
+  "crates/perry-runtime/src/exception.rs::ON": {
+    "claim": "Immutable OnceLock diagnostic flag: initialized once from PERRY_TRACE_THROW and only read by trace_throw_enabled; no reset or assertion depends on a mutable shared counter. Throw state itself is thread-local.",
+    "source_sha256": {
+      "crates/perry-runtime/src/exception.rs": "e4a2ab99bf43e37d7ad9eb37bfb0144a165d7ca7f28d76bb13484fb81fb5ee17"
+    }
+  },
+  "crates/perry-runtime/src/tls/roots/macos.rs::API": {
+    "claim": "Immutable OnceLock framework dispatch table: successful initialization retains both framework images permanently, and all stored CFString keys are immutable. Queries allocate separate inventory/trust objects; tests copy the table to override callbacks without mutating the cached API.",
+    "source_sha256": {
+      "crates/perry-runtime/src/tls/roots/macos.rs": "8054ebf28b4fe4ca12686d4d38cf0d1813f9a5123575cb503f3455ea319b44ce",
+      "crates/perry-runtime/src/tls/roots/macos_tests.rs": "b6ba6b5914f2955aa87fd57ae09b2c543ade4a19c0516eebdeeacf9faa577be2"
     }
   }
 }

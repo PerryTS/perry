@@ -628,7 +628,7 @@ fn reset_young_after_promotion() {
                 let block = &arena.blocks[arena.current];
                 inline.data = block.data;
                 inline.offset = block.offset;
-                inline.size = super::alloc_sample::inline_limit(block.offset, block.size);
+                inline.size = super::inline::allocation_limit(block.offset, block.size);
             }
         });
     });

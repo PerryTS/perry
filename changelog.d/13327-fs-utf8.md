@@ -1,0 +1,1 @@
+Fix Utf8Stream lifecycle handling: defer and coalesce synchronous drain notifications until the next tick, suppress them after teardown, and use native interval cancellation IDs so periodic flushing stays unreferenced and stops on close.

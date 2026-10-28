@@ -4385,7 +4385,7 @@ declare module "zlib" {
   /** stdlib */
   export function brotliDecompress(buffer: any, options?: any, callback?: any): void;
   /** stdlib */
-  export function brotliDecompressSync(p0: string): Buffer;
+  export function brotliDecompressSync(buffer: any, options?: any): Buffer;
   /** stdlib */
   export function crc32(p0: string, seed?: number): number;
   /** stdlib @perryStub params/quality options accepted but ignored, warns once (#4917) */
