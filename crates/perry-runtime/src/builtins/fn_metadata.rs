@@ -68,7 +68,19 @@ fn decode_registered(slot: Option<&[u8]>) -> Option<String> {
 /// Consume a validated view while its registry owner is locked. The caller
 /// chooses whether the result needs owned bytes; presence checks do not.
 fn decode_registered_with<R>(slot: Option<&[u8]>, read: impl FnOnce(&str) -> R) -> Option<R> {
-    std::str::from_utf8(slot?).ok().map(read)
+    decode_registered_bytes(slot?).map(read)
+}
+
+/// ASCII is already a UTF-8 proof. Consume that byte view without entering
+/// the general decoder; non-ASCII and malformed input keep its exact exits.
+#[inline]
+fn decode_registered_bytes(bytes: &[u8]) -> Option<&str> {
+    if bytes.is_ascii() {
+        // SAFETY: every byte is below 0x80, including embedded NULs.
+        Some(unsafe { std::str::from_utf8_unchecked(bytes) })
+    } else {
+        std::str::from_utf8(bytes).ok()
+    }
 }
 
 /// Link-time-relative descriptor emitted by codegen. Keeping offsets instead
@@ -169,7 +181,7 @@ fn with_registered_name<T>(func_ptr: usize, read: impl FnOnce(&str) -> T) -> Opt
     if let Ok(overrides) = function_name_overrides().lock() {
         if let Some(name) = overrides
             .get(&func_ptr)
-            .and_then(|bytes| std::str::from_utf8(bytes).ok())
+            .and_then(|bytes| decode_registered_bytes(bytes))
         {
             return Some(read(name));
         }
@@ -310,21 +322,9 @@ pub fn register_function_name_if_absent(func_ptr: usize, name: &str) {
     // "Absent" means "neither map holds bytes that DECODE" — which is exactly
     // the question the read side answers, so ask it rather than restating it
     // and letting the two drift.
-    // Existence does not select a name, so the image may be checked first:
-    // a valid image entry proves presence even behind an invalid override.
-    // Reflection keeps owned-name precedence in `with_registered_name`.
-    // This avoids an owned-map lock and hash probe for ordinary static names.
-    let image_present = function_name_registry()
-        .lock()
-        .ok()
-        .is_some_and(|map| decode_registered_with(map.get(&func_ptr).copied(), |_| ()).is_some());
-    if image_present {
-        return;
-    }
-    if function_name_overrides().lock().ok().is_some_and(|map| {
-        map.get(&func_ptr)
-            .is_some_and(|bytes| std::str::from_utf8(bytes).is_ok())
-    }) {
+    // Presence and reflection share decoded-byte semantics and owned-first
+    // lookup; presence consumes only a validated view and never copies a name.
+    if with_registered_name(func_ptr, |_| ()).is_some() {
         return;
     }
     if let Ok(mut overrides) = function_name_overrides().lock() {
@@ -1125,6 +1125,32 @@ mod tests {
             function_name_for_ptr(KEY_NAME_IF_ABSENT as usize).as_deref(),
             Some("inferred")
         );
+    }
+
+    #[test]
+    fn metadata_ascii_views_match_utf8_validation_at_every_exit() {
+        for len in 0..128 {
+            let bytes: Vec<_> = (0..len).map(|i| ((i * 37) % 128) as u8).collect();
+            assert_eq!(
+                decode_registered_bytes(&bytes),
+                std::str::from_utf8(&bytes).ok()
+            );
+        }
+        for bytes in [
+            "é".as_bytes(),
+            "界😀".as_bytes(),
+            b"a\0z",
+            b"\xff",
+            b"a\xc2",
+            b"\x80",
+            b"\xed\xa0\x80",
+            b"\xf4\x90\x80\x80",
+        ] {
+            assert_eq!(
+                decode_registered_bytes(bytes),
+                std::str::from_utf8(bytes).ok()
+            );
+        }
     }
 
     #[test]
