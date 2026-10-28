@@ -2,14 +2,14 @@ use super::*;
 use crate::array::header::array_numeric_layout;
 
 fn array(values: &[f64]) -> *mut ArrayHeader {
-    let a = js_array_alloc(values.len() as u32);
+    let mut live = js_array_alloc(values.len() as u32);
     let scope = crate::gc::RuntimeHandleScope::new();
-    let a = scope.root_raw_mut_ptr(a);
+    let a = scope.root_raw_mut_ptr(live);
     for &v in values {
-        let live = js_array_push_f64(a.get_raw_mut_ptr(), v);
+        live = a.with_mut_ptr(|array| js_array_push_f64(array, v));
         a.set_raw_mut_ptr(live);
     }
-    a.get_raw_mut_ptr()
+    live
 }
 
 #[test]
