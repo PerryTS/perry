@@ -218,6 +218,7 @@ pub(crate) fn ptr_array_cached_method(class: &Class, method: &Function) -> Optio
             ty: ty.clone(),
             mutable: false,
             init: Some(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::This),
                 property: field.name.clone(),
                 byte_offset: 0,

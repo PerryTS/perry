@@ -328,6 +328,7 @@ pub(crate) fn heap_value() -> Expr {
 
 pub(crate) fn field_get(local: u32, field: &str) -> Expr {
     Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(local)),
         property: field.to_string(),
         byte_offset: 0,
@@ -336,7 +337,9 @@ pub(crate) fn field_get(local: u32, field: &str) -> Expr {
 
 pub(crate) fn console_log(args: Vec<Expr>) -> Stmt {
     Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::GlobalGet(0)),
             property: "log".to_string(),
             byte_offset: 0,

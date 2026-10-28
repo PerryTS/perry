@@ -55,6 +55,8 @@ fn var_redeclared_numeric_array_compare_against_void_stays_boxed() {
                 init: Some(Expr::Compare {
                     op: CompareOp::Eq,
                     left: Box::new(Expr::IndexGet {
+                        byte_offset: 0,
+                        byte_end: 0,
                         object: Box::new(Expr::LocalGet(ARR)),
                         index: Box::new(Expr::Integer(1)),
                     }),
@@ -103,6 +105,8 @@ fn let_numeric_array_compare_against_void_stays_boxed() {
                 init: Some(Expr::Compare {
                     op: CompareOp::Eq,
                     left: Box::new(Expr::IndexGet {
+                        byte_offset: 0,
+                        byte_end: 0,
                         object: Box::new(Expr::LocalGet(ARR)),
                         index: Box::new(Expr::Integer(1)),
                     }),

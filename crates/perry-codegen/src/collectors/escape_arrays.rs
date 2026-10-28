@@ -175,7 +175,7 @@ fn collect_length_only_indices_in_expr(
     uses: &mut HashMap<u32, HashMap<u32, (usize, usize)>>,
 ) {
     use perry_hir::Expr;
-    if let Expr::IndexGet { object, index } = expr {
+    if let Expr::IndexGet { object, index, .. } = expr {
         if let (Expr::LocalGet(id), Some(index)) = (object.as_ref(), const_index(index)) {
             if non_escaping_arrays
                 .get(id)
@@ -191,7 +191,7 @@ fn collect_length_only_indices_in_expr(
     } = expr
     {
         if property == "length" {
-            if let Expr::IndexGet { object, index } = object.as_ref() {
+            if let Expr::IndexGet { object, index, .. } = object.as_ref() {
                 if let (Expr::LocalGet(id), Some(index)) = (object.as_ref(), const_index(index)) {
                     if non_escaping_arrays
                         .get(id)
@@ -322,7 +322,7 @@ fn collect_used_array_indices_in_expr(
     used: &mut HashMap<u32, HashSet<u32>>,
 ) {
     use perry_hir::Expr;
-    if let Expr::IndexGet { object, index } = expr {
+    if let Expr::IndexGet { object, index, .. } = expr {
         if let Expr::LocalGet(id) = object.as_ref() {
             if let Some(&len) = non_escaping_arrays.get(id) {
                 if let Some(k) = const_index(index) {
@@ -556,7 +556,7 @@ pub fn check_array_escapes_in_expr(
 
     match e {
         // Safe: constant-index read `arr[k]` where 0 <= k < length.
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             if let Expr::LocalGet(id) = object.as_ref() {
                 if let Some(&len) = candidates.get(id) {
                     match const_index(index) {

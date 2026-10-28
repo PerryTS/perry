@@ -138,6 +138,7 @@ fn copied_functions_keep_their_name_and_async_generator_metadata() {
         module.closure_source_text.insert(
             id,
             crate::ir::FunctionSourceMetadata {
+                source_span: None,
                 text: "function retained() {}".into(),
                 is_non_strict_ordinary: true,
             },

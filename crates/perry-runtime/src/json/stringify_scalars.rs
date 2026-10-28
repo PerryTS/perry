@@ -39,7 +39,15 @@ pub(crate) unsafe fn write_number(buf: &mut String, value: f64) {
     // #2089: a Date is now a NaN-boxed `DateCell` pointer, handled in
     // `stringify_value`/`stringify_value_depth` before this numeric funnel —
     // so no Date detection is needed here anymore.
-    if value.is_nan() || value.is_infinite() {
+    // The exact signed-32-bit Number domain can use the narrower integer
+    // writer. The round trip rejects fractions, saturation, infinities and
+    // NaN; either zero spells "0", as JSON requires. Other Number domains
+    // retain the existing ECMAScript formatter below.
+    let small = value as i32;
+    if small as f64 == value {
+        let mut integer = itoa::Buffer::new();
+        super::stringify_copy::push_str(buf, integer.format(small));
+    } else if value.is_nan() || value.is_infinite() {
         // JSON has no NaN/Infinity literal; the spec serializes them as null.
         buf.push_str("null");
     } else if value.abs() < crate::builtins::INT_EXACT_FASTPATH_LIMIT

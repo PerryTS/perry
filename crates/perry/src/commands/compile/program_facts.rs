@@ -93,6 +93,7 @@ pub(crate) fn run(
     let relations =
         dump.is_some() && std::env::var("PERRY_FACTS_RELATIONS").is_ok_and(|v| v == "1");
     let cfg = perry_wpfacts::FactsConfig {
+        diagnostics: dump.is_some(),
         relations,
         sabotage: std::env::var("PERRY_FACTS_SABOTAGE")
             .ok()

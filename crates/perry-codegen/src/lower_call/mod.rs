@@ -600,6 +600,7 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
     } = callee
     {
         let reference = Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::ClassRef(class_name.clone())),
             property: field_name.clone(),
             byte_offset: ctx.strings.pending_call_offset(),

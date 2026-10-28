@@ -4,6 +4,7 @@ use perry_hir::{CompareOp, Expr, Stmt};
 
 fn get(object: Expr, key: &str) -> Expr {
     Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(object),
         property: key.into(),
         byte_offset: 0,
@@ -142,6 +143,7 @@ fn an_observable_call_before_a_field_comparison_has_no_reused_region() {
     let output = ir(
         vec![
             Stmt::Expr(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::LocalGet(2)),
                 args: vec![],
                 type_args: vec![],

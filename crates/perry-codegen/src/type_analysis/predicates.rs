@@ -528,7 +528,7 @@ pub(crate) fn is_array_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
 pub(crate) fn is_native_module_dynamic_index(e: &Expr) -> bool {
     matches!(
         e,
-        Expr::IndexGet { object, index }
+        Expr::IndexGet { object, index , .. }
             if matches!(object.as_ref(), Expr::NativeModuleRef(_))
                 && !matches!(index.as_ref(), Expr::String(_) | Expr::WtfString(_))
     )
@@ -784,7 +784,7 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
         // statically known to be `Array<Array<T>>` / `Array<Tuple<...>>`.
         // Also handles `Record<K, V>[key]` → V so `groups["a"].length`
         // on `Record<string, number[]>` finds the array fast path.
-        Expr::IndexGet { object, index } => match static_type_of(ctx, object) {
+        Expr::IndexGet { object, index, .. } => match static_type_of(ctx, object) {
             Some(HirType::Array(inner)) => Some(*inner),
             // A literal, in-bounds index has the exact element type. A dynamic
             // index could hit any element, so it's only sound when the tuple is

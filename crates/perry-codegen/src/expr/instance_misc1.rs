@@ -830,7 +830,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     );
                     Ok(blk.call(DOUBLE, "js_delete_result", &[(I32, &i32_v), (I32, strict)]))
                 }
-                Expr::IndexGet { object, index } if is_string_expr(ctx, index) => {
+                Expr::IndexGet { object, index, .. } if is_string_expr(ctx, index) => {
                     // #7615 slice 2: the receiver is live across the key's
                     // lowering, and the key is unboxed to a raw `StringHeader*`
                     // below it — slice 1b's `BufferSlice` shape.
@@ -863,7 +863,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // string-valued locals (for example `delete fn[name]`) still
                 // use the ordinary property-delete path instead of being
                 // misread as numeric array indexes.
-                Expr::IndexGet { object, index } => {
+                Expr::IndexGet { object, index, .. } => {
                     rooting::with_operands_rooted(ctx, &[object, index], |ctx, vals| {
                         let (obj_box, idx_box) = (vals[0].clone(), vals[1].clone());
                         ctx.block().call(

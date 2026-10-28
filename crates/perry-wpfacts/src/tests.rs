@@ -17,6 +17,7 @@ mod cjs_require;
 mod class_statics;
 mod closed_world;
 mod closure_context;
+mod diagnostics;
 mod dynamic_code;
 mod escaped_constructor;
 mod escaped_contract_result;

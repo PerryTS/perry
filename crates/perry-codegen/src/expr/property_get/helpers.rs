@@ -165,6 +165,7 @@ pub(crate) fn lower_global_builtin_static_value(
     }
 
     let receiver = Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::GlobalGet(0)),
         property: builtin.to_string(),
         byte_offset: 0,

@@ -306,6 +306,7 @@ mod tests {
             push(
                 1,
                 Expr::New {
+                    byte_end: 0,
                     class_name: "__AnonShape_deadbeef".to_string(),
                     args: vec![],
                     type_args: vec![],
@@ -325,6 +326,7 @@ mod tests {
         let stmts = vec![
             let_array(1, vec![]),
             Stmt::Expr(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::FuncRef(7)),
                 args: vec![Expr::LocalGet(1)],
                 type_args: vec![],

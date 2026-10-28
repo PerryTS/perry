@@ -486,6 +486,7 @@ pub(crate) fn lower_class_expr(
                 seq.push(Expr::RegisterClassStaticSymbol {
                     class_name: synthetic_name.clone(),
                     key_expr: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         object: Box::new(Expr::ClassRef(synthetic_name.clone())),
                         property: slot,
                         byte_offset: 0,

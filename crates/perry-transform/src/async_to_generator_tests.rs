@@ -276,6 +276,7 @@ fn async_closure_await_in_every_position_is_rewritten() {
         (
             "call-arg",
             vec![Stmt::Expr(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::Undefined),
                 args: vec![await_(Expr::Integer(1))],
                 type_args: vec![],
@@ -285,6 +286,8 @@ fn async_closure_await_in_every_position_is_rewritten() {
         (
             "index",
             vec![Stmt::Expr(Expr::IndexGet {
+                byte_offset: 0,
+                byte_end: 0,
                 object: Box::new(Expr::Array(vec![], None)),
                 index: Box::new(await_(Expr::Integer(1))),
             })],

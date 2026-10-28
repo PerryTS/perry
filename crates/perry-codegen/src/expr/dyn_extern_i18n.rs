@@ -542,6 +542,7 @@ fn materialize_compiled_namespace(ctx: &mut FnCtx<'_>, name: &str) -> Result<Opt
         |ctx, accumulator| {
             for member in &members {
                 let member_get = Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 0,
                     object: Box::new(Expr::ExternFuncRef {
                         name: name.to_string(),

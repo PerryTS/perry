@@ -37,6 +37,7 @@ fn main_ir(name: &str, init: Vec<Stmt>) -> String {
 
 fn any_value() -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::ExternFuncRef {
             name: "make".to_string(),
             param_types: Vec::new(),
@@ -50,7 +51,9 @@ fn any_value() -> Expr {
 
 fn method_call(object: Expr, property: &str, args: Vec<Expr>) -> Stmt {
     Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(object),
             property: property.to_string(),

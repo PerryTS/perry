@@ -835,6 +835,7 @@ fn lower_guarded_get(
     let fast_end = ctx.block().label.clone();
     ctx.current_block = miss_idx;
     let generic = Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(object.clone()),
         property: property.to_string(),
         byte_offset,

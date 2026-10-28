@@ -59,6 +59,7 @@ fn probe_module(field_ty: Type) -> Module {
         params: Vec::new(),
         return_type: Type::Any,
         body: vec![Stmt::Return(Some(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::This),
             property: "x".into(),
             byte_offset: 0,
@@ -112,6 +113,7 @@ fn probe_module(field_ty: Type) -> Module {
                 value: Box::new(Expr::Number(7.0)),
             }),
             Stmt::Return(Some(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(PARAM_ID)),
                 property: "value".to_string(),

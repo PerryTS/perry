@@ -29,7 +29,9 @@ fn param(id: u32, name: &str) -> Param {
 
 fn method_call(recv: Expr, args: Vec<Expr>) -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(recv),
             property: "m".to_string(),
             byte_offset: 0,
@@ -42,6 +44,7 @@ fn method_call(recv: Expr, args: Vec<Expr>) -> Expr {
 
 fn effectful_arg() -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::LocalGet(G)),
         args: Vec::new(),
         type_args: Vec::new(),
@@ -138,6 +141,7 @@ fn an_optional_call_reads_the_method_once() {
     let guard = Expr::Compare {
         op: CompareOp::LooseEq,
         left: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(RECV)),
             property: "m".to_string(),
             byte_offset: 0,

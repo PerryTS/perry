@@ -96,6 +96,7 @@ fn binding(id: u32, init: perry_hir::Expr) -> perry_hir::Stmt {
 
 fn property(object: perry_hir::Expr, key: &str) -> perry_hir::Expr {
     perry_hir::Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(object),
         property: key.into(),
         byte_offset: 0,

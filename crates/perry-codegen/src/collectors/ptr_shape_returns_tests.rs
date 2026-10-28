@@ -55,6 +55,7 @@ fn class_c() -> Class {
 
 fn new_c() -> Expr {
     Expr::New {
+        byte_end: 0,
         class_name: "C".to_string(),
         args: Vec::new(),
         type_args: Vec::new(),
@@ -267,6 +268,7 @@ fn call_to_a_return_shape_producer_is_provenance() {
             ty: Type::Any,
             mutable: false,
             init: Some(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::FuncRef(7)),
                 args: Vec::new(),
                 type_args: Vec::new(),
@@ -307,7 +309,9 @@ fn method_call_result(receiver_id: u32, result_id: u32) -> Stmt {
         ty: Type::Any,
         mutable: false,
         init: Some(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(receiver_id)),
                 property: "make".to_string(),
                 byte_offset: 0,
@@ -342,6 +346,7 @@ fn method_return_shape_is_provenance_on_a_proven_receiver() {
             ty: Type::Named("Maker".to_string()),
             mutable: false,
             init: Some(Expr::New {
+                byte_end: 0,
                 class_name: "Maker".to_string(),
                 args: Vec::new(),
                 type_args: Vec::new(),
@@ -385,6 +390,7 @@ fn method_result_is_dropped_when_its_receiver_proof_fails() {
             ty: Type::Named("Maker".to_string()),
             mutable: false,
             init: Some(Expr::New {
+                byte_end: 0,
                 class_name: "Maker".to_string(),
                 args: Vec::new(),
                 type_args: Vec::new(),
@@ -427,6 +433,7 @@ fn method_return_call_audits_the_receivers_this_flow() {
             ty: Type::Named("Maker".to_string()),
             mutable: false,
             init: Some(Expr::New {
+                byte_end: 0,
                 class_name: "Maker".to_string(),
                 args: Vec::new(),
                 type_args: Vec::new(),
@@ -474,6 +481,7 @@ fn method_return_shape_refuses_duplicate_method_declarations() {
             ty: Type::Named("Maker".to_string()),
             mutable: false,
             init: Some(Expr::New {
+                byte_end: 0,
                 class_name: "Maker".to_string(),
                 args: Vec::new(),
                 type_args: Vec::new(),
@@ -514,6 +522,7 @@ fn method_return_shape_refuses_unproven_or_unstable_receivers() {
     let mut hir = Module::new("unstable");
     hir.classes = vec![c.clone(), maker.clone()];
     hir.init = vec![Stmt::Expr(Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::ClassRef("Maker".to_string())),
         property: "prototype".to_string(),
         byte_offset: 0,
@@ -526,6 +535,7 @@ fn method_return_shape_refuses_unproven_or_unstable_receivers() {
             ty: Type::Named("Maker".to_string()),
             mutable: false,
             init: Some(Expr::New {
+                byte_end: 0,
                 class_name: "Maker".to_string(),
                 args: Vec::new(),
                 type_args: Vec::new(),
@@ -587,6 +597,7 @@ fn imported_return_shape_is_provenance_by_exact_local_binding() {
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::ExternFuncRef {
                         name: callee_name.to_string(),
                         param_types: Vec::new(),
@@ -626,6 +637,7 @@ fn exported_return_shape_prepass_is_anon_only_and_alias_aware() {
         70,
         "makeRecord",
         vec![Stmt::Return(Some(Expr::New {
+            byte_end: 0,
             class_name: ANON.to_string(),
             args: Vec::new(),
             type_args: Vec::new(),
@@ -654,6 +666,7 @@ fn exported_return_shape_prepass_is_anon_only_and_alias_aware() {
     // The source module's barrier must suppress the exported fact just as it
     // suppresses a same-module caller fact; the driver may not resurrect it.
     hir.init = vec![Stmt::Expr(Expr::Delete(Box::new(Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(999)),
         property: "x".to_string(),
         byte_offset: 0,
@@ -748,6 +761,7 @@ fn conditional_return_with_any_non_fresh_arm_gets_no_fact() {
 #[test]
 fn disagreeing_conditional_return_classes_get_no_fact() {
     let new_d = Expr::New {
+        byte_end: 0,
         class_name: "D".to_string(),
         args: Vec::new(),
         type_args: Vec::new(),
@@ -872,6 +886,7 @@ fn nested_logical_fallback_returns_only_fresh_objects() {
 #[test]
 fn consumed_logical_allocation_does_not_set_the_return_class() {
     let new_d = Expr::New {
+        byte_end: 0,
         class_name: "D".to_string(),
         args: Vec::new(),
         type_args: Vec::new(),
@@ -978,6 +993,7 @@ fn producer_whose_local_also_escapes_gets_no_fact() {
             let_c(1, "o"),
             // `stash(o)` — an alias the caller-side proof could not bound.
             Stmt::Expr(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::LocalGet(50)),
                 args: vec![Expr::LocalGet(1)],
                 type_args: Vec::new(),
@@ -1004,6 +1020,7 @@ fn producer_whose_local_also_escapes_gets_no_fact() {
 #[test]
 fn disagreeing_return_classes_get_no_fact() {
     let other = Expr::New {
+        byte_end: 0,
         class_name: "D".to_string(),
         args: Vec::new(),
         type_args: Vec::new(),
@@ -1036,6 +1053,7 @@ fn disagreeing_return_classes_get_no_fact() {
             9,
             "one",
             vec![Stmt::Return(Some(Expr::New {
+                byte_end: 0,
                 class_name: "D".to_string(),
                 args: Vec::new(),
                 type_args: Vec::new(),
@@ -1067,6 +1085,7 @@ fn module_barrier_denies_every_fact() {
     hir.functions = vec![function(10, "mk", vec![Stmt::Return(Some(new_c()))])];
     // `delete o.x` anywhere in the module is a shape barrier.
     hir.init = vec![Stmt::Expr(Expr::Delete(Box::new(Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(1)),
         property: "x".to_string(),
         byte_offset: 0,
@@ -1095,6 +1114,7 @@ fn indirect_callee_is_not_seeded() {
             ty: Type::Any,
             mutable: false,
             init: Some(Expr::Call {
+                byte_end: 0,
                 // A local the module never binds — nothing to resolve to.
                 callee: Box::new(Expr::LocalGet(31)),
                 args: Vec::new(),
@@ -1123,6 +1143,7 @@ fn call_seeded_candidate_still_obeys_containment() {
             ty: Type::Any,
             mutable: false,
             init: Some(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::FuncRef(12)),
                 args: Vec::new(),
                 type_args: Vec::new(),
@@ -1277,6 +1298,7 @@ fn call_and_store(bind: u32, callee: Expr) -> Vec<Stmt> {
             ty: Type::Any,
             mutable: false,
             init: Some(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(callee),
                 args: Vec::new(),
                 type_args: Vec::new(),
@@ -1302,6 +1324,7 @@ fn iife_module(extra_iife_stmts: Vec<Stmt>) -> Module {
     ];
     iife_body.extend(extra_iife_stmts);
     iife_body.push(Stmt::Return(Some(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::LocalGet(2)),
         args: Vec::new(),
         type_args: Vec::new(),
@@ -1316,6 +1339,7 @@ fn iife_module(extra_iife_stmts: Vec<Stmt>) -> Module {
         ty: Type::Any,
         mutable: false,
         init: Some(Expr::Call {
+            byte_end: 0,
             callee: Box::new(match let_closure(99, "iife", 0, iife_body) {
                 Stmt::Let { init: Some(e), .. } => e,
                 _ => unreachable!(),
@@ -1749,6 +1773,7 @@ fn named_accessor_locals_reuse_containment_and_vet_accessor_this_flow() {
             90,
             "derived",
             vec![Stmt::Return(Some(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::This),
                 property: "x".into(),
                 byte_offset: 0,
@@ -1770,6 +1795,7 @@ fn named_accessor_locals_reuse_containment_and_vet_accessor_this_flow() {
     let stmts = vec![
         let_c(1, "contained"),
         Stmt::Expr(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(1)),
             property: "derived".into(),
             byte_offset: 0,

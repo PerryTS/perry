@@ -107,6 +107,7 @@ impl<'a> Gen<'a> {
                 object,
                 property,
                 byte_offset: pb,
+                ..
             } => {
                 let o = match self.ns_member(fx.module, object, property, true) {
                     Some(o) => o,
@@ -127,7 +128,7 @@ impl<'a> Gen<'a> {
                 }
                 self.mcall(o, Key::Named(a), args, spread)
             }
-            Expr::IndexGet { object, index } => {
+            Expr::IndexGet { object, index, .. } => {
                 let o = self.expr(fx, object);
                 let i = self.expr(fx, index);
                 let r = self.m.reason("ToPropertyKey");

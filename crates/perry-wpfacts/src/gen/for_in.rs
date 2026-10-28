@@ -43,7 +43,7 @@ fn for_in_shape<'s>(body: &'s [Stmt], keys_of: impl Fn(u32) -> Option<u32>) -> O
     let (bind, rest) = then_branch.split_first()?;
     let Stmt::Let {
         id,
-        init: Some(Expr::IndexGet { object, index }),
+        init: Some(Expr::IndexGet { object, index, .. }),
         ..
     } = bind
     else {

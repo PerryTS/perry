@@ -58,6 +58,7 @@ pub(crate) fn capture_function_source(
     ctx.closure_source_text.insert(
         func_id,
         crate::ir::FunctionSourceMetadata {
+            source_span: Some((span.lo.0, span.hi.0)),
             text: src,
             is_non_strict_ordinary,
         },
@@ -570,6 +571,7 @@ fn lower_named_fn_expr(
     ctx.exit_scope(wrapper_scope);
 
     Ok(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::Closure {
             func_id: wrapper_func_id,
             params: Vec::new(),

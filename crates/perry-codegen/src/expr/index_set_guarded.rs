@@ -642,6 +642,7 @@ mod tests {
             assert!(live.contains(block), "store arm {block} not exercised");
             let dead = store_ir(
                 Expr::New {
+                    byte_end: 0,
                     class_name: "AbruptDerived".into(),
                     args: vec![],
                     type_args: vec![],
