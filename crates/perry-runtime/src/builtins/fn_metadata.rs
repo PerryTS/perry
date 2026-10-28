@@ -475,6 +475,34 @@ pub(crate) unsafe fn function_name_matches_closure(
     with_function_name_for_closure(closure, |name| name.as_bytes() == expected).unwrap_or(false)
 }
 
+/// Reuse one registered-name read when method construction needs both its
+/// presence and the closure's canonical name. None means no non-empty
+/// registered name; a caller that infers one must query again after writing it.
+///
+/// # Safety
+/// The closure is null or live; its info owns the ranges licensed by its flags.
+pub(crate) unsafe fn registered_name_matches_closure(
+    closure: *const crate::closure::ClosureHeader,
+    expected: &[u8],
+) -> Option<bool> {
+    let info = closure.as_ref()?.info.as_ref()?;
+    let code = info.code as usize;
+    if code == 0 {
+        return None;
+    }
+    let registered_match = with_registered_name(code, |name| {
+        (!name.is_empty()).then(|| name.as_bytes() == expected)
+    })
+    .flatten()?;
+    // An image name, including an empty image name, wins over the code-address
+    // registration. This path only reads immutable descriptor bytes.
+    Some(if info.flags & crate::codegen_abi::FN_HAS_NAME != 0 {
+        function_name_matches_closure(closure, expected)
+    } else {
+        registered_match
+    })
+}
+
 /// Returns the name registered by `js_register_function_name{,_static}` (keyed
 /// on the `__perry_wrap_<name>` wrapper address that
 /// `js_closure_alloc_singleton` stamps into the `ClosureHeader`), or `None`
@@ -885,6 +913,42 @@ mod descriptor_name_tests {
                 );
                 assert!(unsafe { function_name_matches_closure(&closure, expected.as_bytes()) });
                 assert!(!unsafe { function_name_matches_closure(&closure, b"other") });
+                let code = 0x9188_0031usize;
+                let mut registered_image = image;
+                registered_image.info.code = code as *const u8; // never called
+                                                                // Moving the descriptor changes its relative name delta.
+                registered_image.tail[slot] = (registered_image.name.as_ptr() as isize
+                    - &registered_image.info as *const _ as isize)
+                    as i32;
+                let registered_closure = crate::closure::ClosureHeader {
+                    capture_count: 0,
+                    shape_id: LayoutWord(crate::codegen_abi::FUNCTION_LAYOUT_WORD),
+                    info: std::ptr::addr_of!(registered_image.info),
+                    props: std::ptr::null_mut(),
+                };
+                assert_eq!(
+                    unsafe {
+                        registered_name_matches_closure(&registered_closure, expected.as_bytes())
+                    },
+                    None
+                );
+                unsafe {
+                    js_register_function_name_static(code as *const u8, b"other".as_ptr(), 5)
+                };
+                assert_eq!(
+                    unsafe {
+                        registered_name_matches_closure(&registered_closure, expected.as_bytes())
+                    },
+                    Some(true)
+                );
+                assert_eq!(
+                    unsafe { registered_name_matches_closure(&registered_closure, b"other") },
+                    Some(false)
+                );
+                super::function_name_registry()
+                    .lock()
+                    .unwrap()
+                    .remove(&code);
             }
         }
     }
@@ -932,6 +996,10 @@ mod tests {
         };
         assert!(!function_has_registered_name(0));
         assert!(!function_has_registered_name(key));
+        assert_eq!(
+            unsafe { registered_name_matches_closure(&closure, b"") },
+            None
+        );
         assert!(!unsafe { function_name_matches_closure(&closure, b"") });
         unsafe {
             js_register_function_name_static(
@@ -944,8 +1012,20 @@ mod tests {
         }
         assert!(function_has_registered_name(key));
         assert!(unsafe { function_name_matches_closure(&closure, "image世界".as_bytes()) });
+        assert_eq!(
+            unsafe { registered_name_matches_closure(&closure, "image世界".as_bytes()) },
+            Some(true)
+        );
+        assert_eq!(
+            unsafe { registered_name_matches_closure(&closure, b"other") },
+            Some(false)
+        );
         unsafe { js_register_function_name(key as *const u8, b"owned".as_ptr(), 5) };
         assert!(unsafe { function_name_matches_closure(&closure, b"owned") });
+        assert_eq!(
+            unsafe { registered_name_matches_closure(&closure, b"owned") },
+            Some(true)
+        );
         assert!(!unsafe { function_name_matches_closure(&closure, "image世界".as_bytes()) });
         // A valid empty override shadows image bytes but the ordinary ptr
         // reader filters it out. Presence/comparison must keep that rule.
@@ -955,6 +1035,10 @@ mod tests {
             .insert(key, std::sync::Arc::from(&b""[..]));
         assert!(function_name_for_ptr(key).is_none());
         assert!(!function_has_registered_name(key));
+        assert_eq!(
+            unsafe { registered_name_matches_closure(&closure, b"") },
+            None
+        );
         assert!(!unsafe { function_name_matches_closure(&closure, b"") });
         function_name_overrides().lock().unwrap().remove(&key);
         function_name_registry().lock().unwrap().remove(&key);
