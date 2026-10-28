@@ -92,28 +92,59 @@ impl AtomTable {
         bytes: &[u8],
         hash: u64,
     ) -> Option<*const StringHeader> {
+        self.probe_from(from, bytes, hash).ok()
+    }
+
+    /// Return the existing atom or the vacant slot that ended this probe.
+    /// The slot is valid only until this table grows or is otherwise mutated.
+    #[inline(always)]
+    unsafe fn probe_from(
+        &self,
+        from: usize,
+        bytes: &[u8],
+        hash: u64,
+    ) -> Result<*const StringHeader, usize> {
         if self.slots.is_empty() {
-            return None;
+            return Err(0);
         }
         let mask = self.slots.len() - 1;
         let mut i = Self::home(hash, mask);
         loop {
             let entry = &self.slots[i];
             if entry.string_ptr == 0 {
-                return None;
+                return Err(i);
             }
             if entry.hash == hash {
                 let existing = entry.string_ptr as *const StringHeader;
                 if entry.string_ptr == from {
-                    return Some(existing);
+                    return Ok(existing);
                 }
                 if (*existing).byte_len as usize == bytes.len()
                     && std::slice::from_raw_parts(string_data(existing), bytes.len()) == bytes
                 {
-                    return Some(existing);
+                    return Ok(existing);
                 }
             }
             i = (i + 1) & mask;
+        }
+    }
+
+    /// Static seeding has both the immutable bytes and their final pointer.
+    /// Reuse the miss's vacant slot instead of repeating the hash probe.
+    /// Growth invalidates that slot and uses the ordinary insertion path.
+    unsafe fn seed_if_absent(&mut self, bytes: &[u8], hash: u64, atom: *const StringHeader) {
+        let Err(vacant) = self.probe_from(atom as usize, bytes, hash) else {
+            return;
+        };
+        if (self.len + 1) * 2 > self.slots.len() {
+            self.insert(hash, atom);
+        } else {
+            // GC_STORE_AUDIT(ROOT): Same weak metadata custody as static seeding's ordinary insert: the caller supplies an immutable non-moving agent atom; no GC allocation occurs between probing and installing it.
+            self.slots[vacant] = InternEntry {
+                hash,
+                string_ptr: atom as usize,
+            };
+            self.len += 1;
         }
     }
 
@@ -224,9 +255,7 @@ pub(crate) unsafe fn seed_static_atom(bytes: &[u8], hash: u64, string: *const St
     }
     let _ = ATOMS.try_with(|t| {
         let t = &mut *t.get();
-        if t.lookup(bytes, hash).is_none() {
-            t.insert(hash, string);
-        }
+        t.seed_if_absent(bytes, hash, string);
     });
 }
 
@@ -971,5 +1000,78 @@ pub unsafe extern "C" fn js_string_register_property_atoms(
 ) {
     for i in 0..count as usize {
         js_string_register_property_atom(*keys.add(i));
+    }
+}
+
+#[cfg(test)]
+mod seed_probe_tests {
+    use super::*;
+
+    #[repr(C)]
+    struct Atom {
+        header: StringHeader,
+        bytes: [u8; 32],
+    }
+
+    fn atom(bytes: &[u8]) -> Box<Atom> {
+        let mut result = Box::new(Atom {
+            header: StringHeader {
+                utf16_len: bytes.len() as u32,
+                byte_len: bytes.len() as u32,
+                capacity: bytes.len() as u32,
+                refcount: 0,
+                flags: 0,
+            },
+            bytes: [0; 32],
+        });
+        result.bytes[..bytes.len()].copy_from_slice(bytes);
+        result
+    }
+
+    #[test]
+    fn static_seed_preserves_first_identity_through_collisions_and_growth() {
+        // Deliberately collide every text, including equal-length names.
+        let atoms: Vec<_> = (0..300)
+            .map(|i| atom(format!("key-{i:03}").as_bytes()))
+            .collect();
+        let duplicate = atom(b"key-017");
+        let mut table = AtomTable::new();
+        let hash = 23;
+        unsafe {
+            for (i, key) in atoms.iter().enumerate() {
+                let bytes = &key.bytes[..key.header.byte_len as usize];
+                table.seed_if_absent(bytes, hash, &key.header);
+                table.seed_if_absent(bytes, hash, &key.header);
+                assert_eq!(table.len, i + 1);
+            }
+            let capacity = table.slots.len();
+            table.seed_if_absent(b"key-017", hash, &duplicate.header);
+            assert_eq!(table.len, atoms.len());
+            assert_eq!(table.slots.len(), capacity);
+            for key in &atoms {
+                let bytes = &key.bytes[..key.header.byte_len as usize];
+                assert_eq!(table.lookup(bytes, hash), Some(&key.header as *const _));
+            }
+            assert_eq!(table.lookup(b"missing", hash), None);
+        }
+    }
+
+    #[test]
+    fn static_seed_uses_reserved_capacity_without_changing_canonical_identity() {
+        let first = atom(b"reserved");
+        let duplicate = atom(b"reserved");
+        let mut table = AtomTable::new();
+        table.reserve(10);
+        let capacity = table.slots.len();
+        unsafe {
+            table.seed_if_absent(b"reserved", 42, &first.header);
+            table.seed_if_absent(b"reserved", 42, &duplicate.header);
+            assert_eq!(
+                table.lookup(b"reserved", 42),
+                Some(&first.header as *const _)
+            );
+        }
+        assert_eq!(table.len, 1);
+        assert_eq!(table.slots.len(), capacity);
     }
 }
