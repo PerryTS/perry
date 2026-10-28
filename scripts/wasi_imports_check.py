@@ -7,12 +7,16 @@ the module runs on a host that implements preview 1 and nothing else.
 
 The opt-in `PERRY_WASM_NET=1` build also imports the three `perry_net`
 functions. `--allow-perry-net` admits those, by name and signature, and
-nothing else: a different `perry_net` function, a `perry_net` import with
-another signature or any `perry_host` import still fails.
+nothing else: a different `perry_net` function or a `perry_net` import with
+another signature still fails.
 
-    wasi_imports_check.py libperry_runtime.a --allow-perry-net
+The opt-in `PERRY_WASM_DISCARD=1` build imports `perry_host.discard_pages`.
+`--allow-perry-host` admits exactly that function with its signature
+`(i32, i32) -> i32`; any other `perry_host` import still fails.
+
+    wasi_imports_check.py libperry_runtime.a --allow-perry-net --allow-perry-host
     wasi_imports_check.py program.wasm
-    wasi_imports_check.py program.wasm --allow-perry-net
+    wasi_imports_check.py program.wasm --allow-perry-net --allow-perry-host
     wasi_imports_check.py --self-test
 
 The allowlist is per import, not per module: it names every permitted function
@@ -35,6 +39,7 @@ WASM_MAGIC = b"\0asm\x01\0\0\0"
 ARCHIVE_MAGIC = b"!<arch>\n"
 PREVIEW1 = "wasi_snapshot_preview1"
 PERRY_NET = "perry_net"
+PERRY_HOST = "perry_host"
 
 # Every function of wasi_snapshot_preview1 (the witx definition) with its core
 # signature: `i` is i32, `l` is i64; before the dash the parameters, after it
@@ -66,6 +71,10 @@ _PREVIEW1 = {
 # errno.
 _PERRY_NET = {"tcp_connect": "iii-i", "sock_error": "ii-i", "resolve": "iiii-i"}
 
+# `perry_host` (docs/WASI_P1_OUTPUT.md): discard_pages(ptr, len) -> 1 when the
+# range now reads as zero, 0 when the host did nothing.
+_PERRY_HOST = {"discard_pages": "ii-i"}
+
 _VALTYPES = {"i": 0x7F, "l": 0x7E}
 
 
@@ -77,6 +86,7 @@ def _signature(text: str) -> tuple[tuple[int, ...], tuple[int, ...]]:
 ALLOWED = {
     PREVIEW1: {name: _signature(sig) for name, sig in _PREVIEW1.items()},
     PERRY_NET: {name: _signature(sig) for name, sig in _PERRY_NET.items()},
+    PERRY_HOST: {name: _signature(sig) for name, sig in _PERRY_HOST.items()},
 }
 
 
@@ -198,11 +208,14 @@ def _text(signature: Signature) -> str:
         ", ".join(names.get(t, hex(t)) for t in part) for part in signature)
 
 
-def violations(imports: list[Import], is_archive: bool, allow_perry_net: bool) -> list[str]:
+def violations(imports: list[Import], is_archive: bool, allow_perry_net: bool,
+               allow_perry_host: bool = False) -> list[str]:
     """Why each import is not allowed; empty when all are."""
     allowed = {PREVIEW1: ALLOWED[PREVIEW1]}
     if allow_perry_net:
         allowed[PERRY_NET] = ALLOWED[PERRY_NET]
+    if allow_perry_host:
+        allowed[PERRY_HOST] = ALLOWED[PERRY_HOST]
     found = []
     for module, name, kind, signature in imports:
         if module == "env" and is_archive:
@@ -221,14 +234,14 @@ def violations(imports: list[Import], is_archive: bool, allow_perry_net: bool) -
     return found
 
 
-def check(path: Path, allow_perry_net: bool = False) -> int:
+def check(path: Path, allow_perry_net: bool = False, allow_perry_host: bool = False) -> int:
     imports, is_archive, members = collect(path)
     modules: dict[str, int] = {}
     for module, *_ in imports:
         modules[module] = modules.get(module, 0) + 1
     kind = f"archive ({members} wasm members)" if is_archive else "module"
     print(f"{path}: {kind}, imports by module: {dict(sorted(modules.items()))}")
-    found = violations(imports, is_archive, allow_perry_net)
+    found = violations(imports, is_archive, allow_perry_net, allow_perry_host)
     for reason in found:
         print(f"::error::{reason}")
     if found:
@@ -236,7 +249,7 @@ def check(path: Path, allow_perry_net: bool = False) -> int:
     if PREVIEW1 not in modules:
         print(f"::error::no import from {PREVIEW1}; the input is empty or not a WASI build")
         return 1
-    extra = f" and {PERRY_NET}" if PERRY_NET in modules else ""
+    extra = "".join(f" and {m}" for m in (PERRY_NET, PERRY_HOST) if m in modules)
     print(f"OK: only {PREVIEW1}{extra} imported")
     return 0
 
@@ -256,7 +269,7 @@ def self_test() -> int:
     def func(module: str, field: str, signature: str | None = None) -> tuple:
         """A function import; by default with its standard signature."""
         if signature is None:
-            signature = {**_PREVIEW1, **_PERRY_NET}.get(field, "-")
+            signature = {**_PREVIEW1, **_PERRY_NET, **_PERRY_HOST}.get(field, "-")
         return (module, field, 0, signature)
 
     def wasm(*imports: tuple, component: bool = False) -> bytes:
@@ -299,7 +312,8 @@ def self_test() -> int:
 
     fd_write = func(PREVIEW1, "fd_write")
     net = [func(PERRY_NET, n) for n in _PERRY_NET]
-    # (title, binary, allow_perry_net, expected exit status)
+    discard = func(PERRY_HOST, "discard_pages")
+    # (title, binary, allow_perry_net, expected exit status[, allow_perry_host])
     cases = [
         ("preview1-only module passes", wasm(fd_write), False, 0),
         ("every preview1 function with its signature passes",
@@ -326,10 +340,26 @@ def self_test() -> int:
          wasm(fd_write, func(PREVIEW1, "sock_open", "iii-i")), False, 1),
         ("preview1 imported as a memory fails",
          wasm(fd_write, (PREVIEW1, "memory", 2, None)), False, 1),
-        ("perry_host extension fails by default",
-         wasm(fd_write, func("perry_host", "discard_pages", "ii-i")), False, 1),
-        ("perry_host extension fails even when perry_net is allowed",
-         wasm(fd_write, *net, func("perry_host", "discard_pages", "ii-i")), True, 1),
+        ("perry_host.discard_pages passes when allowed", wasm(fd_write, discard), False, 0, True),
+        ("allowing perry_host does not require it", wasm(fd_write), False, 0, True),
+        ("perry_host.discard_pages with perry_net passes when both are allowed",
+         wasm(fd_write, *net, discard), True, 0, True),
+        ("perry_host.discard_pages fails by default", wasm(fd_write, discard), False, 1),
+        ("perry_host.discard_pages fails even when perry_net is allowed",
+         wasm(fd_write, *net, discard), True, 1),
+        ("allowing perry_host does not allow perry_net",
+         wasm(fd_write, *net, discard), False, 1, True),
+        ("perry_host.discard_pages with another signature fails",
+         wasm(fd_write, func(PERRY_HOST, "discard_pages", "iii-i")), False, 1, True),
+        ("perry_host.discard_pages with an i64 length fails",
+         wasm(fd_write, func(PERRY_HOST, "discard_pages", "il-i")), False, 1, True),
+        ("perry_host.discard_pages with no result fails",
+         wasm(fd_write, func(PERRY_HOST, "discard_pages", "ii-")), False, 1, True),
+        ("unknown perry_host function fails even when allowed",
+         wasm(fd_write, func(PERRY_HOST, "commit_pages", "ii-i")), False, 1, True),
+        ("perry_host imported as a memory fails",
+         wasm(fd_write, (PERRY_HOST, "discard_pages", 2, None)), False, 1, True),
+        ("module of perry_host imports alone fails (liveness)", wasm(discard), False, 1, True),
         ("component-model interface fails",
          wasm(func("wasi:cli/stdout@0.2.0", "get-stdout")), False, 1),
         ("a component binary fails", wasm(fd_write, component=True), False, 1),
@@ -341,16 +371,20 @@ def self_test() -> int:
          archive(wasm(fd_write), wasm(*net)), True, 0),
         ("archive with the perry_net member fails by default",
          archive(wasm(fd_write), wasm(*net)), False, 1),
-        ("archive with a host extension fails",
-         archive(wasm(fd_write), wasm(func("perry_host", "discard_pages", "ii-i"))), True, 1),
+        ("archive with the perry_host member passes when allowed",
+         archive(wasm(fd_write), wasm(discard)), False, 0, True),
+        ("archive with the perry_host member fails by default",
+         archive(wasm(fd_write), wasm(discard)), True, 1),
+        ("archive with an unknown host extension fails",
+         archive(wasm(fd_write), wasm(func("perry_ext", "other", "ii-i"))), True, 1, True),
         ("archive without wasm members fails", archive(b"not wasm"), False, 1),
     ]
     with tempfile.TemporaryDirectory() as directory:
-        for title, data, allow_perry_net, expected in cases:
+        for title, data, allow_perry_net, expected, *host in cases:
             path = Path(directory) / "input"
             path.write_bytes(data)
             try:
-                status = check(path, allow_perry_net)
+                status = check(path, allow_perry_net, bool(host and host[0]))
             except ValueError:
                 status = 1
             assert status == expected, f"{title}: exit {status}, expected {expected}"
@@ -363,13 +397,15 @@ def main() -> int:
     parser.add_argument("input", nargs="?", type=Path, help="a core wasm module or a static archive")
     parser.add_argument("--allow-perry-net", action="store_true",
                         help="also allow the three perry_net imports (PERRY_WASM_NET=1 builds)")
+    parser.add_argument("--allow-perry-host", action="store_true",
+                        help="also allow perry_host.discard_pages (PERRY_WASM_DISCARD=1 builds)")
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
     if args.self_test:
         return self_test()
     if args.input is None:
         parser.error("an input file is required")
-    return check(args.input, args.allow_perry_net)
+    return check(args.input, args.allow_perry_net, args.allow_perry_host)
 
 
 if __name__ == "__main__":

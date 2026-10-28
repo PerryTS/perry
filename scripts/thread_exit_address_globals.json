@@ -4064,6 +4064,24 @@
    ],
    "verdict": "no_heap_address",
    "why": "Outstanding work count incremented on submit and decremented by OutstandingGuard at delivery. AtomicUsize contains only a job count, never a pointer."
+  },
+  {
+   "file": "crates/perry-runtime/src/wasm_discard.rs",
+   "names": [
+    "REUSED",
+    "SOURCE_CALLS",
+    "SOURCE_BYTES"
+   ],
+   "verdict": "no_heap_address",
+   "why": "REUSED counts blocks handed out by take; SOURCE_CALLS and SOURCE_BYTES count successful host discard calls and discarded byte lengths by Source enum index. All start at zero and are only incremented and read for diagnostics; none stores a block address."
+  },
+  {
+   "file": "crates/perry-runtime/src/wasm_discard.rs",
+   "names": [
+    "KEPT"
+   ],
+   "verdict": "process_global_allocation",
+   "why": "The WASIp1 discard allocator owns retained System/malloc allocations after the caller deallocates them. keep takes custody instead of calling System.dealloc, so an Arena dropping its block relinquishes ownership without physically freeing the allocation. take removes the slot before handing its pointer to a new caller; idle, capacity eviction and release_all remove each slot before release calls libc::free. Only slots below len are read. These are allocator-owned freed blocks, not live GC objects or borrowed thread-arena addresses. build.rs enables the module only for the wasm32-wasip1 wasm-discard runtime, whose allocator has one thread."
   }
  ]
 }

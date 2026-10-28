@@ -274,7 +274,7 @@ pub fn transform_generator_function(
     func: &mut Function,
     next_local_id: &mut u32,
     next_func_id: &mut u32,
-) {
+) -> (Vec<LocalId>, Vec<LocalId>) {
     transform_generator_function_with_extra_captures(
         func,
         next_local_id,
@@ -284,7 +284,7 @@ pub fn transform_generator_function(
         false,
         false,
         None,
-    );
+    )
 }
 
 /// Issue #1021: variant that augments the internally-generated
@@ -307,7 +307,7 @@ pub fn transform_generator_function_with_extra_captures(
     captures_this: bool,
     captures_new_target: bool,
     enclosing_class: Option<String>,
-) {
+) -> (Vec<LocalId>, Vec<LocalId>) {
     // Generator bodies run later inside synthesized step closures, so direct
     // `this` reads need the receiver from the original generator call.
     let captures_this = captures_this || generator_body_uses_call_this(&func.body);
@@ -1632,6 +1632,9 @@ pub fn transform_generator_function_with_extra_captures(
         // literal is hidden inside the wrapper in return position; escape
         // analysis leaves the unanalyzed allocation on the heap (correct — a
         // generator object always escapes via the return).
+        let live_operation = resume_op_id.is_some_and(|operation| {
+            matches!(&iter_obj, Expr::Closure {params,..} if params.iter().any(|p| p.id == operation))
+        });
         let linked = Expr::LinkGeneratorPrototype {
             obj: Box::new(iter_obj),
             is_async: is_async_generator,
@@ -1640,7 +1643,13 @@ pub fn transform_generator_function_with_extra_captures(
                 // The private protocol ABI supplies only 0/1/2 here; an
                 // abrupt continuation writes 0. This parameter is compiler
                 // machinery, not a value justified by a source annotation.
-                let mut ids = vec![state_id, resume_op_id.unwrap(), step_id.unwrap()];
+                let mut ids = vec![state_id, step_id.unwrap()];
+                // A next-only entry has no operation parameter. Retaining its
+                // unused id could collide with a later cloned local and mark
+                // that unrelated slot as numeric control storage.
+                if live_operation {
+                    ids.push(resume_op_id.unwrap());
+                }
                 if has_yielding_finally {
                     ids.push(pending_type_id);
                 }
@@ -1662,4 +1671,11 @@ pub fn transform_generator_function_with_extra_captures(
     }
     func.body = new_body;
     func.is_generator = false;
+    // Carry exact transform-created control identities, independently of
+    // source names and annotations, into any admitted private async owner.
+    let mut numbers = vec![state_id];
+    if has_yielding_finally {
+        numbers.push(pending_type_id);
+    }
+    (numbers, vec![done_id, executing_id])
 }

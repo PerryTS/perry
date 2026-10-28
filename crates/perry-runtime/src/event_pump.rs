@@ -807,6 +807,10 @@ pub extern "C" fn js_wait_for_event() {
         crate::gc::ParkVerdict::Resume => return,
         crate::gc::ParkVerdict::Park(remaining_ms) => remaining_ms,
     };
+    // Large freed blocks nothing has reused for a while go back to the host
+    // now, not on every free (`wasm_discard.rs`).
+    #[cfg(wasm_discard)]
+    crate::wasm_discard::idle();
     // A preview 1 guest has no helper threads: it parks in one `poll_oneoff` that
     // also wakes on socket readiness, host signals and stdin, and falls back to
     // the timed condvar park when there is nothing to wait on.

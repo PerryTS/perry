@@ -192,6 +192,15 @@ fn store_generator_state_slot(
     pointer_free: bool,
     string_alias: bool,
 ) -> Result<()> {
+    if ctx.private_resume_frame {
+        return super::private_resume_frame::store_slot(
+            ctx,
+            capture_idx,
+            value,
+            pointer_free,
+            string_alias,
+        );
+    }
     let bits = ctx.block().bitcast_double_to_i64(value);
     if pointer_free {
         let capture_idx = super::private_resume_frame::slot_index(ctx, capture_idx);

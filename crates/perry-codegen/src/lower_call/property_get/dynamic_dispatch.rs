@@ -1058,9 +1058,10 @@ pub(crate) fn try_lower_instance_method_call(
             let recv_idx = roots.lower(ctx, object, recv_collects)?;
             let selection = if constant_static {
                 let recv = roots.reread(ctx, recv_idx)?;
-                let word = crate::lower_call::method_override::emit_inline_direct_method_word_probe(
-                    ctx, &recv,
-                );
+                let (word, admitted) =
+                    crate::lower_call::method_override::emit_direct_method_selection_probe(
+                        ctx, &recv,
+                    );
                 let key = ctx.strings.intern(property);
                 let dispatch = ctx.strings.static_dispatch_global(key);
                 let method_id = crate::strings::emit_static_dispatch_id(ctx.block(), &dispatch);
@@ -1071,6 +1072,7 @@ pub(crate) fn try_lower_instance_method_call(
                     &constant_candidates,
                     &constant_cased,
                     &word,
+                    &admitted,
                 );
                 let lookup = if static_split {
                     let claimed = ctx.block().icmp_ne(I32, &selected, "0");

@@ -772,7 +772,7 @@ impl Appended {
                 let a = crate::string::js_string_key_bytes(stored, &mut sa);
                 let b = crate::string::js_string_key_bytes(v, &mut sb);
                 match (a, b) {
-                    (Some(x), Some(y)) => x == y,
+                    (Some(x), Some(y)) => crate::string::key_bytes_equal(x, y),
                     // A non-string pair that is not bit-equal is a different
                     // list; the bit compare above already accepted an
                     // identical hole.

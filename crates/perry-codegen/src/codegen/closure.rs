@@ -515,6 +515,8 @@ pub(super) fn compile_closure(
 
     let private_resume_frame =
         crate::expr::private_resume_frame::is_entry(llmod, module_prefix, func_id);
+    let private_async_resume_frame =
+        crate::expr::private_resume_frame::is_async_entry(llmod, module_prefix, func_id);
     // A LocalId is module-unique, but a closure can only observe ids referenced
     // or declared in its own body (plus its parameters/capture list). Older
     // code cloned the complete module-wide boxed/type/reassignment tables into
@@ -591,7 +593,9 @@ pub(super) fn compile_closure(
     // proven-unused first callback parameter for the caller's stack context,
     // so its ABI and register footprint stay identical to the ordinary
     // trusted clone.
-    let llvm_params = crate::expr::private_resume_frame::abi_params(params, private_resume_frame);
+    let llvm_params = crate::expr::private_resume_frame::abi_params(
+        params, private_resume_frame, private_async_resume_frame,
+    );
 
     let ic_base = llmod.ic_counter;
     let buffer_alias_base = llmod.buffer_alias_counter;
@@ -716,11 +720,9 @@ pub(super) fn compile_closure(
                 .map(|(id, _)| *id),
         );
         for p in params {
-            let arg_name = if private_resume_frame && params.len() == 2 && p.id == params[0].id {
-                blk.sitofp(I32, "%frame_op", DOUBLE)
-            } else {
-                format!("%arg{}", p.id)
-            };
+            let arg_name = crate::expr::private_resume_frame::parameter_value(
+                blk, params, p.id, private_resume_frame, private_async_resume_frame,
+            );
             // A closure region's Number parameter: an int32 box becomes the
             // equal plain double once, here (`split_regions`).
             let arg_name = if region_number_params.contains(&p.id) {
@@ -1291,6 +1293,7 @@ pub(super) fn compile_closure(
         trusted_box_captures,
         fixed_generator_state,
         private_resume_frame,
+        private_async_resume_frame,
         versioned_loop_deopt_context,
         trusted_box_capture_ptrs,
         ready_cell_roots: crate::stmt::binding_cell::ReadyCellRoots::with_entry_cells(
@@ -1592,6 +1595,9 @@ pub(super) fn compile_closure(
     let buffer_alias_used = ctx.buffer_data_slots.len() as u32;
     let native_rep_records = std::mem::take(&mut ctx.native_rep_records);
     drop(ctx);
+    if private_async_resume_frame {
+        crate::expr::private_resume_frame::async_adapter(llmod, module_prefix, func_id);
+    }
     llmod.ic_counter = ic_end;
     llmod.buffer_alias_counter += buffer_alias_used;
     llmod.native_rep_records.extend(native_rep_records);
