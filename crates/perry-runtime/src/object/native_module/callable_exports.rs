@@ -300,7 +300,9 @@ extern "C" fn fs_namespace_descriptor_getter_thunk(
     unsafe {
         let property_ptr = crate::closure::js_closure_get_capture_ptr(closure, 0) as *const u8;
         let property_len = crate::closure::js_closure_get_capture_ptr(closure, 1) as usize;
-        js_native_module_property_by_name(b"fs".as_ptr(), 2, property_ptr, property_len)
+        // A restored descriptor must resolve the builtin value, not consult its
+        // own accessor override and recursively invoke this getter again.
+        native_module_property_by_name_impl(b"fs".as_ptr(), 2, property_ptr, property_len, false)
     }
 }
 

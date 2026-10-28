@@ -142,6 +142,26 @@ impl ProgramLayoutOrdinals {
             .map(OrdinalEntry::word)
     }
 
+    /// A carried family descriptor's immutable template word. Family emission
+    /// always carries its word; OtherStatic inputs can also describe static
+    /// metadata whose initializer is zero, so their presence alone is no proof.
+    /// Imported symbols are eligible, but ambiguous spellings stay checked.
+    pub(crate) fn descriptor_template_word(&self, symbol: &str) -> Option<u32> {
+        let mut entries = self.entries.iter().filter(|entry| {
+            matches!(
+                &entry.key, LayoutKey::Descriptor { symbol: name, .. } if name == symbol
+            )
+        });
+        let first = entries.next()?;
+        if first.role != LayoutRole::ClassFamily {
+            return None;
+        }
+        let word = first.word();
+        entries
+            .all(|other| other.role == LayoutRole::ClassFamily && other.word() == word)
+            .then_some(word)
+    }
+
     /// Exact stable cache input, including full keys (not just content hashes),
     /// header bounds, ABI version and the entire native catalog.
     pub fn cache_key(&self) -> String {
@@ -472,4 +492,56 @@ pub(crate) fn deferred_word(birth: &crate::BirthShape, live: u32) -> (u32, u32) 
         })
         .expect("deferred width has a static ordinal");
     (entry.requested_shape_id, entry.word())
+}
+
+#[cfg(test)]
+mod template_word_tests {
+    use super::*;
+
+    fn descriptor(module: &str, symbol: &str) -> OrdinalInput {
+        OrdinalInput {
+            key: LayoutKey::Descriptor {
+                module: module.into(),
+                symbol: symbol.into(),
+                content: vec![1, 2, 3],
+            },
+            requested_shape_id: 0,
+            band: 0,
+            proto_kind: 0,
+            role: LayoutRole::ClassFamily,
+        }
+    }
+
+    #[test]
+    fn only_a_unique_compiler_descriptor_supplies_a_template() {
+        let mut plan = ProgramLayoutOrdinals::assign(
+            [],
+            [
+                descriptor("a", "unique"),
+                descriptor("a", "ambiguous"),
+                descriptor("b", "ambiguous"),
+            ],
+        )
+        .unwrap();
+        let mut metadata = plan.entries[0].clone();
+        metadata.key = LayoutKey::Descriptor {
+            module: "a".into(),
+            symbol: "metadata".into(),
+            content: vec![],
+        };
+        metadata.role = LayoutRole::OtherStatic;
+        plan.entries.push(metadata);
+        assert_eq!(plan.descriptor_template_word("metadata"), None);
+        let entry = plan
+            .entries
+            .iter()
+            .find(|e| match &e.key {
+                LayoutKey::Descriptor { symbol, .. } => symbol == "unique",
+                _ => false,
+            })
+            .unwrap();
+        assert_eq!(plan.descriptor_template_word("unique"), Some(entry.word()));
+        assert_eq!(plan.descriptor_template_word("ambiguous"), None);
+        assert_eq!(plan.descriptor_template_word("opaque"), None);
+    }
 }
