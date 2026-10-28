@@ -357,7 +357,7 @@ pub(super) unsafe fn dispatch_primitive(
                                 (payload.to_bits() & 0x0000_FFFF_FFFF_FFFF)
                                     as *const crate::bigint::BigIntHeader,
                             );
-                            let str_ptr = crate::bigint::js_bigint_to_string(ptr);
+                            let str_ptr = crate::bigint_hooks::js_bigint_to_string(ptr);
                             return Some(f64::from_bits(JSValue::string_ptr(str_ptr).bits()));
                         }
                     }
@@ -744,7 +744,7 @@ pub(super) unsafe fn dispatch_primitive(
         // The cell's own [[Prototype]], not the realm's `Date.prototype`: an
         // instance of `class D extends Date` links `D.prototype`, whose methods
         // override the intrinsic ones (`get` walks on to `Date.prototype`).
-        let proto = crate::date::date_cell_prototype(object_handle.get_nanbox_f64());
+        let proto = crate::date_hook_slots::date_cell_prototype(object_handle.get_nanbox_f64());
         let proto_handle = root_scope.root_nanbox_f64(proto);
         if object_ptr_from_value(proto).is_some() {
             let key = crate::string::js_string_from_bytes(
@@ -769,7 +769,7 @@ pub(super) unsafe fn dispatch_primitive(
             }
         }
         if method_name == "toString" {
-            let string = crate::date::js_date_to_string(object);
+            let string = crate::date_hook_slots::js_date_to_string(object);
             return Some(f64::from_bits(JSValue::string_ptr(string).bits()));
         }
     }
@@ -802,15 +802,15 @@ pub(super) unsafe fn dispatch_primitive(
         );
         match method_name {
             "isZero" => {
-                let result = crate::bigint::js_bigint_is_zero(bigint_ptr);
+                let result = crate::bigint_hooks::js_bigint_is_zero(bigint_ptr);
                 return Some(f64::from_bits(JSValue::bool(result != 0).bits()));
             }
             "isNeg" | "isNegative" => {
-                let result = crate::bigint::js_bigint_is_negative(bigint_ptr);
+                let result = crate::bigint_hooks::js_bigint_is_negative(bigint_ptr);
                 return Some(f64::from_bits(JSValue::bool(result != 0).bits()));
             }
             "toNumber" => {
-                return Some(crate::bigint::js_bigint_to_f64(bigint_ptr));
+                return Some(crate::bigint_hooks::js_bigint_to_f64(bigint_ptr));
             }
             "toString" => {
                 // #2864: ToNumber/ToInteger-coerce + validate the radix
@@ -821,8 +821,8 @@ pub(super) unsafe fn dispatch_primitive(
                     None
                 };
                 let result_ptr = match radix {
-                    Some(r) => crate::bigint::js_bigint_to_string_radix(bigint_ptr, r),
-                    None => crate::bigint::js_bigint_to_string(bigint_ptr),
+                    Some(r) => crate::bigint_hooks::js_bigint_to_string_radix(bigint_ptr, r),
+                    None => crate::bigint_hooks::js_bigint_to_string(bigint_ptr),
                 };
                 return Some(f64::from_bits(JSValue::string_ptr(result_ptr).bits()));
             }
@@ -860,8 +860,8 @@ pub(super) unsafe fn dispatch_primitive(
         // #10694: a raw word must be allocator-owned before the brand read.
         if top16 == 0 && raw_bits >= 0x10000 && crate::buffer::header_is_owned(raw_bits as usize) {
             let addr = raw_bits as usize;
-            if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
-                let ta = addr as *mut crate::typedarray::TypedArrayHeader;
+            if crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some() {
+                let ta = addr as *mut crate::typedarray_hook_slots::TypedArrayHeader;
                 if let Some(r) = dispatch_typed_array_method(ta, method_name, args_ptr, args_len) {
                     return Some(r);
                 }

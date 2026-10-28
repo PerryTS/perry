@@ -100,7 +100,7 @@ fn both(mods: &[(&str, &str)]) -> (ProgramFacts, ProgramFacts) {
     (run(mods, true, &cfg), run(mods, false, &cfg))
 }
 
-fn assert_not_stronger(mods: &[(&str, &str)]) -> (ProgramFacts, ProgramFacts) {
+pub(super) fn assert_not_stronger(mods: &[(&str, &str)]) -> (ProgramFacts, ProgramFacts) {
     let (u, w) = both(mods);
     let s = stronger(&u, &w);
     assert!(

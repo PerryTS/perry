@@ -15,7 +15,7 @@
 //! Both message-set and the entry list were taken verbatim from Node's
 //! `util.getSystemErrorMap()`.
 
-use crate::url::create_string_f64;
+use crate::value::boxed_text::create_string_f64;
 use crate::value::JSValue;
 
 const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;

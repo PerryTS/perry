@@ -344,6 +344,10 @@ pub fn map_cons(
             origin,
             act: act_map(act, &mut n, &mut k),
         },
+        PlainKey { origin, act } => PlainKey {
+            origin,
+            act: act_map(act, &mut n, &mut k),
+        },
         StoreTopProto { origin, src } => StoreTopProto {
             origin,
             src: n(src),
@@ -380,6 +384,7 @@ pub fn map_cons(
         AccessorInstall { key, f, setter } => AccessorInstall { key, f, setter },
         ProtoFrom { src } => ProtoFrom { src: n(src) },
         ProtoOf { dst } => ProtoOf { dst: n(dst) },
+        ProtoValues { dst } => ProtoValues { dst: n(dst) },
         IterNext { dst } => IterNext { dst: n(dst) },
         NewTargetHard { reason } => NewTargetHard { reason },
         IdxLoad { idx, dst } => IdxLoad {
@@ -387,6 +392,15 @@ pub fn map_cons(
             dst: n(dst),
         },
         IdxKey { obj, dst } => IdxKey { obj, dst: n(dst) },
+        IdxMCall { idx, call } => IdxMCall {
+            idx: n(idx),
+            call: k(call),
+        },
+        IdxKeyCall { obj, prim, call } => IdxKeyCall {
+            obj,
+            prim,
+            call: k(call),
+        },
         ForInBody { obj, call } => ForInBody {
             obj: n(obj),
             call: k(call),
@@ -516,6 +530,8 @@ fn gen_kind(c: &Cons) -> bool {
             | Implicit { .. }
             | IdxLoad { .. }
             | IdxKey { .. }
+            | IdxMCall { .. }
+            | IdxKeyCall { .. }
             | ForInBody { .. }
             | DefineKeyed { .. }
             | StoreKeyed { .. }
@@ -547,7 +563,8 @@ fn read_dst(c: &Cons) -> Option<NodeId> {
         | Arith { dst, .. }
         | ArrayLenArg { dst }
         | IterNext { dst }
-        | ProtoOf { dst } => Some(dst),
+        | ProtoOf { dst }
+        | ProtoValues { dst } => Some(dst),
         _ => None,
     }
 }
@@ -575,6 +592,8 @@ impl Model {
             | Cons::New { call }
             | Cons::NewNamed { call, .. }
             | Cons::MCall { call, .. }
+            | Cons::IdxMCall { call, .. }
+            | Cons::IdxKeyCall { call, .. }
             | Cons::ProtoMethods { call, .. }
             | Cons::SuperCtor { call, .. }
             | Cons::SuperCtorParent { call, .. }
@@ -586,6 +605,10 @@ impl Model {
                 ..
             }
             | Cons::AnyAccessors {
+                act: ChainAct::Call(call),
+                ..
+            }
+            | Cons::PlainKey {
                 act: ChainAct::Call(call),
                 ..
             }
@@ -1476,7 +1499,39 @@ impl Model {
         }
         let cret = self.calls[c].ret;
         if !self.rel_into(call, inst + 1, &terms) {
-            self.edge(r, cret);
+            // A summary consisting only of an unwritten parameter copied
+            // to its return passes this call's value back. Its shared
+            // instance still observes every argument, but the caller must
+            // not receive other calls' values (e.g. an identity helper
+            // returning two distinct function arguments).
+            let s = &self.sum.of[&f];
+            let copy = match s.edges.as_slice() {
+                [(from, to)]
+                    if *to == s.ret
+                        && is_slot(*from)
+                        && is_slot(*to)
+                        && s.seeds.is_empty()
+                        && s.cons.is_empty()
+                        && s.calls.is_empty()
+                        && s.births.is_empty()
+                        && s.closures.is_empty()
+                        && self.calls[c].spread.is_empty() =>
+                {
+                    s.params
+                        .iter()
+                        .position(|p| p == from)
+                        .filter(|&i| s.rel[i] && caps[i].is_none())
+                }
+                _ => None,
+            };
+            if let Some(i) = copy {
+                match self.calls[c].args.get(i).copied() {
+                    Some(a) => self.edge(a, cret),
+                    None => self.add_prim(cret, prim::UNDEF),
+                }
+            } else {
+                self.edge(r, cret);
+            }
         }
     }
 
@@ -1738,7 +1793,15 @@ impl Model {
             if contract {
                 // Design §11.2: the result is checked after the solve.
                 self.contract_rets.push((f, r));
-            } else {
+            }
+            // Beyond its publication (an export or a published literal's
+            // field, DECISIONS 210, or known closed callers, DECISIONS 19),
+            // unknown code calls it and retains its result.
+            if !contract
+                || (self.pub_reason != Some(reason)
+                    && self.field_fn_reason != Some(reason)
+                    && closed.is_none())
+            {
                 self.sink_node(r, reason);
             }
         }

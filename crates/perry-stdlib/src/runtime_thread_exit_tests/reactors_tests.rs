@@ -129,6 +129,8 @@ fn agent_retirement_releases_the_agents_turnloop_signal_subscription() {
     const SIGNAL: &str = "SIGUSR1";
     let (agent, while_alive) = std::thread::spawn(|| {
         let agent = perry_runtime::agent::enter_worker_agent();
+        perry_runtime::feature_hooks::js_runtime_install_turnloop();
+        perry_runtime::feature_hooks::js_runtime_install_os();
         probes::set_process_signal_listener_count_for_test(SIGNAL, 1);
         let while_alive = probes::process_signal_subscription_for_test(SIGNAL);
         perry_runtime::agent::retire_agent(agent);

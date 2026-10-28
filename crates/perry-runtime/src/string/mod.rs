@@ -125,6 +125,7 @@ pub(crate) mod normalize_hooked;
 mod pad;
 mod provenance;
 use provenance::{combine_string_flags, raw_string_metadata};
+pub(crate) mod literal_replace;
 #[cfg(test)]
 mod provenance_tests;
 mod raw;
@@ -232,7 +233,7 @@ pub(crate) fn canonical_key(name: &[u8]) -> *mut StringHeader {
     intern::intern_prehashed_bytes(name.as_ptr(), name.len(), hash, false) as *mut StringHeader
 }
 #[cfg(feature = "regex-engine")]
-pub use crate::regex::{js_string_split_js, js_string_split_n};
+pub use crate::regex::hooked::{js_string_split_js, js_string_split_n};
 #[cfg(test)]
 pub(crate) use format::{
     debug_assert_small_string_caches_not_minor_relevant, test_write_small_int_cache_slot,
@@ -1397,3 +1398,15 @@ pub(crate) use intern::{
     is_program_atom, is_property_atom, property_atom, property_atom_from_value, property_atom_hash,
     prune_property_atoms, scan_property_atoms,
 };
+
+pub(crate) mod byte_scan;
+pub(crate) mod quote;
+pub(crate) mod short_copy;
+
+pub(crate) mod form_codec;
+
+/// Allocate a StringHeader pointer holding `s`.
+pub(crate) fn alloc_runtime_string(s: &str) -> *mut crate::StringHeader {
+    // Use the standard string allocator which sets both utf16_len and byte_len
+    crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32)
+}

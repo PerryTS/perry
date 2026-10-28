@@ -445,7 +445,7 @@ mod web_adapter;
 
 pub(crate) use builders::ensure_lazy_stream;
 pub use builders::{
-    init_transform_in_place, init_writable_payload_in_place, js_array_subclass_init,
+    init_transform_in_place, init_writable_payload_in_place,
     js_event_emitter_async_resource_subclass_init, js_event_emitter_subclass_init,
     js_node_stream_duplex_new, js_node_stream_duplex_subclass_init,
     js_node_stream_legacy_subclass_init, js_node_stream_passthrough_new,
@@ -488,3 +488,5 @@ pub(crate) use web_adapter::{
     js_node_stream_duplex_to_web_method_value, js_node_stream_readable_to_web_method_value,
     js_node_stream_writable_to_web_method_value,
 };
+
+pub use crate::array::subclass_init::js_array_subclass_init;

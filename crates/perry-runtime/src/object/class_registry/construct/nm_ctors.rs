@@ -120,7 +120,9 @@ pub(crate) unsafe fn nm_ctor_wasi(
     args_len: usize,
 ) -> Option<f64> {
     if method == "WASI" {
-        return Some(crate::wasi::js_wasi_new(nm_ctor_arg(args_ptr, args_len, 0)));
+        return Some(crate::wasi_hook_slots::js_wasi_new(nm_ctor_arg(
+            args_ptr, args_len, 0,
+        )));
     }
     None
 }

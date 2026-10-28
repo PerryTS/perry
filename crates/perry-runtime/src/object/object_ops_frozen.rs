@@ -101,7 +101,7 @@ unsafe fn set_integrity_level_proxy(obj_value: f64, frozen: bool) -> f64 {
             b"Cannot set integrity level: 'preventExtensions' trap returned falsish",
         );
     }
-    let keys = crate::proxy::js_proxy_own_keys(obj_value);
+    let keys = crate::proxy_hooks::proxy_own_keys(obj_value);
     let scope = crate::gc::RuntimeHandleScope::new();
     let keys = scope.root_raw_const_ptr(extract_obj_ptr(keys) as *const crate::array::ArrayHeader);
     if keys.with_const_ptr::<crate::array::ArrayHeader, _>(|ptr| ptr.is_null()) {
@@ -151,7 +151,7 @@ unsafe fn test_integrity_level_proxy(obj_value: f64, frozen: bool) -> bool {
     if crate::value::js_is_truthy(ext) != 0 {
         return false;
     }
-    let keys = crate::proxy::js_proxy_own_keys(obj_value);
+    let keys = crate::proxy_hooks::proxy_own_keys(obj_value);
     let scope = crate::gc::RuntimeHandleScope::new();
     let keys = scope.root_raw_const_ptr(extract_obj_ptr(keys) as *const crate::array::ArrayHeader);
     if keys.with_const_ptr::<crate::array::ArrayHeader, _>(|ptr| ptr.is_null()) {
@@ -247,7 +247,7 @@ pub extern "C" fn js_object_freeze(obj_value: f64) -> f64 {
         return obj_value;
     }
     crate::array::subclass_elements::deopt_value(obj_value);
-    if crate::proxy::js_proxy_is_proxy(obj_value) != 0 {
+    if crate::proxy_hooks::proxy_is_proxy(obj_value) != 0 {
         return unsafe {
             set_integrity_level_proxy(obj_value, /*frozen=*/ true)
         };
@@ -296,7 +296,7 @@ pub extern "C" fn js_object_freeze(obj_value: f64) -> f64 {
             // below would read a garbage `keys_array` off the TA header and
             // can fault depending on heap layout. The GC flags above are the
             // entire integrity state for them.
-            if crate::typedarray::lookup_typed_array_kind(obj as usize).is_some()
+            if crate::typedarray_hook_slots::lookup_typed_array_kind(obj as usize).is_some()
                 || crate::typedarray_props::typed_array_addr_from_value(obj_value).is_some()
             {
                 return obj_value;
@@ -382,7 +382,7 @@ pub extern "C" fn js_object_seal(obj_value: f64) -> f64 {
         return obj_value;
     }
     crate::array::subclass_elements::deopt_value(obj_value);
-    if crate::proxy::js_proxy_is_proxy(obj_value) != 0 {
+    if crate::proxy_hooks::proxy_is_proxy(obj_value) != 0 {
         return unsafe {
             set_integrity_level_proxy(obj_value, /*frozen=*/ false)
         };
@@ -423,7 +423,7 @@ pub extern "C" fn js_object_seal(obj_value: f64) -> f64 {
                 crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND,
             );
             // TypedArray receivers: GC flags only — see `js_object_freeze`.
-            if crate::typedarray::lookup_typed_array_kind(obj as usize).is_some()
+            if crate::typedarray_hook_slots::lookup_typed_array_kind(obj as usize).is_some()
                 || crate::typedarray_props::typed_array_addr_from_value(obj_value).is_some()
             {
                 return obj_value;
@@ -499,7 +499,7 @@ pub extern "C" fn js_object_prevent_extensions(obj_value: f64) -> f64 {
     // yields the fake pointer and `gc_header_for` would deref unmapped memory.
     // Route through the `[[PreventExtensions]]` trap; per spec throw a TypeError
     // if it reports failure, then return the proxy. (Proxy crash cluster.)
-    if crate::proxy::js_proxy_is_proxy(obj_value) != 0 {
+    if crate::proxy_hooks::proxy_is_proxy(obj_value) != 0 {
         let ok = crate::proxy::js_reflect_prevent_extensions(obj_value);
         if crate::value::js_is_truthy(ok) == 0 {
             throw_object_type_error(b"'preventExtensions' on proxy: trap returned falsish");
@@ -768,7 +768,7 @@ pub extern "C" fn js_object_is_frozen(obj_value: f64) -> f64 {
     if is_symbol_primitive(obj_value) {
         return f64::from_bits(TAG_TRUE);
     }
-    if crate::proxy::js_proxy_is_proxy(obj_value) != 0 {
+    if crate::proxy_hooks::proxy_is_proxy(obj_value) != 0 {
         return if unsafe {
             test_integrity_level_proxy(obj_value, /*frozen=*/ true)
         } {
@@ -830,7 +830,7 @@ pub extern "C" fn js_object_is_sealed(obj_value: f64) -> f64 {
     if is_symbol_primitive(obj_value) {
         return f64::from_bits(TAG_TRUE);
     }
-    if crate::proxy::js_proxy_is_proxy(obj_value) != 0 {
+    if crate::proxy_hooks::proxy_is_proxy(obj_value) != 0 {
         return if unsafe {
             test_integrity_level_proxy(obj_value, /*frozen=*/ false)
         } {
@@ -881,7 +881,7 @@ pub extern "C" fn js_object_is_extensible(obj_value: f64) -> f64 {
     }
     // Proxy receiver: route through the `[[IsExtensible]]` trap rather than
     // dereferencing the fake pointer. (Proxy crash cluster.)
-    if crate::proxy::js_proxy_is_proxy(obj_value) != 0 {
+    if crate::proxy_hooks::proxy_is_proxy(obj_value) != 0 {
         let r = crate::proxy::js_reflect_is_extensible(obj_value);
         return if crate::value::js_is_truthy(r) != 0 {
             f64::from_bits(TAG_TRUE)

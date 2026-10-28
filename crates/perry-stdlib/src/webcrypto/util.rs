@@ -519,7 +519,7 @@ pub(super) unsafe fn bytes_from_jsvalue(bits: u64) -> Vec<u8> {
         return Vec::new();
     }
     if is_registered_buffer(raw)
-        || perry_runtime::typedarray::lookup_typed_array_kind(raw).is_some()
+        || perry_runtime::typedarray_hook_slots::lookup_typed_array_kind(raw).is_some()
     {
         return buffer_payload_copy(raw);
     }
@@ -971,7 +971,7 @@ pub(super) fn resolve_with_bits(bits: u64) -> *mut Promise {
 pub(super) fn resolve_with_bits_provider(bits: u64, provider_type: &'static str) -> *mut Promise {
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let value = scope.root_nanbox_f64(f64::from_bits(bits));
-    let result = perry_runtime::async_hooks::run_provider_completion(provider_type, || {
+    let result = perry_runtime::async_hook_slots::run_provider_completion(provider_type, || {
         let promise = js_promise_resolved(value.get_nanbox_f64());
         f64::from_bits(JSValue::pointer(promise as *const u8).bits())
     });
@@ -984,7 +984,7 @@ pub(super) unsafe fn reject_with_dom_exception(name: &str, message: &str) -> *mu
     let message_str = perry_runtime::js_string_from_bytes(message.as_ptr(), message.len() as u32);
     let name_val = f64::from_bits(JSValue::string_ptr(name_str).bits());
     let message_val = f64::from_bits(JSValue::string_ptr(message_str).bits());
-    let err = perry_runtime::event_target::js_dom_exception_new(message_val, name_val);
+    let err = perry_runtime::event_target_hook_slots::js_dom_exception_new(message_val, name_val);
     if err.is_null() {
         return perry_runtime::js_promise_rejected(f64::from_bits(0x7FFC_0000_0000_0001));
     }

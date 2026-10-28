@@ -767,7 +767,7 @@ mod property_key_tests {
                 crate::string::canonical_key(b"get"),
                 crate::value::js_nanbox_pointer(trap as i64),
             );
-            let proxy = scope.root_nanbox_f64(crate::proxy::js_proxy_new(
+            let proxy = scope.root_nanbox_f64(crate::proxy_hooks::proxy_new(
                 target.get_nanbox_f64(),
                 handler.get_nanbox_f64(),
             ));

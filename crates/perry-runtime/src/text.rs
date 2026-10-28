@@ -449,8 +449,11 @@ fn text_encoder_describe_received(value: f64) -> String {
 
     let addr = text_value_pointer_addr(value);
     if addr >= 0x1000 {
-        if let Some(kind) = crate::typedarray::lookup_typed_array_kind(addr) {
-            return format!("an instance of {}", crate::typedarray::name_for_kind(kind));
+        if let Some(kind) = crate::typedarray_hook_slots::lookup_typed_array_kind(addr) {
+            return format!(
+                "an instance of {}",
+                crate::typedarray_hook_slots::name_for_kind(kind)
+            );
         }
         if crate::buffer::is_data_view(addr) {
             return "an instance of DataView".to_string();
@@ -504,7 +507,9 @@ fn text_encoder_encode_into_source(source: f64) -> *const StringHeader {
 fn text_encoder_encode_into_dest(dest: f64) -> f64 {
     let addr = text_value_pointer_addr(dest);
     if addr >= 0x1000 {
-        if crate::typedarray::lookup_typed_array_kind(addr) == Some(crate::typedarray::KIND_UINT8) {
+        if crate::typedarray_hook_slots::lookup_typed_array_kind(addr)
+            == Some(crate::typedarray_hook_slots::KIND_UINT8)
+        {
             return dest;
         }
         if crate::buffer::is_registered_buffer(addr)
@@ -1064,8 +1069,8 @@ mod tests {
         let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
         let ab = crate::buffer::js_array_buffer_new(4);
         let ab_value = f64::from_bits(crate::value::JSValue::pointer(ab as *const u8).bits());
-        let words = crate::typedarray_view::js_typed_array_view(
-            crate::typedarray::KIND_UINT32 as i32,
+        let words = crate::typedarray_hook_slots::js_typed_array_view(
+            crate::typedarray_hook_slots::KIND_UINT32 as i32,
             ab_value,
             undef,
             undef,
@@ -1075,7 +1080,7 @@ mod tests {
 
         // "ABCD" on a little-endian host, "DCBA" on a big-endian one — the
         // assertion compares against the backing rather than a fixed literal.
-        crate::typedarray::js_typed_array_set(words, 0, 0x4443_4241u32 as f64);
+        crate::typedarray_hook_slots::js_typed_array_set(words, 0, 0x4443_4241u32 as f64);
         let expected = crate::buffer::bytes::no_gc(|scope| {
             std::str::from_utf8(
                 &crate::buffer::bytes::bytes(crate::value::js_nanbox_pointer(ab as i64), scope)

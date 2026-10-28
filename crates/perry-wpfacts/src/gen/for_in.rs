@@ -402,7 +402,7 @@ impl<'a> Gen<'a> {
             for name in lits {
                 for n in self.literal_keys(mi, &name) {
                     let a = self.m.atom(&n);
-                    self.m.accessor_atoms.insert(a);
+                    self.m.add_accessor_atom(a);
                     self.m.for_in_define_keys.insert(a);
                 }
             }

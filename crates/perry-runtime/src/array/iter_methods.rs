@@ -233,10 +233,10 @@ pub extern "C" fn js_array_forEach(arr: *const ArrayHeader, callback: *const Clo
         return;
     }
     if super::header::receiver_may_be_registered_exotic(arr)
-        && crate::typedarray::lookup_typed_array_kind(arr as usize).is_some()
+        && crate::typedarray_hook_slots::lookup_typed_array_kind(arr as usize).is_some()
     {
-        crate::typedarray::js_typed_array_for_each(
-            arr as *const crate::typedarray::TypedArrayHeader,
+        crate::typedarray_hook_slots::js_typed_array_for_each(
+            arr as *const crate::typedarray_hook_slots::TypedArrayHeader,
             callback,
         );
         return;
@@ -323,12 +323,12 @@ pub extern "C" fn js_array_map(
         return js_array_alloc(0);
     }
     if super::header::receiver_may_be_registered_exotic(arr)
-        && crate::typedarray::lookup_typed_array_kind(arr as usize).is_some()
+        && crate::typedarray_hook_slots::lookup_typed_array_kind(arr as usize).is_some()
     {
         // Typed-array receiver: read elements per element-kind and return a
         // same-kind TypedArray (mirrors the sort/at/findLast delegation).
-        return crate::typedarray::js_typed_array_map(
-            arr as *const crate::typedarray::TypedArrayHeader,
+        return crate::typedarray_hook_slots::js_typed_array_map(
+            arr as *const crate::typedarray_hook_slots::TypedArrayHeader,
             callback,
         ) as *mut ArrayHeader;
     }
@@ -545,10 +545,10 @@ pub extern "C" fn js_array_filter(
         return js_array_alloc(0);
     }
     if super::header::receiver_may_be_registered_exotic(arr)
-        && crate::typedarray::lookup_typed_array_kind(arr as usize).is_some()
+        && crate::typedarray_hook_slots::lookup_typed_array_kind(arr as usize).is_some()
     {
-        return crate::typedarray::js_typed_array_filter(
-            arr as *const crate::typedarray::TypedArrayHeader,
+        return crate::typedarray_hook_slots::js_typed_array_filter(
+            arr as *const crate::typedarray_hook_slots::TypedArrayHeader,
             callback,
         ) as *mut ArrayHeader;
     }
@@ -647,10 +647,10 @@ pub extern "C" fn js_array_find(arr: *const ArrayHeader, callback: *const Closur
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     if super::header::receiver_may_be_registered_exotic(arr)
-        && crate::typedarray::lookup_typed_array_kind(arr as usize).is_some()
+        && crate::typedarray_hook_slots::lookup_typed_array_kind(arr as usize).is_some()
     {
-        return crate::typedarray::js_typed_array_find(
-            arr as *const crate::typedarray::TypedArrayHeader,
+        return crate::typedarray_hook_slots::js_typed_array_find(
+            arr as *const crate::typedarray_hook_slots::TypedArrayHeader,
             callback,
         );
     }
@@ -726,10 +726,10 @@ pub extern "C" fn js_array_findIndex(
         return -1;
     }
     if super::header::receiver_may_be_registered_exotic(arr)
-        && crate::typedarray::lookup_typed_array_kind(arr as usize).is_some()
+        && crate::typedarray_hook_slots::lookup_typed_array_kind(arr as usize).is_some()
     {
-        return crate::typedarray::js_typed_array_find_index(
-            arr as *const crate::typedarray::TypedArrayHeader,
+        return crate::typedarray_hook_slots::js_typed_array_find_index(
+            arr as *const crate::typedarray_hook_slots::TypedArrayHeader,
             callback,
         ) as i32;
     }
@@ -786,10 +786,10 @@ pub extern "C" fn js_array_find_last(
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     if super::header::receiver_may_be_registered_exotic(arr)
-        && crate::typedarray::lookup_typed_array_kind(arr as usize).is_some()
+        && crate::typedarray_hook_slots::lookup_typed_array_kind(arr as usize).is_some()
     {
-        return crate::typedarray::js_typed_array_find_last(
-            arr as *const crate::typedarray::TypedArrayHeader,
+        return crate::typedarray_hook_slots::js_typed_array_find_last(
+            arr as *const crate::typedarray_hook_slots::TypedArrayHeader,
             callback,
         );
     }
@@ -845,10 +845,10 @@ pub extern "C" fn js_array_find_last_index(
         return -1;
     }
     if super::header::receiver_may_be_registered_exotic(arr)
-        && crate::typedarray::lookup_typed_array_kind(arr as usize).is_some()
+        && crate::typedarray_hook_slots::lookup_typed_array_kind(arr as usize).is_some()
     {
-        let r = crate::typedarray::js_typed_array_find_last_index(
-            arr as *const crate::typedarray::TypedArrayHeader,
+        let r = crate::typedarray_hook_slots::js_typed_array_find_last_index(
+            arr as *const crate::typedarray_hook_slots::TypedArrayHeader,
             callback,
         );
         return r as i32;
@@ -902,9 +902,9 @@ pub extern "C" fn js_array_at(arr: *const ArrayHeader, index: f64) -> f64 {
     // and Uint8Array/Buffer have different layouts than ArrayHeader, and the
     // codegen happily routes their `.at(i)` through this generic helper.
     let addr = arr as usize;
-    if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
-        return crate::typedarray::js_typed_array_at(
-            addr as *const crate::typedarray::TypedArrayHeader,
+    if crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some() {
+        return crate::typedarray_hook_slots::js_typed_array_at(
+            addr as *const crate::typedarray_hook_slots::TypedArrayHeader,
             index,
         );
     }
@@ -962,10 +962,10 @@ pub extern "C" fn js_array_some(arr: *const ArrayHeader, callback: *const Closur
         return f64::from_bits(TAG_FALSE);
     }
     if super::header::receiver_may_be_registered_exotic(arr)
-        && crate::typedarray::lookup_typed_array_kind(arr as usize).is_some()
+        && crate::typedarray_hook_slots::lookup_typed_array_kind(arr as usize).is_some()
     {
-        return crate::typedarray::js_typed_array_some(
-            arr as *const crate::typedarray::TypedArrayHeader,
+        return crate::typedarray_hook_slots::js_typed_array_some(
+            arr as *const crate::typedarray_hook_slots::TypedArrayHeader,
             callback,
         );
     }
@@ -1042,7 +1042,7 @@ pub extern "C" fn js_array_some_captureless(
     // declared arity, so wasm takes the generic path for every receiver.
     if cfg!(target_os = "wasi")
         || super::header::receiver_may_be_registered_exotic(arr)
-            && crate::typedarray::lookup_typed_array_kind(arr as usize).is_some()
+            && crate::typedarray_hook_slots::lookup_typed_array_kind(arr as usize).is_some()
         || super::header::receiver_may_be_registered_exotic(arr)
             && crate::buffer::is_registered_buffer(arr as usize)
     {
@@ -1133,10 +1133,10 @@ pub extern "C" fn js_array_every(arr: *const ArrayHeader, callback: *const Closu
         return f64::from_bits(TAG_TRUE);
     }
     if super::header::receiver_may_be_registered_exotic(arr)
-        && crate::typedarray::lookup_typed_array_kind(arr as usize).is_some()
+        && crate::typedarray_hook_slots::lookup_typed_array_kind(arr as usize).is_some()
     {
-        return crate::typedarray::js_typed_array_every(
-            arr as *const crate::typedarray::TypedArrayHeader,
+        return crate::typedarray_hook_slots::js_typed_array_every(
+            arr as *const crate::typedarray_hook_slots::TypedArrayHeader,
             callback,
         );
     }
@@ -1311,10 +1311,10 @@ pub extern "C" fn js_array_reduce(
     // storage is NOT NaN-boxed f64, so the generic ArrayHeader path below would
     // read garbage). Issue #2799.
     if super::header::receiver_may_be_registered_exotic(arr)
-        && crate::typedarray::lookup_typed_array_kind(arr as usize).is_some()
+        && crate::typedarray_hook_slots::lookup_typed_array_kind(arr as usize).is_some()
     {
-        return crate::typedarray::js_typed_array_reduce(
-            arr as *const crate::typedarray::TypedArrayHeader,
+        return crate::typedarray_hook_slots::js_typed_array_reduce(
+            arr as *const crate::typedarray_hook_slots::TypedArrayHeader,
             callback,
             has_initial,
             initial,
@@ -1523,8 +1523,8 @@ fn resolve_callback_ptr(cb_boxed: f64) -> Option<i64> {
         // that bare id anyway: DirectCallN falls back to js_closure_callN,
         // whose proxy-callee path performs the Proxy [[Call]].
         if !crate::closure::get_valid_func_ptr(ptr).is_null()
-            || (crate::proxy::js_proxy_is_proxy(cb_boxed) == 1
-                && crate::proxy::proxy_wraps_callable(cb_boxed))
+            || (crate::proxy_hooks::proxy_is_proxy(cb_boxed) == 1
+                && crate::proxy_hooks::proxy_wraps_callable(cb_boxed))
         {
             return Some(ptr as i64);
         }
@@ -1613,7 +1613,7 @@ pub extern "C" fn js_validate_array_map_callback(arr: i64, cb_boxed: f64) -> i64
     }
     let is_typed_array =
         super::header::receiver_may_be_registered_exotic(arr as *const ArrayHeader)
-            && crate::typedarray::lookup_typed_array_kind(arr as usize).is_some();
+            && crate::typedarray_hook_slots::lookup_typed_array_kind(arr as usize).is_some();
     let rendered = if is_typed_array {
         render_callback_plain(cb_boxed)
     } else {

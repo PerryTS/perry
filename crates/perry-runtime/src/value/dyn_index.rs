@@ -154,7 +154,11 @@ fn cached_u8_index_set(addr: usize, index: f64, value: f64) -> bool {
     let Some(idx) = finite_nonnegative_i32_index(index) else {
         return false;
     };
-    crate::buffer::admitted_u8_write(addr, idx, crate::typedarray::jsvalue_to_uint8(value))
+    crate::buffer::admitted_u8_write(
+        addr,
+        idx,
+        crate::typedarray_hook_slots::jsvalue_to_uint8(value),
+    )
 }
 
 /// Tag-aware dynamic index dispatch for `obj[key]` where `obj` has unknown
@@ -223,8 +227,10 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
     // through to the full dispatch below unchanged.
     if jsval.is_pointer() {
         let raw_ptr = (bits & POINTER_MASK) as usize;
-        if let Some(kind) = crate::typedarray::lookup_typed_array_kind(raw_ptr) {
-            if let Some(v) = crate::typedarray::typed_array_fast_index_get(raw_ptr, kind, index) {
+        if let Some(kind) = crate::typedarray_hook_slots::lookup_typed_array_kind(raw_ptr) {
+            if let Some(v) =
+                crate::typedarray_hook_slots::typed_array_fast_index_get(raw_ptr, kind, index)
+            {
                 return v;
             }
         }
@@ -299,9 +305,9 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
     // Probe the registry before any GC-header or raw ArrayHeader fallback so
     // values whose static type was erased by callback methods still read via
     // the per-kind accessor (`Uint16Array#map(...)[0]`, `(ta as any)[0]`).
-    if crate::typedarray::lookup_typed_array_kind(raw_ptr).is_some() {
-        return crate::typedarray::js_typed_array_index_get_dynamic(
-            raw_ptr as *const crate::typedarray::TypedArrayHeader,
+    if crate::typedarray_hook_slots::lookup_typed_array_kind(raw_ptr).is_some() {
+        return crate::typedarray_hook_slots::js_typed_array_index_get_dynamic(
+            raw_ptr as *const crate::typedarray_hook_slots::TypedArrayHeader,
             index,
         );
     }
@@ -383,7 +389,7 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
         let receiver = scope.root_nanbox_f64(value);
         // SAFETY: a NaN-boxed key; ToPropertyKey may run user code.
         let key = scope.root_nanbox_f64(unsafe { crate::object::js_to_property_key(index) });
-        return crate::proxy::js_proxy_get(receiver.get_nanbox_f64(), key.get_nanbox_f64());
+        return crate::proxy_hooks::proxy_get(receiver.get_nanbox_f64(), key.get_nanbox_f64());
     }
     if receiver_tag.is_some_and(|(obj_type, _)| is_registered_collection(raw_ptr, obj_type)) {
         let Some(index) = finite_nonnegative_u32_index(index) else {
@@ -620,8 +626,8 @@ pub extern "C" fn js_dyn_index_set_strict(obj: f64, index: f64, value: f64, stri
     let jsval = JSValue::from_bits(bits);
     // Proxies use small tagged handles rather than heap addresses. They must
     // take their [[Set]] path before any direct-property fast path.
-    if crate::proxy::js_proxy_is_proxy(obj) != 0 {
-        crate::proxy::js_proxy_set(obj, index, value);
+    if crate::proxy_hooks::proxy_is_proxy(obj) != 0 {
+        crate::proxy_hooks::proxy_set(obj, index, value);
         return value;
     }
     // Sloppy assignment still targets only the ephemeral ToObject wrapper,
@@ -656,8 +662,9 @@ pub extern "C" fn js_dyn_index_set_strict(obj: f64, index: f64, value: f64, stri
     // it (the slow path still flips it for the cases it owns).
     if jsval.is_pointer() {
         let raw_ptr = (bits & POINTER_MASK) as usize;
-        if let Some(kind) = crate::typedarray::lookup_typed_array_kind(raw_ptr) {
-            if crate::typedarray::typed_array_fast_index_set(raw_ptr, kind, index, value) {
+        if let Some(kind) = crate::typedarray_hook_slots::lookup_typed_array_kind(raw_ptr) {
+            if crate::typedarray_hook_slots::typed_array_fast_index_set(raw_ptr, kind, index, value)
+            {
                 return value;
             }
         }
@@ -757,7 +764,7 @@ pub extern "C" fn js_dyn_index_set_strict(obj: f64, index: f64, value: f64, stri
             .is_some_and(|h| unsafe { h.as_ref() }.obj_type == crate::gc::GC_TYPE_LAZY_ARRAY);
         if is_lazy {
             return unsafe {
-                crate::json_tape::set_lazy_index(raw_ptr as *mut _, index, value, strict)
+                crate::json_hooks::set_lazy_index(raw_ptr as *mut _, index, value, strict)
             };
         }
         let target = if jsval.is_pointer() {
@@ -767,9 +774,9 @@ pub extern "C" fn js_dyn_index_set_strict(obj: f64, index: f64, value: f64, stri
         };
         return crate::proxy::js_put_value_set(target, index, value, target, strict);
     }
-    if crate::typedarray::lookup_typed_array_kind(raw_ptr).is_some() {
-        crate::typedarray_props::js_typed_array_index_set_dynamic(
-            raw_ptr as *mut crate::typedarray::TypedArrayHeader,
+    if crate::typedarray_hook_slots::lookup_typed_array_kind(raw_ptr).is_some() {
+        crate::typedarray_hook_slots::js_typed_array_index_set_dynamic(
+            raw_ptr as *mut crate::typedarray_hook_slots::TypedArrayHeader,
             index,
             value,
         );
@@ -797,7 +804,7 @@ pub extern "C" fn js_dyn_index_set_strict(obj: f64, index: f64, value: f64, stri
     }
     if crate::buffer::is_registered_buffer(raw_ptr) {
         if let Some(idx_i32) = finite_nonnegative_i32_index(index) {
-            let byte = crate::typedarray::jsvalue_to_uint8(value);
+            let byte = crate::typedarray_hook_slots::jsvalue_to_uint8(value);
             crate::buffer::js_buffer_set(
                 raw_ptr as *mut crate::buffer::BufferHeader,
                 idx_i32,
@@ -819,7 +826,7 @@ pub extern "C" fn js_dyn_index_set_strict(obj: f64, index: f64, value: f64, stri
     }
     if receiver_tag.is_some_and(|(obj_type, _)| obj_type == crate::gc::GC_TYPE_LAZY_ARRAY) {
         return unsafe {
-            crate::json_tape::set_lazy_index(raw_ptr as *mut _, index, value, strict)
+            crate::json_hooks::set_lazy_index(raw_ptr as *mut _, index, value, strict)
         };
     }
     // An ordinary receiver whose explicit [[Prototype]] is a TypedArray must
@@ -830,10 +837,12 @@ pub extern "C" fn js_dyn_index_set_strict(obj: f64, index: f64, value: f64, stri
     // reject a non-extensible receiver in strict code).
     if let Some(proto_bits) = crate::object::prototype_chain::object_static_prototype(raw_ptr) {
         let proto_addr = crate::value::js_nanbox_get_pointer(f64::from_bits(proto_bits)) as usize;
-        if proto_addr != 0 && crate::typedarray::lookup_typed_array_kind(proto_addr).is_some() {
+        if proto_addr != 0
+            && crate::typedarray_hook_slots::lookup_typed_array_kind(proto_addr).is_some()
+        {
             let length = unsafe {
-                crate::typedarray::element_length(
-                    proto_addr as *const crate::typedarray::TypedArrayHeader,
+                crate::typedarray_hook_slots::element_length(
+                    proto_addr as *const crate::typedarray_hook_slots::TypedArrayHeader,
                 )
             };
             let is_valid_index = finite_nonnegative_u32_index(index)

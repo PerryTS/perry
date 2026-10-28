@@ -201,15 +201,20 @@ pub fn capture_context() -> AsyncContextSnapshot {
 }
 
 pub fn enter_context(snapshot: &AsyncContextSnapshot) -> AsyncContextSnapshot {
+    enter_owned_context(snapshot.clone())
+}
+
+/// Install a scheduler-owned snapshot without cloning either vector. The
+/// caller publishes the displaced snapshot in its existing scanned,
+/// throw-safe restore stack before running JavaScript. These native vector
+/// moves and token-generation checks cannot collect.
+pub(crate) fn enter_owned_context(mut snapshot: AsyncContextSnapshot) -> AsyncContextSnapshot {
+    discard_disabled_entries(&mut snapshot);
     ACTIVE_CONTEXT.with(|ctx| {
         let mut ctx = ctx.borrow_mut();
-        let previous = ctx.clone();
-        let mut next = snapshot.clone();
-        discard_disabled_entries(&mut next);
         // ALS snapshots restore values, never the canonical task executing JS.
-        next.job_domain = ctx.job_domain.clone();
-        *ctx = next;
-        previous
+        snapshot.job_domain = ctx.job_domain.clone();
+        std::mem::replace(&mut *ctx, snapshot)
     })
 }
 
@@ -435,7 +440,9 @@ pub fn apply_context_guard(action: ContextGuardAction) {
         ContextGuardAction::RestoreJobDomain(domain) => {
             job_domain::replace_current(domain);
         }
-        ContextGuardAction::RestoreExecutionIds => crate::async_hooks::unwind_execution_scope(),
+        ContextGuardAction::RestoreExecutionIds => {
+            crate::async_hook_slots::unwind_execution_scope()
+        }
         #[cfg(test)]
         ContextGuardAction::TestNoop => {}
     }
@@ -693,6 +700,31 @@ pub(crate) fn test_snapshot_token_lifetime(snapshot: &AsyncContextSnapshot) -> i
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn owned_task_context_keeps_displaced_stores_and_filters_disabled_tokens() {
+        let storage = AsyncLocalStoragePayload::default();
+        let token = storage.token();
+        set_store(token, 1.0);
+        let outer = capture_context();
+        set_store(token, 2.0);
+        let queued = capture_context();
+        restore_context(outer);
+
+        let previous = enter_owned_context(queued.clone());
+        assert_eq!(get_store(token), Some(2.0));
+        set_store(token, 3.0);
+        restore_context(previous);
+        assert_eq!(get_store(token), Some(1.0));
+
+        // disable invalidates an already queued task, including after an
+        // intervening task changed its own active context.
+        clear_store(token);
+        let previous = enter_owned_context(queued);
+        assert_eq!(get_store(token), None);
+        restore_context(previous);
+        assert!(capture_context().is_empty());
+    }
 
     #[test]
     fn disabling_storage_inside_a_scope_keeps_its_restore_token_alive() {

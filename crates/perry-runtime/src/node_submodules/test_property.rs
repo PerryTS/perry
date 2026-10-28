@@ -561,7 +561,7 @@ pub(super) fn create(target: f64, property: f64, value_present: bool, value: f64
         id,
     ));
     set_object_field(handler.get_nanbox_f64(), "get", get_trap.get_nanbox_f64());
-    crate::proxy::js_proxy_new(target.get_nanbox_f64(), handler.get_nanbox_f64())
+    crate::proxy_hooks::proxy_new(target.get_nanbox_f64(), handler.get_nanbox_f64())
 }
 
 pub(super) fn restore_all() {
@@ -612,7 +612,7 @@ mod tests {
     }
 
     fn proxy_context(proxy: f64) -> f64 {
-        crate::proxy::js_proxy_get(proxy, string_value("mock"))
+        crate::proxy_hooks::proxy_get(proxy, string_value("mock"))
     }
 
     #[test]

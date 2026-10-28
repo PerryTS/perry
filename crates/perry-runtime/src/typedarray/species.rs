@@ -227,10 +227,7 @@ pub(crate) unsafe fn copy_range_into(
     }
 }
 
-#[cold]
-fn throw_type_error(msg: &[u8]) -> ! {
-    super::throw_type_error(msg)
-}
+use crate::byte_cell_support::throw_type_error;
 
 /// Resolve a NaN-boxed pointer value back to a `*mut TypedArrayHeader` (for
 /// the legacy return type of the method helpers). Works for both the

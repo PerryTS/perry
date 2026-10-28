@@ -48,7 +48,9 @@ const RESAMPLE_EVERY: u8 = 16;
 
 // Two byte counters read once per parse. No heap pointer can live in either.
 crate::perry_thread_local! {
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_json")]
     static SCORE: Cell<u8> = const { Cell::new(0) };
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_json")]
     static EAGER_RUN: Cell<u8> = const { Cell::new(0) };
 }
 

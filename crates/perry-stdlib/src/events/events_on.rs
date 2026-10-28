@@ -295,7 +295,7 @@ unsafe fn detach_queue_listener(state: *mut ArrayHeader) {
         if let Some(target) = event_target_ptr(emitter.get_nanbox_f64()) {
             let event_ptr =
                 perry_runtime::value::js_get_string_pointer_unified(event) as *const StringHeader;
-            perry_runtime::event_target::js_event_target_remove_event_listener(
+            perry_runtime::event_target_hook_slots::js_event_target_remove_event_listener(
                 target,
                 event_ptr,
                 js_nanbox_get_pointer(listener),
@@ -346,7 +346,8 @@ extern "C" fn events_on_abort_listener(
         // Mark the iterator aborted and reject any blocked `next()`. Buffered
         // events drained before the abort still surface; only once the buffer is
         // empty does `next()` observe the stored AbortError (matching Node).
-        let abort_err = scope.root_nanbox_f64(perry_runtime::url::js_abort_error_value());
+        let abort_err =
+            scope.root_nanbox_f64(perry_runtime::event_target_hook_slots::js_abort_error_value());
         let state = js_nanbox_get_pointer(state.get_nanbox_f64()) as *mut ArrayHeader;
         if !state.is_null() {
             events_on_state_set(state, EVENTS_ON_ABORT, abort_err.get_nanbox_f64());
@@ -404,7 +405,9 @@ pub unsafe extern "C" fn js_events_on(
         .as_ref()
         .is_some_and(|signal| signal_is_aborted(signal.get_nanbox_f64()))
     {
-        perry_runtime::exception::js_throw(perry_runtime::url::js_abort_error_value());
+        perry_runtime::exception::js_throw(
+            perry_runtime::event_target_hook_slots::js_abort_error_value(),
+        );
     }
 
     let listener = scope.root_raw_mut_ptr(js_closure_alloc(
@@ -421,7 +424,7 @@ pub unsafe extern "C" fn js_events_on(
 
     match target {
         EventHelperTarget::EventTarget(target) => {
-            perry_runtime::event_target::js_event_target_add_event_listener(
+            perry_runtime::event_target_hook_slots::js_event_target_add_event_listener(
                 target,
                 event_name.get_raw_const_ptr(),
                 listener.get_raw_mut_ptr::<ClosureHeader>() as i64,
@@ -486,7 +489,7 @@ pub unsafe extern "C" fn js_events_on(
                 let event_ptr =
                     perry_runtime::value::js_get_string_pointer_unified(event.get_nanbox_f64())
                         as *const StringHeader;
-                perry_runtime::event_target::js_event_target_add_event_listener(
+                perry_runtime::event_target_hook_slots::js_event_target_add_event_listener(
                     target,
                     event_ptr,
                     close_listener.get_raw_mut_ptr::<ClosureHeader>() as i64,
@@ -528,7 +531,7 @@ pub unsafe extern "C" fn js_events_on(
             );
             let abort_event = scope.root_nanbox_f64(abort_event_value());
             if let Some(signal_ptr) = object_ptr_from_value(signal.get_nanbox_f64()) {
-                perry_runtime::url::js_abort_signal_add_listener(
+                perry_runtime::event_target_hook_slots::js_abort_signal_add_listener(
                     signal_ptr,
                     abort_event.get_nanbox_f64(),
                     js_nanbox_pointer(abort_listener.get_raw_mut_ptr::<ClosureHeader>() as i64),

@@ -1,6 +1,6 @@
 //! Historical string-returning ABI, retained for native callers and tests.
 //! Compiler and JS dispatch use the boxed ABI to preserve arbitrary hook values.
-use super::{perex_api as api, perex_dispatch as dispatch, perex_replace, RegExpHeader};
+use super::RegExpHeader;
 use crate::gc::RuntimeHandleScope;
 use crate::string::StringHeader;
 use crate::value::{js_nanbox_pointer, js_nanbox_string, TAG_UNDEFINED};
@@ -13,15 +13,14 @@ fn string_value(s: *const StringHeader) -> f64 {
     }
 }
 fn run(all: bool, s: *const StringHeader, search: f64, replacement: f64) -> *mut StringHeader {
-    let result = api::finish(perex_replace::string(
-        all,
-        string_value(s),
-        search,
-        replacement,
-    ));
+    let result = if all {
+        super::hooked::js_string_replace_all_js(string_value(s), search, replacement)
+    } else {
+        super::hooked::js_string_replace_js(string_value(s), search, replacement)
+    };
     let scope = RuntimeHandleScope::new();
     let result = scope.root_nanbox_f64(result);
-    api::finish(dispatch::to_string(&result))
+    crate::string::literal_replace::text(&scope, &result).get_raw_mut_ptr::<StringHeader>()
 }
 macro_rules! string_text {
     ($name:ident, $all:expr) => {

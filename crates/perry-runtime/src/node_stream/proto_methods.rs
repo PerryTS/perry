@@ -1187,9 +1187,9 @@ extern "C" fn legacy_pipe_onclose(c: *const ClosureHeader, _t: crate::closure::J
 extern "C" fn legacy_pipe_cleanup(c: *const ClosureHeader, _t: crate::closure::JsThis) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let record = scope.root_nanbox_f64(js_closure_get_capture_f64(c, 0));
-    let r = || record.get_nanbox_f64();
-    let source = scope.root_nanbox_f64(pipe_get(r(), pipe_slot::SOURCE));
-    let dest = scope.root_nanbox_f64(pipe_get(r(), pipe_slot::DEST));
+    let r = &record;
+    let source = scope.root_nanbox_f64(pipe_get((r.get_nanbox_f64()), pipe_slot::SOURCE));
+    let dest = scope.root_nanbox_f64(pipe_get((r.get_nanbox_f64()), pipe_slot::DEST));
     for (target, event, slot) in [
         (&source, &b"data"[..], pipe_slot::ONDATA),
         (&dest, b"drain", pipe_slot::ONDRAIN),
@@ -1202,7 +1202,7 @@ extern "C" fn legacy_pipe_cleanup(c: *const ClosureHeader, _t: crate::closure::J
         (&dest, b"close", pipe_slot::CLEANUP),
     ] {
         let event = scope.root_nanbox_f64(literal_string_value(event_static(event)));
-        let listener = pipe_get(r(), slot);
+        let listener = pipe_get((r.get_nanbox_f64()), slot);
         call_named(
             target.get_nanbox_f64(),
             crate::runtime_state_key!(b"removeListener"),
@@ -1263,10 +1263,18 @@ extern "C" fn ns_legacy_pipe2(
     let record = scope.root_nanbox_f64(box_pointer(
         crate::array::js_array_alloc_with_length_exact(pipe_slot::LEN) as *const u8,
     ));
-    let r = || record.get_nanbox_f64();
-    pipe_set(r(), pipe_slot::SOURCE, source.get_nanbox_f64());
-    pipe_set(r(), pipe_slot::DEST, dest.get_nanbox_f64());
-    pipe_set(r(), pipe_slot::DID_ON_END, f64::from_bits(TAG_FALSE));
+    let r = &record;
+    pipe_set(
+        (r.get_nanbox_f64()),
+        pipe_slot::SOURCE,
+        source.get_nanbox_f64(),
+    );
+    pipe_set((r.get_nanbox_f64()), pipe_slot::DEST, dest.get_nanbox_f64());
+    pipe_set(
+        (r.get_nanbox_f64()),
+        pipe_slot::DID_ON_END,
+        f64::from_bits(TAG_FALSE),
+    );
     for (slot, info) in [
         (
             pipe_slot::ONDATA,
@@ -1294,12 +1302,16 @@ extern "C" fn ns_legacy_pipe2(
         ),
     ] {
         let closure = js_closure_alloc(info, 1);
-        js_closure_set_capture_f64(closure, 0, r());
-        pipe_set(r(), slot, box_pointer(closure as *const u8));
+        js_closure_set_capture_f64(closure, 0, (r.get_nanbox_f64()));
+        pipe_set(
+            (r.get_nanbox_f64()),
+            slot,
+            box_pointer(closure as *const u8),
+        );
     }
     let on = |target: f64, event: &'static [u8], slot: u32| {
         let event = scope.root_nanbox_f64(literal_string_value(event));
-        let listener = pipe_get(r(), slot);
+        let listener = pipe_get((r.get_nanbox_f64()), slot);
         call_named(
             target,
             crate::runtime_state_key!(b"on"),
@@ -1320,7 +1332,7 @@ extern "C" fn ns_legacy_pipe2(
     }
     for target in [source.get_nanbox_f64(), dest.get_nanbox_f64()] {
         let event = scope.root_nanbox_f64(literal_string_value(b"error"));
-        let listener = pipe_get(r(), pipe_slot::ONERROR);
+        let listener = pipe_get((r.get_nanbox_f64()), pipe_slot::ONERROR);
         call_named(
             target,
             crate::runtime_state_key!(b"prependListener"),

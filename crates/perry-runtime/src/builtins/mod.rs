@@ -112,6 +112,7 @@ mod fn_metadata;
 mod retained_source;
 pub(crate) use fn_metadata::function_registries_census;
 mod formatting;
+pub(crate) use formatting::install_json_format;
 mod globals;
 mod numbers;
 mod table;
@@ -211,3 +212,8 @@ pub(crate) use globals::{
     test_clear_queued_jobs, test_queued_microtask_snapshot, test_seed_queued_job_owner,
     test_seed_queued_microtask, test_seed_queued_microtask_previous_context,
 };
+
+pub(crate) use globals::clone_with_transfers;
+
+mod number_locale;
+pub use number_locale::js_number_to_locale_string;

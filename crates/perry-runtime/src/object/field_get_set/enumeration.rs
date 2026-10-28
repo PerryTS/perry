@@ -145,8 +145,8 @@ pub extern "C" fn js_object_keys_value(value: f64) -> *mut ArrayHeader {
     }
     // A Proxy is a small registered id — route through the `ownKeys` trap +
     // enumerability filter rather than the handle-dispatch fallback below.
-    if crate::proxy::js_proxy_is_proxy(value) != 0 {
-        let arr = crate::proxy::proxy_enum_own_keys(value);
+    if crate::proxy_hooks::proxy_is_proxy(value) != 0 {
+        let arr = crate::proxy_hooks::proxy_enum_own_keys(value);
         return (arr.to_bits() & crate::value::POINTER_MASK) as *mut ArrayHeader;
     }
     if jv.is_any_string() {
@@ -166,7 +166,7 @@ pub extern "C" fn js_object_keys_value(value: f64) -> *mut ArrayHeader {
     if let Some(addr) = crate::typedarray_props::typed_array_addr_from_value(value) {
         return unsafe {
             crate::typedarray_props::typed_array_own_property_names(
-                addr as *const crate::typedarray::TypedArrayHeader,
+                addr as *const crate::typedarray_hook_slots::TypedArrayHeader,
                 true,
             )
         };
@@ -246,10 +246,10 @@ pub extern "C" fn js_object_keys_value(value: f64) -> *mut ArrayHeader {
             }
             return out;
         }
-        if crate::typedarray::lookup_typed_array_kind(ptr).is_some() {
+        if crate::typedarray_hook_slots::lookup_typed_array_kind(ptr).is_some() {
             return unsafe {
                 crate::typedarray_props::typed_array_own_property_names(
-                    ptr as *const crate::typedarray::TypedArrayHeader,
+                    ptr as *const crate::typedarray_hook_slots::TypedArrayHeader,
                     true,
                 )
             };
@@ -794,7 +794,7 @@ unsafe fn proxy_values_or_entries(value: f64, want_pairs: bool) -> *mut ArrayHea
     // handles and are re-read after each call.
     let scope = crate::gc::RuntimeHandleScope::new();
     let recv_h = scope.root_nanbox_f64(value);
-    let keys_boxed = crate::proxy::js_proxy_own_keys(value);
+    let keys_boxed = crate::proxy_hooks::proxy_own_keys(value);
     let keys_arr = (keys_boxed.to_bits() & crate::value::POINTER_MASK) as *mut ArrayHeader;
     let keys_h = scope.root_raw_mut_ptr(keys_arr);
     let len = crate::array::js_array_length(keys_h.get_raw_const_ptr::<ArrayHeader>());
@@ -827,7 +827,7 @@ unsafe fn proxy_values_or_entries(value: f64, want_pairs: bool) -> *mut ArrayHea
         {
             continue;
         }
-        let val = crate::proxy::js_proxy_get(recv_h.get_nanbox_f64(), key_h.get_nanbox_f64());
+        let val = crate::proxy_hooks::proxy_get(recv_h.get_nanbox_f64(), key_h.get_nanbox_f64());
         val_h.set_nanbox_f64(val);
         if want_pairs {
             let pair = crate::array::js_array_alloc(2);
@@ -855,7 +855,7 @@ unsafe fn proxy_values_or_entries(value: f64, want_pairs: bool) -> *mut ArrayHea
 #[no_mangle]
 pub extern "C" fn js_object_values_value(value: f64) -> *mut ArrayHeader {
     let jv = JSValue::from_bits(value.to_bits());
-    if crate::proxy::js_proxy_is_proxy(value) != 0 {
+    if crate::proxy_hooks::proxy_is_proxy(value) != 0 {
         return unsafe {
             proxy_values_or_entries(value, /*want_pairs=*/ false)
         };
@@ -879,7 +879,7 @@ pub extern "C" fn js_object_values_value(value: f64) -> *mut ArrayHeader {
     if let Some(addr) = crate::typedarray_props::typed_array_addr_from_value(value) {
         return unsafe {
             crate::typedarray_props::typed_array_own_enumerable_values(
-                addr as *const crate::typedarray::TypedArrayHeader,
+                addr as *const crate::typedarray_hook_slots::TypedArrayHeader,
             )
         };
     }
@@ -892,10 +892,10 @@ pub extern "C" fn js_object_values_value(value: f64) -> *mut ArrayHeader {
         if crate::value::addr_class::is_handle_band(ptr) {
             return handle_own_entries(value, HandleEnum::Values);
         }
-        if crate::typedarray::lookup_typed_array_kind(ptr).is_some() {
+        if crate::typedarray_hook_slots::lookup_typed_array_kind(ptr).is_some() {
             return unsafe {
                 crate::typedarray_props::typed_array_own_enumerable_values(
-                    ptr as *const crate::typedarray::TypedArrayHeader,
+                    ptr as *const crate::typedarray_hook_slots::TypedArrayHeader,
                 )
             };
         }
@@ -968,7 +968,7 @@ fn handle_own_entries(value: f64, what: HandleEnum) -> *mut ArrayHeader {
 #[no_mangle]
 pub extern "C" fn js_object_entries_value(value: f64) -> *mut ArrayHeader {
     let jv = JSValue::from_bits(value.to_bits());
-    if crate::proxy::js_proxy_is_proxy(value) != 0 {
+    if crate::proxy_hooks::proxy_is_proxy(value) != 0 {
         return unsafe {
             proxy_values_or_entries(value, /*want_pairs=*/ true)
         };
@@ -997,7 +997,7 @@ pub extern "C" fn js_object_entries_value(value: f64) -> *mut ArrayHeader {
     if let Some(addr) = crate::typedarray_props::typed_array_addr_from_value(value) {
         return unsafe {
             crate::typedarray_props::typed_array_own_enumerable_entries(
-                addr as *const crate::typedarray::TypedArrayHeader,
+                addr as *const crate::typedarray_hook_slots::TypedArrayHeader,
             )
         };
     }
@@ -1008,10 +1008,10 @@ pub extern "C" fn js_object_entries_value(value: f64) -> *mut ArrayHeader {
         if crate::value::addr_class::is_handle_band(ptr) {
             return handle_own_entries(value, HandleEnum::Entries);
         }
-        if crate::typedarray::lookup_typed_array_kind(ptr).is_some() {
+        if crate::typedarray_hook_slots::lookup_typed_array_kind(ptr).is_some() {
             return unsafe {
                 crate::typedarray_props::typed_array_own_enumerable_entries(
-                    ptr as *const crate::typedarray::TypedArrayHeader,
+                    ptr as *const crate::typedarray_hook_slots::TypedArrayHeader,
                 )
             };
         }
@@ -1256,15 +1256,15 @@ fn js_object_keys_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
     {
         return unsafe {
             crate::typedarray_props::typed_array_own_property_names(
-                addr as *const crate::typedarray::TypedArrayHeader,
+                addr as *const crate::typedarray_hook_slots::TypedArrayHeader,
                 true,
             )
         };
     }
-    if crate::typedarray::lookup_typed_array_kind(stripped as usize).is_some() {
+    if crate::typedarray_hook_slots::lookup_typed_array_kind(stripped as usize).is_some() {
         return unsafe {
             crate::typedarray_props::typed_array_own_property_names(
-                stripped as *const crate::typedarray::TypedArrayHeader,
+                stripped as *const crate::typedarray_hook_slots::TypedArrayHeader,
                 true,
             )
         };
@@ -1440,8 +1440,8 @@ fn js_object_keys_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
         // check drops it. Plain object literals keep class_id 0, so
         // `{"#fff": 1}` stays visible.
         let hide_private = (*obj).class_id != 0;
-        let hide_wasi_state = crate::wasi::is_wasi_import_object(obj)
-            || crate::wasi::is_wasi_instance(f64::from_bits(
+        let hide_wasi_state = crate::wasi_hook_slots::is_wasi_import_object(obj)
+            || crate::wasi_hook_slots::is_wasi_instance(f64::from_bits(
                 crate::value::js_nanbox_pointer(obj as i64).to_bits(),
             ));
         if !has_descriptors && !own_keys_may_hide(obj) && !hide_wasi_state {
@@ -1730,14 +1730,14 @@ fn js_object_values_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
     {
         return unsafe {
             crate::typedarray_props::typed_array_own_enumerable_values(
-                addr as *const crate::typedarray::TypedArrayHeader,
+                addr as *const crate::typedarray_hook_slots::TypedArrayHeader,
             )
         };
     }
-    if crate::typedarray::lookup_typed_array_kind(stripped as usize).is_some() {
+    if crate::typedarray_hook_slots::lookup_typed_array_kind(stripped as usize).is_some() {
         return unsafe {
             crate::typedarray_props::typed_array_own_enumerable_values(
-                stripped as *const crate::typedarray::TypedArrayHeader,
+                stripped as *const crate::typedarray_hook_slots::TypedArrayHeader,
             )
         };
     }

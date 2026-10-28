@@ -48,6 +48,8 @@ struct Hint {
 const HINTS: usize = 4;
 
 crate::perry_thread_local! {
+    // Keep this resolver record out of Mach-O globals merged with the core.
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_regex")]
     static HINT_TABLE: Cell<[Option<Hint>; HINTS]> = const { Cell::new([None; HINTS]) };
     static HINT_NEXT: Cell<u8> = const { Cell::new(0) };
 }

@@ -292,15 +292,17 @@ pub extern "C" fn js_console_table_with_properties(value: f64, properties: f64) 
         }
         let only_properties = table_properties_from_value(properties);
         let raw_addr = jsval.as_pointer::<u8>() as usize;
-        if crate::typedarray::lookup_typed_array_kind(raw_addr).is_some() {
-            let ta = raw_addr as *const crate::typedarray::TypedArrayHeader;
-            let length = crate::typedarray::js_typed_array_length(ta).max(0) as usize;
+        if crate::typedarray_hook_slots::lookup_typed_array_kind(raw_addr).is_some() {
+            let ta = raw_addr as *const crate::typedarray_hook_slots::TypedArrayHeader;
+            let length = crate::typedarray_hook_slots::js_typed_array_length(ta).max(0) as usize;
             let headers = vec!["(index)".to_string(), "Values".to_string()];
             let mut rows: Vec<Vec<String>> = Vec::with_capacity(length);
             for i in 0..length {
                 rows.push(vec![
                     i.to_string(),
-                    format_table_cell(crate::typedarray::js_typed_array_get(ta, i as i32)),
+                    format_table_cell(crate::typedarray_hook_slots::js_typed_array_get(
+                        ta, i as i32,
+                    )),
                 ]);
             }
             render_table(&headers, &rows);

@@ -1698,7 +1698,7 @@ mod define_header_tests {
     }
 
     /// A shadow frame that no slot write reaches roots nothing, so it renders
-    /// no push and no pop (the fib frame with an i32 parameter: sized for its
+    /// no push and no pop (a specialized raw-i32 frame: sized for its
     /// parameter, which the `i32` rep never roots). The same frame renders
     /// both once one bind or set reaches it, in either entry region.
     #[test]

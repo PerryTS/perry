@@ -33,7 +33,7 @@ pub extern "C" fn js_headers_from_value(init: f64) -> f64 {
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let init = scope.root_nanbox_f64(init);
     let current = init.get_nanbox_f64();
-    if perry_runtime::proxy::js_proxy_is_proxy(current) == 0 {
+    if perry_runtime::proxy_hooks::proxy_is_proxy(current) == 0 {
         let id = handle_id(current);
         if HEADERS_REGISTRY.lock().unwrap().contains_key(&id) {
             return current;
@@ -117,7 +117,7 @@ fn describe_headers_init(value: f64) -> String {
     if jsval.is_any_string() {
         return "string".to_string();
     }
-    if perry_runtime::proxy::js_proxy_is_proxy(value) != 0 {
+    if perry_runtime::proxy_hooks::proxy_is_proxy(value) != 0 {
         return "Proxy".to_string();
     }
     if perry_runtime::js_array_is_array(value).to_bits() == TAG_TRUE {
@@ -187,7 +187,7 @@ fn read_headers_record_entries(
     // heap object, so without this branch the record path bailed and the
     // constructor reported "init is not iterable" for an ordinary header
     // object (OpenCode's request path, tracker #10107).
-    if perry_runtime::proxy::js_proxy_is_proxy(value) != 0 {
+    if perry_runtime::proxy_hooks::proxy_is_proxy(value) != 0 {
         return unsafe { read_proxy_record_entries(value, scope) };
     }
     let raw = perry_runtime::js_nanbox_get_pointer(value);
@@ -231,7 +231,7 @@ unsafe fn read_proxy_record_entries(
     scope: &perry_runtime::gc::RuntimeHandleScope,
 ) -> Option<Vec<(String, String)>> {
     let proxy_handle = scope.root_nanbox_f64(value);
-    let keys_value = perry_runtime::proxy::js_proxy_own_keys(proxy_handle.get_nanbox_f64());
+    let keys_value = perry_runtime::proxy_hooks::proxy_own_keys(proxy_handle.get_nanbox_f64());
     let keys_handle = scope.root_nanbox_f64(keys_value);
     let keys_raw = perry_runtime::js_nanbox_get_pointer(keys_handle.get_nanbox_f64());
     if keys_raw == 0 {
@@ -279,8 +279,10 @@ unsafe fn read_proxy_record_entries(
             continue;
         }
         let name = string_from_header(key_ptr as *const StringHeader).unwrap_or_default();
-        let value =
-            perry_runtime::proxy::js_proxy_get(proxy_handle.get_nanbox_f64(), key.get_nanbox_f64());
+        let value = perry_runtime::proxy_hooks::proxy_get(
+            proxy_handle.get_nanbox_f64(),
+            key.get_nanbox_f64(),
+        );
         entries.push((name, header_init_string(value)));
     }
     Some(entries)
@@ -394,7 +396,7 @@ pub unsafe extern "C" fn js_headers_init_from_value(handle: f64, init: f64) -> f
     // A Proxy value is not a Headers handle: its NaN-box would otherwise be
     // masked into a registry id and could alias a live Headers entry, silently
     // copying the wrong (or no) headers. Route it to the record path below.
-    let is_proxy_init = perry_runtime::proxy::js_proxy_is_proxy(init) != 0;
+    let is_proxy_init = perry_runtime::proxy_hooks::proxy_is_proxy(init) != 0;
     let source_id = handle_id(init);
     let cloned = if is_proxy_init {
         None

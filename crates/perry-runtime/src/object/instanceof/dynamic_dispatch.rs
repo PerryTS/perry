@@ -32,7 +32,7 @@ struct InstanceofRhs {
 impl InstanceofRhs {
     #[inline]
     fn classify(value: f64) -> Self {
-        if crate::proxy::js_proxy_is_proxy(value) != 0 {
+        if crate::proxy_hooks::proxy_is_proxy(value) != 0 {
             return Self {
                 kind: RhsKind::Proxy,
                 closure: None,
@@ -100,8 +100,8 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
     let mut value = value;
     let lhs_non_proxy = {
         let mut depth = 0;
-        while depth < 16 && crate::proxy::js_proxy_is_proxy(value) != 0 {
-            value = crate::proxy::js_proxy_target(value);
+        while depth < 16 && crate::proxy_hooks::proxy_is_proxy(value) != 0 {
+            value = crate::proxy_hooks::proxy_target(value);
             depth += 1;
         }
         depth < 16
@@ -428,7 +428,7 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
                 method.as_str(),
                 "Readable" | "Writable" | "Duplex" | "Transform" | "PassThrough" | "Stream"
             )
-            && (crate::node_stream::is_classic_stream_instance_of(value, method.as_str())
+            && (crate::stream_hooks::is_classic_stream_instance_of(value, method.as_str())
                 || super::tls_constructor_prototype_is_instance_of(value, method.as_str())
                 // #10798: a genuine `class X extends Stream` subclass is a real
                 // ObjectHeader carrying its own class id, chained through the
@@ -485,7 +485,7 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
         {
             let raw = value_addr(value);
             let matched = if method == "AsyncResource" {
-                crate::async_hooks::resolve_async_resource_handle(raw as i64).is_some()
+                crate::async_hook_slots::resolve_async_resource_handle(raw as i64).is_some()
                     || (crate::value::addr_class::is_plausible_heap_addr(raw)
                         && ordinary_has_instance_prototype_walk(value, type_ref))
             } else {
@@ -520,7 +520,9 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
                 "Dir" => crate::fs::is_fs_dir_instance_value(value),
                 "Dirent" => crate::fs::is_fs_dirent_instance_value(value),
                 "ReadStream" | "FileReadStream" | "WriteStream" | "FileWriteStream"
-                | "Utf8Stream" => crate::fs::is_fs_stream_instance_value(value, method.as_str()),
+                | "Utf8Stream" => {
+                    crate::fs_hook_slots::is_fs_stream_instance_value(value, method.as_str())
+                }
                 _ => false,
             };
             if matched {
@@ -546,7 +548,7 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
                 });
             }
         }
-        if module == "wasi" && method == "WASI" && crate::wasi::is_wasi_instance(value) {
+        if module == "wasi" && method == "WASI" && crate::wasi_hook_slots::is_wasi_instance(value) {
             return f64::from_bits(crate::value::TAG_TRUE);
         }
         if module == "repl" {

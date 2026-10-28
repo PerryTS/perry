@@ -636,7 +636,7 @@ pub(crate) unsafe fn resume_fixed_step(
     };
     let set = |index, bits| {
         state.with_const_ptr::<crate::closure::ClosureHeader, _>(|p| {
-            // GC_STORE_AUDIT(POINTER_FREE): shared done/executing/step controls only.
+            // GC_STORE_AUDIT(POINTER_FREE): controls or the canonical undefined sent value.
             p.add(1).cast::<u64>().cast_mut().add(index).write(bits);
         })
     };
@@ -667,9 +667,17 @@ pub(crate) unsafe fn resume_fixed_step(
     }
     set(3, crate::value::TAG_TRUE);
     if op == 0.0 {
-        state.with_const_ptr::<crate::closure::ClosureHeader, _>(|p| {
-            js_generator_set_slot(p.cast_mut(), 2, arg.to_bits(), 1)
-        });
+        // The ordinary next() call sends undefined. Its bits prove there is
+        // neither a managed edge nor a string alias to publish, just as for
+        // the frame's done/executing controls. Keep the full slot operation
+        // for sent values that need barrier or alias handling.
+        if arg.to_bits() == crate::value::TAG_UNDEFINED {
+            set(2, crate::value::TAG_UNDEFINED);
+        } else {
+            state.with_const_ptr::<crate::closure::ClosureHeader, _>(|p| {
+                js_generator_set_slot(p.cast_mut(), 2, arg.to_bits(), 1)
+            });
+        }
     }
     // next consumes the sent slot from this refreshed frame at body entry,
     // including after barrier work. Abrupt arguments cross no slot barrier;

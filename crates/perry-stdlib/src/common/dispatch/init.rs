@@ -1,6 +1,10 @@
 use super::*;
 use crate::common::feature_hooks::{HandleArm, Hook, PropertySetArm};
 
+// An absent streams install cannot own any stream property bag.
+static STREAM_PROPERTY_BAG: Hook<unsafe extern "C" fn(i64, u32, u64, *mut u64) -> bool> =
+    Hook::empty();
+
 // Slots for the optional-feature arms of the three hubs in this file; see
 // `method_dispatch.rs` for the scheme.
 static SET_EXTERNAL_NET: Hook<PropertySetArm> = Hook::empty();
@@ -146,7 +150,7 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
                 } else {
                     TAG_UNDEFINED_F64
                 };
-                perry_runtime::async_hooks::js_async_resource_new(type_value, options)
+                perry_runtime::async_hook_slots::js_async_resource_new(type_value, options)
             }
             // `new sd.StringDecoder(enc)` where `StringDecoder` was read off the
             // `string_decoder` namespace as a value: the same handle the static
@@ -413,6 +417,21 @@ pub(super) unsafe fn install_http_server_registrations() {
 
 #[cfg(feature = "bundled-streams")]
 pub(super) unsafe fn install_streams_registrations() {
+    unsafe extern "C" fn stream_property_bag(
+        handle: i64,
+        operation: u32,
+        bits: u64,
+        out: *mut u64,
+    ) -> bool {
+        if let Some(previous) = crate::streams::native_property_bag(handle as usize) {
+            *out = previous;
+            return operation == 0
+                || crate::streams::set_native_property_bag(handle as usize, bits);
+        }
+        false
+    }
+    STREAM_PROPERTY_BAG.set(stream_property_bag);
+
     crate::streams::install_readable_stream_from_static();
     // #1545: register the Web Streams numeric-handle probe so method calls on
     // stream handles whose static type the codegen lost route to the stream
@@ -576,12 +595,9 @@ unsafe extern "C" fn native_property_bag_dispatch(
         *out = previous;
         return operation == 0 || crate::fetch::set_native_property_bag(handle as usize, bits);
     }
-    #[cfg(feature = "bundled-streams")]
-    if let Some(previous) = crate::streams::native_property_bag(handle as usize) {
-        *out = previous;
-        return operation == 0 || crate::streams::set_native_property_bag(handle as usize, bits);
-    }
-    false
+    STREAM_PROPERTY_BAG
+        .get()
+        .is_some_and(|dispatch| dispatch(handle, operation, bits, out))
 }
 
 #[allow(unused_imports)]

@@ -4,6 +4,8 @@ use super::*;
 mod cleanup_tests;
 #[path = "resource_loan_tests.rs"]
 mod loan_tests;
+#[path = "resource_scope_tests.rs"]
+mod scope_tests;
 
 struct Registry<'a> {
     global: crate::gc::RuntimeHandle<'a>,

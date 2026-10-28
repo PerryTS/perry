@@ -41,10 +41,29 @@ struct ObjectMetadata {
     type_tag: Option<NapiTypeTag>,
 }
 
-crate::perry_thread_local! {
-    static PENDING_FINALIZERS: RefCell<VecDeque<FinalizerRecord>> =
-        const { RefCell::new(VecDeque::new()) };
+mod finalizer_storage {
+    use super::*;
+    type Value = RefCell<VecDeque<FinalizerRecord>>;
+    type Storage = crate::tls_hot::HotCell<Value, { std::mem::needs_drop::<Value>() as usize }>;
+    crate::__perry_thread_local_storage!(Storage, const { RefCell::new(VecDeque::new()) });
+    pub(super) fn resolve(idx: u32) -> Result<*mut u8, crate::tls_hot::AccessError> {
+        STORAGE.try_with(|cell| {
+            cell.arm_guard(idx);
+            cell.value_addr()
+        })
+    }
+    pub(super) static KEY: crate::tls_hot::HotKey<Value> = crate::tls_hot::HotKey::new(
+        crate::tls_hot::SlotId::named(concat!(
+            module_path!(),
+            "::PENDING_FINALIZERS@",
+            line!(),
+            ":",
+            column!()
+        )),
+        crate::native_finalizer_hook::resolve_finalizer_storage,
+    );
 }
+use finalizer_storage::KEY as PENDING_FINALIZERS;
 
 pub(crate) fn finalizer(
     callback: NapiFinalize,
@@ -400,4 +419,8 @@ pub(crate) fn test_owned_metadata(owner: usize) -> Option<(usize, u64, u64)> {
 #[cfg(test)]
 pub(crate) fn test_erase_owned_metadata(owner: usize) {
     owned::erase(owner);
+}
+
+pub(super) fn install_finalizer_storage() {
+    crate::native_finalizer_hook::set_finalizer_storage(finalizer_storage::resolve);
 }

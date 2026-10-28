@@ -87,7 +87,7 @@ pub extern "C" fn js_promise_new_cross_thread() -> *mut Promise {
 
 fn js_promise_new_with_parent_impl(parent: *mut Promise, force_malloc: bool) -> *mut Promise {
     bump(&MT_PROMISE_NEW_COUNT);
-    let async_hooks_active = crate::async_hooks::promise_hooks_active();
+    let async_hooks_active = crate::async_hook_slots::promise_hooks_active();
     let lifecycle_hooks_active = async_hooks_active || crate::v8::promise_hooks_active();
     // Root the parent before allocating the child. The allocation itself may
     // move an arena-resident Promise that predates hook enablement; rooting it
@@ -119,7 +119,7 @@ fn js_promise_new_with_parent_impl(parent: *mut Promise, force_malloc: bool) -> 
         }
         let trigger_async_id = parent_handle.with_mut_ptr::<Promise, _>(|parent| {
             if parent.is_null() {
-                crate::async_hooks::execution_async_id_u64()
+                crate::async_hook_slots::execution_async_id_u64()
             } else {
                 (*parent).async_id
             }
@@ -129,7 +129,7 @@ fn js_promise_new_with_parent_impl(parent: *mut Promise, force_malloc: bool) -> 
                 let resource = f64::from_bits(
                     0x7FFD_0000_0000_0000 | (promise as u64 & 0x0000_FFFF_FFFF_FFFF),
                 );
-                crate::async_hooks::init_resource_with_trigger(
+                crate::async_hook_slots::init_resource_with_trigger(
                     "PROMISE",
                     resource,
                     false,
@@ -145,7 +145,7 @@ fn js_promise_new_with_parent_impl(parent: *mut Promise, force_malloc: bool) -> 
             // while an observer is enabled. Keep this reservation out of the
             // resource table so an unobserved promise is not made immortal by
             // a strong resource root.
-            let ids = crate::async_hooks::reserve_resource_ids(trigger_async_id);
+            let ids = crate::async_hook_slots::reserve_resource_ids(trigger_async_id);
             promise_handle.with_mut_ptr::<Promise, _>(|promise| {
                 (*promise).async_id = ids.async_id;
                 (*promise).trigger_async_id = ids.trigger_async_id;
@@ -251,7 +251,7 @@ pub extern "C" fn js_promise_resolve(promise: *mut Promise, value: f64) {
         (*promise).state = PromiseState::Fulfilled;
         release_native_pin(promise);
         store_promise_jsvalue_slot(promise, std::ptr::addr_of_mut!((*promise).value), value);
-        crate::async_hooks::promise_resolve((*promise).async_id);
+        crate::async_hook_slots::promise_resolve((*promise).async_id);
         crate::v8::promise_hook_settled(promise);
 
         // Schedule callbacks. Push to TASK_QUEUE whenever there's anything
@@ -476,7 +476,7 @@ pub extern "C" fn js_promise_reject(promise: *mut Promise, reason: f64) {
         (*promise).state = PromiseState::Rejected;
         release_native_pin(promise);
         store_promise_jsvalue_slot(promise, std::ptr::addr_of_mut!((*promise).reason), reason);
-        crate::async_hooks::promise_resolve((*promise).async_id);
+        crate::async_hook_slots::promise_resolve((*promise).async_id);
         crate::v8::promise_hook_settled(promise);
 
         // Schedule callbacks. Same propagation rule as `js_promise_resolve`
@@ -1106,7 +1106,7 @@ fn is_promise_species_object(value: f64) -> bool {
     let raw = (bits & crate::value::POINTER_MASK) as usize;
     if crate::value::addr_class::is_handle_band(raw) {
         // Proxies are encoded as handle-band values but are valid objects.
-        return crate::proxy::js_proxy_is_proxy(value) != 0;
+        return crate::proxy_hooks::proxy_is_proxy(value) != 0;
     }
     !crate::symbol::is_registered_symbol(raw)
 }
@@ -1880,7 +1880,7 @@ extern "C" fn finally_cleanup_fulfill(
 
 /// Cleanup-rejected handler: reject `next` with the CLEANUP reason (overrides
 /// the upstream outcome). Captures [next_promise_ptr (i64)].
-extern "C" fn finally_cleanup_reject(
+pub(crate) extern "C" fn finally_cleanup_reject(
     closure: *const crate::closure::ClosureHeader,
     _this: crate::closure::JsThis,
     cleanup_reason: f64,
