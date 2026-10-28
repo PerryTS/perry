@@ -825,7 +825,7 @@ impl Arena {
         if matches!(
             self.blocks[idx].extent_kind,
             super::region::Kind::CollectingHolder
-        ) || (self.blocks[idx].extent_kind == super::region::Kind::LargeObject && self.blocks[idx].offset != 0) {
+        ) {
             return None;
         }
         let before = self.blocks[idx].offset;
@@ -869,7 +869,7 @@ impl Arena {
         if matches!(
             self.blocks[idx].extent_kind,
             super::region::Kind::CollectingHolder
-        ) || (self.blocks[idx].extent_kind == super::region::Kind::LargeObject && self.blocks[idx].offset != 0) {
+        ) {
             return None;
         }
         let before = self.blocks[idx].offset;
@@ -1012,7 +1012,10 @@ impl Arena {
         // we'd push a fresh block on the very first overflow even
         // though blocks `current+1..n_blocks` are all empty.
         for i in 0..self.blocks.len() {
-            if i == self.current {
+            // Dedicated large owners are never ordinary bump targets. The
+            // current block is always installed by the ordinary allocator;
+            // only this cold search can encounter a leaf-space block.
+            if i == self.current || self.blocks[i].extent_kind == super::region::Kind::LargeObject {
                 continue;
             }
             if let Some(ptr) = self.try_block_alloc(i, size, align) {
@@ -1051,7 +1054,10 @@ impl Arena {
             return ptr;
         }
         for i in 0..self.blocks.len() {
-            if i == self.current {
+            // Dedicated large owners are never ordinary bump targets. The
+            // current block is always installed by the ordinary allocator;
+            // only this cold search can encounter a leaf-space block.
+            if i == self.current || self.blocks[i].extent_kind == super::region::Kind::LargeObject {
                 continue;
             }
             if let Some(ptr) = self.try_block_alloc_excluding_pages(i, size, align, excluded_pages)

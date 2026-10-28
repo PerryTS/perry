@@ -6,12 +6,25 @@ use super::*;
 pub(super) fn allocate(total: usize, align: usize) -> *mut u8 {
     // Existing collecting allocation contract; never hold an arena borrow
     // while finishing a previously started non-moving cycle.
+    crate::gc::gc_check_trigger();
     crate::gc::allocation_pacing::finish_cycle_before_large_birth();
-    let size = total.checked_add(4095).expect("large leaf extent overflow") & !4095;
+    let size = total
+        .checked_add(GENERATION_PAGE_SIZE - 1)
+        .expect("large leaf extent overflow")
+        & !(GENERATION_PAGE_SIZE - 1);
     let data = super::block::block_pool_take(size).unwrap_or_else(|| unsafe {
         let data = super::region::map(Kind::LargeObject, size);
-        assert!(!data.is_null(), "large leaf backing exhausted");
-        data
+        if data.is_null() {
+            crate::gc::gc_try_emergency_reclaim();
+            let retry = super::region::map(Kind::LargeObject, size);
+            assert!(
+                !retry.is_null(),
+                "large leaf backing exhausted after emergency reclaim"
+            );
+            retry
+        } else {
+            data
+        }
     });
     unsafe { super::region::advise(data, size, Kind::LargeObject) };
     let mut block = ArenaBlock {
@@ -49,7 +62,14 @@ pub(super) fn allocate(total: usize, align: usize) -> *mut u8 {
 }
 
 fn install(arena: &mut Arena, block: ArenaBlock) {
-    if let Some(slot) = arena.blocks.iter_mut().find(|b| b.data.is_null()) {
+    // A leaf must never occupy the ordinary allocator's current tombstone.
+    let current = arena.current;
+    if let Some((_, slot)) = arena
+        .blocks
+        .iter_mut()
+        .enumerate()
+        .find(|(i, b)| *i != current && b.data.is_null())
+    {
         *slot = block;
     } else {
         arena.blocks.push(block);

@@ -9,7 +9,9 @@ unsafe fn leaf(bytes: usize) -> usize {
     p.write_bytes(0, bytes);
     p as usize
 }
-fn string_bits(p: usize) -> u64 { STRING_TAG | p as u64 }
+fn string_bits(p: usize) -> u64 {
+    STRING_TAG | p as u64
+}
 
 #[test]
 fn large_leaf_has_dedicated_young_storage_and_no_payload_scan() {
@@ -23,10 +25,16 @@ fn large_leaf_has_dedicated_young_storage_and_no_payload_scan() {
         (p as *mut u64).write(string_bits(small));
         let header = header_from_user_ptr(p as *const u8);
         let total = (*header).size as usize;
-        assert_eq!(crate::arena::classify_heap_generation(p), HeapGeneration::Nursery);
+        assert_eq!(
+            crate::arena::classify_heap_generation(p),
+            HeapGeneration::Nursery
+        );
         assert_eq!((*header).gc_flags & GC_FLAG_TENURED, 0);
         assert!(crate::arena::is_large_storage(p));
-        assert_eq!(crate::arena::copying_from_space_in_use_bytes(), before + total);
+        assert_eq!(
+            crate::arena::copying_from_space_in_use_bytes(),
+            before + total
+        );
         assert_eq!(crate::arena::moving_from_space_in_use_bytes(), moving);
         let mut collector = CopyingNurseryCollector::new(CopyingPointerSet::new());
         let classified = collector.ptrs.classify(p).unwrap();
@@ -35,11 +43,19 @@ fn large_leaf_has_dedicated_young_storage_and_no_payload_scan() {
         collector.drain();
         assert!(collector.worklist.is_empty());
         assert_eq!(collector.stats.copied_bytes, 0);
-        assert_eq!((*header_from_user_ptr(small as *const u8)).gc_flags & GC_FLAG_MARKED, 0,
-            "a pointer-shaped word in leaf bytes is not an edge");
-        assert!(collector.ptrs.classify(p+8).is_none(), "one object owns the entire extent");
+        assert_eq!(
+            (*header_from_user_ptr(small as *const u8)).gc_flags & GC_FLAG_MARKED,
+            0,
+            "a pointer-shaped word in leaf bytes is not an edge"
+        );
+        assert!(
+            collector.ptrs.classify(p + 8).is_none(),
+            "one object owns the entire extent"
+        );
         collector.clear_marks();
-    }).join().unwrap();
+    })
+    .join()
+    .unwrap();
 }
 
 #[test]
@@ -55,9 +71,17 @@ fn dead_large_leaf_retires_at_minor_and_successor_reuses_its_backing() {
         assert_eq!(crate::arena::classify_heap_space(p), HeapSpace::Unknown);
         assert_eq!(crate::arena::young_large_in_use_bytes(), 0);
         let next = leaf(18_090_024);
-        assert_eq!(next, p, "dead backing must be reusable before the next fill");
-        assert_eq!(crate::arena::classify_heap_generation(next), HeapGeneration::Nursery);
-    }).join().unwrap();
+        assert_eq!(
+            next, p,
+            "dead backing must be reusable before the next fill"
+        );
+        assert_eq!(
+            crate::arena::classify_heap_generation(next),
+            HeapGeneration::Nursery
+        );
+    })
+    .join()
+    .unwrap();
 }
 
 #[test]
@@ -68,25 +92,39 @@ fn old_edge_retains_large_leaf_by_identity_and_a_later_full_reclaims_it() {
         let old = crate::array::js_array_alloc(20_000);
         js_shadow_slot_set(0, ptr_bits(old as usize));
         let p = leaf(LARGE_OBJECT_THRESHOLD_BYTES + 8);
-        crate::array::js_array_set_f64_extend(old,0,f64::from_bits(string_bits(p)));
+        crate::array::js_array_set_f64_extend(old, 0, f64::from_bits(string_bits(p)));
         assert!(remembered_child_needs_tracking(p));
         assert!(remembered_set_size() > 0);
         let trace = collect_minor_trace(GcTriggerKind::Direct);
-        assert_copied_minor_trace(&trace,true,CopiedMinorFallbackReason::None,false);
-        let value = crate::array::js_array_get_f64(old,0).to_bits();
-        assert_eq!((value & POINTER_MASK) as usize,p);
-        assert_eq!(crate::arena::classify_heap_generation(p),HeapGeneration::Old);
+        assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+        let value = crate::array::js_array_get_f64(old, 0).to_bits();
+        assert_eq!((value & POINTER_MASK) as usize, p);
+        assert_eq!(
+            crate::arena::classify_heap_generation(p),
+            HeapGeneration::Old
+        );
         assert!(crate::arena::is_large_storage(p));
-        let header=header_from_user_ptr(p as *const u8);
-        assert_ne!((*header).gc_flags & GC_FLAG_TENURED,0);
-        assert_eq!((*header).gc_flags & GC_FLAG_MARKED,0, "promotion must finish mark cleanup");
-        crate::array::js_array_set_f64_extend(old,0,0.0);
+        let header = header_from_user_ptr(p as *const u8);
+        assert_ne!((*header).gc_flags & GC_FLAG_TENURED, 0);
+        assert_eq!(
+            (*header).gc_flags & GC_FLAG_MARKED,
+            0,
+            "promotion must finish mark cleanup"
+        );
+        crate::array::js_array_set_f64_extend(old, 0, 0.0);
         let _ = gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot {
-            kind: GcTriggerKind::Direct, steps_before: Some(GcStepSnapshot::current()),
+            kind: GcTriggerKind::Direct,
+            steps_before: Some(GcStepSnapshot::current()),
         });
         assert!(!crate::arena::pointer_in_nursery(p));
-        assert_eq!((*header).obj_type,0,"old-large dies only after the full trace");
-    }).join().unwrap();
+        assert_eq!(
+            crate::arena::classify_heap_space(p),
+            HeapSpace::Unknown,
+            "old-large ownership is retired by the later full"
+        );
+    })
+    .join()
+    .unwrap();
 }
 
 #[test]
@@ -94,18 +132,29 @@ fn nonmoving_minor_retires_dead_large_and_promotes_live_large_by_identity() {
     std::thread::spawn(|| unsafe {
         let _guard = CopyingNurseryTestGuard::new(1);
         let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-        let dead = leaf(LARGE_OBJECT_THRESHOLD_BYTES+8);
-        let live = leaf(LARGE_OBJECT_THRESHOLD_BYTES+8);
-        js_shadow_slot_set(0,string_bits(live));
+        let dead = leaf(LARGE_OBJECT_THRESHOLD_BYTES + 8);
+        let live = leaf(LARGE_OBJECT_THRESHOLD_BYTES + 8);
+        js_shadow_slot_set(0, string_bits(live));
         js_gc_write_barriers_emitted(0);
         let trace = collect_minor_trace(GcTriggerKind::Direct);
-        assert!(!trace.copying_nursery.eligible,"fixture must take the nonmoving fallback");
-        assert_eq!(crate::arena::classify_heap_space(dead),HeapSpace::Unknown);
-        assert_eq!((js_shadow_slot_get(0)&POINTER_MASK) as usize,live);
-        assert_eq!(crate::arena::classify_heap_generation(live),HeapGeneration::Old);
+        assert!(
+            !trace.copying_nursery.eligible,
+            "fixture must take the nonmoving fallback"
+        );
+        assert_eq!(crate::arena::classify_heap_space(dead), HeapSpace::Unknown);
+        assert_eq!((js_shadow_slot_get(0) & POINTER_MASK) as usize, live);
+        assert_eq!(
+            crate::arena::classify_heap_generation(live),
+            HeapGeneration::Old
+        );
         assert!(crate::arena::is_large_storage(live));
-        assert_eq!((*header_from_user_ptr(live as *const u8)).gc_flags & GC_FLAG_MARKED,0);
-    }).join().unwrap();
+        assert_eq!(
+            (*header_from_user_ptr(live as *const u8)).gc_flags & GC_FLAG_MARKED,
+            0
+        );
+    })
+    .join()
+    .unwrap();
 }
 
 #[test]
@@ -113,25 +162,38 @@ fn large_birth_after_sweep_snapshot_survives_only_that_cycle() {
     std::thread::spawn(|| unsafe {
         let _guard = CopyingNurseryTestGuard::new(0);
         let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-        let mut state=GcCycleState::new_full(GcTriggerSnapshot {
-            kind:GcTriggerKind::Direct, steps_before:Some(GcStepSnapshot::current()),
+        let mut state = GcCycleState::new_full(GcTriggerSnapshot {
+            kind: GcTriggerKind::Direct,
+            steps_before: Some(GcStepSnapshot::current()),
         });
         for _ in 0..100_000 {
-            if state.phase()==GcCyclePhase::Sweep {break;}
+            if state.phase() == GcCyclePhase::Sweep {
+                break;
+            }
             state.step(GcWorkBudget::bounded(1));
         }
-        assert_eq!(state.phase(),GcCyclePhase::Sweep);
+        assert_eq!(state.phase(), GcCyclePhase::Sweep);
         // Create the sweep cursor and its allocation snapshot, but leave it sliced.
         state.step(GcWorkBudget::bounded(1));
-        let late=leaf(LARGE_OBJECT_THRESHOLD_BYTES+8);
+        let late = leaf(LARGE_OBJECT_THRESHOLD_BYTES + 8);
         for _ in 0..100_000 {
-            if state.phase()==GcCyclePhase::Complete {break;}
+            if state.phase() == GcCyclePhase::Complete {
+                break;
+            }
             state.step(GcWorkBudget::bounded(1));
         }
-        assert_eq!(state.phase(),GcCyclePhase::Complete);
-        assert_eq!(crate::arena::classify_heap_generation(late),HeapGeneration::Nursery);
-        assert_eq!((*header_from_user_ptr(late as *const u8)).gc_flags & GC_FLAG_MARKED,0);
+        assert_eq!(state.phase(), GcCyclePhase::Complete);
+        assert_eq!(
+            crate::arena::classify_heap_generation(late),
+            HeapGeneration::Nursery
+        );
+        assert_eq!(
+            (*header_from_user_ptr(late as *const u8)).gc_flags & GC_FLAG_MARKED,
+            0
+        );
         let _ = collect_minor_trace(GcTriggerKind::Direct);
-        assert_eq!(crate::arena::classify_heap_space(late),HeapSpace::Unknown);
-    }).join().unwrap();
+        assert_eq!(crate::arena::classify_heap_space(late), HeapSpace::Unknown);
+    })
+    .join()
+    .unwrap();
 }

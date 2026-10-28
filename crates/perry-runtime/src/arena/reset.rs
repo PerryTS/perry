@@ -1422,7 +1422,8 @@ impl OldArenaReclaimDeadBlocksState {
                 .blocks
                 .iter()
                 .enumerate()
-                .find(|(_, block)| !block.data.is_null() && block.offset == 0)
+                .find(|(_, block)| !block.data.is_null() && block.offset == 0
+                    && block.extent_kind != super::region::Kind::LargeObject)
             {
                 arena.set_current(idx);
             } else if arena
@@ -1435,7 +1436,8 @@ impl OldArenaReclaimDeadBlocksState {
                     .blocks
                     .iter()
                     .enumerate()
-                    .find(|(_, block)| !block.data.is_null())
+                    .find(|(_, block)| !block.data.is_null()
+                        && block.extent_kind != super::region::Kind::LargeObject)
                 {
                     arena.set_current(idx);
                 }
@@ -1511,7 +1513,8 @@ pub(crate) fn old_arena_reclaim_dead_blocks(block_has_live: &[bool]) -> ArenaRes
                 .blocks
                 .iter()
                 .enumerate()
-                .find(|(_, block)| !block.data.is_null() && block.offset == 0)
+                .find(|(_, block)| !block.data.is_null() && block.offset == 0
+                    && block.extent_kind != super::region::Kind::LargeObject)
             {
                 arena.set_current(idx);
             } else if arena
@@ -1524,7 +1527,8 @@ pub(crate) fn old_arena_reclaim_dead_blocks(block_has_live: &[bool]) -> ArenaRes
                     .blocks
                     .iter()
                     .enumerate()
-                    .find(|(_, block)| !block.data.is_null())
+                    .find(|(_, block)| !block.data.is_null()
+                        && block.extent_kind != super::region::Kind::LargeObject)
                 {
                     arena.set_current(idx);
                 }
@@ -1615,7 +1619,8 @@ pub(crate) fn old_arena_reclaim_selected_dead_blocks(
                 .blocks
                 .iter()
                 .enumerate()
-                .find(|(_, block)| !block.data.is_null() && block.offset == 0)
+                .find(|(_, block)| !block.data.is_null() && block.offset == 0
+                    && block.extent_kind != super::region::Kind::LargeObject)
             {
                 arena.set_current(idx);
             } else if arena
@@ -1628,7 +1633,8 @@ pub(crate) fn old_arena_reclaim_selected_dead_blocks(
                     .blocks
                     .iter()
                     .enumerate()
-                    .find(|(_, block)| !block.data.is_null())
+                    .find(|(_, block)| !block.data.is_null()
+                        && block.extent_kind != super::region::Kind::LargeObject)
                 {
                     arena.set_current(idx);
                 }
@@ -1661,7 +1667,8 @@ fn reclaim_dead_survivor_arena_blocks(
                     .blocks
                     .iter()
                     .enumerate()
-                    .find(|(_, block)| !block.data.is_null())
+                    .find(|(_, block)| !block.data.is_null()
+                        && block.extent_kind != super::region::Kind::LargeObject)
                     .map(|(i, _)| i)
             });
         let mut stats = ArenaResetStats::default();
@@ -1712,7 +1719,8 @@ fn reclaim_dead_survivor_arena_blocks(
                 .blocks
                 .iter()
                 .enumerate()
-                .find(|(_, block)| !block.data.is_null() && block.offset == 0)
+                .find(|(_, block)| !block.data.is_null() && block.offset == 0
+                    && block.extent_kind != super::region::Kind::LargeObject)
             {
                 arena.set_current(idx);
             } else if arena
@@ -1725,7 +1733,8 @@ fn reclaim_dead_survivor_arena_blocks(
                     .blocks
                     .iter()
                     .enumerate()
-                    .find(|(_, block)| !block.data.is_null())
+                    .find(|(_, block)| !block.data.is_null()
+                        && block.extent_kind != super::region::Kind::LargeObject)
                 {
                     arena.set_current(idx);
                 }

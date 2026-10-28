@@ -1677,7 +1677,7 @@ pub(super) fn run_copied_minor_attempt(
     // one that measures.
     if untraced {
         super::note_untraced_promotion(promotion_stats.bytes, promotion_stats.objects);
-    } else {
+    } else if from_space_bytes != 0 {
         super::note_young_survival(from_space_bytes, collector.live_from_bytes);
     }
     if !untraced {
@@ -1830,12 +1830,14 @@ pub(super) fn run_copied_minor_attempt(
         collector.stats.survivor_live_bytes,
         collector.stats.survivor_first_round_live_bytes,
     );
+    if from_space_bytes != 0 {
     retune_after_scavenge(
         collector.stats.eden_live_bytes,
         collector.stats.eden_copied_bytes,
         collector.stats.survivor_first_round_live_bytes,
         eden_allocated_bytes >= entry_eden_budget,
     );
+    }
     if let Some(d) = collector.survival.as_ref() {
         d.report(super::survival_diag::next_minor_seq());
     }
