@@ -82,8 +82,9 @@ impl StoredPageMeta {
 /// Preserve header order while storing in-page addresses as two-byte offsets.
 /// At most one non-overlapping allocation can enter a page from below. Its
 /// full address is kept separately, so even a multi-gigabyte object is exact.
-/// A sentinel in the offset vector preserves its position in the original
-/// list, including when an old hole is reused before already indexed objects.
+/// One header uses the existing address word directly when the vector is
+/// empty. Multiple headers use compact offsets, with an entering sentinel
+/// preserving insertion order even when an older hole is reused.
 #[derive(Default)]
 pub(super) struct PageObjects {
     offsets: Vec<u16>,
@@ -96,7 +97,11 @@ const _: () = assert!(GENERATION_PAGE_SIZE < ENTERING as usize);
 impl PageObjects {
     pub(super) fn with_capacity(capacity: usize) -> Self {
         Self {
-            offsets: Vec::with_capacity(capacity),
+            offsets: if capacity > 1 {
+                Vec::with_capacity(capacity)
+            } else {
+                Vec::new()
+            },
             entering_header: 0,
         }
     }
@@ -112,6 +117,29 @@ impl PageObjects {
 
     pub(super) fn push(&mut self, page: usize, header: usize) {
         let base = generation_page_base(page);
+        assert!(
+            header < base || header - base < GENERATION_PAGE_SIZE,
+            "header starts beyond its indexed page"
+        );
+        assert!(header != 0 || base == 0, "null entering object");
+        if self.offsets.is_empty() {
+            if self.entering_header == 0 && header != 0 {
+                // One header lives in the address word already present in
+                // this list. No vector allocation for a single-object page.
+                self.entering_header = header;
+                return;
+            }
+            if self.entering_header != 0 {
+                let first = self.entering_header;
+                self.entering_header = 0;
+                self.push_offset(page, first);
+            }
+        }
+        self.push_offset(page, header);
+    }
+
+    fn push_offset(&mut self, page: usize, header: usize) {
+        let base = generation_page_base(page);
         let offset = if header < base {
             assert!(
                 header != 0 && (self.entering_header == 0 || self.entering_header == header),
@@ -120,24 +148,25 @@ impl PageObjects {
             self.entering_header = header;
             ENTERING
         } else {
-            let offset = header - base;
-            assert!(
-                offset < GENERATION_PAGE_SIZE,
-                "header starts beyond its indexed page"
-            );
-            offset as u16
+            (header - base) as u16
         };
         self.offsets.push(offset);
     }
 
     pub(super) fn extend(&mut self, page: usize, headers: &[usize]) {
-        self.offsets.reserve(headers.len());
+        let needed = self.len() + headers.len();
+        if needed > 1 {
+            self.offsets.reserve(needed - self.offsets.len());
+        }
         for &header in headers {
             self.push(page, header);
         }
     }
 
     pub(super) fn contains_prefix(&self, page: usize, header: usize, len: usize) -> bool {
+        if self.offsets.is_empty() {
+            return len != 0 && self.entering_header != 0 && self.entering_header == header;
+        }
         let base = generation_page_base(page);
         let offset = if header < base {
             if header != self.entering_header {
@@ -151,22 +180,35 @@ impl PageObjects {
             }
             offset as u16
         };
-        self.offsets[..len.min(self.len())].contains(&offset)
+        self.offsets[..len.min(self.offsets.len())].contains(&offset)
     }
 
     pub(super) fn iter(&self, page: usize) -> impl Iterator<Item = usize> + '_ {
-        self.offsets
-            .iter()
-            .map(move |&offset| self.decode(page, offset))
+        let singleton =
+            (self.offsets.is_empty() && self.entering_header != 0).then_some(self.entering_header);
+        singleton.into_iter().chain(
+            self.offsets
+                .iter()
+                .map(move |&offset| self.decode(page, offset)),
+        )
     }
 
     pub(super) fn get(&self, page: usize, index: usize) -> Option<usize> {
+        if self.offsets.is_empty() {
+            return (index == 0 && self.entering_header != 0).then_some(self.entering_header);
+        }
         self.offsets
             .get(index)
             .map(|&offset| self.decode(page, offset))
     }
 
     pub(super) fn retain(&mut self, page: usize, mut keep: impl FnMut(usize) -> bool) {
+        if self.offsets.is_empty() {
+            if self.entering_header != 0 && !keep(self.entering_header) {
+                self.entering_header = 0;
+            }
+            return;
+        }
         let base = generation_page_base(page);
         let entering = self.entering_header;
         let mut kept_entering = false;
@@ -185,16 +227,26 @@ impl PageObjects {
     }
 
     pub(super) fn swap_remove(&mut self, index: usize) {
+        if self.offsets.is_empty() {
+            assert!(
+                index == 0 && self.entering_header != 0,
+                "page object index out of bounds"
+            );
+            self.entering_header = 0;
+            return;
+        }
         if self.offsets.swap_remove(index) == ENTERING && !self.offsets.contains(&ENTERING) {
             self.entering_header = 0;
         }
     }
 
     pub(super) fn len(&self) -> usize {
-        self.offsets.len()
+        self.offsets
+            .len()
+            .max(usize::from(self.entering_header != 0))
     }
     pub(super) fn is_empty(&self) -> bool {
-        self.offsets.is_empty()
+        self.offsets.is_empty() && self.entering_header == 0
     }
     pub(super) fn heap_bytes(&self) -> usize {
         self.offsets.capacity() * size_of::<u16>()

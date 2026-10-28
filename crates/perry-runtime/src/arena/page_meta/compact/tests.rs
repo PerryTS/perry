@@ -153,3 +153,36 @@ fn overlapping_entering_objects_are_rejected_instead_of_aliasing() {
     list.push(2, 4096);
     list.push(2, 4104);
 }
+
+#[test]
+fn a_single_page_header_needs_no_heap_buffer_and_grows_in_order() {
+    let page = 101;
+    let base = generation_page_base(page);
+    for first in [base - 32, base, base + 4088] {
+        let mut list = PageObjects::default();
+        list.extend(page, &[first]);
+        assert_eq!(list.heap_bytes(), 0);
+        assert_eq!(list.len(), 1);
+        assert_eq!(list.iter(page).collect::<Vec<_>>(), [first]);
+        assert!(list.contains_prefix(page, first, 1));
+        assert!(!list.contains_prefix(page, first, 0));
+        assert_eq!(list.get(page, 1), None);
+        list.retain(page, |_| true);
+        assert_eq!(list.get(page, 0), Some(first));
+        list.push(page, base + 16);
+        assert_eq!(list.iter(page).collect::<Vec<_>>(), [first, base + 16]);
+        list.swap_remove(0);
+        assert_eq!(list.get(page, 0), Some(base + 16));
+        list.retain(page, |_| false);
+        assert!(list.is_empty());
+        list.push(page, base - 64);
+        list.swap_remove(0);
+        assert!(list.is_empty());
+    }
+    let mut zero = PageObjects::default();
+    zero.push(0, 0);
+    assert_eq!(zero.get(0, 0), Some(0));
+    assert_eq!(zero.len(), 1);
+    zero.swap_remove(0);
+    assert!(zero.is_empty());
+}
