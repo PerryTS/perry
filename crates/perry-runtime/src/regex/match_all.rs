@@ -295,3 +295,5 @@ pub(crate) unsafe fn dispatch_regexp_string_iterator_method_builtin(
         _ => f64::from_bits(TAG_UNDEFINED),
     }
 }
+
+crate::realm_decl!("match_all.realm.json#*");

@@ -15,39 +15,28 @@ pub(crate) fn register_static_layouts() {
             if (*desc).layout_id == 0 {
                 continue;
             }
+            // WRT step 2: a runtime layout or a module namespace draws its id
+            // and installs its shape at its first birth
+            // ([`layout_word_for_birth`], [`register_namespace_layout`]);
+            // startup installs the program's own layouts only. The id cell is
+            // process-wide, so every agent still sees one id per layout.
+            if (*desc).variant == crate::codegen_abi::LAYOUT_VARIANT_NAMESPACE
+                || is_runtime_layout_word((*desc).layout_id)
+            {
+                continue;
+            }
             let Some(id) = layout_id_of_index(index as u32) else {
                 break;
             };
-            let got = if (*desc).variant == crate::codegen_abi::LAYOUT_VARIANT_NAMESPACE {
-                reserve_namespace_layout(desc)
-            } else if is_runtime_layout_word((*desc).layout_id) {
-                register_bound(desc, id, &[], None, Registration::Reserve)
-            } else {
-                register_one(desc, id)
-            };
-            let _ = got;
+            let _ = register_one(desc, id);
         }
     }
 }
 
-/// A module namespace layout's id, drawn at startup in section order (so
-/// every agent draws the same one) without building its key list or shape:
-/// [`register_namespace_layout`] installs them at the namespace's birth. Most
-/// compiled namespaces are never built.
-pub(super) unsafe fn reserve_namespace_layout(desc: *const PerryLayoutDesc) -> u32 {
-    super::super::static_shapes::resolve_layout_fields(
-        std::ptr::addr_of!((*desc).shape_id).cast_mut(),
-        LayoutWord((*desc).layout_id),
-        super::super::shapes::PROTO_ID_NULL,
-    )
-    .identity
-    .0
-}
-
 /// Is `word` a layout of the runtime's own image (the ABI's native rows)?
 /// Generated code never names such a descriptor, so every object carrying
-/// one is born by a runtime funnel ([`layout_word_for_birth`]); startup only
-/// draws its id.
+/// one is born by a runtime funnel ([`layout_word_for_birth`]), which draws
+/// its id and installs its shape at the first birth.
 #[inline]
 pub(super) fn is_runtime_layout_word(word: u32) -> bool {
     word & crate::codegen_abi::LAYOUT_TAG != 0
@@ -55,8 +44,8 @@ pub(super) fn is_runtime_layout_word(word: u32) -> bool {
 }
 
 /// The registered word of `desc` for a birth in this agent. A runtime
-/// layout's shape is installed by its first birth here, under the id startup
-/// drew for it; every other registered layout was installed at startup.
+/// layout's shape is installed by its first birth here; every other
+/// registered layout was installed at startup.
 #[inline]
 pub(crate) unsafe fn layout_word_for_birth(desc: *const PerryLayoutDesc) -> Option<u32> {
     let id = registered_layout_id(load_layout_id(desc))?;
@@ -72,12 +61,12 @@ pub(crate) unsafe fn layout_word_for_birth(desc: *const PerryLayoutDesc) -> Opti
 #[inline(never)]
 unsafe fn install_runtime_layout(desc: *const PerryLayoutDesc) -> Option<()> {
     let requested = layout_id_of_index(descriptor_index(desc)?)?;
-    let id = register_bound(desc, requested, &[], None, Registration::Install);
+    let id = register_bound(desc, requested, &[], None);
     (id != 0 && super::super::shapes::shape_record_for_word(LayoutWord(id)).is_some()).then_some(())
 }
 
 #[cfg(any(test, debug_assertions))]
-thread_local! {
+crate::perry_thread_local! {
     /// Runtime layouts whose shape this agent installed (debug and test
     /// builds only): startup installs none.
     pub(crate) static RUNTIME_LAYOUT_INSTALLS: std::cell::Cell<u32> =
@@ -85,14 +74,6 @@ thread_local! {
 }
 
 /// What [`register_bound`] does with a descriptor that passed validation.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum Registration {
-    /// Draw the id only (a runtime layout at startup).
-    Reserve,
-    /// Draw the id if not drawn yet, then build and install the shape.
-    Install,
-}
-
 /// The installed layout of module namespace descriptor `desc`, installing
 /// its key list and shape under the id startup reserved on the first birth
 /// in this agent; `None` when this runtime cannot represent it.
@@ -136,7 +117,7 @@ pub(super) unsafe fn binding_symbol_keys(d: &PerryLayoutDesc) -> usize {
 /// The key word of key `key` of a descriptor: a string's, a symbol atom's
 /// symbol, or for the `j`-th module-local symbol key, `bound[j]` (`j` counts
 /// those keys before it, `next` the running count).
-pub(super) unsafe fn layout_key_word(key: &PerryLayoutKey, bound: &[u64], next: &mut usize) -> u64 {
+pub(crate) unsafe fn layout_key_word(key: &PerryLayoutKey, bound: &[u64], next: &mut usize) -> u64 {
     if (*key.atom).kind == crate::codegen_abi::ATOM_KIND_BINDING_SYMBOL {
         let word = bound[*next];
         *next += 1;
@@ -159,7 +140,7 @@ pub(crate) unsafe fn register_one_bound(
     requested: u32,
     bound: &[u64],
 ) -> u32 {
-    register_bound(desc, requested, bound, None, Registration::Install)
+    register_bound(desc, requested, bound, None)
 }
 
 /// An ordinary function's layout, with the actual prototype serial carried
@@ -170,13 +151,7 @@ pub(crate) unsafe fn register_function_layout(
     bound: &[u64],
     proto_id: u64,
 ) -> u32 {
-    register_bound(
-        desc,
-        requested,
-        bound,
-        Some(proto_id),
-        Registration::Install,
-    )
+    register_bound(desc, requested, bound, Some(proto_id))
 }
 
 pub(super) unsafe fn register_bound(
@@ -184,7 +159,6 @@ pub(super) unsafe fn register_bound(
     requested: u32,
     bound: &[u64],
     function_proto: Option<u64>,
-    mode: Registration,
 ) -> u32 {
     use std::sync::atomic::{AtomicU32, Ordering};
     let word = AtomicU32::from_ptr(std::ptr::addr_of!((*desc).shape_id).cast_mut());
@@ -295,21 +269,6 @@ pub(super) unsafe fn register_bound(
             Err(_) => (*desc).layout_id,
         };
     }
-    if mode == Registration::Reserve {
-        // The id the installation below would publish, drawn in section order.
-        let proposed = if let Some(id) = existing {
-            id
-        } else if proto_id == super::super::shapes::PROTO_ID_DEFAULT
-            || class_family
-            || d.variant == crate::codegen_abi::LAYOUT_VARIANT_FUNCTION_CONSTRUCTOR
-        {
-            requested
-        } else {
-            super::super::shapes::allocate_declared_layout_id(proto_id).0
-        };
-        let _ = word.compare_exchange(0, proposed, Ordering::AcqRel, Ordering::Acquire);
-        return (*desc).layout_id;
-    }
     #[cfg(any(test, debug_assertions))]
     if is_runtime_layout_word(d.layout_id) {
         RUNTIME_LAYOUT_INSTALLS.with(|n| n.set(n.get() + 1));
@@ -323,6 +282,15 @@ pub(super) unsafe fn register_bound(
     let _no_gc = crate::gc::GcSuppressScope::new();
     let list = if key_count == 0 {
         std::ptr::null_mut()
+    } else if super::super::image_keys::prepare(keys, d.image_keys) {
+        super::super::canonical_keys::static_seed::link_image_list(
+            &super::super::canonical_keys::SharedLayout::shape_cache_entry(),
+            keys,
+            d.image_keys,
+        )
+        .expect("descriptor image list agrees with its keys and attributes")
+        .view()
+        .arr()
     } else if let Some(canonical) = (!function)
         .then(|| {
             super::super::canonical_keys::from_static_layout(

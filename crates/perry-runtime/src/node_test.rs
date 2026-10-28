@@ -165,3 +165,5 @@ pub fn dispatch_object_method(class_id: u32, method_name: &str) -> Option<f64> {
         _ => None,
     }
 }
+
+crate::realm_decl!("node_test.realm.json#*");

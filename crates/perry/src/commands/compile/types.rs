@@ -1054,6 +1054,8 @@ pub struct CompilationContext {
     /// the lowering thread, so direct calls to a patched member lower as
     /// dynamic calls instead of binding the intrinsic.
     pub patched_builtins: perry_hir::PatchedBuiltins,
+    /// Source-only realm reach; emission is unchanged in WRT3a.
+    pub realm_reach: perry_hir::realm_reach::RealmReach,
     /// #10848: modules lowered so far in the current walk.
     pub patched_builtins_lowered_modules: usize,
     /// #10848: a module scanned AFTER others were already lowered added a
@@ -1466,6 +1468,7 @@ impl CompilationContext {
             needs_thread: false,
             cross_module_class_field_types: HashMap::new(),
             patched_builtins: Default::default(),
+            realm_reach: Default::default(),
             patched_builtins_lowered_modules: 0,
             patched_builtins_grew_after_lower: false,
             proto_census: Default::default(),

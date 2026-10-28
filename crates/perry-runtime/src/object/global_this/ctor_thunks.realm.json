@@ -1,0 +1,6883 @@
+{
+  "version": 1,
+  "groups": {
+    "body:webcrypto_get_random_values_thunk": [
+      {
+        "name": "Crypto.prototype.getRandomValues",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "getRandomValues"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::ctor_thunks::webcrypto_get_random_values_thunk",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 3584,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::ctor_thunks::webcrypto_get_random_values_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_69b20762a9f245649338",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "body:webcrypto_random_uuid_thunk": [
+      {
+        "name": "Crypto.prototype.randomUUID",
+        "kind": "method",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "randomUUID"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::ctor_thunks::webcrypto_random_uuid_thunk",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 3584,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::ctor_thunks::webcrypto_random_uuid_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_1671939601e27444f6e3",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ],
+    "objects": [
+      {
+        "name": "%TypedArray%",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "from",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "%TypedArray%.from"
+            }
+          },
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "TypedArray"
+            }
+          },
+          {
+            "key": "of",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "%TypedArray%.of"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "%TypedArray%.prototype"
+            }
+          },
+          {
+            "key": "@@species",
+            "symbol": true,
+            "attributes": 4,
+            "get": "%TypedArray%[\"@@species\"].<get>"
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype",
+          "from",
+          "of"
+        ],
+        "own_symbol_order": [
+          "@@species"
+        ],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::ctor_thunks::typed_array_constructor_call_thunk",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::ctor_thunks::typed_array_constructor_call_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "reference",
+            "value": "Uint8Array.prototype"
+          }
+        ],
+        "info_symbol": "perry_realm_info_71d01491af2eb9b3f665",
+        "births": [
+          "%TypedArray%.from",
+          "%TypedArray%.of",
+          "%TypedArray%.prototype",
+          "%TypedArray%[\"@@species\"].<get>",
+          "ArrayBuffer",
+          "Function.prototype",
+          "Uint8Array.prototype"
+        ]
+      },
+      {
+        "name": "%TypedArray%.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "at",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "%TypedArray%.prototype.at"
+            }
+          },
+          {
+            "key": "buffer",
+            "symbol": false,
+            "attributes": 4,
+            "get": "%TypedArray%.prototype.buffer.<get>"
+          },
+          {
+            "key": "byteLength",
+            "symbol": false,
+            "attributes": 4,
+            "get": "%TypedArray%.prototype.byteLength.<get>"
+          },
+          {
+            "key": "byteOffset",
+            "symbol": false,
+            "attributes": 4,
+            "get": "%TypedArray%.prototype.byteOffset.<get>"
+          },
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "%TypedArray%"
+            }
+          },
+          {
+            "key": "copyWithin",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "%TypedArray%.prototype.copyWithin"
+            }
+          },
+          {
+            "key": "entries",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "%TypedArray%.prototype.entries"
+            }
+          },
+          {
+            "key": "every",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "%TypedArray%.prototype.every"
+            }
+          },
+          {
+            "key": "fill",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "%TypedArray%.prototype.fill"
+            }
+          },
+          {
+            "key": "filter",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "%TypedArray%.prototype.filter"
+            }
+          },
+          {
+            "key": "find",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "%TypedArray%.prototype.find"
+            }
+          },
+          {
+            "key": "findIndex",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "%TypedArray%.prototype.findIndex"
+            }
+          },
+          {
+            "key": "findLast",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "%TypedArray%.prototype.findLast"
+            }
+          },
+          {
+            "key": "findLastIndex",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "%TypedArray%.prototype.findLastIndex"
+            }
+          },
+          {
+            "key": "forEach",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "%TypedArray%.prototype.forEach"
+            }
+          },
+          {
+            "key": "includes",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "%TypedArray%.prototype.includes"
+            }
+          },
+          {
+            "key": "indexOf",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "%TypedArray%.prototype.indexOf"
+            }
+          },
+          {
+            "key": "join",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "%TypedArray%.prototype.join"
+            }
+          },
+          {
+            "key": "keys",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "%TypedArray%.prototype.keys"
+            }
+          },
+          {
+            "key": "lastIndexOf",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "%TypedArray%.prototype.lastIndexOf"
+            }
+          },
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "get": "%TypedArray%.prototype.length.<get>"
+          },
+          {
+            "key": "map",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "%TypedArray%.prototype.map"
+            }
+          },
+          {
+            "key": "reduce",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "%TypedArray%.prototype.reduce"
+            }
+          },
+          {
+            "key": "reduceRight",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "%TypedArray%.prototype.reduceRight"
+            }
+          },
+          {
+            "key": "reverse",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "%TypedArray%.prototype.reverse"
+            }
+          },
+          {
+            "key": "set",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "%TypedArray%.prototype.set"
+            }
+          },
+          {
+            "key": "slice",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "%TypedArray%.prototype.slice"
+            }
+          },
+          {
+            "key": "some",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "%TypedArray%.prototype.some"
+            }
+          },
+          {
+            "key": "sort",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "%TypedArray%.prototype.sort"
+            }
+          },
+          {
+            "key": "subarray",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "%TypedArray%.prototype.subarray"
+            }
+          },
+          {
+            "key": "toLocaleString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "%TypedArray%.prototype.toLocaleString"
+            }
+          },
+          {
+            "key": "toReversed",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "%TypedArray%.prototype.toReversed"
+            }
+          },
+          {
+            "key": "toSorted",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "%TypedArray%.prototype.toSorted"
+            }
+          },
+          {
+            "key": "toString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Array.prototype.toString"
+            }
+          },
+          {
+            "key": "values",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "%TypedArray%.prototype.values"
+            }
+          },
+          {
+            "key": "with",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "%TypedArray%.prototype.with"
+            }
+          },
+          {
+            "key": "@@iterator",
+            "symbol": true,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "%TypedArray%.prototype.values"
+            }
+          },
+          {
+            "key": "@@toStringTag",
+            "symbol": true,
+            "attributes": 4,
+            "get": "%TypedArray%.prototype[\"@@toStringTag\"].<get>"
+          }
+        ],
+        "own_key_order": [
+          "constructor",
+          "length",
+          "byteLength",
+          "byteOffset",
+          "buffer",
+          "at",
+          "copyWithin",
+          "entries",
+          "every",
+          "fill",
+          "filter",
+          "find",
+          "findIndex",
+          "findLast",
+          "findLastIndex",
+          "forEach",
+          "includes",
+          "indexOf",
+          "join",
+          "keys",
+          "lastIndexOf",
+          "map",
+          "reduce",
+          "reduceRight",
+          "reverse",
+          "set",
+          "slice",
+          "some",
+          "sort",
+          "subarray",
+          "toLocaleString",
+          "toReversed",
+          "toSorted",
+          "values",
+          "with",
+          "toString"
+        ],
+        "own_symbol_order": [
+          "@@toStringTag",
+          "@@iterator"
+        ],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2176,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "%ArrayIteratorPrototype%",
+          "%TypedArray%",
+          "%TypedArray%.prototype.at",
+          "%TypedArray%.prototype.buffer.<get>",
+          "%TypedArray%.prototype.byteLength.<get>",
+          "%TypedArray%.prototype.byteOffset.<get>",
+          "%TypedArray%.prototype.copyWithin",
+          "%TypedArray%.prototype.entries",
+          "%TypedArray%.prototype.every",
+          "%TypedArray%.prototype.fill",
+          "%TypedArray%.prototype.filter",
+          "%TypedArray%.prototype.find",
+          "%TypedArray%.prototype.findIndex",
+          "%TypedArray%.prototype.findLast",
+          "%TypedArray%.prototype.findLastIndex",
+          "%TypedArray%.prototype.forEach",
+          "%TypedArray%.prototype.includes",
+          "%TypedArray%.prototype.indexOf",
+          "%TypedArray%.prototype.join",
+          "%TypedArray%.prototype.keys",
+          "%TypedArray%.prototype.lastIndexOf",
+          "%TypedArray%.prototype.length.<get>",
+          "%TypedArray%.prototype.map",
+          "%TypedArray%.prototype.reduce",
+          "%TypedArray%.prototype.reduceRight",
+          "%TypedArray%.prototype.reverse",
+          "%TypedArray%.prototype.set",
+          "%TypedArray%.prototype.slice",
+          "%TypedArray%.prototype.some",
+          "%TypedArray%.prototype.sort",
+          "%TypedArray%.prototype.subarray",
+          "%TypedArray%.prototype.toLocaleString",
+          "%TypedArray%.prototype.toReversed",
+          "%TypedArray%.prototype.toSorted",
+          "%TypedArray%.prototype.values",
+          "%TypedArray%.prototype.with",
+          "%TypedArray%.prototype[\"@@toStringTag\"].<get>",
+          "Array.prototype.toString",
+          "ArrayBuffer",
+          "Object.prototype"
+        ]
+      },
+      {
+        "name": "ArrayBuffer",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "isView",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "ArrayBuffer.isView"
+            }
+          },
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "ArrayBuffer"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "ArrayBuffer.prototype"
+            }
+          },
+          {
+            "key": "@@species",
+            "symbol": true,
+            "attributes": 4,
+            "get": "ArrayBuffer[\"@@species\"].<get>"
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "isView",
+          "prototype"
+        ],
+        "own_symbol_order": [
+          "@@species"
+        ],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 1392508928
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::ctor_thunks::construct_only_builtin_call_thunk",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::ctor_thunks::construct_only_builtin_call_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "int32",
+            "value": 38
+          }
+        ],
+        "info_symbol": "perry_realm_info_2ac8830b891fcb322e89",
+        "births": [
+          "ArrayBuffer.isView",
+          "ArrayBuffer.prototype",
+          "ArrayBuffer[\"@@species\"].<get>",
+          "Function.prototype"
+        ],
+        "constructor": {
+          "identity": 38,
+          "prototype_callable": false,
+          "instance_identity": "BuiltinInstanceIdentity::Class(0xFFFF0025)"
+        }
+      },
+      {
+        "name": "ArrayBuffer.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "byteLength",
+            "symbol": false,
+            "attributes": 4,
+            "get": "ArrayBuffer.prototype.byteLength.<get>"
+          },
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "ArrayBuffer"
+            }
+          },
+          {
+            "key": "detached",
+            "symbol": false,
+            "attributes": 4,
+            "get": "ArrayBuffer.prototype.detached.<get>"
+          },
+          {
+            "key": "maxByteLength",
+            "symbol": false,
+            "attributes": 4,
+            "get": "ArrayBuffer.prototype.maxByteLength.<get>"
+          },
+          {
+            "key": "resizable",
+            "symbol": false,
+            "attributes": 4,
+            "get": "ArrayBuffer.prototype.resizable.<get>"
+          },
+          {
+            "key": "resize",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "ArrayBuffer.prototype.resize"
+            }
+          },
+          {
+            "key": "slice",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "ArrayBuffer.prototype.slice"
+            }
+          },
+          {
+            "key": "toLocaleString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "ArrayBuffer.prototype.toLocaleString"
+            }
+          },
+          {
+            "key": "transfer",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "ArrayBuffer.prototype.transfer"
+            }
+          },
+          {
+            "key": "transferToFixedLength",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "ArrayBuffer.prototype.transferToFixedLength"
+            }
+          },
+          {
+            "key": "valueOf",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "ArrayBuffer.prototype.valueOf"
+            }
+          },
+          {
+            "key": "@@toStringTag",
+            "symbol": true,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "ArrayBuffer"
+            }
+          }
+        ],
+        "own_key_order": [
+          "constructor",
+          "slice",
+          "resize",
+          "transfer",
+          "transferToFixedLength",
+          "byteLength",
+          "resizable",
+          "maxByteLength",
+          "detached",
+          "toLocaleString",
+          "valueOf"
+        ],
+        "own_symbol_order": [
+          "@@toStringTag"
+        ],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2176,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "ArrayBuffer",
+          "ArrayBuffer.prototype.byteLength.<get>",
+          "ArrayBuffer.prototype.detached.<get>",
+          "ArrayBuffer.prototype.maxByteLength.<get>",
+          "ArrayBuffer.prototype.resizable.<get>",
+          "ArrayBuffer.prototype.resize",
+          "ArrayBuffer.prototype.slice",
+          "ArrayBuffer.prototype.toLocaleString",
+          "ArrayBuffer.prototype.transfer",
+          "ArrayBuffer.prototype.transferToFixedLength",
+          "ArrayBuffer.prototype.valueOf",
+          "Object.prototype"
+        ]
+      },
+      {
+        "name": "BigInt64Array",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "BYTES_PER_ELEMENT",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "number_bits",
+              "value": "4020000000000000"
+            }
+          },
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4008000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "BigInt64Array"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "BigInt64Array.prototype"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype",
+          "BYTES_PER_ELEMENT"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 1375731712
+        },
+        "prototype": "%TypedArray%",
+        "length": 3,
+        "body": "crate::object::global_this::ctor_thunks::typed_array_constructor_call_thunk",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::ctor_thunks::typed_array_constructor_call_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "int32",
+            "value": 36
+          }
+        ],
+        "info_symbol": "perry_realm_info_71d01491af2eb9b3f665",
+        "births": [
+          "%TypedArray%",
+          "BigInt64Array.prototype"
+        ],
+        "constructor": {
+          "identity": 36,
+          "prototype_callable": false,
+          "instance_identity": "BuiltinInstanceIdentity::Class(crate::typedarray::CLASS_ID_BIGINT64_ARRAY)"
+        }
+      },
+      {
+        "name": "BigInt64Array.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "BYTES_PER_ELEMENT",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "number_bits",
+              "value": "4020000000000000"
+            }
+          },
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "BigInt64Array"
+            }
+          }
+        ],
+        "own_key_order": [
+          "constructor",
+          "BYTES_PER_ELEMENT"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2432,
+          "class_id": 0
+        },
+        "prototype": "%TypedArray%.prototype",
+        "births": [
+          "%TypedArray%.prototype",
+          "BigInt64Array"
+        ]
+      },
+      {
+        "name": "BigUint64Array",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "BYTES_PER_ELEMENT",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "number_bits",
+              "value": "4020000000000000"
+            }
+          },
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4008000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "BigUint64Array"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "BigUint64Array.prototype"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype",
+          "BYTES_PER_ELEMENT"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 1384120320
+        },
+        "prototype": "%TypedArray%",
+        "length": 3,
+        "body": "crate::object::global_this::ctor_thunks::typed_array_constructor_call_thunk",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::ctor_thunks::typed_array_constructor_call_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "int32",
+            "value": 37
+          }
+        ],
+        "info_symbol": "perry_realm_info_71d01491af2eb9b3f665",
+        "births": [
+          "%TypedArray%",
+          "BigUint64Array.prototype"
+        ],
+        "constructor": {
+          "identity": 37,
+          "prototype_callable": false,
+          "instance_identity": "BuiltinInstanceIdentity::Class(crate::typedarray::CLASS_ID_BIGUINT64_ARRAY)"
+        }
+      },
+      {
+        "name": "BigUint64Array.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "BYTES_PER_ELEMENT",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "number_bits",
+              "value": "4020000000000000"
+            }
+          },
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "BigUint64Array"
+            }
+          }
+        ],
+        "own_key_order": [
+          "constructor",
+          "BYTES_PER_ELEMENT"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2432,
+          "class_id": 0
+        },
+        "prototype": "%TypedArray%.prototype",
+        "births": [
+          "%TypedArray%.prototype",
+          "BigUint64Array"
+        ]
+      },
+      {
+        "name": "Crypto",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "Crypto"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "Crypto.prototype"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 1551892480
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::ctor_thunks::webcrypto_illegal_constructor_thunk",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::ctor_thunks::webcrypto_illegal_constructor_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "int32",
+            "value": 57
+          }
+        ],
+        "info_symbol": "perry_realm_info_f0eadbad4b4c17eb4523",
+        "births": [
+          "ArrayBuffer",
+          "Crypto.prototype",
+          "CryptoKey",
+          "DOMException",
+          "Function.prototype",
+          "Promise",
+          "SubtleCrypto",
+          "Uint8Array"
+        ],
+        "constructor": {
+          "identity": 57,
+          "prototype_callable": false,
+          "instance_identity": "BuiltinInstanceIdentity::Crypto"
+        }
+      },
+      {
+        "name": "Crypto.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Crypto"
+            }
+          },
+          {
+            "key": "getRandomValues",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "Crypto.prototype.getRandomValues"
+            }
+          },
+          {
+            "key": "randomUUID",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "Crypto.prototype.randomUUID"
+            }
+          },
+          {
+            "key": "subtle",
+            "symbol": false,
+            "attributes": 6,
+            "get": "Crypto.prototype.subtle.<get>"
+          },
+          {
+            "key": "toLocaleString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Crypto.prototype.toLocaleString"
+            }
+          },
+          {
+            "key": "valueOf",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Crypto.prototype.valueOf"
+            }
+          }
+        ],
+        "own_key_order": [
+          "constructor",
+          "subtle",
+          "getRandomValues",
+          "randomUUID",
+          "toLocaleString",
+          "valueOf"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2176,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "Crypto",
+          "Crypto.prototype.getRandomValues",
+          "Crypto.prototype.randomUUID",
+          "Crypto.prototype.subtle.<get>",
+          "Crypto.prototype.toLocaleString",
+          "Crypto.prototype.valueOf",
+          "Object.prototype"
+        ]
+      },
+      {
+        "name": "Crypto.prototype.subtle.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "get subtle"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::ctor_thunks::webcrypto_subtle_getter_thunk",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::ctor_thunks::webcrypto_subtle_getter_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_20501267762f86687e73",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "CryptoKey",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "CryptoKey"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "CryptoKey.prototype"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 1560281088
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::ctor_thunks::webcrypto_illegal_constructor_thunk",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::ctor_thunks::webcrypto_illegal_constructor_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "int32",
+            "value": 58
+          }
+        ],
+        "info_symbol": "perry_realm_info_f0eadbad4b4c17eb4523",
+        "births": [
+          "CryptoKey.prototype",
+          "Function.prototype"
+        ],
+        "constructor": {
+          "identity": 58,
+          "prototype_callable": false,
+          "instance_identity": "BuiltinInstanceIdentity::CryptoKey"
+        }
+      },
+      {
+        "name": "CryptoKey.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "algorithm",
+            "symbol": false,
+            "attributes": 6,
+            "get": "CryptoKey.prototype.algorithm.<get>"
+          },
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "CryptoKey"
+            }
+          },
+          {
+            "key": "extractable",
+            "symbol": false,
+            "attributes": 6,
+            "get": "CryptoKey.prototype.extractable.<get>"
+          },
+          {
+            "key": "toLocaleString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "CryptoKey.prototype.toLocaleString"
+            }
+          },
+          {
+            "key": "type",
+            "symbol": false,
+            "attributes": 6,
+            "get": "CryptoKey.prototype.type.<get>"
+          },
+          {
+            "key": "usages",
+            "symbol": false,
+            "attributes": 6,
+            "get": "CryptoKey.prototype.usages.<get>"
+          },
+          {
+            "key": "valueOf",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "CryptoKey.prototype.valueOf"
+            }
+          }
+        ],
+        "own_key_order": [
+          "constructor",
+          "algorithm",
+          "extractable",
+          "type",
+          "usages",
+          "toLocaleString",
+          "valueOf"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2176,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "CryptoKey",
+          "CryptoKey.prototype.algorithm.<get>",
+          "CryptoKey.prototype.extractable.<get>",
+          "CryptoKey.prototype.toLocaleString",
+          "CryptoKey.prototype.type.<get>",
+          "CryptoKey.prototype.usages.<get>",
+          "CryptoKey.prototype.valueOf",
+          "Object.prototype"
+        ]
+      },
+      {
+        "name": "CryptoKey.prototype.algorithm.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "get algorithm"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::ctor_thunks::cryptokey_algorithm_getter_thunk",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::ctor_thunks::cryptokey_algorithm_getter_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_883a8ad7d96bac1b1bc7",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "CryptoKey.prototype.extractable.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "get extractable"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::ctor_thunks::cryptokey_extractable_getter_thunk",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::ctor_thunks::cryptokey_extractable_getter_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_1f423d4db2e68b44846b",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "CryptoKey.prototype.type.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "get type"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::ctor_thunks::cryptokey_type_getter_thunk",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::ctor_thunks::cryptokey_type_getter_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_a60fe18c0f6f04edb901",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "CryptoKey.prototype.usages.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "get usages"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::ctor_thunks::cryptokey_usages_getter_thunk",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::ctor_thunks::cryptokey_usages_getter_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_4466c0130a3eaeb3e241",
+        "births": [
+          "Function.prototype"
+        ]
+      },
+      {
+        "name": "DataView",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "DataView"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "DataView.prototype"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 1409286144
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::ctor_thunks::construct_only_builtin_call_thunk",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::ctor_thunks::construct_only_builtin_call_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "int32",
+            "value": 40
+          }
+        ],
+        "info_symbol": "perry_realm_info_2ac8830b891fcb322e89",
+        "births": [
+          "ArrayBuffer",
+          "DataView.prototype",
+          "Function.prototype"
+        ],
+        "constructor": {
+          "identity": 40,
+          "prototype_callable": false,
+          "instance_identity": "BuiltinInstanceIdentity::Class(0xFFFF002B)"
+        }
+      },
+      {
+        "name": "DataView.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "buffer",
+            "symbol": false,
+            "attributes": 4,
+            "get": "DataView.prototype.buffer.<get>"
+          },
+          {
+            "key": "byteLength",
+            "symbol": false,
+            "attributes": 4,
+            "get": "DataView.prototype.byteLength.<get>"
+          },
+          {
+            "key": "byteOffset",
+            "symbol": false,
+            "attributes": 4,
+            "get": "DataView.prototype.byteOffset.<get>"
+          },
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "DataView"
+            }
+          },
+          {
+            "key": "getBigInt64",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "DataView.prototype.getBigInt64"
+            }
+          },
+          {
+            "key": "getBigUint64",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "DataView.prototype.getBigUint64"
+            }
+          },
+          {
+            "key": "getFloat32",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "DataView.prototype.getFloat32"
+            }
+          },
+          {
+            "key": "getFloat64",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "DataView.prototype.getFloat64"
+            }
+          },
+          {
+            "key": "getInt16",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "DataView.prototype.getInt16"
+            }
+          },
+          {
+            "key": "getInt32",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "DataView.prototype.getInt32"
+            }
+          },
+          {
+            "key": "getInt8",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "DataView.prototype.getInt8"
+            }
+          },
+          {
+            "key": "getUint16",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "DataView.prototype.getUint16"
+            }
+          },
+          {
+            "key": "getUint32",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "DataView.prototype.getUint32"
+            }
+          },
+          {
+            "key": "getUint8",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "DataView.prototype.getUint8"
+            }
+          },
+          {
+            "key": "setBigInt64",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "DataView.prototype.setBigInt64"
+            }
+          },
+          {
+            "key": "setBigUint64",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "DataView.prototype.setBigUint64"
+            }
+          },
+          {
+            "key": "setFloat32",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "DataView.prototype.setFloat32"
+            }
+          },
+          {
+            "key": "setFloat64",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "DataView.prototype.setFloat64"
+            }
+          },
+          {
+            "key": "setInt16",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "DataView.prototype.setInt16"
+            }
+          },
+          {
+            "key": "setInt32",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "DataView.prototype.setInt32"
+            }
+          },
+          {
+            "key": "setInt8",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "DataView.prototype.setInt8"
+            }
+          },
+          {
+            "key": "setUint16",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "DataView.prototype.setUint16"
+            }
+          },
+          {
+            "key": "setUint32",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "DataView.prototype.setUint32"
+            }
+          },
+          {
+            "key": "setUint8",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "DataView.prototype.setUint8"
+            }
+          },
+          {
+            "key": "toLocaleString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "DataView.prototype.toLocaleString"
+            }
+          },
+          {
+            "key": "valueOf",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "DataView.prototype.valueOf"
+            }
+          },
+          {
+            "key": "@@toStringTag",
+            "symbol": true,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "DataView"
+            }
+          }
+        ],
+        "own_key_order": [
+          "constructor",
+          "byteLength",
+          "byteOffset",
+          "buffer",
+          "getInt8",
+          "getUint8",
+          "getInt16",
+          "getUint16",
+          "getInt32",
+          "getUint32",
+          "getFloat32",
+          "getFloat64",
+          "getBigInt64",
+          "getBigUint64",
+          "setInt8",
+          "setUint8",
+          "setInt16",
+          "setUint16",
+          "setInt32",
+          "setUint32",
+          "setFloat32",
+          "setFloat64",
+          "setBigInt64",
+          "setBigUint64",
+          "toLocaleString",
+          "valueOf"
+        ],
+        "own_symbol_order": [
+          "@@toStringTag"
+        ],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2176,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "DataView",
+          "DataView.prototype.buffer.<get>",
+          "DataView.prototype.byteLength.<get>",
+          "DataView.prototype.byteOffset.<get>",
+          "DataView.prototype.getBigInt64",
+          "DataView.prototype.getBigUint64",
+          "DataView.prototype.getFloat32",
+          "DataView.prototype.getFloat64",
+          "DataView.prototype.getInt16",
+          "DataView.prototype.getInt32",
+          "DataView.prototype.getInt8",
+          "DataView.prototype.getUint16",
+          "DataView.prototype.getUint32",
+          "DataView.prototype.getUint8",
+          "DataView.prototype.setBigInt64",
+          "DataView.prototype.setBigUint64",
+          "DataView.prototype.setFloat32",
+          "DataView.prototype.setFloat64",
+          "DataView.prototype.setInt16",
+          "DataView.prototype.setInt32",
+          "DataView.prototype.setInt8",
+          "DataView.prototype.setUint16",
+          "DataView.prototype.setUint32",
+          "DataView.prototype.setUint8",
+          "DataView.prototype.toLocaleString",
+          "DataView.prototype.valueOf",
+          "Object.prototype"
+        ]
+      },
+      {
+        "name": "Error",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "captureStackTrace",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Error.captureStackTrace"
+            }
+          },
+          {
+            "key": "isError",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Error.isError"
+            }
+          },
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "Error"
+            }
+          },
+          {
+            "key": "prepareStackTrace",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Error.prepareStackTrace"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "Error.prototype"
+            }
+          },
+          {
+            "key": "stackTraceLimit",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "number_bits",
+              "value": "4024000000000000"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype",
+          "captureStackTrace",
+          "isError",
+          "prepareStackTrace",
+          "stackTraceLimit"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 1149239296
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::ctor_thunks::error_constructor_call_thunk",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::ctor_thunks::error_constructor_call_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "int32",
+            "value": 9
+          }
+        ],
+        "info_symbol": "perry_realm_info_62e746b7d5b717dc6ddd",
+        "births": [
+          "Error.captureStackTrace",
+          "Error.isError",
+          "Error.prepareStackTrace",
+          "Error.prototype",
+          "Function.prototype"
+        ],
+        "constructor": {
+          "identity": 9,
+          "prototype_callable": false,
+          "instance_identity": "BuiltinInstanceIdentity::Class(crate::error::CLASS_ID_ERROR)"
+        }
+      },
+      {
+        "name": "Error.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Error"
+            }
+          },
+          {
+            "key": "hasOwnProperty",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Error.prototype.hasOwnProperty"
+            }
+          },
+          {
+            "key": "isPrototypeOf",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Error.prototype.isPrototypeOf"
+            }
+          },
+          {
+            "key": "message",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "string",
+              "value": "Error"
+            }
+          },
+          {
+            "key": "toLocaleString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Error.prototype.toLocaleString"
+            }
+          },
+          {
+            "key": "toString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Error.prototype.toString"
+            }
+          },
+          {
+            "key": "valueOf",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Error.prototype.valueOf"
+            }
+          }
+        ],
+        "own_key_order": [
+          "constructor",
+          "toLocaleString",
+          "valueOf",
+          "toString",
+          "isPrototypeOf",
+          "hasOwnProperty",
+          "name",
+          "message"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2176,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "Error",
+          "Error.prototype.hasOwnProperty",
+          "Error.prototype.isPrototypeOf",
+          "Error.prototype.toLocaleString",
+          "Error.prototype.toString",
+          "Error.prototype.valueOf",
+          "Object.prototype"
+        ]
+      },
+      {
+        "name": "EvalError",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "EvalError"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "EvalError.prototype"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 1191182336
+        },
+        "prototype": "Error",
+        "length": 1,
+        "body": "crate::object::global_this::ctor_thunks::eval_error_constructor_call_thunk",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::ctor_thunks::eval_error_constructor_call_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "int32",
+            "value": 14
+          }
+        ],
+        "info_symbol": "perry_realm_info_520830250f131de236f9",
+        "births": [
+          "Error",
+          "EvalError.prototype"
+        ],
+        "constructor": {
+          "identity": 14,
+          "prototype_callable": false,
+          "instance_identity": "BuiltinInstanceIdentity::Class(crate::error::CLASS_ID_EVAL_ERROR)"
+        }
+      },
+      {
+        "name": "EvalError.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "EvalError"
+            }
+          },
+          {
+            "key": "hasOwnProperty",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "EvalError.prototype.hasOwnProperty"
+            }
+          },
+          {
+            "key": "isPrototypeOf",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "EvalError.prototype.isPrototypeOf"
+            }
+          },
+          {
+            "key": "message",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "string",
+              "value": "EvalError"
+            }
+          },
+          {
+            "key": "toLocaleString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "EvalError.prototype.toLocaleString"
+            }
+          },
+          {
+            "key": "toString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "EvalError.prototype.toString"
+            }
+          },
+          {
+            "key": "valueOf",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "EvalError.prototype.valueOf"
+            }
+          }
+        ],
+        "own_key_order": [
+          "constructor",
+          "toLocaleString",
+          "valueOf",
+          "toString",
+          "isPrototypeOf",
+          "hasOwnProperty",
+          "name",
+          "message"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2176,
+          "class_id": 0
+        },
+        "prototype": "Error.prototype",
+        "births": [
+          "Error.prototype",
+          "EvalError",
+          "EvalError.prototype.hasOwnProperty",
+          "EvalError.prototype.isPrototypeOf",
+          "EvalError.prototype.toLocaleString",
+          "EvalError.prototype.toString",
+          "EvalError.prototype.valueOf"
+        ]
+      },
+      {
+        "name": "Float16Array",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "BYTES_PER_ELEMENT",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4008000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "Float16Array"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "Float16Array.prototype"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype",
+          "BYTES_PER_ELEMENT"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 1342177280
+        },
+        "prototype": "%TypedArray%",
+        "length": 3,
+        "body": "crate::object::global_this::ctor_thunks::typed_array_constructor_call_thunk",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::ctor_thunks::typed_array_constructor_call_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "int32",
+            "value": 32
+          }
+        ],
+        "info_symbol": "perry_realm_info_71d01491af2eb9b3f665",
+        "births": [
+          "%TypedArray%",
+          "Float16Array.prototype"
+        ],
+        "constructor": {
+          "identity": 32,
+          "prototype_callable": false,
+          "instance_identity": "BuiltinInstanceIdentity::Class(crate::typedarray::CLASS_ID_FLOAT16_ARRAY)"
+        }
+      },
+      {
+        "name": "Float16Array.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "BYTES_PER_ELEMENT",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Float16Array"
+            }
+          }
+        ],
+        "own_key_order": [
+          "constructor",
+          "BYTES_PER_ELEMENT"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2432,
+          "class_id": 0
+        },
+        "prototype": "%TypedArray%.prototype",
+        "births": [
+          "%TypedArray%.prototype",
+          "Float16Array"
+        ]
+      },
+      {
+        "name": "Float32Array",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "BYTES_PER_ELEMENT",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "number_bits",
+              "value": "4010000000000000"
+            }
+          },
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4008000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "Float32Array"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "Float32Array.prototype"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype",
+          "BYTES_PER_ELEMENT"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 1350565888
+        },
+        "prototype": "%TypedArray%",
+        "length": 3,
+        "body": "crate::object::global_this::ctor_thunks::typed_array_constructor_call_thunk",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::ctor_thunks::typed_array_constructor_call_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "int32",
+            "value": 33
+          }
+        ],
+        "info_symbol": "perry_realm_info_71d01491af2eb9b3f665",
+        "births": [
+          "%TypedArray%",
+          "Float32Array.prototype"
+        ],
+        "constructor": {
+          "identity": 33,
+          "prototype_callable": false,
+          "instance_identity": "BuiltinInstanceIdentity::Class(crate::typedarray::CLASS_ID_FLOAT32_ARRAY)"
+        }
+      },
+      {
+        "name": "Float32Array.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "BYTES_PER_ELEMENT",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "number_bits",
+              "value": "4010000000000000"
+            }
+          },
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Float32Array"
+            }
+          }
+        ],
+        "own_key_order": [
+          "constructor",
+          "BYTES_PER_ELEMENT"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2432,
+          "class_id": 0
+        },
+        "prototype": "%TypedArray%.prototype",
+        "births": [
+          "%TypedArray%.prototype",
+          "Float32Array"
+        ]
+      },
+      {
+        "name": "Float64Array",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "BYTES_PER_ELEMENT",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "number_bits",
+              "value": "4020000000000000"
+            }
+          },
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4008000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "Float64Array"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "Float64Array.prototype"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype",
+          "BYTES_PER_ELEMENT"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 1358954496
+        },
+        "prototype": "%TypedArray%",
+        "length": 3,
+        "body": "crate::object::global_this::ctor_thunks::typed_array_constructor_call_thunk",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::ctor_thunks::typed_array_constructor_call_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "int32",
+            "value": 34
+          }
+        ],
+        "info_symbol": "perry_realm_info_71d01491af2eb9b3f665",
+        "births": [
+          "%TypedArray%",
+          "Float64Array.prototype"
+        ],
+        "constructor": {
+          "identity": 34,
+          "prototype_callable": false,
+          "instance_identity": "BuiltinInstanceIdentity::Class(crate::typedarray::CLASS_ID_FLOAT64_ARRAY)"
+        }
+      },
+      {
+        "name": "Float64Array.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "BYTES_PER_ELEMENT",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "number_bits",
+              "value": "4020000000000000"
+            }
+          },
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Float64Array"
+            }
+          }
+        ],
+        "own_key_order": [
+          "constructor",
+          "BYTES_PER_ELEMENT"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2432,
+          "class_id": 0
+        },
+        "prototype": "%TypedArray%.prototype",
+        "births": [
+          "%TypedArray%.prototype",
+          "Float64Array"
+        ]
+      },
+      {
+        "name": "Int16Array",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "BYTES_PER_ELEMENT",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4008000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "Int16Array"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "Int16Array.prototype"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype",
+          "BYTES_PER_ELEMENT"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 1317011456
+        },
+        "prototype": "%TypedArray%",
+        "length": 3,
+        "body": "crate::object::global_this::ctor_thunks::typed_array_constructor_call_thunk",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::ctor_thunks::typed_array_constructor_call_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "int32",
+            "value": 29
+          }
+        ],
+        "info_symbol": "perry_realm_info_71d01491af2eb9b3f665",
+        "births": [
+          "%TypedArray%",
+          "Int16Array.prototype"
+        ],
+        "constructor": {
+          "identity": 29,
+          "prototype_callable": false,
+          "instance_identity": "BuiltinInstanceIdentity::Class(crate::typedarray::CLASS_ID_INT16_ARRAY)"
+        }
+      },
+      {
+        "name": "Int16Array.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "BYTES_PER_ELEMENT",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Int16Array"
+            }
+          }
+        ],
+        "own_key_order": [
+          "constructor",
+          "BYTES_PER_ELEMENT"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2432,
+          "class_id": 0
+        },
+        "prototype": "%TypedArray%.prototype",
+        "births": [
+          "%TypedArray%.prototype",
+          "Int16Array"
+        ]
+      },
+      {
+        "name": "Int32Array",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "BYTES_PER_ELEMENT",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "number_bits",
+              "value": "4010000000000000"
+            }
+          },
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4008000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "Int32Array"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "Int32Array.prototype"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype",
+          "BYTES_PER_ELEMENT"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 1333788672
+        },
+        "prototype": "%TypedArray%",
+        "length": 3,
+        "body": "crate::object::global_this::ctor_thunks::typed_array_constructor_call_thunk",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::ctor_thunks::typed_array_constructor_call_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "int32",
+            "value": 31
+          }
+        ],
+        "info_symbol": "perry_realm_info_71d01491af2eb9b3f665",
+        "births": [
+          "%TypedArray%",
+          "Int32Array.prototype"
+        ],
+        "constructor": {
+          "identity": 31,
+          "prototype_callable": false,
+          "instance_identity": "BuiltinInstanceIdentity::Class(crate::typedarray::CLASS_ID_INT32_ARRAY)"
+        }
+      },
+      {
+        "name": "Int32Array.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "BYTES_PER_ELEMENT",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "number_bits",
+              "value": "4010000000000000"
+            }
+          },
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Int32Array"
+            }
+          }
+        ],
+        "own_key_order": [
+          "constructor",
+          "BYTES_PER_ELEMENT"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2432,
+          "class_id": 0
+        },
+        "prototype": "%TypedArray%.prototype",
+        "births": [
+          "%TypedArray%.prototype",
+          "Int32Array"
+        ]
+      },
+      {
+        "name": "Int8Array",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "BYTES_PER_ELEMENT",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4008000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "Int8Array"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "Int8Array.prototype"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype",
+          "BYTES_PER_ELEMENT"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 1300234240
+        },
+        "prototype": "%TypedArray%",
+        "length": 3,
+        "body": "crate::object::global_this::ctor_thunks::typed_array_constructor_call_thunk",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::ctor_thunks::typed_array_constructor_call_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "int32",
+            "value": 27
+          }
+        ],
+        "info_symbol": "perry_realm_info_71d01491af2eb9b3f665",
+        "births": [
+          "%TypedArray%",
+          "Int8Array.prototype"
+        ],
+        "constructor": {
+          "identity": 27,
+          "prototype_callable": false,
+          "instance_identity": "BuiltinInstanceIdentity::Class(crate::typedarray::CLASS_ID_INT8_ARRAY)"
+        }
+      },
+      {
+        "name": "Int8Array.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "BYTES_PER_ELEMENT",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Int8Array"
+            }
+          }
+        ],
+        "own_key_order": [
+          "constructor",
+          "BYTES_PER_ELEMENT"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2432,
+          "class_id": 0
+        },
+        "prototype": "%TypedArray%.prototype",
+        "births": [
+          "%TypedArray%.prototype",
+          "Int8Array"
+        ]
+      },
+      {
+        "name": "Map",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "groupBy",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Map.groupBy"
+            }
+          },
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "Map"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "Map.prototype"
+            }
+          },
+          {
+            "key": "@@species",
+            "symbol": true,
+            "attributes": 4,
+            "get": "Map[\"@@species\"].<get>"
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "groupBy",
+          "prototype"
+        ],
+        "own_symbol_order": [
+          "@@species"
+        ],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 1233125376
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::ctor_thunks::map_constructor_call_thunk",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::ctor_thunks::map_constructor_call_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "int32",
+            "value": 19
+          }
+        ],
+        "info_symbol": "perry_realm_info_20d9c7f0ab65791f639c",
+        "births": [
+          "%MapIteratorPrototype%",
+          "Array",
+          "Function.prototype",
+          "Map.groupBy",
+          "Map.prototype",
+          "Map[\"@@species\"].<get>"
+        ],
+        "constructor": {
+          "identity": 19,
+          "prototype_callable": false,
+          "instance_identity": "BuiltinInstanceIdentity::Class(0xFFFF0022)"
+        }
+      },
+      {
+        "name": "Map.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "clear",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Map.prototype.clear"
+            }
+          },
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Map"
+            }
+          },
+          {
+            "key": "delete",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Map.prototype.delete"
+            }
+          },
+          {
+            "key": "entries",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Map.prototype.entries"
+            }
+          },
+          {
+            "key": "forEach",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Map.prototype.forEach"
+            }
+          },
+          {
+            "key": "get",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Map.prototype.get"
+            }
+          },
+          {
+            "key": "has",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Map.prototype.has"
+            }
+          },
+          {
+            "key": "keys",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Map.prototype.keys"
+            }
+          },
+          {
+            "key": "set",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Map.prototype.set"
+            }
+          },
+          {
+            "key": "size",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Map.prototype.size.<get>"
+          },
+          {
+            "key": "toLocaleString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Map.prototype.toLocaleString"
+            }
+          },
+          {
+            "key": "valueOf",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Map.prototype.valueOf"
+            }
+          },
+          {
+            "key": "values",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Map.prototype.values"
+            }
+          },
+          {
+            "key": "@@iterator",
+            "symbol": true,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Map.prototype.entries"
+            }
+          },
+          {
+            "key": "@@toStringTag",
+            "symbol": true,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "Map"
+            }
+          }
+        ],
+        "own_key_order": [
+          "constructor",
+          "size",
+          "clear",
+          "delete",
+          "entries",
+          "forEach",
+          "get",
+          "has",
+          "keys",
+          "set",
+          "values",
+          "toLocaleString",
+          "valueOf"
+        ],
+        "own_symbol_order": [
+          "@@iterator",
+          "@@toStringTag"
+        ],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2176,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "Map",
+          "Map.prototype.clear",
+          "Map.prototype.delete",
+          "Map.prototype.entries",
+          "Map.prototype.forEach",
+          "Map.prototype.get",
+          "Map.prototype.has",
+          "Map.prototype.keys",
+          "Map.prototype.set",
+          "Map.prototype.size.<get>",
+          "Map.prototype.toLocaleString",
+          "Map.prototype.valueOf",
+          "Map.prototype.values",
+          "Object.prototype"
+        ]
+      },
+      {
+        "name": "Promise",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "all",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Promise.all"
+            }
+          },
+          {
+            "key": "allSettled",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Promise.allSettled"
+            }
+          },
+          {
+            "key": "any",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Promise.any"
+            }
+          },
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "Promise"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "Promise.prototype"
+            }
+          },
+          {
+            "key": "race",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Promise.race"
+            }
+          },
+          {
+            "key": "reject",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Promise.reject"
+            }
+          },
+          {
+            "key": "resolve",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Promise.resolve"
+            }
+          },
+          {
+            "key": "try",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Promise.try"
+            }
+          },
+          {
+            "key": "withResolvers",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Promise.withResolvers"
+            }
+          },
+          {
+            "key": "@@species",
+            "symbol": true,
+            "attributes": 4,
+            "get": "Promise[\"@@species\"].<get>"
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "resolve",
+          "reject",
+          "all",
+          "race",
+          "allSettled",
+          "any",
+          "withResolvers",
+          "try",
+          "prototype"
+        ],
+        "own_symbol_order": [
+          "@@species"
+        ],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 1224736768
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::ctor_thunks::promise_constructor_call_thunk",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::ctor_thunks::promise_constructor_call_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "int32",
+            "value": 18
+          }
+        ],
+        "info_symbol": "perry_realm_info_5274cc09cd5e9b82d539",
+        "births": [
+          "Array",
+          "Function.prototype",
+          "Promise.all",
+          "Promise.allSettled",
+          "Promise.any",
+          "Promise.prototype",
+          "Promise.race",
+          "Promise.reject",
+          "Promise.resolve",
+          "Promise.try",
+          "Promise.withResolvers",
+          "Promise[\"@@species\"].<get>"
+        ],
+        "constructor": {
+          "identity": 18,
+          "prototype_callable": false,
+          "instance_identity": "BuiltinInstanceIdentity::Class(0xFFFF0027)"
+        }
+      },
+      {
+        "name": "Promise.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "catch",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Promise.prototype.catch"
+            }
+          },
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Promise"
+            }
+          },
+          {
+            "key": "finally",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Promise.prototype.finally"
+            }
+          },
+          {
+            "key": "then",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Promise.prototype.then"
+            }
+          },
+          {
+            "key": "toLocaleString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Promise.prototype.toLocaleString"
+            }
+          },
+          {
+            "key": "valueOf",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Promise.prototype.valueOf"
+            }
+          },
+          {
+            "key": "@@toStringTag",
+            "symbol": true,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "Promise"
+            }
+          }
+        ],
+        "own_key_order": [
+          "constructor",
+          "catch",
+          "finally",
+          "then",
+          "toLocaleString",
+          "valueOf"
+        ],
+        "own_symbol_order": [
+          "@@toStringTag"
+        ],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2176,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "Object.prototype",
+          "Promise",
+          "Promise.prototype.catch",
+          "Promise.prototype.finally",
+          "Promise.prototype.then",
+          "Promise.prototype.toLocaleString",
+          "Promise.prototype.valueOf"
+        ]
+      },
+      {
+        "name": "RangeError",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "RangeError"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "RangeError.prototype"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 1166016512
+        },
+        "prototype": "Error",
+        "length": 1,
+        "body": "crate::object::global_this::ctor_thunks::range_error_constructor_call_thunk",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::ctor_thunks::range_error_constructor_call_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "int32",
+            "value": 11
+          }
+        ],
+        "info_symbol": "perry_realm_info_73a9489b153425008f28",
+        "births": [
+          "Error",
+          "RangeError.prototype"
+        ],
+        "constructor": {
+          "identity": 11,
+          "prototype_callable": false,
+          "instance_identity": "BuiltinInstanceIdentity::Class(crate::error::CLASS_ID_RANGE_ERROR)"
+        }
+      },
+      {
+        "name": "RangeError.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "RangeError"
+            }
+          },
+          {
+            "key": "hasOwnProperty",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "RangeError.prototype.hasOwnProperty"
+            }
+          },
+          {
+            "key": "isPrototypeOf",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "RangeError.prototype.isPrototypeOf"
+            }
+          },
+          {
+            "key": "message",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "string",
+              "value": "RangeError"
+            }
+          },
+          {
+            "key": "toLocaleString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "RangeError.prototype.toLocaleString"
+            }
+          },
+          {
+            "key": "toString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "RangeError.prototype.toString"
+            }
+          },
+          {
+            "key": "valueOf",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "RangeError.prototype.valueOf"
+            }
+          }
+        ],
+        "own_key_order": [
+          "constructor",
+          "toLocaleString",
+          "valueOf",
+          "toString",
+          "isPrototypeOf",
+          "hasOwnProperty",
+          "name",
+          "message"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2176,
+          "class_id": 0
+        },
+        "prototype": "Error.prototype",
+        "births": [
+          "Error.prototype",
+          "RangeError",
+          "RangeError.prototype.hasOwnProperty",
+          "RangeError.prototype.isPrototypeOf",
+          "RangeError.prototype.toLocaleString",
+          "RangeError.prototype.toString",
+          "RangeError.prototype.valueOf"
+        ]
+      },
+      {
+        "name": "ReferenceError",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "ReferenceError"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "ReferenceError.prototype"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 1182793728
+        },
+        "prototype": "Error",
+        "length": 1,
+        "body": "crate::object::global_this::ctor_thunks::reference_error_constructor_call_thunk",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::ctor_thunks::reference_error_constructor_call_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "int32",
+            "value": 13
+          }
+        ],
+        "info_symbol": "perry_realm_info_1871f48dc0cf2526aa9f",
+        "births": [
+          "Error",
+          "ReferenceError.prototype"
+        ],
+        "constructor": {
+          "identity": 13,
+          "prototype_callable": false,
+          "instance_identity": "BuiltinInstanceIdentity::Class(crate::error::CLASS_ID_REFERENCE_ERROR)"
+        }
+      },
+      {
+        "name": "ReferenceError.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "ReferenceError"
+            }
+          },
+          {
+            "key": "hasOwnProperty",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "ReferenceError.prototype.hasOwnProperty"
+            }
+          },
+          {
+            "key": "isPrototypeOf",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "ReferenceError.prototype.isPrototypeOf"
+            }
+          },
+          {
+            "key": "message",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "string",
+              "value": "ReferenceError"
+            }
+          },
+          {
+            "key": "toLocaleString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "ReferenceError.prototype.toLocaleString"
+            }
+          },
+          {
+            "key": "toString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "ReferenceError.prototype.toString"
+            }
+          },
+          {
+            "key": "valueOf",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "ReferenceError.prototype.valueOf"
+            }
+          }
+        ],
+        "own_key_order": [
+          "constructor",
+          "toLocaleString",
+          "valueOf",
+          "toString",
+          "isPrototypeOf",
+          "hasOwnProperty",
+          "name",
+          "message"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2176,
+          "class_id": 0
+        },
+        "prototype": "Error.prototype",
+        "births": [
+          "Error.prototype",
+          "ReferenceError",
+          "ReferenceError.prototype.hasOwnProperty",
+          "ReferenceError.prototype.isPrototypeOf",
+          "ReferenceError.prototype.toLocaleString",
+          "ReferenceError.prototype.toString",
+          "ReferenceError.prototype.valueOf"
+        ]
+      },
+      {
+        "name": "RegExp",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "escape",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "RegExp.escape"
+            }
+          },
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "RegExp"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "RegExp.prototype"
+            }
+          },
+          {
+            "key": "@@species",
+            "symbol": true,
+            "attributes": 4,
+            "get": "RegExp[\"@@species\"].<get>"
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "escape",
+          "prototype"
+        ],
+        "own_symbol_order": [
+          "@@species"
+        ],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 1132462080
+        },
+        "prototype": "Function.prototype",
+        "length": 2,
+        "body": "crate::object::global_this::ctor_thunks::regexp_constructor_call_thunk",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 2,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 2,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::ctor_thunks::regexp_constructor_call_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "int32",
+            "value": 7
+          }
+        ],
+        "info_symbol": "perry_realm_info_0038d9bce245cf17ced4",
+        "births": [
+          "Array",
+          "Function.prototype",
+          "RegExp.escape",
+          "RegExp.prototype",
+          "RegExp[\"@@species\"].<get>",
+          "String"
+        ],
+        "constructor": {
+          "identity": 7,
+          "prototype_callable": false,
+          "instance_identity": "BuiltinInstanceIdentity::Class(0xFFFF0021)"
+        }
+      },
+      {
+        "name": "RegExp.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "compile",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "RegExp.prototype.compile"
+            }
+          },
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "RegExp"
+            }
+          },
+          {
+            "key": "dotAll",
+            "symbol": false,
+            "attributes": 4,
+            "get": "RegExp.prototype.dotAll.<get>"
+          },
+          {
+            "key": "exec",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "RegExp.prototype.exec"
+            }
+          },
+          {
+            "key": "flags",
+            "symbol": false,
+            "attributes": 4,
+            "get": "RegExp.prototype.flags.<get>"
+          },
+          {
+            "key": "global",
+            "symbol": false,
+            "attributes": 4,
+            "get": "RegExp.prototype.global.<get>"
+          },
+          {
+            "key": "hasIndices",
+            "symbol": false,
+            "attributes": 4,
+            "get": "RegExp.prototype.hasIndices.<get>"
+          },
+          {
+            "key": "ignoreCase",
+            "symbol": false,
+            "attributes": 4,
+            "get": "RegExp.prototype.ignoreCase.<get>"
+          },
+          {
+            "key": "multiline",
+            "symbol": false,
+            "attributes": 4,
+            "get": "RegExp.prototype.multiline.<get>"
+          },
+          {
+            "key": "source",
+            "symbol": false,
+            "attributes": 4,
+            "get": "RegExp.prototype.source.<get>"
+          },
+          {
+            "key": "sticky",
+            "symbol": false,
+            "attributes": 4,
+            "get": "RegExp.prototype.sticky.<get>"
+          },
+          {
+            "key": "test",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "RegExp.prototype.test"
+            }
+          },
+          {
+            "key": "toLocaleString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "RegExp.prototype.toLocaleString"
+            }
+          },
+          {
+            "key": "toString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "RegExp.prototype.toString"
+            }
+          },
+          {
+            "key": "unicode",
+            "symbol": false,
+            "attributes": 4,
+            "get": "RegExp.prototype.unicode.<get>"
+          },
+          {
+            "key": "unicodeSets",
+            "symbol": false,
+            "attributes": 4,
+            "get": "RegExp.prototype.unicodeSets.<get>"
+          },
+          {
+            "key": "valueOf",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "RegExp.prototype.valueOf"
+            }
+          },
+          {
+            "key": "@@match",
+            "symbol": true,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "RegExp.prototype[\"@@match\"]"
+            }
+          },
+          {
+            "key": "@@matchAll",
+            "symbol": true,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "RegExp.prototype[\"@@matchAll\"]"
+            }
+          },
+          {
+            "key": "@@replace",
+            "symbol": true,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "RegExp.prototype[\"@@replace\"]"
+            }
+          },
+          {
+            "key": "@@search",
+            "symbol": true,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "RegExp.prototype[\"@@search\"]"
+            }
+          },
+          {
+            "key": "@@split",
+            "symbol": true,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "RegExp.prototype[\"@@split\"]"
+            }
+          }
+        ],
+        "own_key_order": [
+          "constructor",
+          "flags",
+          "source",
+          "global",
+          "ignoreCase",
+          "multiline",
+          "dotAll",
+          "sticky",
+          "unicode",
+          "unicodeSets",
+          "hasIndices",
+          "exec",
+          "test",
+          "compile",
+          "toString",
+          "toLocaleString",
+          "valueOf"
+        ],
+        "own_symbol_order": [
+          "@@match",
+          "@@search",
+          "@@matchAll",
+          "@@split",
+          "@@replace"
+        ],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2176,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "Object.prototype",
+          "RegExp",
+          "RegExp.prototype.compile",
+          "RegExp.prototype.dotAll.<get>",
+          "RegExp.prototype.exec",
+          "RegExp.prototype.flags.<get>",
+          "RegExp.prototype.global.<get>",
+          "RegExp.prototype.hasIndices.<get>",
+          "RegExp.prototype.ignoreCase.<get>",
+          "RegExp.prototype.multiline.<get>",
+          "RegExp.prototype.source.<get>",
+          "RegExp.prototype.sticky.<get>",
+          "RegExp.prototype.test",
+          "RegExp.prototype.toLocaleString",
+          "RegExp.prototype.toString",
+          "RegExp.prototype.unicode.<get>",
+          "RegExp.prototype.unicodeSets.<get>",
+          "RegExp.prototype.valueOf",
+          "RegExp.prototype[\"@@match\"]",
+          "RegExp.prototype[\"@@matchAll\"]",
+          "RegExp.prototype[\"@@replace\"]",
+          "RegExp.prototype[\"@@search\"]",
+          "RegExp.prototype[\"@@split\"]"
+        ]
+      },
+      {
+        "name": "Set",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "Set"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "Set.prototype"
+            }
+          },
+          {
+            "key": "@@species",
+            "symbol": true,
+            "attributes": 4,
+            "get": "Set[\"@@species\"].<get>"
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [
+          "@@species"
+        ],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 1241513984
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::ctor_thunks::set_constructor_call_thunk",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::ctor_thunks::set_constructor_call_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "int32",
+            "value": 20
+          }
+        ],
+        "info_symbol": "perry_realm_info_31c965be47e49cf7cc91",
+        "births": [
+          "%SetIteratorPrototype%",
+          "Array",
+          "Function.prototype",
+          "Set.prototype",
+          "Set[\"@@species\"].<get>"
+        ],
+        "constructor": {
+          "identity": 20,
+          "prototype_callable": false,
+          "instance_identity": "BuiltinInstanceIdentity::Class(0xFFFF0023)"
+        }
+      },
+      {
+        "name": "Set.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "add",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Set.prototype.add"
+            }
+          },
+          {
+            "key": "clear",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Set.prototype.clear"
+            }
+          },
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Set"
+            }
+          },
+          {
+            "key": "delete",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Set.prototype.delete"
+            }
+          },
+          {
+            "key": "entries",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Set.prototype.entries"
+            }
+          },
+          {
+            "key": "forEach",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Set.prototype.forEach"
+            }
+          },
+          {
+            "key": "has",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Set.prototype.has"
+            }
+          },
+          {
+            "key": "keys",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Set.prototype.keys"
+            }
+          },
+          {
+            "key": "size",
+            "symbol": false,
+            "attributes": 4,
+            "get": "Set.prototype.size.<get>"
+          },
+          {
+            "key": "toLocaleString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Set.prototype.toLocaleString"
+            }
+          },
+          {
+            "key": "valueOf",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Set.prototype.valueOf"
+            }
+          },
+          {
+            "key": "values",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Set.prototype.keys"
+            }
+          },
+          {
+            "key": "@@iterator",
+            "symbol": true,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Set.prototype.keys"
+            }
+          },
+          {
+            "key": "@@toStringTag",
+            "symbol": true,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "Set"
+            }
+          }
+        ],
+        "own_key_order": [
+          "constructor",
+          "size",
+          "add",
+          "clear",
+          "delete",
+          "entries",
+          "forEach",
+          "has",
+          "keys",
+          "values",
+          "toLocaleString",
+          "valueOf"
+        ],
+        "own_symbol_order": [
+          "@@iterator",
+          "@@toStringTag"
+        ],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2176,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "Object.prototype",
+          "Set",
+          "Set.prototype.add",
+          "Set.prototype.clear",
+          "Set.prototype.delete",
+          "Set.prototype.entries",
+          "Set.prototype.forEach",
+          "Set.prototype.has",
+          "Set.prototype.keys",
+          "Set.prototype.size.<get>",
+          "Set.prototype.toLocaleString",
+          "Set.prototype.valueOf"
+        ]
+      },
+      {
+        "name": "SharedArrayBuffer",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "SharedArrayBuffer"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "SharedArrayBuffer.prototype"
+            }
+          },
+          {
+            "key": "@@species",
+            "symbol": true,
+            "attributes": 4,
+            "get": "SharedArrayBuffer[\"@@species\"].<get>"
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [
+          "@@species"
+        ],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 1400897536
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::ctor_thunks::construct_only_builtin_call_thunk",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::ctor_thunks::construct_only_builtin_call_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "int32",
+            "value": 39
+          }
+        ],
+        "info_symbol": "perry_realm_info_2ac8830b891fcb322e89",
+        "births": [
+          "Function.prototype",
+          "SharedArrayBuffer.prototype",
+          "SharedArrayBuffer[\"@@species\"].<get>"
+        ],
+        "constructor": {
+          "identity": 39,
+          "prototype_callable": false,
+          "instance_identity": "BuiltinInstanceIdentity::Class(0xFFFF002E)"
+        }
+      },
+      {
+        "name": "SharedArrayBuffer.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "byteLength",
+            "symbol": false,
+            "attributes": 4,
+            "get": "SharedArrayBuffer.prototype.byteLength.<get>"
+          },
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "SharedArrayBuffer"
+            }
+          },
+          {
+            "key": "slice",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "SharedArrayBuffer.prototype.slice"
+            }
+          },
+          {
+            "key": "toLocaleString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "SharedArrayBuffer.prototype.toLocaleString"
+            }
+          },
+          {
+            "key": "valueOf",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "SharedArrayBuffer.prototype.valueOf"
+            }
+          },
+          {
+            "key": "@@toStringTag",
+            "symbol": true,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "SharedArrayBuffer"
+            }
+          }
+        ],
+        "own_key_order": [
+          "constructor",
+          "slice",
+          "byteLength",
+          "toLocaleString",
+          "valueOf"
+        ],
+        "own_symbol_order": [
+          "@@toStringTag"
+        ],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2176,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "Object.prototype",
+          "SharedArrayBuffer",
+          "SharedArrayBuffer.prototype.byteLength.<get>",
+          "SharedArrayBuffer.prototype.slice",
+          "SharedArrayBuffer.prototype.toLocaleString",
+          "SharedArrayBuffer.prototype.valueOf"
+        ]
+      },
+      {
+        "name": "SubtleCrypto",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "SubtleCrypto"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "SubtleCrypto.prototype"
+            }
+          },
+          {
+            "key": "supports",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "SubtleCrypto.supports"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "supports",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 1568669696
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::ctor_thunks::webcrypto_illegal_constructor_thunk",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::ctor_thunks::webcrypto_illegal_constructor_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "int32",
+            "value": 59
+          }
+        ],
+        "info_symbol": "perry_realm_info_f0eadbad4b4c17eb4523",
+        "births": [
+          "ArrayBuffer",
+          "CryptoKey",
+          "DOMException",
+          "Function.prototype",
+          "Promise",
+          "SubtleCrypto.prototype",
+          "SubtleCrypto.supports",
+          "Uint8Array"
+        ],
+        "constructor": {
+          "identity": 59,
+          "prototype_callable": false,
+          "instance_identity": "BuiltinInstanceIdentity::SubtleCrypto"
+        }
+      },
+      {
+        "name": "SubtleCrypto.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "SubtleCrypto"
+            }
+          },
+          {
+            "key": "decapsulateBits",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "SubtleCrypto.prototype.decapsulateBits"
+            }
+          },
+          {
+            "key": "decapsulateKey",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "SubtleCrypto.prototype.decapsulateKey"
+            }
+          },
+          {
+            "key": "encapsulateBits",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "SubtleCrypto.prototype.encapsulateBits"
+            }
+          },
+          {
+            "key": "encapsulateKey",
+            "symbol": false,
+            "attributes": 7,
+            "value": {
+              "kind": "reference",
+              "value": "SubtleCrypto.prototype.encapsulateKey"
+            }
+          },
+          {
+            "key": "toLocaleString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "SubtleCrypto.prototype.toLocaleString"
+            }
+          },
+          {
+            "key": "valueOf",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "SubtleCrypto.prototype.valueOf"
+            }
+          }
+        ],
+        "own_key_order": [
+          "constructor",
+          "encapsulateBits",
+          "decapsulateBits",
+          "encapsulateKey",
+          "decapsulateKey",
+          "toLocaleString",
+          "valueOf"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2176,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "Object.prototype",
+          "SubtleCrypto",
+          "SubtleCrypto.prototype.decapsulateBits",
+          "SubtleCrypto.prototype.decapsulateKey",
+          "SubtleCrypto.prototype.encapsulateBits",
+          "SubtleCrypto.prototype.encapsulateKey",
+          "SubtleCrypto.prototype.toLocaleString",
+          "SubtleCrypto.prototype.valueOf"
+        ]
+      },
+      {
+        "name": "SyntaxError",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "SyntaxError"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 1,
+            "value": {
+              "kind": "reference",
+              "value": "SyntaxError.prototype"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 1174405120
+        },
+        "prototype": "Error",
+        "length": 1,
+        "body": "crate::object::global_this::ctor_thunks::syntax_error_constructor_call_thunk",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::ctor_thunks::syntax_error_constructor_call_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "int32",
+            "value": 12
+          }
+        ],
+        "info_symbol": "perry_realm_info_557525a7bb76e3654c02",
+        "births": [
+          "Error",
+          "SyntaxError.prototype"
+        ],
+        "constructor": {
+          "identity": 12,
+          "prototype_callable": false,
+          "instance_identity": "BuiltinInstanceIdentity::Class(crate::error::CLASS_ID_SYNTAX_ERROR)"
+        }
+      },
+      {
+        "name": "SyntaxError.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "SyntaxError"
+            }
+          },
+          {
+            "key": "hasOwnProperty",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "SyntaxError.prototype.hasOwnProperty"
+            }
+          },
+          {
+            "key": "isPrototypeOf",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "SyntaxError.prototype.isPrototypeOf"
+            }
+          },
+          {
+            "key": "message",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "string",
+              "value": "SyntaxError"
+            }
+          },
+          {
+            "key": "toLocaleString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "SyntaxError.prototype.toLocaleString"
+            }
+          },
+          {
+            "key": "toString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "SyntaxError.prototype.toString"
+            }
+          },
+          {
+            "key": "valueOf",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "SyntaxError.prototype.valueOf"
+            }
+          }
+        ],
+        "own_key_order": [
+          "constructor",
+          "toLocaleString",
+          "valueOf",
+          "toString",
+          "isPrototypeOf",
+          "hasOwnProperty",
+          "name",
+          "message"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2176,
+          "class_id": 0
+        },
+        "prototype": "Error.prototype",
+        "births": [
+          "Error.prototype",
+          "SyntaxError",
+          "SyntaxError.prototype.hasOwnProperty",
+          "SyntaxError.prototype.isPrototypeOf",
+          "SyntaxError.prototype.toLocaleString",
+          "SyntaxError.prototype.toString",
+          "SyntaxError.prototype.valueOf"
+        ]
+      },
+      {
+        "name": "TypeError",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "TypeError"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "TypeError.prototype"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 1157627904
+        },
+        "prototype": "Error",
+        "length": 1,
+        "body": "crate::object::global_this::ctor_thunks::type_error_constructor_call_thunk",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::ctor_thunks::type_error_constructor_call_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "int32",
+            "value": 10
+          }
+        ],
+        "info_symbol": "perry_realm_info_0b4390160f009383c120",
+        "births": [
+          "Error",
+          "TypeError.prototype"
+        ],
+        "constructor": {
+          "identity": 10,
+          "prototype_callable": false,
+          "instance_identity": "BuiltinInstanceIdentity::Class(crate::error::CLASS_ID_TYPE_ERROR)"
+        }
+      },
+      {
+        "name": "TypeError.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "TypeError"
+            }
+          },
+          {
+            "key": "hasOwnProperty",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "TypeError.prototype.hasOwnProperty"
+            }
+          },
+          {
+            "key": "isPrototypeOf",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "TypeError.prototype.isPrototypeOf"
+            }
+          },
+          {
+            "key": "message",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "string",
+              "value": "TypeError"
+            }
+          },
+          {
+            "key": "toLocaleString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "TypeError.prototype.toLocaleString"
+            }
+          },
+          {
+            "key": "toString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "TypeError.prototype.toString"
+            }
+          },
+          {
+            "key": "valueOf",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "TypeError.prototype.valueOf"
+            }
+          }
+        ],
+        "own_key_order": [
+          "constructor",
+          "toLocaleString",
+          "valueOf",
+          "toString",
+          "isPrototypeOf",
+          "hasOwnProperty",
+          "name",
+          "message"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2176,
+          "class_id": 0
+        },
+        "prototype": "Error.prototype",
+        "births": [
+          "Error.prototype",
+          "TypeError",
+          "TypeError.prototype.hasOwnProperty",
+          "TypeError.prototype.isPrototypeOf",
+          "TypeError.prototype.toLocaleString",
+          "TypeError.prototype.toString",
+          "TypeError.prototype.valueOf"
+        ]
+      },
+      {
+        "name": "URIError",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "URIError"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "URIError.prototype"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 1199570944
+        },
+        "prototype": "Error",
+        "length": 1,
+        "body": "crate::object::global_this::ctor_thunks::uri_error_constructor_call_thunk",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 1,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::ctor_thunks::uri_error_constructor_call_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "int32",
+            "value": 15
+          }
+        ],
+        "info_symbol": "perry_realm_info_8105f957bc4806263681",
+        "births": [
+          "Error",
+          "URIError.prototype"
+        ],
+        "constructor": {
+          "identity": 15,
+          "prototype_callable": false,
+          "instance_identity": "BuiltinInstanceIdentity::Class(crate::error::CLASS_ID_URI_ERROR)"
+        }
+      },
+      {
+        "name": "URIError.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "URIError"
+            }
+          },
+          {
+            "key": "hasOwnProperty",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "URIError.prototype.hasOwnProperty"
+            }
+          },
+          {
+            "key": "isPrototypeOf",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "URIError.prototype.isPrototypeOf"
+            }
+          },
+          {
+            "key": "message",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "string",
+              "value": "URIError"
+            }
+          },
+          {
+            "key": "toLocaleString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "URIError.prototype.toLocaleString"
+            }
+          },
+          {
+            "key": "toString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "URIError.prototype.toString"
+            }
+          },
+          {
+            "key": "valueOf",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "URIError.prototype.valueOf"
+            }
+          }
+        ],
+        "own_key_order": [
+          "constructor",
+          "toLocaleString",
+          "valueOf",
+          "toString",
+          "isPrototypeOf",
+          "hasOwnProperty",
+          "name",
+          "message"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2176,
+          "class_id": 0
+        },
+        "prototype": "Error.prototype",
+        "births": [
+          "Error.prototype",
+          "URIError",
+          "URIError.prototype.hasOwnProperty",
+          "URIError.prototype.isPrototypeOf",
+          "URIError.prototype.toLocaleString",
+          "URIError.prototype.toString",
+          "URIError.prototype.valueOf"
+        ]
+      },
+      {
+        "name": "URLPattern",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "URLPattern"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "URLPattern.prototype"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 1518338048
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::ctor_thunks::global_this_url_pattern_call_thunk",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 2,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 2,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::ctor_thunks::global_this_url_pattern_call_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "int32",
+            "value": 53
+          }
+        ],
+        "info_symbol": "perry_realm_info_8b8f096c907a0665e807",
+        "births": [
+          "Function.prototype",
+          "URLPattern.prototype"
+        ],
+        "constructor": {
+          "identity": 53,
+          "prototype_callable": false
+        }
+      },
+      {
+        "name": "URLPattern.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "URLPattern"
+            }
+          },
+          {
+            "key": "exec",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "URLPattern.prototype.exec"
+            }
+          },
+          {
+            "key": "hasRegExpGroups",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "undefined"
+            }
+          },
+          {
+            "key": "hash",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "undefined"
+            }
+          },
+          {
+            "key": "hostname",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "undefined"
+            }
+          },
+          {
+            "key": "password",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "undefined"
+            }
+          },
+          {
+            "key": "pathname",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "undefined"
+            }
+          },
+          {
+            "key": "port",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "undefined"
+            }
+          },
+          {
+            "key": "protocol",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "undefined"
+            }
+          },
+          {
+            "key": "search",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "undefined"
+            }
+          },
+          {
+            "key": "test",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "URLPattern.prototype.test"
+            }
+          },
+          {
+            "key": "username",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "undefined"
+            }
+          }
+        ],
+        "own_key_order": [
+          "constructor",
+          "exec",
+          "test",
+          "hasRegExpGroups",
+          "hash",
+          "hostname",
+          "password",
+          "pathname",
+          "port",
+          "protocol",
+          "search",
+          "username"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2176,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "Object.prototype",
+          "URLPattern",
+          "URLPattern.prototype.exec",
+          "URLPattern.prototype.test"
+        ]
+      },
+      {
+        "name": "Uint16Array",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "BYTES_PER_ELEMENT",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4008000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "Uint16Array"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "Uint16Array.prototype"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype",
+          "BYTES_PER_ELEMENT"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 1308622848
+        },
+        "prototype": "%TypedArray%",
+        "length": 3,
+        "body": "crate::object::global_this::ctor_thunks::typed_array_constructor_call_thunk",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::ctor_thunks::typed_array_constructor_call_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "int32",
+            "value": 28
+          }
+        ],
+        "info_symbol": "perry_realm_info_71d01491af2eb9b3f665",
+        "births": [
+          "%TypedArray%",
+          "Uint16Array.prototype"
+        ],
+        "constructor": {
+          "identity": 28,
+          "prototype_callable": false,
+          "instance_identity": "BuiltinInstanceIdentity::Class(crate::typedarray::CLASS_ID_UINT16_ARRAY)"
+        }
+      },
+      {
+        "name": "Uint16Array.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "BYTES_PER_ELEMENT",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "number_bits",
+              "value": "4000000000000000"
+            }
+          },
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Uint16Array"
+            }
+          }
+        ],
+        "own_key_order": [
+          "constructor",
+          "BYTES_PER_ELEMENT"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2432,
+          "class_id": 0
+        },
+        "prototype": "%TypedArray%.prototype",
+        "births": [
+          "%TypedArray%.prototype",
+          "Uint16Array"
+        ]
+      },
+      {
+        "name": "Uint32Array",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "BYTES_PER_ELEMENT",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "number_bits",
+              "value": "4010000000000000"
+            }
+          },
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4008000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "Uint32Array"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "Uint32Array.prototype"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype",
+          "BYTES_PER_ELEMENT"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 1325400064
+        },
+        "prototype": "%TypedArray%",
+        "length": 3,
+        "body": "crate::object::global_this::ctor_thunks::typed_array_constructor_call_thunk",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::ctor_thunks::typed_array_constructor_call_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "int32",
+            "value": 30
+          }
+        ],
+        "info_symbol": "perry_realm_info_71d01491af2eb9b3f665",
+        "births": [
+          "%TypedArray%",
+          "Uint32Array.prototype"
+        ],
+        "constructor": {
+          "identity": 30,
+          "prototype_callable": false,
+          "instance_identity": "BuiltinInstanceIdentity::Class(crate::typedarray::CLASS_ID_UINT32_ARRAY)"
+        }
+      },
+      {
+        "name": "Uint32Array.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "BYTES_PER_ELEMENT",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "number_bits",
+              "value": "4010000000000000"
+            }
+          },
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Uint32Array"
+            }
+          }
+        ],
+        "own_key_order": [
+          "constructor",
+          "BYTES_PER_ELEMENT"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2432,
+          "class_id": 0
+        },
+        "prototype": "%TypedArray%.prototype",
+        "births": [
+          "%TypedArray%.prototype",
+          "Uint32Array"
+        ]
+      },
+      {
+        "name": "Uint8Array",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "BYTES_PER_ELEMENT",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "fromBase64",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Uint8Array.fromBase64"
+            }
+          },
+          {
+            "key": "fromHex",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Uint8Array.fromHex"
+            }
+          },
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4008000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "Uint8Array"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "Uint8Array.prototype"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "fromBase64",
+          "fromHex",
+          "prototype",
+          "BYTES_PER_ELEMENT"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 1291845632
+        },
+        "prototype": "%TypedArray%",
+        "length": 3,
+        "body": "crate::object::global_this::ctor_thunks::typed_array_constructor_call_thunk",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::ctor_thunks::typed_array_constructor_call_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "int32",
+            "value": 26
+          }
+        ],
+        "info_symbol": "perry_realm_info_71d01491af2eb9b3f665",
+        "births": [
+          "%TypedArray%",
+          "Uint8Array.fromBase64",
+          "Uint8Array.fromHex",
+          "Uint8Array.prototype"
+        ],
+        "constructor": {
+          "identity": 26,
+          "prototype_callable": false,
+          "instance_identity": "BuiltinInstanceIdentity::Class(crate::typedarray::CLASS_ID_UINT8_ARRAY)"
+        }
+      },
+      {
+        "name": "Uint8Array.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "BYTES_PER_ELEMENT",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Uint8Array"
+            }
+          },
+          {
+            "key": "setFromBase64",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Uint8Array.prototype.setFromBase64"
+            }
+          },
+          {
+            "key": "setFromHex",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Uint8Array.prototype.setFromHex"
+            }
+          },
+          {
+            "key": "toBase64",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Uint8Array.prototype.toBase64"
+            }
+          },
+          {
+            "key": "toHex",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Uint8Array.prototype.toHex"
+            }
+          }
+        ],
+        "own_key_order": [
+          "constructor",
+          "toBase64",
+          "toHex",
+          "setFromBase64",
+          "setFromHex",
+          "BYTES_PER_ELEMENT"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2432,
+          "class_id": 0
+        },
+        "prototype": "%TypedArray%.prototype",
+        "births": [
+          "%TypedArray%.prototype",
+          "Uint8Array",
+          "Uint8Array.prototype.setFromBase64",
+          "Uint8Array.prototype.setFromHex",
+          "Uint8Array.prototype.toBase64",
+          "Uint8Array.prototype.toHex"
+        ]
+      },
+      {
+        "name": "Uint8ClampedArray",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "BYTES_PER_ELEMENT",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "4008000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "Uint8ClampedArray"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "Uint8ClampedArray.prototype"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype",
+          "BYTES_PER_ELEMENT"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 1367343104
+        },
+        "prototype": "%TypedArray%",
+        "length": 3,
+        "body": "crate::object::global_this::ctor_thunks::typed_array_constructor_call_thunk",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::ctor_thunks::typed_array_constructor_call_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "int32",
+            "value": 35
+          }
+        ],
+        "info_symbol": "perry_realm_info_71d01491af2eb9b3f665",
+        "births": [
+          "%TypedArray%",
+          "Uint8ClampedArray.prototype"
+        ],
+        "constructor": {
+          "identity": 35,
+          "prototype_callable": false,
+          "instance_identity": "BuiltinInstanceIdentity::Class(crate::typedarray::CLASS_ID_UINT8_CLAMPED_ARRAY)"
+        }
+      },
+      {
+        "name": "Uint8ClampedArray.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "BYTES_PER_ELEMENT",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "Uint8ClampedArray"
+            }
+          }
+        ],
+        "own_key_order": [
+          "constructor",
+          "BYTES_PER_ELEMENT"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2432,
+          "class_id": 0
+        },
+        "prototype": "%TypedArray%.prototype",
+        "births": [
+          "%TypedArray%.prototype",
+          "Uint8ClampedArray"
+        ]
+      },
+      {
+        "name": "WeakMap",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "WeakMap"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "WeakMap.prototype"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 1249902592
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::ctor_thunks::weak_map_constructor_call_thunk",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::ctor_thunks::weak_map_constructor_call_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "int32",
+            "value": 21
+          }
+        ],
+        "info_symbol": "perry_realm_info_77dab6a4079afb3671fc",
+        "births": [
+          "Function.prototype",
+          "WeakMap.prototype"
+        ],
+        "constructor": {
+          "identity": 21,
+          "prototype_callable": false,
+          "prototype_class": "crate::weakref::CLASS_ID_WEAKMAP",
+          "instance_identity": "BuiltinInstanceIdentity::Class(0xFFFF002C)"
+        }
+      },
+      {
+        "name": "WeakMap.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "WeakMap"
+            }
+          },
+          {
+            "key": "delete",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "WeakMap.prototype.delete"
+            }
+          },
+          {
+            "key": "get",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "WeakMap.prototype.get"
+            }
+          },
+          {
+            "key": "has",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "WeakMap.prototype.has"
+            }
+          },
+          {
+            "key": "set",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "WeakMap.prototype.set"
+            }
+          },
+          {
+            "key": "toLocaleString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "WeakMap.prototype.toLocaleString"
+            }
+          },
+          {
+            "key": "valueOf",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "WeakMap.prototype.valueOf"
+            }
+          },
+          {
+            "key": "@@toStringTag",
+            "symbol": true,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "WeakMap"
+            }
+          }
+        ],
+        "own_key_order": [
+          "constructor",
+          "delete",
+          "get",
+          "has",
+          "set",
+          "toLocaleString",
+          "valueOf"
+        ],
+        "own_symbol_order": [
+          "@@toStringTag"
+        ],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2176,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "Object.prototype",
+          "WeakMap",
+          "WeakMap.prototype.delete",
+          "WeakMap.prototype.get",
+          "WeakMap.prototype.has",
+          "WeakMap.prototype.set",
+          "WeakMap.prototype.toLocaleString",
+          "WeakMap.prototype.valueOf"
+        ]
+      },
+      {
+        "name": "WeakRef",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "3ff0000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "WeakRef"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "WeakRef.prototype"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 1266679808
+        },
+        "prototype": "Function.prototype",
+        "length": 1,
+        "body": "crate::object::global_this::ctor_thunks::weak_ref_constructor_call_thunk",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::ctor_thunks::weak_ref_constructor_call_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "int32",
+            "value": 23
+          }
+        ],
+        "info_symbol": "perry_realm_info_27f18efbbeec894ec912",
+        "births": [
+          "Function.prototype",
+          "WeakRef.prototype"
+        ],
+        "constructor": {
+          "identity": 23,
+          "prototype_callable": false,
+          "prototype_class": "crate::weakref::CLASS_ID_WEAKREF",
+          "instance_identity": "BuiltinInstanceIdentity::Class(crate::weakref::CLASS_ID_WEAKREF)"
+        }
+      },
+      {
+        "name": "WeakRef.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "WeakRef"
+            }
+          },
+          {
+            "key": "deref",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "WeakRef.prototype.deref"
+            }
+          },
+          {
+            "key": "toLocaleString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "WeakRef.prototype.toLocaleString"
+            }
+          },
+          {
+            "key": "valueOf",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "WeakRef.prototype.valueOf"
+            }
+          }
+        ],
+        "own_key_order": [
+          "constructor",
+          "deref",
+          "toLocaleString",
+          "valueOf"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2176,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "Object.prototype",
+          "WeakRef",
+          "WeakRef.prototype.deref",
+          "WeakRef.prototype.toLocaleString",
+          "WeakRef.prototype.valueOf"
+        ]
+      },
+      {
+        "name": "WeakSet",
+        "kind": "constructor",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "WeakSet"
+            }
+          },
+          {
+            "key": "prototype",
+            "symbol": false,
+            "attributes": 0,
+            "value": {
+              "kind": "reference",
+              "value": "WeakSet.prototype"
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 0,
+          "capture_flags": 1258291200
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::ctor_thunks::weak_set_constructor_call_thunk",
+        "construct": "crate::object::js_new_function_construct",
+        "function_info": {
+          "params": 1,
+          "rest_fixed": 0,
+          "flags": 0,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::ctor_thunks::weak_set_constructor_call_thunk",
+          "native_method": false
+        },
+        "captures": [
+          {
+            "kind": "int32",
+            "value": 22
+          }
+        ],
+        "info_symbol": "perry_realm_info_3a8dec54268cab5bf018",
+        "births": [
+          "Function.prototype",
+          "WeakSet.prototype"
+        ],
+        "constructor": {
+          "identity": 22,
+          "prototype_callable": false,
+          "prototype_class": "crate::weakref::CLASS_ID_WEAKSET",
+          "instance_identity": "BuiltinInstanceIdentity::Class(0xFFFF002D)"
+        }
+      },
+      {
+        "name": "WeakSet.prototype",
+        "kind": "prototype",
+        "properties": [
+          {
+            "key": "add",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "WeakSet.prototype.add"
+            }
+          },
+          {
+            "key": "constructor",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "WeakSet"
+            }
+          },
+          {
+            "key": "delete",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "WeakSet.prototype.delete"
+            }
+          },
+          {
+            "key": "has",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "WeakSet.prototype.has"
+            }
+          },
+          {
+            "key": "toLocaleString",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "WeakSet.prototype.toLocaleString"
+            }
+          },
+          {
+            "key": "valueOf",
+            "symbol": false,
+            "attributes": 5,
+            "value": {
+              "kind": "reference",
+              "value": "WeakSet.prototype.valueOf"
+            }
+          },
+          {
+            "key": "@@toStringTag",
+            "symbol": true,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": "WeakSet"
+            }
+          }
+        ],
+        "own_key_order": [
+          "constructor",
+          "add",
+          "delete",
+          "has",
+          "toLocaleString",
+          "valueOf"
+        ],
+        "own_symbol_order": [
+          "@@toStringTag"
+        ],
+        "header": {
+          "gc_type": 2,
+          "reserved": 2176,
+          "class_id": 0
+        },
+        "prototype": "Object.prototype",
+        "births": [
+          "Object.prototype",
+          "WeakSet",
+          "WeakSet.prototype.add",
+          "WeakSet.prototype.delete",
+          "WeakSet.prototype.has",
+          "WeakSet.prototype.toLocaleString",
+          "WeakSet.prototype.valueOf"
+        ]
+      },
+      {
+        "name": "crypto.<get>",
+        "kind": "getter",
+        "properties": [
+          {
+            "key": "length",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "number_bits",
+              "value": "0000000000000000"
+            }
+          },
+          {
+            "key": "name",
+            "symbol": false,
+            "attributes": 4,
+            "value": {
+              "kind": "string",
+              "value": ""
+            }
+          }
+        ],
+        "own_key_order": [
+          "length",
+          "name",
+          "prototype"
+        ],
+        "own_symbol_order": [],
+        "header": {
+          "gc_type": 4,
+          "reserved": 16384,
+          "capture_flags": 0
+        },
+        "prototype": "Function.prototype",
+        "length": 0,
+        "body": "crate::object::global_this::ctor_thunks::global_this_crypto_getter_thunk",
+        "function_info": {
+          "params": 0,
+          "rest_fixed": 0,
+          "flags": 2048,
+          "length": 0,
+          "declared": 0,
+          "plain_params": 0,
+          "source_symbol": "source:perry_runtime::object::global_this::ctor_thunks::global_this_crypto_getter_thunk",
+          "native_method": false
+        },
+        "captures": [],
+        "info_symbol": "perry_realm_info_1d53641ff892f9e99241",
+        "births": [
+          "Function.prototype"
+        ]
+      }
+    ]
+  }
+}

@@ -716,3 +716,5 @@ pub(crate) extern "C" fn thunk_streamP_finished(
         pending_finished_promise(stream, signal, need_readable, need_writable)
     }
 }
+
+crate::realm_decl!("stream_promises.realm.json#*");

@@ -46,12 +46,12 @@ pub(super) const GC_LAYOUT_UNKNOWN: u16 = 0x0000;
 // flag block used to claim 12..13 were free, and #10842 shipped a mark on
 // bit 13 that `set_layout_state` erases. Do not add a flag to either namespace
 // without reading that table.
-pub const GC_LAYOUT_POINTER_FREE: u16 = 0x4000;
-pub(crate) const GC_LAYOUT_SIDE_MASK: u16 = 0x8000;
+pub const GC_LAYOUT_POINTER_FREE: u16 = perry_abi::GC_LAYOUT_POINTER_FREE;
+pub(crate) const GC_LAYOUT_SIDE_MASK: u16 = perry_abi::GC_LAYOUT_SIDE_MASK;
 // A side-layout payload whose entire live prefix contains pointers. Bit 13 is
 // independent from the two high state bits and travels with `_reserved` when
 // copying GC moves the object, avoiding a per-array side-table entry.
-pub(crate) const GC_LAYOUT_ALL_POINTERS: u16 = 0x2000;
+pub(crate) const GC_LAYOUT_ALL_POINTERS: u16 = perry_abi::GC_LAYOUT_ALL_POINTERS;
 
 mod by_shape;
 mod child_slots;

@@ -249,3 +249,5 @@ mod tests {
         });
     }
 }
+
+crate::realm_decl!("object_intrinsic.realm.json#*");

@@ -1923,3 +1923,5 @@ fn post_promise(session_raw: i64, method_value: f64, mut params: f64) -> f64 {
     }
     promise_value(run_command(session, &method, params))
 }
+
+crate::realm_decl!("node_inspector.realm.json#*");

@@ -1213,3 +1213,5 @@ pub(super) fn web_webcrypto_statics(name: &str, s: &mut ConstructorStatics) {
         _ => {}
     }
 }
+
+crate::realm_decl!("install_static.realm.json#*");

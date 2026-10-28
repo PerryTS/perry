@@ -333,3 +333,5 @@ fn string_value(s: &str) -> f64 {
     let ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
     crate::value::js_nanbox_string(ptr as i64)
 }
+
+crate::realm_decl!("disposable_proto_thunks.realm.json#*");

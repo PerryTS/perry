@@ -34,6 +34,7 @@ pub(crate) struct FsReadFailure {
     pub(super) err: std::io::Error,
     syscall: &'static str,
     path: Option<String>,
+    read_path: Option<String>,
 }
 
 impl FsReadFailure {
@@ -43,6 +44,7 @@ impl FsReadFailure {
             err,
             syscall: "open",
             path,
+            read_path: None,
         }
     }
 
@@ -51,6 +53,24 @@ impl FsReadFailure {
             err,
             syscall: "read",
             path: None,
+            read_path: None,
+        }
+    }
+
+    pub(crate) fn read_at(err: std::io::Error, path: &str) -> Self {
+        Self {
+            read_path: Some(path.to_owned()),
+            ..Self::read(err)
+        }
+    }
+
+    /// A read failure carries the opened path as Rust-owned metadata, so an
+    /// async error never decodes a possibly moved JS input after allocation.
+    /// Sync reads and numeric descriptors keep a pathless read diagnostic.
+    pub(crate) unsafe fn async_error_value(&self) -> f64 {
+        match self.path.as_ref().or(self.read_path.as_ref()) {
+            Some(path) => build_fs_error_value(&self.err, self.syscall, path),
+            None => build_fs_error_value_no_path(&self.err, self.syscall),
         }
     }
 
