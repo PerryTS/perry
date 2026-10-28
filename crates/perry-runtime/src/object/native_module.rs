@@ -1529,5 +1529,4 @@ pub(crate) use cjs_default::{
 #[cfg(test)]
 mod buffer_pool_size_tests;
 
-// Realm facts owned here; this marker emits no runtime code or data.
-crate::realm_decl!("native_module.realm.json#objects");
+crate::realm_decl!("native_module.realm.json#*");

@@ -169,5 +169,4 @@ pub(super) extern "C" fn supported_values_of_thunk(
     }
 }
 
-// Realm facts owned here; this marker emits no runtime code or data.
-crate::realm_decl!("locales.realm.json#objects");
+crate::realm_decl!("locales.realm.json#*");

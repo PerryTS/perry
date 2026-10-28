@@ -1978,5 +1978,4 @@ pub unsafe extern "C" fn js_install_readable_stream_from(info: *const JsFunction
     );
 }
 
-// Realm facts owned here; this marker emits no runtime code or data.
-crate::realm_decl!("mod.realm.json#objects");
+crate::realm_decl!("mod.realm.json#*");

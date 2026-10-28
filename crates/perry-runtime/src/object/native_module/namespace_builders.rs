@@ -518,7 +518,7 @@ fn global_agent_method_value(
 
 fn global_agent_listener_value(is_https: bool, once: bool) -> f64 {
     let closure = crate::closure::js_closure_alloc(
-        crate::fn_info!(#[realm("namespace_builders.realm.json#body:global_agent_listener_thunk")] global_agent_listener_thunk, 3; with_declared(3)),
+        crate::fn_info!(global_agent_listener_thunk, 3; with_declared(3)),
         2,
     );
     crate::closure::js_closure_set_capture_ptr(closure, 0, i64::from(is_https));
@@ -539,7 +539,7 @@ unsafe fn global_agent_prototype(is_https: bool, agent: *mut ObjectHeader) -> f6
             "keepSocketAlive",
             global_agent_method_value(
                 "keepSocketAlive",
-                crate::fn_info!(#[realm("namespace_builders.realm.json#body:global_agent_keep_socket_alive_thunk")] global_agent_keep_socket_alive_thunk, 1; with_declared(1)),
+                crate::fn_info!(global_agent_keep_socket_alive_thunk, 1; with_declared(1)),
                 1,
                 None,
             ),
@@ -548,7 +548,7 @@ unsafe fn global_agent_prototype(is_https: bool, agent: *mut ObjectHeader) -> f6
             "reuseSocket",
             global_agent_method_value(
                 "reuseSocket",
-                crate::fn_info!(#[realm("namespace_builders.realm.json#body:global_agent_reuse_socket_thunk")] global_agent_reuse_socket_thunk, 2; with_declared(2)),
+                crate::fn_info!(global_agent_reuse_socket_thunk, 2; with_declared(2)),
                 2,
                 None,
             ),
@@ -557,7 +557,7 @@ unsafe fn global_agent_prototype(is_https: bool, agent: *mut ObjectHeader) -> f6
             "getName",
             global_agent_method_value(
                 "getName",
-                crate::fn_info!(#[realm("namespace_builders.realm.json#body:global_agent_get_name_thunk")] global_agent_get_name_thunk, 2; with_declared(2)),
+                crate::fn_info!(global_agent_get_name_thunk, 2; with_declared(2)),
                 0,
                 Some(i64::from(is_https)),
             ),
@@ -566,7 +566,7 @@ unsafe fn global_agent_prototype(is_https: bool, agent: *mut ObjectHeader) -> f6
             "addRequest",
             global_agent_method_value(
                 "addRequest",
-                crate::fn_info!(#[realm("namespace_builders.realm.json#body:global_agent_add_request_thunk")] global_agent_add_request_thunk, 5; with_declared(5)),
+                crate::fn_info!(global_agent_add_request_thunk, 5; with_declared(5)),
                 4,
                 Some(agent as i64),
             ),
@@ -575,7 +575,7 @@ unsafe fn global_agent_prototype(is_https: bool, agent: *mut ObjectHeader) -> f6
             "destroy",
             global_agent_method_value(
                 "destroy",
-                crate::fn_info!(#[realm("namespace_builders.realm.json#body:global_agent_destroy_thunk")] global_agent_destroy_thunk, 0; with_declared(0)),
+                crate::fn_info!(global_agent_destroy_thunk, 0; with_declared(0)),
                 0,
                 None,
             ),
@@ -992,3 +992,5 @@ pub(crate) unsafe fn create_fs_constants_object() -> f64 {
     });
     result
 }
+
+crate::realm_decl!("namespace_builders.realm.json#*");

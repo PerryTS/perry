@@ -571,7 +571,7 @@ fn install_domain_prototype(proto: &mut PayloadPrototype) {
     method!("exit", domain_exit_thunk, 0);
     method!("add", domain_add_thunk, 1);
     method!("remove", domain_remove_thunk, 1);
-    proto.method("run", perry_runtime::fn_info!(#[realm("domain.realm.json#body:domain_run_thunk")] 
+    proto.method("run", perry_runtime::fn_info!(
         domain_run_thunk, 2; with_rest(1), with_declared(1), with_flags(perry_runtime::closure::FN_BUILTIN)
     ), 1);
     method!("intercept", domain_intercept_thunk, 1);
@@ -651,8 +651,8 @@ pub unsafe extern "C" fn js_domain_native_dispatch(
     }
 }
 
-// Realm facts owned here; this marker emits no runtime code or data.
+// Source-only realm facts beside the owning builtin bodies.
 macro_rules! realm_decl {
     ($facts:literal) => {};
 }
-realm_decl!("domain.realm.json#objects");
+realm_decl!("domain.realm.json#*");

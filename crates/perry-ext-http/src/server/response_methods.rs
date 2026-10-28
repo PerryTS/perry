@@ -270,8 +270,8 @@ mod tests {
     }
 }
 
-// Realm facts owned here; this marker emits no runtime code or data.
+// Source-only realm facts beside the owning builtin bodies.
 macro_rules! realm_decl {
     ($facts:literal) => {};
 }
-realm_decl!("response_methods.realm.json#objects");
+realm_decl!("response_methods.realm.json#*");

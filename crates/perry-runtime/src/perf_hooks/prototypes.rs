@@ -226,7 +226,7 @@ unsafe fn install_perf_to_string_tag(proto: *mut crate::object::ObjectHeader, ta
 
 unsafe fn perf_field_getter(name: &str) -> f64 {
     let leaked: &'static [u8] = name.as_bytes().to_vec().leak();
-    let func_ptr = crate::fn_info!(#[realm("prototypes.realm.json#body:perf_entry_field_getter_thunk")] perf_entry_field_getter_thunk, 0; with_declared(0));
+    let func_ptr = crate::fn_info!(perf_entry_field_getter_thunk, 0; with_declared(0));
     let closure = crate::closure::js_closure_alloc(func_ptr, 2);
     crate::closure::js_closure_set_capture_ptr(closure, 0, leaked.as_ptr() as i64);
     crate::closure::js_closure_set_capture_ptr(closure, 1, leaked.len() as i64);
@@ -400,7 +400,7 @@ pub(crate) unsafe fn attach_perf_hooks_constructor(
                 install_perf_method(proto, method, value, enumerable);
             }
             let getter = perf_method_value(
-                crate::fn_info!(#[realm("prototypes.realm.json#body:perf_time_origin_getter_thunk")] perf_time_origin_getter_thunk, 0; with_declared(0)),
+                crate::fn_info!(perf_time_origin_getter_thunk, 0; with_declared(0)),
                 "get timeOrigin",
                 0,
             );
@@ -413,7 +413,7 @@ pub(crate) unsafe fn attach_perf_hooks_constructor(
                 install_perf_getter(proto, field, getter, true);
             }
             let to_json = perf_method_value(
-                crate::fn_info!(#[realm("prototypes.realm.json#body:perf_entry_to_json_thunk")] perf_entry_to_json_thunk, 0; with_declared(0)),
+                crate::fn_info!(perf_entry_to_json_thunk, 0; with_declared(0)),
                 "toJSON",
                 0,
             );
@@ -437,7 +437,7 @@ pub(crate) unsafe fn attach_perf_hooks_constructor(
                 proto,
                 "observe",
                 perf_method_value(
-                    crate::fn_info!(#[realm("prototypes.realm.json#body:perf_observer_observe_thunk")] perf_observer_observe_thunk, 1; with_declared(1)),
+                    crate::fn_info!(perf_observer_observe_thunk, 1; with_declared(1)),
                     "observe",
                     1,
                 ),
@@ -447,7 +447,7 @@ pub(crate) unsafe fn attach_perf_hooks_constructor(
                 proto,
                 "disconnect",
                 perf_method_value(
-                    crate::fn_info!(#[realm("prototypes.realm.json#body:perf_observer_disconnect_thunk")] perf_observer_disconnect_thunk, 0; with_declared(0)),
+                    crate::fn_info!(perf_observer_disconnect_thunk, 0; with_declared(0)),
                     "disconnect",
                     0,
                 ),
@@ -457,7 +457,7 @@ pub(crate) unsafe fn attach_perf_hooks_constructor(
                 proto,
                 "takeRecords",
                 perf_method_value(
-                    crate::fn_info!(#[realm("prototypes.realm.json#body:perf_observer_take_records_thunk")] perf_observer_take_records_thunk, 0; with_declared(0)),
+                    crate::fn_info!(perf_observer_take_records_thunk, 0; with_declared(0)),
                     "takeRecords",
                     0,
                 ),
@@ -470,7 +470,7 @@ pub(crate) unsafe fn attach_perf_hooks_constructor(
                 proto,
                 "getEntries",
                 perf_method_value(
-                    crate::fn_info!(#[realm("prototypes.realm.json#body:perf_list_get_entries_thunk")] perf_list_get_entries_thunk, 0; with_declared(0)),
+                    crate::fn_info!(perf_list_get_entries_thunk, 0; with_declared(0)),
                     "getEntries",
                     0,
                 ),
@@ -480,7 +480,7 @@ pub(crate) unsafe fn attach_perf_hooks_constructor(
                 proto,
                 "getEntriesByType",
                 perf_method_value(
-                    crate::fn_info!(#[realm("prototypes.realm.json#body:perf_list_get_by_type_thunk")] perf_list_get_by_type_thunk, 1; with_declared(1)),
+                    crate::fn_info!(perf_list_get_by_type_thunk, 1; with_declared(1)),
                     "getEntriesByType",
                     1,
                 ),
@@ -490,7 +490,7 @@ pub(crate) unsafe fn attach_perf_hooks_constructor(
                 proto,
                 "getEntriesByName",
                 perf_method_value(
-                    crate::fn_info!(#[realm("prototypes.realm.json#body:perf_list_get_by_name_thunk")] perf_list_get_by_name_thunk, 1; with_declared(1)),
+                    crate::fn_info!(perf_list_get_by_name_thunk, 1; with_declared(1)),
                     "getEntriesByName",
                     1,
                 ),
@@ -546,7 +546,7 @@ pub(crate) unsafe fn attach_perf_hooks_constructor(
 
     if class_name == "PerformanceObserver" {
         let getter = perf_method_value(
-            crate::fn_info!(#[realm("prototypes.realm.json#body:perf_supported_entry_types_getter_thunk")] perf_supported_entry_types_getter_thunk, 0; with_declared(0)),
+            crate::fn_info!(perf_supported_entry_types_getter_thunk, 0; with_declared(0)),
             "get supportedEntryTypes",
             0,
         );
@@ -569,3 +569,5 @@ pub(crate) unsafe fn attach_perf_hooks_constructor(
 
 #[cfg(test)]
 mod tests;
+
+crate::realm_decl!("prototypes.realm.json#*");

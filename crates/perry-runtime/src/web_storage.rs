@@ -531,5 +531,4 @@ fn throw_quota_exceeded() -> f64 {
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
-// Realm facts owned here; this marker emits no runtime code or data.
 crate::realm_decl!("web_storage.realm.json#*");

@@ -813,5 +813,4 @@ pub(crate) fn typed_array_uint8_intrinsic_prototype_value() -> f64 {
     crate::closure::js_closure_get_capture_f64(ctor, 0)
 }
 
-// Group facts preserve existing runtime source locations.
 crate::realm_decl!("typed_array.realm.json#*");

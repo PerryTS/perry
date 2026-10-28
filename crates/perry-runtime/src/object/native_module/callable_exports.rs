@@ -319,7 +319,7 @@ pub(crate) fn fs_namespace_descriptor_getter_value(property_name: &str) -> f64 {
     }
 
     let property_bytes: &'static [u8] = property_name.as_bytes().to_vec().leak();
-    let func_ptr = crate::fn_info!(#[realm("callable_exports.realm.json#body:fs_namespace_descriptor_getter_thunk")] fs_namespace_descriptor_getter_thunk, 0; with_declared(0));
+    let func_ptr = crate::fn_info!(fs_namespace_descriptor_getter_thunk, 0; with_declared(0));
     let closure = crate::closure::js_closure_alloc(func_ptr, 2);
     crate::closure::js_closure_set_capture_ptr(closure, 0, property_bytes.as_ptr() as i64);
     crate::closure::js_closure_set_capture_ptr(closure, 1, property_bytes.len() as i64);
@@ -344,7 +344,7 @@ pub(crate) fn fs_namespace_descriptor_setter_value(property_name: &str) -> f64 {
         return f64::from_bits(bits);
     }
 
-    let func_ptr = crate::fn_info!(#[realm("callable_exports.realm.json#body:fs_namespace_descriptor_setter_thunk")] fs_namespace_descriptor_setter_thunk, 1; with_declared(1));
+    let func_ptr = crate::fn_info!(fs_namespace_descriptor_setter_thunk, 1; with_declared(1));
     let closure = crate::closure::js_closure_alloc(func_ptr, 0);
     let name = format!("set {property_name}");
     set_bound_native_closure_name(closure, &name);
@@ -825,7 +825,7 @@ fn attach_crypto_x509_certificate_shape(closure_addr: usize, constructor_value: 
 
     unsafe {
         let getter = crate::closure::js_closure_alloc(
-            crate::fn_info!(#[realm("callable_exports.realm.json#body:x509_issuer_certificate_getter_thunk")] x509_issuer_certificate_getter_thunk, 0; with_declared(0)),
+            crate::fn_info!(x509_issuer_certificate_getter_thunk, 0; with_declared(0)),
             0,
         );
         if !getter.is_null() {
@@ -1100,7 +1100,7 @@ fn attach_tls_constructor_prototype(constructor_value: f64, constructor_name: &s
         super::super::PropertyAttrs::new(true, false, true),
     );
 
-    let thunk = crate::fn_info!(#[realm("callable_exports.realm.json#body:tls_prototype_method_thunk")] tls_prototype_method_thunk, 1; with_rest(0));
+    let thunk = crate::fn_info!(tls_prototype_method_thunk, 1; with_rest(0));
     for &(name, length) in methods {
         let method = crate::closure::js_closure_alloc(thunk, 2);
         if method.is_null() {
@@ -1632,5 +1632,4 @@ pub(crate) unsafe fn nm_attach_util(
     value
 }
 
-// Realm facts owned here; this marker emits no runtime code or data.
-crate::realm_decl!("callable_exports.realm.json#objects");
+crate::realm_decl!("callable_exports.realm.json#*");

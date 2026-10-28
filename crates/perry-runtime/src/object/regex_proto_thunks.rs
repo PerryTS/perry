@@ -384,14 +384,14 @@ pub(crate) fn install_regex_proto_methods(proto_obj: *mut ObjectHeader) {
     ipm(
         proto_obj,
         "exec",
-        crate::fn_info!(#[realm("regex_proto_thunks.realm.json#body:regex_proto_exec_thunk")] regex_proto_exec_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::codegen_abi::FN_PERMANENT_IMAGE)),
+        crate::fn_info!(regex_proto_exec_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::codegen_abi::FN_PERMANENT_IMAGE)),
         1,
     );
     #[cfg(feature = "regex-engine")]
     ipm(
         proto_obj,
         "test",
-        crate::fn_info!(#[realm("regex_proto_thunks.realm.json#body:regex_proto_test_thunk")] regex_proto_test_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::codegen_abi::FN_PERMANENT_IMAGE)),
+        crate::fn_info!(regex_proto_test_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::codegen_abi::FN_PERMANENT_IMAGE)),
         1,
     );
     // Annex B `compile` re-initializes the receiver in place. It needs a real
@@ -401,13 +401,13 @@ pub(crate) fn install_regex_proto_methods(proto_obj: *mut ObjectHeader) {
     ipm(
         proto_obj,
         "compile",
-        crate::fn_info!(#[realm("regex_proto_thunks.realm.json#body:regex_proto_compile_thunk")] regex_proto_compile_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(regex_proto_compile_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
         2,
     );
     ipm(
         proto_obj,
         "toString",
-        crate::fn_info!(#[realm("regex_proto_thunks.realm.json#body:regex_proto_to_string_thunk")] regex_proto_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(regex_proto_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
         0,
     );
     #[cfg(feature = "regex-engine")]
@@ -490,51 +490,53 @@ pub(crate) fn install_regex_proto_accessors(proto_obj: *mut ObjectHeader) {
     install_getter(
         proto_obj,
         "flags",
-        crate::fn_info!(#[realm("regex_proto_thunks.realm.json#body:regex_proto_flags_getter")] regex_proto_flags_getter, 0; with_declared(0)),
+        crate::fn_info!(regex_proto_flags_getter, 0; with_declared(0)),
     );
     install_getter(
         proto_obj,
         "source",
-        crate::fn_info!(#[realm("regex_proto_thunks.realm.json#body:regex_proto_source_getter")] regex_proto_source_getter, 0; with_declared(0)),
+        crate::fn_info!(regex_proto_source_getter, 0; with_declared(0)),
     );
     install_getter(
         proto_obj,
         "global",
-        crate::fn_info!(#[realm("regex_proto_thunks.realm.json#body:regex_proto_global_getter")] regex_proto_global_getter, 0; with_declared(0)),
+        crate::fn_info!(regex_proto_global_getter, 0; with_declared(0)),
     );
     install_getter(
         proto_obj,
         "ignoreCase",
-        crate::fn_info!(#[realm("regex_proto_thunks.realm.json#body:regex_proto_ignore_case_getter")] regex_proto_ignore_case_getter, 0; with_declared(0)),
+        crate::fn_info!(regex_proto_ignore_case_getter, 0; with_declared(0)),
     );
     install_getter(
         proto_obj,
         "multiline",
-        crate::fn_info!(#[realm("regex_proto_thunks.realm.json#body:regex_proto_multiline_getter")] regex_proto_multiline_getter, 0; with_declared(0)),
+        crate::fn_info!(regex_proto_multiline_getter, 0; with_declared(0)),
     );
     install_getter(
         proto_obj,
         "dotAll",
-        crate::fn_info!(#[realm("regex_proto_thunks.realm.json#body:regex_proto_dot_all_getter")] regex_proto_dot_all_getter, 0; with_declared(0)),
+        crate::fn_info!(regex_proto_dot_all_getter, 0; with_declared(0)),
     );
     install_getter(
         proto_obj,
         "sticky",
-        crate::fn_info!(#[realm("regex_proto_thunks.realm.json#body:regex_proto_sticky_getter")] regex_proto_sticky_getter, 0; with_declared(0)),
+        crate::fn_info!(regex_proto_sticky_getter, 0; with_declared(0)),
     );
     install_getter(
         proto_obj,
         "unicode",
-        crate::fn_info!(#[realm("regex_proto_thunks.realm.json#body:regex_proto_unicode_getter")] regex_proto_unicode_getter, 0; with_declared(0)),
+        crate::fn_info!(regex_proto_unicode_getter, 0; with_declared(0)),
     );
     install_getter(
         proto_obj,
         "unicodeSets",
-        crate::fn_info!(#[realm("regex_proto_thunks.realm.json#body:regex_proto_unicode_sets_getter")] regex_proto_unicode_sets_getter, 0; with_declared(0)),
+        crate::fn_info!(regex_proto_unicode_sets_getter, 0; with_declared(0)),
     );
     install_getter(
         proto_obj,
         "hasIndices",
-        crate::fn_info!(#[realm("regex_proto_thunks.realm.json#body:regex_proto_has_indices_getter")] regex_proto_has_indices_getter, 0; with_declared(0)),
+        crate::fn_info!(regex_proto_has_indices_getter, 0; with_declared(0)),
     );
 }
+
+crate::realm_decl!("regex_proto_thunks.realm.json#*");

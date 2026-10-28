@@ -1044,5 +1044,4 @@ mod incoming_init_tests {
     }
 }
 
-// Group facts preserve existing runtime source locations.
 crate::realm_decl!("node_http_prototypes.realm.json#*");

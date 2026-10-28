@@ -1917,5 +1917,4 @@ mod tests;
 #[path = "test_once_unit_tests.rs"]
 mod once_tests;
 
-// Group facts preserve existing runtime source locations.
 crate::realm_decl!("test.realm.json#*");

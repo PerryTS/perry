@@ -132,5 +132,4 @@ pub(super) extern "C" fn mark_resource_timing(
     )
 }
 
-// Realm facts owned here; this marker emits no runtime code or data.
-crate::realm_decl!("performance_methods.realm.json#objects");
+crate::realm_decl!("performance_methods.realm.json#*");

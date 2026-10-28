@@ -1522,5 +1522,4 @@ mod tests {
     }
 }
 
-// Realm facts owned here; this marker emits no runtime code or data.
-crate::realm_decl!("os.realm.json#objects");
+crate::realm_decl!("os.realm.json#*");

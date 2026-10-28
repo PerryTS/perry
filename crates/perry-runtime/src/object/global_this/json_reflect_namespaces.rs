@@ -116,5 +116,4 @@ pub(crate) fn create_reflect_namespace() -> *mut ObjectHeader {
     builtin_namespace::create(REFLECT_MEMBERS)
 }
 
-// Realm facts owned here; this marker emits no runtime code or data.
-crate::realm_decl!("json_reflect_namespaces.realm.json#objects");
+crate::realm_decl!("json_reflect_namespaces.realm.json#*");

@@ -26,7 +26,7 @@ fn install_zlib_closed_getter(proto: f64) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let proto = scope.root_nanbox_f64(proto);
     let getter = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
-        crate::fn_info!(#[realm("constructor_shapes.realm.json#body:zlib_closed_getter")] zlib_closed_getter, 0; with_declared(0)),
+        crate::fn_info!(zlib_closed_getter, 0; with_declared(0)),
         0,
     ));
     getter.with_mut_ptr(|p| callable_exports::set_bound_native_closure_name(p, "get"));
@@ -361,7 +361,7 @@ fn own_static(ctor: f64, name: &str, kind: u8, length: u32) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let ctor = scope.root_nanbox_f64(ctor);
     let method = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
-        crate::fn_info!(#[realm("constructor_shapes.realm.json#body:own_static_thunk")] own_static_thunk, 5; with_declared(5)),
+        crate::fn_info!(own_static_thunk, 5; with_declared(5)),
         1,
     ));
     method.with_mut_ptr(|p| crate::closure::js_closure_set_capture_f64(p, 0, kind as f64));
@@ -975,7 +975,7 @@ pub(crate) fn install_event_emitter_statics(value: f64) -> f64 {
     // laziness avoids eagerly materializing EventEmitter.prototype just to
     // link a child which the program may never request.
     let async_get = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
-        crate::fn_info!(#[realm("constructor_shapes.realm.json#body:event_async_resource_get")] event_async_resource_get, 0; with_declared(0)),
+        crate::fn_info!(event_async_resource_get, 0; with_declared(0)),
         0,
     ));
     async_get.with_mut_ptr(|p| {
@@ -1007,12 +1007,12 @@ pub(crate) fn install_event_emitter_statics(value: f64) -> f64 {
         (
             "defaultMaxListeners",
             10.0,
-            crate::fn_info!(#[realm("constructor_shapes.realm.json#body:default_max_listeners_set")] default_max_listeners_set, 1; with_declared(1)),
+            crate::fn_info!(default_max_listeners_set, 1; with_declared(1)),
         ),
         (
             "captureRejections",
             f64::from_bits(crate::value::TAG_FALSE),
-            crate::fn_info!(#[realm("constructor_shapes.realm.json#body:capture_rejections_set")] capture_rejections_set, 1; with_declared(1)),
+            crate::fn_info!(capture_rejections_set, 1; with_declared(1)),
         ),
     ] {
         // node's `kCapture`: the key `EventEmitter.prototype`'s layout lists
@@ -1028,9 +1028,9 @@ pub(crate) fn install_event_emitter_statics(value: f64) -> f64 {
         };
         let get = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
             if name == "captureRejections" {
-                crate::fn_info!(#[realm("constructor_shapes.realm.json#body:capture_rejections_get")] capture_rejections_get, 0; with_declared(0))
+                crate::fn_info!(capture_rejections_get, 0; with_declared(0))
             } else {
-                crate::fn_info!(#[realm("constructor_shapes.realm.json#body:default_max_listeners_get")] default_max_listeners_get, 0; with_declared(0))
+                crate::fn_info!(default_max_listeners_get, 0; with_declared(0))
             },
             if capture_key.is_some() { 2 } else { 1 },
         ));
@@ -1106,3 +1106,5 @@ extern "C" fn event_async_resource_get(
 ) -> f64 {
     bound_native_callable_export_value("events", "EventEmitterAsyncResource")
 }
+
+crate::realm_decl!("constructor_shapes.realm.json#*");

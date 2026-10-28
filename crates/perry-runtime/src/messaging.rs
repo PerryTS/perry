@@ -840,5 +840,4 @@ fn throw_constructor_call_error() -> f64 {
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
-// Group facts preserve existing runtime source locations.
 crate::realm_decl!("messaging.realm.json#*");

@@ -527,5 +527,4 @@ pub extern "C" fn js_string_replace_all_js(receiver: f64, search: f64, replaceme
     api::finish(string(true, receiver, search, replacement))
 }
 
-// Realm facts owned here; this marker emits no runtime code or data.
-crate::realm_decl!("perex_replace.realm.json#objects");
+crate::realm_decl!("perex_replace.realm.json#*");

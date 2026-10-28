@@ -364,5 +364,4 @@ pub(crate) extern "C" fn search_thunk(
     api::finish(regexp(Operation::Search, this.as_f64(), arg))
 }
 
-// Realm facts owned here; this marker emits no runtime code or data.
-crate::realm_decl!("perex_match_search.realm.json#objects");
+crate::realm_decl!("perex_match_search.realm.json#*");

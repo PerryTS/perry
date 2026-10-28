@@ -101,94 +101,94 @@ pub(super) fn install_typed_array_proto_methods(proto_obj: *mut ObjectHeader) {
 fn thunk_for(name: &str) -> *const crate::closure::JsFunctionInfo {
     match name {
         "at" => {
-            crate::fn_info!(#[realm("typed_array_proto_thunks.realm.json#body:ta_at_thunk")] ta_at_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(ta_at_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "copyWithin" => {
-            crate::fn_info!(#[realm("typed_array_proto_thunks.realm.json#body:ta_copy_within_thunk")] ta_copy_within_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(ta_copy_within_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "entries" => {
-            crate::fn_info!(#[realm("typed_array_proto_thunks.realm.json#body:ta_entries_thunk")] ta_entries_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(ta_entries_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "every" => {
-            crate::fn_info!(#[realm("typed_array_proto_thunks.realm.json#body:ta_every_thunk")] ta_every_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(ta_every_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "fill" => {
-            crate::fn_info!(#[realm("typed_array_proto_thunks.realm.json#body:ta_fill_thunk")] ta_fill_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(ta_fill_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "filter" => {
-            crate::fn_info!(#[realm("typed_array_proto_thunks.realm.json#body:ta_filter_thunk")] ta_filter_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(ta_filter_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "find" => {
-            crate::fn_info!(#[realm("typed_array_proto_thunks.realm.json#body:ta_find_thunk")] ta_find_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(ta_find_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "findIndex" => {
-            crate::fn_info!(#[realm("typed_array_proto_thunks.realm.json#body:ta_find_index_thunk")] ta_find_index_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(ta_find_index_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "findLast" => {
-            crate::fn_info!(#[realm("typed_array_proto_thunks.realm.json#body:ta_find_last_thunk")] ta_find_last_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(ta_find_last_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "findLastIndex" => {
-            crate::fn_info!(#[realm("typed_array_proto_thunks.realm.json#body:ta_find_last_index_thunk")] ta_find_last_index_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(ta_find_last_index_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "forEach" => {
-            crate::fn_info!(#[realm("typed_array_proto_thunks.realm.json#body:ta_for_each_thunk")] ta_for_each_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(ta_for_each_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "includes" => {
-            crate::fn_info!(#[realm("typed_array_proto_thunks.realm.json#body:ta_includes_thunk")] ta_includes_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(ta_includes_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "indexOf" => {
-            crate::fn_info!(#[realm("typed_array_proto_thunks.realm.json#body:ta_index_of_thunk")] ta_index_of_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(ta_index_of_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "join" => {
-            crate::fn_info!(#[realm("typed_array_proto_thunks.realm.json#body:ta_join_thunk")] ta_join_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(ta_join_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "keys" => {
-            crate::fn_info!(#[realm("typed_array_proto_thunks.realm.json#body:ta_keys_thunk")] ta_keys_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(ta_keys_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "lastIndexOf" => {
-            crate::fn_info!(#[realm("typed_array_proto_thunks.realm.json#body:ta_last_index_of_thunk")] ta_last_index_of_thunk, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(ta_last_index_of_thunk, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN))
         }
         "map" => {
-            crate::fn_info!(#[realm("typed_array_proto_thunks.realm.json#body:ta_map_thunk")] ta_map_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(ta_map_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "reduce" => {
-            crate::fn_info!(#[realm("typed_array_proto_thunks.realm.json#body:ta_reduce_thunk")] ta_reduce_thunk, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(ta_reduce_thunk, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN))
         }
         "reduceRight" => {
-            crate::fn_info!(#[realm("typed_array_proto_thunks.realm.json#body:ta_reduce_right_thunk")] ta_reduce_right_thunk, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(ta_reduce_right_thunk, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN))
         }
         "reverse" => {
-            crate::fn_info!(#[realm("typed_array_proto_thunks.realm.json#body:ta_reverse_thunk")] ta_reverse_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(ta_reverse_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "set" => {
-            crate::fn_info!(#[realm("typed_array_proto_thunks.realm.json#body:ta_set_thunk")] ta_set_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(ta_set_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "slice" => {
-            crate::fn_info!(#[realm("typed_array_proto_thunks.realm.json#body:ta_slice_thunk")] ta_slice_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(ta_slice_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "some" => {
-            crate::fn_info!(#[realm("typed_array_proto_thunks.realm.json#body:ta_some_thunk")] ta_some_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(ta_some_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "sort" => {
-            crate::fn_info!(#[realm("typed_array_proto_thunks.realm.json#body:ta_sort_thunk")] ta_sort_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(ta_sort_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "subarray" => {
-            crate::fn_info!(#[realm("typed_array_proto_thunks.realm.json#body:ta_subarray_thunk")] ta_subarray_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(ta_subarray_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "toLocaleString" => {
-            crate::fn_info!(#[realm("typed_array_proto_thunks.realm.json#body:ta_to_locale_string_thunk")] ta_to_locale_string_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(ta_to_locale_string_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "toReversed" => {
-            crate::fn_info!(#[realm("typed_array_proto_thunks.realm.json#body:ta_to_reversed_thunk")] ta_to_reversed_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(ta_to_reversed_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "toSorted" => {
-            crate::fn_info!(#[realm("typed_array_proto_thunks.realm.json#body:ta_to_sorted_thunk")] ta_to_sorted_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(ta_to_sorted_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "values" => {
-            crate::fn_info!(#[realm("typed_array_proto_thunks.realm.json#body:ta_values_thunk")] ta_values_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(ta_values_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "with" => {
-            crate::fn_info!(#[realm("typed_array_proto_thunks.realm.json#body:ta_with_thunk")] ta_with_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(ta_with_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         _ => {
             crate::fn_info!(ta_generic_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
@@ -1286,22 +1286,22 @@ pub(super) fn install_uint8array_base64_hex_proto_methods(proto_obj: *mut Object
     let methods: &[(&str, *const crate::closure::JsFunctionInfo, u32)] = &[
         (
             "toBase64",
-            fn_info!(#[realm("typed_array_proto_thunks.realm.json#body:u8_to_base64_thunk")] u8_to_base64_thunk, 3; with_declared(3), with_flags(FN_BUILTIN)),
+            fn_info!(u8_to_base64_thunk, 3; with_declared(3), with_flags(FN_BUILTIN)),
             0,
         ),
         (
             "toHex",
-            fn_info!(#[realm("typed_array_proto_thunks.realm.json#body:u8_to_hex_thunk")] u8_to_hex_thunk, 3; with_declared(3), with_flags(FN_BUILTIN)),
+            fn_info!(u8_to_hex_thunk, 3; with_declared(3), with_flags(FN_BUILTIN)),
             0,
         ),
         (
             "setFromBase64",
-            fn_info!(#[realm("typed_array_proto_thunks.realm.json#body:u8_set_from_base64_thunk")] u8_set_from_base64_thunk, 3; with_declared(3), with_flags(FN_BUILTIN)),
+            fn_info!(u8_set_from_base64_thunk, 3; with_declared(3), with_flags(FN_BUILTIN)),
             1,
         ),
         (
             "setFromHex",
-            fn_info!(#[realm("typed_array_proto_thunks.realm.json#body:u8_set_from_hex_thunk")] u8_set_from_hex_thunk, 3; with_declared(3), with_flags(FN_BUILTIN)),
+            fn_info!(u8_set_from_hex_thunk, 3; with_declared(3), with_flags(FN_BUILTIN)),
             1,
         ),
     ];
@@ -1309,3 +1309,5 @@ pub(super) fn install_uint8array_base64_hex_proto_methods(proto_obj: *mut Object
         ipm(proto_obj, name, info, spec_length);
     }
 }
+
+crate::realm_decl!("typed_array_proto_thunks.realm.json#*");

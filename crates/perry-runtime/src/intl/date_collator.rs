@@ -1866,5 +1866,4 @@ mod collator_compare_tests {
     }
 }
 
-// Realm facts owned here; this marker emits no runtime code or data.
-crate::realm_decl!("date_collator.realm.json#objects");
+crate::realm_decl!("date_collator.realm.json#*");

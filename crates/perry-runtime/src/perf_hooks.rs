@@ -1899,5 +1899,4 @@ mod sso_tests_1781 {
     }
 }
 
-// Realm facts owned here; this marker emits no runtime code or data.
-crate::realm_decl!("perf_hooks.realm.json#objects");
+crate::realm_decl!("perf_hooks.realm.json#*");

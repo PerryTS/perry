@@ -385,5 +385,4 @@ pub(crate) extern "C" fn thunk_diag_bounded_channel(
     boxed_ptr(obj)
 }
 
-// Realm facts owned here; this marker emits no runtime code or data.
-crate::realm_decl!("diagnostics_tail.realm.json#objects");
+crate::realm_decl!("diagnostics_tail.realm.json#*");

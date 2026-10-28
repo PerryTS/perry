@@ -95,5 +95,4 @@ pub(crate) extern "C" fn plural_rules_constructor_thunk(
     )
 }
 
-// Realm facts owned here; this marker emits no runtime code or data.
-crate::realm_decl!("constructor_thunks.realm.json#objects");
+crate::realm_decl!("constructor_thunks.realm.json#*");

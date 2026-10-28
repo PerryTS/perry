@@ -105,7 +105,7 @@ fn mock_context_object() -> *mut ObjectHeader {
 
 fn mock_function_value() -> f64 {
     let value = fn_value(
-        crate::fn_info!(#[realm("node_test.realm.json#body:noop3")] noop3, 3; with_declared(3)),
+        crate::fn_info!(noop3, 3; with_declared(3)),
         "mockConstructor",
     );
     let closure_ptr = crate::value::js_nanbox_get_pointer(value) as usize;
@@ -165,3 +165,5 @@ pub fn dispatch_object_method(class_id: u32, method_name: &str) -> Option<f64> {
         _ => None,
     }
 }
+
+crate::realm_decl!("node_test.realm.json#*");

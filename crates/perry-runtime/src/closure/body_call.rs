@@ -128,7 +128,7 @@ macro_rules! fn_info {
     (@uty 14) => { $crate::codegen_abi::JsBodyUnwind14<$crate::closure::ClosureHeader> };
     (@uty 15) => { $crate::codegen_abi::JsBodyUnwind15<$crate::closure::ClosureHeader> };
     (@uty 16) => { $crate::codegen_abi::JsBodyUnwind16<$crate::closure::ClosureHeader> };
-    (native_args $body:path, $declared:tt $(; $($m:ident($($a:expr),*)),* $(,)?)?) => {{
+    ($(#[realm($facts:literal)])? native_args $body:path, $declared:tt $(; $($m:ident($($a:expr),*)),* $(,)?)?) => {{
         static INFO: $crate::closure::JsFunctionInfo =
             $crate::closure::JsFunctionInfo::of_native_args(
                 $body as $crate::codegen_abi::JsNativeArgsBody<$crate::closure::ClosureHeader>,
@@ -137,20 +137,20 @@ macro_rules! fn_info {
                 $($(.$m($($a),*))*)?;
         &INFO as *const $crate::closure::JsFunctionInfo
     }};
-    (unwind_in_tests $body:path, $n:tt $(; $($m:ident($($a:expr),*)),* $(,)?)?) => {{
+    ($(#[realm($facts:literal)])? unwind_in_tests $body:path, $n:tt $(; $($m:ident($($a:expr),*)),* $(,)?)?) => {{
         #[cfg(panic = "abort")]
         let info = $crate::fn_info!($body, $n $(; $($m($($a),*)),*)?);
         #[cfg(not(panic = "abort"))]
         let info = $crate::fn_info!(unwind $body, $n $(; $($m($($a),*)),*)?);
         info
     }};
-    (unwind $body:path, $n:tt $(; $($m:ident($($a:expr),*)),* $(,)?)?) => {{
+    ($(#[realm($facts:literal)])? unwind $body:path, $n:tt $(; $($m:ident($($a:expr),*)),* $(,)?)?) => {{
         static INFO: $crate::closure::JsFunctionInfo =
             $crate::closure::JsFunctionInfo::of($body as $crate::fn_info!(@uty $n))
                 $($(.$m($($a),*))*)?;
         &INFO as *const $crate::closure::JsFunctionInfo
     }};
-    ($body:path, $n:tt $(; $($m:ident($($a:expr),*)),* $(,)?)?) => {{
+    ($(#[realm($facts:literal)])? $body:path, $n:tt $(; $($m:ident($($a:expr),*)),* $(,)?)?) => {{
         static INFO: $crate::closure::JsFunctionInfo =
             $crate::closure::JsFunctionInfo::of($body as $crate::fn_info!(@ty $n))
                 $($(.$m($($a),*))*)?;

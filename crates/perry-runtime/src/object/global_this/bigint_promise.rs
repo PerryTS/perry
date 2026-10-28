@@ -981,5 +981,4 @@ pub(crate) fn promise_static_function_spec(name: &str) -> Option<(*const u8, u32
     }
 }
 
-// Group facts preserve existing runtime source locations.
 crate::realm_decl!("bigint_promise.realm.json#*");

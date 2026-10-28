@@ -74,7 +74,7 @@ pub(super) fn install_buffer_species(buffer_ctor: f64) {
     // FastBuffer itself: named, sharing Buffer.prototype. Node reports
     // `FastBuffer.length === 0`; the thunk still receives three arguments.
     let fast = crate::closure::js_closure_alloc(
-        crate::fn_info!(#[realm("buffer_species.realm.json#body:fast_buffer_constructor_thunk")] fast_buffer_constructor_thunk, 3; with_declared(3)),
+        crate::fn_info!(fast_buffer_constructor_thunk, 3; with_declared(3)),
         0,
     );
     if fast.is_null() {
@@ -102,7 +102,7 @@ pub(super) fn install_buffer_species(buffer_ctor: f64) {
 
     // The getter, holding FastBuffer in capture slot 0.
     let getter = crate::closure::js_closure_alloc(
-        crate::fn_info!(#[realm("buffer_species.realm.json#body:buffer_species_getter_thunk")] buffer_species_getter_thunk, 0; with_declared(0)),
+        crate::fn_info!(buffer_species_getter_thunk, 0; with_declared(0)),
         1,
     );
     if getter.is_null() {
@@ -138,3 +138,5 @@ pub(super) fn install_buffer_species(buffer_ctor: f64) {
         );
     }
 }
+
+crate::realm_decl!("buffer_species.realm.json#*");

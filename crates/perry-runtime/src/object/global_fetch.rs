@@ -709,5 +709,4 @@ mod redirect_mode_tests {
     }
 }
 
-// Realm facts owned here; this marker emits no runtime code or data.
-crate::realm_decl!("global_fetch.realm.json#objects");
+crate::realm_decl!("global_fetch.realm.json#*");

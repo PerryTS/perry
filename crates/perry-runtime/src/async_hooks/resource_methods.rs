@@ -189,5 +189,4 @@ extern "C" fn deferred_bind_trampoline(
     }
 }
 
-// Realm facts owned here; this marker emits no runtime code or data.
-crate::realm_decl!("resource_methods.realm.json#objects");
+crate::realm_decl!("resource_methods.realm.json#*");

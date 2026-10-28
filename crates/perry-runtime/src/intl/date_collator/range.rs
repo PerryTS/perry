@@ -232,5 +232,4 @@ pub(crate) extern "C" fn date_time_format_bound_range_to_parts_thunk(
     date_time_format_range_parts_value(obj, "formatRangeToParts", start, end)
 }
 
-// Realm facts owned here; this marker emits no runtime code or data.
-crate::realm_decl!("range.realm.json#objects");
+crate::realm_decl!("range.realm.json#*");

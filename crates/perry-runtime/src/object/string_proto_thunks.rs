@@ -33,25 +33,25 @@ pub(super) fn install_string_proto_methods(
     ipm(
         proto_obj,
         "at",
-        crate::fn_info!(#[realm("string_proto_thunks.realm.json#body:string_proto_at_thunk")] string_proto_at_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(string_proto_at_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         1,
     );
     ipm(
         proto_obj,
         "charAt",
-        crate::fn_info!(#[realm("string_proto_thunks.realm.json#body:string_proto_char_at_thunk")] string_proto_char_at_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(string_proto_char_at_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         1,
     );
     ipm(
         proto_obj,
         "charCodeAt",
-        crate::fn_info!(#[realm("string_proto_thunks.realm.json#body:string_proto_char_code_at_thunk")] string_proto_char_code_at_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(string_proto_char_code_at_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         1,
     );
     ipm(
         proto_obj,
         "codePointAt",
-        crate::fn_info!(#[realm("string_proto_thunks.realm.json#body:string_proto_code_point_at_thunk")] string_proto_code_point_at_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(string_proto_code_point_at_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         1,
     );
     install_string_iterator_symbol(proto_obj);
@@ -125,22 +125,22 @@ fn install_generic_string_proto_methods(proto_obj: *mut ObjectHeader) {
         ) {
             let fp = match name {
                 "match" => {
-                    crate::fn_info!(#[realm("string_proto_thunks.realm.json#body:string_proto_match_thunk")] string_proto_match_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN))
+                    crate::fn_info!(string_proto_match_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN))
                 }
                 "matchAll" => {
-                    crate::fn_info!(#[realm("string_proto_thunks.realm.json#body:string_proto_match_all_thunk")] string_proto_match_all_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN))
+                    crate::fn_info!(string_proto_match_all_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN))
                 }
                 "replace" => {
-                    crate::fn_info!(#[realm("string_proto_thunks.realm.json#body:string_proto_replace_thunk")] string_proto_replace_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN))
+                    crate::fn_info!(string_proto_replace_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN))
                 }
                 "replaceAll" => {
-                    crate::fn_info!(#[realm("string_proto_thunks.realm.json#body:string_proto_replace_all_thunk")] string_proto_replace_all_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN))
+                    crate::fn_info!(string_proto_replace_all_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN))
                 }
                 "split" => {
-                    crate::fn_info!(#[realm("string_proto_thunks.realm.json#body:string_proto_split_thunk")] string_proto_split_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN))
+                    crate::fn_info!(string_proto_split_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN))
                 }
                 _ => {
-                    crate::fn_info!(#[realm("string_proto_thunks.realm.json#body:string_proto_search_thunk")] string_proto_search_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN))
+                    crate::fn_info!(string_proto_search_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN))
                 }
             };
             super::global_this::install_proto_method(proto_obj, name, fp, spec_length);
@@ -151,7 +151,7 @@ fn install_generic_string_proto_methods(proto_obj: *mut ObjectHeader) {
             super::global_this::install_proto_method(
                 proto_obj,
                 name,
-                crate::fn_info!(#[realm("string_proto_thunks.realm.json#body:string_proto_index_of_thunk")] string_proto_index_of_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(string_proto_index_of_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
                 spec_length,
             );
             continue;
@@ -161,7 +161,7 @@ fn install_generic_string_proto_methods(proto_obj: *mut ObjectHeader) {
         super::global_this::install_proto_method_rest_with_length(
             proto_obj,
             name,
-            crate::fn_info!(#[realm("string_proto_thunks.realm.json#body:string_proto_generic_thunk")] string_proto_generic_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(string_proto_generic_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
             spec_length,
         );
     }
@@ -232,7 +232,7 @@ fn install_string_iterator_symbol(proto_obj: *mut ObjectHeader) {
     if iter.is_null() {
         return;
     }
-    let func_ptr = crate::fn_info!(#[realm("string_proto_thunks.realm.json#body:string_proto_symbol_iterator_thunk")] string_proto_symbol_iterator_thunk, 0; with_declared(0));
+    let func_ptr = crate::fn_info!(string_proto_symbol_iterator_thunk, 0; with_declared(0));
     let closure = crate::closure::js_closure_alloc(func_ptr, 0);
     if closure.is_null() {
         return;
@@ -426,3 +426,5 @@ pub(super) extern "C" fn string_proto_index_of_thunk(
         from,
     ) as f64
 }
+
+crate::realm_decl!("string_proto_thunks.realm.json#*");

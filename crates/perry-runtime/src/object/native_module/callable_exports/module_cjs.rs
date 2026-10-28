@@ -556,5 +556,4 @@ pub(super) fn attach_module_cjs_constructor_statics(module_value: f64) -> f64 {
     module.get_nanbox_f64()
 }
 
-// Group facts preserve existing runtime source locations.
 crate::realm_decl!("module_cjs.realm.json#*");

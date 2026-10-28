@@ -1193,5 +1193,4 @@ unsafe fn name_first_realm_prototype(proto: *mut ObjectHeader, serial: u64) {
     let _ = crate::object::builtin_proto::name_runtime_prototype(proto, serial);
 }
 
-// Realm facts owned here; this marker emits no runtime code or data.
-crate::realm_decl!("populate.realm.json#objects");
+crate::realm_decl!("populate.realm.json#*");

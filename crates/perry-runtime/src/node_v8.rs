@@ -859,5 +859,4 @@ mod snapshot_thread_name_tests {
     }
 }
 
-// Group facts preserve existing runtime source locations.
 crate::realm_decl!("node_v8.realm.json#*");

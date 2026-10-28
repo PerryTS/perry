@@ -1401,5 +1401,4 @@ mod dynamic_super_new_target_tests {
     }
 }
 
-// Realm facts owned here; this marker emits no runtime code or data.
-crate::realm_decl!("fetch_globals.realm.json#objects");
+crate::realm_decl!("fetch_globals.realm.json#*");

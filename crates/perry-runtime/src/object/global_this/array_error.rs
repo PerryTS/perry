@@ -1214,5 +1214,4 @@ mod native_args_tests;
 #[cfg(test)]
 mod variadic_args_tests;
 
-// Realm facts owned here; this marker emits no runtime code or data.
-crate::realm_decl!("array_error.realm.json#objects");
+crate::realm_decl!("array_error.realm.json#*");

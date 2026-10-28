@@ -254,7 +254,7 @@ pub(super) const THROWER_FROZEN_FLAGS: u16 =
 
 pub(super) fn thrower_closure_value() -> f64 {
     let closure = crate::closure::js_closure_alloc_singleton(
-        crate::fn_info!(#[realm("arguments.realm.json#body:arguments_throw_type_error")] arguments_throw_type_error, 0; with_declared(0)),
+        crate::fn_info!(arguments_throw_type_error, 0; with_declared(0)),
     );
     // #10509: configure the per-thread singleton once, not per strict call.
     // The frozen bits are the last step below and live in the closure's own
@@ -1359,3 +1359,5 @@ unsafe fn write_ordinary_own_value(
         }
     }
 }
+
+crate::realm_decl!("arguments.realm.json#*");

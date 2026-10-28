@@ -1939,5 +1939,4 @@ pub(crate) fn test_buffer_value_from_bytes(bytes: &[u8]) -> f64 {
     buffer_value_from_bytes(bytes)
 }
 
-// Realm facts owned here; this marker emits no runtime code or data.
-crate::realm_decl!("node_stream.realm.json#objects");
+crate::realm_decl!("node_stream.realm.json#*");

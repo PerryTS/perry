@@ -559,5 +559,4 @@ pub(crate) fn install_constructor_constants(name: &str, constructor: *mut Object
     }
 }
 
-// Realm facts owned here; this marker emits no runtime code or data.
 crate::realm_decl!("prototype.realm.json#*");

@@ -296,11 +296,11 @@ fn install_object_prototype_dunder_proto(proto_obj: *mut ObjectHeader) {
         return;
     }
     let getter = crate::closure::js_closure_alloc(
-        crate::fn_info!(#[realm("proto_methods.realm.json#body:object_prototype_dunder_proto_getter_thunk")] object_prototype_dunder_proto_getter_thunk, 0; with_declared(0)),
+        crate::fn_info!(object_prototype_dunder_proto_getter_thunk, 0; with_declared(0)),
         0,
     );
     let setter = crate::closure::js_closure_alloc(
-        crate::fn_info!(#[realm("proto_methods.realm.json#body:object_prototype_dunder_proto_setter_thunk")] object_prototype_dunder_proto_setter_thunk, 1; with_declared(1)),
+        crate::fn_info!(object_prototype_dunder_proto_setter_thunk, 1; with_declared(1)),
         0,
     );
     if getter.is_null() || setter.is_null() {
@@ -1334,7 +1334,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method(
                 proto(),
                 "toString",
-                crate::fn_info!(#[realm("proto_methods.realm.json#body:url_prototype_href_thunk")] url_prototype_href_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(url_prototype_href_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
             web_method_enumerable(proto(), "toString");
@@ -1847,5 +1847,4 @@ pub(super) fn web_webcrypto_proto_methods(builtin_name: &str, proto_obj: *mut Ob
     }
 }
 
-// Realm facts owned here; this marker emits no runtime code or data.
-crate::realm_decl!("proto_methods.realm.json#objects");
+crate::realm_decl!("proto_methods.realm.json#*");

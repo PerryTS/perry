@@ -1264,23 +1264,23 @@ pub extern "C" fn js_node_inspector_console_object() -> f64 {
     for (name, func) in [
         (
             "log",
-            crate::fn_info!(#[realm("node_inspector.realm.json#body:inspector_console_log")] inspector_console_log, 3; with_declared(3)),
+            crate::fn_info!(inspector_console_log, 3; with_declared(3)),
         ),
         (
             "info",
-            crate::fn_info!(#[realm("node_inspector.realm.json#body:inspector_console_info")] inspector_console_info, 3; with_declared(3)),
+            crate::fn_info!(inspector_console_info, 3; with_declared(3)),
         ),
         (
             "debug",
-            crate::fn_info!(#[realm("node_inspector.realm.json#body:inspector_console_debug")] inspector_console_debug, 3; with_declared(3)),
+            crate::fn_info!(inspector_console_debug, 3; with_declared(3)),
         ),
         (
             "warn",
-            crate::fn_info!(#[realm("node_inspector.realm.json#body:inspector_console_warn")] inspector_console_warn, 3; with_declared(3)),
+            crate::fn_info!(inspector_console_warn, 3; with_declared(3)),
         ),
         (
             "error",
-            crate::fn_info!(#[realm("node_inspector.realm.json#body:inspector_console_error")] inspector_console_error, 3; with_declared(3)),
+            crate::fn_info!(inspector_console_error, 3; with_declared(3)),
         ),
     ] {
         set_field(obj, name, fn_value(func, name));
@@ -1538,7 +1538,7 @@ pub(crate) fn install_session_prototype(constructor: f64, promise_mode: bool) ->
                 proto,
                 "post",
                 fn_value(
-                    crate::fn_info!(#[realm("node_inspector.realm.json#body:promises_session_post_thunk")] promises_session_post_thunk, 3; with_declared(3)),
+                    crate::fn_info!(promises_session_post_thunk, 3; with_declared(3)),
                     "post",
                 ),
             );
@@ -1551,19 +1551,19 @@ pub(crate) fn install_session_prototype(constructor: f64, promise_mode: bool) ->
             for (method, func) in [
                 (
                     "connect",
-                    crate::fn_info!(#[realm("node_inspector.realm.json#body:session_connect_thunk")] session_connect_thunk, 0; with_declared(0)),
+                    crate::fn_info!(session_connect_thunk, 0; with_declared(0)),
                 ),
                 (
                     "connectToMainThread",
-                    crate::fn_info!(#[realm("node_inspector.realm.json#body:session_connect_main_thunk")] session_connect_main_thunk, 0; with_declared(0)),
+                    crate::fn_info!(session_connect_main_thunk, 0; with_declared(0)),
                 ),
                 (
                     "disconnect",
-                    crate::fn_info!(#[realm("node_inspector.realm.json#body:session_disconnect_thunk")] session_disconnect_thunk, 0; with_declared(0)),
+                    crate::fn_info!(session_disconnect_thunk, 0; with_declared(0)),
                 ),
                 (
                     "post",
-                    crate::fn_info!(#[realm("node_inspector.realm.json#body:session_post_thunk")] session_post_thunk, 3; with_declared(3)),
+                    crate::fn_info!(session_post_thunk, 3; with_declared(3)),
                 ),
             ] {
                 set_field(proto, method, fn_value(func, method));
@@ -1923,3 +1923,5 @@ fn post_promise(session_raw: i64, method_value: f64, mut params: f64) -> f64 {
     }
     promise_value(run_command(session, &method, params))
 }
+
+crate::realm_decl!("node_inspector.realm.json#*");

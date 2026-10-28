@@ -183,7 +183,7 @@ extern "C" fn stream_static_method_thunk(
 fn stream_static_method_value(method: &str, kind: f64, exposed_length: u32) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let closure = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
-        crate::fn_info!(#[realm("native_module_stream.realm.json#body:stream_static_method_thunk")] stream_static_method_thunk, 2; with_declared(2)),
+        crate::fn_info!(stream_static_method_thunk, 2; with_declared(2)),
         1,
     ));
     closure.with_mut_ptr(|p| crate::closure::js_closure_set_capture_f64(p, 0, kind));
@@ -477,3 +477,5 @@ mod tests {
         assert_object_property_function(web_pair_writable, b"getWriter");
     }
 }
+
+crate::realm_decl!("native_module_stream.realm.json#*");
