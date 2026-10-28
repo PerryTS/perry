@@ -52,92 +52,18 @@ fn lower_rooted_dynamic_binary(
     })
 }
 
-/// Emit JS numeric remainder with an inline fast path for i32-valued operands.
-///
-/// LLVM lowers `frem double` to a libm `fmod` call. Most application
-/// remainders use small whole numbers (loop indices, lengths, parsed integer
-/// configuration), so prove that common case at runtime and use integer
-/// remainder instead. The ordered range checks are deliberately in a separate
-/// predecessor from `fptosi`: converting NaN, infinity, or an out-of-range
-/// double is poison in LLVM even when a later select would discard it.
-///
-/// Everything the inline i32 check refuses goes to ONE shared out-of-line
-/// helper, `js_number_mod`, in place of the `frem` that used to be emitted
-/// here. That `frem` was already a libm call, so the site does not grow. The
-/// helper adds an exact-integer path for operands within ±2^53 (a 64-bit
-/// LCG step such as `(seed * 48271) % 2147483647` overflows i32 but not
-/// i53) and falls back to `fmod` for everything else.
+/// Use the same checked raw-Number operation as typed function/method entries.
+/// Its frozen i32 conversions plus exact ordered roundtrips reject fractions,
+/// overflow, NaN and infinities without a separate range-check predecessor.
+/// It also restores the dividend's sign with copysign, including negative zero.
+/// The compiler-owned body is inlined before statepoint rewriting, so constant
+/// divisors and proven operand ranges remain visible to LLVM. Non-Numbers
+/// have already taken the ordinary ToNumeric/ToNumber paths at the caller.
 fn lower_checked_i32_modulo(ctx: &mut FnCtx<'_>, left: &str, right: &str) -> String {
-    let convert_idx = ctx.new_block("mod.i32.convert");
-    let integer_idx = ctx.new_block("mod.i32.integer");
-    let fallback_idx = ctx.new_block("mod.f64.fallback");
-    let merge_idx = ctx.new_block("mod.merge");
-    let convert_label = ctx.block_label(convert_idx);
-    let integer_label = ctx.block_label(integer_idx);
-    let fallback_label = ctx.block_label(fallback_idx);
-    let merge_label = ctx.block_label(merge_idx);
-
-    let min = crate::nanbox::double_literal(f64::from(i32::MIN));
-    let max = crate::nanbox::double_literal(f64::from(i32::MAX));
-    let l_ge_min = ctx.block().fcmp("oge", left, &min);
-    let l_le_max = ctx.block().fcmp("ole", left, &max);
-    let r_ge_min = ctx.block().fcmp("oge", right, &min);
-    let r_le_max = ctx.block().fcmp("ole", right, &max);
-    let l_in_range = ctx.block().and(I1, &l_ge_min, &l_le_max);
-    let r_in_range = ctx.block().and(I1, &r_ge_min, &r_le_max);
-    let both_in_range = ctx.block().and(I1, &l_in_range, &r_in_range);
-    ctx.block()
-        .cond_br(&both_in_range, &convert_label, &fallback_label);
-
-    ctx.current_block = convert_idx;
-    let li = ctx.block().fptosi(DOUBLE, left, I32);
-    let ri = ctx.block().fptosi(DOUBLE, right, I32);
-    let l_roundtrip = ctx.block().sitofp(I32, &li, DOUBLE);
-    let r_roundtrip = ctx.block().sitofp(I32, &ri, DOUBLE);
-    let l_is_integer = ctx.block().fcmp("oeq", &l_roundtrip, left);
-    let r_is_integer = ctx.block().fcmp("oeq", &r_roundtrip, right);
-    let r_is_nonzero = ctx.block().icmp_ne(I32, &ri, "0");
-    let both_integer = ctx.block().and(I1, &l_is_integer, &r_is_integer);
-    let can_use_integer = ctx.block().and(I1, &both_integer, &r_is_nonzero);
-    ctx.block()
-        .cond_br(&can_use_integer, &integer_label, &fallback_label);
-
-    ctx.current_block = integer_idx;
-    // LLVM srem(INT_MIN, -1) is poison, although JS returns -0.
-    // Both divisors have zero integer remainder; retain the sign fix below.
-    let minus_one = ctx.block().icmp_eq(I32, &ri, "-1");
-    let divisor = ctx.block().select(I1, &minus_one, I32, "1", &ri);
-    let remainder = ctx.block().srem(I32, &li, &divisor);
-    let result = ctx.block().sitofp(I32, &remainder, DOUBLE);
-
-    // Integer remainder loses the sign of a zero result. Test the dividend's
-    // IEEE-754 sign bit rather than `left < 0`, because -0 must also produce
-    // -0. Nonzero results already have the dividend's sign via signed `srem`.
-    let remainder_is_zero = ctx.block().icmp_eq(I32, &remainder, "0");
-    let left_bits = ctx.block().bitcast_double_to_i64(left);
-    let dividend_has_sign = ctx.block().icmp_slt(I64, &left_bits, "0");
-    let needs_negative_zero = ctx.block().and(I1, &remainder_is_zero, &dividend_has_sign);
-    let negative_result = ctx.block().fneg(&result);
-    let integer_value =
-        ctx.block()
-            .select(I1, &needs_negative_zero, DOUBLE, &negative_result, &result);
-    let integer_end = ctx.block().label.clone();
-    ctx.block().br(&merge_label);
-
-    ctx.current_block = fallback_idx;
-    let fallback_value =
-        ctx.block()
-            .call(DOUBLE, "js_number_mod", &[(DOUBLE, left), (DOUBLE, right)]);
-    let fallback_end = ctx.block().label.clone();
-    ctx.block().br(&merge_label);
-
-    ctx.current_block = merge_idx;
-    ctx.block().phi(
+    ctx.block().call_gc_leaf(
         DOUBLE,
-        &[
-            (&integer_value, &integer_end),
-            (&fallback_value, &fallback_end),
-        ],
+        crate::codegen::numeric_remainder::CHECKED_NUMBER_REMAINDER,
+        &[(DOUBLE, left), (DOUBLE, right)],
     )
 }
 

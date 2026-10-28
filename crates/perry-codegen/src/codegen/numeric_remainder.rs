@@ -1,4 +1,4 @@
-//! Checked raw-Number remainder for typed entries.
+//! Checked raw-Number remainder for ordinary arithmetic and typed entries.
 //!
 //! Keep the integer proof in the caller's LLVM unit: after inlining,
 //! constants and guarded scalar lanes can discharge its roundtrip tests.
@@ -85,5 +85,30 @@ pub(crate) fn define_checked_number_remainder_if_used(module: &mut LlModule) {
             &[(DOUBLE, "%left"), (DOUBLE, "%right")],
         );
         blk.ret(DOUBLE, &result);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use perry_hir::{BinaryOp, Expr, Stmt};
+
+    #[test]
+    fn ordinary_remainder_uses_the_shared_checked_number_operation() {
+        let ir = crate::temp_root_coverage::main_ir_for(
+            "ordinary_checked_remainder",
+            vec![Stmt::Expr(Expr::Binary {
+                op: BinaryOp::Mod,
+                left: Box::new(Expr::Number(5.5)),
+                right: Box::new(Expr::Number(2.0)),
+            })],
+        );
+        assert!(
+            ir.contains("call double @perry_checked_number_remainder("),
+            "ordinary arithmetic must reach the shared checked operation: {ir}"
+        );
+        assert!(
+            !ir.contains("mod.i32.convert") && !ir.contains("fptosi double"),
+            "the ordinary caller must not retain its separate conversion path: {ir}"
+        );
     }
 }
