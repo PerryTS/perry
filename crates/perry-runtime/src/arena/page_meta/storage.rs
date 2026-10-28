@@ -90,7 +90,7 @@ impl<T: Default, const N: usize> PageMap<T, N> {
         let mut page = first;
         loop {
             let key = page / N;
-            let end = last.min(key * N + N - 1);
+            let end = last.min(key * N + (N - 1));
             let slot = page % N;
             let width_minus_one = end - page;
             let mask = (u64::MAX >> (63 - width_minus_one)) << slot;

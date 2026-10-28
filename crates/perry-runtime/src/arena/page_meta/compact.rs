@@ -138,6 +138,9 @@ impl PageObjects {
     }
 
     pub(super) fn contains_prefix(&self, page: usize, header: usize, len: usize) -> bool {
+        if len == 0 {
+            return false;
+        }
         let base = generation_page_base(page);
         let offset = if header < base {
             if header != self.entering_header {
