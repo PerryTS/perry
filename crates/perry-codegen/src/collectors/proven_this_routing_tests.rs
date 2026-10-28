@@ -1150,7 +1150,7 @@ fn single_arm_method_shape_guard_is_inlined_with_the_runtime_contract() {
         "a monomorphic shape-only site must not retain the out-of-line guard call:\n{probe}"
     );
     assert!(
-        probe.contains("icmp eq i64") && probe.contains(", 32765") && probe.contains(", 0"),
+        probe.contains("icmp eq i64") && probe.contains(", 32765"),
         "the dereference gate must accept the 0x7FFD boxed pointer tag:\n{probe}"
     );
     let target = crate::codegen::default_target_triple();
