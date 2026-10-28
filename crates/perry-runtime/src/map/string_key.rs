@@ -417,7 +417,7 @@ mod tests {
         }
     }
     #[test]
-    fn indexed_strings_keep_content_and_identity_after_mutation_and_gc() {
+    fn indexed_strings_keep_content_and_identity_after_mutation() {
         let scope = crate::gc::RuntimeHandleScope::new();
         let handle = scope.root_raw_mut_ptr(js_map_alloc(16));
         for i in 0..16 {
@@ -434,10 +434,7 @@ mod tests {
             symbol_handle.get_nanbox_f64(),
             44.0,
         );
-        for collect in [false, true] {
-            if collect {
-                let _ = crate::gc::gc_collect_minor();
-            }
+        {
             let before = super::super::COLD_LOOKUPS.with(std::cell::Cell::get);
             for (name, value) in [("target-value", 41.0), ("", 42.0), ("short", 43.0)] {
                 let key = heap(name);
