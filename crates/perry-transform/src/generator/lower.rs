@@ -274,7 +274,7 @@ pub fn transform_generator_function(
     func: &mut Function,
     next_local_id: &mut u32,
     next_func_id: &mut u32,
-) {
+) -> (Vec<LocalId>, Vec<LocalId>) {
     transform_generator_function_with_extra_captures(
         func,
         next_local_id,
@@ -284,7 +284,7 @@ pub fn transform_generator_function(
         false,
         false,
         None,
-    );
+    )
 }
 
 /// Issue #1021: variant that augments the internally-generated
@@ -307,7 +307,7 @@ pub fn transform_generator_function_with_extra_captures(
     captures_this: bool,
     captures_new_target: bool,
     enclosing_class: Option<String>,
-) {
+) -> (Vec<LocalId>, Vec<LocalId>) {
     // Generator bodies run later inside synthesized step closures, so direct
     // `this` reads need the receiver from the original generator call.
     let captures_this = captures_this || generator_body_uses_call_this(&func.body);
@@ -1662,4 +1662,11 @@ pub fn transform_generator_function_with_extra_captures(
     }
     func.body = new_body;
     func.is_generator = false;
+    // Carry exact transform-created control identities, independently of
+    // source names and annotations, into any admitted private async owner.
+    let mut numbers = vec![state_id];
+    if has_yielding_finally {
+        numbers.push(pending_type_id);
+    }
+    (numbers, vec![done_id, executing_id])
 }

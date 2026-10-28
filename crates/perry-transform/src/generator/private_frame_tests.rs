@@ -262,3 +262,121 @@ fn private_frame_logging_requires_primitive_writes_not_a_number_annotation() {
         );
     }
 }
+
+fn nested_argument_fixture(escapes: bool) -> Module {
+    let mut m = fixture(Type::Any);
+    let mut consumer = m.functions[0].clone();
+    consumer.id = 1;
+    consumer.name = "consumer".into();
+    consumer.params = vec![perry_hir::Param {
+        id: 30,
+        name: "input".into(),
+        ty: Type::Any,
+        is_rest: false,
+        default: None,
+        decorators: vec![],
+        arguments_object: None,
+    }];
+    consumer.body = if escapes {
+        vec![Stmt::Expr(Expr::Yield {
+            value: Some(Box::new(Expr::LocalGet(30))),
+            delegate: false,
+        })]
+    } else {
+        vec![
+            Stmt::Expr(runtime(
+                "iteratorStep",
+                vec![
+                    Expr::LocalGet(30),
+                    Expr::Undefined,
+                    Expr::LocalSet(31, Box::new(runtime("iteratorStepOutput", vec![]))),
+                ],
+            )),
+            Stmt::Expr(Expr::Yield {
+                value: Some(Box::new(Expr::Number(8.0))),
+                delegate: false,
+            }),
+        ]
+    };
+    m.functions.push(consumer);
+    let Stmt::Let {
+        init: Some(Expr::Call { callee, args, .. }),
+        ..
+    } = &mut m.init[0]
+    else {
+        unreachable!()
+    };
+    *callee = Box::new(Expr::FuncRef(1));
+    *args = vec![Expr::Call {
+        callee: Box::new(Expr::FuncRef(0)),
+        args: vec![],
+        type_args: vec![],
+        byte_offset: 0,
+    }];
+    m
+}
+#[test]
+fn nested_constructor_transfers_only_protocol_owned_child() {
+    for (escapes, count) in [(false, 2), (true, 1)] {
+        let mut m = nested_argument_fixture(escapes);
+        super::super::transform_generators(&mut m);
+        let mut frames = 0;
+        visit_stmts(&m.init, &mut |e| {
+            if matches!(e,Expr::NativeMethodCall {module,method,..} if module=="__perry_runtime" && method=="privateResumeFrame")
+            {
+                frames += 1;
+            }
+        });
+        assert_eq!(
+            frames, count,
+            "nested child ownership or escape proof was lost"
+        );
+    }
+}
+
+#[test]
+fn cloned_control_descriptors_belong_to_the_fresh_resume_scope() {
+    let mut m = fixture(Type::Any);
+    super::super::transform_generators(&mut m);
+    let mut checked = 0;
+    visit_stmts(&m.init, &mut |e| {
+        if let Expr::NativeMethodCall {
+            module,
+            method,
+            args,
+            ..
+        } = e
+        {
+            if module == "__perry_runtime" && method == "privateResumeFrame" {
+                if let Some(Expr::LinkGeneratorPrototype {
+                    obj,
+                    i32_controls,
+                    i1_controls,
+                    ..
+                }) = args.first()
+                {
+                    if let Expr::Closure {
+                        captures, params, ..
+                    } = obj.as_ref()
+                    {
+                        let slots: HashSet<_> = captures
+                            .iter()
+                            .copied()
+                            .chain(params.iter().map(|p| p.id))
+                            .collect();
+                        assert!(!i32_controls.is_empty() && !i1_controls.is_empty());
+                        assert!(
+                            i32_controls
+                                .iter()
+                                .chain(i1_controls)
+                                .all(|id| slots.contains(id)),
+                            "control metadata escaped its cloned scope"
+                        );
+                        checked += 1;
+                    }
+                }
+            }
+        }
+    });
+    assert_eq!(checked, 1);
+}

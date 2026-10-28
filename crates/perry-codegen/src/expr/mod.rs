@@ -845,6 +845,7 @@ pub(crate) struct FnCtx<'a> {
     pub fixed_generator_state: bool,
     /// The owner stays rooted; only capture addressing adds the frame offset.
     pub private_resume_frame: bool,
+    pub private_async_resume_frame: bool,
     /// Stack context supplied only to a compiler-private versioned-loop
     /// callback clone. Its cold arms record the exact resume index and poison
     /// the caller's private counter before executing observable fallback code.
@@ -3321,10 +3322,10 @@ pub(crate) mod class_field_inline_guard;
 pub(crate) mod element_shape_guard;
 pub(crate) mod element_shape_reads;
 mod generator_control_slots;
-pub(crate) mod private_resume_frame;
 pub(crate) mod ic_fast_split;
 mod js_runtime;
 mod literals_vars;
+pub(crate) mod private_resume_frame;
 pub(crate) use literals_vars::{bind_lowered_value_to_local, note_born_local_write};
 mod logical_collections;
 mod math_simple;

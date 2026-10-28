@@ -6,25 +6,31 @@
 use super::*;
 use crate::types::{DOUBLE, I32, I64, PTR};
 
+// Each private entry is emitted only for this fixed birth layout. Its sealed
+// callers supply offset one; the callable async adapter supplies the same
+// allocation owner. Specialize address arithmetic to that construction fact,
+// while retaining the explicit owner/offset ABI and relocation rereads.
+const FRAME_WORD_OFFSET: u32 = 1;
+
 pub(super) fn slot_index(ctx: &mut FnCtx<'_>, index: u32) -> String {
-    if ctx.private_resume_frame {
-        ctx.block().add(I32, "%frame_offset", &index.to_string())
-    } else {
-        index.to_string()
-    }
+    (index
+        + if ctx.private_resume_frame {
+            FRAME_WORD_OFFSET
+        } else {
+            0
+        })
+    .to_string()
 }
 pub(super) fn slot_offset(ctx: &mut FnCtx<'_>, index: &str) -> String {
     let header = crate::target_layout::closure_header_size_bytes(ctx.target_triple);
-    if ctx.private_resume_frame {
-        let index = ctx.block().zext(I32, index, I64);
-        let bytes = ctx.block().mul(I64, &index, "8");
-        ctx.block().add(I64, &bytes, &header.to_string())
-    } else {
-        (header + index.parse::<u64>().expect("constant capture") * 8).to_string()
-    }
+    (header + index.parse::<u64>().expect("constant frame capture") * 8).to_string()
 }
 pub(crate) fn write_out_kind(ctx: &mut FnCtx<'_>) -> Result<()> {
     if !ctx.private_resume_frame {
+        return Ok(());
+    }
+    if ctx.private_async_resume_frame {
+        ctx.block().store(I32, "0", "%frame_out_kind");
         return Ok(());
     }
     let owner = current_closure_ptr_value(ctx, "private resume output")?;
@@ -87,14 +93,16 @@ fn birth(ctx: &mut FnCtx<'_>, link: &Expr) -> Result<String> {
         super::closure::push_capture_word(ctx, *id, &mut birth)?;
     }
     let words = birth.read(ctx);
-    let count = words.len() + 1;
+    let count = words.len() + FRAME_WORD_OFFSET as usize;
     let buffer = ctx.func.alloca_entry_array(I64, count);
     let prefix = ctx.block().gep(I64, &buffer, &[(I64, "0")]);
     ctx.block().store(I64, "0", &prefix);
     for (i, word) in words.iter().enumerate() {
-        let ptr = ctx
-            .block()
-            .gep(I64, &buffer, &[(I64, &(i + 1).to_string())]);
+        let ptr = ctx.block().gep(
+            I64,
+            &buffer,
+            &[(I64, &(i + FRAME_WORD_OFFSET as usize).to_string())],
+        );
         ctx.block().store(I64, word, &ptr);
     }
     let header = (u64::from(crate::runtime_abi::FUNCTION_LAYOUT_WORD) << 32)
@@ -126,7 +134,7 @@ fn resume(
         &name,
         &[
             (I64, &owner),
-            (I32, "1"),
+            (I32, &FRAME_WORD_OFFSET.to_string()),
             (I32, op),
             (DOUBLE, sent),
             (PTR, &out),
@@ -136,6 +144,9 @@ fn resume(
     Ok((result, kind))
 }
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, method: &str, args: &[Expr]) -> Result<Option<String>> {
+    if method == "privateAsyncResumeFrame" {
+        return Ok(Some(async_birth(ctx, &args[0])?));
+    }
     if method == "privateResumeFrame" {
         return Ok(Some(birth(ctx, &args[0])?));
     }
@@ -236,6 +247,21 @@ pub(crate) fn record_entries(
             ..
         } = e
         {
+            if module == "__perry_runtime" && method == "privateAsyncResumeFrame" {
+                if let Some(Expr::Closure { func_id, .. }) = args.first() {
+                    for name in [
+                        crate::fn_info::closure_body_symbol(prefix, *func_id),
+                        symbol(prefix, *func_id),
+                    ] {
+                        llmod.note_fn_info(&name, |facts| {
+                            facts.fixed_generator_state = true;
+                            facts.private_resume_frame = true;
+                            facts.private_async_resume_frame = true;
+                            facts.set_strict();
+                        });
+                    }
+                }
+            }
             if module == "__perry_runtime" && method == "privateResumeFrame" {
                 if let Some(Expr::LinkGeneratorPrototype { obj, .. }) = args.first() {
                     if let Expr::Closure { func_id, .. } = obj.as_ref() {
@@ -292,6 +318,7 @@ pub(crate) fn is_entry(llmod: &crate::module::LlModule, prefix: &str, fid: u32) 
 pub(crate) fn abi_params(
     params: &[perry_hir::Param],
     private: bool,
+    asynchronous: bool,
 ) -> Vec<(crate::types::LlvmType, String)> {
     if !private {
         return super::body_call::js_body_params(params.iter().map(|p| format!("%arg{}", p.id)));
@@ -301,7 +328,176 @@ pub(crate) fn abi_params(
         (I64, "%this_closure".into()),
         (I32, "%frame_offset".into()),
         (I32, "%frame_op".into()),
-        (DOUBLE, format!("%arg{}", params[1].id)),
+        (
+            DOUBLE,
+            format!("%arg{}", params[usize::from(!asynchronous)].id),
+        ),
         (PTR, "%frame_out_kind".into()),
     ]
+}
+
+pub(crate) fn is_async_entry(llmod: &crate::module::LlModule, prefix: &str, fid: u32) -> bool {
+    let mut asynchronous = false;
+    llmod.note_fn_info(&crate::fn_info::closure_body_symbol(prefix, fid), |facts| {
+        asynchronous = facts.private_async_resume_frame;
+    });
+    asynchronous
+}
+
+fn async_birth(ctx: &mut FnCtx<'_>, closure: &Expr) -> Result<String> {
+    let Expr::Closure {
+        func_id,
+        params,
+        body,
+        captures,
+        mutable_captures,
+        captures_this: false,
+        captures_new_target: false,
+        enclosing_class: None,
+        ..
+    } = closure
+    else {
+        anyhow::bail!("private async frame needs a closed step owner");
+    };
+    let captures = crate::type_analysis::compute_auto_captures(ctx, params, body, captures);
+    anyhow::ensure!(
+        mutable_captures.is_empty() && captures.iter().all(|id| !ctx.boxed_vars.contains(id)),
+        "private async frame retained a shared cell"
+    );
+    let adapter = crate::fn_info::closure_body_symbol(ctx.strings.module_prefix(), *func_id);
+    let info = ctx.block().fn_info_ref(&adapter);
+    let mut birth = crate::stmt::binding_cell::BirthWords::new(ctx, &captures);
+    for id in &captures {
+        super::closure::push_capture_word(ctx, *id, &mut birth)?;
+    }
+    let words = birth.read(ctx);
+    let count = words.len() + FRAME_WORD_OFFSET as usize;
+    let buffer = ctx.func.alloca_entry_array(I64, count);
+    let zero = ctx.block().gep(I64, &buffer, &[(I64, "0")]);
+    ctx.block().store(I64, "0", &zero);
+    for (i, word) in words.iter().enumerate() {
+        let p = ctx.block().gep(
+            I64,
+            &buffer,
+            &[(I64, &(i + FRAME_WORD_OFFSET as usize).to_string())],
+        );
+        ctx.block().store(I64, word, &p);
+    }
+    let header = (u64::from(crate::runtime_abi::FUNCTION_LAYOUT_WORD) << 32)
+        | u64::from(crate::runtime_abi::checked_closure_capture_count(count));
+    let owner = ctx.block().call(
+        I64,
+        "js_closure_alloc_fixed",
+        &[(PTR, &info), (I64, &header.to_string()), (PTR, &buffer)],
+    );
+    birth.release(ctx);
+    Ok(super::nanbox_pointer_inline(ctx.block(), &owner))
+}
+
+/// The existing scheduler calls this ordinary two-argument step closure. It
+/// carries the allocation owner into the private child entry at offset one.
+/// The queued pointer, reaction capture and TLS self all name the parent;
+/// no interior pointer or native-stack lifetime crosses a suspension.
+pub(crate) fn async_adapter(llmod: &mut crate::module::LlModule, prefix: &str, fid: u32) {
+    let name = crate::fn_info::closure_body_symbol(prefix, fid);
+    let frame = symbol(prefix, fid);
+    let params = super::body_call::js_body_params(["%sent", "%error"]);
+    let function = llmod.define_function(&name, DOUBLE, params);
+    function.create_block("entry");
+    let out = function.alloca_entry(I32);
+    let block = function.block_mut(0).unwrap();
+    let bits = block.bitcast_double_to_i64("%error");
+    let yes = block.icmp_eq(I64, &bits, crate::nanbox::TAG_TRUE_I64);
+    let operation = block.zext(crate::types::I1, &yes, I32);
+    let value = block.call(
+        DOUBLE,
+        &frame,
+        &[
+            (I64, "%this_closure"),
+            (I32, &FRAME_WORD_OFFSET.to_string()),
+            (I32, &operation),
+            (DOUBLE, "%sent"),
+            (PTR, &out),
+        ],
+    );
+    block.ret(DOUBLE, &value);
+}
+
+/// The private descriptor proves the exact owner and inline slot index. The
+/// existing barrier emitter tests the stored value and current generation;
+/// every managed edge still reaches the same exact-slot runtime barrier.
+pub(super) fn store_slot(
+    ctx: &mut FnCtx<'_>,
+    index: u32,
+    value: &str,
+    pointer_free: bool,
+    string_alias: bool,
+) -> Result<()> {
+    if string_alias && !pointer_free {
+        super::helpers::emit_string_addref_if_heap_string(ctx, value);
+    }
+    let owner = current_closure_ptr_value(ctx, "private frame slot store")?;
+    let index = slot_index(ctx, index);
+    let offset = slot_offset(ctx, &index);
+    let address = ctx.block().add(I64, &owner, &offset);
+    let pointer = ctx.block().inttoptr(I64, &address);
+    let bits = ctx.block().bitcast_double_to_i64(value);
+    // GC_STORE_AUDIT(BARRIERED): the parent scanner owns every child word.
+    ctx.block().store(I64, &bits, &pointer);
+    if !pointer_free {
+        super::write_barrier::emit_write_barrier_slot_value_and_generation_tested(
+            ctx,
+            &owner,
+            &owner,
+            &address,
+            &bits,
+            "frame_slot",
+        );
+    }
+    Ok(())
+}
+
+/// Translate the private operation to the original step parameter without
+/// changing the ordinary closure ABI or the sent JSValue representation.
+pub(crate) fn parameter_value(
+    block: &mut crate::block::LlBlock,
+    params: &[perry_hir::Param],
+    id: u32,
+    private: bool,
+    asynchronous: bool,
+) -> String {
+    if asynchronous && id == params[1].id {
+        let error = block.icmp_ne(I32, "%frame_op", "0");
+        let bits = block.select(
+            crate::types::I1,
+            &error,
+            I64,
+            crate::nanbox::TAG_TRUE_I64,
+            crate::nanbox::TAG_FALSE_I64,
+        );
+        block.bitcast_i64_to_double(&bits)
+    } else if private && !asynchronous && params.len() == 2 && id == params[0].id {
+        block.sitofp(I32, "%frame_op", DOUBLE)
+    } else {
+        format!("%arg{id}")
+    }
+}
+
+/// These are transform-created LocalIds carried by the private descriptor,
+/// not a scan of source variable names or TypeScript annotations. LocalGet
+/// nodes let the normal HIR remapper keep descriptors tied to fresh scopes.
+pub(crate) fn collect_async_controls(
+    args: &[Expr],
+    numbers: &mut std::collections::HashSet<u32>,
+    booleans: &mut std::collections::HashSet<u32>,
+) {
+    for (index, out) in [(1, numbers), (2, booleans)] {
+        if let Some(Expr::Sequence(ids)) = args.get(index) {
+            for id in ids {
+                if let Expr::LocalGet(id) = id {
+                    out.insert(*id);
+                }
+            }
+        }
+    }
 }

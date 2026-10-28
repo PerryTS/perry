@@ -24,7 +24,7 @@ fn visit_expr(expr: &Expr, f: &mut impl FnMut(&Expr)) {
     }
     perry_hir::walker::walk_expr_children(expr, &mut |e| visit_expr(e, f));
 }
-fn visit_stmts(stmts: &[Stmt], f: &mut impl FnMut(&Expr)) {
+pub(super) fn visit_stmts(stmts: &[Stmt], f: &mut impl FnMut(&Expr)) {
     for stmt in stmts {
         perry_hir::walker::stmt_any_expr(stmt, &mut |expr| {
             visit_expr(expr, f);
@@ -139,6 +139,32 @@ fn closed_effects(module: &Module) -> bool {
     for f in &module.functions {
         visit_stmts(&f.body, &mut writes);
     }
+    let mut self_steps = HashSet::new();
+    fn self_ids(stmts: &mut [Stmt], out: &mut HashSet<u32>) {
+        for s in stmts {
+            if let Stmt::Let {
+                id,
+                init: Some(Expr::CurrentStepClosure),
+                ..
+            } = s
+            {
+                out.insert(*id);
+            }
+            for b in crate::closure_local_inline::nested_stmt_lists(s) {
+                self_ids(b, out);
+            }
+            crate::closure_local_inline::for_each_expr_in_stmt_mut(s, &mut |e| {
+                if let Expr::Closure { body, .. } = e {
+                    self_ids(body, out);
+                }
+            });
+        }
+    }
+    self_ids(&mut module.init.clone(), &mut self_steps);
+    for f in &module.functions {
+        self_ids(&mut f.body.clone(), &mut self_steps);
+    }
+    let primitives = primitive_globals(module);
     let mut safe = true;
     let mut check = |e: &Expr| {
         let allowed = match e {
@@ -159,6 +185,14 @@ fn closed_effects(module: &Module) -> bool {
             | Expr::Sequence(_)
             | Expr::FuncRef(_)
             | Expr::GetIterator(_)
+            | Expr::CurrentStepClosure
+            | Expr::AsyncFirstCall { .. }
+            | Expr::AsyncStepChain { .. }
+            | Expr::AsyncStepDone { .. }
+            | Expr::IterResultSet(..)
+            | Expr::IterResultGetValue
+            | Expr::IterResultGetDone
+            | Expr::GlobalGet(0)
             | Expr::LinkGeneratorPrototype {
                 fixed_state: true,
                 is_async: false,
@@ -174,9 +208,24 @@ fn closed_effects(module: &Module) -> bool {
             } => true,
             Expr::IndexGet { index, .. } => matches!(index.as_ref(), Expr::NativeMethodCall {
                 module,class_name:None,object:None,method,.. } if module=="__perry_runtime" && method=="arrayRecordIndex"),
-            Expr::Call { callee, .. } => match callee.as_ref() {
+            Expr::PropertyGet {
+                object, property, ..
+            } => {
+                matches!(object.as_ref(), Expr::GlobalGet(0))
+                    && matches!(property.as_str(), "log" | "reject")
+            }
+            Expr::Call { callee, args, .. } => match callee.as_ref() {
                 Expr::FuncRef(fid) => functions.contains_key(fid),
-                Expr::LocalGet(id) => targets.contains(id) && !unknown.contains(id),
+                Expr::LocalGet(id) => {
+                    (targets.contains(id) && !unknown.contains(id)) || self_steps.contains(id)
+                }
+                Expr::PropertyGet {
+                    object, property, ..
+                } if matches!(object.as_ref(), Expr::GlobalGet(0)) => {
+                    property == "reject"
+                        || (property == "log"
+                            && args.iter().all(|a| primitive_output(a, &primitives)))
+                }
                 _ => false,
             },
             Expr::NativeMethodCall {
@@ -187,7 +236,12 @@ fn closed_effects(module: &Module) -> bool {
                 ..
             } if module == "__perry_runtime" => matches!(
                 method.as_str(),
-                "iteratorNextMethod"
+                "privateResumeFrame"
+                    | "privateResumeFrameStep"
+                    | "privateResumeFrameClose"
+                    | "privateResumeFrameCloseOnThrow"
+                    | "privateAsyncResumeFrame"
+                    | "iteratorNextMethod"
                     | "iteratorStep"
                     | "iteratorStepOutput"
                     | "iteratorCloseIfNotDone"
@@ -239,11 +293,21 @@ fn closed_effects(module: &Module) -> bool {
 /// Every reference must be the receiver of a compiler-owned protocol op.
 /// Explicitly reject captures (including closures whose bodies do not read
 /// the capture) and writes. A type annotation cannot relax this check.
-fn protocol_only(stmts: &[Stmt], id: LocalId) -> bool {
+pub(super) fn protocol_only(stmts: &[Stmt], id: LocalId) -> bool {
     fn expr(e: &Expr, id: LocalId) -> bool {
         match e {
             Expr::LocalGet(other) => *other != id,
             Expr::LocalSet(other, _) | Expr::Update { id: other, .. } if *other == id => false,
+            Expr::NativeMethodCall {
+                module,
+                method,
+                args,
+                ..
+            } if module == "__perry_runtime" && method == "privateResumeFrame" => {
+                matches!(args.first(), Some(Expr::LinkGeneratorPrototype {obj, fixed_state:true, is_async:false, ..})
+                    if matches!(obj.as_ref(), Expr::Closure {body, mutable_captures, ..}
+                        if mutable_captures.is_empty() && protocol_only(&super::private_frame_records::normalize(body,id), id)))
+            }
             Expr::Closure {
                 captures,
                 mutable_captures,
@@ -312,7 +376,7 @@ pub(super) fn run(module: &mut Module) {
             mutable_captures,
             ..
         } => {
-            for id in captures.iter().chain(mutable_captures) {
+            for id in captures.iter().chain(mutable_captures.iter()) {
                 *uses.entry(*id).or_default() += 1;
             }
         }
@@ -335,9 +399,9 @@ pub(super) fn run(module: &mut Module) {
         &mut next_local,
         &mut next_func,
     );
-    // This slice's owner is the local consumer scope. Suspended parents and
-    // async promises remain standalone until their ownership transfers have
-    // an equally closed proof; no creator-native-stack lifetime inference.
+    for f in &mut module.functions {
+        lower_owned_resume(f, &templates, &uses, &mut next_local, &mut next_func);
+    }
 }
 
 fn lower_list(
@@ -348,39 +412,24 @@ fn lower_list(
     next_func: &mut u32,
 ) {
     for stmt in stmts.iter_mut() {
-        match stmt {
-            Stmt::If {
-                then_branch,
-                else_branch,
-                ..
-            } => {
-                lower_list(then_branch, templates, uses, next_local, next_func);
-                if let Some(b) = else_branch {
-                    lower_list(b, templates, uses, next_local, next_func);
-                }
-            }
-            Stmt::For { body, .. } | Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-                lower_list(body, templates, uses, next_local, next_func)
-            }
-            Stmt::Try {
-                body,
-                catch,
-                finally,
-            } => {
-                lower_list(body, templates, uses, next_local, next_func);
-                if let Some(c) = catch {
-                    lower_list(&mut c.body, templates, uses, next_local, next_func);
-                }
-                if let Some(b) = finally {
-                    lower_list(b, templates, uses, next_local, next_func);
-                }
-            }
-            _ => {}
+        for body in crate::closure_local_inline::nested_stmt_lists(stmt) {
+            lower_list(body, templates, uses, next_local, next_func);
         }
     }
     let mut at = 0;
     while at < stmts.len() {
-        let candidate = match &stmts[at] {
+        let assigned = matches!(&stmts[at], Stmt::Expr(Expr::LocalSet(_, _)));
+        let normalized = match &stmts[at] {
+            Stmt::Expr(Expr::LocalSet(id, value)) => Stmt::Let {
+                id: *id,
+                name: "__owned_child".into(),
+                ty: Type::Any,
+                mutable: true,
+                init: Some(value.as_ref().clone()),
+            },
+            s => s.clone(),
+        };
+        let candidate = match &normalized {
             Stmt::Let {
                 id,
                 init: Some(Expr::Call { callee, args, .. }),
@@ -418,7 +467,12 @@ fn lower_list(
             }
             _ => {}
         });
-        if scoped_uses != uses.get(&id).copied().unwrap_or(0)
+        if scoped_uses
+            != uses
+                .get(&id)
+                .copied()
+                .unwrap_or(0)
+                .saturating_sub(usize::from(assigned))
             || !protocol_only(&stmts[at + 1..], id)
         {
             at += 1;
@@ -637,7 +691,7 @@ fn lower_list(
         let catch_id = *next_local;
         *next_local += 1;
         *body = super::lower::wrap_generator_resume_body(prefix, executing, done, catch_id, false);
-        // Remap the explicit control metadata as well as ordinary HIR uses.
+        // The HIR remapper above also updates the explicit control identities.
         let _ = (i32_controls, i1_controls);
         let mut replacement = Vec::new();
         for (p, arg) in f.params.iter().zip(args) {
@@ -660,14 +714,25 @@ fn lower_list(
         if let Stmt::Let { init, .. } = &mut declaration {
             *init = Some(Expr::Undefined);
         }
-        replacement = vec![
-            declaration,
-            Stmt::If {
-                condition: Expr::Bool(true),
-                then_branch: replacement,
-                else_branch: None,
-            },
-        ];
+        replacement = vec![Stmt::If {
+            condition: Expr::Bool(true),
+            then_branch: replacement,
+            else_branch: None,
+        }];
+        if !assigned {
+            replacement.insert(0, declaration);
+        }
+        // Fresh cloned argument bindings cannot be referenced outside this
+        // constructor. A private outer frame may retain the child's owner;
+        // its traced capture is the only additional allowed use.
+        let fresh_uses = reference_counts(&replacement);
+        lower_list(
+            &mut replacement,
+            templates,
+            &fresh_uses,
+            next_local,
+            next_func,
+        );
         rewrite_uses(&mut stmts[at + 1..], id, resume_id);
         let count = replacement.len();
         stmts.splice(at..=at, replacement);
@@ -721,6 +786,22 @@ fn rewrite_uses(stmts: &mut [Stmt], id: LocalId, fid: FuncId) {
                 }
             }
         }
+        if let Expr::NativeMethodCall {
+            module,
+            method,
+            args,
+            ..
+        } = e
+        {
+            if module == "__perry_runtime" && method == "privateResumeFrame" {
+                if let Some(Expr::LinkGeneratorPrototype { obj, .. }) = args.first_mut() {
+                    if let Expr::Closure { body, .. } = obj.as_mut() {
+                        *body = super::private_frame_records::normalize(body, id);
+                        rewrite_uses(body, id, fid);
+                    }
+                }
+            }
+        }
         perry_hir::walker::walk_expr_children_mut(e, &mut |e| expr(e, id, fid));
     }
     for s in stmts {
@@ -734,3 +815,103 @@ fn rewrite_uses(stmts: &mut [Stmt], id: LocalId, fid: FuncId) {
 #[cfg(test)]
 #[path = "private_frame_tests.rs"]
 mod tests;
+
+pub(super) fn reference_counts(stmts: &[Stmt]) -> HashMap<u32, usize> {
+    let mut uses = HashMap::new();
+    visit_stmts(stmts, &mut |e| match e {
+        Expr::LocalGet(id) | Expr::LocalSet(id, _) | Expr::Update { id, .. } => {
+            *uses.entry(*id).or_default() += 1;
+        }
+        Expr::Closure {
+            captures,
+            mutable_captures,
+            ..
+        } => {
+            for id in captures.iter().chain(mutable_captures.iter()) {
+                *uses.entry(*id).or_default() += 1;
+            }
+        }
+        _ => {}
+    });
+    uses
+}
+
+/// A canonical resume/step closure is a traced owner over its entire suspended
+/// lifetime. Remove exactly its own capture declaration from the reference
+/// census, while retaining every other capture, alias and external use.
+fn lower_owned_resume(
+    f: &mut Function,
+    templates: &HashMap<FuncId, Function>,
+    uses: &HashMap<u32, usize>,
+    next_local: &mut u32,
+    next_func: &mut u32,
+) {
+    fn body(
+        closure: &mut Expr,
+        templates: &HashMap<FuncId, Function>,
+        uses: &HashMap<u32, usize>,
+        next_local: &mut u32,
+        next_func: &mut u32,
+    ) {
+        if let Expr::Closure {
+            body,
+            captures,
+            mutable_captures,
+            ..
+        } = closure
+        {
+            let mut owned = uses.clone();
+            for id in captures.iter().chain(mutable_captures.iter()) {
+                if let Some(count) = owned.get_mut(id) {
+                    *count = count.saturating_sub(1);
+                }
+            }
+            lower_list(body, templates, &owned, next_local, next_func);
+        }
+    }
+    if f.was_plain_async {
+        let step = match f.body.last() {
+            Some(Stmt::Return(Some(Expr::AsyncFirstCall { step_closure }))) => {
+                match step_closure.as_ref() {
+                    Expr::LocalGet(id) => Some(*id),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        for s in &mut f.body {
+            if let Stmt::Let {
+                id,
+                init: Some(value),
+                ..
+            } = s
+            {
+                if Some(*id) == step {
+                    if let Expr::NativeMethodCall {
+                        module,
+                        method,
+                        args,
+                        ..
+                    } = value
+                    {
+                        if module == "__perry_runtime" && method == "privateAsyncResumeFrame" {
+                            if let Some(closure) = args.first_mut() {
+                                body(closure, templates, uses, next_local, next_func);
+                            }
+                        }
+                    } else {
+                        body(value, templates, uses, next_local, next_func);
+                    }
+                }
+            }
+        }
+    } else if let Some(Stmt::Return(Some(Expr::LinkGeneratorPrototype {
+        obj,
+        fixed_state: true,
+        is_async: false,
+        ..
+    }))) = f.body.last_mut()
+    {
+        body(obj, templates, uses, next_local, next_func);
+    }
+}

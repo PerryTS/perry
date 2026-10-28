@@ -11,6 +11,7 @@
 use perry_hir::ir::*;
 use perry_hir::types::{FuncId, LocalId, Type};
 
+mod async_frame;
 mod box_release;
 mod break_continue;
 mod helpers;
@@ -19,8 +20,9 @@ mod id_scan;
 mod iter_result_rewrite;
 mod linearize;
 mod lower;
-mod private_frame;
 mod per_iteration;
+mod private_frame;
+mod private_frame_records;
 mod rewrite_returns;
 
 // Explicit named re-exports so siblings can reach each other via
@@ -120,6 +122,8 @@ pub fn transform_generators(module: &mut Module) {
         }
     });
 
+    let private_async = async_frame::admission(module);
+
     // Compute the next available local and func IDs by scanning the module
     let mut next_local_id = compute_max_local_id(module) + 1;
     let mut next_func_id = compute_max_func_id(module) + 1;
@@ -131,7 +135,11 @@ pub fn transform_generators(module: &mut Module) {
             if func.is_async {
                 record_async_generator_func(func.id);
             }
-            transform_generator_function(func, &mut next_local_id, &mut next_func_id);
+            let controls =
+                transform_generator_function(func, &mut next_local_id, &mut next_func_id);
+            if private_async.contains(&func.id) {
+                async_frame::lower(func, controls);
+            }
         }
     }
 
