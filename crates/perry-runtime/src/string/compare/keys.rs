@@ -69,7 +69,7 @@ pub(crate) unsafe fn js_string_key_matches_bytes(
         }
         let stored_data = (stored_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
         let stored_slice = std::slice::from_raw_parts(stored_data, stored_len);
-        return stored_slice == incoming_bytes;
+        return key_bytes_equal(stored_slice, incoming_bytes);
     }
     if stored.is_short_string() {
         let sso_len = stored.short_string_len();
@@ -88,7 +88,10 @@ pub(crate) unsafe fn js_string_key_matches_bytes(
 #[inline]
 fn short_key_matches_bytes(stored: crate::JSValue, incoming: &[u8]) -> bool {
     let word = stored.bits().to_le_bytes();
-    &word[..crate::value::SHORT_STRING_MAX_LEN][..incoming.len()] == incoming
+    key_bytes_equal(
+        &word[..crate::value::SHORT_STRING_MAX_LEN][..incoming.len()],
+        incoming,
+    )
 }
 
 /// Extract the bytes of a stored-key JSValue (STRING_TAG or SHORT_STRING_TAG)
