@@ -195,9 +195,13 @@ fn private_frame_terminal_logging_cannot_hide_observable_getters() {
             property: "log".into(),
             byte_offset: 0,
         }),
-        args: vec![Expr::IndexGet {
-            object: Box::new(Expr::FuncRef(0)),
-            index: Box::new(Expr::String("caller".into())),
+        args: vec![Expr::Binary {
+            op: BinaryOp::Add,
+            left: Box::new(Expr::String("caller ".into())),
+            right: Box::new(Expr::IndexGet {
+                object: Box::new(Expr::FuncRef(0)),
+                index: Box::new(Expr::String("caller".into())),
+            }),
         }],
         type_args: vec![],
         byte_offset: 0,
