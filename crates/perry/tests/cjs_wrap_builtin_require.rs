@@ -284,3 +284,101 @@ console.log(typeof promises.readFile);
     );
     assert_eq!(stdout, "function\n");
 }
+
+/// The same sources emitted by tsc as CommonJS and ES2022 must select the
+/// same optional installers. This catches collection-time feature leakage,
+/// which merely checking the final loader call sites would miss.
+#[test]
+fn cjs_wrap_closed_samples_select_their_esm_installers() {
+    fn installs(source: &str, extension: &str) -> std::collections::BTreeSet<String> {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join(format!("main.{extension}"));
+        std::fs::write(&input, source).unwrap();
+        let result = Command::new(perry_bin())
+            .current_dir(dir.path())
+            .arg("compile")
+            .arg(&input)
+            .arg("-v")
+            .arg("--no-cache")
+            .arg("-o")
+            .arg(dir.path().join("app"))
+            .output()
+            .unwrap();
+        let log = format!(
+            "{}\n{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert!(result.status.success(), "{log}");
+        assert!(
+            log.contains("runtime installs:"),
+            "no install evidence: {log}"
+        );
+        log.lines()
+            .filter_map(|line| {
+                line.split_once("runtime installs:")
+                    .or_else(|| line.split_once("stdlib installs:"))
+            })
+            .flat_map(|(_, names)| names.split(','))
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .collect()
+    }
+    for (name, cjs, esm) in [
+        (
+            "02-wc",
+            include_str!("fixtures/cjs_closed_support/02-wc.cjs"),
+            include_str!("fixtures/cjs_closed_support/02-wc.mjs"),
+        ),
+        (
+            "03-todo",
+            include_str!("fixtures/cjs_closed_support/03-todo.cjs"),
+            include_str!("fixtures/cjs_closed_support/03-todo.mjs"),
+        ),
+        (
+            "04-json-query",
+            include_str!("fixtures/cjs_closed_support/04-json-query.cjs"),
+            include_str!("fixtures/cjs_closed_support/04-json-query.mjs"),
+        ),
+        (
+            "05-csv-stats",
+            include_str!("fixtures/cjs_closed_support/05-csv-stats.cjs"),
+            include_str!("fixtures/cjs_closed_support/05-csv-stats.mjs"),
+        ),
+    ] {
+        assert_eq!(installs(cjs, "cjs"), installs(esm, "mjs"), "{name}");
+    }
+}
+
+#[test]
+fn cjs_wrap_computed_require_and_cache_writer_keep_create_require() {
+    for source in [
+        "const name = process.argv[2] || 'fs'; console.log(typeof require(name).readFileSync);",
+        "require.cache['/a'] = { exports: 42 }; console.log(require.cache['/a'].exports);",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("main.cjs");
+        std::fs::write(&input, source).unwrap();
+        let result = Command::new(perry_bin())
+            .current_dir(dir.path())
+            .env("PERRY_LAYOUT_REPORT", "2")
+            .arg("compile")
+            .arg(&input)
+            .arg("--print-hir")
+            .arg("--no-link")
+            .arg("--no-cache")
+            .arg("-o")
+            .arg(dir.path().join("app.o"))
+            .output()
+            .unwrap();
+        let log = format!(
+            "{}\n{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert!(result.status.success(), "{log}");
+        assert!(log.contains("CommonJS not closed:"), "{log}");
+        assert!(log.contains("method: \"createRequire\""), "{log}");
+    }
+}

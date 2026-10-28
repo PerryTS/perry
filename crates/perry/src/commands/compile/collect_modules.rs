@@ -33,7 +33,7 @@ mod crypto_ns;
 mod discovery;
 mod dynamic_glob;
 mod eval_worker;
-mod feature_detect;
+pub(super) mod feature_detect;
 mod import_helpers;
 mod import_meta_require;
 mod import_meta_resolve;
@@ -879,6 +879,7 @@ fn collect_module_one(
             syntax.module_capability_uses = 0;
         }
     }
+    super::cjs_wrap::capability_values::refine(&mut hir_module);
     *next_class_id = new_next_class_id; // Update the global class_id counter
 
     // #9599: Bun platform mode is a real global mode, not merely a direct-call

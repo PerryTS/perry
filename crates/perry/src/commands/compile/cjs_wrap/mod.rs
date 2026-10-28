@@ -37,6 +37,7 @@
 //!     follows up to a small depth (2 levels) to handle one level of env
 //!     switching; deeper indirection is rare and gets the no-op fallback.
 
+pub(super) mod capability_values;
 mod computed_requires;
 mod deferred_requires;
 pub(crate) mod detect;

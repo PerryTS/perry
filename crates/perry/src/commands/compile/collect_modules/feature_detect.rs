@@ -519,7 +519,7 @@ fn module_uses_json_format(module: &perry_hir::Module) -> bool {
 }
 
 /// Inspect a lowered module and set the optional-feature gates it needs.
-pub(super) fn detect_optional_feature_usage(
+pub(crate) fn detect_optional_feature_usage(
     ctx: &mut CompilationContext,
     hir_module: &perry_hir::Module,
 ) {

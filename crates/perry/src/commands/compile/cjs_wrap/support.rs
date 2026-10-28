@@ -181,6 +181,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn closed_support_has_no_loader_import_or_call() {
+        let source = source(&["/p/main.cjs".into()], true);
+        let ast = perry_parser::parse_typescript(&source, "support.mjs").unwrap();
+        let original = perry_hir::lower_module(&ast, "support", "/p/support.mjs").unwrap();
+        for closed in [false, true] {
+            let mut module = original.clone();
+            super::super::super::cjs_link::resolve_open_sites(&mut module, closed).unwrap();
+            assert_eq!(
+                module.imports.iter().any(|i| i.source.strip_prefix("node:").unwrap_or(&i.source) == "module"),
+                !closed
+            );
+            let mut loader = false;
+            perry_hir::tdz_check::for_each_module_expr(&module, &mut |e| {
+                loader |= matches!(e, perry_hir::Expr::NativeMethodCall { module, method, .. }
+                    if module == "module" && method == "createRequire");
+            });
+            assert_eq!(loader, !closed);
+        }
+    }
+
+    #[test]
     fn the_source_is_a_function_of_the_graph_only() {
         let paths = vec!["/p/a.js".to_string(), "/p/b.js".to_string()];
         assert_eq!(source(&paths, true), source(&paths, true));
