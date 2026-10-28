@@ -5153,6 +5153,7 @@ perry_component_frame_task_cancel	i32s	ptr
 perry_component_frame_task_checkpoint	i32s	ptr
 perry_component_frame_task_new	ptr	
 perry_component_frame_task_ready	i32s	ptr
+perry_component_frame_task_release_arguments	i32s	ptr,i32u
 perry_component_frame_task_resume	i32s	ptr,ptr,ptr
 perry_component_frame_u64	i32u	ptr,i64
 perry_create_family	f64	ptr,f64
