@@ -737,8 +737,9 @@ pub(crate) fn byte_offset_to_utf16_index(s: &str, byte_off: usize) -> usize {
 ///   strings that do not require a real `StringHeader*`.
 /// - Normal heap strings, including native input, use GC-managed arenas.
 ///   Large JSON result leaves may use GC-tracked malloc storage instead.
-/// - `arena_alloc_gc` routes small and medium payloads to nursery pages and
-///   large payloads to old-gen pages using `LARGE_OBJECT_THRESHOLD_BYTES`.
+/// - `arena_alloc_gc` routes small and medium payloads to moving nursery pages
+///   and large pointer-free leaves to individually owned young non-moving
+///   storage using the existing `LARGE_OBJECT_THRESHOLD_BYTES`.
 ///
 /// Keep this helper as the single normal heap-string storage entry point. Other
 /// `GC_TYPE_STRING` users, notably `SymbolHeader` and JSON tape scratch buffers,

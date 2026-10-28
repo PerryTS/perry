@@ -216,9 +216,11 @@ pub const LARGE_OBJECT_THRESHOLD_BYTES: usize = 16 * 1024;
 ///
 /// # Why the two thresholds cannot be the same number
 ///
-/// Crossing the threshold does not merely change where an object is allocated.
-/// [`crate::arena::arena_alloc_gc`] births it in the old generation **and
-/// stamps `GC_FLAG_TENURED`**, and a minor collection never sweeps old-gen. So
+/// For pointer-bearing containers in this staged implementation, crossing the
+/// threshold still births the object old and stamps `GC_FLAG_TENURED`.
+/// Pointer-free whole-cell leaves instead get dedicated non-moving storage
+/// with ordinary young age; size alone no longer makes those leaves old.
+/// A minor never sweeps the old generation. For an old container,
 /// the object — and, if it holds pointers, *everything reachable from it* —
 /// is immortal until a full mark-sweep runs. The threshold is therefore a
 /// trade between two costs:
@@ -228,9 +230,10 @@ pub const LARGE_OBJECT_THRESHOLD_BYTES: usize = 16 * 1024;
 /// * **retention cost**, paid by a born-tenured object that dies: its bytes,
 ///   held until the next full collection.
 ///
-/// For a `pointer_free` object those two quantities are the *same* quantity,
-/// so trading one against the other at 16 KB is a defensible wash. For a
-/// pointer-BEARING object the retention is **transitive and unbounded**: the
+/// The historical pointer-free cutoff traded those equal quantities at
+/// 16 KB. That cutoff now selects young large storage without copying. For
+/// the still-pretenured pointer-bearing containers, retention remains
+/// **transitive and unbounded**: the
 /// write barrier records old→young edges out of it, and every minor's dirty
 /// scan then marks its children live, whether or not anything still refers to
 /// the container.
