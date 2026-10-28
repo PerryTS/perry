@@ -62,8 +62,25 @@ fn eager_fn_metadata_validation() -> bool {
 /// for metadata something actually reads. Invalid bytes yield `None`, which is
 /// what the caller saw before when registration rejected them up front.
 fn decode_registered(slot: Option<&[u8]>) -> Option<String> {
-    let bytes = slot?;
-    std::str::from_utf8(bytes).ok().map(str::to_owned)
+    decode_registered_with(slot, str::to_owned)
+}
+
+/// Consume a validated view while its registry owner is locked. The caller
+/// chooses whether the result needs owned bytes; presence checks do not.
+fn decode_registered_with<R>(slot: Option<&[u8]>, read: impl FnOnce(&str) -> R) -> Option<R> {
+    decode_registered_bytes(slot?).map(read)
+}
+
+/// ASCII is already a UTF-8 proof. Consume that byte view without entering
+/// the general decoder; non-ASCII and malformed input keep its exact exits.
+#[inline]
+fn decode_registered_bytes(bytes: &[u8]) -> Option<&str> {
+    if bytes.is_ascii() {
+        // SAFETY: every byte is below 0x80, including embedded NULs.
+        Some(unsafe { std::str::from_utf8_unchecked(bytes) })
+    } else {
+        std::str::from_utf8(bytes).ok()
+    }
 }
 
 /// Link-time-relative descriptor emitted by codegen. Keeping offsets instead
@@ -164,15 +181,15 @@ fn with_registered_name<T>(func_ptr: usize, read: impl FnOnce(&str) -> T) -> Opt
     if let Ok(overrides) = function_name_overrides().lock() {
         if let Some(name) = overrides
             .get(&func_ptr)
-            .and_then(|bytes| std::str::from_utf8(bytes).ok())
+            .and_then(|bytes| decode_registered_bytes(bytes))
         {
             return Some(read(name));
         }
     }
-    function_name_registry().lock().ok().and_then(|map| {
-        let name = std::str::from_utf8(map.get(&func_ptr).copied()?).ok()?;
-        Some(read(name))
-    })
+    function_name_registry()
+        .lock()
+        .ok()
+        .and_then(|map| decode_registered_with(map.get(&func_ptr).copied(), read))
 }
 
 /// Register `func_ptr` as the compiled address of a JS function called
@@ -305,6 +322,8 @@ pub fn register_function_name_if_absent(func_ptr: usize, name: &str) {
     // "Absent" means "neither map holds bytes that DECODE" — which is exactly
     // the question the read side answers, so ask it rather than restating it
     // and letting the two drift.
+    // Presence and reflection share decoded-byte semantics and owned-first
+    // lookup; presence consumes only a validated view and never copies a name.
     if with_registered_name(func_ptr, |_| ()).is_some() {
         return;
     }
@@ -1137,6 +1156,62 @@ mod tests {
             function_name_for_ptr(KEY_NAME_IF_ABSENT as usize).as_deref(),
             Some("inferred")
         );
+    }
+
+    #[test]
+    fn metadata_ascii_views_match_utf8_validation_at_every_exit() {
+        for len in 0..128 {
+            let bytes: Vec<_> = (0..len).map(|i| ((i * 37) % 128) as u8).collect();
+            assert_eq!(
+                decode_registered_bytes(&bytes),
+                std::str::from_utf8(&bytes).ok()
+            );
+        }
+        for bytes in [
+            "é".as_bytes(),
+            "界😀".as_bytes(),
+            b"a\0z",
+            b"\xff",
+            b"a\xc2",
+            b"\x80",
+            b"\xed\xa0\x80",
+            b"\xf4\x90\x80\x80",
+        ] {
+            assert_eq!(
+                decode_registered_bytes(bytes),
+                std::str::from_utf8(bytes).ok()
+            );
+        }
+    }
+
+    #[test]
+    fn if_absent_preserves_valid_name_behind_invalid_override() {
+        let key = 0x9188_0171usize;
+        function_name_registry()
+            .lock()
+            .unwrap()
+            .insert(key, b"imageName");
+        function_name_overrides()
+            .lock()
+            .unwrap()
+            .insert(key, std::sync::Arc::from(&b"\xff"[..]));
+        register_function_name_if_absent(key, "inferred");
+        assert_eq!(function_name_for_ptr(key).as_deref(), Some("imageName"));
+        assert_eq!(
+            &**function_name_overrides().lock().unwrap().get(&key).unwrap(),
+            b"\xff"
+        );
+
+        function_name_registry()
+            .lock()
+            .unwrap()
+            .insert(key, b"\xff");
+        function_name_overrides()
+            .lock()
+            .unwrap()
+            .insert(key, std::sync::Arc::from(&b"ownedName"[..]));
+        register_function_name_if_absent(key, "inferred");
+        assert_eq!(function_name_for_ptr(key).as_deref(), Some("ownedName"));
     }
 
     #[test]

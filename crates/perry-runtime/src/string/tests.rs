@@ -1106,20 +1106,23 @@ mod concat_chain_no_collect {
         );
     }
 
-    /// A part that is not a live heap string (SSO, a number, `undefined`)
-    /// needs `js_jsvalue_to_string`, which allocates — so it must fall back
-    /// to the rooted path, and still answer correctly.
+    /// Unsupported conversions keep the rooted path. Numbers and inline
+    /// strings now use the primitive no-collect contract instead.
     #[test]
-    fn non_heap_string_parts_fall_back_to_the_rooted_path() {
-        let sso = js_string_new_sso(b"ab".as_ptr(), 2);
+    fn unsupported_primitive_parts_fall_back_to_the_rooted_path() {
         for (parts, want) in [
-            (vec![heap("x"), 7.0, heap("y")], "x7y"),
-            (vec![heap("x"), sso, heap("y")], "xaby"),
             (
                 vec![heap("v="), f64::from_bits(crate::value::TAG_UNDEFINED)],
                 "v=undefined",
             ),
-            (vec![7.0, 8.0], "78"),
+            (
+                vec![heap("v="), f64::from_bits(crate::value::TAG_NULL)],
+                "v=null",
+            ),
+            (
+                vec![heap("v="), f64::from_bits(crate::value::TAG_TRUE)],
+                "v=true",
+            ),
         ] {
             let before = hits();
             assert_eq!(text(chain(&parts)), want);
@@ -1188,7 +1191,12 @@ mod concat_chain_no_collect {
             // Build the operands FIRST — `js_string_from_bytes` goes through
             // the COLLECTING entry and would install a fresh block, undoing
             // the fill.
-            let parts = [heap("a"), heap("bb"), heap("ccc"), heap("dddd")];
+            let parts = [
+                heap("a"),
+                42.0,
+                js_string_new_sso(b"bb".as_ptr(), 2),
+                heap("dddd"),
+            ];
 
             // Now fill through the no-collect entry, which by construction
             // installs nothing and moves nothing, so `parts` stays valid.
@@ -1213,7 +1221,7 @@ mod concat_chain_no_collect {
 
             let before = hits();
             let joined = chain(&parts);
-            assert_eq!(text(joined), "abbcccdddd");
+            assert_eq!(text(joined), "a42bbdddd");
             assert_eq!(
                 hits(),
                 before,

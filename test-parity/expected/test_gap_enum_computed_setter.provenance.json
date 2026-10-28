@@ -1,0 +1,15 @@
+{
+  "source": "test-files/test_gap_enum_computed_setter.ts",
+  "source_sha256": "91e6e166891dbf23b1b598025d7d31b2c2a3b99d6db5c4f2cc099a6d4c727d96",
+  "typescript": "5.8.2",
+  "node": "26.12.1",
+  "transform": "typescript.transpileModule",
+  "compiler_options": {
+    "target": "ES2022",
+    "module": "CommonJS"
+  },
+  "transformed_javascript_sha256": "f6e402b113f08e462b9869e81fc5b0a50e0726bd682dd48b6915fae090d5eae4",
+  "expected_stdout_sha256": "22524ed5905dea49f0c3d888349d1845d5b1b4b406dbe73879eadf2f49f1efd2",
+  "expected_exit": 0,
+  "reason": "Node strip-only mode rejects enum syntax; retain original enum source and compare with independently transpiled TypeScript executed by the pinned Node oracle."
+}

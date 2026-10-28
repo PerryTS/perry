@@ -196,7 +196,7 @@ pub use compare_value_eq::js_string_equals_value;
 // across object/.
 pub(crate) use compare::{
     compare_primitive_strings, js_string_key_bytes, js_string_key_matches,
-    js_string_key_matches_bytes, utf16_cmp_bytes,
+    js_string_key_matches_bytes, key_bytes_equal, utf16_cmp_bytes,
 };
 pub use concat::{
     js_string_add_value, js_string_append_chain, js_string_concat, js_string_concat_box,
