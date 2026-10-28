@@ -279,3 +279,39 @@ fn optimized_integer_constants_have_the_same_numeric_meaning() {
         Some(NumericOrder::Ascending)
     );
 }
+
+#[test]
+fn signed_zero_joins_do_not_invent_an_exact_reciprocal_sign() {
+    let zero = ternary(
+        compare(CompareOp::Lt, local(17), num(0.0)),
+        num(-0.0),
+        num(0.0),
+    );
+    let reciprocal = Expr::Binary {
+        op: BinaryOp::Div,
+        left: Box::new(num(1.0)),
+        right: Box::new(zero),
+    };
+    let body = vec![
+        Stmt::Let {
+            id: 50,
+            name: "scale".into(),
+            ty: Type::Any,
+            mutable: false,
+            init: Some(reciprocal),
+        },
+        Stmt::Return(Some(ternary(
+            compare(CompareOp::Lt, local(17), local(23)),
+            Expr::Unary {
+                op: UnaryOp::Neg,
+                operand: Box::new(local(50)),
+            },
+            ternary(
+                compare(CompareOp::Gt, local(17), local(23)),
+                local(50),
+                num(0.0),
+            ),
+        ))),
+    ];
+    assert_eq!(pure_numeric_order(&callback(body)), None);
+}

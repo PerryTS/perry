@@ -91,6 +91,7 @@ fn numeric_sign_source_forms_select_the_certified_operation() {
 #[test]
 fn numeric_sign_source_effects_inconsistency_unknown_and_tdz_keep_callbacks() {
     for (source, close) in [
+        ("const xs=[-2,-1,1,2]; xs.sort((a,b)=>{ const scale=1/(a<0?-0:0); return a<b?-scale:a>b?scale:0; });",true),
         ("const cmp=(a,b)=>a-b; function run(xs:any[]=[2,1].sort((a,b)=>f(a,b)),f:any=cmp) {} run();",true),
         ("const xs=[{k:1,j:2},{k:1,j:1}]; xs.sort((a,b)=>a.k!==b.k?a.k-b.k:a.j-b.j);",true),
         ("const xs = [3,1,2]; xs.sort((a,b) => a<b ? -1 : 1);",true),

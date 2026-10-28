@@ -160,7 +160,12 @@ impl Value {
         }
     }
     fn merge(self, other: Self) -> Option<Self> {
-        if self == other {
+        // IEEE equal zeros have different signs under later division.
+        // Exactness survives a join only when the numeric bits also agree.
+        let different_bits = matches!((&self, &other),
+            (Self::Number { exact: Some(a), .. }, Self::Number { exact: Some(b), .. })
+                if a.to_bits() != b.to_bits());
+        if self == other && !different_bits {
             return Some(self);
         }
         match (self, other) {
