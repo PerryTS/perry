@@ -1880,6 +1880,8 @@ jobs:
             # inside a bounded Node fixture and fail before running it.
             cargo build-perry --release
             scripts/gc_call_effects/sidecars.sh target/release
+            # This shard can also contain GC fixtures that select instruments.
+            scripts/build_instr_runtime.sh
             export PERRY_TEST_RUNTIME_PREBUILT=1
           else
             cargo build --release -p perry-runtime -p perry-stdlib \
