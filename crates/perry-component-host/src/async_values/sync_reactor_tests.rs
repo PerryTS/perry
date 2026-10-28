@@ -1,5 +1,5 @@
 //! Architecture proof for a guest-owned writer escaping a synchronous factory.
-//! The internal async task uses the same component instance and handles. This
+//! A private async producer lives behind a synchronous public wrapper. This
 //! does not implement Perry's value adapters or qualify their JS/GC ownership.
 use super::integration_tests::result;
 use crate::{AsyncImports, Host, Imports, Options};
@@ -7,7 +7,7 @@ use serde_json::json;
 use std::sync::Arc;
 
 #[test]
-fn internal_callback_reactor_drives_a_sync_factory_stream_without_another_guest_call() {
+fn private_async_producer_drives_a_sync_factory_stream_without_another_guest_call() {
     let world = perry_wit::parse(
         "package test:sync-reactor; world plugin { export make: func() -> stream<u8>; export finished: func() -> u32; }",
         None,
