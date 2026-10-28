@@ -664,7 +664,9 @@ unsafe fn option_detail_bits(options_obj: *const crate::object::ObjectHeader) ->
         // Node structured-clones `detail`, so the stored value deep-equals the
         // input but is a distinct reference (mutating the original afterward
         // doesn't affect the entry).
-        crate::builtins::js_structured_clone(f64::from_bits(v.bits())).to_bits()
+        // User Timing owns this clone even when no thread or namespace
+        // export has been materialized to install the optional global hook.
+        crate::builtins::clone_with_transfers(f64::from_bits(v.bits()), &[]).to_bits()
     }
 }
 
