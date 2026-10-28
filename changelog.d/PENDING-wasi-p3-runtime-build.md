@@ -1,0 +1,1 @@
+Prepare a separate wasm32-wasip3 runtime archive using the pinned SDK and expose its C toolchain settings on Unix and Windows. Public WASI 0.3 command output remains unfinished; the default WASI output profile remains WASI 0.2.

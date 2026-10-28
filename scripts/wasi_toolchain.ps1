@@ -56,6 +56,9 @@ $env:CFLAGS_wasm32_wasip2 = "--target=wasm32-wasip2 --sysroot=`"$(Join-Path $sdk
 $env:CC_wasm32_wasip1 = $env:CC_wasm32_wasip2
 $env:AR_wasm32_wasip1 = $env:AR_wasm32_wasip2
 $env:CFLAGS_wasm32_wasip1 = "--target=wasm32-wasip1 --sysroot=`"$(Join-Path $sdkPath 'share/wasi-sysroot')`""
+$env:CC_wasm32_wasip3 = $env:CC_wasm32_wasip2
+$env:AR_wasm32_wasip3 = $env:AR_wasm32_wasip2
+$env:CFLAGS_wasm32_wasip3 = "--target=wasm32-wasip3 --sysroot=`"$(Join-Path $sdkPath 'share/wasi-sysroot')`""
 $env:CC_SHELL_ESCAPED_FLAGS = '1'
 Write-Host "WASI SDK: $sdkPath"
 & $env:WASMTIME --version
