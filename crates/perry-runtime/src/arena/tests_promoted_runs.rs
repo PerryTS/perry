@@ -157,26 +157,35 @@ fn a_full_cycle_expands_every_pending_run_before_it_can_sweep() {
 
 #[test]
 fn dropping_a_block_discards_its_run_instead_of_parsing_freed_pages() {
-    super::tests::run_with_fresh_arenas(|| {
-        let region = promoted_region(200);
-        let pages = register_region_runs(&region);
-        let page_list: Vec<usize> = pages.iter().copied().collect();
-        assert!(pending_promoted_page_runs() > 0);
+    for range in [false, true] {
+        super::tests::run_with_fresh_arenas(|| {
+            let region = promoted_region(200);
+            let pages = register_region_runs(&region);
+            let page_list: Vec<usize> = pages.iter().copied().collect();
+            assert!(pending_promoted_page_runs() > 0);
 
-        unregister_old_block_pages(&page_list);
+            if range {
+                super::page_meta::unregister_old_block_range(
+                    *page_list.iter().min().unwrap(),
+                    *page_list.iter().max().unwrap(),
+                );
+            } else {
+                unregister_old_block_pages(&page_list);
+            }
 
-        assert_eq!(
-            pending_promoted_page_runs(),
-            0,
-            "the block is gone; a surviving run would have a later read parse \
+            assert_eq!(
+                pending_promoted_page_runs(),
+                0,
+                "the block is gone; a surviving run would have a later read parse \
              memory this arena no longer owns"
-        );
-        assert!(
-            walk(&pages).is_empty(),
-            "an unregistered page must stay empty — a run must not resurrect it"
-        );
-        drop(region);
-    });
+            );
+            assert!(
+                walk(&pages).is_empty(),
+                "an unregistered page must stay empty — a run must not resurrect it"
+            );
+            drop(region);
+        });
+    }
 }
 
 /// A TRACED promotion may NOT be described: its liveness lives in marks that
@@ -235,6 +244,11 @@ fn every_page_object_reader_expands_promoted_runs() {
             "unregister_old_block_pages",
             "DISCARDS the run rather than expanding it — the backing block is \
              going away, so its bounds no longer address arena memory",
+        ),
+        (
+            "unregister_old_block_range",
+            "DISCARDS runs for a known retiring block span; expanding bounds \
+             after retirement could parse memory the arena no longer owns",
         ),
         (
             "old_arena_page_index_clear_for_tests",

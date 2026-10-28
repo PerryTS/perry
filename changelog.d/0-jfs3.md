@@ -1,0 +1,1 @@
+Retire known old-generation page spans by canonical directory chunk, dropping wholly removed chunks directly and resetting only surviving chunks’ removed slots. Preserve deferred-registration ordering, promoted-run discard and sparse removal semantics while avoiding temporary page-number vectors and replacement writes into allocations being freed.

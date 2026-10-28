@@ -1722,7 +1722,7 @@ fn every_index_reader_flushes_before_reading() {
 #[test]
 fn removing_a_deferred_object_does_not_resurrect_it() {
     run_with_fresh_arenas(|| {
-        let headers = synthetic_old_headers(3);
+        let headers = synthetic_old_headers(4);
         let mut pages = crate::fast_hash::new_ptr_hash_set();
         pages.insert(generation_page_for_addr(headers[0]));
 
@@ -1756,6 +1756,14 @@ fn removing_a_deferred_object_does_not_resurrect_it() {
         assert!(
             !visited_now(&pages).contains(&headers[2]),
             "unregister_old_block_pages must flush first (#7624)"
+        );
+        // 4. The contiguous block-span remover has the same flush obligation.
+        defer_old_object_page_registration(headers[3], 64);
+        let page = generation_page_for_addr(headers[3]);
+        unregister_old_block_range(page, page);
+        assert!(
+            !visited_now(&pages).contains(&headers[3]),
+            "unregister_old_block_range must flush before retirement"
         );
     });
 }

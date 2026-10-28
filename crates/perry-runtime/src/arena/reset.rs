@@ -1376,8 +1376,7 @@ impl OldArenaReclaimDeadBlocksState {
             let used = block.offset;
             let first_page = generation_page_for_addr(base);
             let last_page = generation_page_for_addr(base + size - 1);
-            let pages: Vec<usize> = (first_page..=last_page).collect();
-            unregister_old_block_pages(&pages);
+            unregister_old_block_range(first_page, last_page);
             // #7437: this block's bytes are being recycled; any swept hole
             // recorded inside it must not be handed out again. #11505: the
             // list is threaded through those holes, so they are unlinked
@@ -1470,8 +1469,7 @@ pub(crate) fn old_arena_reclaim_dead_blocks(block_has_live: &[bool]) -> ArenaRes
             let used = block.offset;
             let first_page = generation_page_for_addr(base);
             let last_page = generation_page_for_addr(base + size - 1);
-            let pages: Vec<usize> = (first_page..=last_page).collect();
-            unregister_old_block_pages(&pages);
+            unregister_old_block_range(first_page, last_page);
             // #7437: this block's bytes are being recycled; any swept hole
             // recorded inside it must not be handed out again. #11505: the
             // list is threaded through those holes, so they are unlinked
@@ -1577,8 +1575,7 @@ pub(crate) fn old_arena_reclaim_selected_dead_blocks(
             let used = block.offset;
             let first_page = generation_page_for_addr(base);
             let last_page = generation_page_for_addr(base + size - 1);
-            let pages: Vec<usize> = (first_page..=last_page).collect();
-            unregister_old_block_pages(&pages);
+            unregister_old_block_range(first_page, last_page);
             // #7437: this block's bytes are being recycled; any swept hole
             // recorded inside it must not be handed out again. #11505: the
             // list is threaded through those holes, so they are unlinked

@@ -92,8 +92,8 @@ pub(crate) use page_meta::{
     address_span_overlaps_pages, defer_old_object_page_registration,
     defer_promoted_old_object_page_registration, page_class_table_report,
     register_block_space_with_object_starts, register_old_object_pages, shrink_page_tables,
-    unregister_block_generation, unregister_old_block_pages, OLD_GEN_RECLAIM_POOLED_BYTES,
-    OLD_GEN_RECLAIM_RETURNED_BYTES, OLD_GEN_RECLAIM_REUSABLE_BYTES,
+    unregister_block_generation, unregister_old_block_pages, unregister_old_block_range,
+    OLD_GEN_RECLAIM_POOLED_BYTES, OLD_GEN_RECLAIM_RETURNED_BYTES, OLD_GEN_RECLAIM_REUSABLE_BYTES,
 };
 pub(crate) use page_meta::{page_generation_cache_hot_addr, page_generations_hot_addr};
 // `PERRY_GC_CENSUS` accessors (gc/census.rs).

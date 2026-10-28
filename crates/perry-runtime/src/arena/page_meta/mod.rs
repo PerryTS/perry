@@ -397,6 +397,27 @@ pub(crate) fn unregister_old_block_pages(pages: &[usize]) {
     crate::gc::dirty_page_cache_invalidate();
 }
 
+/// A block's page span is already known: retire canonical chunks without
+/// constructing a page-number vector. Preserve the deferred-entry ordering
+/// and discard promoted runs without parsing the retired backing.
+pub(crate) fn unregister_old_block_range(first: usize, last: usize) {
+    if first > last {
+        return;
+    }
+    flush_deferred_old_page_registrations();
+    OLD_GEN_PAGE_META.with(|meta| meta.borrow_mut().remove_range(first, last));
+    OLD_GEN_PAGE_OBJECTS.with(|index| index.borrow_mut().remove_range(first, last));
+    if OLD_GEN_PAGE_PROMOTED_RUNS_NONEMPTY.with(Cell::get) {
+        OLD_GEN_PAGE_PROMOTED_RUNS.with(|runs| {
+            let mut runs = runs.borrow_mut();
+            for page in first..=last {
+                runs.remove(&page);
+            }
+        });
+    }
+    crate::gc::dirty_page_cache_invalidate();
+}
+
 #[inline]
 pub(crate) fn address_span_overlaps_pages(
     start: usize,
@@ -829,10 +850,10 @@ pub(crate) fn unregister_block_generation(base: usize, size: usize) {
         let was_old = generation == HeapGeneration::Old;
         super::region::reservation::set_space(base, size, HeapSpace::Unknown, Some(0));
         if was_old {
-            let pages: Vec<usize> = (generation_page_for_addr(base)
-                ..=generation_page_for_addr(base + size - 1))
-                .collect();
-            unregister_old_block_pages(&pages);
+            unregister_old_block_range(
+                generation_page_for_addr(base),
+                generation_page_for_addr(base + size - 1),
+            );
         }
         return;
     }
