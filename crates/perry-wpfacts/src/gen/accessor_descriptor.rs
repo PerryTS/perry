@@ -31,5 +31,4 @@ impl<'a> Gen<'a> {
             .all(|k| matches!(*k, "get" | "set" | "enumerable" | "configurable"))
             && keys.iter().any(|k| matches!(*k, "get" | "set"))
     }
-
 }
