@@ -949,8 +949,7 @@ impl ArenaResetEmptyBlocksState {
                         if !block.data.is_null() {
                             inline.data = block.data;
                             inline.offset = block.offset;
-                            inline.size =
-                                super::inline::allocation_limit(block.offset, block.size);
+                            inline.size = super::inline::allocation_limit(block.offset, block.size);
                         }
                     }
                 }
