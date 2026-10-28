@@ -67,9 +67,9 @@ fn ordinary_named_misses_skip_all_exotic_probes() {
 fn exotic_named_reads_keep_native_properties() {
     crate::gc::initialize_runtime_fixture();
     let scope = crate::gc::RuntimeHandleScope::new();
-    let date = scope.root_nanbox_f64(crate::date::js_date_new_from_timestamp(0.0));
+    let date = scope.root_nanbox_f64(crate::date_hook_slots::js_date_new_from_timestamp(0.0));
     let params = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
-        crate::url::js_url_search_params_new_empty() as i64,
+        crate::url_hooks::url_search_params_new_empty() as i64,
     ));
     let typed = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
         crate::typedarray::js_typed_array_new_empty(0, 3) as i64,

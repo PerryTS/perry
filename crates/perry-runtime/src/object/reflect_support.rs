@@ -60,7 +60,7 @@ pub(crate) fn obj_value_has_own_key(value: f64, key: f64) -> bool {
         // expando side table. Must precede the GC-header read below — small
         // typed arrays are plain-`alloc`ed without a `GcHeader`, so reading
         // `addr - 8` is allocator-metadata garbage.
-        if crate::typedarray::lookup_typed_array_kind(obj_addr).is_some() {
+        if crate::typedarray_hook_slots::lookup_typed_array_kind(obj_addr).is_some() {
             // #6943: `js_string_coerce` allocates for every non-heap-string key
             // and runs a user `toString` / `valueOf` for an object key, so it
             // can trigger a GC that **evacuates**. `obj` was resolved from
@@ -74,7 +74,7 @@ pub(crate) fn obj_value_has_own_key(value: f64, key: f64) -> bool {
                 return false;
             }
             return crate::typedarray_props::typed_array_has_own_property(
-                obj as *const crate::typedarray::TypedArrayHeader,
+                obj as *const crate::typedarray_hook_slots::TypedArrayHeader,
                 key_str,
             );
         }

@@ -178,11 +178,11 @@ impl<'s, 'm> Reader<'s, 'm> {
             SerializedValue::Ref(index) => self.resolve(*index as usize),
             SerializedValue::String(bytes) => string_bits(bytes),
             SerializedValue::BigInt(limbs) => {
-                let ptr = crate::bigint::bigint_alloc_with_limbs(limbs);
+                let ptr = crate::bigint_hooks::bigint_alloc_with_limbs(limbs);
                 BIGINT_TAG | (ptr as u64 & POINTER_MASK)
             }
             // #2089: a fresh DateCell in this thread's arena.
-            SerializedValue::Date(ts) => crate::date::alloc_date_cell(*ts).to_bits(),
+            SerializedValue::Date(ts) => crate::date_hook_slots::alloc_date_cell(*ts).to_bits(),
             SerializedValue::Array(elements) => {
                 return self.array(slot.unwrap(), ArrayElements::Values(elements))
             }
@@ -505,7 +505,7 @@ impl<'s, 'm> Reader<'s, 'm> {
         let elem = if kind == VIEW_KIND_DATA_VIEW {
             1
         } else {
-            crate::typedarray::elem_size_for_kind(kind)
+            crate::typedarray_hook_slots::elem_size_for_kind(kind)
         };
         // A view over all of a buffer seen for the first time owns its
         // bytes; nothing can tell it from a view over a fresh ArrayBuffer.
@@ -515,7 +515,7 @@ impl<'s, 'm> Reader<'s, 'm> {
                 && length as usize * elem == bytes.len()
             {
                 let buffer_slot = self.reserve();
-                let (bits, made) = if kind == crate::typedarray::KIND_UINT8 {
+                let (bits, made) = if kind == crate::typedarray_hook_slots::KIND_UINT8 {
                     (owned_uint8array(bytes), Made::BytesOfUint8Array)
                 } else {
                     (
@@ -533,12 +533,16 @@ impl<'s, 'm> Reader<'s, 'm> {
         let length = length as f64;
         let bits = if kind == VIEW_KIND_DATA_VIEW {
             crate::buffer::js_data_view_new(buffer, offset, length).to_bits()
-        } else if kind == crate::typedarray::KIND_UINT8 {
+        } else if kind == crate::typedarray_hook_slots::KIND_UINT8 {
             let view = crate::buffer::js_uint8array_view(buffer, offset, length);
             JSValue::pointer(view as *const u8).bits()
         } else {
-            let view =
-                crate::typedarray_view::js_typed_array_view(kind as i32, buffer, offset, length);
+            let view = crate::typedarray_hook_slots::js_typed_array_view(
+                kind as i32,
+                buffer,
+                offset,
+                length,
+            );
             JSValue::pointer(view as *const u8).bits()
         };
         self.fill(slot, bits, Made::Value);
@@ -550,7 +554,7 @@ impl<'s, 'm> Reader<'s, 'm> {
     unsafe fn regexp(&mut self, source: &[u8], flags: &[u8]) -> u64 {
         let source = self.scope.root_nanbox_u64(string_bits(source));
         let flags = string_bits(flags);
-        let re = crate::regex::js_regexp_new(
+        let re = crate::regex::hooked::new(
             (source.get_nanbox_u64() & POINTER_MASK) as *const _,
             (flags & POINTER_MASK) as *const _,
         );
@@ -664,7 +668,7 @@ unsafe fn new_buffer(
 
 #[optimize(size)]
 unsafe fn owned_typed_array(kind: u8, length: u32, bytes: &[u8]) -> u64 {
-    let ta = crate::typedarray::typed_array_alloc(kind, length);
+    let ta = crate::typedarray_hook_slots::typed_array_alloc(kind, length);
     if !bytes.is_empty() {
         crate::buffer::bytes::no_gc(|scope| {
             let value = crate::value::js_nanbox_pointer(ta as i64);

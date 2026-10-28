@@ -50,7 +50,7 @@ fn is_native_array_value(value: f64) -> bool {
     }
     // Off-GC-heap header-less typed arrays / buffers are not Arrays and must
     // not be header-probed (#5226).
-    if crate::typedarray::is_offheap_sidetable_alloc(ptr) {
+    if crate::typedarray_hook_slots::is_offheap_sidetable_alloc(ptr) {
         return false;
     }
     unsafe {
@@ -185,7 +185,7 @@ pub(super) fn enqueue_thenable_job(promise: *mut Promise, thenable: f64, then_ac
     let callback = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(callback as i64));
 
     let context = capture_context();
-    let ids = crate::async_hooks::init_resource(
+    let ids = crate::async_hook_slots::init_resource(
         "PromiseResolveThenableJob",
         f64::from_bits(crate::value::TAG_UNDEFINED),
         false,
@@ -299,7 +299,7 @@ pub(super) fn enqueue_native_adoption_job(outer: *mut Promise, inner: *mut Promi
     let callback = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(callback as i64));
 
     let context = capture_context();
-    let ids = crate::async_hooks::init_resource(
+    let ids = crate::async_hook_slots::init_resource(
         "PromiseResolveThenableJob",
         f64::from_bits(crate::value::TAG_UNDEFINED),
         false,

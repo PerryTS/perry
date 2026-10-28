@@ -25,7 +25,7 @@ fn compiled_materialization_of_a_lazy_array_counts_once_and_a_plain_array_never(
     let mut plain = crate::array::js_array_alloc(2);
     plain = crate::array::js_array_push_f64(plain, 1.0);
     let plain_box = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(plain as i64));
-    let _ = crate::array::header::js_array_refresh_local_head(plain_box.get_nanbox_f64());
+    let _ = crate::array::js_array_refresh_local_head(plain_box.get_nanbox_f64());
     assert_eq!(
         crate::json::traversal_feedback::score_for_tests(),
         0,
@@ -33,7 +33,7 @@ fn compiled_materialization_of_a_lazy_array_counts_once_and_a_plain_array_never(
     );
 
     let lazy = scope.root_nanbox_f64(lazy_array_box(br#"[{"id":1},{"id":2},{"id":3}]"#, 3));
-    let first = crate::array::header::js_array_refresh_local_head(lazy.get_nanbox_f64());
+    let first = crate::array::js_array_refresh_local_head(lazy.get_nanbox_f64());
     assert_ne!(
         first.to_bits(),
         lazy.get_nanbox_f64().to_bits(),
@@ -45,7 +45,7 @@ fn compiled_materialization_of_a_lazy_array_counts_once_and_a_plain_array_never(
         "materializing a lazy array whole is one flip's worth of evidence"
     );
 
-    let _ = crate::array::header::js_array_refresh_local_head(lazy.get_nanbox_f64());
+    let _ = crate::array::js_array_refresh_local_head(lazy.get_nanbox_f64());
     assert_eq!(
         crate::json::traversal_feedback::score_for_tests(),
         2,

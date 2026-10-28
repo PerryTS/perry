@@ -294,8 +294,8 @@ pub(crate) fn construct(callee: f64, args: &[f64]) -> f64 {
 
 /// Whether the selected global (including its prototype chain) binds `name`.
 pub(crate) fn global_has_property(global: f64, name: &str) -> bool {
-    let global = if crate::proxy::js_proxy_is_proxy(global) != 0 {
-        crate::proxy::js_proxy_target(global)
+    let global = if crate::proxy_hooks::proxy_is_proxy(global) != 0 {
+        crate::proxy_hooks::proxy_target(global)
     } else {
         global
     };
@@ -310,8 +310,8 @@ pub(crate) fn global_has_property(global: f64, name: &str) -> bool {
 /// intrinsic-global backing. VM contexts pass distinct values; ordinary
 /// dynamic Function calls pass the process global for both.
 pub(crate) fn global_lookup(global_this: f64, intrinsics: f64, name: &str) -> f64 {
-    let lookup_target = if crate::proxy::js_proxy_is_proxy(global_this) != 0 {
-        crate::proxy::js_proxy_target(global_this)
+    let lookup_target = if crate::proxy_hooks::proxy_is_proxy(global_this) != 0 {
+        crate::proxy_hooks::proxy_target(global_this)
     } else {
         global_this
     };

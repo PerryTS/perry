@@ -315,9 +315,9 @@ pub extern "C" fn js_readline_emit_keypress_events_args(
     let Some(raw) = raw_ptr_from_value(stream.get_nanbox_f64()) else {
         return undefined();
     };
-    if crate::os::is_process_stdin_handle(raw) {
+    if crate::os_hook_slots::is_process_stdin_handle(raw) {
         listener.with_const_ptr::<ClosureHeader, _>(|listener| {
-            crate::os::enable_process_stdin_keypress_events(listener as i64)
+            crate::os_hook_slots::enable_process_stdin_keypress_events(listener as i64)
         });
     } else {
         let event = scope.root_nanbox_f64(boxed_str(b"data"));

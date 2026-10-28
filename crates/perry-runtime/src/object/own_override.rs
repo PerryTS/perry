@@ -382,7 +382,7 @@ unsafe fn resolve_own_user_method(recv: f64, name: &str) -> Option<f64> {
     // caller (which roots it before invoking it).
     let value = scope.root_nanbox_f64(value);
     if !crate::object::value_is_callable(value.get_nanbox_f64())
-        && !crate::proxy::proxy_wraps_callable(value.get_nanbox_f64())
+        && !crate::proxy_hooks::proxy_wraps_callable(value.get_nanbox_f64())
     {
         crate::error::js_throw_type_error_not_a_function(
             std::ptr::null(),

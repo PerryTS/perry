@@ -102,6 +102,11 @@ impl Model {
         if self.is_marker(t) && !self.virt_protos.contains_key(&t) {
             return;
         }
+        // DECISIONS 217: `__proto__` is Object.prototype's accessor, found on
+        // every chain: it reads the receiver's prototype, as a value.
+        if self.is_proto_key(key) {
+            self.proto_value(t, dst);
+        }
         // DECISIONS 124: a receiver marker with values beside it stands for
         // instances of its classes, whose builtin members are the chain's
         // (`cv` below reaches Object.prototype): no builtin object's.
@@ -119,6 +124,72 @@ impl Model {
         // Accessors run with the receiver as `this`: walk per receiver, only
         // for keys an accessor may be defined under.
         self.accessor_walk(origin, t, key, ChainAct::Load(dst));
+    }
+
+    /// A key generation names an accessor under.
+    pub(crate) fn add_accessor_atom(&mut self, a: Atom) {
+        self.numeric_accessor |= self.atoms[a as usize].parse::<f64>().is_ok();
+        self.accessor_atoms.insert(a);
+    }
+
+    pub fn is_proto_key(&self, key: Key) -> bool {
+        matches!(key, Key::Named(a) if self.atoms[a as usize] == "__proto__")
+    }
+
+    /// dst ⊇ `t`'s prototypes as values (DECISIONS 217): what
+    /// `Object.getPrototypeOf(t)` and `t.__proto__` return. A literal's
+    /// class prototype is its layout, no object (`Cons::ProtoValues`);
+    /// `ObjectProto` stands for every builtin prototype, so its own
+    /// prototype may be itself (Array.prototype's is Object.prototype) or
+    /// null; a module record's (`module.exports` or a namespace) may be null.
+    pub fn proto_value(&mut self, t: Tok, dst: NodeId) {
+        match self.toks[t as usize] {
+            TokKind::Top => self.add_tok(dst, TOP),
+            TokKind::ObjectProto => {
+                self.add_tok(dst, t);
+                self.add_prim(dst, prim::NULL);
+            }
+            _ => {
+                if matches!(self.toks[t as usize], TokKind::ModNs(_)) {
+                    let op = self.tok(TokKind::ObjectProto);
+                    self.add_tok(dst, op);
+                    self.add_prim(dst, prim::NULL);
+                }
+                let pn = self.proto_node(t);
+                if self.idx_done.insert((pn, t, dst, IDX_PROTO_VALUE)) {
+                    self.cons(pn, Cons::ProtoValues { dst });
+                }
+            }
+        }
+    }
+
+    /// `t` read (called) under a key that names no member of an intrinsic
+    /// prototype and is not `__proto__`: a number (DECISIONS 217; its own
+    /// fields under any key are the caller's). Its program prototypes'
+    /// members under any key, a key a store into ⊤ wrote on an intrinsic
+    /// prototype (`Cons::PlainKey`), and accessors that key may name.
+    pub(crate) fn plain_key(&mut self, t: Tok, act: ChainAct) {
+        if t == TOP || (self.is_marker(t) && !self.virt_protos.contains_key(&t)) {
+            return;
+        }
+        let cp = self.cp(t);
+        let at = match act {
+            ChainAct::Load(n) | ChainAct::Store(n) => n,
+            ChainAct::Call(c) => c,
+        };
+        let tag = match act {
+            ChainAct::Load(_) => IDX_PLAIN_LOAD,
+            ChainAct::Store(_) => return,
+            ChainAct::Call(_) => IDX_PLAIN_CALL,
+        };
+        if self.idx_done.insert((cp, t, at, tag)) {
+            self.cons(cp, Cons::PlainKey { origin: t, act });
+            // An accessor under a numeric name (one under a computed key
+            // made the object's fields ⊤ already).
+            if self.numeric_accessor {
+                self.accessor_walk(t, t, Key::Any, act);
+            }
+        }
     }
 
     /// A key no builtin prototype defines (ToPropertyKey of `true`, `false`,
@@ -401,6 +472,12 @@ impl Model {
                     Key::Any => self.all_fields(start),
                 };
                 self.edge(f, dst);
+                // DECISIONS 217: `super.__proto__` runs Object.prototype's
+                // getter on the receiver.
+                if self.is_proto_key(key) {
+                    let pk = self.atom("__proto__");
+                    self.load_from(origin, origin, Key::Named(pk), dst);
+                }
                 self.with_b(|m| builtins::tok_load(m, start, key, dst));
                 if !self.stops_at(start, key) {
                     let up = self.cv(start, key);

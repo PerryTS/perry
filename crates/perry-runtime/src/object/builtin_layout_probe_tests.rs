@@ -481,7 +481,7 @@ fn array_intrinsic_length_precedes_named_bag_and_prototypes() {
             let next = crate::array::js_array_push_f64(arr, 10.0);
             array.set_raw_mut_ptr(next);
         }
-        let proxy = crate::proxy::js_proxy_new(
+        let proxy = crate::proxy_hooks::proxy_new(
             crate::value::js_nanbox_pointer(
                 array.get_raw_mut_ptr::<crate::array::ArrayHeader>() as i64
             ),

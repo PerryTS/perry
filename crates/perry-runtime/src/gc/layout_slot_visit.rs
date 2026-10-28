@@ -358,7 +358,7 @@ unsafe fn visit_gc_rewrite_slot_descriptors_with<const INLINE_LAYOUT: bool>(
                 &mut (*promise).on_rejected as *mut _ as *mut usize,
             ));
             visit(pointer_slot(&mut (*promise).next as *mut _ as *mut usize));
-            if crate::async_hooks::resource_state::get((*promise).async_id).is_some() {
+            if crate::async_hook_slots::resource_state::get((*promise).async_id).is_some() {
                 visit(pointer_slot(
                     std::ptr::addr_of_mut!((*promise).async_id).cast(),
                 ));
@@ -378,7 +378,7 @@ unsafe fn visit_gc_rewrite_slot_descriptors_with<const INLINE_LAYOUT: bool>(
             }
         }
         GcRewriteDescriptorKind::AsyncResourceState => {
-            let state = user_ptr as *mut crate::async_hooks::resource_state::ResourceState;
+            let state = user_ptr as *mut crate::async_hook_slots::resource_state::ResourceState;
             visit(fixed_slot(std::ptr::addr_of_mut!((*state).resource).cast()));
             visit(fixed_slot(
                 std::ptr::addr_of_mut!((*state).lease_resource).cast(),

@@ -344,6 +344,10 @@ pub fn map_cons(
             origin,
             act: act_map(act, &mut n, &mut k),
         },
+        PlainKey { origin, act } => PlainKey {
+            origin,
+            act: act_map(act, &mut n, &mut k),
+        },
         StoreTopProto { origin, src } => StoreTopProto {
             origin,
             src: n(src),
@@ -380,6 +384,7 @@ pub fn map_cons(
         AccessorInstall { key, f, setter } => AccessorInstall { key, f, setter },
         ProtoFrom { src } => ProtoFrom { src: n(src) },
         ProtoOf { dst } => ProtoOf { dst: n(dst) },
+        ProtoValues { dst } => ProtoValues { dst: n(dst) },
         IterNext { dst } => IterNext { dst: n(dst) },
         NewTargetHard { reason } => NewTargetHard { reason },
         IdxLoad { idx, dst } => IdxLoad {
@@ -387,6 +392,15 @@ pub fn map_cons(
             dst: n(dst),
         },
         IdxKey { obj, dst } => IdxKey { obj, dst: n(dst) },
+        IdxMCall { idx, call } => IdxMCall {
+            idx: n(idx),
+            call: k(call),
+        },
+        IdxKeyCall { obj, prim, call } => IdxKeyCall {
+            obj,
+            prim,
+            call: k(call),
+        },
         ForInBody { obj, call } => ForInBody {
             obj: n(obj),
             call: k(call),
@@ -516,6 +530,8 @@ fn gen_kind(c: &Cons) -> bool {
             | Implicit { .. }
             | IdxLoad { .. }
             | IdxKey { .. }
+            | IdxMCall { .. }
+            | IdxKeyCall { .. }
             | ForInBody { .. }
             | DefineKeyed { .. }
             | StoreKeyed { .. }
@@ -547,7 +563,8 @@ fn read_dst(c: &Cons) -> Option<NodeId> {
         | Arith { dst, .. }
         | ArrayLenArg { dst }
         | IterNext { dst }
-        | ProtoOf { dst } => Some(dst),
+        | ProtoOf { dst }
+        | ProtoValues { dst } => Some(dst),
         _ => None,
     }
 }
@@ -575,6 +592,8 @@ impl Model {
             | Cons::New { call }
             | Cons::NewNamed { call, .. }
             | Cons::MCall { call, .. }
+            | Cons::IdxMCall { call, .. }
+            | Cons::IdxKeyCall { call, .. }
             | Cons::ProtoMethods { call, .. }
             | Cons::SuperCtor { call, .. }
             | Cons::SuperCtorParent { call, .. }
@@ -586,6 +605,10 @@ impl Model {
                 ..
             }
             | Cons::AnyAccessors {
+                act: ChainAct::Call(call),
+                ..
+            }
+            | Cons::PlainKey {
                 act: ChainAct::Call(call),
                 ..
             }

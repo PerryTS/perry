@@ -164,13 +164,17 @@ pub(crate) unsafe fn nm_dispatch_async_hooks(
                 .with_mut_ptr::<crate::StringHeader, _>(|msg| crate::error::js_typeerror_new(msg));
             crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
         }
-        ("async_hooks", "createHook") => crate::async_hooks::js_async_hooks_create_hook(arg(0)),
-        ("async_hooks", "executionAsyncId") => {
-            crate::async_hooks::js_async_hooks_execution_async_id()
+        ("async_hooks", "createHook") => {
+            crate::async_hook_slots::js_async_hooks_create_hook(arg(0))
         }
-        ("async_hooks", "triggerAsyncId") => crate::async_hooks::js_async_hooks_trigger_async_id(),
+        ("async_hooks", "executionAsyncId") => {
+            crate::async_hook_slots::js_async_hooks_execution_async_id()
+        }
+        ("async_hooks", "triggerAsyncId") => {
+            crate::async_hook_slots::js_async_hooks_trigger_async_id()
+        }
         ("async_hooks", "executionAsyncResource") => {
-            crate::async_hooks::js_async_hooks_execution_async_resource()
+            crate::async_hook_slots::js_async_hooks_execution_async_resource()
         }
         _ => f64::from_bits(JSValue::undefined().bits()),
     }
@@ -327,8 +331,8 @@ pub(crate) unsafe fn nm_dispatch_bun(ctx: &NmCtx, module_name: &str, method_name
         ("bun", "write") => crate::bun_compat::js_bun_write(arg(0), arg(1)),
         ("bun", "Glob") => crate::bun_compat::js_bun_glob_new(arg(0)),
         ("bun", "unsupported") => crate::bun_compat::js_bun_unsupported(arg(0)),
-        ("bun", "pathToFileURL") => crate::url::js_url_path_to_file_url(arg(0), arg(1)),
-        ("bun", "fileURLToPath") => crate::url::js_url_file_url_to_path(arg(0), arg(1)),
+        ("bun", "pathToFileURL") => crate::url_hooks::url_path_to_file_url(arg(0), arg(1)),
+        ("bun", "fileURLToPath") => crate::url_hooks::url_file_url_to_path(arg(0), arg(1)),
         ("bun.ant", "getPeerUid") => crate::bun_compat::js_bun_ant_get_peer_uid(arg(0)),
         ("bun.ant", "getPeerPid") => crate::bun_compat::js_bun_ant_get_peer_pid(arg(0)),
         ("bun.ant", "memoryPressureLevel") => crate::bun_compat::js_bun_ant_memory_pressure_level(),

@@ -237,9 +237,7 @@ pub(super) unsafe fn construct_ordinary_compiled_function(
     // slots. The chain decides at every birth (one record load per level).
     let recorded = ((*(*proto).meta).instance_birth >> 32) as u32;
     {
-        if let Some(layout) =
-            crate::node_stream::instance_birth::derived_layout(proto_handle.get_nanbox_u64())
-        {
+        if let Some(layout) = crate::stream_hooks::derived_layout(proto_handle.get_nanbox_u64()) {
             if let Some(obj) = crate::object::layout_desc::alloc_derived_layout_object(
                 &*layout,
                 serial,

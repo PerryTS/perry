@@ -83,7 +83,7 @@ impl Drop for StateOwner {
         // runs this destructor): every observable effect already happened, so
         // the state is left to the OS instead of being torn down entry by
         // entry. Any other thread's exit frees it.
-        if crate::os::os_process_emitter::process_exit_event_emitted() {
+        if crate::os_hook_slots::process_exit_event_emitted() {
             return;
         }
         STATE_PTR.with(|c| c.set(std::ptr::null_mut()));

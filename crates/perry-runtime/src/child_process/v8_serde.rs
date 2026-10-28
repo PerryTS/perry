@@ -99,7 +99,7 @@ impl Drop for GcSuppressGuard {
 /// ordering is Node's, NOT Perry's: Buffer is inserted at index 10, pushing the
 /// BigInt views to 11/12. Verified empirically against `v8.serialize`.
 fn v8_index_for_kind(kind: u8) -> u64 {
-    use crate::typedarray::*;
+    use crate::typedarray_hook_slots::*;
     match kind {
         KIND_INT8 => 0,
         KIND_UINT8 => 1,
@@ -120,7 +120,7 @@ fn v8_index_for_kind(kind: u8) -> u64 {
 /// Inverse of [`v8_index_for_kind`]; `None` for Buffer (10), DataView (9), or an
 /// unknown index — the caller builds those specially.
 fn kind_for_v8_index(idx: u64) -> Option<u8> {
-    use crate::typedarray::*;
+    use crate::typedarray_hook_slots::*;
     Some(match idx {
         0 => KIND_INT8,
         1 => KIND_UINT8,
@@ -257,7 +257,7 @@ impl Serializer {
             }
             return true;
         }
-        if let Some(kind) = crate::typedarray::lookup_typed_array_kind(raw) {
+        if let Some(kind) = crate::typedarray_hook_slots::lookup_typed_array_kind(raw) {
             if self.write_reference_or_register(raw) {
                 return true;
             }
@@ -325,7 +325,7 @@ impl Serializer {
                 return true;
             }
             self.out.push(TAG_DATE);
-            self.write_double(crate::date::js_date_get_time(value));
+            self.write_double(crate::date_hook_slots::js_date_get_time(value));
             return true;
         }
         if let Some(header) = unsafe { crate::value::addr_class::try_read_gc_header(raw) } {
@@ -397,18 +397,18 @@ impl Serializer {
 
     fn write_bigint(&mut self, value: f64) {
         let ptr = JSValue::from_bits(value.to_bits()).as_bigint_ptr();
-        let negative = crate::bigint::js_bigint_is_negative(ptr) != 0;
+        let negative = crate::bigint_hooks::js_bigint_is_negative(ptr) != 0;
         // Read the magnitude as big-endian bytes (negate first if needed), then
         // reverse to the little-endian order V8's bigint digits use.
         let mag_ptr = if negative {
             {
-                crate::bigint::js_bigint_neg(ptr) as *const crate::bigint::BigIntHeader
+                crate::bigint_hooks::js_bigint_neg(ptr) as *const crate::bigint::BigIntHeader
             }
         } else {
             ptr
         };
         let nbytes = unsafe { (*mag_ptr).limb_count * 8 };
-        let be_buf = crate::bigint::js_bigint_to_buffer(mag_ptr, nbytes as i32);
+        let be_buf = crate::bigint_hooks::js_bigint_to_buffer(mag_ptr, nbytes as i32);
         let mut le: Vec<u8> = if be_buf.is_null() {
             Vec::new()
         } else {
@@ -731,7 +731,7 @@ impl<'a> Deserializer<'a> {
                 TAG_TWO_BYTE_STRING => self.read_two_byte_string()?,
                 TAG_DATE => {
                     let ms = self.read_double()?;
-                    let d = crate::date::js_date_new_from_timestamp(ms);
+                    let d = crate::date_hook_slots::js_date_new_from_timestamp(ms);
                     self.id_table.push(d);
                     d
                 }
@@ -790,9 +790,9 @@ impl<'a> Deserializer<'a> {
             mag |= (b as u64) << (i * 8);
         }
         let ptr = if negative {
-            crate::bigint::js_bigint_from_i64((mag as i64).wrapping_neg())
+            crate::bigint_hooks::js_bigint_from_i64((mag as i64).wrapping_neg())
         } else {
-            crate::bigint::js_bigint_from_u64(mag)
+            crate::bigint_hooks::js_bigint_from_u64(mag)
         };
         Some(crate::value::js_nanbox_bigint(ptr as i64))
     }
@@ -908,7 +908,7 @@ impl<'a> Deserializer<'a> {
             crate::string::js_string_from_bytes(flag_bytes.as_ptr(), flag_bytes.len() as u32);
         #[cfg(feature = "regex-engine")]
         {
-            let re = crate::regex::js_regexp_new(source, flags);
+            let re = crate::regex::hooked::new(source, flags);
             let boxed = cp_box_ptr(re as *const u8);
             self.id_table.push(boxed);
             Some(boxed)
@@ -1254,13 +1254,13 @@ fn int_to_value(v: i64) -> f64 {
 
 /// Build a NaN-boxed typed array of `kind` from raw little-endian bytes.
 fn make_typed_array(kind: u8, bytes: &[u8]) -> f64 {
-    let elem_size = crate::typedarray::elem_size_for_kind(kind);
+    let elem_size = crate::typedarray_hook_slots::elem_size_for_kind(kind);
     let length = if elem_size == 0 {
         0
     } else {
         bytes.len() / elem_size
     };
-    let ta = crate::typedarray::js_typed_array_new_empty(kind as i32, length as i32);
+    let ta = crate::typedarray_hook_slots::js_typed_array_new_empty(kind as i32, length as i32);
     if ta.is_null() {
         return cp_undefined();
     }

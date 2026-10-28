@@ -31,6 +31,7 @@ mod native_proto;
 mod parent_value;
 mod prim_result;
 mod proof_receivers;
+mod proto_value;
 mod protocol_calls;
 mod protocol_keys;
 mod receiver_this;

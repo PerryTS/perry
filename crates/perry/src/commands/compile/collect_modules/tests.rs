@@ -1340,3 +1340,29 @@ console.log(value);
         "compilePackages ESM files should not route through JS runtime"
     );
 }
+
+#[test]
+fn generated_native_namespaces_compile_without_package_opt_ins() {
+    for source in [
+        "async function main() { const util = await import('node:util'); console.log(util.format('%s', 'ok')); } main();",
+        "import * as util from 'node:util'; console.log(util['format']('%s', 'ok'));",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = dir.path().join("main.ts");
+        let cache = dir.path().join("node_modules/.cache/perry");
+        std::fs::create_dir_all(&cache).unwrap();
+        std::fs::write(&entry, source).unwrap();
+        let ctx = collect_with_package_policy(&cache, &entry, &[], &[]).unwrap();
+        assert!(ctx.js_runtime_importers.is_empty(), "{:?}", ctx.js_runtime_importers);
+        assert!(ctx.native_modules.keys().any(|path| path.starts_with(&cache)));
+        let generated = ctx
+            .native_modules
+            .iter()
+            .find(|(path, _)| path.starts_with(&cache))
+            .unwrap()
+            .1;
+        assert!(generated.imports.iter().any(|import| {
+            import.is_native && matches!(import.source.as_str(), "util" | "node:util")
+        }));
+    }
+}

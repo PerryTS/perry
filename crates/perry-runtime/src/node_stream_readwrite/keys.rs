@@ -47,20 +47,8 @@ pub(in super::super) unsafe fn own_field_by_key_bytes(
     None
 }
 
-/// Canonical trie keys share the runtime's existing atom and GC machinery.
-/// Taking a key cannot collect: callers may already hold an unrooted receiver.
-pub(in super::super) fn hidden_key(bytes: &'static [u8]) -> *mut crate::string::StringHeader {
-    let _no_gc = crate::gc::GcSuppressScope::new();
-    let hash = crate::object::key_bytes_hash(bytes.as_ptr(), bytes.len());
-    #[cfg(test)]
-    if std::env::var_os("PERRY_TEST_STREAM_LITERAL_KEY").is_some() {
-        return crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
-    }
-    // The canonical-keys trie adopts these same atoms (Appended::atomized).
-    // Resolve text identity at its source; traversing a singleton trie list
-    // here would add the trie's edge HashMap probe to every construction.
-    crate::string::js_string_pool_atom(bytes.as_ptr(), bytes.len() as u32, hash, 0)
-}
+// Ordinary method installation shares this no-GC atomization helper.
+pub(in super::super) use crate::object::native_method_install::native_method_key as hidden_key;
 
 #[cfg(test)]
 pub(crate) fn hidden_key_for_test(bytes: &'static [u8]) -> *mut crate::string::StringHeader {

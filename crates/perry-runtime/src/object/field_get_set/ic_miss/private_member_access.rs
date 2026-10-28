@@ -399,7 +399,7 @@ pub extern "C" fn js_private_brand_check(
         ));
     }
     if is_static != 0
-        && (crate::proxy::js_proxy_is_proxy(obj) != 0
+        && (crate::proxy_hooks::proxy_is_proxy(obj) != 0
             || !private_static_receiver_is_constructor(obj))
     {
         return false_value;

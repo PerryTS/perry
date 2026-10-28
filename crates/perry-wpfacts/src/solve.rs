@@ -568,6 +568,11 @@ impl Model {
         }
         let all = self.all_fields(t);
         self.edge(n, all);
+        if let Some(&nf) = self.num_fields.get(&t) {
+            if self.is_num_atom(a) {
+                self.edge(n, nf);
+            }
+        }
         // A key gained after a spread of `t`: the targets get it too.
         if let Some(v) = self.spread_to.get(&t).cloned() {
             for (d, site) in v {
@@ -766,6 +771,33 @@ impl Model {
             self.add_tok(n, s);
         }
         n
+    }
+
+    /// The fields of `t` a number key may name (DECISIONS 217): those under
+    /// a numeric key or the element key, and what it holds under a
+    /// computed key. ToPropertyKey of a number names no other.
+    pub fn num_fields(&mut self, t: Tok) -> NodeId {
+        if let Some(&n) = self.num_fields.get(&t) {
+            return n;
+        }
+        let n = self.node_named("numfields", || format!("numfields({t})"));
+        self.nodes[n as usize].obs = self.obs_toks.contains(&t);
+        self.nodes[n as usize].frame = self.fam_home(t);
+        self.num_fields.insert(t, n);
+        let fa = self.field_any(t);
+        self.edge(fa, n);
+        for a in self.field_keys.get(&t).cloned().unwrap_or_default() {
+            if self.is_num_atom(a) {
+                let f = self.field(t, a);
+                self.edge(f, n);
+            }
+        }
+        n
+    }
+
+    fn is_num_atom(&self, a: Atom) -> bool {
+        let s = &self.atoms[a as usize];
+        numeric_key(s) || s == ELEM || s == NUM_KEY
     }
 
     /// The node holding the prototype objects of `t`.
@@ -1782,6 +1814,8 @@ impl Model {
                 format!("birthfield {n} {} {src}", self.key_name(*key))
             }
             Cons::ProtoOf { dst } => format!("protoof {n} {dst}"),
+            Cons::ProtoValues { dst } => format!("protovalues {n} {dst}"),
+            Cons::PlainKey { origin, act } => format!("plainkey {n} {origin} {act:?}"),
             Cons::IterNext { dst } => format!("iternext {n} {dst}"),
             Cons::NewTargetHard { reason } => format!("newtargethard {n} {reason}"),
             Cons::ShareBuffer { ta } => format!("sharebuffer {n} {ta}"),
@@ -1789,6 +1823,8 @@ impl Model {
             Cons::ArrayLenArg { dst } => format!("arraylenarg {n} {dst}"),
             Cons::IdxLoad { idx, dst } => format!("idxload {n} {idx} {dst}"),
             Cons::IdxKey { obj, dst } => format!("idxkey {n} {obj} {dst}"),
+            Cons::IdxMCall { idx, call } => format!("idxmcall {n} {idx} {call}"),
+            Cons::IdxKeyCall { obj, prim, call } => format!("idxkeycall {n} {obj} {prim} {call}"),
             Cons::ForInBody { obj, call } => format!("forinbody {n} {obj} {call}"),
             Cons::ForInKeys { ft, call } => format!("forinkeys {n} {ft} {call}"),
             Cons::DefineKeyed {

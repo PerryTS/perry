@@ -881,7 +881,7 @@ fn test_movable_date_evacuation_migrates_expando_and_preserves_ts() {
 
     let _guard = CopyingNurseryTestGuard::new(1);
     let ts = 1_234_567_890.5_f64;
-    let date_addr = (crate::date::alloc_date_cell(ts).to_bits() & POINTER_MASK) as usize;
+    let date_addr = (crate::date_hook_slots::alloc_date_cell(ts).to_bits() & POINTER_MASK) as usize;
     assert!(crate::arena::pointer_in_nursery(date_addr));
 
     // A plain double: the property holder stores numbers in their canonical

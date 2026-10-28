@@ -92,7 +92,7 @@ pub(crate) fn array_iteration_is_exotic(arr: *const ArrayHeader) -> bool {
     }
     if super::header::receiver_may_be_registered_exotic(arr as *const ArrayHeader)
         && (crate::buffer::is_registered_buffer(arr as usize)
-            || crate::typedarray::lookup_typed_array_kind(arr as usize).is_some())
+            || crate::typedarray_hook_slots::lookup_typed_array_kind(arr as usize).is_some())
     {
         return true;
     }
@@ -121,7 +121,7 @@ pub(crate) fn array_iteration_is_exotic(arr: *const ArrayHeader) -> bool {
 pub(crate) unsafe fn array_iteration_is_exotic_cleaned(arr: *const ArrayHeader) -> bool {
     if super::header::receiver_may_be_registered_exotic(arr as *const ArrayHeader)
         && (crate::buffer::is_registered_buffer(arr as usize)
-            || crate::typedarray::lookup_typed_array_kind(arr as usize).is_some())
+            || crate::typedarray_hook_slots::lookup_typed_array_kind(arr as usize).is_some())
     {
         return true;
     }
@@ -314,7 +314,7 @@ pub extern "C" fn js_array_length(arr: *const ArrayHeader) -> u32 {
     if let Some(proxy) = array_ptr_as_proxy(arr) {
         let key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
         let key_f64 = crate::value::js_nanbox_string(key as i64);
-        let n = crate::builtins::js_number_coerce(crate::proxy::js_proxy_get(proxy, key_f64));
+        let n = crate::builtins::js_number_coerce(crate::proxy_hooks::proxy_get(proxy, key_f64));
         return if n.is_finite() && n > 0.0 {
             n.min(u32::MAX as f64) as u32
         } else {
@@ -405,7 +405,7 @@ pub extern "C" fn js_array_length(arr: *const ArrayHeader) -> u32 {
                     // access forced it), read the authoritative length
                     // from the materialized tree.
                     if !(*lazy).materialized.is_null() {
-                        let array = crate::json_tape::resolve_materialized_array(lazy.cast_mut());
+                        let array = crate::json_hooks::resolve_materialized_array(lazy.cast_mut());
                         return if array.is_null() { 0 } else { (*array).length };
                     }
                     return (*lazy).cached_length;
@@ -593,7 +593,7 @@ pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
             if (*gc_header).obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
                 let lazy = raw_ptr as *mut crate::json_tape::LazyArrayHeader;
                 if (*lazy).magic == crate::json_tape::LAZY_ARRAY_MAGIC {
-                    let value = crate::json_tape::lazy_get(lazy, index);
+                    let value = crate::json_hooks::lazy_get(lazy, index);
                     return f64::from_bits(value.bits());
                 }
             }
@@ -650,10 +650,10 @@ pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
     // already read above selects the typed authority first; the registry
     // remains the liveness/layout proof, exactly as for Map/Set.
     if crate::gc::is_typed_array_type(receiver_tag.0)
-        && crate::typedarray::lookup_typed_array_kind(raw_ptr as usize).is_some()
+        && crate::typedarray_hook_slots::lookup_typed_array_kind(raw_ptr as usize).is_some()
     {
-        return crate::typedarray::js_typed_array_get(
-            raw_ptr as *const crate::typedarray::TypedArrayHeader,
+        return crate::typedarray_hook_slots::js_typed_array_get(
+            raw_ptr as *const crate::typedarray_hook_slots::TypedArrayHeader,
             index as i32,
         );
     }
@@ -677,7 +677,7 @@ pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
         // is the proxy's `[[Get]]` (the `get` trap, else the target), the same
         // route `js_array_length` takes for its `length`.
         if let Some(proxy) = array_ptr_as_proxy(arr) {
-            return crate::proxy::js_proxy_get(proxy, index as f64);
+            return crate::proxy_hooks::proxy_get(proxy, index as f64);
         }
         // #7574: `a[i]` on a `class X extends Array` instance held in a
         // `T[]`-annotated binding. Read the object's indexed property through
@@ -701,9 +701,9 @@ pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
     // integer compare replace them.
     if super::header::receiver_may_be_registered_exotic(arr) {
         // Check if this is actually a TypedArray — dispatch through typed array helper
-        if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
-            return crate::typedarray::js_typed_array_get(
-                arr as *const crate::typedarray::TypedArrayHeader,
+        if crate::typedarray_hook_slots::lookup_typed_array_kind(arr as usize).is_some() {
+            return crate::typedarray_hook_slots::js_typed_array_get(
+                arr as *const crate::typedarray_hook_slots::TypedArrayHeader,
                 index as i32,
             );
         }
@@ -919,9 +919,9 @@ pub extern "C" fn js_array_set_f64(arr: *mut ArrayHeader, index: u32, value: f64
             return;
         }
         // Check if this is a typed array — route through per-kind store.
-        if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
-            crate::typedarray::js_typed_array_set(
-                arr as *mut crate::typedarray::TypedArrayHeader,
+        if crate::typedarray_hook_slots::lookup_typed_array_kind(arr as usize).is_some() {
+            crate::typedarray_hook_slots::js_typed_array_set(
+                arr as *mut crate::typedarray_hook_slots::TypedArrayHeader,
                 index as i32,
                 value,
             );
@@ -975,7 +975,7 @@ pub(crate) fn array_strict_index_write_guard(arr: *mut ArrayHeader, index: u32) 
     if clean.is_null()
         || (super::header::receiver_may_be_registered_exotic(clean as *const ArrayHeader)
             && (crate::buffer::is_registered_buffer(clean as usize)
-                || crate::typedarray::lookup_typed_array_kind(clean as usize).is_some()))
+                || crate::typedarray_hook_slots::lookup_typed_array_kind(clean as usize).is_some()))
     {
         return;
     }
@@ -1316,7 +1316,7 @@ fn js_array_set_f64_extend_strict_impl(
     if clean.is_null()
         || (super::header::receiver_may_be_registered_exotic(clean as *const ArrayHeader)
             && (crate::buffer::is_registered_buffer(clean as usize)
-                || crate::typedarray::lookup_typed_array_kind(clean as usize).is_some()))
+                || crate::typedarray_hook_slots::lookup_typed_array_kind(clean as usize).is_some()))
     {
         // Preserve the existing polymorphic/subclass behavior on receivers
         // that are not live plain arrays. These are cold and cannot use the
@@ -1563,9 +1563,9 @@ pub extern "C" fn js_array_set_f64_extend(
             return arr;
         }
         // Check if this is a typed array — route through per-kind store (no extension).
-        if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
-            crate::typedarray::js_typed_array_set(
-                arr as *mut crate::typedarray::TypedArrayHeader,
+        if crate::typedarray_hook_slots::lookup_typed_array_kind(arr as usize).is_some() {
+            crate::typedarray_hook_slots::js_typed_array_set(
+                arr as *mut crate::typedarray_hook_slots::TypedArrayHeader,
                 index as i32,
                 value,
             );

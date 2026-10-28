@@ -1052,7 +1052,7 @@ pub(super) fn replay_is_own(w: &crate::model::SharedWrite) -> bool {
     use crate::model::{Shared, SharedWrite};
     match w {
         SharedWrite::Store(s, _) | SharedWrite::Accessor(s, _) => *s == Shared::Top,
-        SharedWrite::Unmodeled(_) | SharedWrite::Handed(_) => true,
+        SharedWrite::Unmodeled(_) | SharedWrite::Handed(_) | SharedWrite::Hard(..) => true,
     }
 }
 

@@ -1032,12 +1032,12 @@ pub unsafe fn dispatch_x509_property(handle: i64, property: &str) -> f64 {
         "issuer" => x509_string_f64(&x509_format_name(tbs.issuer())),
         "validFrom" => x509_string_f64(&x509_format_time(&tbs.validity().not_before)),
         "validTo" => x509_string_f64(&x509_format_time(&tbs.validity().not_after)),
-        "validFromDate" => perry_runtime::date::js_date_new_from_timestamp(x509_time_millis(
-            &tbs.validity().not_before,
-        )),
-        "validToDate" => perry_runtime::date::js_date_new_from_timestamp(x509_time_millis(
-            &tbs.validity().not_after,
-        )),
+        "validFromDate" => perry_runtime::date_hook_slots::js_date_new_from_timestamp(
+            x509_time_millis(&tbs.validity().not_before),
+        ),
+        "validToDate" => perry_runtime::date_hook_slots::js_date_new_from_timestamp(
+            x509_time_millis(&tbs.validity().not_after),
+        ),
         "serialNumber" => x509_string_f64(&x509_serial_number_hex(&h.cert)),
         "signatureAlgorithm" => match x509_signature_algorithm_name(&h.cert) {
             Some(value) => x509_string_f64(value),

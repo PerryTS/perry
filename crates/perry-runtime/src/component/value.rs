@@ -82,7 +82,7 @@ fn encode_at(
         return Ok(json!(string(root.get_nanbox_f64())));
     }
     if js.is_bigint() {
-        let text = crate::bigint::js_bigint_to_string(js.as_bigint_ptr());
+        let text = crate::bigint_hooks::js_bigint_to_string(js.as_bigint_ptr());
         return Ok(json!({"$bigint":string(crate::value::js_nanbox_string(text as i64))}));
     }
     if super::array_pointer(root.get_nanbox_f64()).is_some() {
@@ -100,8 +100,8 @@ fn encode_at(
     }
     let js = JSValue::from_bits(root.get_nanbox_f64().to_bits());
     if js.is_pointer()
-        && crate::typedarray::lookup_typed_array_kind(js.as_pointer::<u8>() as usize)
-            == Some(crate::typedarray::KIND_UINT8)
+        && crate::typedarray_hook_slots::lookup_typed_array_kind(js.as_pointer::<u8>() as usize)
+            == Some(crate::typedarray_hook_slots::KIND_UINT8)
     {
         return crate::buffer::bytes::no_gc(|scope| {
             crate::buffer::bytes::bytes(root.get_nanbox_f64(), scope)
@@ -228,8 +228,8 @@ fn decode_at(
         Value::Array(values)
             if ty["kind"] == "list" && resolved(world, &ty["value"])["kind"] == "u8" =>
         {
-            let pointer = crate::typedarray::typed_array_alloc(
-                crate::typedarray::KIND_UINT8,
+            let pointer = crate::typedarray_hook_slots::typed_array_alloc(
+                crate::typedarray_hook_slots::KIND_UINT8,
                 values
                     .len()
                     .try_into()
@@ -237,7 +237,7 @@ fn decode_at(
             );
             let array = scope.root_raw_mut_ptr(pointer);
             for (i, value) in values.iter().enumerate() {
-                crate::typedarray::js_typed_array_set(
+                crate::typedarray_hook_slots::js_typed_array_set(
                     array.get_raw_mut_ptr(),
                     i as i32,
                     value
@@ -246,7 +246,7 @@ fn decode_at(
                 );
             }
             crate::value::js_nanbox_pointer(
-                array.get_raw_mut_ptr::<crate::typedarray::TypedArrayHeader>() as i64,
+                array.get_raw_mut_ptr::<crate::typedarray_hook_slots::TypedArrayHeader>() as i64,
             )
         }
         Value::Array(values) => {
@@ -290,7 +290,7 @@ fn decode_at(
                 );
             }
             if let Some(text) = object.get("$bigint").and_then(Value::as_str) {
-                return crate::value::js_nanbox_bigint(crate::bigint::js_bigint_from_string(
+                return crate::value::js_nanbox_bigint(crate::bigint_hooks::js_bigint_from_string(
                     text.as_ptr(),
                     text.len() as u32,
                 ) as i64);

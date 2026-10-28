@@ -48,7 +48,7 @@ extern "C" fn abort_signal_abort_thunk(
     _this: crate::closure::JsThis,
     reason: f64,
 ) -> f64 {
-    let signal = crate::url::abort::js_abort_signal_abort(reason);
+    let signal = crate::event_target_hook_slots::js_abort_signal_abort(reason);
     crate::value::js_nanbox_pointer(signal as i64)
 }
 
@@ -57,7 +57,7 @@ extern "C" fn abort_signal_timeout_thunk(
     _this: crate::closure::JsThis,
     ms: f64,
 ) -> f64 {
-    let signal = crate::url::abort::js_abort_signal_timeout(ms);
+    let signal = crate::event_target_hook_slots::js_abort_signal_timeout(ms);
     crate::value::js_nanbox_pointer(signal as i64)
 }
 
@@ -75,7 +75,7 @@ extern "C" fn abort_signal_any_thunk(
     if array.is_null() {
         crate::validators::throw_invalid_arg_type("signals", "Array", signals);
     }
-    let signal = crate::url::abort::js_abort_signal_any(array);
+    let signal = crate::event_target_hook_slots::js_abort_signal_any(array);
     crate::value::js_nanbox_pointer(signal as i64)
 }
 
@@ -85,12 +85,12 @@ extern "C" fn url_can_parse_thunk(
     input: f64,
     base: f64,
 ) -> f64 {
-    let input_ptr = crate::url::js_url_coerce_string(input);
+    let input_ptr = crate::url_hooks::url_coerce_string(input);
     let ok = if base.to_bits() == crate::value::TAG_UNDEFINED {
-        crate::url::js_url_can_parse(input_ptr)
+        crate::url_hooks::url_can_parse(input_ptr)
     } else {
-        let base_ptr = crate::url::js_url_coerce_string(base);
-        crate::url::js_url_can_parse_with_base(input_ptr, base_ptr)
+        let base_ptr = crate::url_hooks::url_coerce_string(base);
+        crate::url_hooks::url_can_parse_with_base(input_ptr, base_ptr)
     };
     f64::from_bits(crate::value::JSValue::bool(ok != 0).bits())
 }
@@ -101,12 +101,12 @@ extern "C" fn url_parse_thunk(
     input: f64,
     base: f64,
 ) -> f64 {
-    let input_ptr = crate::url::js_url_coerce_string(input);
+    let input_ptr = crate::url_hooks::url_coerce_string(input);
     let url = if base.to_bits() == crate::value::TAG_UNDEFINED {
-        crate::url::js_url_parse(input_ptr)
+        crate::url_hooks::url_parse(input_ptr)
     } else {
-        let base_ptr = crate::url::js_url_coerce_string(base);
-        crate::url::js_url_parse_with_base(input_ptr, base_ptr)
+        let base_ptr = crate::url_hooks::url_coerce_string(base);
+        crate::url_hooks::url_parse_with_base(input_ptr, base_ptr)
     };
     if url.is_null() {
         f64::from_bits(crate::value::TAG_NULL)
@@ -1105,7 +1105,7 @@ pub(crate) extern "C" fn url_pattern_test_thunk(
     let base = rest_first_arg(rest);
     let this_value = this.as_f64();
     let pattern = crate::value::js_nanbox_get_pointer(this_value) as *mut ObjectHeader;
-    crate::url::js_url_pattern_test(pattern, input, base)
+    crate::url_hooks::url_pattern_test(pattern, input, base)
 }
 
 pub(crate) extern "C" fn url_pattern_exec_thunk(
@@ -1117,7 +1117,7 @@ pub(crate) extern "C" fn url_pattern_exec_thunk(
     let base = rest_first_arg(rest);
     let this_value = this.as_f64();
     let pattern = crate::value::js_nanbox_get_pointer(this_value) as *mut ObjectHeader;
-    crate::url::js_url_pattern_exec(pattern, input, base)
+    crate::url_hooks::url_pattern_exec(pattern, input, base)
 }
 
 fn rest_first_arg(rest: f64) -> f64 {

@@ -17,7 +17,9 @@ import os
 from pathlib import Path
 import platform
 import re
+import socket
 import shutil
+import shlex
 import struct
 import subprocess
 import sys
@@ -25,11 +27,84 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "tests/link_absence"
+NEGATIVES = {
+    "hello": None,
+    "without_math": ["global_math"],
+    "without_regex": ["regex_engine"],
+    "without_node_stream": ["node_stream"],
+    "without_json": ["global_json", "json_tape"],
+    "bun_file_without_json": ["global_json", "json_tape"],
+    "without_turnloop_net": ["turnloop_net"],
+    "without_turnloop": ["turnloop"],
+    "without_bigint": ["bigint"],
+    "without_proxy": ["proxy"],
+    "without_url": ["url_engine", "global_url"],
+    "without_fs": ["fs"],
+    "without_thread": ["thread"],
+    "without_date": ["date"],
+    "without_perf_hooks": ["perf_hooks"],
+    "without_os": ["os"],
+    "without_wasi": ["wasi"],
+    "without_event_target": ["event_target"],
+    "without_typedarray": ["typedarray"],
+    "without_proc_ipc": ["proc_ipc"],
+    "without_bun_cli": ["bun_cli_utils"],
+    "without_node_test": ["mod_node_test"],
+    "without_temporal": ["temporal"],
+    "without_dgram": ["mod_dgram"],
+    "without_wasm": ["wasm_host"],
+    "without_segmenter": ["intl_segmenter"],
+    "without_node_api_host": ["node_api_host"],
+    "without_normalize": ["string_normalize"],
+    "without_diagnostics": ["diagnostics"],
+    "without_dyn_eval": ["dyn_eval"],
+    "without_messaging": ["messaging"],
+    "without_async_hooks": ["async_hooks"],
+    "without_bigint_querystring": ["bigint"],
+    "fs_promises_without_streams": ["bundled_web_streams"],
+}
 
 
-def run(cmd, *, cwd=None, env=None, timeout=180):
+def run(cmd, *, cwd=None, env=None, timeout=180, input=None):
     return subprocess.run([str(x) for x in cmd], cwd=cwd, env=env,
-                          capture_output=True, timeout=timeout)
+                          capture_output=True, timeout=timeout, input=input)
+
+
+def run_witness(cmd, *, cwd, options):
+    data = options["stdin"].encode() if options["stdin"] is not None else None
+    if options["ipc_driver"]:
+        driver = cwd / options["ipc_driver"]
+        shutil.copyfile(FIXTURES / options["ipc_driver"], driver)
+        return run(["node", driver, json.dumps([str(x) for x in cmd])], cwd=cwd,
+                   input=data, timeout=10)
+    if options["ipc"] is None:
+        return run(cmd, cwd=cwd, input=data)
+    # Node and Perry adopt the same inherited fd and newline JSON framing.
+    # Keep the parent endpoint open until the child exits, so EOF cannot race
+    # the callback. A missing delivery times out instead of passing silently.
+    parent, child = socket.socketpair()
+    with parent, child:
+        env = {**os.environ, "NODE_CHANNEL_FD": str(child.fileno()),
+               "NODE_CHANNEL_SERIALIZATION_MODE": "json"}
+        with subprocess.Popen([str(x) for x in cmd], cwd=cwd, env=env,
+                              pass_fds=(child.fileno(),), stdin=subprocess.PIPE,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
+            child.close()
+            try:
+                parent.sendall((json.dumps(options["ipc"])+"\n").encode())
+                stdout, stderr = process.communicate(data, timeout=10)
+                if options["ipc_reply"] is not None:
+                    parent.settimeout(1)
+                    payload = bytearray()
+                    while chunk := parent.recv(65536):
+                        payload.extend(chunk)
+                    messages = [json.loads(line) for line in payload.splitlines() if line]
+                    assert messages == [options["ipc_reply"]], f"IPC reply mismatch: {messages!r}"
+            except BaseException:
+                process.kill()
+                process.communicate()
+                raise
+            return subprocess.CompletedProcess(cmd, process.returncode, stdout, stderr)
 
 
 def checked(cmd, **kwargs):
@@ -51,26 +126,75 @@ def tool(name):
     return value
 
 
+def native_install_hooks():
+    native_source = (ROOT / "crates/perry-codegen/src/nm_install.rs").read_text()
+    native_section = native_source.split("const NM_INSTALL_SYMBOLS:", 1)[1].split("\n];", 1)[0]
+    return set(re.findall(r'"(js_\w+)"', native_section))
+
+
+def witness_options(path):
+    source = path.read_text()
+    argv = re.search(r"^// HWS argv: (.+)$", source, re.M)
+    argv = json.loads(argv[1]) if argv else ["world"]
+    assert isinstance(argv, list) and all(isinstance(arg, str) for arg in argv), f"{path}: argv must be a JSON string list"
+    oracle = re.search(r"^// HWS node: (.+)$", source, re.M)
+    oracle = oracle[1] if oracle else None
+    if oracle:
+        assert Path(oracle).name == oracle and Path(oracle).suffix in (".js", ".mjs", ".ts"), f"{path}: Node oracle must be a sibling source filename"
+        assert (FIXTURES / oracle).is_file(), f"{path}: missing Node oracle {oracle}"
+    stdin=re.search(r"^// HWS stdin: (.+)$",source,re.M)
+    stdin=json.loads(stdin[1]) if stdin else None
+    assert stdin is None or isinstance(stdin,str), f"{path}: stdin must be a JSON string"
+    ipc = re.search(r"^// HWS ipc: (.+)$", source, re.M)
+    ipc = json.loads(ipc[1]) if ipc else None
+    assert ipc is None or isinstance(ipc, dict), f"{path}: ipc must be a JSON object"
+    reply = re.search(r"^// HWS ipc reply: (.+)$", source, re.M)
+    reply = json.loads(reply[1]) if reply else None
+    assert reply is None or isinstance(reply, dict), f"{path}: ipc reply must be a JSON object"
+    assert reply is None or ipc is not None, f"{path}: ipc reply requires an inherited IPC channel"
+    driver = re.search(r"^// HWS ipc driver: (.+)$", source, re.M)
+    driver = driver[1] if driver else None
+    if driver:
+        assert Path(driver).name == driver and Path(driver).suffix == ".mjs", f"{path}: IPC driver must be a sibling .mjs"
+        assert (FIXTURES / driver).is_file(), f"{path}: missing IPC driver {driver}"
+        assert ipc is None and reply is None, f"{path}: use a driver or JSON IPC transport"
+    return {"argv": argv, "node": oracle,"stdin":stdin,"ipc":ipc,"ipc_reply":reply,"ipc_driver":driver}
+
+
 def inventory():
     source = (ROOT / "crates/perry/src/commands/stdlib_installs.rs").read_text()
     section = source.split("const RUNTIME_INSTALLS:", 1)[1].split("\n];", 1)[0]
     hooks = set(re.findall(r'"(js_runtime_install_\w+)"', section))
     assert hooks, "RUNTIME_INSTALLS not found"
+    stdlib_section = source.split("const INSTALLS:", 1)[1].split("\n];", 1)[0]
+    stdlib_hooks = set(re.findall(r'"(js_stdlib_install_\w+)"', stdlib_section))
+    native_hooks = native_install_hooks()
     fixtures = {}
     for path in sorted(FIXTURES.glob("*.ts")):
-        if path.stem in ("hello", "without_math"):
+        if path.stem in NEGATIVES:
             continue
         source = path.read_text()
         hook = re.search(r"^// HWS hook: (.+)$", source, re.M)
         rule = re.search(r"^// HWS prefixes: (.+)$", source, re.M)
         assert hook and rule, f"{path}: missing hook/prefix declaration"
         hook = hook[1]
-        assert hook in hooks or hook == "none (no hook yet)", f"{path}: unknown hook {hook}"
+        assert hook in hooks | stdlib_hooks | native_hooks or hook == "none (no hook yet)", f"{path}: unknown hook {hook}"
         prefixes = rule[1].split("|")
         assert all(prefixes), f"{path}: empty prefix matches every symbol"
-        if hook in hooks:
+        if hook in hooks | stdlib_hooks | native_hooks:
             prefixes.append(hook)
-        fixtures[path.stem] = {"hook": hook, "prefixes": prefixes}
+        options = witness_options(path)
+        companion = re.search(r"^// HWS companion: (.+)$", source, re.M)
+        fixtures[path.stem] = {"hook": hook, "prefixes": prefixes,
+                               "companion": companion[1] if companion else None,
+                               "native_hook": hook in native_hooks, "argv": options["argv"]}
+    for name, fixture in fixtures.items():
+        parent = fixture["companion"]
+        if parent:
+            assert parent in fixtures and parent != name, f"{name}: unknown companion owner {parent}"
+            owner = fixtures[parent]
+            assert not owner["companion"], f"{name}: companion owner is itself a companion"
+            assert set(fixture["prefixes"]) <= set(owner["prefixes"]), f"{name}: companion symbols lack an absence rule"
     covered = {f["hook"] for f in fixtures.values()}
     assert hooks <= covered, f"new runtime hooks need positive witnesses: {sorted(hooks-covered)}"
     return fixtures
@@ -180,6 +304,29 @@ def compile_witness(args, name, env, extra=""):
     assert len(installs) == 1, f"{name}: missing selected runtime install evidence"
     selected = set(installs[0].decode().split(", ")) - {""}
     assert "js_runtime_install_compiled" not in selected, "full installs invalidate absence check"
+    stdlib_installs = re.findall(rb"stdlib installs: ([^\r\n]*)", log)
+    assert len(stdlib_installs) <= 1, f"{name}: duplicate stdlib install evidence"
+    if stdlib_installs:
+        selected.update(set(stdlib_installs[0].decode().split(", ")) - {""})
+        assert "js_stdlib_install_compiled" not in selected, "full stdlib installs invalidate absence check"
+        expected_stdlib = str(Path(env["PERRY_RUNTIME_DIR"])/"libperry_stdlib.a").encode()
+        assert expected_stdlib in log, f"{name}: did not link the pinned stdlib archive"
+    # Native-module installs are calls in the compiler's program objects,
+    # rather than in its runtime feature object. Read their undefined symbols
+    # from exactly the kept objects named by the actual link invocation. Archive
+    # references cannot count as program selection or exempt leaked code.
+    links = re.findall(rb"^\[link\] invoking: ([^\r\n]*)", log, re.M)
+    assert len(links) == 1, f"{name}: missing unique link command"
+    objects = [Path(word) for word in shlex.split(links[0].decode()) if word.endswith(".o")]
+    assert objects and all(p.is_file() for p in objects), f"{name}: compiler did not keep its program objects"
+    undefined = checked([tool("llvm-nm"), "--undefined-only", "--format=posix", *objects])
+    native_hooks = native_install_hooks()
+    for row in undefined.splitlines():
+        fields = row.split()
+        if len(fields) >= 2 and fields[1] == "U":
+            symbol = fields[0][1:] if sys.platform == "darwin" else fields[0]
+            if symbol in native_hooks:
+                selected.add(symbol)
     return binary, selected, log
 
 
@@ -188,12 +335,16 @@ def why_live(args, name, symbol, env, demangler):
     if sys.platform == "darwin":
         # Apple's final symbol table drops LTO's .llvm.<id> suffix. why_live
         # needs the input atom spelling, not that renamed output symbol.
-        archive = Path(env["PERRY_RUNTIME_DIR"])/"libperry_runtime.a"
-        listing = checked([tool("llvm-nm"), "--format=posix", "--defined-only", archive])
-        candidates = [line.split()[0] for line in listing.splitlines()
-                      if line.split() and line.split()[0].startswith(raw+".llvm.")]
-        if candidates:
-            raw = candidates[0]
+        for filename in ("libperry_runtime.a", "libperry_stdlib.a"):
+            archive = Path(env["PERRY_RUNTIME_DIR"])/filename
+            if not archive.is_file():
+                continue
+            listing = checked([tool("llvm-nm"), "--format=posix", "--defined-only", archive])
+            candidates = [line.split()[0] for line in listing.splitlines()
+                          if line.split() and line.split()[0].startswith(raw+".llvm.")]
+            if candidates:
+                raw = candidates[0]
+                break
         flags = f"-Wl,-why_live,{raw}"
     else:
         flags = f"-fuse-ld=lld -Wl,--why-live={raw}"
@@ -234,18 +385,24 @@ def main():
     known_path = FIXTURES / "known-failing" / (key+".json")
     known = json.loads(known_path.read_text()) if known_path.exists() else {"lane": "HWS2", "symbols": {}}
     assert known["lane"] == "HWS2", "unknown exception owner"
-    assert set(known["symbols"]) <= set(fixtures), "exceptions for removed subsystem rules"
+    assert set(known["symbols"]) <= {n for n,f in fixtures.items() if not f["companion"]}, "exceptions for removed subsystem rules"
     env = dict(os.environ)
     env["PATH"] = str(Path(nm).parent) + os.pathsep + env.get("PATH", "")
     env.setdefault("PERRY_RUNTIME_DIR", str(Path(args.perry).parent))
     report = {"platform": key, "node": node_version, "witnesses": {}, "subsystems": {}, "failures": []}
     exceptions = {}
-    names = ["hello", "without_math"] + ([] if args.negative_only else list(fixtures))
+    names = list(NEGATIVES) + ([] if args.negative_only else list(fixtures))
     for name in names:
         try:
             binary, selected, _ = compile_witness(args, name, env)
-            oracle = run(["node", args.output/name/"main.ts", "world"], cwd=binary.parent)
-            actual = run([binary, "world"], cwd=binary.parent)
+            options = witness_options(FIXTURES / (name+".ts"))
+            witness_argv = options["argv"]
+            oracle_source = args.output/name/"main.ts"
+            if options["node"]:
+                oracle_source = args.output/name/options["node"]
+                shutil.copyfile(FIXTURES/options["node"], oracle_source)
+            oracle = run_witness(["node", oracle_source, *witness_argv], cwd=binary.parent, options=options)
+            actual = run_witness([binary, *witness_argv], cwd=binary.parent, options=options)
             (binary.parent/"node.stdout").write_bytes(oracle.stdout)
             (binary.parent/"native.stdout").write_bytes(actual.stdout)
             (binary.parent/"node.stderr").write_bytes(oracle.stderr)
@@ -257,34 +414,37 @@ def main():
             syms, text = symbols(binary, nm, demangler)
             report["witnesses"][name] = {"text_bytes": text, "binary_bytes": binary.stat().st_size,
                                           "installs": sorted(selected), "parity": True}
-            if name not in ("hello", "without_math"):
+            if name not in NEGATIVES:
                 fixture = fixtures[name]
-                assert any(matches(s, fixture) for s in syms), f"{name}: positive linked no matching symbols"
+                assert any(matches(s, fixture) and s["name"] != fixture["hook"] for s in syms), f"{name}: positive linked no matching symbols"
                 if fixture["hook"].startswith("js_"):
                     assert fixture["hook"] in selected, f"{name}: positive did not install {fixture['hook']}"
             else:
-                candidates = fixtures.items() if name == "hello" else [("global_math", fixtures["global_math"])]
+                candidates = (((n,f) for n,f in fixtures.items() if not f["companion"]) if NEGATIVES[name] is None else
+                              [(subsystem, fixtures[subsystem]) for subsystem in NEGATIVES[name]])
                 for subsystem, fixture in candidates:
                     hit = [s for s in syms if matches(s, fixture)]
                     installed = fixture["hook"] in selected
-                    if name == "without_math":
-                        assert not installed, "Math's negative witness unexpectedly installs Math"
-                    observed = sorted({s["name"] for s in hit}) if not installed else []
+                    forced_absent = name != "hello"
+                    checked_absence = not installed or forced_absent
+                    observed = sorted({s["name"] for s in hit}) if checked_absence else []
                     allowed = known["symbols"].get(subsystem, [])
                     new = sorted(set(observed)-set(allowed))
-                    failure = not installed and bool(new)
-                    stale = not installed and bool(allowed) and not observed
+                    failure = checked_absence and (bool(new) or (forced_absent and installed))
+                    stale = checked_absence and bool(allowed) and not observed
                     row = {"hook": fixture["hook"], "installed": installed, "linked": bool(hit),
                            "bytes": sum({s["address"]:s["bytes"] for s in hit}.values()),
                            "symbols": len(observed), "new_symbols": new,
-                           "status": "installed" if installed else "HWS2" if observed and not failure else "FAIL" if failure else "absent"}
+                           "status": "FAIL" if failure else "installed" if installed else "HWS2" if observed else "absent"}
                     if name == "hello":
                         report["subsystems"][subsystem] = row
                     else:
-                        report["math_negative"] = row
+                        report.setdefault("negative_witnesses", {}).setdefault(name, {})[subsystem] = row
+                        if name in ("without_math", "without_regex"):
+                            report["math_negative" if name == "without_math" else "regex_negative"] = row
                     if observed:
                         exceptions[subsystem] = observed
-                    if hit and not installed and (args.record_known_failures or failure):
+                    if hit and checked_absence and (args.record_known_failures or failure):
                         largest = max(hit, key=lambda s:s["bytes"])
                         row["largest"] = largest
                         row["why_live"] = why_live(args, name, largest, env, demangler)
@@ -293,7 +453,8 @@ def main():
                         if failure and not args.record_known_failures:
                             print(f"FAIL {subsystem}: new linked symbols {new[:3]}; largest={largest['name']}\n{row['why_live']}", flush=True)
                     if failure and not args.record_known_failures:
-                        report["failures"].append(f"{subsystem}: uninstalled subsystem has new linked symbols")
+                        reason = "negative witness selected a forbidden install" if forced_absent and installed else "uninstalled subsystem has new linked symbols"
+                        report["failures"].append(f"{subsystem}: {reason}")
                     if stale and not args.record_known_failures:
                         report["failures"].append(f"{subsystem}: fixed; remove HWS2 exception to lock in absence")
             print(f"{name}: parity ok, text={text}, installs={len(selected)}", flush=True)

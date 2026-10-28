@@ -62,7 +62,7 @@ pub(super) fn attach_to_object_with<T: 'static>(
             // A stream's state record without a payload takes the new cell
             // (`attach_external_rooted`); a weak collection's storage is not
             // a place for one.
-            None if crate::node_stream::is_stream_record_word(previous) => {}
+            None if crate::stream_hooks::is_stream_record_word(previous) => {}
             None => return false,
         }
     }
@@ -128,7 +128,7 @@ pub(crate) fn attach_external_rooted(
     obj.with_mut_ptr::<ObjectHeader, _>(|obj| unsafe {
         let meta = (*obj).meta;
         debug_assert!(!meta.is_null(), "object_meta_ensure ran above");
-        if crate::node_stream::store_record_payload_cell((*meta).native_state, word) {
+        if crate::stream_hooks::store_record_payload_cell((*meta).native_state, word) {
             return;
         }
         (*meta).native_state = word;

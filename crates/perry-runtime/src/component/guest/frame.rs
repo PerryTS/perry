@@ -63,6 +63,9 @@ pub(super) struct Frame {
     // Native metadata never caches a managed address across suspension.
     pub(super) borrow_states: Vec<u32>,
     pub(super) committed_borrows: Vec<(u32, u32)>,
+    // Canonical handle identities only. Async exports retain imported borrows
+    // until task.return/cancel, independently of the frame's later task exit.
+    incoming_borrows: Vec<(u32, u32)>,
     lifetime: Option<u32>,
     task: Option<task::TaskContext>,
     suspended: Option<suspended::SuspendedImport>,
@@ -102,6 +105,7 @@ impl Frame {
             borrows: Vec::new(),
             borrow_states: Vec::new(),
             committed_borrows: Vec::new(),
+            incoming_borrows: Vec::new(),
             lifetime: None,
             task: None,
             suspended: None,
@@ -183,6 +187,26 @@ impl Frame {
         self.get(slot)
     }
 
+    pub(super) fn retain_incoming_borrow(&mut self, ty: u32, handle: u32) {
+        // Synchronous adapters use the maintained backend's automatic drop.
+        // Async adapters disable that drop, whose C stack ends at the first
+        // suspension, and retire their borrows explicitly at return/cancel.
+        if self.task.is_some() && handle != 0 && !self.incoming_borrows.contains(&(ty, handle)) {
+            self.incoming_borrows.push((ty, handle));
+        }
+    }
+
+    fn end_resource_scope(&mut self) {
+        if let Some(slot) = self.lifetime.take() {
+            crate::array::js_array_set_f64(array(self.get(slot)), 0, 0.0);
+        }
+        for (ty, handle) in std::mem::take(&mut self.incoming_borrows) {
+            unsafe {
+                (super::ops().resource)((self as *mut Self).cast(), ty, 2, handle);
+            }
+        }
+    }
+
     pub fn error(&self) -> Option<f64> {
         self.failed.then(|| self.get(0))
     }
@@ -217,9 +241,7 @@ impl Drop for Frame {
         // native C-task drop must free only Rust state after that point.
         if self.alive.load(Ordering::Acquire) {
             super::resources::release_borrows(self);
-            if let Some(slot) = self.lifetime {
-                crate::array::js_array_set_f64(array(self.get(slot)), 0, 0.0);
-            }
+            self.end_resource_scope();
             let owner = unsafe { payload::link_event_owner(self.owner) }
                 .expect("canonical frame on owner thread");
             payload::close(owner, &FRAME);
@@ -268,11 +290,7 @@ pub unsafe extern "C" fn perry_component_frame_bootstrap(
     let mut frame = Frame::allocate_guest_frame();
     if let Some(error) = error {
         let values = scope.root_nanbox_f64(frame.values());
-        crate::array::js_array_set_f64(
-            array(values.get_nanbox_f64()),
-            0,
-            error.get_nanbox_f64(),
-        );
+        crate::array::js_array_set_f64(array(values.get_nanbox_f64()), 0, error.get_nanbox_f64());
         frame.failed = true;
     }
     Box::into_raw(Box::new(frame)).cast()
@@ -280,6 +298,22 @@ pub unsafe extern "C" fn perry_component_frame_bootstrap(
 #[no_mangle]
 pub unsafe extern "C" fn perry_component_frame_drop(pointer: *mut c_void) {
     drop(Box::from_raw(pointer.cast::<Frame>()));
+}
+/// End incoming canonical borrows before task.return or task.cancel, while
+/// retaining the task's traced values for post-return children. Idempotent;
+/// cleanup also runs on a failed frame and preserves its original error.
+/// # Safety
+/// `pointer` is an open frame on its creating agent. No canonical suspension
+/// or concurrent frame access is permitted while this function executes.
+#[no_mangle]
+pub unsafe extern "C" fn perry_component_frame_resource_scope_end(pointer: *mut c_void) -> i32 {
+    let owner = frame(pointer);
+    owner.end_resource_scope();
+    if owner.failed {
+        -1
+    } else {
+        0
+    }
 }
 #[no_mangle]
 pub unsafe extern "C" fn perry_component_frame_failed(pointer: *mut c_void) -> i32 {
@@ -320,7 +354,7 @@ pub unsafe extern "C" fn perry_component_frame_bool(pointer: *mut c_void, value:
 pub unsafe extern "C" fn perry_component_frame_s64(pointer: *mut c_void, value: i64) -> u32 {
     frame(pointer).guard(|frame| {
         frame.add(crate::value::js_nanbox_bigint(
-            crate::bigint::js_bigint_from_i64(value) as i64,
+            crate::bigint_hooks::js_bigint_from_i64(value) as i64,
         ))
     })
 }
@@ -328,7 +362,7 @@ pub unsafe extern "C" fn perry_component_frame_s64(pointer: *mut c_void, value: 
 pub unsafe extern "C" fn perry_component_frame_u64(pointer: *mut c_void, value: u64) -> u32 {
     frame(pointer).guard(|frame| {
         frame.add(crate::value::js_nanbox_bigint(
-            crate::bigint::js_bigint_from_u64(value) as i64,
+            crate::bigint_hooks::js_bigint_from_u64(value) as i64,
         ))
     })
 }
@@ -364,7 +398,10 @@ pub unsafe extern "C" fn perry_component_frame_bytes(
 ) -> u32 {
     frame(pointer).guard(|frame| {
         let len = u32::try_from(len).unwrap_or_else(|_| fail("Component byte list is too long"));
-        let array = crate::typedarray::typed_array_alloc(crate::typedarray::KIND_UINT8, len);
+        let array = crate::typedarray_hook_slots::typed_array_alloc(
+            crate::typedarray_hook_slots::KIND_UINT8,
+            len,
+        );
         let slot = frame.add(crate::value::js_nanbox_pointer(array as i64));
         // The new array has no aliases. Copy its canonical byte list in one
         // allocation-free borrow; per-element JS setters spend guest fuel on
@@ -699,13 +736,14 @@ const fn adapter_entry(code: *const ()) -> AdapterEntry {
 }
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
-static KEEP_ADAPTER_ENTRIES: [AdapterEntry; 48] = [
+static KEEP_ADAPTER_ENTRIES: [AdapterEntry; 49] = [
     adapter_entry(super::resources::payload::js_component_resource_create as *const ()),
     adapter_entry(super::resources::payload::js_component_resource_value as *const ()),
     adapter_entry(super::resources::payload::perry_component_frame_resource_destroy as *const ()),
     adapter_entry(super::resources::perry_component_frame_resource_lift as *const ()),
     adapter_entry(super::resources::perry_component_frame_resource_lower as *const ()),
     adapter_entry(super::resources::perry_component_frame_resource_commit as *const ()),
+    adapter_entry(perry_component_frame_resource_scope_end as *const ()),
     adapter_entry(perry_component_frame_new as *const ()),
     adapter_entry(perry_component_frame_bootstrap as *const ()),
     adapter_entry(perry_component_frame_drop as *const ()),

@@ -172,9 +172,9 @@ fn lower_guarded_numeric_arg_fast(
                 BinaryOp::Sub => ctx.block().fsub(&left, &right),
                 BinaryOp::Mul => ctx.block().fmul(&left, &right),
                 BinaryOp::Div => ctx.block().fdiv(&left, &right),
-                BinaryOp::Mod => ctx.block().call(
+                BinaryOp::Mod => ctx.block().call_gc_leaf(
                     DOUBLE,
-                    "js_number_mod",
+                    crate::codegen::numeric_remainder::CHECKED_NUMBER_REMAINDER,
                     &[(DOUBLE, &left), (DOUBLE, &right)],
                 ),
                 _ => bail!("unsupported guarded scalar method binary arg"),

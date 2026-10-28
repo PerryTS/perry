@@ -53,10 +53,10 @@ pub(super) unsafe fn construct(
         }
         BuiltinConstructorIdentity::Date => {
             if args.is_empty() {
-                return Some(crate::date::js_date_new());
+                return Some(crate::date_hook_slots::js_date_new());
             }
             if args.len() == 1 {
-                return Some(crate::date::js_date_new_from_value(args[0]));
+                return Some(crate::date_hook_slots::js_date_new_from_value(args[0]));
             }
             let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
             let mut vals = [undefined, undefined, 1.0, 0.0, 0.0, 0.0, 0.0];
@@ -65,7 +65,7 @@ pub(super) unsafe fn construct(
                     *slot = args[i];
                 }
             }
-            return Some(crate::date::js_date_new_local_components(
+            return Some(crate::date_hook_slots::js_date_new_local_components(
                 vals[0], vals[1], vals[2], vals[3], vals[4], vals[5], vals[6],
             ));
         }
@@ -193,7 +193,11 @@ pub(super) unsafe fn construct(
                 .get(1)
                 .copied()
                 .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
-            let event = crate::event_target::js_event_new(event_type, options, args.len() as u32);
+            let event = crate::event_target_hook_slots::js_event_new(
+                event_type,
+                options,
+                args.len() as u32,
+            );
             return Some(crate::value::js_nanbox_pointer(event as i64));
         }
         BuiltinConstructorIdentity::CustomEvent => {
@@ -205,8 +209,11 @@ pub(super) unsafe fn construct(
                 .get(1)
                 .copied()
                 .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
-            let event =
-                crate::event_target::js_custom_event_new(event_type, options, args.len() as u32);
+            let event = crate::event_target_hook_slots::js_custom_event_new(
+                event_type,
+                options,
+                args.len() as u32,
+            );
             return Some(crate::value::js_nanbox_pointer(event as i64));
         }
         BuiltinConstructorIdentity::DOMException => {
@@ -218,7 +225,7 @@ pub(super) unsafe fn construct(
                 .get(1)
                 .copied()
                 .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
-            let exception = crate::event_target::js_dom_exception_new(message, name);
+            let exception = crate::event_target_hook_slots::js_dom_exception_new(message, name);
             return Some(crate::value::js_nanbox_pointer(exception as i64));
         }
         // #2889: `new (rebound Error subclass)(msg)` through a global
@@ -270,7 +277,7 @@ pub(super) unsafe fn construct(
         BuiltinConstructorIdentity::Proxy => {
             let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
             let arg = |i: usize| args.get(i).copied().unwrap_or(undefined);
-            return Some(crate::proxy::js_proxy_new(arg(0), arg(1)));
+            return Some(crate::proxy_hooks::proxy_new(arg(0), arg(1)));
         }
         // #2889: `new (rebound RegExp)(pattern, flags)`.
         #[cfg(feature = "regex-engine")]
@@ -284,7 +291,7 @@ pub(super) unsafe fn construct(
                 .copied()
                 .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
             return Some(crate::value::js_nanbox_pointer(
-                crate::regex::js_regexp_construct(pattern, flags) as i64,
+                crate::regex::hooked::construct(pattern, flags) as i64,
             ));
         }
         // #2889: `new (rebound TypedArray)(lengthOrSource)`.
@@ -301,20 +308,32 @@ pub(super) unsafe fn construct(
         | BuiltinConstructorIdentity::BigInt64Array
         | BuiltinConstructorIdentity::BigUint64Array => {
             let kind = match name {
-                BuiltinConstructorIdentity::Int8Array => crate::typedarray::KIND_INT8,
-                BuiltinConstructorIdentity::Uint8Array => crate::typedarray::KIND_UINT8,
+                BuiltinConstructorIdentity::Int8Array => crate::typedarray_hook_slots::KIND_INT8,
+                BuiltinConstructorIdentity::Uint8Array => crate::typedarray_hook_slots::KIND_UINT8,
                 BuiltinConstructorIdentity::Uint8ClampedArray => {
-                    crate::typedarray::KIND_UINT8_CLAMPED
+                    crate::typedarray_hook_slots::KIND_UINT8_CLAMPED
                 }
-                BuiltinConstructorIdentity::Int16Array => crate::typedarray::KIND_INT16,
-                BuiltinConstructorIdentity::Uint16Array => crate::typedarray::KIND_UINT16,
-                BuiltinConstructorIdentity::Int32Array => crate::typedarray::KIND_INT32,
-                BuiltinConstructorIdentity::Uint32Array => crate::typedarray::KIND_UINT32,
-                BuiltinConstructorIdentity::Float16Array => crate::typedarray::KIND_FLOAT16,
-                BuiltinConstructorIdentity::Float32Array => crate::typedarray::KIND_FLOAT32,
-                BuiltinConstructorIdentity::Float64Array => crate::typedarray::KIND_FLOAT64,
-                BuiltinConstructorIdentity::BigInt64Array => crate::typedarray::KIND_BIGINT64,
-                _ => crate::typedarray::KIND_BIGUINT64,
+                BuiltinConstructorIdentity::Int16Array => crate::typedarray_hook_slots::KIND_INT16,
+                BuiltinConstructorIdentity::Uint16Array => {
+                    crate::typedarray_hook_slots::KIND_UINT16
+                }
+                BuiltinConstructorIdentity::Int32Array => crate::typedarray_hook_slots::KIND_INT32,
+                BuiltinConstructorIdentity::Uint32Array => {
+                    crate::typedarray_hook_slots::KIND_UINT32
+                }
+                BuiltinConstructorIdentity::Float16Array => {
+                    crate::typedarray_hook_slots::KIND_FLOAT16
+                }
+                BuiltinConstructorIdentity::Float32Array => {
+                    crate::typedarray_hook_slots::KIND_FLOAT32
+                }
+                BuiltinConstructorIdentity::Float64Array => {
+                    crate::typedarray_hook_slots::KIND_FLOAT64
+                }
+                BuiltinConstructorIdentity::BigInt64Array => {
+                    crate::typedarray_hook_slots::KIND_BIGINT64
+                }
+                _ => crate::typedarray_hook_slots::KIND_BIGUINT64,
             } as i32;
             let arg0 = if args.is_empty() {
                 f64::from_bits(crate::value::JSValue::number(0.0).bits())
@@ -333,14 +352,14 @@ pub(super) unsafe fn construct(
             // back to `js_typed_array_new` inside `js_typed_array_view`.
             let ta = if args.len() >= 2 {
                 let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
-                crate::typedarray_view::js_typed_array_view(
+                crate::typedarray_hook_slots::js_typed_array_view(
                     kind,
                     arg0,
                     args[1],
                     args.get(2).copied().unwrap_or(undefined),
                 )
             } else {
-                crate::typedarray::js_typed_array_new(kind, arg0)
+                crate::typedarray_hook_slots::js_typed_array_new(kind, arg0)
             };
             return Some(crate::value::js_nanbox_pointer(ta as i64));
         }
@@ -392,14 +411,14 @@ pub(super) unsafe fn construct(
         // constructs through the variable. Without this arm the dynamic
         // `new` fell through and threw "AbortController is not a function".
         BuiltinConstructorIdentity::AbortController => {
-            let controller = crate::url::js_abort_controller_new();
+            let controller = crate::event_target_hook_slots::js_abort_controller_new();
             return Some(crate::value::js_nanbox_pointer(controller as i64));
         }
         BuiltinConstructorIdentity::MessageChannel => {
-            return Some(crate::messaging::js_message_channel_new());
+            return Some(crate::messaging_hook_slots::js_message_channel_new());
         }
         BuiltinConstructorIdentity::MessagePort => {
-            return Some(crate::messaging::js_message_port_constructor_error());
+            return Some(crate::messaging_hook_slots::js_message_port_constructor_error());
         }
         BuiltinConstructorIdentity::Storage => {
             return Some(crate::web_storage::storage_constructor_illegal(
@@ -412,7 +431,7 @@ pub(super) unsafe fn construct(
                 .first()
                 .copied()
                 .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
-            return Some(crate::messaging::js_broadcast_channel_new(name));
+            return Some(crate::messaging_hook_slots::js_broadcast_channel_new(name));
         }
         BuiltinConstructorIdentity::URL => {
             if let Some(value) = crate::object::global_this::web_hooks::construct(
@@ -662,20 +681,20 @@ pub(in crate::object) unsafe fn web_url_construct(
                 .first()
                 .copied()
                 .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
-            let input_ptr = crate::url::js_url_coerce_string(input);
+            let input_ptr = crate::url_hooks::url_coerce_string(input);
             let url = if let Some(base) = args.get(1).copied() {
-                let base_ptr = crate::url::js_url_coerce_string(base);
-                crate::url::js_url_new_with_base(input_ptr, base_ptr)
+                let base_ptr = crate::url_hooks::url_coerce_string(base);
+                crate::url_hooks::url_new_with_base(input_ptr, base_ptr)
             } else {
-                crate::url::js_url_new(input_ptr)
+                crate::url_hooks::url_new(input_ptr)
             };
             return Some(crate::value::js_nanbox_pointer(url as i64));
         }
         BuiltinConstructorIdentity::URLSearchParams => {
             let params = if let Some(init) = args.first().copied() {
-                crate::url::js_url_search_params_new_any(init)
+                crate::url_hooks::url_search_params_new_any(init)
             } else {
-                crate::url::js_url_search_params_new_empty()
+                crate::url_hooks::url_search_params_new_empty()
             };
             return Some(crate::value::js_nanbox_pointer(params as i64));
         }

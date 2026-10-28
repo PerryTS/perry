@@ -339,6 +339,7 @@ mod testing_feature_gate_tests;
 #[cfg(test)]
 mod trusted_box_callback_tests;
 mod typed_abi;
+pub(crate) mod numeric_remainder;
 mod typed_abi_opt_report;
 mod typed_entry;
 pub(crate) use typed_entry::{emit_plain_number_bits_test, emit_plain_number_test};
@@ -4498,6 +4499,7 @@ fn emit_lowered_module(lowered: LoweredModule) -> Result<Vec<u8>> {
     // renderer and the in-process constructor see the same IR; a pass living in
     // one of them would silently not apply to the other.
     // See `crate::root_reload`.
+    numeric_remainder::define_checked_number_remainder_if_used(&mut llmod);
     progress.phase(1, "lowering complete; finalizing generated IR");
     crate::root_reload::apply_to_module(&mut llmod);
 
