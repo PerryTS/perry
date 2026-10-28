@@ -161,6 +161,7 @@ pub(super) fn registered_name_string(func_ptr: usize) -> Option<String> {
 
 /// Read the canonical metadata under its owner lock. Presence checks need the
 /// same UTF-8/precedence rules as reflection, but do not need an owned String.
+#[inline(always)]
 fn with_registered_name<T>(func_ptr: usize, read: impl FnOnce(&str) -> T) -> Option<T> {
     if let Ok(overrides) = function_name_overrides().lock() {
         if let Some(name) = overrides
