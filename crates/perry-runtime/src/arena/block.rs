@@ -611,6 +611,11 @@ pub(crate) struct Arena {
     pub(crate) space: HeapSpace,
     pub(crate) allocated_bytes: usize,
     pub(crate) large_allocated_bytes: usize,
+    /// Bytes in use across this arena's dedicated young leaf extents (exact:
+    /// leaf birth adds, retire/promotion subtracts). Lives in the arena the
+    /// trigger probes already hold, so a program with no leaf pays no extra
+    /// thread-local resolution to learn that.
+    pub(crate) young_leaf_bytes: usize,
 }
 
 /// The GC kinds whose payload owns native memory released at thread exit.
@@ -735,6 +740,7 @@ impl ArenaCell {
             space,
             allocated_bytes: 0,
             large_allocated_bytes: 0,
+            young_leaf_bytes: 0,
         }))
     }
 
