@@ -1941,7 +1941,7 @@ fn map_set_resolved(map: *mut MapHeader, key: f64, value: f64) {
         } else if is_string_like(key_bits) {
             // String key: content-hashed index bypasses the gen-GC stale-bits
             // constraint by storing entry indexes (not pointers) keyed by
-            // FNV-1a 64-bit hash of the bytes.
+            // Map-local word digest of the bytes.
             if let Some(h) = string_content_hash(key_bits) {
                 (*(*map).store).strings.insert(h, used);
             }
