@@ -283,6 +283,11 @@ fn main() -> Result<(), String> {
     if unsafe { probe() } != api.gc_init as usize {
         return Err("stdlib provider is bound to a different runtime image".into());
     }
+    // Dispatch initializes on the executor after its app layout is bound.
+    let register: unsafe extern "C" fn(extern "C" fn()) =
+        unsafe { symbol(stdlib, "js_stdlib_register_feature_installer")? };
+    let install: extern "C" fn() = unsafe { symbol(stdlib, "js_stdlib_install_compiled")? };
+    unsafe { register(install) };
     let module_init: ModuleInit = unsafe { symbol(app, "perry_module_init")? };
     let temporary: Handler = unsafe { symbol(app, &arguments[4])? };
     let retained: Handler = unsafe { symbol(app, &arguments[5])? };
