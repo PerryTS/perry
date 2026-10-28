@@ -451,6 +451,6 @@ mod tests {
         js_map_set(handle.get_raw_mut_ptr::<MapHeader>(), key, 99.0);
         let key = heap("target-value");
         assert_eq!(js_map_get(handle.get_raw_mut_ptr::<MapHeader>(), key), 99.0);
-        assert_eq!(js_map_size(handle.get_raw_mut_ptr::<MapHeader>()), 20.0);
+        assert_eq!(js_map_size(handle.get_raw_mut_ptr::<MapHeader>()), 20);
     }
 }
