@@ -1059,7 +1059,7 @@ pub(super) fn emit_guarded_direct_method_call(
             &holder_ok,
             &fast_label,
             &fallback_label,
-            true,
+            false,
             family_guard,
         );
     }

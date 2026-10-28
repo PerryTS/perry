@@ -39,3 +39,37 @@ fn packed_class_selection_proves_the_boxed_pointer_band_before_dereferencing() {
         gate.1
     );
 }
+
+#[test]
+fn stolen_method_this_uses_the_boxed_pointer_gate() {
+    let mut module = guarded_site_module();
+    module.classes[0].methods.push(func(
+        400,
+        "relay",
+        Vec::new(),
+        Type::Void,
+        vec![Stmt::Expr(call(Expr::This, "bump", Vec::new()))],
+    ));
+    let ir = emit_static(&module, false);
+    let body = function_body(&ir, "__Counter__relay(");
+    let gate = blocks(&body)
+        .into_iter()
+        .find(|(_, lines)| {
+            lines
+                .iter()
+                .any(|l| l.contains("br i1") && l.contains("label %method_direct.inline_deref"))
+        })
+        .expect("the public this value must be guarded");
+    assert!(gate
+        .1
+        .iter()
+        .any(|l| l.contains("icmp eq i64") && l.ends_with(", 32765")));
+    assert!(
+        !gate
+            .1
+            .iter()
+            .any(|l| l.contains("icmp eq i64") && l.ends_with(", 0")),
+        "a stolen method cannot interpret Number this as a raw pointer: {:?}",
+        gate.1
+    );
+}
