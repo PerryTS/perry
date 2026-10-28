@@ -586,26 +586,29 @@ fn matrix_frozen_sort_preserves_elements_and_throws_only_on_writes() {
                 values.as_ptr(),
                 values.len() as u32,
             ));
-            crate::object::js_object_freeze(crate::value::js_nanbox_pointer(
-                arr.get_raw_mut_ptr::<ArrayHeader>() as i64,
-            ));
+            arr.with_mut_ptr::<ArrayHeader, _>(|array| {
+                crate::object::js_object_freeze(crate::value::js_nanbox_pointer(array as i64));
+            });
             let cmp = scope.root_raw_const_ptr(crate::closure::js_closure_alloc(
                 crate::fn_info!(frozen_sort_compare, 2),
                 0,
             ));
-            let result = crate::exception::catch_js_throw(|| {
-                if comparator {
-                    js_array_sort_with_comparator(
-                        arr.get_raw_mut_ptr::<ArrayHeader>(),
-                        cmp.get_raw_const_ptr(),
-                    )
-                } else {
-                    js_array_sort_default(arr.get_raw_mut_ptr::<ArrayHeader>())
-                }
+            let (result, live) = arr.across_mut::<ArrayHeader, _>(|| {
+                crate::exception::catch_js_throw(|| {
+                    arr.with_mut_ptr(|array| {
+                        if comparator {
+                            cmp.with_const_ptr(|compare| {
+                                js_array_sort_with_comparator(array, compare)
+                            })
+                        } else {
+                            js_array_sort_default(array)
+                        }
+                    })
+                })
             });
             assert_eq!(result.is_err(), throws, "{label}, comparator={comparator}");
             match result {
-                Ok(out) => assert_eq!(out, arr.get_raw_mut_ptr::<ArrayHeader>()),
+                Ok(out) => assert_eq!(out, live),
                 Err(error) => unsafe {
                     let address = (error.to_bits() & crate::value::POINTER_MASK) as usize;
                     assert!(crate::error::ptr_is_native_error(address));
@@ -615,7 +618,6 @@ fn matrix_frozen_sort_preserves_elements_and_throws_only_on_writes() {
                     );
                 },
             }
-            let live = arr.get_raw_mut_ptr::<ArrayHeader>();
             assert_eq!(unsafe { (*live).length }, values.len() as u32);
             for (index, value) in values.iter().enumerate() {
                 assert_eq!(
@@ -646,38 +648,32 @@ fn matrix_sort_mutable_and_frozen_to_sorted_controls() {
                 2,
             ));
             if copy {
-                crate::object::js_object_freeze(crate::value::js_nanbox_pointer(
-                    arr.get_raw_mut_ptr::<ArrayHeader>() as i64,
-                ));
+                arr.with_mut_ptr::<ArrayHeader, _>(|array| {
+                    crate::object::js_object_freeze(crate::value::js_nanbox_pointer(array as i64));
+                });
             }
             let cmp = scope.root_raw_const_ptr(crate::closure::js_closure_alloc(
                 crate::fn_info!(frozen_sort_compare, 2),
                 0,
             ));
-            let out = match (copy, comparator) {
-                (false, false) => js_array_sort_default(arr.get_raw_mut_ptr::<ArrayHeader>()),
-                (false, true) => js_array_sort_with_comparator(
-                    arr.get_raw_mut_ptr::<ArrayHeader>(),
-                    cmp.get_raw_const_ptr(),
-                ),
-                (true, false) => js_array_to_sorted_default(arr.get_raw_mut_ptr::<ArrayHeader>()),
-                (true, true) => js_array_to_sorted_with_comparator(
-                    arr.get_raw_mut_ptr::<ArrayHeader>(),
-                    cmp.get_raw_const_ptr(),
-                ),
-            };
-            assert_eq!(out == arr.get_raw_mut_ptr::<ArrayHeader>(), !copy);
+            let (out, live) = arr.across_mut::<ArrayHeader, _>(|| {
+                arr.with_mut_ptr(|array| match (copy, comparator) {
+                    (false, false) => js_array_sort_default(array),
+                    (false, true) => {
+                        cmp.with_const_ptr(|compare| js_array_sort_with_comparator(array, compare))
+                    }
+                    (true, false) => js_array_to_sorted_default(array),
+                    (true, true) => cmp.with_const_ptr(|compare| {
+                        js_array_to_sorted_with_comparator(array, compare)
+                    }),
+                })
+            });
+            assert_eq!(out == live, !copy);
             assert_eq!(unsafe { (*out).length }, 2);
             assert_eq!(js_array_get_f64(out, 0), 1.0);
             assert_eq!(js_array_get_f64(out, 1), 2.0);
-            assert_eq!(
-                js_array_get_f64(arr.get_raw_mut_ptr::<ArrayHeader>(), 0),
-                if copy { 2.0 } else { 1.0 }
-            );
-            assert_eq!(
-                js_array_get_f64(arr.get_raw_mut_ptr::<ArrayHeader>(), 1),
-                if copy { 1.0 } else { 2.0 }
-            );
+            assert_eq!(js_array_get_f64(live, 0), if copy { 2.0 } else { 1.0 });
+            assert_eq!(js_array_get_f64(live, 1), if copy { 1.0 } else { 2.0 });
         }
     }
 }
