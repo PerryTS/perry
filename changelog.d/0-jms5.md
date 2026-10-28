@@ -1,1 +1,1 @@
-Map existing-key reads and replacements use the canonical entry identity before numeric normalization; replacements retain exact GC slot barriers while avoiding insertion allocation frames.
+Use the actual Map brand and canonical stored-key identity to keep existing-key reads and replacements out of normalization, insertion and subclass fallback frames, retaining exact GC slot barriers and complete fallback semantics.

@@ -313,9 +313,9 @@ pub(crate) fn test_map_side_deallocation_snapshot() -> (u64, u64) {
     )
 }
 
+mod entry;
 mod store;
 mod string_key;
-mod entry;
 
 use store::*;
 #[cfg(test)]
@@ -1969,31 +1969,41 @@ pub extern "C" fn js_map_set_string_string(
 /// Returns the value, or TAG_UNDEFINED if not found
 #[no_mangle]
 pub extern "C" fn js_map_get(map: *const MapHeader, key: f64) -> f64 {
-    let map = clean_map_ptr(map);
-    if map.is_null() {
-        return f64::from_bits(TAG_UNDEFINED);
+    if let Some(map) = entry::plain_receiver(map) {
+        return map_get_resolved(map, key);
     }
-    map_get_resolved(map, key)
+    entry::get_receiver_fallback(map, key)
 }
 
 #[inline(always)]
 fn map_get_resolved(map: *const MapHeader, key: f64) -> f64 {
     unsafe {
-        let idx = entry::find_entry(map, key);
-
-        if idx >= 0 {
-            let entries = entries_ptr(map);
-            let value_slot = entries.add((idx as usize) * 2 + 1);
-            let value = ptr::read(value_slot);
-            // Primitive values need no array-forwarding resolution frame.
-            if value.to_bits() & crate::value::TAG_MASK != crate::value::POINTER_TAG {
-                return value;
-            }
-            return heal_forwarded_array_value(map, value_slot, value);
+        if let Some(index) = entry::identical_entry(map, key) {
+            return map_read_entry_value(map, index);
         }
-
-        f64::from_bits(TAG_UNDEFINED)
     }
+    map_get_resolved_fallback(map, key)
+}
+
+#[inline(never)]
+fn map_get_resolved_fallback(map: *const MapHeader, key: f64) -> f64 {
+    unsafe {
+        let index = find_key_index(map, normalize_zero(key));
+        if index >= 0 {
+            return map_read_entry_value(map, index);
+        }
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+#[inline(always)]
+unsafe fn map_read_entry_value(map: *const MapHeader, index: i32) -> f64 {
+    let slot = entries_ptr(map).add(index as usize * 2 + 1);
+    let value = ptr::read(slot);
+    if value.to_bits() & crate::value::TAG_MASK != crate::value::POINTER_TAG {
+        return value;
+    }
+    heal_forwarded_array_value(map, slot, value)
 }
 
 crate::entry_contracts::kind_entry! {

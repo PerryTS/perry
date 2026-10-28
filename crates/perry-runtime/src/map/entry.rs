@@ -1,68 +1,87 @@
-//! Existing-entry operations keep numeric normalization and allocation frames
-//! off the identity hit. The entry payload, not a mirrored key cache, proves it.
+//! Map entry identity is proved from canonical storage; the actual receiver
+//! brand selects the ordinary operation, with complete semantics on fallback.
 use super::*;
 
-/// A bit-identical live entry is SameValueZero-equal. Normalization is needed
-/// only when that proof fails: -0 and noncanonical NaNs then take the complete
-/// path. A hole must never match an entry tombstone before normalization.
 #[inline(always)]
-pub(super) unsafe fn find_entry(map: *const MapHeader, key: f64) -> i32 {
+pub(super) fn plain_receiver(map: *const MapHeader) -> Option<*const MapHeader> {
+    let map = map_receiver_identity(map);
+    match unsafe { crate::value::addr_class::try_read_gc_header(map as usize) } {
+        Some(header) if header.obj_type == crate::gc::GC_TYPE_MAP => Some(map),
+        _ => None,
+    }
+}
+
+/// Bit identity proves SameValueZero for a live, canonical stored key. A hole
+/// must never be admitted against a tombstone before its normalization.
+#[inline(always)]
+pub(super) unsafe fn identical_entry(map: *const MapHeader, key: f64) -> Option<i32> {
     let used = (*map).used;
     let bits = key.to_bits();
     if used <= SIDE_TABLE_THRESHOLD && bits != MAP_HOLE_KEY_BITS {
-        if let Some(index) = find_identical_key(entries_ptr(map), used, bits) {
-            return index;
-        }
+        return find_identical_key(entries_ptr(map), used, bits);
     }
-    find_key_index(map, normalize_zero(key))
+    None
 }
 
-/// Resolve the real brand once, then replace without an allocation-capable
-/// insertion/receiver-root frame. The ordinary exact slot barrier is retained.
 #[inline(always)]
-pub(super) fn set(map: *mut MapHeader, key: f64, value: f64) -> *mut MapHeader {
-    let receiver = map_receiver_identity_mut(map);
-    let resolved = clean_map_ptr_mut(map);
-    if resolved.is_null() {
-        return receiver;
+unsafe fn find_entry(map: *const MapHeader, key: f64) -> i32 {
+    if let Some(index) = identical_entry(map, key) {
+        return index;
     }
-    unsafe {
-        let index = find_entry(resolved, key);
-        if index >= 0 {
-            let value_slot = entries_ptr_mut(resolved).add(index as usize * 2 + 1);
-            // GC_STORE_AUDIT(BARRIERED): exact slot in the existing owned store.
-            crate::gc::runtime_store_gc_jsvalue_slot(
-                (*resolved).store as usize,
-                value_slot as usize,
-                value.to_bits(),
-            );
-            // Replacement does not collect. A subclass retains its identity
-            // without opening the handle scope that an insertion can need.
-            return receiver;
-        }
-    }
-    insert_returning_receiver(receiver, resolved, normalize_zero(key), value)
+    find_entry_fallback(map, key)
 }
 
 #[inline(never)]
-fn insert_returning_receiver(
-    receiver: *mut MapHeader,
-    resolved: *mut MapHeader,
-    key: f64,
-    value: f64,
-) -> *mut MapHeader {
-    if std::ptr::eq(resolved, receiver) {
-        unsafe { append_resolved(resolved, key, value) };
-        return receiver;
+unsafe fn find_entry_fallback(map: *const MapHeader, key: f64) -> i32 {
+    find_key_index(map, normalize_zero(key))
+}
+
+#[inline(always)]
+pub(super) fn set(map: *mut MapHeader, key: f64, value: f64) -> *mut MapHeader {
+    if let Some(map) = plain_receiver(map) {
+        return set_resolved(map as *mut MapHeader, key, value);
     }
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let handle = scope.root_raw_mut_ptr(receiver);
-    let ((), receiver) =
-        handle.across_mut::<MapHeader, _>(|| unsafe { append_resolved(resolved, key, value) });
-    receiver
+    set_receiver_fallback(map, key, value)
+}
+
+#[inline(never)]
+fn set_receiver_fallback(map: *mut MapHeader, key: f64, value: f64) -> *mut MapHeader {
+    // Preserve the complete subclass receiver/root contract on the fallback.
+    map_op_returning_receiver(map, |map| {
+        set_resolved(map, key, value);
+    })
+}
+
+#[inline(always)]
+fn set_resolved(map: *mut MapHeader, key: f64, value: f64) -> *mut MapHeader {
+    unsafe {
+        let index = find_entry(map, key);
+        if index >= 0 {
+            let value_slot = entries_ptr_mut(map).add(index as usize * 2 + 1);
+            // GC_STORE_AUDIT(BARRIERED): exact slot in the existing owned store.
+            crate::gc::runtime_store_gc_jsvalue_slot(
+                (*map).store as usize,
+                value_slot as usize,
+                value.to_bits(),
+            );
+        } else {
+            append_resolved(map, normalize_zero(key), value);
+        }
+    }
+    map
+}
+
+#[inline(never)]
+pub(super) fn get_receiver_fallback(map: *const MapHeader, key: f64) -> f64 {
+    let map = clean_map_ptr(map);
+    if map.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    map_get_resolved(map, key)
 }
 
 /// The key is normalized and absent; caller has resolved/rooted the receiver.
+#[inline(never)]
 unsafe fn append_resolved(map: *mut MapHeader, key: f64, value: f64) {
     // Key doesn't exist, append a new entry. `ensure_capacity` can fire a
     // MOVING minor (via gc_note_external_side_alloc) — its "conservative +
@@ -151,6 +170,10 @@ mod tests {
         assert_eq!(js_map_size(map), 2);
         js_map_set(map, 1.0, 9.0);
         js_map_delete(map, 1.0);
+        assert!(
+            unsafe { (*map).used > (*map).size },
+            "the tombstone must be live"
+        );
         let hole = f64::from_bits(MAP_HOLE_KEY_BITS);
         js_map_set(map, hole, 7.0);
         assert_eq!(js_map_size(map), 3);
