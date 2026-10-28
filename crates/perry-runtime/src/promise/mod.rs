@@ -40,6 +40,7 @@ mod rejection_loop_tests;
 #[cfg(test)]
 mod resolving_function_kind_tests;
 pub mod scanners;
+mod settled_step;
 pub mod spec_combinators;
 pub(crate) mod step_completion;
 pub mod subclass;

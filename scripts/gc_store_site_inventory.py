@@ -653,6 +653,7 @@ CODEGEN_BARRIERED_BINDINGS = {
     # The compact append and both coloured-key store arms each have a live
     # census witness, including the constructor-run arm in layout_read.
     "crates/perry-codegen/src/expr/array_append.rs": ("append", 1),
+    "crates/perry-codegen/src/expr/private_resume_frame.rs": ("frame_slot", 1),
     "crates/perry-codegen/src/expr/layout_read.rs": (("l2s", "l2i"), 2),
     # Step 4b (#10884): a loop region's bare store of a pointer-capable value,
     # discharged by the same `put.pic`-stem bookkeeping the store IC emits
@@ -1658,9 +1659,16 @@ def run_self_tests() -> int:
                 "    emit_static_store_ic_bookkeeping(ctx, a, b, c, d, \"put.pic\");\n"
                 "}\n"
             ),
+            "crates/perry-codegen/src/expr/private_resume_frame.rs": (
+                "// GC_STORE_AUDIT(BARRIERED): planted private frame store\n"
+                "fn lower_frame(ctx: &mut FnCtx) {\n"
+                "    emit_write_barrier_slot_value_and_generation_tested(ctx, a, b, c, d, \"frame_slot\");\n"
+                "}\n"
+            ),
             STEM_REGISTRY_PATH: (
                 "pub(super) const VERIFIED_BARRIER_STEMS: &[(&str, StemKind)] = &[\n"
                 + registry
+                + "    (\"frame_slot\", StemKind::ValueAndGenerationTested),\n"
                 + "    (\"put.pic\", StemKind::PointerTestedStore),\n"
                 + "    (\"append\", StemKind::ValueAndGenerationTested),\n"
                 + "    (\"l2s\", StemKind::PointerTestedStore),\n"
@@ -1822,6 +1830,9 @@ def run_self_tests() -> int:
         '    emit_write_barrier_slot_generation_tested(ctx, a, b, c, d, "apush");\n'
         "}\n"
     )
+    # Remove the extra private-frame witness too, keeping this fixture below
+    # the existing floor rather than weakening scanner-rot detection.
+    del t["crates/perry-codegen/src/expr/private_resume_frame.rs"]
     expect_verify("V-P13 census below floor", t, None, "scanner rot")
 
     t = dict(base)
