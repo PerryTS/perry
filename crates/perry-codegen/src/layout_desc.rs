@@ -30,7 +30,7 @@ use crate::strings::StringPool;
 /// methods, identity and pad (80 bytes LP64; 64 bytes ILP32).
 pub const DESC_TY: &str =
     "{ i32, i16, i8, i8, i32, i32, i64, ptr, ptr, i32, i32, ptr, i32, i32, ptr, i32, i32 }";
-mod methods;
+pub(crate) mod methods;
 /// `%PerryLayoutKey`: atom, slot, attrs, pad (16 bytes).
 pub const KEY_TY: &str = "{ ptr, i32, i8, [3 x i8] }";
 /// `%StaticAtom`: hash, string, kind, pad, index (24 bytes; §6a).
