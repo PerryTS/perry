@@ -43,9 +43,17 @@ pub(crate) unsafe fn release(data: *mut u8, size: usize) -> usize {
             return length;
         }
     }
-    #[cfg(not(unix))]
-    let _ = (data, size);
-    0
+    // wasip1: the host drops the pages if it provides `perry_host.discard_pages`.
+    #[cfg(wasm_discard)]
+    {
+        crate::wasm_discard::discard_interior(data, size, crate::wasm_discard::Source::Pool)
+    }
+    #[cfg(not(wasm_discard))]
+    {
+        #[cfg(not(unix))]
+        let _ = (data, size);
+        0
+    }
 }
 
 #[cfg(test)]

@@ -489,12 +489,16 @@ fn symlink_escape_invalid_names_and_special_file_types() {
         let temp = tempfile::tempdir().unwrap();
         std::fs::write(temp.path().join("file"), b"x").unwrap();
         let _socket = UnixListener::bind(temp.path().join("socket")).unwrap();
-        rustix::fs::mkfifoat(
-            rustix::fs::CWD,
-            temp.path().join("fifo"),
-            rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
-        )
-        .unwrap();
+        // rustix::mkfifoat is unavailable on Apple targets. This fixture uses
+        // an absolute path, so the portable POSIX mkfifo operation suffices.
+        let fifo =
+            std::ffi::CString::new(temp.path().join("fifo").into_os_string().into_vec()).unwrap();
+        assert_eq!(
+            unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) },
+            0,
+            "create FIFO fixture: {}",
+            std::io::Error::last_os_error()
+        );
         store
             .data_mut()
             .ctx
@@ -561,13 +565,28 @@ fn symlink_escape_invalid_names_and_special_file_types() {
                 DescriptorType::Socket
             ));
             let invalid = std::ffi::OsString::from_vec(vec![b'b', 0xff]);
-            std::fs::write(temp.path().join(invalid), b"x").unwrap();
+            let invalid_created = match std::fs::write(temp.path().join(invalid), b"x") {
+                Ok(()) => true,
+                Err(error) => {
+                    // Filesystems such as APFS reject non-UTF-8 names before
+                    // a directory entry exists. Require that exact rejection;
+                    // other fixture failures must still fail this test.
+                    assert_eq!(error.raw_os_error(), Some(libc::EILSEQ));
+                    false
+                }
+            };
             let (data, result) = fs.with(|s| Host::read_directory(s, borrow(&dir))).unwrap();
-            let _entries = entries(accessor, data);
-            assert!(matches!(
-                receive(accessor, result).await.unwrap(),
-                Err(ErrorCode::IllegalByteSequence)
-            ));
+            let found = entries(accessor, data);
+            let result = receive(accessor, result).await.unwrap();
+            if invalid_created {
+                assert!(matches!(result, Err(ErrorCode::IllegalByteSequence)));
+            } else {
+                result.unwrap();
+                let found = found.lock().unwrap();
+                let mut names: Vec<_> = found.iter().map(|entry| entry.name.as_str()).collect();
+                names.sort_unstable();
+                assert_eq!(names, ["escape", "fifo", "file", "relative", "socket"]);
+            }
             fs.with(|mut s| HostDescriptor::drop(&mut s.get(), dir))
                 .unwrap();
         }))

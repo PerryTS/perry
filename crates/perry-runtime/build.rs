@@ -594,6 +594,7 @@ fn main() {
         .expect("emit runtime realm manifest");
 
     println!("cargo:rerun-if-env-changed=PERRY_CHECK_CONTRACTS");
+    println!("cargo:rustc-check-cfg=cfg(wasm_discard)");
     println!("cargo:rustc-check-cfg=cfg(perry_check_contracts)");
     println!("cargo:rustc-check-cfg=cfg(perry_contract_checks)");
     let instrumented_variant = emit_instrument_cfgs();
@@ -676,6 +677,17 @@ fn main() {
         println!("cargo:rerun-if-changed=src/ffi/perry_net_import.c");
         if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("p1") {
             eh.file("src/ffi/perry_net_import.c");
+        }
+        // The page-discard hook is the same shape: a weak fallback and, in a
+        // member of its own, the `perry_host` import (`-u perry_wasm_discard_host`).
+        println!("cargo:rerun-if-changed=src/ffi/perry_wasm_discard.c");
+        println!("cargo:rerun-if-changed=src/ffi/perry_wasm_discard_import.c");
+        if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("p1")
+            && std::env::var_os("CARGO_FEATURE_WASM_DISCARD").is_some()
+        {
+            println!("cargo:rustc-cfg=wasm_discard");
+            eh.file("src/ffi/perry_wasm_discard.c")
+                .file("src/ffi/perry_wasm_discard_import.c");
         }
         eh.flag("-mexception-handling")
             .flag("-mllvm")

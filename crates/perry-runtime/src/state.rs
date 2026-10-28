@@ -77,6 +77,8 @@ crate::perry_thread_local! {
 struct StateOwner(*mut RuntimeState);
 
 impl Drop for StateOwner {
+    // Keep the reviewed teardown cut visible in optimized GC-effects sidecars.
+    #[inline(never)]
     fn drop(&mut self) {
         // The thread that emitted the process `exit` event is ending the
         // process (natural exit returns from `main` into libc's `exit`, which

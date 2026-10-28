@@ -16,20 +16,11 @@
 use crate::feature_hooks::Hook;
 
 static FUNCTION_FROM_STRINGS: Hook<fn(&[String]) -> f64> = Hook::empty();
-static SCAN_ROOTS: Hook<fn(&mut crate::gc::RuntimeRootVisitor<'_>)> = Hook::empty();
 static DATA_URL_IMPORT: Hook<fn(&str) -> Option<f64>> = Hook::empty();
 
 /// `new Function(...params, body)` from strings; `None` without the evaluator.
 pub(crate) fn function_from_strings(args: &[String]) -> Option<f64> {
     FUNCTION_FROM_STRINGS.get().map(|f| f(args))
-}
-
-/// Forward scans of the interpreter's rooted value stack (#6559). The
-/// installer registers the evaluator's actual scanner only when selected.
-pub fn scan_dyn_eval_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    if let Some(scan) = SCAN_ROOTS.get() {
-        scan(visitor);
-    }
 }
 
 /// Dynamic `import()` of a JavaScript `data:` URL; `None` without the
@@ -50,10 +41,10 @@ pub(crate) fn install() {
     }
     crate::dyn_eval_hook_roots::install(register_roots);
     FUNCTION_FROM_STRINGS.set(crate::dyn_eval::dyn_function_from_strings);
-    SCAN_ROOTS.set(crate::dyn_eval::scan_dyn_eval_roots_mut);
     DATA_URL_IMPORT.set(crate::module_require::dynamic_import_javascript_data_url);
 }
 
-pub(crate) use crate::interp_proto_guard::{
-    interp_active_enter, interp_active_leave, note_proto_write, PERRY_INTERP_PROTO_WRITTEN,
-};
+pub(crate) use crate::interp_proto_guard::note_proto_write;
+
+#[cfg(feature = "dyn-eval")]
+pub(crate) use crate::interp_proto_guard::{interp_active_enter, interp_active_leave};

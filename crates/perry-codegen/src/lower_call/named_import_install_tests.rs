@@ -86,6 +86,37 @@ fn named_builtin_cell_installs_only_its_module_before_lookup() {
 }
 
 #[test]
+fn named_fs_promises_installs_dependency_before_snapshot() {
+    for module in ["fs", "node:fs"] {
+        for property in ["promises", "readFileSync"] {
+            let ir = compile_lookup(module, property);
+            let parent = ir
+                .find("call void @js_nm_install_fs(")
+                .expect("fs installer");
+            let lookup = ir
+                .find("call double @js_native_module_named_esm_export_value(")
+                .expect("named export lookup");
+            assert!(parent < lookup, "parent installed before snapshot: {ir}");
+            let dependency = ir.find("call void @js_node_submod_install_fs_promises(");
+            if property == "promises" {
+                let dependency = dependency.expect("promises dependency installer");
+                assert!(
+                    dependency < lookup,
+                    "dependency installed before snapshot: {ir}"
+                );
+            } else {
+                assert!(
+                    dependency.is_none(),
+                    "sync import retains no promises dependency: {ir}"
+                );
+            }
+            assert!(!ir.contains("call void @js_nm_install_all("));
+            assert!(!ir.contains("call void @js_node_submod_install_stream_promises("));
+        }
+    }
+}
+
+#[test]
 fn unknown_named_module_does_not_install_unrelated_buckets() {
     let ir = compile_lookup("unknown-module", "value");
     assert!(ir.contains("call double @js_native_module_named_esm_export_value("));

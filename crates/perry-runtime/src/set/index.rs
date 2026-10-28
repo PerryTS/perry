@@ -95,6 +95,18 @@ fn is_plain_numeric_key(bits: u64) -> bool {
     bits >> 48 != 0 && crate::map::is_plain_nonzero_number_bits(bits)
 }
 
+/// Fold all IEEE bits into the bucket hash before truncating to 32 bits.
+/// Integer doubles have long zero mantissa tails: the pointer multiply/xor
+/// leaves low bucket bits clustered, forcing long probe walks even when
+/// the complete hashes differ. This avalanche belongs only to
+/// the numeric key domain; movable keys keep their relocation-stable identity.
+#[inline(always)]
+fn number_hash(mut bits: u64) -> u32 {
+    bits = (bits ^ (bits >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    bits = (bits ^ (bits >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    (bits ^ (bits >> 31)) as u32
+}
+
 fn hash_value(value: f64, insert: bool) -> Option<u32> {
     #[cfg(test)]
     TEST_HASH_CALLS.with(|count| count.set(count.get() + 1));
@@ -149,6 +161,12 @@ fn hash_value(value: f64, insert: bool) -> Option<u32> {
             }
             return Some(hasher.finish() as u32);
         }
+    }
+    // String/symbol/identity paths return above. Only the remaining numeric
+    // domain needs an avalanche; ordinary string startup probes pay no new
+    // numeric admission work.
+    if is_plain_numeric_key(bits) {
+        return Some(number_hash(bits));
     }
     bits.hash(&mut hasher);
     Some(hasher.finish() as u32)
@@ -285,9 +303,7 @@ pub(super) unsafe fn lookup_plain_number(set: *const SetHeader, bits: u64) -> i3
     };
     #[cfg(test)]
     TEST_HASH_CALLS.with(|count| count.set(count.get() + 1));
-    let mut hasher = crate::fast_hash::PtrHasher.build_hasher();
-    bits.hash(&mut hasher);
-    let hash = hasher.finish() as u32;
+    let hash = number_hash(bits);
     index
         .find_number_bits(set, bits, hash)
         .map_or(-1, |pos| index.buckets[pos].index as i32)
@@ -460,15 +476,26 @@ mod tests {
             assert!(index
                 .find_number_bits(set, (-3.5f64).to_bits(), 7)
                 .is_some());
-            // Fast admission must use the SAME hash as the previous numeric
-            // path; otherwise existing mixed indexes could silently miss.
+            // Both insertion/general probes and admitted-number probes must
+            // use the same numeric hash in a mixed index.
             for value in [7.0f64, -3.5, f64::INFINITY, f64::NEG_INFINITY] {
-                let mut hasher = crate::fast_hash::PtrHasher.build_hasher();
-                value.to_bits().hash(&mut hasher);
-                assert_eq!(existing_hash(value), Some(hasher.finish() as u32));
+                assert_eq!(existing_hash(value), Some(number_hash(value.to_bits())));
+                assert_eq!(js_set_has(set, value), 1);
             }
             finalize_set_side_allocation_for_gc(set);
         }
+    }
+
+    /// Integer IEEE encodings have zero low mantissa bits. Bucket masking
+    /// must still use the information carried in the high bits of the key.
+    #[test]
+    fn numeric_hash_distributes_integer_mantissas_before_bucket_mask() {
+        let mut occupied = [false; 1024];
+        for integer in 1..=4096 {
+            let hash = number_hash((integer as f64).to_bits());
+            occupied[hash as usize & 1023] = true;
+        }
+        assert!(occupied.into_iter().filter(|&bit| bit).count() > 512);
     }
 
     #[test]

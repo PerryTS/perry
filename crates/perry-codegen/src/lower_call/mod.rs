@@ -634,6 +634,18 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
                 if let Some(install) = crate::nm_install::nm_install_symbol(module) {
                     ctx.block().call_void(install, &[]);
                 }
+                // The parent bucket does not install object-valued submodules.
+                // Populate the named cell only after its concrete value exists;
+                // otherwise fs.promises snapshots an unresolved stub.
+                if module.strip_prefix("node:").unwrap_or(module) == "fs"
+                    && matches!(args.get(1), Some(Expr::String(property)) if property == "promises")
+                {
+                    if let Some(install) =
+                        crate::nm_install::nm_submod_install_symbol("fs_promises")
+                    {
+                        ctx.block().call_void(install, &[]);
+                    }
+                }
             }
         }
         if name == "js_global_get_optional" {

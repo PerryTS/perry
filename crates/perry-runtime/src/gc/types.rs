@@ -1146,6 +1146,23 @@ const INERT_TYPE_INFO: GcTypeInfo = gc_type_info_entry(
     GcFinalizeHookKind::None,
 );
 
+// Direct descriptor projection must preserve unknown-kind semantics for
+// EVERY unused row, including any future catalog changes.
+const _: () = {
+    let rows = byte_type_infos();
+    let mut kind = 0;
+    while kind < rows.len() {
+        assert!(
+            rows[kind].type_id != 0
+                || matches!(
+                    rows[kind].rewrite_descriptor_kind,
+                    GcRewriteDescriptorKind::Leaf
+                )
+        );
+        kind += 1;
+    }
+};
+
 const fn byte_type_infos() -> [GcTypeInfo; MALLOC_KIND_BUCKET_COUNT] {
     // Unused ids have fully initialized inert fields. A layout note can read
     // its field directly from the sole descriptor authority; admission still
@@ -1243,11 +1260,23 @@ pub(crate) fn gc_type_is_arena_walkable(obj_type: u8) -> bool {
     gc_type_info(obj_type).is_some_and(|info| info.arena_walkable)
 }
 
-#[inline]
+#[inline(always)]
 pub(crate) fn gc_type_rewrite_descriptor_kind(obj_type: u8) -> GcRewriteDescriptorKind {
-    gc_type_info(obj_type).map_or(GcRewriteDescriptorKind::Leaf, |info| {
-        info.rewrite_descriptor_kind
-    })
+    #[cfg(test)]
+    if obj_type == GC_TYPE_ARRAY
+        && header_admission_tests::DENSE_DESCRIPTOR_FAULT.with(std::cell::Cell::get)
+    {
+        return GC_TYPE_INFO_BY_ID[GC_TYPE_OBJECT as usize].rewrite_descriptor_kind;
+    }
+    // Unused rows are canonical inert descriptors with Leaf rewrite kind,
+    // exactly the unknown-kind answer. Project the field from the one table;
+    // repeating type admission changes no answer and costs every child trace.
+    // Header/pointer admission remains gc_type_is_known's independent job.
+    GC_TYPE_INFO_BY_ID
+        .get(obj_type as usize)
+        .map_or(GcRewriteDescriptorKind::Leaf, |info| {
+            info.rewrite_descriptor_kind
+        })
 }
 
 #[inline]
@@ -1844,47 +1873,7 @@ pub(super) const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 pub(super) const TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
 
 #[cfg(test)]
-mod buffer_family_type_tests {
-    use super::*;
-
-    /// #10694: every buffer-family flavor is the same GC kind under another
-    /// brand. If one ever diverged (a different descriptor, finalize hook or
-    /// movability), the brand would change how the collector treats the cell.
-    #[test]
-    fn buffer_family_flavors_share_one_gc_kind() {
-        let base = *gc_type_info(GC_TYPE_BUFFER).expect("buffer type info");
-        let mut flavors = 0;
-        for t in 0..=u8::MAX {
-            let Some(info) = gc_type_info(t) else {
-                assert!(!is_byte_family_type(t), "flavor {t} has no type info");
-                continue;
-            };
-            assert_eq!(info.type_id, t, "GC_TYPE_INFO_BY_ID is indexed by type id");
-            let same_kind = GcTypeInfo {
-                type_id: base.type_id,
-                name: base.name,
-                ..*info
-            } == base;
-            assert_eq!(
-                is_byte_family_type(t),
-                same_kind,
-                "type {t} ({}) must be a buffer flavor exactly when it is GC_TYPE_BUFFER's kind",
-                info.name
-            );
-            flavors += usize::from(is_byte_family_type(t));
-        }
-        assert_eq!(flavors, 38);
-        for t in [
-            GC_TYPE_BUFFER_UINT8ARRAY,
-            GC_TYPE_BUFFER_SECRET_KEY,
-            GC_TYPE_BUFFER_CRYPTO_KEY,
-        ] {
-            assert!(is_uint8array_buffer_type(t));
-        }
-        assert!(!is_uint8array_buffer_type(GC_TYPE_BUFFER));
-        assert!(!is_uint8array_buffer_type(GC_TYPE_BUFFER_ARRAY_BUFFER));
-    }
-}
+mod buffer_family_type_tests;
 
 #[cfg(test)]
 mod header_admission_tests {

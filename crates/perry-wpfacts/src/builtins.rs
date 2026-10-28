@@ -13,12 +13,12 @@ mod native_protocol;
 use collections::{array_method, bobj_method, function_method, iterate};
 pub(crate) use collections::{WK_ITERATOR, WK_PREFIX};
 use members::{Family, Mem};
-use native_protocol::{anon_tmpl, native_method, native_skips, replay_native_missing};
 pub use native_protocol::{
     global_field, global_user_key, is_builtin_module, native_parent_ctor, native_parent_keys,
-    native_parent_summarized, native_proto, native_proto_keys, native_written, note_global_in_top,
-    note_native_write, require_parts,
+    native_parent_summarized, native_proto, native_written, note_global_in_top, note_native_write,
+    require_parts,
 };
+use native_protocol::{native_method, native_skips};
 
 /// Global names the `GlobalGet(0)` sentinel resolves to.
 fn ns_by_name(name: &str) -> Option<BuiltinNs> {
@@ -1105,14 +1105,7 @@ fn prim_method_generic(m: &mut Model, call: CallId) {
 /// through the chain (`proto_method`); a data member is no function; a name
 /// no intrinsic of the chain defines is absent (a TypeError), unless it may
 /// have been written onto a builtin prototype.
-pub(super) fn undescribed_method(
-    m: &mut Model,
-    fam: Family,
-    t: Tok,
-    name: &str,
-    call: CallId,
-    why: &str,
-) {
+fn undescribed_method(m: &mut Model, fam: Family, t: Tok, name: &str, call: CallId, why: &str) {
     match members::own(fam, name) {
         Some(Mem::Fn) if fam == Family::Wrapper => prim_method_generic(m, call),
         Some(Mem::Fn) => unknown_method(m, call, why),

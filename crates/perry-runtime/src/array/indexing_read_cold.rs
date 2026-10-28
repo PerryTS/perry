@@ -42,7 +42,10 @@ pub unsafe extern "C" fn perry_array_read_cold_shared(
         // the exact entry reads its attribute summary.
         "cmp qword ptr [rdi + {named}], 0",
         "jne 2f",
-        "cmp byte ptr [rip + {invalidated}], 0",
+        // The exported flag is interposable in ELF provider dylibs. Load
+        // through the GOT instead of emitting a text relocation to its byte.
+        "mov rax, qword ptr [rip + {invalidated}@GOTPCREL]",
+        "cmp byte ptr [rax], 0",
         "jne 2f",
         "movabs rax, {undefined}",
         "movq xmm0, rax",

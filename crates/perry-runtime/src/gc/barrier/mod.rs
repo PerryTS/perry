@@ -460,7 +460,7 @@ pub(super) fn incremental_mark_barrier_disable() {
     // sweep can never visit them — while a birth mark they carry would leak
     // into the next cycle as "already traced" (post-snapshot objects are
     // exactly the ones this sweep never visits and never unmarks).
-    GC_BIRTH_EXTRA_FLAGS.with(|cell| cell.set(0));
+    set_birth_extra_flags(0);
 }
 
 /// True when no thread anywhere has an incremental mark barrier installed.
@@ -490,6 +490,13 @@ pub(super) fn incremental_mark_barrier_disable() {
 #[inline(always)]
 pub(crate) fn incremental_mark_barrier_globally_idle() -> bool {
     PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT.load(Ordering::Relaxed) == 0
+}
+
+/// Change the live color and the existing allocator permission atomically
+/// with respect to this thread's mutator (no allocation/safepoint intervenes).
+pub(crate) fn set_birth_extra_flags(flags: u8) {
+    GC_BIRTH_EXTRA_FLAGS.with(|cell| cell.set(flags));
+    crate::arena::refresh_inline_allocation_limit();
 }
 
 /// Allocate-black birth flags for all allocations — see

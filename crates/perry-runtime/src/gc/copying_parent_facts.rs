@@ -171,6 +171,25 @@ fn unvalidated_child(bits: u64) -> Option<usize> {
 }
 
 impl CopyingNurseryCollector {
+    /// A canonical leaf has no rewrite slots. Keep it in the survivor/mark
+    /// lists (which clear its mark and account for survival), but do not build
+    /// an empty descriptor walk in the drain. Young forwarding hops are
+    /// resolved by the mark/move entry points; any other forwarded header
+    /// retains its previous queueing obligation.
+    #[inline(always)]
+    pub(super) unsafe fn queue_child_scan(&mut self, header: *mut GcHeader) {
+        if (*header).gc_flags & GC_FLAG_FORWARDED != 0
+            || (gc_type_rewrite_descriptor_kind((*header).obj_type)
+                != GcRewriteDescriptorKind::Leaf
+                && !gc_object_yields_no_child_slots(header))
+        {
+            self.worklist.push(header);
+            if let Some(d) = self.survival.as_mut() {
+                d.note_worklist_push();
+            }
+        }
+    }
+
     /// A producer already decoded this root's encoding. Reuse that word,
     /// retaining the mixed shadow ABI's aligned-address admission and the
     /// same pointer classifier/mark before re-encoding a moved address.
@@ -389,7 +408,11 @@ impl CopyingNurseryCollector {
         // address, never the child. Asked after, the optimizer duplicated the
         // call into both decode arms and then stopped inlining it.
         let remembering = slot.is_parent_owned() && remembering();
-        let visited = self.visit_value_bits_child(slot.read());
+        let bits = slot.read();
+        if slot.shared_keys_already_marked(bits) {
+            return;
+        }
+        let visited = self.visit_value_bits_child(bits);
         if let Some((_, Some(new_bits), _)) = visited {
             slot.write(new_bits);
         }

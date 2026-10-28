@@ -126,6 +126,7 @@ mod index;
 pub(crate) mod nanbox_inline;
 mod native_memory;
 mod native_record;
+pub(crate) mod numeric_order;
 mod object_literal;
 mod pod_layout_constants;
 mod pod_record;
@@ -364,6 +365,10 @@ pub enum HeaderImageSource {
 }
 
 pub(crate) struct FnCtx<'a> {
+    pub numeric_order_functions: &'a [perry_hir::Function],
+    pub numeric_order_closures: &'a [(u32, Expr)],
+    /// Lexical initialization dominance for closed callee reads.
+    pub numeric_order_ready: crate::stmt::binding_cell::ReadyCellRoots,
     /// wpfacts slice 2: this module's elision facts (`expr/wpfacts_access.rs`).
     pub wpfacts: std::sync::Arc<crate::codegen::ElisionFacts>,
     /// Object model step 5 (case 2c): the program's key colouring
@@ -4830,3 +4835,6 @@ mod byte_prepass_tests;
 
 #[cfg(test)]
 mod array_layout_loop_tests;
+
+#[cfg(test)]
+mod sort_numeric_source_tests;
