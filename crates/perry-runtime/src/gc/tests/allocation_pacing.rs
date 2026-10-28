@@ -559,3 +559,27 @@ fn completed_native_input_preserves_its_result_while_draining_owed_collection() 
         js_shadow_frame_pop(frame);
     }
 }
+
+#[test]
+fn native_input_bulk_debt_does_not_arm_a_disabled_loop_poll() {
+    let _isolation = GcTestIsolationGuard::new();
+    let _placement = policy::ByteStorePolicyTestGuard::new(usize::MAX);
+    let _off = policy::force_alloc_point_minor_pacing();
+    let _thresholds = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    finish_full(0, 4 * MIB);
+    policy::GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.set(usize::MAX / 4));
+    for _ in 0..BURST_BUFFERS {
+        crate::buffer::js_buffer_alloc((4 * MIB) as i32, 13);
+    }
+    assert!(!policy::GC_SAFEPOINT_PENDING.with(std::cell::Cell::get));
+    let scope = RuntimeHandleScope::new();
+    let mut input = b"off".as_slice();
+    let result = crate::string::read_utf8(&mut input, 3).unwrap();
+    let result = scope.root_string_ptr(result);
+    assert!(policy::GC_OLD_RECLAIM_PENDING.with(|pending| pending.get()));
+    assert!(!policy::GC_SAFEPOINT_PENDING.with(std::cell::Cell::get));
+    js_gc_collect();
+    unsafe {
+        result.with_string_bytes(|bytes| assert_eq!(bytes, b"off"));
+    }
+}

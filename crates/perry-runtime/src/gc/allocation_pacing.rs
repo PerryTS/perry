@@ -236,7 +236,9 @@ pub(crate) fn burst_boundary() -> bool {
     // A native producer may return to a compiled loop rather than the pump
     // that explicitly invokes a precise poll. Arm the same existing handoff
     // as alloc-point deferral, including the nursery arm's slack base.
-    if !super::policy::GC_SAFEPOINT_PENDING.with(Cell::get) {
+    if super::policy::gc_moving_loop_polls_enabled()
+        && !super::policy::GC_SAFEPOINT_PENDING.with(Cell::get)
+    {
         super::policy::GC_SAFEPOINT_DEFER_ARENA_BASE
             .with(|base| base.set(crate::arena::arena_total_bytes()));
         super::policy::set_safepoint_pending(true);
