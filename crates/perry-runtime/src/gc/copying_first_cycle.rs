@@ -1,4 +1,4 @@
-//! The first copying minor's promotion attempt, and its rollback (#7937).
+//! Trace-and-rollback promotion for the first copying minor and parent probe.
 //!
 //! The steady-state in-place promotion policy (`gc::promote_in_place`) reads
 //! the PREVIOUS cycle's measured young-survival ratio, so it always declines on
@@ -21,7 +21,7 @@ use super::copying::{run_copied_minor_attempt, CopiedMinorEligibility};
 use super::*;
 
 /// How a copied-minor attempt ended. `RolledBack` is only ever produced by the
-/// speculative first-cycle promotion, and it means the heap is in exactly the
+/// speculative first-cycle or parent-probe promotion: the heap is in exactly the
 /// state it was in when the attempt began.
 pub(super) enum CopiedMinorAttempt {
     Done(Option<CopiedMinorFastPathOutcome>),
@@ -36,13 +36,13 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
 ) -> Option<CopiedMinorFastPathOutcome> {
     match run_copied_minor_attempt(trace, start, eligibility, trigger_kind, true) {
         CopiedMinorAttempt::Done(outcome) => outcome,
-        // The first-cycle attempt read its own trace and the ratio said
+        // The speculative attempt read its own trace and the ratio said
         // evacuate. The rollback restored the pre-cycle heap, so re-deriving
         // eligibility observes what the first attempt did and this is an
         // ordinary copying minor. Re-derived rather than reused because
         // `CopiedMinorEligibility` owns the pointer classifier the first
         // attempt consumed; the cost is one more preflight, on a cycle that by
-        // construction has almost nothing live to walk.
+        // construction did not meet its current-survival criterion.
         CopiedMinorAttempt::RolledBack => {
             let eligibility = CopiedMinorEligibility::evaluate(trigger_kind);
             match run_copied_minor_attempt(trace, start, eligibility, trigger_kind, false) {
