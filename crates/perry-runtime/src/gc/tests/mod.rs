@@ -31,6 +31,7 @@ mod contract;
 mod copy_slot_decode;
 mod copy_slot_hoists;
 mod copying;
+mod copying_leaf_queue;
 mod copying_object_scan;
 mod copying_side_tables;
 mod cycle_state;

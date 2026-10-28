@@ -19,7 +19,7 @@
 //! header and thread state: a full trace or layout-scan trace in progress (the
 //! generic walk records carrier notes and slot counters this path does not), or
 //! a type-table entry that stopped describing `GC_TYPE_OBJECT` the way this
-//! assumes. Once admitted it never hands the object back, so no edge is visited
+//! assumes, or a post-rewrite hook is required. Once admitted it never hands the object back, so no edge is visited
 //! twice.
 //!
 //! Drift is the risk of a second enumeration, so it is not trusted: in test and
@@ -102,6 +102,7 @@ unsafe fn plain_object_admissible(header: *mut GcHeader) -> bool {
             gc_type_layout_slot_kind(GC_TYPE_OBJECT),
             GcLayoutSlotKind::ObjectFields
         )
+        && gc_type_rewrite_hook_kind(GC_TYPE_OBJECT) == GcRewriteHookKind::None
 }
 
 /// `gc_child_slots`' ObjectFields arm and `visit_gc_layout_slot_descriptors`'
@@ -190,8 +191,6 @@ impl CopyingNurseryCollector {
         if !plain_object_admissible(header) {
             return false;
         }
-        let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE) as usize;
-        let mut changed = false;
         // Asked lazily by the generic walk, at its first slot; both are
         // properties of the header alone, so asking them up front is the same
         // answer.
@@ -207,13 +206,10 @@ impl CopyingNurseryCollector {
             assert_matches_generic_walk(header, &plan);
         }
         while let Some(slot) = plan.next_slot() {
-            let before = slot.read();
             self.visit_slot_with_parent_facts(slot, header, weak, remembering);
-            changed |= slot.read() != before;
         }
-        if changed {
-            run_gc_rewrite_hook(GC_TYPE_OBJECT, user_ptr);
-        }
+        // Admission established that this descriptor has no post-rewrite
+        // hook. There is no consumer for a per-slot before/after comparison.
         true
     }
 }

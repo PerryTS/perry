@@ -1,0 +1,1 @@
+Skip empty child scans for canonical leaf objects during copying collection, and avoid slot-change comparisons for ordinary objects with no rewrite hook. Preserve survivor accounting, mark clearing, forwarding and remembered-set coverage.
