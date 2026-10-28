@@ -66,39 +66,15 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-# The runtime crate normally emits only an rlib. Build the provider from a
-# disposable worktree so changing its crate type cannot race with or dirty the
-# checkout running the gate. HEAD is also the compiler/provider identity this
-# integration contract requires.
+# Isolate the fixture lockfile from the checkout running this gate. The custom
+# stdlib linker builds the runtime provider from the EXACT runtime rlib selected
+# by this Cargo graph, then excludes that archive from the stdlib image. Merely
+# preempting C exports leaves private Rust dispatch/TLS state duplicated.
 git -C "$repo_root" worktree add --detach "$provider_source" HEAD >/dev/null
 worktree_added=true
-runtime_manifest="$provider_source/crates/perry-runtime/Cargo.toml"
-runtime_manifest_backup="$scratch/perry-runtime.Cargo.toml"
-cp "$runtime_manifest" "$runtime_manifest_backup"
-perl -0pi -e 's/crate-type = \["rlib"\]/crate-type = ["dylib"]/ or die "runtime crate-type marker missing\n"' "$runtime_manifest"
-
-runtime_features="full,regex-engine,temporal,url-engine,intl-namespace,intl-datetime,diagnostics,dyn-eval,keepalive-anchors,gc-instruments,stdlib"
-if [[ "$host_os" == Darwin ]]; then
-  CARGO_TARGET_DIR="$provider_target_dir" cargo rustc \
-    --manifest-path "$provider_source/Cargo.toml" \
-    --profile "$profile" -p perry-runtime \
-    --no-default-features --features "$runtime_features" -- \
-    -C 'link-arg=-Wl,-install_name,@rpath/libperry_runtime.dylib' \
-    -C link-arg=-framework -C link-arg=CoreFoundation \
-    -C link-arg=-framework -C link-arg=Foundation
-else
-  CARGO_TARGET_DIR="$provider_target_dir" cargo rustc \
-    --manifest-path "$provider_source/Cargo.toml" \
-    --profile "$profile" -p perry-runtime \
-    --no-default-features --features "$runtime_features" -- \
-    -C 'link-arg=-Wl,-soname,libperry_runtime.so'
-fi
-
 provider_dir="$scratch/providers"
 mkdir -p "$provider_dir"
 runtime_library="$provider_dir/$runtime_filename"
-cp "$provider_target_dir/$profile/libperry_runtime.$library_extension" "$runtime_library"
-cp "$runtime_manifest_backup" "$runtime_manifest"
 
 stdlib_manifest="$provider_source/tests/fixtures/issue_8075_provider_gc/stdlib-provider/Cargo.toml"
 stdlib_linker="$provider_source/tests/fixtures/issue_8075_provider_gc/stdlib-linker.sh"
@@ -138,8 +114,8 @@ else
   # Read nm to completion: grep -q otherwise closes the large symbol stream
   # early, and pipefail mistakes nm's SIGPIPE for a missing export.
   stdlib_symbols=$(nm -D "$stdlib_library")
-  grep -q ' T js_gc_init$' <<<"$stdlib_symbols" || {
-    echo "stdlib provider hid js_gc_init — not preemptible" >&2
+  grep -q ' U js_gc_init$' <<<"$stdlib_symbols" || {
+    echo "stdlib provider must import js_gc_init from the sole runtime image" >&2
     exit 1
   }
   readelf -d "$stdlib_library" | grep -Fq "Shared library: [$runtime_filename]" || {
