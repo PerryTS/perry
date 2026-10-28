@@ -10,6 +10,8 @@ crate-type = ["cdylib"]
 
 [dependencies]
 perry-stdlib = { path = "../../../../crates/perry-stdlib", default-features = false, features = ["full"] }
+# The full stdlib dispatch table references the Turnloop HTTP/net providers.
+perry-ext-http = { path = "../../../../crates/perry-ext-http" }
 
 # The gate builds this provider with `--profile provider` below, but a bare
 # `cargo build --release` here must not silently produce an unwind runtime:

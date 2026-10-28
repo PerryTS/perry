@@ -3,6 +3,7 @@
 //! The custom final-link driver binds its runtime calls to the process-wide
 //! runtime dylib before leaving the rlib available for Rust generic glue.
 
+extern crate perry_ext_http;
 extern crate perry_stdlib;
 
 unsafe extern "C" {
@@ -11,6 +12,11 @@ unsafe extern "C" {
 
 #[used]
 static PIN_STDLIB: extern "C" fn() -> i32 = perry_stdlib::common::js_stdlib_process_pending;
+
+// The full stdlib's HTTP/net dispatch references must resolve when the host
+// eagerly loads this image, even before an app installs a network feature.
+#[used]
+static PIN_HTTP: unsafe extern "C" fn() -> i32 = perry_ext_http::js_http_process_pending;
 
 // Later-loaded apps register their generated feature installer and call the
 // compiled-feature entry point. Keep both available in the provider image.
