@@ -58,8 +58,7 @@ SENTINELS=(
   # #9188: codegen switched module init from the copying spellings to these.
   # A runtime archive predating the split defines neither, and every program
   # with a named function would fail to link on a build worker instead of here.
-  js_register_function_name_static
-  js_register_function_source_static
+  js_register_function_metadata
   # #11501: the class-source sibling, emitted for every class an executable
   # contains.
   js_register_class_source_static

@@ -1146,8 +1146,7 @@ fn registration(line: &str) -> bool {
     // Only generated inventories: runtime-observable source operations such as
     // computed-member evaluation and property writes remain ordinary sinks.
     [
-        "js_register_function_names_static",
-        "js_register_function_sources_static",
+        "js_register_function_metadata",
         "js_register_class_declaration",
         "js_register_class_constructor",
         "js_register_class_constructor_with_arity",
@@ -1163,10 +1162,6 @@ fn registration(line: &str) -> bool {
         "js_register_class_constructor_flags",
         "js_register_class_method_bind_length",
         "js_register_class_static_method_bind_length",
-        "js_register_function_name_static",
-        "js_register_function_name",
-        "js_register_function_source_static",
-        "js_register_function_source",
     ]
     .iter()
     .any(|name| line.contains(&format!("@{name}(")))
