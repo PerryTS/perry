@@ -21,7 +21,7 @@ pub(super) fn supports(params: &[Param], captures: &[TypedParamRep]) -> bool {
             .is_some_and(|reps| reps.iter().all(|r| matches!(r, TypedParamRep::F64)))
 }
 pub(super) fn name(typed_name: &str) -> String {
-    format!("{typed_name}.$normalized_captures")
+    crate::fn_info::normalized_capture_body_symbol(typed_name)
 }
 pub(super) fn load_typed_capture(
     blk: &mut LlBlock,
@@ -69,7 +69,15 @@ pub(super) fn compile(
     let reps = captures.iter().copied().collect();
     let value = lower_typed_f64_body_with_seed_locals_and_reps(blk, params, body, values, reps)?;
     f.block_mut(0).unwrap().ret(DOUBLE, &value);
+    f.pre_statepoint_inline =
+        super::helpers::guarded_specialization_fits_preinline_budget(f.estimated_ir_bytes());
     Ok(())
+}
+
+pub(super) fn fits_preinline_budget(module: &LlModule, name: &str) -> bool {
+    module
+        .function_estimated_ir_bytes(name)
+        .is_some_and(super::helpers::guarded_specialization_fits_preinline_budget)
 }
 
 pub(crate) fn emit_typed_capture_guard(
@@ -93,4 +101,54 @@ pub(crate) fn emit_typed_capture_guard(
         });
     }
     guard
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn numeric_capture_admission_is_visible_before_statepoints() {
+        let ast = perry_parser::parse_typescript(
+            "function make(n: number) { return (x: number) => (x * 7 + n) % 101; } console.log(make(3)(4));",
+            "capture_contract.ts",
+        ).unwrap();
+        let hir = perry_hir::lower_module(&ast, "capture_contract", "capture_contract.ts").unwrap();
+        let id = perry_hir::emitted_closures(&hir)[0].0;
+        let ir = String::from_utf8(
+            crate::compile_module(
+                &hir,
+                crate::CompileOptions {
+                    emit_ir_only: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let header = ir
+            .lines()
+            .find(|l| {
+                l.starts_with("define ")
+                    && l.contains("@perry_closure_")
+                    && l.contains(&format!("__{id}("))
+            })
+            .unwrap_or_else(|| panic!("missing public capture admission: {ir}"));
+        let symbol = header.split('@').nth(1).unwrap().split('(').next().unwrap();
+        assert!(header.contains("alwaysinline"), "{header}");
+        assert!(
+            ir.contains(".$normalized_captures("),
+            "private scalar body must be live: {ir}"
+        );
+        assert!(
+            ir.contains("typed_closure_public"),
+            "actual value guards must remain: {ir}"
+        );
+        assert!(
+            ir.contains(&format!("@{symbol}$generic(")),
+            "boxed continuation must remain: {ir}"
+        );
+        assert!(
+            ir.contains("@perry_checked_number_remainder("),
+            "exact remainder admission must remain: {ir}"
+        );
+    }
 }

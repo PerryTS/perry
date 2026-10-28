@@ -57,6 +57,9 @@ pub(crate) fn try_lower_proven_value_call(
     callee: &Expr,
     args: &[Expr],
 ) -> Result<Option<String>> {
+    if let Some(value) = crate::stmt::numeric_callbacks::try_lower(ctx, callee, args)? {
+        return Ok(Some(value));
+    }
     let Expr::LocalGet(id) = callee else {
         return Ok(None);
     };

@@ -923,3 +923,8 @@ mod constructor_tail_tests {
         assert!(line.ends_with("{ ptr @ctor_layout, ptr @ctor_operands, i32 2, i32 0 } }"));
     }
 }
+
+/// The private scalar capture body shares the typed closure's identity.
+pub(crate) fn normalized_capture_body_symbol(typed: &str) -> String {
+    format!("{typed}.$normalized_captures")
+}
