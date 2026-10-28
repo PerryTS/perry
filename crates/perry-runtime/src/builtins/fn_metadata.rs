@@ -311,6 +311,11 @@ pub fn register_function_name_if_absent(func_ptr: usize, name: &str) {
     if let Ok(mut overrides) = function_name_overrides().lock() {
         overrides
             .entry(func_ptr)
+            .and_modify(|bytes| {
+                if std::str::from_utf8(bytes).is_err() {
+                    *bytes = std::sync::Arc::from(name.as_bytes());
+                }
+            })
             .or_insert_with(|| std::sync::Arc::from(name.as_bytes()));
     }
 }
@@ -1122,6 +1127,14 @@ mod tests {
         assert_eq!(
             function_name_for_ptr(absent as usize).as_deref(),
             Some("inferred世界")
+        );
+
+        let invalid_owned = 0x9188_0012usize as *const u8;
+        unsafe { js_register_function_name(invalid_owned, [0xffu8].as_ptr(), 1) };
+        register_function_name_if_absent(invalid_owned as usize, "recovered世界");
+        assert_eq!(
+            function_name_for_ptr(invalid_owned as usize).as_deref(),
+            Some("recovered世界")
         );
     }
 
