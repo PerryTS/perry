@@ -408,6 +408,18 @@ pub extern "C" fn js_nm_install_querystring() {
         Ordering::Relaxed,
     );
 }
+/// Promise interfaces own their constructor decoration without retaining the
+/// callback module's dispatcher and unrelated exports.
+pub(crate) fn install_readline_constructor_metadata() {
+    crate::stream_hooks::install();
+    super::native_module::install_nm_ee_ops();
+    nm_register_attach(
+        NmBucket::Readline,
+        super::native_module::constructor_shapes::nm_attach_readline,
+    );
+    nm_register_ctor(NmBucket::Readline, nm_ctor_readline);
+}
+
 #[no_mangle]
 pub extern "C" fn js_nm_install_readline() {
     js_nm_install_events();

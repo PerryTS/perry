@@ -316,7 +316,7 @@ pub extern "C" fn js_node_submod_install_fs_promises() {
 }
 #[no_mangle]
 pub extern "C" fn js_node_submod_install_readline_promises() {
-    crate::object::js_nm_install_readline();
+    crate::object::install_readline_constructor_metadata();
     arm_readline_promises();
 }
 /// The registry store alone, for `js_nm_install_readline`: a program that names
@@ -768,6 +768,7 @@ fn submodule_has_default_object(submod_key: &str) -> bool {
         submod_key,
         "diagnostics_channel"
             | "fs_promises"
+            | "readline_promises"
             | "stream_consumers"
             | "stream_web"
             | "test_reporters"
