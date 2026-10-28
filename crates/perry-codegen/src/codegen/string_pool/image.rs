@@ -252,15 +252,19 @@ mod tests {
                 1
             );
             #[cfg(feature = "llvm-inprocess")]
-            for (index, ir) in units.iter().enumerate() {
-                crate::inprocess::compile_ll_to_object_inprocess(
-                    ir,
-                    target,
-                    &["-O2".into()],
-                    &format!("literal-linkage-{index}"),
-                    false,
-                )
-                .expect("literal bytes must not change ownership or COMDAT declarations");
+            if !target.starts_with("wasm32") || cfg!(feature = "target-wasi") {
+                // The text contracts above apply to every target; actual
+                // WebAssembly codegen requires its optional LLVM backend.
+                for (index, ir) in units.iter().enumerate() {
+                    crate::inprocess::compile_ll_to_object_inprocess(
+                        ir,
+                        target,
+                        &["-O2".into()],
+                        &format!("literal-linkage-{index}"),
+                        false,
+                    )
+                    .expect("literal bytes must not change ownership or COMDAT declarations");
+                }
             }
         }
     }

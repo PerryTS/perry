@@ -174,27 +174,16 @@ fn check_compact_birth(ir: &str, defaults: &str) {
                 .unwrap();
             let compare = defs[condition].strip_prefix("icmp ule i64 ").unwrap();
             let limit = compare.split_once(", ").unwrap().1;
-            let select = defs[limit]
-                .strip_prefix("select i1 ")
-                .expect("color selects the allocation bound");
-            assert!(
-                select.ends_with(", i64 0"),
-                "active color must reject the birth"
-            );
-            let idle = select.split_once(", ").unwrap().0;
-            let color = defs[idle]
-                .strip_prefix("icmp eq i64 ")
-                .unwrap()
-                .strip_suffix(", 0")
-                .unwrap();
-            let flag = defs[color]
-                .strip_prefix("zext i8 ")
-                .unwrap()
-                .strip_suffix(" to i64")
+            let address = defs[limit]
+                .strip_prefix("load i64, ptr ")
+                .expect("the fast birth must consume the live canonical bump bound")
+                .split(',')
+                .next()
                 .unwrap();
             assert!(
-                defs[flag].starts_with("load volatile i8, ptr "),
-                "idle proof must use live color"
+                defs[address].starts_with("getelementptr i8, ptr ")
+                    && defs[address].ends_with(", i64 16"),
+                "permission must come from InlineArenaState.size"
             );
             let body = tail.split_once(':').unwrap().1;
             let body = body
@@ -218,7 +207,7 @@ fn check_compact_birth(ir: &str, defaults: &str) {
     assert!(checked > 0, "compact birth subject must be live");
     assert!(
         ir.contains("load volatile i8"),
-        "live color must gate the fast arm"
+        "the shared fallback must still read live birth color"
     );
 }
 
