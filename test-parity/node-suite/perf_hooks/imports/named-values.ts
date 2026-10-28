@@ -1,7 +1,4 @@
 import { performance, createHistogram } from "node:perf_hooks";
-performance.mark("direct named export", { detail: { value: 9 } });
-console.log(performance.getEntriesByName("direct named export")[0].detail.value);
-performance.clearMarks("direct named export");
 const value = performance;
 console.log(value === globalThis.performance, typeof value);
 const histogram = createHistogram();
