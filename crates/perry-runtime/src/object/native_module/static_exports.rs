@@ -3,7 +3,9 @@
 //! Reading one statically named member never installs a module dispatch bucket.
 use super::*;
 use crate::closure::JsFunctionInfo;
-use perry_dispatch::native_callable_exports::canonical_native_callable_module;
+use perry_dispatch::native_callable_exports::{
+    canonical_native_callable_module, canonical_native_callable_property,
+};
 
 /// The flag on `function` licenses this exact immutable descriptor layout.
 /// Construction follows the export's own body, without a module registry.
@@ -199,7 +201,7 @@ pub(crate) unsafe fn call_minted(
     args: *const f64,
     len: usize,
 ) -> Option<f64> {
-    let property = canonical_native_callable_property(module, property);
+    let property = super::canonical_native_callable_property(module, property);
     let module = canonical_native_callable_module(module, property);
     let value = callable_exports::minted_native_callable_export(&format!("{module}\0{property}"))?;
     let closure =

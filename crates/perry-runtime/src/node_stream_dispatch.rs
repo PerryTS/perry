@@ -184,7 +184,7 @@ fn require_event_emitter_async_resource_receiver(
     closure: *const ClosureHeader,
     this: crate::closure::JsThis,
 ) -> i64 {
-    if let Some(backing) = event_emitter_async_resource_backing(this_value(closure, this)) {
+    if let Some(backing) = event_emitter_async_resource_backing(emitter_this_value(closure, this)) {
         return backing;
     }
     crate::node_submodules::diagnostics::throw_type_error_no_code(

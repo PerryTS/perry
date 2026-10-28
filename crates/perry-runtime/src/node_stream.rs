@@ -165,7 +165,7 @@ pub use destroy_state::{js_node_stream_method_destroy, js_node_stream_method_des
 // ─────────────────────────────────────────────────────────────────
 
 #[inline]
-fn this_value(closure: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
+fn method_receiver(closure: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
     // Slot 0 was set by `build_object` to the NaN-boxed bits of the
     // host object value cast to i64; reverse the cast.
     if !closure.is_null() {
@@ -180,10 +180,22 @@ fn this_value(closure: *const ClosureHeader, this: crate::closure::JsThis) -> f6
         // captures a real object pointer, so existing instance-bound closures
         // never hit this branch.
         if bits != crate::value::TAG_UNDEFINED {
-            return constructors::ensure_lazy_stream(f64::from_bits(bits));
+            return f64::from_bits(bits);
         }
     }
-    constructors::ensure_lazy_stream(this.as_f64())
+    this.as_f64()
+}
+
+#[inline]
+fn this_value(closure: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
+    constructors::ensure_lazy_stream(method_receiver(closure, this))
+}
+
+/// Emitter methods also serve stream receivers. Only a stream owner can
+/// create lazy stream state, and that owner installs the existing hook.
+#[inline]
+fn emitter_this_value(closure: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
+    crate::stream_hooks::ensure_lazy_stream(method_receiver(closure, this))
 }
 
 extern "C" fn ns_chain1(
@@ -555,7 +567,7 @@ extern "C" fn ns_emit_rest(
     rest: f64,
 ) -> f64 {
     emit_stream_event_from_array(
-        this_value(closure, this),
+        emitter_this_value(closure, this),
         event,
         raw_ptr_from_value(rest) as *const _,
     )
@@ -574,7 +586,7 @@ unsafe extern "C" fn ns_emit_args(
     } else {
         std::slice::from_raw_parts(args, len)
     };
-    let target = this_value(closure, this);
+    let target = emitter_this_value(closure, this);
     match args.split_first() {
         Some((event, rest)) => event_emitter::emit_stream_event(target, *event, rest),
         None => event_emitter::emit_stream_event(target, f64::from_bits(TAG_UNDEFINED), &[]),
@@ -625,7 +637,7 @@ pub(crate) unsafe fn emitter_emit_call(
     };
     // No allocation precedes the read of the closure's receiver capture; the
     // emit roots everything it holds before it allocates.
-    let target = this_value(closure, crate::closure::JsThis::from_f64(recv));
+    let target = emitter_this_value(closure, crate::closure::JsThis::from_f64(recv));
     Some(match args.split_first() {
         Some((event, rest)) => event_emitter::emit_stream_event(target, *event, rest),
         None => event_emitter::emit_stream_event(target, f64::from_bits(TAG_UNDEFINED), &[]),
