@@ -7,7 +7,7 @@ use crate::{
 use std::sync::Arc;
 
 fn body(with_facts: bool, checked: bool, interp: bool, kind: u16) -> String {
-    let source = "class Cell { x: number; constructor(x: number) { this.x = x; } } function run(o: Cell, a: any[]) { a.push((o.x + 1) % 10); return (o.x + 1) % 10; }";
+    let source = "class Cell { x: number; constructor(x: number) { this.x = x; } } function run(o: Cell, a: number[]) { a.push((o.x + 1) % 10); return (o.x + 1) % 10; }";
     let mut cache = perry_diagnostics::SourceCache::new();
     let parsed =
         perry_parser::parse_typescript_with_cache(source, "result.ts", &mut cache).unwrap();
