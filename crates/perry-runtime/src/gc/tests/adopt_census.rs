@@ -24,10 +24,14 @@ struct Outcome {
     dropped: usize,
 }
 
-fn promote_then_collect_cohort(sabotaged: bool) -> Outcome {
+fn promote_then_collect_cohort(sabotaged: bool, traced: bool) -> Outcome {
     let _guard = CopyingNurseryTestGuard::new(4);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    let _promote = super::super::InPlacePromotionTestGuard::untraced();
+    let _promote = if traced {
+        super::super::InPlacePromotionTestGuard::enabled(1000)
+    } else {
+        super::super::InPlacePromotionTestGuard::untraced()
+    };
     cohort::seed_for_tests(0, 0, 0);
 
     const INNER: usize = 64;
@@ -52,6 +56,7 @@ fn promote_then_collect_cohort(sabotaged: bool) -> Outcome {
         "premise: young population"
     );
 
+    let untraced_before = untraced_promotion_cycles();
     adopt_census::begin_recording();
     let trace = {
         let _sabotage = sabotaged.then(adopt_census::sabotage::Guard::arm);
@@ -63,6 +68,13 @@ fn promote_then_collect_cohort(sabotaged: bool) -> Outcome {
         "premise: the minor promoted in place"
     );
     assert!(crate::arena::pointer_in_old_gen(held[0].2));
+    if traced {
+        assert_eq!(
+            untraced_promotion_cycles(),
+            untraced_before,
+            "the traced census witness must execute the real trace"
+        );
+    }
 
     // Drop every other held string.
     let mut kept = Vec::new();
@@ -83,12 +95,26 @@ fn promote_then_collect_cohort(sabotaged: bool) -> Outcome {
 
     cohort::seed_for_tests(cohort::bound_bytes(), 0, 0);
     let adopted_before = adopt_census::adopted_blocks();
+    let survival_before_full = last_young_survival_permille();
+    if traced {
+        assert!(
+            adopt_census::ready_blocks().is_empty(),
+            "traced census records must not arm the untraced survival predictor"
+        );
+    }
     let ran = {
         let _sabotage = sabotaged.then(adopt_census::sabotage::Guard::arm);
         run_promoted_cohort_full_if_due()
     };
     assert!(ran, "premise: the cohort full ran");
     let adopted = adopt_census::adopted_blocks() - adopted_before;
+    if traced {
+        assert_eq!(
+            last_young_survival_permille(),
+            survival_before_full,
+            "census reuse must leave the traced minor's predictor unchanged"
+        );
+    }
     let alive = |user: usize| {
         crate::arena::pointer_in_old_gen(user)
             && unsafe { (*header_from_user_ptr(user as *const u8)).obj_type } == GC_TYPE_STRING
@@ -108,7 +134,7 @@ fn promote_then_collect_cohort(sabotaged: bool) -> Outcome {
 
 #[test]
 fn a_cohort_full_adopts_the_promotion_census_and_collects_exactly() {
-    let outcome = promote_then_collect_cohort(false);
+    let outcome = promote_then_collect_cohort(false, false);
     assert!(
         outcome.adopted >= 2,
         "the full must adopt the promoted blocks' records: {}",
@@ -126,7 +152,7 @@ fn a_cohort_full_adopts_the_promotion_census_and_collects_exactly() {
 
 #[test]
 fn sabotaged_promotion_census_loses_rooted_objects() {
-    let outcome = promote_then_collect_cohort(true);
+    let outcome = promote_then_collect_cohort(true, false);
     assert!(
         outcome.adopted >= 2,
         "premise: the sabotaged records were adopted"
@@ -137,5 +163,26 @@ fn sabotaged_promotion_census_loses_rooted_objects() {
          mark, so rooted strings are swept: {} of {} survived",
         outcome.kept_alive,
         outcome.kept
+    );
+}
+
+#[test]
+fn a_traced_promotion_census_is_adopted_and_preserves_exact_liveness() {
+    let outcome = promote_then_collect_cohort(false, true);
+    assert!(
+        outcome.adopted >= 2,
+        "traced records must actually be adopted"
+    );
+    assert_eq!(outcome.kept_alive, outcome.kept);
+    assert_eq!(outcome.dropped_reclaimed, outcome.dropped);
+}
+
+#[test]
+fn a_corrupted_traced_promotion_census_is_detected_by_liveness() {
+    let outcome = promote_then_collect_cohort(true, true);
+    assert!(outcome.adopted >= 2);
+    assert!(
+        outcome.kept_alive < outcome.kept,
+        "removing recorded start bits must make the live-subject witness fail"
     );
 }

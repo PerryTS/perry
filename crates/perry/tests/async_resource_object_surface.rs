@@ -1,35 +1,7 @@
-//! #10926 / honest-tags row 13 — `AsyncResource` and `AsyncHook` are ordinary
-//! objects, and a subclass inherits through the prototype chain.
-//!
-//! Two bugs, one representation. The DIRECT path
-//! (`new AsyncResource(...)`, `createHook(...)`) handed JS a raw
-//! `Box::into_raw` address with no `GcHeader`, so `JSON.stringify` dispatched
-//! on whatever bytes preceded the `Box` and answered `""` (#10926). The
-//! SUBCLASS path compensated for a missing prototype link by copying five
-//! methods onto every instance as own properties and stashing that same
-//! header-less `Box` in a user-visible `__perryAsyncResourceBacking` field —
-//! so `Object.keys(new R())` leaked it and `JSON.stringify` serialised the
-//! header-less value.
-//!
-//! The leak was the symptom. The cause is that
-//! `Object.getPrototypeOf(R.prototype) === AsyncResource.prototype` is false:
-//! `reserved_native_parent_prototype_bits` wires `EventEmitter` and
-//! `EventEmitterAsyncResource` and simply never got an `AsyncResource` arm.
-//! Linking the chain deletes the copies and the field.
-//!
-//! THIS HALF fixes the DIRECT path only: `new AsyncResource(...)` and
-//! `createHook(...)` become ordinary objects, so `direct-json`, `hook-json`
-//! and `nested` match node. The SUBCLASS half is HELD: linking
-//! `R.prototype.[[Prototype]]` to `AsyncResource.prototype` needs a codegen
-//! condition in `perry-codegen/src/expr/property_get.rs:1351`, which matches
-//! `class_name == "AsyncResource"` exactly and so misses a subclass; widening
-//! it belongs to the lane already restructuring that file. Until then
-//! `sub-keys`, `sub-gopn`, `sub-json` and `proto-chain` keep their CURRENT
-//! (node-divergent) values here, marked below, so this test states the truth
-//! rather than an aspiration.
-//!
-//! MUST-FAIL: committed BEFORE the fix. On v0.5.1633 the three direct lines
-//! differ; with this half they match node 26.8.1.
+//! AsyncResource, AsyncHook and subclasses have Node's ordinary-object surface.
+//! The subclass prototype chain supplies methods without leaking an own backing
+//! field. Keep reflection, identity, dispatch and collection stability pinned
+//! to Node 26.12.1; pristine main is checked when refreshing these expectations.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -101,31 +73,21 @@ const m = new Map<any, number>([[direct, 1], [hook, 2]]);
 console.log("map", m.size, m.get(direct), m.get(hook));
 "#;
 
-/// Every line is node 26.8.1's. Seven differ on v0.5.1633:
-/// `sub-keys`, `sub-gopn`, `sub-json`, `direct-json`, `hook-json`, `nested`
-/// and `proto-chain`. The other ten are already correct and are pinned here so
-/// the representation change cannot quietly break them — `instanceof`,
-/// `typeof`, the method results, identity and `Map` keys all have to survive.
+/// The complete ordinary-object surface matches the pinned Node oracle.
 #[test]
 fn async_resource_and_hook_match_nodes_object_surface() {
     let dir = tempfile::tempdir().expect("tempdir");
     let stdout = compile_and_run(dir.path(), PROGRAM);
     assert_eq!(
         stdout,
-        // The first three lines and `proto-chain` are HELD (subclass half,
-        // pending the codegen widening at `property_get.rs:1351`) -- node
-        // gives `[]`, `[]`, `{}` and `true` for those four. `direct-keys`,
-        // `direct-json`, `hook-json` and `nested` are what THIS half fixes.
-        // Do not put a `//` comment inside the literal below: the lines end
-        // in `\` continuations, so it would become expected output.
-        "sub-keys [\"__perryAsyncResourceBacking\"]\n\
-         sub-gopn [\"__perryAsyncResourceBacking\",\"asyncId\",\"bind\",\"emitDestroy\",\"runInAsyncScope\",\"triggerAsyncId\"]\n\
-         sub-json {\"__perryAsyncResourceBacking\":\"\"}\n\
+        "sub-keys []\n\
+         sub-gopn []\n\
+         sub-json {}\n\
          direct-keys []\n\
          direct-json {}\n\
          hook-json {}\n\
          nested {\"a\":{},\"b\":{}}\n\
-         proto-chain false\n\
+         proto-chain true\n\
          instanceof true true true\n\
          typeof object object object\n\
          asyncId number number\n\
@@ -201,10 +163,8 @@ console.log("surface", JSON.stringify(sub), JSON.stringify(direct));
     );
     assert_eq!(
         stdout,
-        // `sub` still carries the held own property, so its JSON is the
-        // subclass half's business; `direct` is this half's.
         "stable-id true\n\
          after-gc 2 number function\n\
-         surface {\"__perryAsyncResourceBacking\":\"\"} {}\n"
+         surface {} {}\n"
     );
 }
