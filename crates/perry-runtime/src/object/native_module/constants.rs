@@ -596,6 +596,10 @@ pub(crate) unsafe fn get_native_module_constant(
             "INSPECT_MAX_BYTES" => Some(50.0),
             _ => None,
         },
+        "readline" => match property {
+            "promises" => Some(crate::node_submodules::commonjs_value("readline_promises")),
+            _ => None,
+        },
         "timers" => match property {
             "promises" => Some(crate::node_submodules::commonjs_value("timers_promises")),
             _ => None,
