@@ -1042,10 +1042,10 @@ pub extern "C" fn js_string_concat_value_box(prefix: *const StringHeader, value:
     // which on the baseline x86-64 target is a libm `trunc` call (#10762). NaN
     // fails the range test, and the range test runs first, so the cast only
     // ever sees a value it can represent.
-    // A number with more than SHORT_STRING_MAX_LEN decimal digits cannot
-    // fit inline even with an empty prefix. Do not format it twice.
-    const SSO_NUMBER_LIMIT: f64 = 10u32.pow(crate::value::SHORT_STRING_MAX_LEN as u32) as f64;
-    if (0.0..SSO_NUMBER_LIMIT).contains(&value)
+    // The exact u32 formatter serves both inline results and the existing
+    // heap fallback, which reuses these digits. Admit its full integer domain
+    // rather than sending larger results through a second general formatter.
+    if (0.0..=u32::MAX as f64).contains(&value)
         && (value as u32) as f64 == value
         && is_valid_string_ptr(prefix)
     {
