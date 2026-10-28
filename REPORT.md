@@ -107,6 +107,66 @@ accepted the minimal +0.27% residual under landing rule112's side band.
 It is not represented as complete pre-number recovery. Against integrated main
 it is instruction-flat. Absolute cycles and nanoseconds are in the full medians JSON.
 
+## Final paired check under manager007
+
+After the n5 verification, manager007 required at least six AB/BA pairs per case,
+all pairs retained, sibling ticks/load for every sample, and paired medians with
+ranges both with and without contended pairs. The final check has180 samples:
+six pairs for each of14 AWFY cases plus property. Main/head order is
+AB, BA, AB, BA, AB, BA on one fixed physical CPU/SMT pair per case.
+
+The first six cases admitted an idle CPU pair. Following007's shared-host ruling,
+the remaining nine chose the quietest available pair after a two-second CPU census.
+No pair was discarded or repeated. The transition preserved all completed cases
+and stopped only the owned sleeping sampler with no child at a case boundary.
+Every run records raw before/after CPU ticks and host load. A contended pair has
+at least one sample with >2% sibling activity (a reporting classification only).
+
+The table uses100*(head_cycles/main_cycles-1) for each pair, then its median and
+full range. A dash means no uncontended pair; it does not imply a filtered pass.
+
+| Case | All6 median % | All6 range % | Uncontended n | Uncontended median % | Uncontended range % |
+|---|---:|---:|---:|---:|---:|
+| Bounce | -0.353 | -0.852 .. +0.629 | 4 | -0.103 | -0.399 .. +0.629 |
+| CD | +0.232 | -0.384 .. +1.154 | 6 | +0.232 | -0.384 .. +1.154 |
+| DeltaBlue | -2.494 | -7.253 .. -1.536 | 5 | -2.137 | -4.721 .. -1.536 |
+| Havlak | -3.158 | -7.061 .. +0.280 | 3 | -2.813 | -3.502 .. -2.776 |
+| Json | -14.920 | -16.857 .. +17.294 | 3 | -16.728 | -16.857 .. -15.047 |
+| List | +0.148 | -0.959 .. +2.052 | 6 | +0.148 | -0.959 .. +2.052 |
+| Mandelbrot | +0.126 | -0.354 .. +1.414 | 6 | +0.126 | -0.354 .. +1.414 |
+| NBody | -1.702 | -18.817 .. +15.694 | 2 | -2.120 | -2.174 .. -2.067 |
+| Permute | +0.513 | -0.027 .. +2.026 | 5 | +0.452 | -0.027 .. +0.694 |
+| Queens | -0.170 | -0.553 .. -0.043 | 6 | -0.170 | -0.553 .. -0.043 |
+| Richards | -3.407 | -32.021 .. +4.012 | 0 | — | — |
+| Sieve | +2.635 | -15.178 .. +11.154 | 1 | +0.341 | +0.341 .. +0.341 |
+| Storage | -3.769 | -4.414 .. +5.410 | 3 | -4.313 | -4.414 .. -3.676 |
+| Towers | +0.102 | -0.329 .. +0.860 | 5 | +0.066 | -0.329 .. +0.860 |
+| property-prototype | -3.543 | -8.962 .. +12.908 | 6 | -3.543 | -8.962 .. +12.908 |
+
+Thirteen AWFY cases have median paired cycles <=+2%. Sieve passes007's explicit
+alternative: its range straddles zero and instructions show no additional work.
+Sieve all-pair cycles median+2.6351%, range[-15.1785%,+11.1536%]; instructions
+median-0.0001613%. Five pairs are contended; the one uncontended pair is+0.3415%
+cycles. The independent earlier clean n5 was-0.2233% cycles and-0.0002% instructions.
+These figures are all retained; the positive paired median is not hidden.
+
+Sieve's actual767-instruction sieve body and referenced floating/NANBOX constants
+match exactly after ordinary branch/call/RIP relocations and three immediate
+references to the same two ELF globals (PERRY_GC_POLL_ARMED and
+PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED). nm and GDB resolve the globals in both
+ELFs; arbitrary immediates are not stripped. This supports the unchanged-work
+criterion, with no new instruction tolerance or product tuning.
+BRG-sieve-code-compare.py reproduces the comparison and BRG-paired-audit.py checks
+all180 rows, AB/BA ordering, tick/load fields, parity, unchanged ELFs, all ranges,
+and this explicit Sieve criterion. The check does not claim all paired medians
+are below2% or that the contended wall-time median is a clean measurement.
+
+Evidence: paired-final/{raw.json,summary.json,audit.json,audit.complete,sieve-code/}
+and paired-final-audit.log. Prior n5 batches, including every contended attempt,
+remain under names-final; old-n5-all-pairs.json reports all their paired ranges.
+No additional startup count was needed: the shipping source, compiler, runtime
+archive and native ELFs are unchanged.
+
 ## Exact startup
 
 Both arms: x86-64-v3, PERRY_KEEP_SYMBOLS=1, ASLR off, same executable and synthetic
@@ -171,7 +231,7 @@ Root free space remained above25GB (319GB at the final audit). No other lane's
 PIDs were killed. No historical checkout was profiled or bisected.
 
 Bundle: /root/BRG/brg.bundle, ref refs/heads/brg, prerequisite origin/main334a705b9.
-The final docs-only commit follows the verified production source; bundle head
+The final docs-only commits follow the verified production source; bundle head
 is recorded in the accompanying mailbox done message. Full raw evidence stays on
 qb9; brg-evidence.tar.gz carries compact verification receipts and driver scripts.
 No push. Next Ball action is the separate exact-chain/design review required by002/003.

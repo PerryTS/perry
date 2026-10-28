@@ -19,7 +19,11 @@ manager002/003. Ball is pending design review before a new publication-model bui
   the earlier wrapper failure remains recorded; corrected final audit passes.
 - Rejected broader candidate's Storage effect is explained by clean layout controls
   and per-function frontend/icache profiles; that candidate is excluded.
-- Quiet-window request007 resolved through ordinary idle admission; withdrawn by008.
+- Quiet-window request007 was withdrawn by008 after the original n5 finished.
+- Manager007 then required a shared-host six-pair check:180 samples, all pairs kept.
+- Thirteen AWFY paired medians <=+2%; Sieve passes007 range/unchanged-work criterion.
+- Sieve+2.635% cycles, range[-15.179,+11.154]%, instructions-0.000161%; body767 identical
+  after resolved relocations. Full report includes both contended/uncontended ranges.
 - All commits Ralph Küpper <ralph3@skelpo.com>, no attribution; no push.
 - Build roots owned; GC sidecars current; free space319GB at final audit.
 - Bundle refs/heads/brg based on origin/main334a; see REPORT.md and mailbox done.
