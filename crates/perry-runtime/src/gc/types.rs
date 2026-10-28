@@ -1146,6 +1146,12 @@ const INERT_TYPE_INFO: GcTypeInfo = gc_type_info_entry(
     GcFinalizeHookKind::None,
 );
 
+// Direct descriptor projection must preserve unknown-kind admission semantics.
+const _: () = assert!(matches!(
+    INERT_TYPE_INFO.rewrite_descriptor_kind,
+    GcRewriteDescriptorKind::Leaf
+));
+
 const fn byte_type_infos() -> [GcTypeInfo; MALLOC_KIND_BUCKET_COUNT] {
     // Unused ids have fully initialized inert fields. A layout note can read
     // its field directly from the sole descriptor authority; admission still
@@ -1245,17 +1251,21 @@ pub(crate) fn gc_type_is_arena_walkable(obj_type: u8) -> bool {
 
 #[inline(always)]
 pub(crate) fn gc_type_rewrite_descriptor_kind(obj_type: u8) -> GcRewriteDescriptorKind {
-    // These exact canonical layouts dominate tracing. Constant descriptor
-    // projections avoid the sparse-table address calculation and known-type
-    // admission for each string/object, without another table or hard-coded
-    // descriptor answer. Unknown and remaining types keep normal admission.
-    match obj_type {
-        GC_TYPE_OBJECT => GC_TYPE_INFO_BY_ID[GC_TYPE_OBJECT as usize].rewrite_descriptor_kind,
-        GC_TYPE_STRING => GC_TYPE_INFO_BY_ID[GC_TYPE_STRING as usize].rewrite_descriptor_kind,
-        _ => gc_type_info(obj_type).map_or(GcRewriteDescriptorKind::Leaf, |info| {
-            info.rewrite_descriptor_kind
-        }),
+    #[cfg(test)]
+    if obj_type == GC_TYPE_ARRAY
+        && header_admission_tests::DENSE_DESCRIPTOR_FAULT.with(std::cell::Cell::get)
+    {
+        return GC_TYPE_INFO_BY_ID[GC_TYPE_OBJECT as usize].rewrite_descriptor_kind;
     }
+    // Unused rows are canonical inert descriptors with Leaf rewrite kind,
+    // exactly the unknown-kind answer. Project the field from the one table;
+    // repeating type admission changes no answer and costs every child trace.
+    // Header/pointer admission remains gc_type_is_known's independent job.
+    GC_TYPE_INFO_BY_ID
+        .get(obj_type as usize)
+        .map_or(GcRewriteDescriptorKind::Leaf, |info| {
+            info.rewrite_descriptor_kind
+        })
 }
 
 #[inline]
