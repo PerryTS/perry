@@ -588,10 +588,14 @@ fn build_trap_shim() {
     cc::Build::new().object(&obj).compile("perry_trap");
 }
 
+#[path = "build/realm_info_exports.rs"]
+mod realm_info_exports;
+
 fn main() {
     let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
-    perry_runtime_manifest::realm_source::generate(std::path::Path::new("src"), &out)
+    let realm = perry_runtime_manifest::realm_source::generate(std::path::Path::new("src"), &out)
         .expect("emit runtime realm manifest");
+    realm_info_exports::write(&realm, &out).expect("emit realm info export link test");
 
     println!("cargo:rerun-if-env-changed=PERRY_CHECK_CONTRACTS");
     println!("cargo:rustc-check-cfg=cfg(wasm_discard)");

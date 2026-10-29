@@ -12,9 +12,8 @@ def write(path, count):
 
 
 class CompanionRatchetTests(unittest.TestCase):
-    def test_allowlist_totals_the_remaining_forty_four(self):
-        self.assertEqual(sum(ALLOWED.values()), 44)
-        self.assertEqual(len(ALLOWED), 6)
+    def test_no_companion_is_allowed(self):
+        self.assertEqual(ALLOWED, {})
 
     def test_nested_source_companion_is_rejected_and_build_output_is_allowed(self):
         with tempfile.TemporaryDirectory() as temporary:

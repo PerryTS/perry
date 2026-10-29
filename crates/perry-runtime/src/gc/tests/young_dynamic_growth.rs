@@ -15,7 +15,12 @@ fn check_first_dynamic_key(old_owner: bool, old_meta: bool) {
     let obj = crate::object::js_object_alloc(0, 0);
     js_shadow_slot_set(0, ptr_bits(obj as usize));
     if old_meta {
-        unsafe { crate::object::object_meta_ensure(obj) };
+        unsafe {
+            crate::object::object_meta_ensure(
+                crate::object::MetaObj::runtime_born(obj),
+                crate::object::MetaReason::RuntimeHandle,
+            )
+        };
     }
     if old_owner {
         for _ in 0..8 {

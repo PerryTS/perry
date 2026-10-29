@@ -226,36 +226,36 @@ pub(super) fn install_disposable_proto_methods(
             // corrupts a data slot (see the Map arm in `collection_proto_thunks`).
             install_disposed_getter(
                 proto_obj,
-                crate::fn_info!(#[realm("DisposableStack.prototype.disposed.<get>", constructible = true)] ds_proto_disposed_getter_thunk, 0; with_declared(0)),
+                crate::fn_info!(#[realm("DisposableStack.prototype.disposed.<get>", constructible = true)] export crate::object::disposable_proto_thunks::ds_proto_disposed_getter_thunk, 0; with_declared(0)),
             );
             ipm(
                 proto_obj,
                 "use",
-                crate::fn_info!(#[realm(DisposableStack.prototype.use)] ds_proto_use_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(DisposableStack.prototype.use)] export crate::object::disposable_proto_thunks::ds_proto_use_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
             ipm(
                 proto_obj,
                 "adopt",
-                crate::fn_info!(#[realm(DisposableStack.prototype.adopt)] ds_proto_adopt_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(DisposableStack.prototype.adopt)] export crate::object::disposable_proto_thunks::ds_proto_adopt_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
                 2,
             );
             ipm(
                 proto_obj,
                 "defer",
-                crate::fn_info!(#[realm(DisposableStack.prototype.defer)] ds_proto_defer_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(DisposableStack.prototype.defer)] export crate::object::disposable_proto_thunks::ds_proto_defer_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
             let dispose_value = ipm(
                 proto_obj,
                 "dispose",
-                crate::fn_info!(#[realm(DisposableStack.prototype.dispose)] ds_proto_dispose_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(DisposableStack.prototype.dispose)] export crate::object::disposable_proto_thunks::ds_proto_dispose_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
             ipm(
                 proto_obj,
                 "move",
-                crate::fn_info!(#[realm(DisposableStack.prototype.move)] ds_proto_move_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(DisposableStack.prototype.move)] export crate::object::disposable_proto_thunks::ds_proto_move_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
             install_symbol_dispose_alias(proto_obj, "dispose", dispose_value);
@@ -264,36 +264,36 @@ pub(super) fn install_disposable_proto_methods(
         "AsyncDisposableStack" => {
             install_disposed_getter(
                 proto_obj,
-                crate::fn_info!(#[realm("AsyncDisposableStack.prototype.disposed.<get>", constructible = true)] ads_proto_disposed_getter_thunk, 0; with_declared(0)),
+                crate::fn_info!(#[realm("AsyncDisposableStack.prototype.disposed.<get>", constructible = true)] export crate::object::disposable_proto_thunks::ads_proto_disposed_getter_thunk, 0; with_declared(0)),
             );
             ipm(
                 proto_obj,
                 "use",
-                crate::fn_info!(#[realm(AsyncDisposableStack.prototype.use)] ads_proto_use_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(AsyncDisposableStack.prototype.use)] export crate::object::disposable_proto_thunks::ads_proto_use_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
             ipm(
                 proto_obj,
                 "adopt",
-                crate::fn_info!(#[realm(AsyncDisposableStack.prototype.adopt)] ads_proto_adopt_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(AsyncDisposableStack.prototype.adopt)] export crate::object::disposable_proto_thunks::ads_proto_adopt_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
                 2,
             );
             ipm(
                 proto_obj,
                 "defer",
-                crate::fn_info!(#[realm(AsyncDisposableStack.prototype.defer)] ads_proto_defer_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(AsyncDisposableStack.prototype.defer)] export crate::object::disposable_proto_thunks::ads_proto_defer_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
             let dispose_value = ipm(
                 proto_obj,
                 "disposeAsync",
-                crate::fn_info!(#[realm(AsyncDisposableStack.prototype.disposeAsync)] ads_proto_dispose_async_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(AsyncDisposableStack.prototype.disposeAsync)] export crate::object::disposable_proto_thunks::ads_proto_dispose_async_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
             ipm(
                 proto_obj,
                 "move",
-                crate::fn_info!(#[realm(AsyncDisposableStack.prototype.move)] ads_proto_move_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(AsyncDisposableStack.prototype.move)] export crate::object::disposable_proto_thunks::ads_proto_move_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
             install_symbol_dispose_alias(proto_obj, "asyncDispose", dispose_value);

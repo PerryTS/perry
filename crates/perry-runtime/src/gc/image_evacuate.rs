@@ -97,7 +97,7 @@ pub(crate) fn evacuate_realm_image() -> RealmEvacuation {
     for copy in evacuation.copies() {
         let user = unsafe { (copy as *mut u8).add(GC_HEADER_SIZE) } as usize;
         unsafe {
-            visit_gc_rewrite_slots(copy, |slot| {
+            visit_gc_rewrite_slots::<{ cfg!(test) }>(copy, |slot| {
                 let Some(new_bits) = forward_bits(&evacuation, slot.read()) else {
                     return;
                 };

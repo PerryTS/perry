@@ -127,7 +127,10 @@ fn private_storage_evaluation_id(class_id: u32, receiver: Option<f64>, owner: Op
             return (*meta).native_state;
         }
         // Metadata allocation can move the class; object_meta_ensure roots it.
-        let meta = crate::object::object_meta_ensure(object as *mut ObjectHeader);
+        let meta = crate::object::object_meta_ensure(
+            crate::object::MetaObj::runtime_born(object as *mut ObjectHeader),
+            crate::object::MetaReason::ClassEvaluationPrivateStorage,
+        );
         let id = NEXT_PRIVATE_EVALUATION_ID
             .try_update(
                 std::sync::atomic::Ordering::Relaxed,
@@ -193,7 +196,8 @@ fn private_evaluation_field_get(
     if !private_template_may_be_evaluated(class_id) {
         let receiver = private_member_receiver(obj);
         let name = intern_private_name(name.as_bytes()).unwrap();
-        return private_storage_key_by_id(class_id, PRIVATE_TEMPLATE_EVALUATION_ID, name).get_cached(receiver);
+        return private_storage_key_by_id(class_id, PRIVATE_TEMPLATE_EVALUATION_ID, name)
+            .get_cached(receiver);
     }
     let owner = take_private_field_owner(class_id, name, false);
     let _owner = PrivateHintBrandScope::new(owner);
@@ -226,7 +230,8 @@ fn private_evaluation_field_set(
     if !private_template_may_be_evaluated(class_id) {
         let receiver = private_member_receiver(obj);
         let name = intern_private_name(name.as_bytes()).unwrap();
-        return private_storage_key_by_id(class_id, PRIVATE_TEMPLATE_EVALUATION_ID, name).set_cached(receiver, value);
+        return private_storage_key_by_id(class_id, PRIVATE_TEMPLATE_EVALUATION_ID, name)
+            .set_cached(receiver, value);
     }
     let owner = take_private_field_owner(class_id, name, true);
     let _owner = PrivateHintBrandScope::new(owner);

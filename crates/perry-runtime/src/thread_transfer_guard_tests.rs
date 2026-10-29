@@ -202,3 +202,31 @@ fn variable_width_bigint_clone_preserves_upper_words() {
         assert_eq!(crate::bigint::BigIntHeader::all_limbs(ptr), words);
     }
 }
+
+#[test]
+fn message_clone_stops_visiting_after_first_unsupported_value() {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let first = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
+    let second = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
+    let array = scope.root_raw_mut_ptr(crate::array::js_array_alloc(2));
+    let first_bits = JSValue::pointer(first.get_raw_const_ptr::<u8>()).bits();
+    let second_bits = JSValue::pointer(second.get_raw_const_ptr::<u8>()).bits();
+    crate::array::js_array_push_f64(array.get_raw_mut_ptr(), f64::from_bits(first_bits));
+    crate::array::js_array_push_f64(array.get_raw_mut_ptr(), f64::from_bits(second_bits));
+    let visits = std::cell::Cell::new(0);
+    let refuse = |bits| {
+        if bits == first_bits || bits == second_bits {
+            visits.set(visits.get() + 1);
+        }
+        bits == first_bits
+    };
+    let result = unsafe {
+        serialize_message(
+            JSValue::pointer(array.get_raw_const_ptr::<u8>()).bits(),
+            &[],
+            Some(&refuse),
+        )
+    };
+    assert!(result.is_err());
+    assert_eq!(visits.get(), 1);
+}

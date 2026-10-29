@@ -1398,7 +1398,7 @@ fn note_removal(elems_moved: usize) {
 /// One `[gc-idlist]` line per copying minor under `PERRY_GC_DIAG=1`,
 /// cumulative. `elems_moved` is the rig falsifier for this change.
 pub(crate) fn id_list_report() {
-    if !crate::gc::gc_diag_enabled() {
+    if !crate::gc::diagnostic_hooks::enabled() {
         return;
     }
     let st = ID_LIST_OP_STATS.with(std::cell::Cell::get);

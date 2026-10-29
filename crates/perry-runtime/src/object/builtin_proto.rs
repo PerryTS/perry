@@ -54,56 +54,7 @@ use super::ObjectHeader;
 /// Number of [`BuiltinProto`] families.
 pub const FAMILIES: usize = crate::codegen_abi::BUILTIN_PROTO_FAMILIES;
 
-/// A family of intrinsic prototypes whose methods compiled code calls by
-/// name. The discriminant is the family's agent slot offset
-/// (`AGENT_PTR_INTRINSIC_PROTO + k`); `perry-codegen` mirrors these values
-/// (`builtin_proto.rs`), and a test pins the two lists together.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(u8)]
-pub enum BuiltinProto {
-    Object = 0,
-    Function = 1,
-    Array = 2,
-    String = 3,
-    Number = 4,
-    Boolean = 5,
-    Symbol = 6,
-    BigInt = 7,
-    Map = 8,
-    Set = 9,
-    Date = 10,
-    RegExp = 11,
-    Promise = 12,
-    Error = 13,
-    WeakMap = 14,
-    WeakSet = 15,
-}
-
-impl BuiltinProto {
-    /// Every family, with the global constructor whose `prototype` it is.
-    pub const ALL: [(BuiltinProto, &'static str); FAMILIES] = [
-        (BuiltinProto::Object, "Object"),
-        (BuiltinProto::Function, "Function"),
-        (BuiltinProto::Array, "Array"),
-        (BuiltinProto::String, "String"),
-        (BuiltinProto::Number, "Number"),
-        (BuiltinProto::Boolean, "Boolean"),
-        (BuiltinProto::Symbol, "Symbol"),
-        (BuiltinProto::BigInt, "BigInt"),
-        (BuiltinProto::Map, "Map"),
-        (BuiltinProto::Set, "Set"),
-        (BuiltinProto::Date, "Date"),
-        (BuiltinProto::RegExp, "RegExp"),
-        (BuiltinProto::Promise, "Promise"),
-        (BuiltinProto::Error, "Error"),
-        (BuiltinProto::WeakMap, "WeakMap"),
-        (BuiltinProto::WeakSet, "WeakSet"),
-    ];
-
-    fn from_index(i: usize) -> Option<BuiltinProto> {
-        Self::ALL.get(i).map(|(f, _)| *f)
-    }
-}
+pub use perry_abi::BuiltinProto;
 
 /// `Pristine(family)`: neither `family`'s prototype nor `%Object.prototype%`
 /// has been modified: the shadow bit of this agent's intrinsic prototype.
@@ -194,7 +145,10 @@ pub(crate) unsafe fn seal_object_family(obj: *mut ObjectHeader, family: usize) {
     let _ = super::proto_validity::mark_object_as_prototype(obj as usize);
     // Marking may have moved nothing (startup runs with collection
     // suppressed by the caller) but it did ensure a meta record.
-    let meta = super::object_meta_ensure(obj);
+    let meta = super::object_meta_ensure(
+        super::MetaObj::runtime_born(obj),
+        super::MetaReason::BuiltinSeal,
+    );
     if meta.is_null() {
         return;
     }
@@ -271,7 +225,10 @@ pub(crate) unsafe fn name_runtime_prototype(
     serial: u64,
 ) -> Option<*mut super::ObjectMeta> {
     let _no_move = crate::gc::GcSuppressScope::new();
-    let meta = super::object_meta_ensure(proto);
+    let meta = super::object_meta_ensure(
+        super::MetaObj::runtime_born(proto),
+        super::MetaReason::RuntimePrototypeName,
+    );
     if meta.is_null() {
         return None;
     }

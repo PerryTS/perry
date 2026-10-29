@@ -2,19 +2,19 @@
 
 use super::*;
 
-pub(in crate::gc) unsafe fn trace_heap_rewrite_slots(
+pub(in crate::gc) unsafe fn trace_heap_rewrite_slots<const DIAGNOSTICS: bool>(
     header: *mut GcHeader,
     valid_ptrs: &ValidPointerSet,
     worklist: &mut Vec<*mut GcHeader>,
 ) {
-    trace_heap_rewrite_slots_impl::<false, false>(header, valid_ptrs, worklist, None);
+    trace_heap_rewrite_slots_impl::<DIAGNOSTICS, false, false>(header, valid_ptrs, worklist, None);
 }
 
 /// Only full-cycle drains pass a buffer. The parent's generation and its
 /// descriptor remain the authority for which slots enter the remembered set.
 /// Specialize at the object boundary so minors and young parents keep their
 /// existing mark loop, without a remembering branch at every slot.
-pub(in crate::gc) unsafe fn trace_heap_rewrite_slots_remembering(
+pub(in crate::gc) unsafe fn trace_heap_rewrite_slots_remembering<const DIAGNOSTICS: bool>(
     header: *mut GcHeader,
     valid_ptrs: &ValidPointerSet,
     worklist: &mut Vec<*mut GcHeader>,
@@ -24,7 +24,7 @@ pub(in crate::gc) unsafe fn trace_heap_rewrite_slots_remembering(
         let user = (header as *mut u8).add(GC_HEADER_SIZE) as usize;
         match crate::gc::barrier::barrier_remembering_parent(user) {
             Some(crate::gc::barrier::RememberingParent::Old) => {
-                trace_heap_rewrite_slots_impl::<true, true>(
+                trace_heap_rewrite_slots_impl::<DIAGNOSTICS, true, true>(
                     header,
                     valid_ptrs,
                     worklist,
@@ -37,8 +37,21 @@ pub(in crate::gc) unsafe fn trace_heap_rewrite_slots_remembering(
                 // Reuse the ordinary mark loop, then record their descriptor's
                 // post-observer words through one shared cold helper. This
                 // avoids emitting a third copy of the complete mark loop.
-                trace_heap_rewrite_slots(header, valid_ptrs, worklist);
-                remember_malloc_mark_slots(header, sticky);
+                trace_heap_rewrite_slots::<DIAGNOSTICS>(header, valid_ptrs, worklist);
+                remember_malloc_mark_slots::<DIAGNOSTICS>(header, sticky);
+                return;
+            }
+            // A young large container this full marks is promoted at its
+            // address when the sweep ends, after the remembered-set clear
+            // would have dropped entries made then: remember its young and
+            // malloc children now, as an old parent's.
+            None if crate::arena::is_young_large_owner(user) => {
+                trace_heap_rewrite_slots_impl::<DIAGNOSTICS, true, true>(
+                    header,
+                    valid_ptrs,
+                    worklist,
+                    Some(sticky),
+                );
                 return;
             }
             // No collector traces an image cell (marking stops at the image
@@ -46,12 +59,15 @@ pub(in crate::gc) unsafe fn trace_heap_rewrite_slots_remembering(
             Some(crate::gc::barrier::RememberingParent::Image) | None => {}
         }
     }
-    trace_heap_rewrite_slots(header, valid_ptrs, worklist);
+    trace_heap_rewrite_slots::<DIAGNOSTICS>(header, valid_ptrs, worklist);
 }
 
 #[cold]
 #[inline(never)]
-unsafe fn remember_malloc_mark_slots(header: *mut GcHeader, sticky: &mut StickyRememberedSet) {
+unsafe fn remember_malloc_mark_slots<const DIAGNOSTICS: bool>(
+    header: *mut GcHeader,
+    sticky: &mut StickyRememberedSet,
+) {
     // Match the mark loop's early exits. Ephemeron words are not unconditional
     // strong edges, and a missing native callback must remain detectable.
     if (*header).obj_type == GC_TYPE_WEAK_STORAGE {
@@ -64,7 +80,7 @@ unsafe fn remember_malloc_mark_slots(header: *mut GcHeader, sticky: &mut StickyR
         return;
     }
     let weak_holder = crate::weakref::is_weak_holder_header(header);
-    visit_gc_rewrite_slots(header, |slot| {
+    visit_gc_rewrite_slots::<DIAGNOSTICS>(header, |slot| {
         if weak_holder && crate::weakref::is_weak_target_trace_slot(header, slot.slot) {
             return;
         }
@@ -74,7 +90,11 @@ unsafe fn remember_malloc_mark_slots(header: *mut GcHeader, sticky: &mut StickyR
     });
 }
 
-unsafe fn trace_heap_rewrite_slots_impl<const REMEMBER: bool, const OLD_PARENT: bool>(
+unsafe fn trace_heap_rewrite_slots_impl<
+    const DIAGNOSTICS: bool,
+    const REMEMBER: bool,
+    const OLD_PARENT: bool,
+>(
     header: *mut GcHeader,
     valid_ptrs: &ValidPointerSet,
     worklist: &mut Vec<*mut GcHeader>,
@@ -120,7 +140,9 @@ unsafe fn trace_heap_rewrite_slots_impl<const REMEMBER: bool, const OLD_PARENT: 
                     break 'visit;
                 }
                 if let Some(kind) = slot.layout_kind {
-                    record_layout_child_slot_read(kind);
+                    if DIAGNOSTICS {
+                        record_layout_child_slot_read(kind)
+                    };
                     record_trace_slot_read();
                 }
                 let bits = slot.read();
@@ -199,7 +221,7 @@ unsafe fn trace_heap_rewrite_slots_impl<const REMEMBER: bool, const OLD_PARENT: 
             return;
         }
     }
-    visit_gc_rewrite_slot_descriptors(header, |descriptor| unsafe {
+    visit_gc_rewrite_slot_descriptors::<DIAGNOSTICS>(header, |descriptor| unsafe {
         match descriptor {
             GcMutableSlotDescriptor::PointerFreeRange(range) => {
                 if proxy_trace_active {

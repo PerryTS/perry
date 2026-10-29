@@ -1,3 +1,4 @@
+mod atomic_finalize;
 use super::barrier::{ConservativePinClearState, RememberedSetClearState};
 use super::cycle_malloc_trim::{
     block_persist_always_enabled, run_allocator_purge, run_malloc_trim,
@@ -87,7 +88,7 @@ impl TraceWorklistCycleState {
         }
     }
 
-    fn step(
+    fn step<const DIAGNOSTICS: bool>(
         &mut self,
         valid_ptrs: &ValidPointerSet,
         budget: usize,
@@ -96,7 +97,7 @@ impl TraceWorklistCycleState {
     ) -> bool {
         self.absorb_mark_seeds();
         let before = self.cursor;
-        let mut done = drain_trace_worklist_step_remembering(
+        let mut done = drain_trace_worklist_step_remembering::<DIAGNOSTICS>(
             &mut self.worklist,
             &mut self.cursor,
             valid_ptrs,
@@ -165,7 +166,7 @@ impl BlockPersistCycleState {
         }
     }
 
-    fn step(
+    fn step<const DIAGNOSTICS: bool>(
         &mut self,
         valid_ptrs: &ValidPointerSet,
         budget: usize,
@@ -194,7 +195,7 @@ impl BlockPersistCycleState {
                     }
                     self.stats.marked_objects =
                         self.stats.marked_objects.saturating_add(self.newly_marked);
-                    super::trace::note_block_persist_force_marks(self.newly_marked);
+                    super::mark::note_block_persist_force_marks(self.newly_marked);
                     if self.newly_marked == 0 {
                         self.subphase = BlockPersistSubphase::Done;
                         return true;
@@ -207,7 +208,7 @@ impl BlockPersistCycleState {
                         return false;
                     }
                     let before = self.worklist_cursor;
-                    let done = drain_trace_worklist_step_remembering(
+                    let done = drain_trace_worklist_step_remembering::<DIAGNOSTICS>(
                         &mut self.worklist,
                         &mut self.worklist_cursor,
                         valid_ptrs,
@@ -363,7 +364,7 @@ impl RootScanCycleState {
         }
     }
 
-    fn step_current_subphase(
+    fn step_current_subphase<const DIAGNOSTICS: bool>(
         &mut self,
         valid_ptrs: &ValidPointerSet,
         trace: &mut Option<GcCycleTrace>,
@@ -403,7 +404,7 @@ impl RootScanCycleState {
                 } else {
                     ConservativePinTraceStats::default()
                 };
-                if let Some(trace) = trace.as_mut() {
+                if let Some(trace) = trace.as_mut().filter(|_| DIAGNOSTICS) {
                     trace.conservative_root_count = conservative_root_stats.root_count;
                     trace.conservative_pinned = conservative_pin_stats.pinned_roots;
                     trace.conservative_pinned_bytes = conservative_pin_stats.pinned_bytes;
@@ -423,7 +424,7 @@ impl RootScanCycleState {
                 false
             }
             RootScanSubphase::MutableSlots => {
-                let done = match trace.as_mut() {
+                let done = match trace.as_mut().filter(|_| DIAGNOSTICS) {
                     Some(trace) => mark_mutable_root_slots_step(
                         valid_ptrs,
                         Some(&mut trace.shadow_roots),
@@ -448,7 +449,7 @@ impl RootScanCycleState {
                 let state = self
                     .mutable_registered
                     .get_or_insert_with(MutableRegisteredRootScanState::new);
-                let done = match trace.as_mut() {
+                let done = match trace.as_mut().filter(|_| DIAGNOSTICS) {
                     Some(trace) => state.step(
                         valid_ptrs,
                         Some(&mut trace.root_sources),
@@ -479,7 +480,7 @@ impl RootScanCycleState {
                     budget,
                     allow_synchronous_scanners,
                 ) {
-                    if let Some(trace) = trace.as_mut() {
+                    if let Some(trace) = trace.as_mut().filter(|_| DIAGNOSTICS) {
                         trace.legacy_copy_only_scanner_pinned = state.stats();
                     }
                     self.subphase = RootScanSubphase::RememberedSet;
@@ -494,10 +495,10 @@ impl RootScanCycleState {
                 // arms the write barrier) — see `new_with_marking`.
                 let mark_from_set = self.minor_only;
                 let state = self.remembered_set.get_or_insert_with(|| {
-                    RememberedSetRootMarkState::new_with_marking(mark_from_set)
+                    RememberedSetRootMarkState::new_for_cycle::<DIAGNOSTICS>(mark_from_set)
                 });
-                if state.step(valid_ptrs, budget) {
-                    if let Some(trace) = trace.as_mut() {
+                if state.step_with::<DIAGNOSTICS>(valid_ptrs, budget) {
+                    if let Some(trace) = trace.as_mut().filter(|_| DIAGNOSTICS) {
                         trace.remembered_set = state.stats();
                     }
                     self.subphase = RootScanSubphase::ImageCells;
@@ -616,9 +617,11 @@ pub(super) struct GcCycleState {
     #[allow(dead_code)]
     // captured trigger classification retained alongside collection_kind/progress_kind for cycle diagnostics
     trigger_kind: GcTriggerKind,
+    trigger_snapshot: GcTriggerSnapshot,
     progress_kind: GcProgressKind,
     phase: GcCyclePhase,
     trace: Option<GcCycleTrace>,
+    step_impl: fn(&mut Self, GcWorkBudget) -> GcCycleStepResult,
     active_elapsed: Duration,
     active_step_start: Option<Instant>,
     valid_builder: Option<ValidPointerSetBuilder>,
@@ -665,7 +668,7 @@ impl GcCycleState {
         // keep their ordering and pay nothing for the overlap.
         super::roots::ensure_stack_maps_built();
         let trigger_kind = trigger.kind;
-        let trace = GcCycleTrace::new(GcCollectionKind::Full, trigger);
+        let trace = None;
         let start = Instant::now();
         crate::arena::discard_previously_idle_eden_pages();
         crate::arena::old_pages_begin_gc_cycle();
@@ -689,9 +692,11 @@ impl GcCycleState {
         Self {
             collection_kind: GcCollectionKind::Full,
             trigger_kind,
+            trigger_snapshot: trigger,
             progress_kind: trigger_kind.progress_kind(GcCollectionKind::Full),
             phase: GcCyclePhase::BuildValidPointerSet,
             trace,
+            step_impl: Self::start_step,
             active_elapsed: start.elapsed(),
             active_step_start: None,
             valid_builder: None,
@@ -737,9 +742,11 @@ impl GcCycleState {
         Self {
             collection_kind: GcCollectionKind::Minor,
             trigger_kind,
+            trigger_snapshot: trigger,
             progress_kind,
             phase: GcCyclePhase::BuildValidPointerSet,
             trace,
+            step_impl: Self::start_step,
             active_elapsed: start.elapsed(),
             active_step_start: None,
             valid_builder: None,
@@ -809,7 +816,33 @@ impl GcCycleState {
         }
     }
 
+    pub(super) fn continue_with_diagnostics<const DIAGNOSTICS: bool>(&mut self) {
+        self.step_impl = Self::step_with_diagnostics::<DIAGNOSTICS>;
+    }
+
+    fn start_step(&mut self, budget: GcWorkBudget) -> GcCycleStepResult {
+        // This is the cycle's continuation, selected once, never a per-edge
+        // installer lookup. Both continuations execute the same collector body.
+        self.step_impl = super::diagnostic_hooks::cycle_step();
+        (self.step_impl)(self, budget)
+    }
+
+    pub(super) fn start_diagnostic_step(&mut self, budget: GcWorkBudget) -> GcCycleStepResult {
+        self.step_impl = Self::step_with_diagnostics::<true>;
+        if self.trace.is_none() {
+            self.trace = GcCycleTrace::new(self.collection_kind, self.trigger_snapshot);
+        }
+        self.step_with_diagnostics::<true>(budget)
+    }
+
     pub(super) fn step(&mut self, budget: GcWorkBudget) -> GcCycleStepResult {
+        (self.step_impl)(self, budget)
+    }
+
+    pub(super) fn step_with_diagnostics<const DIAGNOSTICS: bool>(
+        &mut self,
+        budget: GcWorkBudget,
+    ) -> GcCycleStepResult {
         let _allocation_guard = super::allocation_pacing::CollectorStepGuard::enter();
         let phase_before = self.phase;
         if self.phase == GcCyclePhase::Complete {
@@ -819,26 +852,32 @@ impl GcCycleState {
             };
         }
 
-        let debt_before = self.trace.as_ref().map(|_| GcDebtSnapshot::current());
+        let debt_before = self
+            .trace
+            .as_ref()
+            .filter(|_| DIAGNOSTICS)
+            .map(|_| GcDebtSnapshot::current());
         let step_start = Instant::now();
         self.active_step_start = Some(step_start);
         match self.phase {
-            GcCyclePhase::BuildValidPointerSet => self.step_build_valid_pointer_set(budget),
-            GcCyclePhase::RootScan => self.step_root_scan(budget),
-            GcCyclePhase::MarkPropagation => self.step_mark_propagation(budget),
-            GcCyclePhase::BlockPersistence => self.step_block_persistence(budget),
-            GcCyclePhase::AtomicFinalize => self.step_atomic_finalize(budget),
+            GcCyclePhase::BuildValidPointerSet => {
+                self.step_build_valid_pointer_set::<DIAGNOSTICS>(budget)
+            }
+            GcCyclePhase::RootScan => self.step_root_scan::<DIAGNOSTICS>(budget),
+            GcCyclePhase::MarkPropagation => self.step_mark_propagation::<DIAGNOSTICS>(budget),
+            GcCyclePhase::BlockPersistence => self.step_block_persistence::<DIAGNOSTICS>(budget),
+            GcCyclePhase::AtomicFinalize => self.step_atomic_finalize::<DIAGNOSTICS>(budget),
             GcCyclePhase::Sweep => {
                 let _heap_change = crate::gc::heap_generation::HeapChange::begin(
                     crate::gc::heap_generation::HeapChangeKind::Sweep,
                 );
-                self.step_sweep(budget)
+                self.step_sweep::<DIAGNOSTICS>(budget)
             }
             GcCyclePhase::Reclaim => {
                 let _heap_change = crate::gc::heap_generation::HeapChange::begin(
                     crate::gc::heap_generation::HeapChangeKind::Reclaim,
                 );
-                self.step_reclaim(budget)
+                self.step_reclaim::<DIAGNOSTICS>(budget)
             }
             GcCyclePhase::Complete => {}
         }
@@ -847,7 +886,7 @@ impl GcCycleState {
         self.active_elapsed = self.active_elapsed.saturating_add(step_elapsed);
         if let Some(debt_before) = debt_before {
             let debt_after = GcDebtSnapshot::current();
-            if let Some(trace) = self.trace.as_mut() {
+            if let Some(trace) = self.trace.as_mut().filter(|_| DIAGNOSTICS) {
                 trace.record_pause_step(
                     phase_before,
                     self.phase,
@@ -859,7 +898,7 @@ impl GcCycleState {
             } else if let Some(trace) = self
                 .outcome
                 .as_mut()
-                .and_then(|outcome| outcome.trace.as_mut())
+                .and_then(|outcome| outcome.trace.as_mut().filter(|_| DIAGNOSTICS))
             {
                 trace.record_pause_step(
                     phase_before,
@@ -912,8 +951,12 @@ impl GcCycleState {
         self.active_elapsed().as_micros() as u64
     }
 
-    fn step_build_valid_pointer_set(&mut self, budget: GcWorkBudget) {
-        let phase_start = trace_phase_start(&self.trace);
+    fn step_build_valid_pointer_set<const DIAGNOSTICS: bool>(&mut self, budget: GcWorkBudget) {
+        let phase_start = if DIAGNOSTICS {
+            trace_phase_start(&self.trace)
+        } else {
+            None
+        };
         let builder = self.valid_builder.get_or_insert_with(|| {
             // #6179: budgeted cycles are precise (no conservative scan,
             // non-moving) — skip the O(heap) exact census and resolve
@@ -929,7 +972,9 @@ impl GcCycleState {
             }
         });
         if !builder.step(budget.work_units) {
-            trace_phase_record(&mut self.trace, "build_valid_pointer_set", phase_start);
+            if DIAGNOSTICS {
+                trace_phase_record(&mut self.trace, "build_valid_pointer_set", phase_start)
+            };
             return;
         }
         // The census's frames just returned from the stack region the root
@@ -946,7 +991,9 @@ impl GcCycleState {
         if self.minor.is_none() {
             begin_full_trace();
         }
-        trace_phase_record(&mut self.trace, "build_valid_pointer_set", phase_start);
+        if DIAGNOSTICS {
+            trace_phase_record(&mut self.trace, "build_valid_pointer_set", phase_start)
+        };
         // Enable the incremental mark barrier for BOTH kinds. A budgeted
         // MINOR cycle sliced across mutator turns has the same lost-store
         // hazard as a Full one: a store into an already-traced object after
@@ -975,7 +1022,7 @@ impl GcCycleState {
                 old_to_young_tracking_complete(),
                 minor.old_page_selection.selected_pages,
             );
-            if let Some(trace) = self.trace.as_mut() {
+            if let Some(trace) = self.trace.as_mut().filter(|_| DIAGNOSTICS) {
                 trace.evacuation_policy = minor.evacuation_policy;
             }
         }
@@ -983,7 +1030,7 @@ impl GcCycleState {
         self.phase = GcCyclePhase::RootScan;
     }
 
-    fn step_root_scan(&mut self, budget: GcWorkBudget) {
+    fn step_root_scan<const DIAGNOSTICS: bool>(&mut self, budget: GcWorkBudget) {
         let valid_ptrs = self.valid_ptrs.as_ref().expect("valid pointer set built");
         let consider_evacuation = self
             .minor
@@ -1006,12 +1053,16 @@ impl GcCycleState {
                 .as_ref()
                 .expect("root scan state exists")
                 .trace_phase_name();
-            let phase_start = trace_phase_start(&self.trace);
+            let phase_start = if DIAGNOSTICS {
+                trace_phase_start(&self.trace)
+            } else {
+                None
+            };
             let done = self
                 .root_scan
                 .as_mut()
                 .expect("root scan state exists")
-                .step_current_subphase(
+                .step_current_subphase::<DIAGNOSTICS>(
                     valid_ptrs,
                     &mut self.trace,
                     consider_evacuation,
@@ -1019,7 +1070,9 @@ impl GcCycleState {
                     allow_synchronous_scanners,
                     self.minor.is_some(),
                 );
-            trace_phase_record(&mut self.trace, phase_name, phase_start);
+            if DIAGNOSTICS {
+                trace_phase_record(&mut self.trace, phase_name, phase_start)
+            };
             if done {
                 self.root_scan = None;
                 self.phase = GcCyclePhase::MarkPropagation;
@@ -1031,14 +1084,18 @@ impl GcCycleState {
         }
     }
 
-    fn step_mark_propagation(&mut self, budget: GcWorkBudget) {
+    fn step_mark_propagation<const DIAGNOSTICS: bool>(&mut self, budget: GcWorkBudget) {
         let valid_ptrs = self.valid_ptrs.as_ref().expect("valid pointer set built");
-        let phase_start = trace_phase_start(&self.trace);
+        let phase_start = if DIAGNOSTICS {
+            trace_phase_start(&self.trace)
+        } else {
+            None
+        };
         let minor_only = matches!(self.collection_kind, GcCollectionKind::Minor);
         let trace_worklist = self
             .trace_worklist
             .get_or_insert_with(|| TraceWorklistCycleState::new(minor_only));
-        if trace_worklist.step(
+        if trace_worklist.step::<DIAGNOSTICS>(
             valid_ptrs,
             budget.work_units,
             self.live_old_to_young_sticky.as_mut(),
@@ -1052,13 +1109,15 @@ impl GcCycleState {
                 super::census::census_pass1_if_armed();
             }
         }
-        trace_phase_record(&mut self.trace, "trace_worklist", phase_start);
+        if DIAGNOSTICS {
+            trace_phase_record(&mut self.trace, "trace_worklist", phase_start)
+        };
     }
 
     /// Is the block-persistence pass redundant for THIS cycle? (#9628)
     ///
     /// The pass exists for one hazard, stated at
-    /// `trace::mark_block_persisting_arena_objects`: an object that the
+    /// `mark::mark_block_persisting_arena_objects`: an object that the
     /// mutator still holds **in a register** and will store somewhere after
     /// the collection returns, which the root scan cannot see. Its arena block
     /// survives (block reset is all-or-nothing and a neighbour is reachable),
@@ -1111,7 +1170,7 @@ impl GcCycleState {
         matches!(self.trigger_kind, GcTriggerKind::Manual)
     }
 
-    fn step_block_persistence(&mut self, budget: GcWorkBudget) {
+    fn step_block_persistence<const DIAGNOSTICS: bool>(&mut self, budget: GcWorkBudget) {
         // #6010: block persistence exists to protect REGISTER-HELD recent
         // objects that precise (shadow-stack) roots can't see (#43/#44). A
         // cycle whose root scan ran the FULL conservative stack+register
@@ -1124,14 +1183,20 @@ impl GcCycleState {
         // multi-MB external buffers for the life of the process (#6010:
         // 1.4 GB RSS on a Map-churn benchmark whose live heap was ~1 MB).
         if self.block_persistence_is_redundant() {
-            self.log_block_persistence(false);
+            if DIAGNOSTICS {
+                self.log_block_persistence(false)
+            };
             self.phase = GcCyclePhase::AtomicFinalize;
             return;
         }
         let valid_ptrs = self.valid_ptrs.as_ref().expect("valid pointer set built");
-        let phase_start = trace_phase_start(&self.trace);
+        let phase_start = if DIAGNOSTICS {
+            trace_phase_start(&self.trace)
+        } else {
+            None
+        };
         let block_persist = if budget.work_units == usize::MAX && self.block_persist.is_none() {
-            mark_block_persisting_arena_objects_remembering(
+            mark_block_persisting_arena_objects_remembering::<DIAGNOSTICS>(
                 valid_ptrs,
                 self.live_old_to_young_sticky.as_mut(),
             )
@@ -1139,12 +1204,14 @@ impl GcCycleState {
             let block_persist = self
                 .block_persist
                 .get_or_insert_with(BlockPersistCycleState::new);
-            if !block_persist.step(
+            if !block_persist.step::<DIAGNOSTICS>(
                 valid_ptrs,
                 budget.work_units,
                 self.live_old_to_young_sticky.as_mut(),
             ) {
-                trace_phase_record(&mut self.trace, "block_persistence", phase_start);
+                if DIAGNOSTICS {
+                    trace_phase_record(&mut self.trace, "block_persistence", phase_start)
+                };
                 return;
             }
             self.block_persist
@@ -1152,11 +1219,15 @@ impl GcCycleState {
                 .expect("block-persist state exists")
                 .stats()
         };
-        trace_phase_record(&mut self.trace, "block_persistence", phase_start);
-        if let Some(trace) = self.trace.as_mut() {
+        if DIAGNOSTICS {
+            trace_phase_record(&mut self.trace, "block_persistence", phase_start)
+        };
+        if let Some(trace) = self.trace.as_mut().filter(|_| DIAGNOSTICS) {
             trace.block_persist = block_persist;
         }
-        self.log_block_persistence(true);
+        if DIAGNOSTICS {
+            self.log_block_persistence(true)
+        };
         self.phase = GcCyclePhase::AtomicFinalize;
     }
 
@@ -1164,7 +1235,7 @@ impl GcCycleState {
     /// block-persistence window ran, under which scan decision, and the
     /// cumulative count of objects it has force-marked (`window=`).
     fn log_block_persistence(&self, ran: bool) {
-        if !super::gc_diag_enabled() {
+        if !super::diagnostic_hooks::enabled() {
             return;
         }
         eprintln!(
@@ -1181,355 +1252,12 @@ impl GcCycleState {
         );
     }
 
-    fn step_atomic_finalize(&mut self, budget: GcWorkBudget) {
-        let remark = self.progress_kind.is_budgeted();
-        self.atomic_finalize
-            .get_or_insert_with(|| AtomicFinalizeCycleState::new(self.collection_kind, remark));
-        if budget.work_units == 0 {
-            // Status probe: never start the atomic tail on a zero budget.
-            return;
-        }
-        loop {
-            let subphase = self
-                .atomic_finalize
-                .as_ref()
-                .expect("atomic finalize state exists")
-                .subphase;
-            // SLICED subphases honor the caller's budget and may return to the
-            // mutator. Post-remark windows are sound only because EVERY way the
-            // mutator can acquire a heap reference is shaded: stores by the
-            // incremental mark barrier, births by allocate-black, and weak
-            // READS by `weakref::read_barrier` (#7900 — that arm was missing).
-            let sliced = matches!(
-                subphase,
-                AtomicFinalizeSubphase::BarrierSeedDrain
-                    | AtomicFinalizeSubphase::RememberedSetReady
-                    | AtomicFinalizeSubphase::WeakProcessing
-                    | AtomicFinalizeSubphase::EphemeronClear
-            );
-            let sub_budget = if sliced {
-                budget.work_units
-            } else {
-                usize::MAX
-            };
-            let phase_start = trace_phase_start(&self.trace);
-            self.step_atomic_finalize_current_subphase(sub_budget);
-            trace_phase_record(&mut self.trace, "atomic_finalize", phase_start);
-            if self.phase != GcCyclePhase::AtomicFinalize {
-                break;
-            }
-            let advanced = self
-                .atomic_finalize
-                .as_ref()
-                .expect("atomic finalize state exists")
-                .subphase
-                != subphase;
-            if sliced && !advanced && budget.work_units != usize::MAX {
-                break;
-            }
-        }
-    }
-
-    fn step_atomic_finalize_current_subphase(&mut self, budget: usize) {
-        let subphase = self
-            .atomic_finalize
-            .as_ref()
-            .expect("atomic finalize state exists")
-            .subphase;
-        match subphase {
-            AtomicFinalizeSubphase::FinalRootRemark => {
-                if budget == 0 {
-                    return;
-                }
-                // Re-scan every root with the marks nearly final (see the enum
-                // doc). DELIBERATELY ATOMIC and NOT bounded by the step budget:
-                // the scan is bounded by root-set size, but the drain below is
-                // bounded by the newly-reachable graph, which a root installed
-                // after the initial scan can make arbitrarily large. Measured
-                // rather than claimed — `final_remark_max_us` in
-                // `[gc-step-bounds]`; docs/src/internals/gc-step-bounds.md has
-                // the bound and rejected alternatives (#7903).
-                // consider_evacuation is false: pinning was decided already.
-                {
-                    let _remark_timer = instruments::FinalRemarkTimer::start();
-                    let valid_ptrs = self.valid_ptrs.as_ref().expect("valid pointer set built");
-                    let minor_only = self.minor.is_some();
-                    let remark_minor_only = matches!(self.collection_kind, GcCollectionKind::Minor);
-                    let remark_scan = self
-                        .root_scan
-                        .get_or_insert_with(|| RootScanCycleState::new(remark_minor_only));
-                    while !remark_scan.step_current_subphase(
-                        valid_ptrs,
-                        &mut self.trace,
-                        /* consider_evacuation = */ false,
-                        usize::MAX,
-                        /* allow_synchronous_scanners = */ true,
-                        minor_only,
-                    ) {}
-                    self.root_scan = None;
-                    // Trace everything the remark newly discovered so weak
-                    // processing sees a complete mark set and newly traced old
-                    // parents contribute their remembered entries.
-                    let mut remark_drain = TraceWorklistCycleState::new(minor_only);
-                    while !remark_drain.step(
-                        valid_ptrs,
-                        usize::MAX,
-                        self.live_old_to_young_sticky.as_mut(),
-                        &mut self.ephemerons,
-                    ) {}
-                }
-                let next = if self.minor.is_some() {
-                    AtomicFinalizeSubphase::WeakProcessing
-                } else {
-                    AtomicFinalizeSubphase::RememberedSetReady
-                };
-                self.atomic_finalize
-                    .as_mut()
-                    .expect("atomic finalize state exists")
-                    .subphase = next;
-            }
-            AtomicFinalizeSubphase::WeakProcessing => self.step_weak_ephemerons(budget, false),
-            AtomicFinalizeSubphase::EphemeronClear => self.step_weak_ephemerons(budget, true),
-            AtomicFinalizeSubphase::MinorPrelude => {
-                if budget == 0 {
-                    return;
-                }
-                self.atomic_finalize_minor_prelude();
-                self.atomic_finalize
-                    .as_mut()
-                    .expect("atomic finalize state exists")
-                    .subphase = AtomicFinalizeSubphase::RememberedSetReady;
-            }
-            AtomicFinalizeSubphase::BarrierSeedDrain => {
-                let minor_only = self.minor.is_some();
-                let valid_ptrs = self.valid_ptrs.as_ref().expect("valid pointer set built");
-                let done = {
-                    let state = self
-                        .atomic_finalize
-                        .as_mut()
-                        .expect("atomic finalize state exists");
-                    let drain = state
-                        .barrier_drain
-                        .get_or_insert_with(|| TraceWorklistCycleState::new(minor_only));
-                    drain.step(
-                        valid_ptrs,
-                        budget,
-                        self.live_old_to_young_sticky.as_mut(),
-                        &mut self.ephemerons,
-                    )
-                };
-                if done {
-                    let state = self
-                        .atomic_finalize
-                        .as_mut()
-                        .expect("atomic finalize state exists");
-                    state.barrier_drain = None;
-                    // Kind-specific continuation (see AtomicFinalizeCycleState::new).
-                    state.subphase = if state.remark {
-                        AtomicFinalizeSubphase::FinalRootRemark
-                    } else if minor_only {
-                        AtomicFinalizeSubphase::WeakProcessing
-                    } else {
-                        AtomicFinalizeSubphase::RememberedSetReady
-                    };
-                }
-            }
-            AtomicFinalizeSubphase::RememberedSetReady => {
-                // A minor keeps its incremental remembered set (#6181), plus
-                // evacuation entries and the pre-clear dirty snapshot repair.
-                // Only full mark drains populate live_old_to_young_sticky.
-                if self.minor.is_some() {
-                    // Drain any seeds the barrier pushed since
-                    // BarrierSeedDrain completed (late stores mark the child
-                    // but its children still need the trace). Bounded by
-                    // late-store volume.
-                    //
-                    // The barrier deliberately STAYS ENABLED here: the sweep
-                    // state (and its per-block fill snapshot) is only built
-                    // on the next step_sweep slice, and the mutator runs in
-                    // between. With the barrier (and its allocate-black birth
-                    // flags) off in that window, an object allocated and
-                    // linked there is WHITE yet INSIDE the sweep snapshot —
-                    // it gets freed live (observed: React fibers created
-                    // during a render burst between finalize and sweep lost
-                    // their side-table fields; the compiled TUI's
-                    // pendingProps/lanes/slice crashes). step_sweep drains
-                    // the gap's seeds and disables the barrier in the same
-                    // slice that takes the snapshot.
-                    let valid_ptrs = self.valid_ptrs.as_ref().expect("valid pointer set built");
-                    let mut final_drain = TraceWorklistCycleState::new(true);
-                    while !final_drain.step(
-                        valid_ptrs,
-                        usize::MAX,
-                        self.live_old_to_young_sticky.as_mut(),
-                        &mut self.ephemerons,
-                    ) {}
-                    self.atomic_finalize = None;
-                    self.phase = GcCyclePhase::Sweep;
-                    return;
-                }
-                // Full drains already remembered each live old parent's strong
-                // slots while tracing them. Keep that buffer in the cycle until
-                // reclaim, including entries from remark and sweep-gap seeds.
-                // Weak processing follows without another heap/descriptor walk.
-                self.atomic_finalize
-                    .as_mut()
-                    .expect("atomic finalize state exists")
-                    .subphase = AtomicFinalizeSubphase::WeakProcessing;
-            }
-            AtomicFinalizeSubphase::DisableBarrier => {
-                if budget == 0 {
-                    return;
-                }
-                // Same late-seed closure as the minor path: trace anything
-                // the barrier shaded after BarrierSeedDrain completed, so no
-                // marked-but-untraced object reaches Sweep with unmarked
-                // children. The barrier stays enabled until step_sweep takes
-                // the block snapshot (see the minor arm's gap comment).
-                {
-                    let valid_ptrs = self.valid_ptrs.as_ref().expect("valid pointer set built");
-                    let mut final_drain = TraceWorklistCycleState::new(false);
-                    while !final_drain.step(
-                        valid_ptrs,
-                        usize::MAX,
-                        self.live_old_to_young_sticky.as_mut(),
-                        &mut self.ephemerons,
-                    ) {}
-                }
-                #[cfg(any(test, perry_check_contracts))]
-                if crate::gc::gc_verify_mark_enabled() {
-                    super::verify_honest::verify_honest_pointers("full-sweep-start");
-                }
-                if let Some(state) = self.atomic_finalize.as_mut() {
-                    state.subphase = AtomicFinalizeSubphase::Done;
-                }
-                self.atomic_finalize = None;
-                self.phase = GcCyclePhase::Sweep;
-            }
-            AtomicFinalizeSubphase::Done => {
-                self.atomic_finalize = None;
-                self.phase = GcCyclePhase::Sweep;
-            }
-        }
-    }
-
-    fn atomic_finalize_minor_prelude(&mut self) {
-        let valid_ptrs = self.valid_ptrs.as_ref().expect("valid pointer set built");
-        if gc_verify_evacuation_enabled() {
-            let phase_start = trace_phase_start(&self.trace);
-            let old_young_edge_verifier = verify_old_to_young_edges_covered();
-            trace_phase_record(&mut self.trace, "old_young_edge_verify", phase_start);
-            if let Some(trace) = self.trace.as_mut() {
-                trace.old_young_edge_verifier = old_young_edge_verifier;
-            }
-        }
-        // Diagnostic (PERRY_GC_VERIFY_MARK): marks are final for this minor and
-        // sweep has not yet run — report any OLD parent whose young/malloc child
-        // is UNMARKED (about to be swept live = dropped remembered-set edge).
-        if crate::gc::gc_verify_mark_enabled() {
-            super::verify::verify_minor_unmarked_young_children_report("minor-prelude");
-            #[cfg(any(test, perry_check_contracts))]
-            super::verify_honest::verify_honest_pointers("minor-prelude");
-        }
-
-        let active_elapsed_us = self.active_elapsed_us();
-        let progress_kind = self.progress_kind;
-        let minor = self.minor.as_mut().expect("minor context exists");
-        if minor.evacuation_policy.considered {
-            let snapshot = evacuation_policy_snapshot_after_mark(
-                minor.evacuation_policy.snapshot,
-                minor.evacuation_policy.force,
-                active_elapsed_us,
-                &minor.old_page_selection,
-            );
-            minor.evacuation_policy =
-                evacuation_policy_final_decision(minor.evacuation_policy, snapshot);
+    fn step_sweep<const DIAGNOSTICS: bool>(&mut self, budget: GcWorkBudget) {
+        let phase_start = if DIAGNOSTICS {
+            trace_phase_start(&self.trace)
         } else {
-            minor.evacuation_policy.snapshot.pre_evac_pause_us = active_elapsed_us;
-        }
-        if let Some(trace) = self.trace.as_mut() {
-            trace.evacuation_policy = minor.evacuation_policy;
-        }
-        assert!(
-            !progress_kind.is_budgeted() || !minor.evacuation_policy.enabled,
-            "budgeted low-pause minor GC must remain non-moving"
-        );
-
-        let mut evacuation = EvacuationTraceStats::default();
-        let mut evacuation_sticky = StickyRememberedSet::default();
-        if minor.evacuation_policy.enabled {
-            let _heap_change = crate::gc::heap_generation::HeapChange::begin(
-                crate::gc::heap_generation::HeapChangeKind::Evacuation,
-            );
-            let phase_start = trace_phase_start(&self.trace);
-            let mut evacuated_new_headers = Vec::new();
-            let mut evacuated_original_headers = Vec::new();
-            evacuation = evacuate_tenured_nursery_objects_collecting(
-                minor.evacuation_policy.force,
-                &mut evacuated_new_headers,
-                &mut evacuated_original_headers,
-            );
-            let old_page_evacuation = {
-                let _compaction = crate::gc::heap_generation::HeapChange::begin(
-                    crate::gc::heap_generation::HeapChangeKind::Compaction,
-                );
-                evacuate_selected_old_pages_collecting(
-                    &minor.old_page_selection.pages,
-                    &mut evacuated_new_headers,
-                    &mut evacuated_original_headers,
-                )
-            };
-            evacuation.objects = evacuation
-                .objects
-                .saturating_add(old_page_evacuation.objects);
-            evacuation.bytes = evacuation.bytes.saturating_add(old_page_evacuation.bytes);
-            evacuation.moved_objects = evacuation
-                .moved_objects
-                .saturating_add(old_page_evacuation.moved_objects);
-            evacuation.moved_bytes = evacuation
-                .moved_bytes
-                .saturating_add(old_page_evacuation.moved_bytes);
-            evacuation.old_page_moved_objects = old_page_evacuation.old_page_moved_objects;
-            evacuation.old_page_moved_bytes = old_page_evacuation.old_page_moved_bytes;
-            trace_phase_record(&mut self.trace, "evacuation", phase_start);
-            if evacuation.objects > 0 {
-                let phase_start = trace_phase_start(&self.trace);
-                match self.trace.as_mut() {
-                    Some(trace) => rewrite_forwarded_references(
-                        valid_ptrs,
-                        Some(&mut trace.shadow_roots),
-                        Some(&mut trace.root_sources),
-                    ),
-                    None => rewrite_forwarded_references(valid_ptrs, None, None),
-                }
-                evacuation_sticky =
-                    rebuild_evacuated_old_to_young_remembered_set(&evacuated_new_headers);
-                trace_phase_record(&mut self.trace, "reference_rewrite", phase_start);
-                if gc_verify_evacuation_enabled() {
-                    let phase_start = trace_phase_start(&self.trace);
-                    let context = begin_evacuation_verify_cycle(self.trigger_kind, None);
-                    verify_evacuated_no_stale_forwarded_refs(
-                        EvacuationVerifier::all_forwarded(valid_ptrs).with_context(context),
-                    );
-                    trace_phase_record(&mut self.trace, "evacuation_verify", phase_start);
-                }
-                let released =
-                    release_evacuated_original_forwarding_stubs(&evacuated_original_headers);
-                evacuation.released_original_objects = released.released_original_objects;
-                evacuation.released_original_bytes = released.released_original_bytes;
-                evacuation.released_original_reusable_bytes =
-                    released.released_original_reusable_bytes;
-                evacuation.released_original_returned_bytes =
-                    released.released_original_returned_bytes;
-            }
-        }
-
-        minor.evacuation = evacuation;
-        minor.evacuation_sticky = evacuation_sticky;
-    }
-
-    fn step_sweep(&mut self, budget: GcWorkBudget) {
-        let phase_start = trace_phase_start(&self.trace);
+            None
+        };
         if self.sweep_state.is_none() {
             let full_trace = self.minor.is_none();
             // Close the finalize->sweep gap: the barrier stayed enabled across
@@ -1541,7 +1269,7 @@ impl GcCycleState {
             if incremental_mark_barrier_active() {
                 let valid_ptrs = self.valid_ptrs.as_ref().expect("valid pointer set built");
                 let mut gap_drain = TraceWorklistCycleState::new(!full_trace);
-                while !gap_drain.step(
+                while !gap_drain.step::<DIAGNOSTICS>(
                     valid_ptrs,
                     usize::MAX,
                     self.live_old_to_young_sticky.as_mut(),
@@ -1623,7 +1351,9 @@ impl GcCycleState {
             .as_mut()
             .expect("sweep state exists")
             .step(budget.work_units);
-        trace_phase_record(&mut self.trace, "sweep", phase_start);
+        if DIAGNOSTICS {
+            trace_phase_record(&mut self.trace, "sweep", phase_start)
+        };
         if !done {
             return;
         }
@@ -1635,12 +1365,14 @@ impl GcCycleState {
             minor.evacuation.retained_forwarded_stub_objects =
                 sweep.retained_forwarded_stub_objects;
             minor.evacuation.retained_forwarded_stub_bytes = sweep.retained_forwarded_stub_bytes;
-            maybe_print_evacuation_policy_diag(minor.evacuation_policy, minor.evacuation);
-            if let Some(trace) = self.trace.as_mut() {
+            if DIAGNOSTICS {
+                maybe_print_evacuation_policy_diag(minor.evacuation_policy, minor.evacuation);
+            }
+            if let Some(trace) = self.trace.as_mut().filter(|_| DIAGNOSTICS) {
                 trace.evacuation = minor.evacuation;
             }
         }
-        if let Some(trace) = self.trace.as_mut() {
+        if let Some(trace) = self.trace.as_mut().filter(|_| DIAGNOSTICS) {
             trace.sweep = sweep;
             trace.old_pages = crate::arena::old_page_summary();
         }
@@ -1666,7 +1398,7 @@ impl GcCycleState {
         self.phase = GcCyclePhase::Reclaim;
     }
 
-    fn step_reclaim(&mut self, budget: GcWorkBudget) {
+    fn step_reclaim<const DIAGNOSTICS: bool>(&mut self, budget: GcWorkBudget) {
         self.reclaim_state
             .get_or_insert_with(ReclaimCycleState::new);
         let mut remaining = budget.work_units;
@@ -1678,8 +1410,16 @@ impl GcCycleState {
                 .subphase;
             match subphase {
                 ReclaimSubphase::RememberedSet => {
-                    let reclaim_start = trace_phase_start(&self.trace);
-                    let phase_start = trace_phase_start(&self.trace);
+                    let reclaim_start = if DIAGNOSTICS {
+                        trace_phase_start(&self.trace)
+                    } else {
+                        None
+                    };
+                    let phase_start = if DIAGNOSTICS {
+                        trace_phase_start(&self.trace)
+                    } else {
+                        None
+                    };
                     let clear = {
                         let reclaim_state =
                             self.reclaim_state.as_mut().expect("reclaim state exists");
@@ -1695,7 +1435,7 @@ impl GcCycleState {
                             // live_old_to_young_sticky, and sweep retires the
                             // others. Do not visit those same slots twice.
                             self.pre_clear_dirty_snapshot =
-                                Some(super::barrier::remembered_dirty_snapshot());
+                                Some(super::barrier::remembered_dirty_snapshot::<DIAGNOSTICS>());
                         }
                         reclaim_state
                             .remembered_set_clear
@@ -1703,9 +1443,15 @@ impl GcCycleState {
                             .step_counted(remaining)
                     };
                     remaining = remaining.saturating_sub(clear.work_units);
-                    trace_phase_record(&mut self.trace, "remembered_set_clear", phase_start);
+                    if DIAGNOSTICS {
+                        trace_phase_record(&mut self.trace, "remembered_set_clear", phase_start)
+                    };
                     if clear.done {
-                        let restore_start = trace_phase_start(&self.trace);
+                        let restore_start = if DIAGNOSTICS {
+                            trace_phase_start(&self.trace)
+                        } else {
+                            None
+                        };
                         if let Some(minor) = self.minor.as_ref() {
                             minor.evacuation_sticky.restore();
                         }
@@ -1717,7 +1463,7 @@ impl GcCycleState {
                             // with the mutator, and a store into an already
                             // dirty page leaves no trace, so nothing scanned
                             // earlier can be declared covered here.
-                            restore_surviving_dirty_coverage(
+                            restore_surviving_dirty_coverage::<DIAGNOSTICS>(
                                 &snapshot,
                                 &crate::fast_hash::new_ptr_hash_set(),
                                 "budgeted_cycle",
@@ -1727,20 +1473,32 @@ impl GcCycleState {
                             self.reclaim_state.as_mut().expect("reclaim state exists");
                         reclaim_state.remembered_set_clear = None;
                         reclaim_state.subphase = ReclaimSubphase::ConservativePins;
-                        trace_phase_record(
-                            &mut self.trace,
-                            "remembered_set_restore",
-                            restore_start,
-                        );
+                        if DIAGNOSTICS {
+                            trace_phase_record(
+                                &mut self.trace,
+                                "remembered_set_restore",
+                                restore_start,
+                            )
+                        };
                     }
-                    trace_phase_record(&mut self.trace, "reclaim", reclaim_start);
+                    if DIAGNOSTICS {
+                        trace_phase_record(&mut self.trace, "reclaim", reclaim_start)
+                    };
                     if !clear.done {
                         break;
                     }
                 }
                 ReclaimSubphase::ConservativePins => {
-                    let reclaim_start = trace_phase_start(&self.trace);
-                    let phase_start = trace_phase_start(&self.trace);
+                    let reclaim_start = if DIAGNOSTICS {
+                        trace_phase_start(&self.trace)
+                    } else {
+                        None
+                    };
+                    let phase_start = if DIAGNOSTICS {
+                        trace_phase_start(&self.trace)
+                    } else {
+                        None
+                    };
                     let done = if self.minor.is_some() {
                         let clear = {
                             let reclaim_state =
@@ -1755,8 +1513,12 @@ impl GcCycleState {
                     } else {
                         true
                     };
-                    trace_phase_record(&mut self.trace, "conservative_pin_clear", phase_start);
-                    trace_phase_record(&mut self.trace, "reclaim", reclaim_start);
+                    if DIAGNOSTICS {
+                        trace_phase_record(&mut self.trace, "conservative_pin_clear", phase_start)
+                    };
+                    if DIAGNOSTICS {
+                        trace_phase_record(&mut self.trace, "reclaim", reclaim_start)
+                    };
                     if done {
                         let reclaim_state =
                             self.reclaim_state.as_mut().expect("reclaim state exists");
@@ -1767,7 +1529,11 @@ impl GcCycleState {
                     }
                 }
                 ReclaimSubphase::MallocTrim => {
-                    let reclaim_start = trace_phase_start(&self.trace);
+                    let reclaim_start = if DIAGNOSTICS {
+                        trace_phase_start(&self.trace)
+                    } else {
+                        None
+                    };
                     // #7875: a critical-pressure / allocation-failure request
                     // drains only after a FULL sweep has released all idle
                     // arena blocks, and before allocator pressure relief so
@@ -1775,7 +1541,7 @@ impl GcCycleState {
                     if self.minor.is_none() {
                         let drained: crate::arena::BlockPoolDrainStats =
                             crate::arena::drain_block_pool_if_requested();
-                        if let Some(trace) = self.trace.as_mut() {
+                        if let Some(trace) = self.trace.as_mut().filter(|_| DIAGNOSTICS) {
                             trace.sweep.pool_drained_blocks = drained.blocks;
                             trace.sweep.pool_drained_bytes = drained.bytes;
                             trace.sweep.returned_bytes =
@@ -1804,7 +1570,7 @@ impl GcCycleState {
                     // back. Major-only, at the same point, outside the atomic
                     // tail.
                     let purge = run_allocator_purge(self.minor.is_none());
-                    if let Some(trace) = self.trace.as_mut() {
+                    if let Some(trace) = self.trace.as_mut().filter(|_| DIAGNOSTICS) {
                         trace.record_allocator_purge_maintenance(
                             purge.status,
                             purge.reason,
@@ -1828,7 +1594,9 @@ impl GcCycleState {
                             trim.elapsed_us,
                         );
                     }
-                    trace_phase_record(&mut self.trace, "reclaim", reclaim_start);
+                    if DIAGNOSTICS {
+                        trace_phase_record(&mut self.trace, "reclaim", reclaim_start)
+                    };
                     self.reclaim_state
                         .as_mut()
                         .expect("reclaim state exists")
@@ -1836,16 +1604,24 @@ impl GcCycleState {
                     remaining -= 1;
                 }
                 ReclaimSubphase::Publish => {
-                    let reclaim_start = trace_phase_start(&self.trace);
-                    self.publish_reclaim_outcome();
+                    let reclaim_start = if DIAGNOSTICS {
+                        trace_phase_start(&self.trace)
+                    } else {
+                        None
+                    };
+                    self.publish_reclaim_outcome::<DIAGNOSTICS>();
                     // #9754: per-table young-log rows for this cycle's root
                     // scans (initial + final remark), labelled by cycle kind.
+                    if DIAGNOSTICS {
                     super::young_log::report_and_reset(if self.minor.is_some() {
                         "budgeted_minor"
                     } else {
                         "budgeted_full"
                     });
-                    trace_phase_record(&mut self.trace, "reclaim", reclaim_start);
+                    }
+                    if DIAGNOSTICS {
+                        trace_phase_record(&mut self.trace, "reclaim", reclaim_start)
+                    };
                     self.reclaim_state
                         .as_mut()
                         .expect("reclaim state exists")
@@ -1861,7 +1637,7 @@ impl GcCycleState {
         }
     }
 
-    fn publish_reclaim_outcome(&mut self) {
+    fn publish_reclaim_outcome<const DIAGNOSTICS: bool>(&mut self) {
         crate::arena::advance_block_pool_reuse_window();
         let elapsed_us = self.active_elapsed_us();
         GC_STATS.with(|stats| {
@@ -1869,17 +1645,19 @@ impl GcCycleState {
                 .borrow_mut()
                 .record_collection(self.freed_bytes, elapsed_us);
         });
-        super::telemetry::log_collection(
-            self.minor.is_none(),
-            self.trigger_kind,
-            self.freed_bytes,
-            elapsed_us,
-        );
+        if DIAGNOSTICS {
+            super::diagnostic_hooks::collection_log(
+                self.minor.is_none(),
+                self.trigger_kind,
+                self.freed_bytes,
+                elapsed_us,
+            )
+        };
 
         if let Some(minor) = self.minor.as_ref() {
             restore_minor_in_alloc(minor.prev_in_alloc);
         }
-        if let Some(trace) = self.trace.as_mut() {
+        if let Some(trace) = self.trace.as_mut().filter(|_| DIAGNOSTICS) {
             trace.pause_us = elapsed_us;
             trace.capture_layout_scans();
         }

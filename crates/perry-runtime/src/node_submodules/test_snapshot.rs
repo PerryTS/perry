@@ -159,12 +159,12 @@ pub(super) fn snapshot_object_value() -> f64 {
         set_field(
             obj,
             "setDefaultSnapshotSerializers",
-            closure_value(crate::fn_info!(#[realm("node:test.snapshot.setDefaultSnapshotSerializers", provider = closure, spec = {length = 1}, emit = metadata(realm_node_test_snapshot_setdefaultsnapshotserializers_metadata))] snapshot_set_default_serializers, 1), realm_node_test_snapshot_setdefaultsnapshotserializers_metadata!(length)),
+            closure_value(crate::fn_info!(#[realm("node:test.snapshot.setDefaultSnapshotSerializers", provider = closure, spec = {length = 1}, emit = metadata(realm_node_test_snapshot_setdefaultsnapshotserializers_metadata))] export crate::node_submodules::test::snapshot::snapshot_set_default_serializers, 1), realm_node_test_snapshot_setdefaultsnapshotserializers_metadata!(length)),
         );
         set_field(
             obj,
             "setResolveSnapshotPath",
-            closure_value(crate::fn_info!(#[realm("node:test.snapshot.setResolveSnapshotPath", provider = closure, spec = {length = 1}, emit = metadata(realm_node_test_snapshot_setresolvesnapshotpath_metadata))] snapshot_set_resolve_snapshot_path, 1), realm_node_test_snapshot_setresolvesnapshotpath_metadata!(length)),
+            closure_value(crate::fn_info!(#[realm("node:test.snapshot.setResolveSnapshotPath", provider = closure, spec = {length = 1}, emit = metadata(realm_node_test_snapshot_setresolvesnapshotpath_metadata))] export crate::node_submodules::test::snapshot::snapshot_set_resolve_snapshot_path, 1), realm_node_test_snapshot_setresolvesnapshotpath_metadata!(length)),
         );
         *slot.borrow_mut() = Some(obj);
         boxed_ptr(obj)

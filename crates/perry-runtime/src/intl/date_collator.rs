@@ -1380,7 +1380,7 @@ fn opt_string(raw: f64) -> Option<String> {
 
 mod temporal;
 pub(crate) use temporal::{temporal_locale_string, TemporalLocaleCtx};
-mod range;
+pub(super) mod range;
 pub(crate) use range::*;
 
 pub(crate) extern "C" fn date_time_format_resolved_options_thunk(

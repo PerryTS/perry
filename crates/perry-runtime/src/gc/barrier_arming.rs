@@ -145,7 +145,7 @@ pub(super) fn note_reconstruct_objects_walked(objects: usize) {
 /// while the walk is in flight must be logged, because the walk may already
 /// have passed its parent. Arming first makes the two coverages overlap; the
 /// reverse order leaves a hole.
-pub(super) fn arm_and_reconstruct_remembered_set_if_unarmed() {
+pub(super) fn arm_and_reconstruct_remembered_set_if_unarmed<const DIAGNOSTICS: bool>() {
     if REMEMBERED_SET_RECONSTRUCTED.with(Cell::get) {
         return;
     }
@@ -164,7 +164,7 @@ pub(super) fn arm_and_reconstruct_remembered_set_if_unarmed() {
     // are kept one extra cycle) in the same direction the barrier itself
     // over-approximates — an edge logged while the parent was alive also
     // outlives the parent's death.
-    let sticky = super::verify::rebuild_minor_old_to_young_remembered_set();
+    let sticky = super::remembered::rebuild_minor_old_to_young_remembered_set::<DIAGNOSTICS>();
     let recovered_old_pages = sticky.old_pages.len() as u64;
     let recovered_external_pages = sticky.external_pages.len() as u64;
     sticky.restore();

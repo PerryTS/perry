@@ -33,42 +33,6 @@ pub(crate) fn for_each_live_object_at_sweep_start(
     });
 }
 
-/// Follow forwarding pointers for a word that may hold a heap reference,
-/// NaN-boxed or bare, preserving the form it was stored in.
-///
-/// Decoding goes through [`decode_root_word`] so this path and the *mark*
-/// path (`mark_mutable_root_bits`) accept exactly the same bit patterns —
-/// see `gc::root_words` for why relocating a word the mark path would have
-/// skipped is a use-after-free (#6910).
-pub(super) fn try_rewrite_value(bits: u64, valid_ptrs: &ValidPointerSet) -> Option<u64> {
-    let word = decode_root_word(bits)?;
-    let new_user = try_rewrite_raw_addr(word.addr(), valid_ptrs)?;
-    Some(word.encode(new_user))
-}
-
-pub(super) fn try_rewrite_nanboxed_value(bits: u64, valid_ptrs: &ValidPointerSet) -> Option<u64> {
-    let word = decode_nanboxed_root_word(bits)?;
-    Some(word.encode(try_rewrite_raw_addr(word.addr(), valid_ptrs)?))
-}
-
-/// #8174: refuses a forwarding target that is not a heap object start, in
-/// lockstep with [`CopyingNurseryCollector::rewrite_raw_addr`](super::copying).
-///
-/// The lockstep is the point. The VERIFY pass shares this forwarding walker
-/// and panics when it finds a stale alias the rewrite pass left alone.
-/// Copying verification permits retained array-growth aliases through
-/// [`EvacuationVerifier`], without changing source/target validation.
-/// Tightening only the rewrite pass would
-/// therefore have turned a silently-corrupt rewrite into a `PERRY_GC_VERIFY_
-/// EVACUATION` abort blaming an innocent scanner — the two walkers must reach
-/// the same verdict or the verifier is measuring the difference between them
-/// instead of the heap. Its own gate (`valid_ptrs`, a live census) is strictly
-/// stronger than the copier's heap-region test, so this only changes the case
-/// where a genuinely LIVE forwarded object's target word is corrupt.
-pub(super) fn try_rewrite_raw_addr(ptr_addr: usize, valid_ptrs: &ValidPointerSet) -> Option<usize> {
-    follow_forwarding_raw_addr(ptr_addr, valid_ptrs, |_, _| true)
-}
-
 /// The copying minor retains non-moving array-growth stubs. Other evacuation
 /// paths rewrite every forwarding alias before releasing moved originals.
 /// Carry that distinction through every verifier surface, including FFI roots.
@@ -149,39 +113,6 @@ impl<'a> EvacuationVerifier<'a> {
     }
 }
 
-fn follow_forwarding_raw_addr(
-    ptr_addr: usize,
-    valid_ptrs: &ValidPointerSet,
-    must_rewrite: impl Fn(usize, usize) -> bool,
-) -> Option<usize> {
-    if ptr_addr == 0 {
-        return None;
-    }
-    let mut current = ptr_addr;
-    let mut rewrote = false;
-    for _ in 0..64 {
-        if !valid_ptrs.contains(&current) {
-            return rewrote.then_some(current);
-        }
-        unsafe {
-            let header = (current as *const u8).sub(GC_HEADER_SIZE) as *const GcHeader;
-            if (*header).gc_flags & GC_FLAG_FORWARDED == 0 {
-                return rewrote.then_some(current);
-            }
-            let next = forwarding_address(header) as usize;
-            if next == 0 || next == current {
-                return rewrote.then_some(current);
-            }
-            if !accept_forwarding_target(next) {
-                return None;
-            }
-            rewrote |= must_rewrite(current, next);
-            current = next;
-        }
-    }
-    rewrote.then_some(current)
-}
-
 #[cold]
 pub(super) fn panic_stale_forwarded_reference(
     verifier: EvacuationVerifier<'_>,
@@ -191,13 +122,6 @@ pub(super) fn panic_stale_forwarded_reference(
     new_bits: u64,
 ) -> ! {
     panic_stale_forwarded_reference_detailed(verifier, surface, slot_addr, old_bits, new_bits);
-}
-
-#[inline]
-pub(super) unsafe fn rewrite_mutable_slot(slot: GcMutableSlot, valid_ptrs: &ValidPointerSet) {
-    if let Some(bits) = try_rewrite_value(slot.read(), valid_ptrs) {
-        slot.write(bits);
-    }
 }
 
 #[cfg(test)]
@@ -222,599 +146,6 @@ unsafe fn verify_mutable_slot(
     let bits = slot.read();
     if let Some(new_bits) = verifier.stale_value(bits) {
         panic_stale_forwarded_reference(verifier, surface, slot.slot as usize, bits, new_bits);
-    }
-}
-
-pub(super) unsafe fn rewrite_heap_object_fields(
-    header: *mut GcHeader,
-    valid_ptrs: &ValidPointerSet,
-) {
-    let flags = (*header).gc_flags;
-    if flags & GC_FLAG_FORWARDED != 0 {
-        return;
-    }
-    let mut changed = false;
-    visit_gc_rewrite_slots(header, |slot| unsafe {
-        slot.record_layout_read();
-        let before = slot.read();
-        rewrite_mutable_slot(slot, valid_ptrs);
-        changed |= slot.read() != before;
-    });
-    if changed {
-        let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
-        run_gc_rewrite_hook((*header).obj_type, user_ptr as usize);
-    }
-}
-
-// Evacuation copies land in OLD_ARENA after the remembered-set scan
-// for this cycle has already run. Rebuild only the pages for copied
-// old objects that still hold nursery children so the next minor GC
-// sees those old→young edges after the normal collection clear.
-#[inline]
-pub(super) unsafe fn remember_evacuated_old_to_young_slot(
-    sticky: &mut StickyRememberedSet,
-    parent_header: *mut GcHeader,
-    slot: *mut u64,
-) -> bool {
-    remember_mutable_old_to_young_slot(sticky, parent_header, GcMutableSlot::new(slot, None))
-}
-
-#[inline]
-pub(super) unsafe fn remember_mutable_old_to_young_slot(
-    sticky: &mut StickyRememberedSet,
-    parent_header: *mut GcHeader,
-    mutable_slot: GcMutableSlot,
-) -> bool {
-    let slot = mutable_slot.slot;
-    if slot.is_null() || !mutable_slot.is_parent_owned() {
-        return false;
-    }
-    let bits = mutable_slot.read();
-    let child_addr = decode_heap_addr(bits);
-    // Nursery AND malloc-GC children both need their pages kept dirty:
-    // minors sweep the malloc registry too, and old parents are black
-    // leaves — dropping an old→malloc page here would free the malloc
-    // child on the next minor (see remembered_child_needs_tracking).
-    if child_addr == 0 || !crate::gc::barrier::remembered_child_needs_tracking(child_addr) {
-        return false;
-    }
-    // Every rebuild (arming reconstruct, promotion repair) holds an old or
-    // malloc parent here, so a young leaf in the slot has escaped.
-    super::leaf_escape::probe_old_parent_child(child_addr);
-    sticky.remember_slot(
-        parent_header,
-        slot,
-        slot_is_external_to(parent_header, slot),
-    );
-    // Report the child's tracking requirement, not whether its page was new.
-    // The repair diagnostic can count productive slots without decoding and
-    // classifying the same child a second time.
-    true
-}
-
-/// Full mark's observer-free visit already decoded this immutable slot word.
-/// Do not use this entry across foreign handle observers; those visits retain
-/// the slot-reading wrapper above. Tracking is independent of marking success.
-#[inline(always)]
-pub(super) unsafe fn remember_decoded_full_mark_slot(
-    sticky: &mut StickyRememberedSet,
-    parent_header: *mut GcHeader,
-    mutable_slot: GcMutableSlot,
-    word: trace::FieldWord,
-    old_parent: bool,
-) -> bool {
-    let slot = mutable_slot.slot;
-    if slot.is_null() || !mutable_slot.is_parent_owned() || !word.needs_tracking() {
-        return false;
-    }
-    // The object-boundary proof replaces a generation lookup per inline
-    // slot. Containment is still checked: old external buffers must enter
-    // through their owning descriptor, never as bare old pages (#7538).
-    let start = parent_header as usize;
-    let external = !old_parent
-        || (slot as usize) < start
-        || (slot as usize) >= start + (*parent_header).size as usize;
-    #[cfg(test)]
-    if trace::remembered_mark_sabotage::drop_next_entry() {
-        return false;
-    }
-    #[cfg(test)]
-    let external = if trace::full_mark_decode_sabotage::generation_only_custody() {
-        mutable_slot.external()
-    } else {
-        external
-    };
-    sticky.remember_slot(parent_header, slot, external);
-    true
-}
-
-/// Is `slot` outside `parent_header`'s own allocation, or on a page the
-/// old-page modbuf cannot describe?
-///
-/// #7538: this decides whether the re-arm records a bare page (found again by
-/// walking the objects ON that page) or a `(page → owner header)` pair (found
-/// again by re-entering the OWNER's descriptor). Deciding it by GENERATION —
-/// "not old ⟹ external" — is right for a malloc side buffer and wrong for
-/// every old-gen buffer a GC object owns but does not contain. The lazy JSON
-/// array's sparse element cache is exactly that: a separate `GC_TYPE_STRING`
-/// block, born old at ≥2049 elements, whose slots only
-/// `GcRewriteDescriptorKind::LazyArray` on the owning `LazyArrayHeader` can
-/// read. Re-armed as a bare old page, the next minor's dirty scan walked that
-/// page, found the cache's own leaf header, and scanned nothing — so a cached
-/// element pointer went stale one collection AFTER the store's own barrier
-/// entry had been consumed and cleared. Containment is the question the
-/// modbuf is actually asking.
-#[inline]
-unsafe fn slot_is_external_to(parent_header: *mut GcHeader, slot: *mut u64) -> bool {
-    if !matches!(
-        crate::arena::classify_heap_generation(slot as usize),
-        crate::arena::HeapGeneration::Old
-    ) {
-        return true;
-    }
-    let start = parent_header as usize;
-    let total_size = (*parent_header).size as usize;
-    if total_size == 0 {
-        return true;
-    }
-    let slot_addr = slot as usize;
-    slot_addr < start || slot_addr >= start + total_size
-}
-
-pub(super) unsafe fn remember_evacuated_old_copy_young_slots(
-    sticky: &mut StickyRememberedSet,
-    header: *mut GcHeader,
-) {
-    if header.is_null() {
-        return;
-    }
-    let flags = (*header).gc_flags;
-    if flags & GC_FLAG_FORWARDED != 0 || flags & (GC_FLAG_MARKED | GC_FLAG_PINNED) == 0 {
-        return;
-    }
-    let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
-    if !crate::arena::pointer_in_old_gen(user_ptr as usize) {
-        return;
-    }
-    // #10362: no child slot means no old->young edge to remember. This pass
-    // ignores `PointerFreeRange`, so unlike the full mark it needs no proxy
-    // term.
-    if crate::gc::gc_object_yields_no_child_slots(header) {
-        return;
-    }
-    visit_gc_rewrite_slots(header, |slot| unsafe {
-        if crate::weakref::is_weak_target_trace_slot(header, slot.slot)
-            && (*header).obj_type != GC_TYPE_WEAK_STORAGE
-        {
-            return;
-        }
-        slot.record_layout_read();
-        remember_mutable_old_to_young_slot(sticky, header, slot);
-    });
-}
-
-/// Post-cycle remembered-set repair (#5029): after `remembered_set_clear` +
-/// sticky restore, rescan every PRE-cycle dirty page (and external dirty
-/// entry) with the same slot predicate `verify_old_to_young_edges_covered`
-/// uses, and re-remember any slot that still points into the nursery. The
-/// from-scratch rebuild can disagree with the verifier across the cycle
-/// boundary (measured: ~130 covered pages at cycle entry, ~10 after the
-/// rebuild, verifier missing_edges=7710 on the next minor while the swept
-/// children were still referenced); deriving the kept set from the SAME walk
-/// the verifier performs makes dropping a still-needed page impossible by
-/// construction. Pages whose every slot now points old (the common case
-/// after evacuation rewrites) are still dropped, so the remembered set keeps
-/// shrinking as before.
-///
-/// #9754: `covered` names the objects the cycle's own dirty scan visited
-/// COMPLETELY (every pointer slot on a dirty page and inside the body —
-/// `scan_dirty_object_slots`). For those, `visit_slot_with_parent` already
-/// re-remembered every slot whose post-visit child still needs tracking with
-/// the same predicate this walk applies, so re-walking them can only re-insert
-/// pages the sticky restore just inserted. They are skipped; the walk is then
-/// proportional to the objects the dirty scan could NOT fully cover
-/// (multi-page arrays, owners of out-of-body buffers) instead of to every slot
-/// on every dirty page. Under `debug_assertions`, and in unit-test builds, the
-/// skipped objects are walked anyway and any page the walk would have ADDED is
-/// a panic — the machine check of the equivalence argument above. Including
-/// `cfg(test)` keeps the check active in `cargo test --release` without adding
-/// work to production release builds.
-pub(super) fn restore_surviving_dirty_coverage(
-    snapshot: &RememberedDirtySnapshot,
-    covered: &crate::fast_hash::PtrHashSet<usize>,
-    cycle_label: &str,
-) {
-    // Keep slot accounting out of the normal GC walk. Both instantiations
-    // perform exactly the same repair; only the diagnostic one counts it.
-    if crate::gc::gc_diag_enabled() {
-        restore_surviving_dirty_coverage_impl::<true>(snapshot, covered, cycle_label);
-    } else {
-        restore_surviving_dirty_coverage_impl::<false>(snapshot, covered, cycle_label);
-    }
-}
-
-fn restore_surviving_dirty_coverage_impl<const DIAGNOSTICS: bool>(
-    snapshot: &RememberedDirtySnapshot,
-    covered: &crate::fast_hash::PtrHashSet<usize>,
-    cycle_label: &str,
-) {
-    let mut sticky = StickyRememberedSet::default();
-    let mut walked = 0usize;
-    let mut skipped = 0usize;
-    let mut parents_visited = 0usize;
-    let mut slots_visited = 0usize;
-    let mut slots_tracking = 0usize;
-    #[cfg(any(test, debug_assertions))]
-    let mut skipped_sticky = StickyRememberedSet::default();
-    // Mirror scan_remembered_dirty_slots_copying's scan_header guards: the
-    // external dirty entries can carry headers the harness seeded
-    // synthetically, and a dead entry may point at reclaimed memory — never
-    // dereference before the plausibility check.
-    let mut visit_parent = |header: *mut GcHeader| unsafe {
-        if header.is_null() {
-            return;
-        }
-        let arena_parent = plausible_gc_header(header, true);
-        let malloc_parent = !arena_parent && plausible_gc_header(header, false);
-        if !arena_parent && !malloc_parent {
-            return;
-        }
-        if (*header).gc_flags & GC_FLAG_FORWARDED != 0 {
-            return;
-        }
-        let user = (header as *mut u8).add(GC_HEADER_SIZE) as usize;
-        if arena_parent
-            && !matches!(
-                crate::arena::classify_heap_generation(user),
-                crate::arena::HeapGeneration::Old
-            )
-        {
-            return;
-        }
-        if DIAGNOSTICS {
-            parents_visited += 1;
-        }
-        visit_gc_rewrite_slots(header, |slot| {
-            if DIAGNOSTICS {
-                // Count all enumerated slots, including unproductive weak
-                // targets and primitive values. This measures traversal work.
-                slots_visited += 1;
-            }
-            if crate::weakref::is_weak_target_trace_slot(header, slot.slot)
-                && (*header).obj_type != GC_TYPE_WEAK_STORAGE
-            {
-                return;
-            }
-            slot.record_layout_read();
-            let tracking = remember_mutable_old_to_young_slot(&mut sticky, header, slot);
-            if DIAGNOSTICS && tracking {
-                slots_tracking += 1;
-            }
-        });
-    };
-    if !snapshot.dirty_old_pages.is_empty() {
-        crate::arena::old_arena_walk_objects_on_pages(&snapshot.dirty_old_pages, |hp| {
-            if covered.contains(&(hp as usize)) {
-                skipped += 1;
-                #[cfg(any(test, debug_assertions))]
-                cross_check_covered_parent(hp as *mut GcHeader, &mut skipped_sticky);
-                return;
-            }
-            walked += 1;
-            visit_parent(hp as *mut GcHeader);
-        });
-    }
-    let mut seen_external = crate::fast_hash::new_ptr_hash_set();
-    for &(_, header_addr) in &snapshot.external_dirty_entries {
-        if !seen_external.insert(header_addr) {
-            continue;
-        }
-        if covered.contains(&header_addr) {
-            skipped += 1;
-            #[cfg(any(test, debug_assertions))]
-            cross_check_covered_parent(header_addr as *mut GcHeader, &mut skipped_sticky);
-            continue;
-        }
-        walked += 1;
-        // External entries may be stale (or, in the GC unit tests,
-        // synthetic). Establish that the address is dereference-safe
-        // WITHOUT touching it: old/longlived arena pages are always
-        // mapped; anything else must still be a registered malloc GC
-        // object.
-        let deref_safe =
-            matches!(
-                crate::arena::classify_heap_generation(header_addr),
-                crate::arena::HeapGeneration::Old | crate::arena::HeapGeneration::Longlived
-            ) || super::malloc::gc_malloc_header_is_local(header_addr as *const GcHeader);
-        if deref_safe {
-            visit_parent(header_addr as *mut GcHeader);
-        }
-    }
-    let added = sticky.restore_counted();
-    #[cfg(any(test, debug_assertions))]
-    {
-        let would_add = skipped_sticky.count_not_yet_dirty();
-        assert_eq!(
-            would_add, 0,
-            "restore_surviving_dirty_coverage: {would_add} page(s) of {skipped} \
-             dirty-scan-covered object(s) are not remembered — the dirty scan's \
-             per-slot re-remembering disagrees with the coverage walk for an \
-             object `scan_dirty_object_slots` reported complete"
-        );
-    }
-    if DIAGNOSTICS {
-        // These are the two actual snapshot inputs and the skip-set size.
-        // `dirty_pages` also includes external pages and is NOT the set the
-        // old-arena walk iterates. Candidate counts precede validity guards;
-        // parent visits and slot counts describe the admitted traversal.
-        eprintln!(
-            "[gc-restore-coverage] {cycle_label} dirty_old_pages={} external_entries={} \
-             covered={} objects_walked={walked} objects_skipped={skipped} \
-             parents_visited={parents_visited} slots_visited={slots_visited} \
-             slots_tracking={slots_tracking} pages_added={added}",
-            snapshot.dirty_old_pages.len(),
-            snapshot.external_dirty_entries.len(),
-            covered.len(),
-        );
-    }
-}
-
-/// Test/debug twin of the restore's `visit_parent` for a skipped object:
-/// re-derive what the full walk would have remembered so the caller can assert
-/// it adds nothing beyond what the dirty scan already restored.
-#[cfg(any(test, debug_assertions))]
-fn cross_check_covered_parent(header: *mut GcHeader, sticky: &mut StickyRememberedSet) {
-    unsafe {
-        if header.is_null() {
-            return;
-        }
-        let arena_parent = plausible_gc_header(header, true);
-        let malloc_parent = !arena_parent && plausible_gc_header(header, false);
-        if !arena_parent && !malloc_parent {
-            return;
-        }
-        if (*header).gc_flags & GC_FLAG_FORWARDED != 0 {
-            return;
-        }
-        let user = (header as *mut u8).add(GC_HEADER_SIZE) as usize;
-        if arena_parent
-            && !matches!(
-                crate::arena::classify_heap_generation(user),
-                crate::arena::HeapGeneration::Old
-            )
-        {
-            return;
-        }
-        visit_gc_rewrite_slots(header, |slot| {
-            if crate::weakref::is_weak_target_trace_slot(header, slot.slot)
-                && (*header).obj_type != GC_TYPE_WEAK_STORAGE
-            {
-                return;
-            }
-            slot.record_layout_read();
-            remember_mutable_old_to_young_slot(sticky, header, slot);
-        });
-    }
-}
-
-pub(super) fn rebuild_evacuated_old_to_young_remembered_set(
-    evacuated_headers: &[*mut GcHeader],
-) -> StickyRememberedSet {
-    let mut sticky = StickyRememberedSet::default();
-    for &header in evacuated_headers {
-        unsafe {
-            remember_evacuated_old_copy_young_slots(&mut sticky, header);
-        }
-    }
-    sticky
-}
-
-unsafe fn remember_retained_old_to_young_slots(
-    sticky: &mut StickyRememberedSet,
-    header: *mut GcHeader,
-    require_marked: bool,
-) {
-    if header.is_null() || (*header).gc_flags & GC_FLAG_FORWARDED != 0 {
-        return;
-    }
-    if require_marked && (*header).gc_flags & (GC_FLAG_MARKED | GC_FLAG_PINNED) == 0 {
-        return;
-    }
-    let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
-    if !barrier_parent_needs_remembering(user_ptr as usize) {
-        return;
-    }
-    visit_gc_rewrite_slots(header, |slot| unsafe {
-        if crate::weakref::is_weak_target_trace_slot(header, slot.slot)
-            && (*header).obj_type != GC_TYPE_WEAK_STORAGE
-        {
-            return;
-        }
-        slot.record_layout_read();
-        remember_mutable_old_to_young_slot(sticky, header, slot);
-    });
-}
-
-pub(super) struct OldToYoungRememberedRebuildState {
-    require_marked: bool,
-    sticky: StickyRememberedSet,
-    arena_cursor: Option<crate::arena::ArenaObjectCursor>,
-    arena_done: bool,
-    malloc_index: usize,
-    objects_scanned: usize,
-    done: bool,
-}
-
-impl OldToYoungRememberedRebuildState {
-    pub(super) fn new(require_marked: bool) -> Self {
-        // Arena parents on uniformly young or longlived blocks cannot pass
-        // barrier_parent_needs_remembering. Keep every other range, including
-        // blocks retagged old before in-place promotion changes their owner.
-        // Malloc parents retain their separate walk below.
-        let arena_cursor = crate::arena::ArenaObjectCursor::new_remembered_parents();
-        Self {
-            require_marked,
-            sticky: StickyRememberedSet::default(),
-            arena_cursor: Some(arena_cursor),
-            arena_done: false,
-            malloc_index: 0,
-            objects_scanned: 0,
-            done: false,
-        }
-    }
-
-    /// Reference implementation for equivalence/visited-work regression tests.
-    #[cfg(test)]
-    pub(super) fn whole_heap_for_test(require_marked: bool) -> Self {
-        let mut state = Self::new(require_marked);
-        state.arena_cursor = Some(crate::arena::ArenaObjectCursor::new(
-            crate::arena::ArenaWalkOrder::BlockIndex,
-        ));
-        state
-    }
-
-    /// Candidate arena and malloc objects visited by the arming reconstruct
-    /// or the test reference walk. Full cycles fold their entries into marking
-    /// and no longer construct this state.
-    pub(super) fn objects_scanned(&self) -> usize {
-        self.objects_scanned
-    }
-
-    pub(super) fn step(&mut self, budget: usize) -> bool {
-        if self.done {
-            return true;
-        }
-
-        let mut remaining = budget;
-        while remaining > 0 && !self.arena_done {
-            let next = self
-                .arena_cursor
-                .as_mut()
-                .and_then(crate::arena::ArenaObjectCursor::next);
-            let Some((header_ptr, _block_idx)) = next else {
-                self.arena_done = true;
-                self.arena_cursor = None;
-                break;
-            };
-            remaining -= 1;
-            self.objects_scanned += 1;
-            let header = header_ptr as *mut GcHeader;
-            unsafe {
-                remember_retained_old_to_young_slots(&mut self.sticky, header, self.require_marked);
-            }
-        }
-
-        while remaining > 0 && self.arena_done {
-            let maybe_header = MALLOC_STATE.with(|s| {
-                let s = s.borrow();
-                s.objects.get(self.malloc_index).copied()
-            });
-            let Some(header) = maybe_header else {
-                self.done = true;
-                return true;
-            };
-            self.malloc_index += 1;
-            remaining -= 1;
-            self.objects_scanned += 1;
-            unsafe {
-                remember_retained_old_to_young_slots(&mut self.sticky, header, self.require_marked);
-            }
-        }
-
-        if self.arena_done {
-            let malloc_len = MALLOC_STATE.with(|s| s.borrow().objects.len());
-            if self.malloc_index >= malloc_len {
-                self.done = true;
-            }
-        }
-
-        self.done
-    }
-
-    #[allow(dead_code)]
-    pub(super) fn finish_unbounded(mut self) -> StickyRememberedSet {
-        while !self.step(usize::MAX) {}
-        self.sticky
-    }
-
-    pub(super) fn finish(self) -> StickyRememberedSet {
-        debug_assert!(self.done);
-        self.sticky
-    }
-}
-
-#[allow(dead_code)]
-fn rebuild_retained_old_to_young_remembered_set(require_marked: bool) -> StickyRememberedSet {
-    OldToYoungRememberedRebuildState::new(require_marked).finish_unbounded()
-}
-
-#[allow(dead_code)]
-pub(super) fn rebuild_live_old_to_young_remembered_set() -> StickyRememberedSet {
-    rebuild_retained_old_to_young_remembered_set(true)
-}
-
-/// The arming reconstruct's walk (#7187): every retained old parent's
-/// old→young edges.
-///
-/// It skips every arena block that is wholly NURSERY. The walk keeps a parent
-/// only if `barrier_parent_needs_remembering` says so — an Old-generation
-/// object, or a malloc object — and an object on a nursery block is neither,
-/// so each object there was a classification and a rejection. Skipping the
-/// block is therefore exact, not a heuristic. It matters because the walk runs
-/// at the first minor of every thread, when the young generation is at its
-/// fullest: on binary-trees at n = 3 it visited 131 k young objects to find no
-/// parent, about 20 M instructions.
-pub(super) fn rebuild_minor_old_to_young_remembered_set() -> StickyRememberedSet {
-    let mut state = OldToYoungRememberedRebuildState::new(false);
-    if let Some(cursor) = state.arena_cursor.as_mut() {
-        cursor.skip_blocks_where(arming_walk_skips_block);
-    }
-    while !state.step(usize::MAX) {}
-    super::barrier_arming::note_reconstruct_objects_walked(state.objects_scanned());
-    state.finish()
-}
-
-/// Can the arming walk skip the block `[data, end)` without looking? Only when
-/// one registered range covers it and that range is the nursery.
-fn arming_walk_skips_block(data: usize, end: usize) -> bool {
-    #[cfg(test)]
-    if arming_walk_sabotage::skipping_every_block() {
-        return true;
-    }
-    matches!(
-        crate::arena::uniform_heap_generation(data, end),
-        Some(crate::arena::HeapGeneration::Nursery)
-    )
-}
-
-/// Test-only sabotage for [`arming_walk_skips_block`]: skip EVERY block, old
-/// ones included, so the witness can prove that the old→young edge it recovers
-/// comes from the walk it is testing.
-#[cfg(test)]
-pub(crate) mod arming_walk_sabotage {
-    use std::cell::Cell;
-
-    thread_local! {
-        static SKIP_ALL: Cell<bool> = const { Cell::new(false) };
-    }
-
-    pub(crate) fn skipping_every_block() -> bool {
-        SKIP_ALL.with(Cell::get)
-    }
-
-    pub(crate) struct Guard(bool);
-
-    impl Guard {
-        pub(crate) fn arm() -> Self {
-            Self(SKIP_ALL.with(|s| s.replace(true)))
-        }
-    }
-
-    impl Drop for Guard {
-        fn drop(&mut self) {
-            let prior = self.0;
-            SKIP_ALL.with(|s| s.set(prior));
-        }
     }
 }
 
@@ -952,7 +283,7 @@ pub(super) unsafe fn verify_old_young_parent_slots_covered(
         return;
     }
     stats.checked_old_objects = stats.checked_old_objects.saturating_add(1);
-    visit_gc_rewrite_slots(header, |slot| unsafe {
+    visit_gc_rewrite_slots::<true>(header, |slot| unsafe {
         if crate::weakref::is_weak_target_trace_slot(header, slot.slot)
             && (*header).obj_type != GC_TYPE_WEAK_STORAGE
         {
@@ -1014,7 +345,7 @@ pub(super) fn panic_old_young_edge_verifier_failed(stats: OldYoungEdgeVerifyStat
 }
 
 pub(super) fn verify_old_to_young_edges_collect() -> OldYoungEdgeVerifyStats {
-    let snapshot = remembered_dirty_snapshot();
+    let snapshot = remembered_dirty_snapshot::<true>();
     let mut stats = OldYoungEdgeVerifyStats {
         checked_remembered_pages: snapshot.dirty_pages.len(),
         ..OldYoungEdgeVerifyStats::default()
@@ -1113,7 +444,7 @@ pub(super) unsafe fn verify_marked_object_child_marks(
     }
     let parent = (header as *mut u8).add(GC_HEADER_SIZE) as usize;
     stats.checked_marked_objects = stats.checked_marked_objects.saturating_add(1);
-    visit_gc_rewrite_slots(header, |slot| unsafe {
+    visit_gc_rewrite_slots::<true>(header, |slot| unsafe {
         if crate::weakref::is_weak_target_trace_slot(header, slot.slot)
             && !super::ephemeron::value_slot_is_enabled(header, slot.slot, false)
         {
@@ -1200,7 +531,7 @@ pub(super) unsafe fn verify_array_pointer_slots_enumerated_for(
     let words = elements as *const u64;
 
     let mut reached = vec![0u64; length.div_ceil(64)];
-    visit_gc_rewrite_slots(header, |slot| {
+    visit_gc_rewrite_slots::<true>(header, |slot| {
         let addr = slot.slot as usize;
         if addr < elements_addr {
             return;
@@ -1385,7 +716,7 @@ unsafe fn verify_image_cell_child_marks(
     header: *mut GcHeader,
 ) {
     stats.checked_marked_objects = stats.checked_marked_objects.saturating_add(1);
-    visit_gc_rewrite_slots(header, |slot| {
+    visit_gc_rewrite_slots::<true>(header, |slot| {
         if !slot.is_parent_owned() {
             return;
         }
@@ -1493,7 +824,7 @@ pub(super) fn verify_minor_unmarked_young_children_report(phase: &str) {
             return;
         }
         checked_parents += 1;
-        visit_gc_rewrite_slots(header, |slot| {
+        visit_gc_rewrite_slots::<true>(header, |slot| {
             if crate::weakref::is_weak_target_trace_slot(header, slot.slot)
                 && !super::ephemeron::value_slot_is_enabled(header, slot.slot, true)
             {
@@ -1555,7 +886,7 @@ pub(super) unsafe fn verify_heap_object_fields(
     }
     let verifier = verifier.with_parent(header);
     let mut slots = 0usize;
-    visit_gc_rewrite_slot_descriptors(header, |descriptor| unsafe {
+    visit_gc_rewrite_slot_descriptors::<true>(header, |descriptor| unsafe {
         slots = slots.saturating_add(match descriptor {
             GcMutableSlotDescriptor::Slot(_) => 1,
             GcMutableSlotDescriptor::Range { range, .. } => range.slot_count(),
@@ -1567,136 +898,6 @@ pub(super) unsafe fn verify_heap_object_fields(
         });
     });
     slots
-}
-
-/// Walk every live (MARKED, non-FORWARDED) object on the heap and
-/// rewrite any forwarded references in its fields. Includes new
-/// evac copies (marked at evac time) and surviving non-evacuated
-/// objects.
-pub(super) fn rewrite_heap_objects(valid_ptrs: &ValidPointerSet) {
-    let rewrite_one = |header: *mut GcHeader| {
-        unsafe {
-            let flags = (*header).gc_flags;
-            // FORWARDED originals are stale — first 8 bytes of
-            // payload now holds the forwarding address, not real
-            // field data. Skip them entirely.
-            if flags & GC_FLAG_FORWARDED != 0 {
-                return;
-            }
-            // Skip dead NURSERY objects — this cycle's sweep frees them.
-            // An UNMARKED object outside the nursery is NOT dead: a minor
-            // cycle neither traces nor sweeps the old generation, so being
-            // unmarked is the normal state of a live old object whose pages
-            // are clean. Old→old references have no dirty-page coverage
-            // (barriers only track old→young), which makes this walk the
-            // ONLY pass that re-points an old referrer at an old-page
-            // evacuation target. Skipping unmarked old objects left their
-            // slots aimed at forwarding stubs that
-            // `release_evacuated_original_forwarding_stubs` then released —
-            // dangling pointers into reused memory (#5029).
-            if flags & (GC_FLAG_MARKED | GC_FLAG_PINNED) == 0 {
-                let user = (header as *mut u8).add(GC_HEADER_SIZE) as usize;
-                if crate::arena::pointer_in_nursery(user) {
-                    return;
-                }
-            }
-            rewrite_heap_object_fields(header, valid_ptrs);
-        }
-    };
-    crate::arena::arena_walk_objects(|hp| rewrite_one(hp as *mut GcHeader));
-    MALLOC_STATE.with(|s| {
-        let s = s.borrow();
-        for &h in s.objects.iter() {
-            rewrite_one(h);
-        }
-    });
-}
-
-pub(super) fn rewrite_remembered_dirty_ranges(valid_ptrs: &ValidPointerSet) {
-    let snapshot = remembered_dirty_snapshot();
-    let mut stats = RememberedSetTraceStats::default();
-    let mut rewrite_dirty_slot = |slot: GcMutableSlot, _stats: &mut RememberedSetTraceStats| unsafe {
-        rewrite_mutable_slot(slot, valid_ptrs);
-    };
-    scan_remembered_dirty_slot_ranges(&snapshot, valid_ptrs, &mut stats, &mut rewrite_dirty_slot);
-
-    for header_addr in snapshot.fallback_headers {
-        let user_ptr = header_addr + GC_HEADER_SIZE;
-        if !valid_ptrs.contains(&user_ptr) {
-            continue;
-        }
-        unsafe {
-            rewrite_heap_object_fields(header_addr as *mut GcHeader, valid_ptrs);
-        }
-    }
-}
-
-/// Walk every mutable root slot and rewrite forwarded pointers.
-///
-/// The source owner selects the same decoder for marking and rewriting:
-/// global/native homes contain JSValues; untyped shadow homes may also contain
-/// bare pointers. Never relocate a numeric precise value as a pointer (#6910).
-pub(super) fn rewrite_mutable_root_slots(
-    valid_ptrs: &ValidPointerSet,
-    shadow_stats: Option<&mut ShadowRootTraceStats>,
-) {
-    rewrite_mutable_root_slots_with_sources(valid_ptrs, shadow_stats, None);
-}
-
-pub(super) fn rewrite_mutable_root_slots_with_sources(
-    valid_ptrs: &ValidPointerSet,
-    mut shadow_stats: Option<&mut ShadowRootTraceStats>,
-    mut root_sources: Option<&mut RootSourcesTraceStats>,
-) {
-    let native_stack_walk = visit_mutable_root_slots(|slot| unsafe {
-        let bits = slot.read();
-        record_mutable_slot_scan_source(slot, bits, valid_ptrs, &mut root_sources);
-        if bits == 0 {
-            return;
-        }
-        if let Some(new_bits) = slot
-            .pointer_word(bits)
-            .and_then(|_| try_rewrite_value(bits, valid_ptrs))
-        {
-            slot.write(new_bits);
-            record_mutable_slot_rewrite_source(slot, &mut root_sources);
-            if matches!(slot.kind, MutableRootSlotKind::ShadowStack) {
-                if let Some(stats) = shadow_stats.as_mut() {
-                    stats.record_rewrite();
-                }
-            }
-        }
-    });
-    record_native_stack_walk_source(native_stack_walk, &mut root_sources);
-}
-
-pub(super) fn rewrite_mutable_registered_roots(valid_ptrs: &ValidPointerSet) {
-    rewrite_mutable_registered_roots_with_sources(valid_ptrs, None);
-}
-
-pub(super) fn rewrite_mutable_registered_roots_with_sources(
-    valid_ptrs: &ValidPointerSet,
-    mut root_sources: Option<&mut RootSourcesTraceStats>,
-) {
-    let scanners: Vec<MutableRootScannerEntry> = MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
-    let mut visitor = RuntimeRootVisitor::for_rewrite(valid_ptrs);
-    for entry in scanners {
-        let stats = match &mut root_sources {
-            Some(sources) => match entry.source {
-                MutableRootScannerSource::RuntimeHandles => {
-                    Some(&mut sources.runtime_handles as *mut RootSourceSlotTraceStats)
-                }
-                MutableRootScannerSource::RuntimeMutableScanner => {
-                    Some(&mut sources.runtime_mutable_scanners as *mut RootSourceSlotTraceStats)
-                }
-            },
-            None => None,
-        };
-        let previous = visitor.set_root_source_stats(stats);
-        (entry.scanner)(&mut visitor);
-        visitor.set_root_source_stats(previous);
-    }
-    visit_ffi_mutable_registered_roots_with_sources(&mut visitor, root_sources);
 }
 
 pub(super) fn verify_mutable_root_slots(verifier: EvacuationVerifier<'_>) {
@@ -1764,7 +965,7 @@ pub(super) fn verify_copy_only_registered_roots(verifier: EvacuationVerifier<'_>
 }
 
 pub(super) fn verify_remembered_dirty_ranges(verifier: EvacuationVerifier<'_>) {
-    let snapshot = remembered_dirty_snapshot();
+    let snapshot = remembered_dirty_snapshot::<true>();
     let mut stats = RememberedSetTraceStats::default();
     let mut seen_headers = crate::fast_hash::new_ptr_hash_set();
     let mut verify_header = |header: *mut GcHeader| unsafe {
@@ -1775,7 +976,7 @@ pub(super) fn verify_remembered_dirty_ranges(verifier: EvacuationVerifier<'_>) {
         let mut verify_dirty_slot = |slot: GcMutableSlot, _stats: &mut RememberedSetTraceStats| {
             verify_mutable_slot(slot, parent_verifier, "remembered dirty ranges");
         };
-        scan_dirty_header_once(
+        scan_dirty_header_once::<true>(
             header,
             &snapshot.dirty_pages,
             verifier.valid_ptrs,
@@ -1849,43 +1050,4 @@ pub(super) fn verify_evacuated_no_stale_forwarded_refs(
     verify_copy_only_registered_roots(verifier);
     verify_remembered_dirty_ranges(verifier);
     verify_heap_objects(verifier)
-}
-
-/// Top-level Phase C4b-γ-2 entry: rewrite every reference site we
-/// own. Skipped: conservatively-discovered C-stack words (we can't
-/// safely overwrite arbitrary stack memory; pinning of conservative-
-/// root targets in `gc_collect_minor` keeps those references valid
-/// without rewriting). Legacy copy-only scanners still pin their own
-/// discoveries directly during root marking.
-pub(super) fn rewrite_forwarded_references(
-    valid_ptrs: &ValidPointerSet,
-    shadow_stats: Option<&mut ShadowRootTraceStats>,
-    root_sources: Option<&mut RootSourcesTraceStats>,
-) {
-    match root_sources {
-        Some(sources) => {
-            rewrite_mutable_root_slots_with_sources(valid_ptrs, shadow_stats, Some(&mut *sources));
-            rewrite_mutable_registered_roots_with_sources(valid_ptrs, Some(&mut *sources));
-        }
-        None => {
-            rewrite_mutable_root_slots(valid_ptrs, shadow_stats);
-            rewrite_mutable_registered_roots(valid_ptrs);
-        }
-    }
-    rewrite_remembered_dirty_ranges(valid_ptrs);
-    super::image_cells::rewrite_image_roots(valid_ptrs);
-    rewrite_heap_objects(valid_ptrs);
-}
-
-/// Gen-GC Phase C4b: is `header` pinned this cycle (cannot be
-/// evacuated)? Tested by the evacuation candidate filter in
-/// `gc_collect_minor` after the age-bump pass.
-#[inline]
-pub fn is_conservatively_pinned(header: *const GcHeader) -> bool {
-    CONS_PINNED.with(|s| s.borrow().contains(&(header as usize)))
-}
-
-/// Test-only diagnostic: number of objects pinned this cycle.
-pub fn cons_pinned_count() -> usize {
-    CONS_PINNED.with(|s| s.borrow().len())
 }

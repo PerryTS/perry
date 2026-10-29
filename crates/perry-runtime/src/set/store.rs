@@ -6,16 +6,20 @@
 //! ordinary sweep through its finalize hook.
 use super::*;
 
-#[repr(C)]
-pub(crate) struct SetStore {
-    // Internal holders expose no ShapeId at payload +4 (rule 3).
-    _receiver_word: u64,
-    pub(super) elements: *mut f64,
-    pub(super) capacity: usize,
-    pub(super) used: usize,
-    pub(super) index: Option<Box<index::SetIndex>>,
-    pub(super) compaction: Option<SetCompactionLog>,
-}
+pub(crate) type SetStore =
+    crate::codegen_abi::SetStoreHeader<Box<index::SetIndex>, Box<SetCompactionLog>>;
+
+const _: () = {
+    assert!(
+        std::mem::size_of::<SetStore>()
+            == if cfg!(target_pointer_width = "64") {
+                48
+            } else {
+                32
+            }
+    );
+    assert!(std::mem::offset_of!(SetStore, elements) == 8);
+};
 
 pub(super) unsafe fn alloc_store(capacity: usize) -> *mut SetStore {
     alloc_store_in::<false>(capacity)
@@ -91,6 +95,10 @@ pub(crate) unsafe fn refresh_elements_alias(set: *mut SetHeader) {
 
 /// Values are part of the GC allocation; only native buffers need a drop.
 /// Idempotent cleanup also serves arena destruction without consulting TLS.
+/// A call from the arena's thread-exit walk and the sweep, as for Map stores:
+/// inlined, its boxed index and log drops add register pressure to every
+/// arena drop.
+#[inline(never)]
 pub(crate) unsafe fn finalize_owned_store(store: *mut u8, accounting: bool) {
     let store = &mut *store.cast::<SetStore>();
     if store.elements.is_null() {

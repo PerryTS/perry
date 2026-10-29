@@ -26,7 +26,7 @@ extern "C" fn zlib_closed_getter(
     let scope = crate::gc::RuntimeHandleScope::new();
     let proto = scope.root_nanbox_f64(proto);
     let getter = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
-        crate::fn_info!(#[realm("node:zlib.Deflate.prototype.<prototype>.<prototype>._closed.<get>", constructible = true, spec = {name = "get"}, emit = metadata(realm_zlib_closed_get_name))] zlib_closed_getter, 0; with_declared(0)),
+        crate::fn_info!(#[realm("node:zlib.Deflate.prototype.<prototype>.<prototype>._closed.<get>", constructible = true, spec = {name = "get"}, emit = metadata(realm_zlib_closed_get_name))] export crate::object::native_module::constructor_shapes::zlib_closed_getter, 0; with_declared(0)),
         0,
     ));
     getter.with_mut_ptr(|p| callable_exports::set_bound_native_closure_name(p, realm_zlib_closed_get_name!(name)));
@@ -361,7 +361,7 @@ fn own_static(ctor: f64, name: &str, kind: u8, length: u32) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let ctor = scope.root_nanbox_f64(ctor);
     let method = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
-        crate::fn_info!(#[realm(realm_decl! { "node:crypto.ECDH.convertKey", capture = [number_argument(own_static, kind)], constructible = true; "node:net.BlockList.isBlockList", capture = [number_argument(own_static, kind)], spec = {length = 1}, emit = metadata(realm_native_predicate_public); "node:net.SocketAddress.isSocketAddress", capture = [number_argument(own_static, kind)], spec = {length = 1}, emit = metadata(realm_native_predicate_public); "node:net.SocketAddress.parse", capture = [number_argument(own_static, kind)], spec = {length = 1}, emit = metadata(realm_native_predicate_public); })] own_static_thunk, 5; with_declared(5)),
+        crate::fn_info!(#[realm(realm_decl! { "node:crypto.ECDH.convertKey", capture = [number_argument(own_static, kind)], constructible = true; "node:net.BlockList.isBlockList", capture = [number_argument(own_static, kind)], spec = {length = 1}, emit = metadata(realm_native_predicate_public); "node:net.SocketAddress.isSocketAddress", capture = [number_argument(own_static, kind)], spec = {length = 1}, emit = metadata(realm_native_predicate_public); "node:net.SocketAddress.parse", capture = [number_argument(own_static, kind)], spec = {length = 1}, emit = metadata(realm_native_predicate_public); })] export crate::object::native_module::constructor_shapes::own_static_thunk, 5; with_declared(5)),
         1,
     ));
     method.with_mut_ptr(|p| crate::closure::js_closure_set_capture_f64(p, 0, kind as f64));
@@ -975,7 +975,7 @@ pub(crate) fn install_event_emitter_statics(value: f64) -> f64 {
     // laziness avoids eagerly materializing EventEmitter.prototype just to
     // link a child which the program may never request.
     let async_get = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
-        crate::fn_info!(#[realm("node:events.EventEmitter.EventEmitterAsyncResource.<get>", spec = {name = "lazyEventEmitterAsyncResource"}, emit = metadata(realm_event_resource_get_name))] event_async_resource_get, 0; with_declared(0)),
+        crate::fn_info!(#[realm("node:events.EventEmitter.EventEmitterAsyncResource.<get>", spec = {name = "lazyEventEmitterAsyncResource"}, emit = metadata(realm_event_resource_get_name))] export crate::object::native_module::constructor_shapes::event_async_resource_get, 0; with_declared(0)),
         0,
     ));
     async_get.with_mut_ptr(|p| {
@@ -1007,12 +1007,12 @@ pub(crate) fn install_event_emitter_statics(value: f64) -> f64 {
         (
             "defaultMaxListeners",
             10.0,
-            crate::fn_info!(#[realm("node:events.EventEmitter.defaultMaxListeners.<set>", provider = closure, capture = [ref("node:events.EventEmitter.defaultMaxListeners.<get>")])] default_max_listeners_set, 1; with_declared(1)),
+            crate::fn_info!(#[realm("node:events.EventEmitter.defaultMaxListeners.<set>", provider = closure, capture = [ref("node:events.EventEmitter.defaultMaxListeners.<get>")])] export crate::object::native_module::constructor_shapes::default_max_listeners_set, 1; with_declared(1)),
         ),
         (
             "captureRejections",
             f64::from_bits(crate::value::TAG_FALSE),
-            crate::fn_info!(capture_rejections_set, 1; with_declared(1)),
+            crate::fn_info!(#[realm("node:events.EventEmitter.captureRejections.<set>", provider = closure, capture = [ref("node:events.EventEmitter"), symbol(NP_SYMBOL_K_CAPTURE)])] export crate::object::native_module::constructor_shapes::capture_rejections_set, 1; with_declared(1)),
         ),
     ] {
         // node's `kCapture`: the key `EventEmitter.prototype`'s layout lists
@@ -1028,9 +1028,9 @@ pub(crate) fn install_event_emitter_statics(value: f64) -> f64 {
         };
         let get = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
             if name == "captureRejections" {
-                crate::fn_info!(capture_rejections_get, 0; with_declared(0))
+                crate::fn_info!(#[realm("node:events.EventEmitter.captureRejections.<get>", capture = [ref("node:events.EventEmitter"), symbol(NP_SYMBOL_K_CAPTURE)])] export crate::object::native_module::constructor_shapes::capture_rejections_get, 0; with_declared(0))
             } else {
-                crate::fn_info!(#[realm("node:events.EventEmitter.defaultMaxListeners.<get>", capture = [number_property])] default_max_listeners_get, 0; with_declared(0))
+                crate::fn_info!(#[realm("node:events.EventEmitter.defaultMaxListeners.<get>", capture = [number_property])] export crate::object::native_module::constructor_shapes::default_max_listeners_get, 0; with_declared(0))
             },
             if capture_key.is_some() { 2 } else { 1 },
         ));
@@ -1106,5 +1106,3 @@ extern "C" fn event_async_resource_get(
 ) -> f64 {
     bound_native_callable_export_value("events", "EventEmitterAsyncResource")
 }
-
-crate::realm_decl!("constructor_shapes.realm.json#*");

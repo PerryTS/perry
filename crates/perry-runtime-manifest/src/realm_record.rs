@@ -1,6 +1,7 @@
 //! Fixed record births inherit their layout and key order from runtime_record!.
 use super::{birth, info, tokens, Token};
 use crate::realm_json::Value;
+use perry_abi::realm_header::ObjectLayout;
 use std::collections::BTreeMap;
 
 pub(super) fn layouts(source: &str, name: &str) -> Result<Vec<Vec<String>>, String> {
@@ -21,7 +22,9 @@ pub(super) fn layouts(source: &str, name: &str) -> Result<Vec<Vec<String>>, Stri
         }
         let end = super::closing_paren(&ts, i + 2)?;
         let args = info::split(&ts[i + 3..end], ",");
-        if args.len() != 5
+        // An optional sixth field names the owning realm cells (`realm = [..]`).
+        let owned = args.len() == 6 && info::text(args[5]).starts_with("realm=");
+        if !(args.len() == 5 || owned)
             || info::text(args[3]) != "crate::object::layout_desc::LAYOUT_PROTO_OBJECT"
         {
             return Err("record birth requires its ordinary object layout".into());
@@ -82,21 +85,9 @@ pub(super) fn birth(expression: &[Token<'_>], entry: &[Token<'_>]) -> Result<Val
     }
     // perry_alloc_layout owns the ordinary-layout allocation flags. No
     // serialization ID, GC word or slot count is repeated in realm source.
-    let Value::Object(map) = &mut declaration else {
-        unreachable!()
-    };
-    let Value::Object(header) = map.get_mut("header").unwrap() else {
-        unreachable!()
-    };
-    let flags = info::constants(include_str!("../../perry-abi/src/lib.rs"))?;
-    let current = header["reserved"]
-        .encode()
-        .parse::<u64>()
-        .map_err(|e| e.to_string())?;
-    header.insert(
-        "reserved".into(),
-        Value::Number((current | flags["OBJ_FLAG_PLAIN_ORDINARY"]).to_string()),
-    );
+    super::derive::restate(&mut declaration, |birth| {
+        birth.layout = ObjectLayout::PlainOrdinary
+    })?;
     Ok(declaration)
 }
 

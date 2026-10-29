@@ -126,7 +126,8 @@ pub(crate) unsafe fn install_elements(obj: *mut ObjectHeader, length: u32) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj_handle = scope.root_raw_mut_ptr(obj);
     let (_, obj) =
-        obj_handle.across_mut::<ObjectHeader, _>(|| crate::object::object_meta_ensure(obj));
+        // A1_UNPROVEN: an `extends Array` instance from a JS value, no type test (kind-A/B question for S0b-S0e).
+        obj_handle.across_mut::<ObjectHeader, _>(|| crate::object::object_meta_ensure(crate::object::MetaObj::runtime_born(obj), crate::object::MetaReason::ArraySubclassElements));
     if !elements_of(obj).is_null() {
         return;
     }

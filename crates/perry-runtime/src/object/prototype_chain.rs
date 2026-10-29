@@ -523,7 +523,11 @@ fn object_set_static_prototype_impl_with(
             if per_object || !(*obj).meta.is_null() {
                 // `object_meta_ensure` allocates and may evacuate the owner.
                 let (meta, moved) = obj_handle.across_mut::<crate::object::ObjectHeader, _>(|| {
-                    crate::object::object_meta_ensure(obj)
+                    // A1_UNPROVEN: receiver from a JS value, no type test (kind-A/B question for S0b-S0e).
+                    crate::object::object_meta_ensure(
+                        crate::object::MetaObj::runtime_born(obj),
+                        crate::object::MetaReason::PrototypeOnReceiver,
+                    )
                 });
                 obj = moved;
                 let word = proto_handle.get_nanbox_u64();
@@ -565,7 +569,11 @@ fn object_set_static_prototype_impl_with(
     unsafe {
         let holder = crate::object::descriptor_state::descriptor_holder(obj_ptr);
         if !holder.is_null() {
-            let meta = crate::object::object_meta_ensure(holder);
+            // A1_UNPROVEN: descriptor_holder(obj_ptr) may return the user object itself (kind-A/B question for S0b-S0e).
+            let meta = crate::object::object_meta_ensure(
+                crate::object::MetaObj::runtime_born(holder),
+                crate::object::MetaReason::PrototypeHolder,
+            );
             // GC_STORE_AUDIT(BARRIERED): the bag owns this NaN-boxed prototype
             // edge; the exact metadata-slot barrier follows the store.
             (*meta).prototype = proto_bits;

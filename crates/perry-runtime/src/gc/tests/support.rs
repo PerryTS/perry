@@ -462,7 +462,7 @@ impl GcTestIsolationGuard {
     ///    misses exactly once per PROCESS, so WHICH libtest thread pays is a
     ///    scheduling accident.
     /// 2. Arena block reset is all-or-nothing, so
-    ///    `gc::trace::mark_block_persisting_arena_objects` force-MARKS every
+    ///    `gc::mark::mark_block_persisting_arena_objects` force-MARKS every
     ///    object in a block that holds one reachable object. A test owner that
     ///    shares its block with a freshly-bootstrapped realm is therefore NOT
     ///    dead — and the death prune *correctly* declines to drop its
@@ -500,7 +500,8 @@ impl GcTestIsolationGuard {
         reset_shadow_stack();
         reset_global_roots();
         reset_remembered_set();
-        super::super::verify::rebuild_minor_old_to_young_remembered_set().restore();
+        super::super::remembered::rebuild_minor_old_to_young_remembered_set::<{ cfg!(test) }>()
+            .restore();
         Self {
             _scanner_guard: scanner_guard,
             _lock: lock,
@@ -522,7 +523,8 @@ impl Drop for GcTestIsolationGuard {
         reset_shadow_stack();
         reset_global_roots();
         reset_remembered_set();
-        super::super::verify::rebuild_minor_old_to_young_remembered_set().restore();
+        super::super::remembered::rebuild_minor_old_to_young_remembered_set::<{ cfg!(test) }>()
+            .restore();
     }
 }
 
@@ -580,7 +582,8 @@ impl CopyingNurseryTestGuard {
         reset_shadow_stack();
         reset_global_roots();
         reset_remembered_set();
-        super::super::verify::rebuild_minor_old_to_young_remembered_set().restore();
+        super::super::remembered::rebuild_minor_old_to_young_remembered_set::<{ cfg!(test) }>()
+            .restore();
         js_gc_write_barriers_emitted(1);
         let frame = js_shadow_frame_push(slot_count);
         Self {
@@ -598,7 +601,8 @@ impl Drop for CopyingNurseryTestGuard {
         reset_shadow_stack();
         reset_global_roots();
         reset_remembered_set();
-        super::super::verify::rebuild_minor_old_to_young_remembered_set().restore();
+        super::super::remembered::rebuild_minor_old_to_young_remembered_set::<{ cfg!(test) }>()
+            .restore();
         js_gc_write_barriers_emitted(0);
     }
 }
@@ -818,6 +822,27 @@ pub(super) fn young_leaf() -> usize {
     let id = YOUNG_LEAF_COUNTER.fetch_add(1, Ordering::Relaxed);
     let bytes = format!("young_leaf_{id:x}");
     crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32) as usize
+}
+
+/// A large container is born young (young large storage). A fixture whose
+/// subject is an OLD large parent promotes it first: one minor with the cell
+/// as a global root flips it old at its unchanged address, as a surviving
+/// program object is. Call it before allocating young cells the fixture
+/// keeps unrooted.
+pub(super) unsafe fn promote_young_large<T>(p: *mut T) -> *mut T {
+    let addr = p as usize;
+    assert!(
+        crate::arena::is_large_storage(addr) && crate::arena::pointer_in_nursery(addr),
+        "fixture: a young large cell"
+    );
+    let mut slot = Box::new(ptr_bits(addr));
+    let root: *mut u64 = &mut *slot;
+    register_global_root(root);
+    let _ = collect_minor_trace(GcTriggerKind::Direct);
+    GLOBAL_ROOTS.with(|roots| roots.borrow_mut().retain(|&r| r != root));
+    assert_eq!((*slot & POINTER_MASK) as usize, addr, "promoted at its address");
+    assert!(crate::arena::pointer_in_old_gen(addr));
+    p
 }
 
 pub(super) fn ptr_bits(addr: usize) -> u64 {
@@ -1076,7 +1101,7 @@ pub(super) fn alloc_tracked_test_symbol() -> *mut crate::symbol::SymbolHeader {
     ptr as *mut crate::symbol::SymbolHeader
 }
 
-pub(super) unsafe fn alloc_old_test_array(
+pub(crate) unsafe fn alloc_old_test_array(
     length: u32,
 ) -> (*mut crate::array::ArrayHeader, *mut u64) {
     let payload = std::mem::size_of::<crate::array::ArrayHeader>() + length as usize * 8;

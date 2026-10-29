@@ -2,16 +2,12 @@ use super::super::*;
 use super::support::*;
 use std::fmt::Write as _;
 
-/// Field/element count whose backing store exceeds the POINTER-BEARING
-/// born-tenured threshold — see `copying.rs`'s `OLD_BORN_ELEMENTS`. These two
-/// fixtures assert that a materialized JSON object / regex result array is an
-/// OLD-generation birth holding young children, so they must actually be one.
-///
-/// #10123: a JSON-constructed object's storage is admitted young up to
-/// `LARGE_OBJECT_STORAGE_YOUNG_BIRTH_CEILING_BYTES`, which is HIGHER than the
-/// flat pointer-bearing threshold. Derive from the ceiling that actually
-/// governs this fixture, or the "is an old-generation birth" premise silently
-/// stops holding and the test fails on its premise rather than its subject.
+/// Field/element count whose backing store exceeds every young-copy ceiling,
+/// so a materialized JSON object / regex result array takes young large
+/// storage: traced in place by the minor while its young children move, and
+/// promoted at its address. Derived from the ceiling that governs JSON object
+/// storage (#10123, `LARGE_OBJECT_STORAGE_YOUNG_BIRTH_CEILING_BYTES`, above
+/// the flat pointer-bearing cutoff), so the premise moves with it.
 const OLD_BORN_FIELDS: u32 =
     (crate::gc::LARGE_OBJECT_STORAGE_YOUNG_BIRTH_CEILING_BYTES / 8) as u32 + 64;
 
@@ -120,7 +116,7 @@ fn json_large_object_materialization_preserves_young_string_fields() {
     let obj = (parsed.bits() & POINTER_MASK) as *mut crate::object::ObjectHeader;
     js_shadow_slot_set(0, parsed.bits());
 
-    assert!(crate::arena::pointer_in_old_gen(obj as usize));
+    assert!(crate::arena::pointer_in_nursery(obj as usize), "wide JSON storage is born young");
     let fields = unsafe {
         (obj as *mut u8).add(std::mem::size_of::<crate::object::ObjectHeader>()) as *mut u64
     };
@@ -168,7 +164,10 @@ fn regex_global_result_array_preserves_young_match_strings() {
         source_handle.get_raw_const_ptr::<crate::StringHeader>(),
         regex_handle.get_raw_const_ptr::<crate::regex::RegExpHeader>(),
     );
-    assert!(crate::arena::pointer_in_old_gen(result as usize));
+    assert!(
+        crate::arena::pointer_in_nursery(result as usize) && crate::arena::is_large_storage(result as usize),
+        "a large match result is young large storage, traced in place"
+    );
     js_shadow_slot_set(0, ptr_bits(result as usize));
     let elements = unsafe {
         crate::array::array_elements_ptr(result as *const crate::array::ArrayHeader) as *mut u64

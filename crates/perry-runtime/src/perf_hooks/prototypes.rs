@@ -1,11 +1,6 @@
 use super::*;
 
 mod performance_methods;
-use performance_methods::{
-    clear_marks, clear_measures, clear_resource_timings, get_entries, get_entries_by_name,
-    get_entries_by_type, mark, mark_resource_timing, measure, now, set_resource_timing_buffer_size,
-    to_json,
-};
 
 const PERF_CONSTRUCTOR_NAMES: &[&str] = &[
     "Performance",
@@ -226,7 +221,7 @@ unsafe fn install_perf_to_string_tag(proto: *mut crate::object::ObjectHeader, ta
 
 unsafe fn perf_field_getter(name: &str) -> f64 {
     let leaked: &'static [u8] = name.as_bytes().to_vec().leak();
-    let func_ptr = crate::fn_info!(#[realm(realm_decl! { "PerformanceEntry.prototype.duration.<get>", capture = property_key, constructible = true; "PerformanceEntry.prototype.entryType.<get>", capture = property_key, constructible = true; "PerformanceEntry.prototype.name.<get>", capture = property_key, constructible = true; "PerformanceEntry.prototype.startTime.<get>", capture = property_key, constructible = true; "PerformanceMark.prototype.detail.<get>", capture = property_key, constructible = true; "PerformanceMeasure.prototype.detail.<get>", capture = property_key, constructible = true; "PerformanceResourceTiming.prototype.connectEnd.<get>", capture = property_key, constructible = true; "PerformanceResourceTiming.prototype.connectStart.<get>", capture = property_key, constructible = true; "PerformanceResourceTiming.prototype.decodedBodySize.<get>", capture = property_key, constructible = true; "PerformanceResourceTiming.prototype.deliveryType.<get>", capture = property_key, constructible = true; "PerformanceResourceTiming.prototype.domainLookupEnd.<get>", capture = property_key, constructible = true; "PerformanceResourceTiming.prototype.domainLookupStart.<get>", capture = property_key, constructible = true; "PerformanceResourceTiming.prototype.encodedBodySize.<get>", capture = property_key, constructible = true; "PerformanceResourceTiming.prototype.fetchStart.<get>", capture = property_key, constructible = true; "PerformanceResourceTiming.prototype.initiatorType.<get>", capture = property_key, constructible = true; "PerformanceResourceTiming.prototype.nextHopProtocol.<get>", capture = property_key, constructible = true; "PerformanceResourceTiming.prototype.redirectEnd.<get>", capture = property_key, constructible = true; "PerformanceResourceTiming.prototype.redirectStart.<get>", capture = property_key, constructible = true; "PerformanceResourceTiming.prototype.requestStart.<get>", capture = property_key, constructible = true; "PerformanceResourceTiming.prototype.responseEnd.<get>", capture = property_key, constructible = true; "PerformanceResourceTiming.prototype.responseStart.<get>", capture = property_key, constructible = true; "PerformanceResourceTiming.prototype.responseStatus.<get>", capture = property_key, constructible = true; "PerformanceResourceTiming.prototype.secureConnectionStart.<get>", capture = property_key, constructible = true; "PerformanceResourceTiming.prototype.transferSize.<get>", capture = property_key, constructible = true; "PerformanceResourceTiming.prototype.workerStart.<get>", capture = property_key, constructible = true; })] perf_entry_field_getter_thunk, 0; with_declared(0));
+    let func_ptr = crate::fn_info!(#[realm(realm_decl! { "PerformanceEntry.prototype.duration.<get>", capture = property_key, constructible = true; "PerformanceEntry.prototype.entryType.<get>", capture = property_key, constructible = true; "PerformanceEntry.prototype.name.<get>", capture = property_key, constructible = true; "PerformanceEntry.prototype.startTime.<get>", capture = property_key, constructible = true; "PerformanceMark.prototype.detail.<get>", capture = property_key, constructible = true; "PerformanceMeasure.prototype.detail.<get>", capture = property_key, constructible = true; "PerformanceResourceTiming.prototype.connectEnd.<get>", capture = property_key, constructible = true; "PerformanceResourceTiming.prototype.connectStart.<get>", capture = property_key, constructible = true; "PerformanceResourceTiming.prototype.decodedBodySize.<get>", capture = property_key, constructible = true; "PerformanceResourceTiming.prototype.deliveryType.<get>", capture = property_key, constructible = true; "PerformanceResourceTiming.prototype.domainLookupEnd.<get>", capture = property_key, constructible = true; "PerformanceResourceTiming.prototype.domainLookupStart.<get>", capture = property_key, constructible = true; "PerformanceResourceTiming.prototype.encodedBodySize.<get>", capture = property_key, constructible = true; "PerformanceResourceTiming.prototype.fetchStart.<get>", capture = property_key, constructible = true; "PerformanceResourceTiming.prototype.initiatorType.<get>", capture = property_key, constructible = true; "PerformanceResourceTiming.prototype.nextHopProtocol.<get>", capture = property_key, constructible = true; "PerformanceResourceTiming.prototype.redirectEnd.<get>", capture = property_key, constructible = true; "PerformanceResourceTiming.prototype.redirectStart.<get>", capture = property_key, constructible = true; "PerformanceResourceTiming.prototype.requestStart.<get>", capture = property_key, constructible = true; "PerformanceResourceTiming.prototype.responseEnd.<get>", capture = property_key, constructible = true; "PerformanceResourceTiming.prototype.responseStart.<get>", capture = property_key, constructible = true; "PerformanceResourceTiming.prototype.responseStatus.<get>", capture = property_key, constructible = true; "PerformanceResourceTiming.prototype.secureConnectionStart.<get>", capture = property_key, constructible = true; "PerformanceResourceTiming.prototype.transferSize.<get>", capture = property_key, constructible = true; "PerformanceResourceTiming.prototype.workerStart.<get>", capture = property_key, constructible = true; })] export crate::perf_hooks::prototypes::perf_entry_field_getter_thunk, 0; with_declared(0));
     let closure = crate::closure::js_closure_alloc(func_ptr, 2);
     crate::closure::closure_set_capture_word(closure, 0, leaked.as_ptr() as i64);
     crate::closure::closure_set_capture_word(closure, 1, leaked.len() as i64);
@@ -325,64 +320,69 @@ pub(crate) unsafe fn attach_perf_hooks_constructor(
             let methods: [(&str, *const crate::closure::JsFunctionInfo, u32, bool); 14] = [
                 (
                     "clearMarks",
-                    crate::fn_info!(#[realm(Performance.prototype.clearMarks, constructible = true)] clear_marks, 1; with_declared(0)),
+                    crate::fn_info!(#[realm(Performance.prototype.clearMarks, constructible = true)] export crate::perf_hooks::prototypes::performance_methods::clear_marks, 1; with_declared(0)),
                     0,
                     true,
                 ),
                 (
                     "clearMeasures",
-                    crate::fn_info!(#[realm(Performance.prototype.clearMeasures, constructible = true)] clear_measures, 1; with_declared(0)),
+                    crate::fn_info!(#[realm(Performance.prototype.clearMeasures, constructible = true)] export crate::perf_hooks::prototypes::performance_methods::clear_measures, 1; with_declared(0)),
                     0,
                     true,
                 ),
                 (
                     "clearResourceTimings",
-                    crate::fn_info!(#[realm(Performance.prototype.clearResourceTimings, constructible = true)] clear_resource_timings, 0; with_declared(0)),
+                    crate::fn_info!(#[realm(Performance.prototype.clearResourceTimings, constructible = true)] export crate::perf_hooks::prototypes::performance_methods::clear_resource_timings, 0; with_declared(0)),
                     0,
                     true,
                 ),
                 (
                     "getEntries",
-                    crate::fn_info!(#[realm(Performance.prototype.getEntries, constructible = true)] get_entries, 0; with_declared(0)),
+                    crate::fn_info!(#[realm(Performance.prototype.getEntries, constructible = true)] export crate::perf_hooks::prototypes::performance_methods::get_entries, 0; with_declared(0)),
                     0,
                     true,
                 ),
                 (
                     "getEntriesByName",
-                    crate::fn_info!(#[realm(Performance.prototype.getEntriesByName, constructible = true)] get_entries_by_name, 2; with_declared(1)),
+                    crate::fn_info!(#[realm(Performance.prototype.getEntriesByName, constructible = true)] export crate::perf_hooks::prototypes::performance_methods::get_entries_by_name, 2; with_declared(1)),
                     1,
                     true,
                 ),
                 (
                     "getEntriesByType",
-                    crate::fn_info!(#[realm(Performance.prototype.getEntriesByType, constructible = true)] get_entries_by_type, 1; with_declared(1)),
+                    crate::fn_info!(#[realm(Performance.prototype.getEntriesByType, constructible = true)] export crate::perf_hooks::prototypes::performance_methods::get_entries_by_type, 1; with_declared(1)),
                     1,
                     true,
                 ),
-                ("mark", crate::fn_info!(#[realm(Performance.prototype.mark, constructible = true)] mark, 2; with_declared(1)), 1, true),
+                (
+                    "mark",
+                    crate::fn_info!(#[realm(Performance.prototype.mark, constructible = true)] export crate::perf_hooks::prototypes::performance_methods::mark, 2; with_declared(1)),
+                    1,
+                    true,
+                ),
                 (
                     "measure",
-                    crate::fn_info!(#[realm(Performance.prototype.measure, constructible = true)] measure, 3; with_declared(1)),
+                    crate::fn_info!(#[realm(Performance.prototype.measure, constructible = true)] export crate::perf_hooks::prototypes::performance_methods::measure, 3; with_declared(1)),
                     1,
                     true,
                 ),
-                ("now", crate::fn_info!(#[realm(Performance.prototype.now, constructible = true)] now, 0; with_declared(0)), 0, true),
+                ("now", crate::fn_info!(#[realm(Performance.prototype.now, constructible = true)] export crate::perf_hooks::prototypes::performance_methods::now, 0; with_declared(0)), 0, true),
                 (
                     "setResourceTimingBufferSize",
-                    crate::fn_info!(#[realm(Performance.prototype.setResourceTimingBufferSize, constructible = true)] set_resource_timing_buffer_size, 1; with_declared(1)),
+                    crate::fn_info!(#[realm(Performance.prototype.setResourceTimingBufferSize, constructible = true)] export crate::perf_hooks::prototypes::performance_methods::set_resource_timing_buffer_size, 1; with_declared(1)),
                     1,
                     true,
                 ),
                 (
                     "toJSON",
-                    crate::fn_info!(#[realm(Performance.prototype.toJSON, constructible = true)] to_json, 0; with_declared(0)),
+                    crate::fn_info!(#[realm(Performance.prototype.toJSON, constructible = true)] export crate::perf_hooks::prototypes::performance_methods::to_json, 0; with_declared(0)),
                     0,
                     true,
                 ),
                 ("eventLoopUtilization", std::ptr::null(), 2, false),
                 (
                     "markResourceTiming",
-                    crate::fn_info!(#[realm(Performance.prototype.markResourceTiming, constructible = true)] mark_resource_timing, 8; with_declared(7)),
+                    crate::fn_info!(#[realm(Performance.prototype.markResourceTiming, constructible = true)] export crate::perf_hooks::prototypes::performance_methods::mark_resource_timing, 8; with_declared(7)),
                     7,
                     false,
                 ),
@@ -400,7 +400,7 @@ pub(crate) unsafe fn attach_perf_hooks_constructor(
                 install_perf_method(proto, method, value, enumerable);
             }
             let getter = perf_method_value(
-                crate::fn_info!(#[realm("Performance.prototype.timeOrigin.<get>", constructible = true)] perf_time_origin_getter_thunk, 0; with_declared(0)),
+                crate::fn_info!(#[realm("Performance.prototype.timeOrigin.<get>", constructible = true)] export crate::perf_hooks::prototypes::perf_time_origin_getter_thunk, 0; with_declared(0)),
                 "get timeOrigin",
                 0,
             );
@@ -413,7 +413,7 @@ pub(crate) unsafe fn attach_perf_hooks_constructor(
                 install_perf_getter(proto, field, getter, true);
             }
             let to_json = perf_method_value(
-                crate::fn_info!(#[realm(realm_decl! { PerformanceEntry.prototype.toJSON, constructible = true; PerformanceMark.prototype.toJSON, constructible = true; PerformanceMeasure.prototype.toJSON, constructible = true; PerformanceResourceTiming.prototype.toJSON, constructible = true; })] perf_entry_to_json_thunk, 0; with_declared(0)),
+                crate::fn_info!(#[realm(realm_decl! { PerformanceEntry.prototype.toJSON, constructible = true; PerformanceMark.prototype.toJSON, constructible = true; PerformanceMeasure.prototype.toJSON, constructible = true; PerformanceResourceTiming.prototype.toJSON, constructible = true; })] export crate::perf_hooks::prototypes::perf_entry_to_json_thunk, 0; with_declared(0)),
                 "toJSON",
                 0,
             );
@@ -437,7 +437,7 @@ pub(crate) unsafe fn attach_perf_hooks_constructor(
                 proto,
                 "observe",
                 perf_method_value(
-                    crate::fn_info!(#[realm(PerformanceObserver.prototype.observe, constructible = true)] perf_observer_observe_thunk, 1; with_declared(1)),
+                    crate::fn_info!(#[realm(PerformanceObserver.prototype.observe, constructible = true)] export crate::perf_hooks::prototypes::perf_observer_observe_thunk, 1; with_declared(1)),
                     "observe",
                     1,
                 ),
@@ -447,7 +447,7 @@ pub(crate) unsafe fn attach_perf_hooks_constructor(
                 proto,
                 "disconnect",
                 perf_method_value(
-                    crate::fn_info!(#[realm(PerformanceObserver.prototype.disconnect, constructible = true)] perf_observer_disconnect_thunk, 0; with_declared(0)),
+                    crate::fn_info!(#[realm(PerformanceObserver.prototype.disconnect, constructible = true)] export crate::perf_hooks::prototypes::perf_observer_disconnect_thunk, 0; with_declared(0)),
                     "disconnect",
                     0,
                 ),
@@ -457,7 +457,7 @@ pub(crate) unsafe fn attach_perf_hooks_constructor(
                 proto,
                 "takeRecords",
                 perf_method_value(
-                    crate::fn_info!(#[realm(PerformanceObserver.prototype.takeRecords, constructible = true)] perf_observer_take_records_thunk, 0; with_declared(0)),
+                    crate::fn_info!(#[realm(PerformanceObserver.prototype.takeRecords, constructible = true)] export crate::perf_hooks::prototypes::perf_observer_take_records_thunk, 0; with_declared(0)),
                     "takeRecords",
                     0,
                 ),
@@ -470,7 +470,7 @@ pub(crate) unsafe fn attach_perf_hooks_constructor(
                 proto,
                 "getEntries",
                 perf_method_value(
-                    crate::fn_info!(#[realm(PerformanceObserverEntryList.prototype.getEntries, constructible = true)] perf_list_get_entries_thunk, 0; with_declared(0)),
+                    crate::fn_info!(#[realm(PerformanceObserverEntryList.prototype.getEntries, constructible = true)] export crate::perf_hooks::prototypes::perf_list_get_entries_thunk, 0; with_declared(0)),
                     "getEntries",
                     0,
                 ),
@@ -480,7 +480,7 @@ pub(crate) unsafe fn attach_perf_hooks_constructor(
                 proto,
                 "getEntriesByType",
                 perf_method_value(
-                    crate::fn_info!(#[realm(PerformanceObserverEntryList.prototype.getEntriesByType, constructible = true)] perf_list_get_by_type_thunk, 1; with_declared(1)),
+                    crate::fn_info!(#[realm(PerformanceObserverEntryList.prototype.getEntriesByType, constructible = true)] export crate::perf_hooks::prototypes::perf_list_get_by_type_thunk, 1; with_declared(1)),
                     "getEntriesByType",
                     1,
                 ),
@@ -490,7 +490,7 @@ pub(crate) unsafe fn attach_perf_hooks_constructor(
                 proto,
                 "getEntriesByName",
                 perf_method_value(
-                    crate::fn_info!(#[realm(PerformanceObserverEntryList.prototype.getEntriesByName, constructible = true)] perf_list_get_by_name_thunk, 1; with_declared(1)),
+                    crate::fn_info!(#[realm(PerformanceObserverEntryList.prototype.getEntriesByName, constructible = true)] export crate::perf_hooks::prototypes::perf_list_get_by_name_thunk, 1; with_declared(1)),
                     "getEntriesByName",
                     1,
                 ),
@@ -546,7 +546,7 @@ pub(crate) unsafe fn attach_perf_hooks_constructor(
 
     if class_name == "PerformanceObserver" {
         let getter = perf_method_value(
-            crate::fn_info!(#[realm("PerformanceObserver.supportedEntryTypes.<get>", constructible = true)] perf_supported_entry_types_getter_thunk, 0; with_declared(0)),
+            crate::fn_info!(#[realm("PerformanceObserver.supportedEntryTypes.<get>", constructible = true)] export crate::perf_hooks::prototypes::perf_supported_entry_types_getter_thunk, 0; with_declared(0)),
             "get supportedEntryTypes",
             0,
         );

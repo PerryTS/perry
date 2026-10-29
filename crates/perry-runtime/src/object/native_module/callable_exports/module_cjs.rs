@@ -12,7 +12,7 @@ extern "C" fn module_cjs_extension_noop_thunk(
 
 fn module_cjs_extension_function(name: &str) -> f64 {
     let closure = crate::closure::js_closure_alloc(
-        crate::fn_info!(#[realm(realm_decl! { "node:module._extensions[\".js\"]", constructible = true; "node:module._extensions[\".json\"]", constructible = true; "node:module._extensions[\".node\"]", constructible = true; })] module_cjs_extension_noop_thunk, 2; with_declared(2), with_length(2)),
+        crate::fn_info!(#[realm(realm_decl! { "node:module._extensions[\".js\"]", constructible = true; "node:module._extensions[\".json\"]", constructible = true; "node:module._extensions[\".node\"]", constructible = true; })] export crate::object::native_module::callable_exports::module_cjs::module_cjs_extension_noop_thunk, 2; with_declared(2), with_length(2)),
         0,
     );
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -138,21 +138,8 @@ pub(crate) fn module_cjs_global_paths_value() -> f64 {
             .unwrap_or_else(|| std::path::PathBuf::from("/usr/local"));
         paths.push(prefix.join("lib/node").to_string_lossy().into_owned());
 
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let arr = scope.root_nanbox_f64(f64::from_bits(
-            JSValue::array_ptr(crate::array::js_array_alloc_with_length(paths.len() as u32)).bits(),
-        ));
-        store_module_cjs_root(slot, arr.get_nanbox_f64());
-        for (i, path) in paths.iter().enumerate() {
-            let value = scope.root_nanbox_f64(native_string_value(path));
-            crate::array::js_array_set_f64(
-                JSValue::from_bits(arr.get_nanbox_f64().to_bits())
-                    .as_pointer::<crate::array::ArrayHeader>() as *mut _,
-                i as u32,
-                value.get_nanbox_f64(),
-            );
-        }
-        store_module_cjs_root(slot, arr.get_nanbox_f64())
+        let arr = crate::realm_decl! { birth crate::array::realm_string_array(&paths.iter().map(String::as_str).collect::<Vec<_>>(), false); realm { "node:module.globalPaths", value = dynamic, elements = string } };
+        store_module_cjs_root(slot, arr)
     })
 }
 
@@ -162,28 +149,17 @@ pub(crate) fn module_builtin_modules_value() -> f64 {
         if bits != 0 {
             return f64::from_bits(bits);
         }
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let arr = scope.root_nanbox_f64(f64::from_bits(
-            JSValue::array_ptr(crate::array::js_array_alloc_with_length(
-                crate::process::MODULE_BUILTIN_MODULES.len() as u32,
-            ))
-            .bits(),
-        ));
-        store_module_cjs_root(slot, arr.get_nanbox_f64());
-        for (i, name) in crate::process::MODULE_BUILTIN_MODULES.iter().enumerate() {
-            let value = scope.root_nanbox_f64(native_string_value(name));
-            crate::array::js_array_set_f64(
-                JSValue::from_bits(arr.get_nanbox_f64().to_bits())
-                    .as_pointer::<crate::array::ArrayHeader>() as *mut _,
-                i as u32,
-                value.get_nanbox_f64(),
-            );
-        }
-        let value = arr.get_nanbox_f64();
-        crate::object::js_object_freeze(value);
-        store_module_cjs_root(slot, value)
+        store_module_cjs_root(slot, crate::process::module_builtin_modules_array())
     })
 }
+
+/// `module.constants.compileCacheStatus`, in Node's order.
+const MODULE_COMPILE_CACHE_STATUS: &[(&str, f64)] = &[
+    ("FAILED", 0.0),
+    ("ENABLED", 1.0),
+    ("ALREADY_ENABLED", 2.0),
+    ("DISABLED", 3.0),
+];
 
 pub(crate) fn module_constants_value() -> f64 {
     MODULE_CONSTANTS_VALUE.with(|slot| {
@@ -192,19 +168,10 @@ pub(crate) fn module_constants_value() -> f64 {
             return f64::from_bits(bits);
         }
         let scope = crate::gc::RuntimeHandleScope::new();
-        let constants = scope.root_nanbox_f64(native_object_value(
-            crate::object::js_object_alloc_null_proto(0, 1),
-        ));
+        let constants = scope.root_nanbox_f64(native_object_value(crate::realm_decl! { birth crate::object::js_object_alloc_null_proto(0, 1); realm { "node:module.constants", kind = namespace, members = { compileCacheStatus = ref("node:module.constants.compileCacheStatus"), attrs = writable | enumerable | configurable; }, integrity = frozen } }));
         store_module_cjs_root(slot, constants.get_nanbox_f64());
-        let status = scope.root_nanbox_f64(native_object_value(
-            crate::object::js_object_alloc_null_proto(0, 4),
-        ));
-        for (name, value) in [
-            ("FAILED", 0.0),
-            ("ENABLED", 1.0),
-            ("ALREADY_ENABLED", 2.0),
-            ("DISABLED", 3.0),
-        ] {
+        let status = scope.root_nanbox_f64(native_object_value(crate::realm_decl! { birth crate::object::js_object_alloc_null_proto(0, MODULE_COMPILE_CACHE_STATUS.len() as u32); realm { "node:module.constants.compileCacheStatus", kind = namespace, members_source = MODULE_COMPILE_CACHE_STATUS, integrity = frozen } }));
+        for &(name, value) in MODULE_COMPILE_CACHE_STATUS {
             native_set_field(
                 crate::value::js_nanbox_get_pointer(status.get_nanbox_f64()) as *mut ObjectHeader,
                 name,
@@ -241,7 +208,7 @@ extern "C" fn module_wrap_thunk(
 
 fn module_wrap_value() -> f64 {
     let closure = crate::closure::js_closure_alloc(
-        crate::fn_info!(#[realm("node:module.Module.wrap", constructible = true)] module_wrap_thunk, 1; with_declared(1), with_length(1)),
+        crate::fn_info!(#[realm("node:module.Module.wrap", constructible = true)] export crate::object::native_module::callable_exports::module_cjs::module_wrap_thunk, 1; with_declared(1), with_length(1)),
         0,
     );
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -257,28 +224,14 @@ fn module_wrap_value() -> f64 {
     })
 }
 
+/// `Module.wrapper`, in Node's order.
+const MODULE_WRAPPER: &[&str] = &[
+    "(function (exports, require, module, __filename, __dirname) { ",
+    "\n});",
+];
+
 fn module_wrapper_value() -> f64 {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let arr = scope.root_nanbox_f64(f64::from_bits(
-        JSValue::array_ptr(crate::array::js_array_alloc_with_length(2)).bits(),
-    ));
-    let prefix = scope.root_nanbox_f64(native_string_value(
-        "(function (exports, require, module, __filename, __dirname) { ",
-    ));
-    crate::array::js_array_set_f64(
-        JSValue::from_bits(arr.get_nanbox_f64().to_bits()).as_pointer::<crate::array::ArrayHeader>()
-            as *mut _,
-        0,
-        prefix.get_nanbox_f64(),
-    );
-    let suffix = scope.root_nanbox_f64(native_string_value("\n});"));
-    crate::array::js_array_set_f64(
-        JSValue::from_bits(arr.get_nanbox_f64().to_bits()).as_pointer::<crate::array::ArrayHeader>()
-            as *mut _,
-        1,
-        suffix.get_nanbox_f64(),
-    );
-    arr.get_nanbox_f64()
+    crate::realm_decl! { birth crate::array::realm_string_array(MODULE_WRAPPER, false); realm { "node:module.Module.wrapper", elements_source = MODULE_WRAPPER } }
 }
 
 extern "C" fn module_prototype_method_thunk(
@@ -313,9 +266,9 @@ extern "C" fn module_prototype_require_thunk(
 
 fn module_prototype_method(name: &str, length: u32) -> f64 {
     let info = match name {
-        "load" => crate::fn_info!(#[realm("node:module.Module.prototype.load", provider = closure, spec = {length = 1}, emit = metadata(realm_module_method_public))] module_prototype_load_thunk, 3; with_declared(3)),
-        "require" => crate::fn_info!(#[realm("node:module.Module.prototype.require", provider = closure, spec = {length = 1}, emit = metadata(realm_module_method_public))] module_prototype_require_thunk, 3; with_declared(3)),
-        _ => crate::fn_info!(#[realm("node:module.Module.prototype._compile", provider = closure)] module_prototype_method_thunk, 3; with_declared(3)),
+        "load" => crate::fn_info!(#[realm("node:module.Module.prototype.load", provider = closure, spec = {length = 1}, emit = metadata(realm_module_method_public))] export crate::object::native_module::callable_exports::module_cjs::module_prototype_load_thunk, 3; with_declared(3)),
+        "require" => crate::fn_info!(#[realm("node:module.Module.prototype.require", provider = closure, spec = {length = 1}, emit = metadata(realm_module_method_public))] export crate::object::native_module::callable_exports::module_cjs::module_prototype_require_thunk, 3; with_declared(3)),
+        _ => crate::fn_info!(#[realm("node:module.Module.prototype._compile", provider = closure)] export crate::object::native_module::callable_exports::module_cjs::module_prototype_method_thunk, 3; with_declared(3)),
     };
     let closure = crate::closure::js_closure_alloc(info, 0);
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -454,7 +407,7 @@ fn module_cjs_prototype_value(_module_value: f64) -> f64 {
         install_accessor(
             "constructor",
             module_accessor(
-                crate::fn_info!(#[realm("node:module.Module.prototype.constructor.<get>", provider = closure_alloc)] module_prototype_constructor_getter, 0; with_declared(0)),
+                crate::fn_info!(#[realm("node:module.Module.prototype.constructor.<get>", provider = closure_alloc)] export crate::object::native_module::callable_exports::module_cjs::module_prototype_constructor_getter, 0; with_declared(0)),
                 None,
                 None,
             ),
@@ -462,7 +415,7 @@ fn module_cjs_prototype_value(_module_value: f64) -> f64 {
         install_accessor(
             "isPreloading",
             module_accessor(
-                crate::fn_info!(#[realm("node:module.Module.prototype.isPreloading.<get>", provider = closure_alloc)] module_prototype_false_getter, 0; with_declared(0)),
+                crate::fn_info!(#[realm("node:module.Module.prototype.isPreloading.<get>", provider = closure_alloc)] export crate::object::native_module::callable_exports::module_cjs::module_prototype_false_getter, 0; with_declared(0)),
                 None,
                 None,
             ),
@@ -470,8 +423,8 @@ fn module_cjs_prototype_value(_module_value: f64) -> f64 {
         install_accessor(
             "parent",
             module_accessor(
-                crate::fn_info!(#[realm("node:module.Module.prototype.parent.<get>", provider = closure_alloc)] module_prototype_parent_getter, 0; with_declared(0)),
-                Some(crate::fn_info!(#[realm("node:module.Module.prototype.parent.<set>", provider = closure_alloc)] module_prototype_parent_setter, 1; with_declared(1))),
+                crate::fn_info!(#[realm("node:module.Module.prototype.parent.<get>", provider = closure_alloc)] export crate::object::native_module::callable_exports::module_cjs::module_prototype_parent_getter, 0; with_declared(0)),
+                Some(crate::fn_info!(#[realm("node:module.Module.prototype.parent.<set>", provider = closure_alloc)] export crate::object::native_module::callable_exports::module_cjs::module_prototype_parent_setter, 1; with_declared(1))),
                 None,
             ),
         );

@@ -55,7 +55,7 @@ fn json_construction_during_incremental_marking_preserves_black_births() {
 }
 
 #[test]
-fn json_construction_wide_old_record_remembers_sparse_pointer_pages() {
+fn json_construction_wide_record_is_traced_in_place_and_keeps_sparse_children() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _evacuation = ForcedEvacuationTestGuard::on();
@@ -79,9 +79,11 @@ fn json_construction_wide_old_record_remembers_sparse_pointer_pages() {
     let scope = RuntimeHandleScope::new();
     unsafe {
         let value = parse(&source);
-        assert!(crate::arena::pointer_in_old_gen(
-            value.as_pointer::<u8>() as usize
-        ));
+        let record = value.as_pointer::<u8>() as usize;
+        assert!(
+            crate::arena::pointer_in_nursery(record) && crate::arena::is_large_storage(record),
+            "a wide record's storage is young large storage"
+        );
         let root = scope.root_nanbox_u64(value.bits());
         // The generic indexed getter has a pre-existing 10,000-slot guard.
         // Verify the final physical slot directly after proving its bounds.
@@ -100,6 +102,8 @@ fn json_construction_wide_old_record_remembers_sparse_pointer_pages() {
         assert!(crate::JSValue::from_bits(last_before).is_pointer());
         gc_collect_minor();
         let live = crate::JSValue::from_bits(root.get_nanbox_u64());
+        assert_eq!(live.as_pointer::<u8>() as usize, record, "promoted at its address");
+        assert!(crate::arena::pointer_in_old_gen(record));
         let last_after = last_child(live);
         assert_ne!(last_before, last_after);
         assert_eq!(
@@ -110,7 +114,7 @@ fn json_construction_wide_old_record_remembers_sparse_pointer_pages() {
 }
 
 #[test]
-fn json_construction_fifty_thousand_records_keep_old_to_young_edges() {
+fn json_construction_fifty_thousand_records_are_traced_in_place() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _evacuation = ForcedEvacuationTestGuard::on();
@@ -136,9 +140,11 @@ fn json_construction_fifty_thousand_records_keep_old_to_young_edges() {
         );
         let root = scope.root_nanbox_u64(value.bits());
         let child_before = crate::array::js_array_get(value.as_pointer(), 23_456).bits();
-        assert!(crate::arena::pointer_in_old_gen(
-            value.as_pointer::<u8>() as usize
-        ));
+        let records = value.as_pointer::<u8>() as usize;
+        assert!(
+            crate::arena::pointer_in_nursery(records) && crate::arena::is_large_storage(records),
+            "the record array is young large storage"
+        );
         gc_collect_minor();
         assert!(gc_collection_count() > before);
         let live = crate::JSValue::from_bits(root.get_nanbox_u64());

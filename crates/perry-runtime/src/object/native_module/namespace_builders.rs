@@ -4,17 +4,48 @@ use std::sync::atomic::Ordering;
 /// The compiled code treats the result as another NativeModuleRef, so chained
 /// property accesses like `fs.constants.O_RDONLY` work through the dispatch table.
 pub(crate) fn create_sub_namespace(name: &str) -> f64 {
-    let value = js_create_native_module_namespace(name.as_ptr(), name.len());
     if name == "vm.constants" {
-        let object = JSValue::from_bits(value.to_bits()).as_pointer::<ObjectHeader>();
-        if !object.is_null() {
-            super::super::prototype_chain::object_set_static_prototype(
-                object as usize,
-                crate::value::TAG_NULL,
-            );
-            super::super::js_object_freeze(value);
+        // One object per realm, kept where the namespace was kept before.
+        if let Some(bits) = NATIVE_MODULE_NAMESPACES.with(|cache| cache.borrow().get(name).copied())
+        {
+            return f64::from_bits(bits);
         }
+        let value = vm_constants_value();
+        NATIVE_MODULE_NAMESPACES.with(|cache| {
+            cache.borrow_mut().insert(name.to_string(), value.to_bits());
+        });
+        return value;
     }
+    js_create_native_module_namespace(name.as_ptr(), name.len())
+}
+
+/// `vm.constants`: as in Node, an ordinary frozen object with a null
+/// prototype holding two registered symbols, written in Node's order.
+fn vm_constants_value() -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let object = scope.root_raw_mut_ptr(crate::realm_decl! { birth crate::object::js_object_alloc_null_proto(0, 2); realm { "node:vm.constants", kind = namespace, members = { USE_MAIN_CONTEXT_DEFAULT_LOADER = Symbol.for("vm_dynamic_import_main_context_default"), attrs = writable | enumerable | configurable; DONT_CONTEXTIFY = Symbol.for("vm_context_no_contextify"), attrs = writable | enumerable | configurable; }, integrity = frozen } });
+    let store = |key: &str, description: &str| {
+        let symbol = scope.root_nanbox_f64(unsafe {
+            crate::symbol::js_symbol_for(global_agent_string_value(description))
+        });
+        let key = scope.root_string_ptr(crate::string::js_string_from_bytes(
+            key.as_ptr(),
+            key.len() as u32,
+        ));
+        object.with_mut_ptr::<ObjectHeader, _>(|object| {
+            key.with_const_ptr::<crate::StringHeader, _>(|key| {
+                super::super::js_object_set_field_by_name(object, key, symbol.get_nanbox_f64())
+            })
+        });
+    };
+    store(
+        "USE_MAIN_CONTEXT_DEFAULT_LOADER",
+        "vm_dynamic_import_main_context_default",
+    );
+    store("DONT_CONTEXTIFY", "vm_context_no_contextify");
+    let value = object
+        .with_mut_ptr::<ObjectHeader, _>(|object| crate::value::js_nanbox_pointer(object as i64));
+    super::super::js_object_freeze(value);
     value
 }
 
@@ -97,22 +128,8 @@ pub(crate) unsafe fn http_methods_array() -> f64 {
         "UNLOCK",
         "UNSUBSCRIBE",
     ];
-    let arr = crate::array::js_array_alloc_with_length_longlived(METHODS.len() as u32);
-    let elements_ptr =
-        crate::array::array_elements_ptr(arr as *const crate::array::ArrayHeader) as *mut f64;
-    for (i, m) in METHODS.iter().enumerate() {
-        let bytes = m.as_bytes();
-        let str_ptr =
-            crate::string::js_string_from_bytes_longlived(bytes.as_ptr(), bytes.len() as u32);
-        let nanboxed = f64::from_bits(
-            crate::value::STRING_TAG | (str_ptr as u64 & crate::value::POINTER_MASK),
-        );
-        *elements_ptr.add(i) = nanboxed;
-        crate::array::note_array_slot_layout_only(arr, i, nanboxed.to_bits());
-    }
-    // The list is fresh and every slot holds a method name.
-    crate::array::ek_birth_prefix(arr, METHODS.len() as u32);
-    let value = crate::value::js_nanbox_pointer(arr as i64);
+    // Born in the longlived arena with its pointer layout, filled in order.
+    let value = crate::realm_decl! { birth crate::array::realm_string_array(METHODS, true); realm { "node:http.METHODS", elements_source = METHODS } };
     // GC_STORE_AUDIT(ROOT): HTTP_METHODS_CACHE is a mutable root visited by scan_object_cache_roots_mut.
     crate::object::HTTP_METHODS_CACHE.with_slot(|slot| {
         crate::gc::runtime_store_root_atomic_nanbox_u64(slot, value.to_bits(), Ordering::Relaxed);
@@ -518,7 +535,7 @@ fn global_agent_method_value(
 
 fn global_agent_listener_value(is_https: bool, once: bool) -> f64 {
     let closure = crate::closure::js_closure_alloc(
-        crate::fn_info!(#[realm(realm_decl! { "node:http.globalAgent.<prototype>.on", capture = [flag_owner(global_agent_prototype, is_https, "node:http.globalAgent"), flag_property(global_agent_listener_value, once)], spec = {length = 2}, emit = metadata(realm_agent_listener_public); "node:http.globalAgent.<prototype>.once", capture = [flag_owner(global_agent_prototype, is_https, "node:http.globalAgent"), flag_property(global_agent_listener_value, once)], spec = {length = 2}, emit = metadata(realm_agent_listener_public); "node:https.globalAgent.<prototype>.on", capture = [flag_owner(global_agent_prototype, is_https, "node:https.globalAgent"), flag_property(global_agent_listener_value, once)], spec = {length = 2}, emit = metadata(realm_agent_listener_public); "node:https.globalAgent.<prototype>.once", capture = [flag_owner(global_agent_prototype, is_https, "node:https.globalAgent"), flag_property(global_agent_listener_value, once)], spec = {length = 2}, emit = metadata(realm_agent_listener_public); })] global_agent_listener_thunk, 3; with_declared(3)),
+        crate::fn_info!(#[realm(realm_decl! { "node:http.globalAgent.<prototype>.on", capture = [flag_owner(global_agent_prototype, is_https, "node:http.globalAgent"), flag_property(global_agent_listener_value, once)], spec = {length = 2}, emit = metadata(realm_agent_listener_public); "node:http.globalAgent.<prototype>.once", capture = [flag_owner(global_agent_prototype, is_https, "node:http.globalAgent"), flag_property(global_agent_listener_value, once)], spec = {length = 2}, emit = metadata(realm_agent_listener_public); "node:https.globalAgent.<prototype>.on", capture = [flag_owner(global_agent_prototype, is_https, "node:https.globalAgent"), flag_property(global_agent_listener_value, once)], spec = {length = 2}, emit = metadata(realm_agent_listener_public); "node:https.globalAgent.<prototype>.once", capture = [flag_owner(global_agent_prototype, is_https, "node:https.globalAgent"), flag_property(global_agent_listener_value, once)], spec = {length = 2}, emit = metadata(realm_agent_listener_public); })] export crate::object::native_module::namespace_builders::global_agent_listener_thunk, 3; with_declared(3)),
         2,
     );
     crate::closure::closure_set_capture_word(closure, 0, i64::from(is_https));
@@ -539,7 +556,7 @@ unsafe fn global_agent_prototype(is_https: bool, agent: *mut ObjectHeader) -> f6
             "keepSocketAlive",
             global_agent_method_value(
                 "keepSocketAlive",
-                crate::fn_info!(#[realm(realm_decl! { "node:http.globalAgent.<prototype>.keepSocketAlive"; "node:https.globalAgent.<prototype>.keepSocketAlive"; })] global_agent_keep_socket_alive_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(realm_decl! { "node:http.globalAgent.<prototype>.keepSocketAlive"; "node:https.globalAgent.<prototype>.keepSocketAlive"; })] export crate::object::native_module::namespace_builders::global_agent_keep_socket_alive_thunk, 1; with_declared(1)),
                 1,
                 None,
             ),
@@ -548,7 +565,7 @@ unsafe fn global_agent_prototype(is_https: bool, agent: *mut ObjectHeader) -> f6
             "reuseSocket",
             global_agent_method_value(
                 "reuseSocket",
-                crate::fn_info!(#[realm(realm_decl! { "node:http.globalAgent.<prototype>.reuseSocket"; "node:https.globalAgent.<prototype>.reuseSocket"; })] global_agent_reuse_socket_thunk, 2; with_declared(2)),
+                crate::fn_info!(#[realm(realm_decl! { "node:http.globalAgent.<prototype>.reuseSocket"; "node:https.globalAgent.<prototype>.reuseSocket"; })] export crate::object::native_module::namespace_builders::global_agent_reuse_socket_thunk, 2; with_declared(2)),
                 2,
                 None,
             ),
@@ -557,7 +574,7 @@ unsafe fn global_agent_prototype(is_https: bool, agent: *mut ObjectHeader) -> f6
             "getName",
             global_agent_method_value(
                 "getName",
-                crate::fn_info!(#[realm(realm_decl! { "node:http.globalAgent.<prototype>.getName", capture = [flag_owner(global_agent_prototype, is_https, "node:http.globalAgent")], spec = {length = 0}, emit = metadata(realm_agent_getName_public); "node:https.globalAgent.<prototype>.getName", capture = [flag_owner(global_agent_prototype, is_https, "node:https.globalAgent")], spec = {length = 0}, emit = metadata(realm_agent_getName_public); })] global_agent_get_name_thunk, 2; with_declared(2)),
+                crate::fn_info!(#[realm(realm_decl! { "node:http.globalAgent.<prototype>.getName", capture = [flag_owner(global_agent_prototype, is_https, "node:http.globalAgent")], spec = {length = 0}, emit = metadata(realm_agent_getName_public); "node:https.globalAgent.<prototype>.getName", capture = [flag_owner(global_agent_prototype, is_https, "node:https.globalAgent")], spec = {length = 0}, emit = metadata(realm_agent_getName_public); })] export crate::object::native_module::namespace_builders::global_agent_get_name_thunk, 2; with_declared(2)),
                 realm_agent_getName_public!(length),
                 Some(i64::from(is_https)),
             ),
@@ -566,7 +583,7 @@ unsafe fn global_agent_prototype(is_https: bool, agent: *mut ObjectHeader) -> f6
             "addRequest",
             global_agent_method_value(
                 "addRequest",
-                crate::fn_info!(#[realm(realm_decl! { "node:http.globalAgent.<prototype>.addRequest", capture = [raw_ref("node:http.globalAgent")], spec = {length = 4}, emit = metadata(realm_agent_addRequest_public); "node:https.globalAgent.<prototype>.addRequest", capture = [raw_ref("node:https.globalAgent")], spec = {length = 4}, emit = metadata(realm_agent_addRequest_public); })] global_agent_add_request_thunk, 5; with_declared(5)),
+                crate::fn_info!(#[realm(realm_decl! { "node:http.globalAgent.<prototype>.addRequest", capture = [raw_ref("node:http.globalAgent")], spec = {length = 4}, emit = metadata(realm_agent_addRequest_public); "node:https.globalAgent.<prototype>.addRequest", capture = [raw_ref("node:https.globalAgent")], spec = {length = 4}, emit = metadata(realm_agent_addRequest_public); })] export crate::object::native_module::namespace_builders::global_agent_add_request_thunk, 5; with_declared(5)),
                 realm_agent_addRequest_public!(length),
                 Some(agent as i64),
             ),
@@ -575,7 +592,7 @@ unsafe fn global_agent_prototype(is_https: bool, agent: *mut ObjectHeader) -> f6
             "destroy",
             global_agent_method_value(
                 "destroy",
-                crate::fn_info!(#[realm(realm_decl! { "node:http.globalAgent.<prototype>.destroy"; "node:https.globalAgent.<prototype>.destroy"; })] global_agent_destroy_thunk, 0; with_declared(0)),
+                crate::fn_info!(#[realm(realm_decl! { "node:http.globalAgent.<prototype>.destroy"; "node:https.globalAgent.<prototype>.destroy"; })] export crate::object::native_module::namespace_builders::global_agent_destroy_thunk, 0; with_declared(0)),
                 0,
                 None,
             ),

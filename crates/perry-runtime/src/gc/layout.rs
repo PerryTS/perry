@@ -322,7 +322,7 @@ pub(crate) unsafe fn layout_note_closure_edge_installed(user_ptr: *mut u8) {
     let Some(header) = layout_header_for_user(user_ptr as usize) else {
         return;
     };
-    if (*header)._reserved & GC_LAYOUT_STATE_MASK == GC_LAYOUT_POINTER_FREE {
+    if crate::codegen_abi::closure_reserved_with_props((*header)._reserved) != (*header)._reserved {
         layout_mark_unknown(user_ptr);
     }
 }

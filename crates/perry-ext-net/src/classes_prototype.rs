@@ -143,32 +143,32 @@ unsafe extern "C" fn address_json(_: *const RawClosureHeader, this: JsThis) -> f
     let mut proto = np::PayloadPrototype::from_raw(raw);
     {
         // Public length and body metadata share this declaration.
-        perry_ffi::js_function_info!(#[realm("node:net.BlockList.prototype.addAddress", spec = { length = 1 }, emit = metadata)] add_address, 2; with_flags(perry_ffi::FN_BUILTIN); bind realm_info, realm_add_address_metadata);
+        perry_ffi::fn_info!(#[realm("node:net.BlockList.prototype.addAddress", spec = { length = 1 }, emit = metadata)] reference export crate::classes::prototype::add_address, 2; with_flags(perry_ffi::FN_BUILTIN); bind realm_info, realm_add_address_metadata);
         proto.method("addAddress", realm_info, realm_add_address_metadata!(length));
     }
     {
         // Public length and body metadata share this declaration.
-        perry_ffi::js_function_info!(#[realm("node:net.BlockList.prototype.addRange", spec = { length = 2 }, emit = metadata)] add_range, 3; with_flags(perry_ffi::FN_BUILTIN); bind realm_info, realm_add_range_metadata);
+        perry_ffi::fn_info!(#[realm("node:net.BlockList.prototype.addRange", spec = { length = 2 }, emit = metadata)] reference export crate::classes::prototype::add_range, 3; with_flags(perry_ffi::FN_BUILTIN); bind realm_info, realm_add_range_metadata);
         proto.method("addRange", realm_info, realm_add_range_metadata!(length));
     }
     {
         // Public length and body metadata share this declaration.
-        perry_ffi::js_function_info!(#[realm("node:net.BlockList.prototype.addSubnet", spec = { length = 2 }, emit = metadata)] add_subnet, 3; with_flags(perry_ffi::FN_BUILTIN); bind realm_info, realm_add_subnet_metadata);
+        perry_ffi::fn_info!(#[realm("node:net.BlockList.prototype.addSubnet", spec = { length = 2 }, emit = metadata)] reference export crate::classes::prototype::add_subnet, 3; with_flags(perry_ffi::FN_BUILTIN); bind realm_info, realm_add_subnet_metadata);
         proto.method("addSubnet", realm_info, realm_add_subnet_metadata!(length));
     }
     {
         // Public length and body metadata share this declaration.
-        perry_ffi::js_function_info!(#[realm("node:net.BlockList.prototype.check", spec = { length = 1 }, emit = metadata)] check, 2; with_flags(perry_ffi::FN_BUILTIN); bind realm_info, realm_check_metadata);
+        perry_ffi::fn_info!(#[realm("node:net.BlockList.prototype.check", spec = { length = 1 }, emit = metadata)] reference export crate::classes::prototype::check, 2; with_flags(perry_ffi::FN_BUILTIN); bind realm_info, realm_check_metadata);
         proto.method("check", realm_info, realm_check_metadata!(length));
     }
     proto.method(
         "toJSON",
-        perry_ffi::js_function_info!(#[realm("node:net.BlockList.prototype.toJSON")] rules, 0; with_flags(perry_ffi::FN_BUILTIN)),
+        perry_ffi::fn_info!(#[realm("node:net.BlockList.prototype.toJSON")] reference export crate::classes::prototype::rules, 0; with_flags(perry_ffi::FN_BUILTIN)),
         0,
     );
     proto.method(
         "fromJSON",
-        perry_ffi::js_function_info!(#[realm("node:net.BlockList.prototype.fromJSON")] from_json, 1; with_flags(perry_ffi::FN_BUILTIN)),
+        perry_ffi::fn_info!(#[realm("node:net.BlockList.prototype.fromJSON")] reference export crate::classes::prototype::from_json, 1; with_flags(perry_ffi::FN_BUILTIN)),
         1,
     );
     proto.getter(

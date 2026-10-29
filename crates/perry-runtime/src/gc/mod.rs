@@ -81,6 +81,7 @@ pub use idle_reclaim::{
     IDLE_RECLAIM_QUIET_MS, IDLE_RECLAIM_REARM_MS, IDLE_RECLAIM_SLICE_US,
 };
 pub(crate) use idle_reclaim::{park_hook as idle_reclaim_park_hook, ParkVerdict};
+pub(crate) mod diagnostic_hooks;
 mod telemetry;
 pub use telemetry::*;
 mod malloc;
@@ -117,15 +118,13 @@ mod layout;
 mod layout_slot_visit;
 pub use layout::*;
 use layout_slot_visit::*;
-mod trace;
-pub(crate) use trace::*;
+mod mark;
+pub(crate) use mark::*;
 mod barrier;
 pub use barrier::*;
 /// #7630: the runtime slot-store helpers, split from `barrier.rs` (2000-line cap).
 mod barrier_store;
 pub(crate) use barrier_store::*;
-mod producer_birth;
-pub(crate) use producer_birth::{fresh_old_container_store_barrier, ProducerChildBirth};
 mod dirty_page_cache;
 // #7187 Phase B: `crate::arena`'s page-metadata module invalidates the
 // barrier's "already dirty" page cache when it un-stamps or discards a page.
@@ -172,7 +171,7 @@ pub(crate) mod prefetch;
 mod copying;
 mod leaf_escape;
 mod leaf_service;
-pub(crate) use leaf_service::repair_promoted_leaf_edges;
+pub(crate) use leaf_service::{remember_promoted_large_container, repair_promoted_leaf_edges};
 /// A store of `child_addr` into the old/malloc parent `parent_addr` that the
 /// page-granular remembering skipped: record young-leaf escape only.
 pub(crate) fn probe_leaf_escape_store(parent_addr: usize, child_addr: usize) {
@@ -185,7 +184,7 @@ mod copying_phase;
 mod copying_pointer_set;
 mod diag_sites;
 mod static_scan;
-pub(crate) use diag_sites::primitive_dispatch as diag_primitive_dispatch;
+pub(crate) use diagnostic_hooks::site_primitive_dispatch as diag_primitive_dispatch;
 /// #8174: shared validation for the TARGET of a forwarding pointer.
 mod forwarding;
 /// Per-scanner root attribution for the copied-minor root scan (#7915).
@@ -260,6 +259,10 @@ pub(crate) use cycle_malloc_trim::{
 };
 /// WRT: the realm image's remembered set and the worker-realm evacuation.
 pub(crate) mod image_cells;
+mod remembered;
+use remembered::*;
+mod rewrite;
+pub use rewrite::*;
 mod verify;
 mod verify_diag;
 // Step 3 (worker realms) is the production caller; until then the tests are.
@@ -314,7 +317,7 @@ pub use schedule::{
     gc_schedule_forced_collections, gc_schedule_safepoints, schedule_liveness_report,
     schedule_polls_paced,
 };
-pub use verify::*;
+pub(crate) use verify::*;
 /// Env-gated heap census (`PERRY_GC_CENSUS`); off by default.
 pub(crate) mod census;
 mod census_field_repr;
@@ -347,7 +350,7 @@ pub(super) fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCol
     // allocation-free once the collector owns the heap, which is why the build
     // cannot be deferred any further than this.
     roots::ensure_stack_maps_built();
-    verify::verify_array_hole_tails_at_collection();
+    diagnostic_hooks::before_collection();
 
     gc_collect_minor_with_trigger_inner(trigger, FullEscalation::Allowed, CopyingFastPath::Allowed)
 }
@@ -371,7 +374,7 @@ pub(super) enum CopyingFastPath {
 /// the caller a collection that cannot compact — the #6946 argument).
 pub(super) fn gc_collect_compacting_minor(trigger: GcTriggerSnapshot) -> GcCollectOutcome {
     roots::ensure_stack_maps_built();
-    verify::verify_array_hole_tails_at_collection();
+    diagnostic_hooks::before_collection();
     let _armed = oldgen_defrag::IdleCompactDefragArm::new();
     gc_collect_minor_with_trigger_inner(trigger, FullEscalation::Refused, CopyingFastPath::Skipped)
 }
@@ -404,12 +407,24 @@ pub(super) fn gc_collect_forced_evacuating_minor(trigger: GcTriggerSnapshot) -> 
     // allocation-free once the collector owns the heap, which is why the build
     // cannot be deferred any further than this.
     roots::ensure_stack_maps_built();
-    verify::verify_array_hole_tails_at_collection();
+    diagnostic_hooks::before_collection();
 
     gc_collect_minor_with_trigger_inner(trigger, FullEscalation::Refused, CopyingFastPath::Allowed)
 }
 
 fn gc_collect_minor_with_trigger_inner(
+    trigger: GcTriggerSnapshot,
+    escalation: FullEscalation,
+    copying: CopyingFastPath,
+) -> GcCollectOutcome {
+    if let Some(run) = diagnostic_hooks::MINOR_COLLECTION.get() {
+        run(trigger, escalation, copying)
+    } else {
+        gc_collect_minor_with_diagnostics::<false>(trigger, escalation, copying)
+    }
+}
+
+fn gc_collect_minor_with_diagnostics<const DIAGNOSTICS: bool>(
     trigger: GcTriggerSnapshot,
     escalation: FullEscalation,
     copying: CopyingFastPath,
@@ -478,7 +493,11 @@ fn gc_collect_minor_with_trigger_inner(
         restore_minor_in_alloc(prev_in_alloc);
         return outcome;
     }
-    let mut trace = GcCycleTrace::new(GcCollectionKind::Minor, trigger);
+    let mut trace = if DIAGNOSTICS {
+        GcCycleTrace::new(GcCollectionKind::Minor, trigger)
+    } else {
+        None
+    };
     let start = Instant::now();
     crate::arena::discard_previously_idle_eden_pages();
     crate::arena::old_pages_begin_gc_cycle();
@@ -494,14 +513,15 @@ fn gc_collect_minor_with_trigger_inner(
     clear_mark_seeds();
     let copying_outcome = match copying {
         CopyingFastPath::Allowed => {
-            gc_collect_minor_copying_fast_path(&mut trace, start, trigger.kind)
+            gc_collect_minor_copying_fast_path::<DIAGNOSTICS>(&mut trace, start, trigger.kind)
         }
         // Run the ordinary eligibility preflight — it carries the one-shot
         // remembered-set reconstruction every declined cycle depends on — and
         // then decline, the way any other fallback reason would.
         CopyingFastPath::Skipped => {
-            let malloc_sweep_due = CopiedMinorEligibility::evaluate(trigger.kind).malloc_sweep_due;
-            gc_collect_minor_copying_fast_path_with_eligibility(
+            let malloc_sweep_due =
+                CopiedMinorEligibility::evaluate::<DIAGNOSTICS>(trigger.kind).malloc_sweep_due;
+            gc_collect_minor_copying_fast_path_with_eligibility::<DIAGNOSTICS>(
                 &mut trace,
                 start,
                 CopiedMinorEligibility::fallback(
@@ -521,9 +541,9 @@ fn gc_collect_minor_with_trigger_inner(
                 .borrow_mut()
                 .record_collection(freed_bytes, elapsed_us);
         });
-        telemetry::log_collection(false, trigger.kind, freed_bytes, elapsed_us);
+        diagnostic_hooks::collection_log(false, trigger.kind, freed_bytes, elapsed_us);
         restore_minor_in_alloc(prev_in_alloc);
-        if let Some(trace) = trace.as_mut() {
+        if let Some(trace) = trace.as_mut().filter(|_| DIAGNOSTICS) {
             trace.pause_us = elapsed_us;
             trace.capture_layout_scans();
         }
@@ -549,7 +569,7 @@ fn gc_collect_minor_with_trigger_inner(
     };
     let old_page_source_blocks =
         crate::arena::old_arena_source_blocks_for_pages(&old_page_selection.pages);
-    GcCycleState::new_minor_fallback(
+    let mut cycle = GcCycleState::new_minor_fallback(
         trigger,
         trace,
         start,
@@ -562,8 +582,9 @@ fn gc_collect_minor_with_trigger_inner(
         EVACUATION_POLICY_DISABLED_REASON,
         old_page_selection,
         old_page_source_blocks,
-    )
-    .run_to_completion()
+    );
+    cycle.continue_with_diagnostics::<DIAGNOSTICS>();
+    cycle.run_to_completion()
 }
 
 #[inline]
@@ -882,7 +903,7 @@ fn gc_collect_full_mark_sweep_with_trigger(trigger: GcTriggerSnapshot) -> GcColl
     // allocation-free once the collector owns the heap, which is why the build
     // cannot be deferred any further than this.
     roots::ensure_stack_maps_built();
-    verify::verify_array_hole_tails_at_collection();
+    diagnostic_hooks::before_collection();
 
     // PERRY_GC_SAFEPOINT_ONLY: see gc_collect_minor_with_trigger. Manual
     // gc() engages its own force_full_scan first, which this detects as
@@ -891,7 +912,7 @@ fn gc_collect_full_mark_sweep_with_trigger(trigger: GcTriggerSnapshot) -> GcColl
     let _contract_heal = policy::contract_scan_heal_guard();
     gc_drain_active_budgeted_cycle();
     GC_TRIGGER_BUMPED.with(|c| c.set(false));
-    diag_sites::full_started(diag_sites::take_full_site(), trigger.kind);
+    diagnostic_hooks::site_full_started(diagnostic_hooks::site_take_full_site(), trigger.kind);
     GcCycleState::new_full(trigger).run_to_completion()
 }
 
@@ -1506,8 +1527,8 @@ pub extern "C" fn js_gc_release_current_thread_collection_side_allocations() {
     // `PERRY_LOOP_STATS=1` line on the same all-exits funnel.
     crate::event_pump::shutdown_wait_driver();
     crate::arena::alloc_sample::report("exit");
-    diag_sites::report_charges("exit");
-    diag_sites::report_primitive_dispatch("exit");
+    diagnostic_hooks::site_report_charges("exit");
+    diagnostic_hooks::site_report_primitive_dispatch("exit");
     emit_incremental_liveness_diag();
     emit_schedule_liveness_verdict();
 }
@@ -1521,7 +1542,7 @@ pub extern "C" fn js_gc_release_current_thread_collection_side_allocations() {
 /// of the leaf profile is collector machinery. `cycle_starts > completions`
 /// with a large `steps` is exactly that state, and it is only visible here.
 fn emit_incremental_liveness_diag() {
-    if !telemetry::gc_diag_enabled() {
+    if !diagnostic_hooks::enabled() {
         return;
     }
     if !crate::native_handle::is_main_thread_or_unrecorded() {
@@ -1562,7 +1583,7 @@ fn emit_incremental_liveness_diag() {
         instruments::loop_polls_reached(),
         poll_arm::poll_arm_events(),
         poll_arm::poll_armed_count(),
-        trace::forwarded_stub_membership_recoveries(),
+        mark::forwarded_stub_membership_recoveries(),
     );
     idle_reclaim::emit_diag();
     idle_compact::emit_diag();

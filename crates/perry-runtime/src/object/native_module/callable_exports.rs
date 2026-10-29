@@ -145,6 +145,13 @@ pub fn bound_native_callable_export_value(module_name: &str, property_name: &str
             crate::closure::js_closure_set_capture_f64(c, 3, class as f64);
         });
     }
+    // A bound export declared `constructable = false` is born with the
+    // per-instance bit; every other export's birth word has no bit to add.
+    if bound_export_is_non_constructable(export_module_name, property_name) {
+        closure.with_mut_ptr(|c: *mut crate::closure::ClosureHeader| {
+            builtin_closure_metadata::publish_bound_export_birth(c as usize, false)
+        });
+    }
     #[cfg(test)]
     TEST_COLLECT_NATIVE_EXPORT_AFTER_ALLOC.with(|armed| {
         if armed.replace(false) {
@@ -321,7 +328,7 @@ pub(crate) fn fs_namespace_descriptor_getter_value(property_name: &str) -> f64 {
     }
 
     let property_bytes: &'static [u8] = property_name.as_bytes().to_vec().leak();
-    let func_ptr = crate::fn_info!(#[realm(realm_decl! { "node:fs.default.FileReadStream.<get>", capture = property_key, constructible = true; "node:fs.default.FileWriteStream.<get>", capture = property_key, constructible = true; "node:fs.default.ReadStream.<get>", capture = property_key, constructible = true; "node:fs.default.Utf8Stream.<get>", capture = property_key, constructible = true; "node:fs.default.WriteStream.<get>", capture = property_key, constructible = true; "node:fs.default.promises.<get>", capture = property_key, constructible = true, spec = {name = "get"}, emit = metadata(realm_fs_promises_get_name); })] fs_namespace_descriptor_getter_thunk, 0; with_declared(0));
+    let func_ptr = crate::fn_info!(#[realm(realm_decl! { "node:fs.default.FileReadStream.<get>", capture = property_key, constructible = true; "node:fs.default.FileWriteStream.<get>", capture = property_key, constructible = true; "node:fs.default.ReadStream.<get>", capture = property_key, constructible = true; "node:fs.default.Utf8Stream.<get>", capture = property_key, constructible = true; "node:fs.default.WriteStream.<get>", capture = property_key, constructible = true; "node:fs.default.promises.<get>", capture = property_key, constructible = true, spec = {name = "get"}, emit = metadata(realm_fs_promises_get_name); })] export crate::object::native_module::callable_exports::fs_namespace_descriptor_getter_thunk, 0; with_declared(0));
     let closure = crate::closure::js_closure_alloc(func_ptr, 2);
     crate::closure::closure_set_capture_word(closure, 0, property_bytes.as_ptr() as i64);
     crate::closure::closure_set_capture_word(closure, 1, property_bytes.len() as i64);
@@ -346,7 +353,7 @@ pub(crate) fn fs_namespace_descriptor_setter_value(property_name: &str) -> f64 {
         return f64::from_bits(bits);
     }
 
-    let func_ptr = crate::fn_info!(#[realm(realm_decl! { "node:fs.default.FileReadStream.<set>", constructible = true; "node:fs.default.FileWriteStream.<set>", constructible = true; "node:fs.default.ReadStream.<set>", constructible = true; "node:fs.default.WriteStream.<set>", constructible = true; })] fs_namespace_descriptor_setter_thunk, 1; with_declared(1));
+    let func_ptr = crate::fn_info!(#[realm(realm_decl! { "node:fs.default.FileReadStream.<set>", constructible = true; "node:fs.default.FileWriteStream.<set>", constructible = true; "node:fs.default.ReadStream.<set>", constructible = true; "node:fs.default.WriteStream.<set>", constructible = true; })] export crate::object::native_module::callable_exports::fs_namespace_descriptor_setter_thunk, 1; with_declared(1));
     let closure = crate::closure::js_closure_alloc(func_ptr, 0);
     let name = format!("set {property_name}");
     set_bound_native_closure_name(closure, &name);
@@ -827,7 +834,7 @@ fn attach_crypto_x509_certificate_shape(closure_addr: usize, constructor_value: 
 
     unsafe {
         let getter = crate::closure::js_closure_alloc(
-            crate::fn_info!(#[realm("node:crypto.X509Certificate.prototype.issuerCertificate.<get>", provider = intrinsic_closure, constructible = true)] x509_issuer_certificate_getter_thunk, 0; with_declared(0)),
+            crate::fn_info!(#[realm("node:crypto.X509Certificate.prototype.issuerCertificate.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::native_module::callable_exports::x509_issuer_certificate_getter_thunk, 0; with_declared(0)),
             0,
         );
         if !getter.is_null() {
@@ -956,16 +963,34 @@ fn util_inspect_colors() -> f64 {
 }
 
 pub(crate) fn zlib_codes_object() -> f64 {
-    const ZLIB_RETURN_CODES: &[(&str, i32)] = &[
-        ("Z_OK", 0),
-        ("Z_STREAM_END", 1),
-        ("Z_NEED_DICT", 2),
-        ("Z_ERRNO", -1),
-        ("Z_STREAM_ERROR", -2),
-        ("Z_DATA_ERROR", -3),
-        ("Z_MEM_ERROR", -4),
-        ("Z_BUF_ERROR", -5),
-        ("Z_VERSION_ERROR", -6),
+    /// A `zlib.codes` member: a return code by its name, or a code's name.
+    #[derive(Clone, Copy)]
+    enum ZlibCode {
+        Code(f64),
+        Name(&'static str),
+    }
+    /// `zlib.codes` in Node's order: each code's name by its value for the
+    /// index keys (which enumerate first), each return code by name, then
+    /// the names of the negative codes. The birth writes these rows in order.
+    const ZLIB_CODES: &[(&str, ZlibCode)] = &[
+        ("0", ZlibCode::Name("Z_OK")),
+        ("1", ZlibCode::Name("Z_STREAM_END")),
+        ("2", ZlibCode::Name("Z_NEED_DICT")),
+        ("Z_OK", ZlibCode::Code(0.0)),
+        ("Z_STREAM_END", ZlibCode::Code(1.0)),
+        ("Z_NEED_DICT", ZlibCode::Code(2.0)),
+        ("Z_ERRNO", ZlibCode::Code(-1.0)),
+        ("Z_STREAM_ERROR", ZlibCode::Code(-2.0)),
+        ("Z_DATA_ERROR", ZlibCode::Code(-3.0)),
+        ("Z_MEM_ERROR", ZlibCode::Code(-4.0)),
+        ("Z_BUF_ERROR", ZlibCode::Code(-5.0)),
+        ("Z_VERSION_ERROR", ZlibCode::Code(-6.0)),
+        ("-1", ZlibCode::Name("Z_ERRNO")),
+        ("-2", ZlibCode::Name("Z_STREAM_ERROR")),
+        ("-3", ZlibCode::Name("Z_DATA_ERROR")),
+        ("-4", ZlibCode::Name("Z_MEM_ERROR")),
+        ("-5", ZlibCode::Name("Z_BUF_ERROR")),
+        ("-6", ZlibCode::Name("Z_VERSION_ERROR")),
     ];
 
     ZLIB_CODES_OBJECT.with(|slot| {
@@ -975,19 +1000,15 @@ pub(crate) fn zlib_codes_object() -> f64 {
         }
 
         let scope = crate::gc::RuntimeHandleScope::new();
-        let obj = scope.root_nanbox_f64(native_object_value(js_object_alloc(0, 0)));
+        let obj = scope.root_nanbox_f64(native_object_value(crate::realm_decl! { birth js_object_alloc(0, 0); realm { "node:zlib.codes", kind = namespace, members_source = ZLIB_CODES, integrity = frozen } }));
         let current_object =
             || crate::value::js_nanbox_get_pointer(obj.get_nanbox_f64()) as *mut ObjectHeader;
-        for (name, value) in ZLIB_RETURN_CODES.iter().take(3) {
-            let name_value = native_string_value(name);
-            native_set_field(current_object(), &value.to_string(), name_value);
-        }
-        for (name, value) in ZLIB_RETURN_CODES {
-            native_set_field(current_object(), name, *value as f64);
-        }
-        for (name, value) in ZLIB_RETURN_CODES.iter().skip(3) {
-            let name_value = native_string_value(name);
-            native_set_field(current_object(), &value.to_string(), name_value);
+        for &(key, value) in ZLIB_CODES {
+            let value = match value {
+                ZlibCode::Code(code) => code,
+                ZlibCode::Name(name) => native_string_value(name),
+            };
+            native_set_field(current_object(), key, value);
         }
 
         // Freeze actual properties, not only the namespace's descriptor view.
@@ -1102,7 +1123,7 @@ fn attach_tls_constructor_prototype(constructor_value: f64, constructor_name: &s
         super::super::PropertyAttrs::new(true, false, true),
     );
 
-    let thunk = crate::fn_info!(#[realm(realm_decl! { "node:tls.TLSSocket.prototype.getPeerX509Certificate", capture = property_key, constructible = true; "node:tls.TLSSocket.prototype.getSharedSigalgs", capture = property_key, constructible = true; "node:tls.TLSSocket.prototype.getX509Certificate", capture = property_key, constructible = true; "node:tls.TLSSocket.prototype.setKeyCert", capture = property_key, constructible = true, spec = {length = 1}, emit = metadata(realm_tls_setkey_public); })] tls_prototype_method_thunk, 1; with_rest(0));
+    let thunk = crate::fn_info!(#[realm(realm_decl! { "node:tls.TLSSocket.prototype.getPeerX509Certificate", capture = property_key, constructible = true; "node:tls.TLSSocket.prototype.getSharedSigalgs", capture = property_key, constructible = true; "node:tls.TLSSocket.prototype.getX509Certificate", capture = property_key, constructible = true; "node:tls.TLSSocket.prototype.setKeyCert", capture = property_key, constructible = true, spec = {length = 1}, emit = metadata(realm_tls_setkey_public); })] export crate::object::native_module::callable_exports::tls_prototype_method_thunk, 1; with_rest(0));
     for &(name, length) in methods {
         let method = crate::closure::js_closure_alloc(thunk, 2);
         if method.is_null() {
@@ -1271,7 +1292,7 @@ unsafe fn bound_native_export_metadata(
     match (module, method.as_str()) {
         ("console", "Console") => Some(realm_native_console_Console_metadata!(length)),
         ("util", "isArray") => Some(realm_native_util_isArray_metadata!(length)),
-        ("module", "isBuiltin") => Some(1),
+        ("module", "isBuiltin") => Some(realm_native_module_isBuiltin_metadata!(length)),
         ("process", "getBuiltinModule") => Some(realm_native_process_getBuiltinModule_metadata!(length)),
         _ => native_callable_export_arity(module, method.as_str()),
     }
@@ -1311,10 +1332,20 @@ pub(crate) unsafe fn nm_attach_module(
             value,
         ) as usize);
     }
-    if matches!(property_name, "flushCompileCache" | "isBuiltin") {
-        set_builtin_closure_non_constructable(crate::value::js_nanbox_get_pointer(value) as usize);
-    }
+    // Born non-constructable (`publish_bound_export_birth`).
+    debug_assert!(
+        !bound_export_is_non_constructable("module", property_name)
+            || builtin_closure_is_non_constructable(
+                crate::value::js_nanbox_get_pointer(value) as usize
+            )
+    );
     value
+}
+
+/// The bound exports declared `constructable = false` (the per-instance bit;
+/// `closure/registry.rs` declares the same facts).
+fn bound_export_is_non_constructable(module: &str, property: &str) -> bool {
+    module == "module" && matches!(property, "flushCompileCache" | "isBuiltin")
 }
 
 #[allow(unused_mut)]
@@ -1550,7 +1581,7 @@ pub(crate) unsafe fn nm_attach_async_hooks(
             ),
         );
         let bind = scope.root_nanbox_f64(async_hooks_static_method_value(
-            crate::fn_info!(#[realm("node:async_hooks.AsyncLocalStorage.bind")] crate::async_hook_slots::js_async_local_storage_static_bind_method, 2; with_rest(1)),
+            crate::fn_info!(#[realm("node:async_hooks.AsyncLocalStorage.bind")] export crate::async_hook_slots::js_async_local_storage_static_bind_method, 2; with_rest(1)),
             "bind",
             1,
         ));
@@ -1565,7 +1596,7 @@ pub(crate) unsafe fn nm_attach_async_hooks(
             super::PropertyAttrs::new(true, false, true),
         );
         let snapshot = scope.root_nanbox_f64(async_hooks_static_method_value(
-            crate::fn_info!(#[realm("node:async_hooks.AsyncLocalStorage.snapshot")] crate::async_hook_slots::js_async_local_storage_static_snapshot_method, 1; with_rest(0)),
+            crate::fn_info!(#[realm("node:async_hooks.AsyncLocalStorage.snapshot")] export crate::async_hook_slots::js_async_local_storage_static_snapshot_method, 1; with_rest(0)),
             "snapshot",
             0,
         ));
@@ -1588,7 +1619,7 @@ pub(crate) unsafe fn nm_attach_async_hooks(
             ),
         );
         let bind = scope.root_nanbox_f64(async_hooks_static_method_value(
-            crate::fn_info!(#[realm("node:async_hooks.AsyncResource.bind")] crate::async_hook_slots::js_async_resource_static_bind_method, 4; with_rest(3)),
+            crate::fn_info!(#[realm("node:async_hooks.AsyncResource.bind")] export crate::async_hook_slots::js_async_resource_static_bind_method, 4; with_rest(3)),
             "bind",
             3,
         ));

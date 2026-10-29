@@ -12,7 +12,7 @@
 
 use super::super::*;
 use super::support::*;
-use crate::gc::trace::block_skip::{hole_rebuild_blocks_skipped, sabotage};
+use crate::gc::mark::block_skip::{hole_rebuild_blocks_skipped, sabotage};
 
 fn run_isolated(test: fn()) {
     std::thread::spawn(move || {

@@ -1213,5 +1213,3 @@ mod native_args_tests;
 
 #[cfg(test)]
 mod variadic_args_tests;
-
-crate::realm_decl!("array_error.realm.json#*");

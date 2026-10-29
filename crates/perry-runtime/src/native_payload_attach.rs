@@ -39,7 +39,13 @@ pub(super) fn attach_to_object_with<T: 'static>(
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj = scope.root_raw_mut_ptr(obj);
     let meta = obj
-        .with_mut_ptr::<ObjectHeader, _>(|obj| unsafe { crate::object::object_meta_ensure(obj) });
+        // A1_UNPROVEN: any_object(value): a JS value (kind-A/B question for S0b-S0e).
+        .with_mut_ptr::<ObjectHeader, _>(|obj| unsafe {
+            crate::object::object_meta_ensure(
+                crate::object::MetaObj::runtime_born(obj),
+                crate::object::MetaReason::NativePayload,
+            )
+        });
     if meta.is_null() {
         return false;
     }
@@ -109,7 +115,13 @@ pub(crate) fn attach_external_rooted(
     external_bytes: usize,
 ) {
     let meta = obj
-        .with_mut_ptr::<ObjectHeader, _>(|obj| unsafe { crate::object::object_meta_ensure(obj) });
+        // A1_UNPROVEN: obj handle parameter, no type test (kind-A/B question for S0b-S0e).
+        .with_mut_ptr::<ObjectHeader, _>(|obj| unsafe {
+            crate::object::object_meta_ensure(
+                crate::object::MetaObj::runtime_born(obj),
+                crate::object::MetaReason::NativePayload,
+            )
+        });
     if meta.is_null() {
         return;
     }

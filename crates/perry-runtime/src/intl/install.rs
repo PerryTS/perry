@@ -10,10 +10,7 @@
 use crate::object::{js_object_alloc, ObjectHeader, PropertyAttrs};
 use crate::value::js_nanbox_pointer;
 
-use super::{
-    install_function, set_builtin_attrs, set_field, set_proto_to_string_tag,
-    supported_locales_of_thunk,
-};
+use super::{install_function, set_builtin_attrs, set_field, set_proto_to_string_tag};
 
 /// `ctor` is the constructor body's info (a rest body, `with_rest(0)`);
 /// each method's info records its declared `arity`, each getter's 0.
@@ -99,7 +96,7 @@ pub(super) fn install_constructor(
     let supported = install_function(
         ctor as *mut ObjectHeader,
         "supportedLocalesOf",
-        crate::fn_info!(#[realm(realm_decl! { Intl.Collator.supportedLocalesOf, spec = {length = 1}, emit = metadata(realm_intl_collator_supportedlocalesof_metadata); Intl.DateTimeFormat.supportedLocalesOf, spec = {length = 1}, emit = metadata(realm_intl_collator_supportedlocalesof_metadata); Intl.DisplayNames.supportedLocalesOf, spec = {length = 1}, emit = metadata(realm_intl_collator_supportedlocalesof_metadata); Intl.DurationFormat.supportedLocalesOf, spec = {length = 1}, emit = metadata(realm_intl_collator_supportedlocalesof_metadata); Intl.ListFormat.supportedLocalesOf, spec = {length = 1}, emit = metadata(realm_intl_collator_supportedlocalesof_metadata); Intl.NumberFormat.supportedLocalesOf, spec = {length = 1}, emit = metadata(realm_intl_collator_supportedlocalesof_metadata); Intl.PluralRules.supportedLocalesOf, spec = {length = 1}, emit = metadata(realm_intl_collator_supportedlocalesof_metadata); Intl.RelativeTimeFormat.supportedLocalesOf, spec = {length = 1}, emit = metadata(realm_intl_collator_supportedlocalesof_metadata); Intl.Segmenter.supportedLocalesOf, spec = {length = 1}, emit = metadata(realm_intl_collator_supportedlocalesof_metadata); })] supported_locales_of_thunk, 1; with_rest(0)),
+        crate::fn_info!(#[realm(realm_decl! { Intl.Collator.supportedLocalesOf, spec = {length = 1}, emit = metadata(realm_intl_collator_supportedlocalesof_metadata); Intl.DateTimeFormat.supportedLocalesOf, spec = {length = 1}, emit = metadata(realm_intl_collator_supportedlocalesof_metadata); Intl.DisplayNames.supportedLocalesOf, spec = {length = 1}, emit = metadata(realm_intl_collator_supportedlocalesof_metadata); Intl.DurationFormat.supportedLocalesOf, spec = {length = 1}, emit = metadata(realm_intl_collator_supportedlocalesof_metadata); Intl.ListFormat.supportedLocalesOf, spec = {length = 1}, emit = metadata(realm_intl_collator_supportedlocalesof_metadata); Intl.NumberFormat.supportedLocalesOf, spec = {length = 1}, emit = metadata(realm_intl_collator_supportedlocalesof_metadata); Intl.PluralRules.supportedLocalesOf, spec = {length = 1}, emit = metadata(realm_intl_collator_supportedlocalesof_metadata); Intl.RelativeTimeFormat.supportedLocalesOf, spec = {length = 1}, emit = metadata(realm_intl_collator_supportedlocalesof_metadata); Intl.Segmenter.supportedLocalesOf, spec = {length = 1}, emit = metadata(realm_intl_collator_supportedlocalesof_metadata); })] export crate::intl::supported_locales_of_thunk, 1; with_rest(0)),
         realm_intl_collator_supportedlocalesof_metadata!(length),
     );
     crate::closure::closure_set_dynamic_prop(ctor as usize, "supportedLocalesOf", supported);

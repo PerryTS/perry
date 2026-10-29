@@ -113,7 +113,11 @@ pub(crate) unsafe fn stamp_evaluation_holder(obj: *mut crate::object::ObjectHead
         crate::object::layout_desc::layout_id_of_word((*obj).parent_class_id),
     ) {
         let (meta, _) = receiver.across_mut::<crate::object::ObjectHeader, _>(|| {
-            crate::object::object_meta_ensure(obj)
+            // A1_UNPROVEN: tested by the layout word (is_family_layout_word), not the type byte (kind-A/B question for S0b-S0e).
+            crate::object::object_meta_ensure(
+                crate::object::MetaObj::runtime_born(obj),
+                crate::object::MetaReason::EvalBrand,
+            )
         });
         (*meta).private_evaluation_brand = holder.get_nanbox_u64();
         crate::gc::runtime_write_barrier_slot(

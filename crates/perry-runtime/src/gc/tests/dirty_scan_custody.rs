@@ -43,11 +43,11 @@ fn custody_disagreements(negative_control: bool) -> usize {
         ] {
             let header = header_from_user_ptr(user);
             let mut pages = crate::fast_hash::new_ptr_hash_set();
-            visit_gc_rewrite_slots(header, |slot| {
+            visit_gc_rewrite_slots::<{ cfg!(test) }>(header, |slot| {
                 pages.insert(crate::arena::generation_page_for_addr(slot.slot as usize));
             });
             let mut slots = 0;
-            barrier::scan_dirty_object_slots(
+            barrier::scan_dirty_object_slots::<{ cfg!(test) }>(
                 header,
                 &pages,
                 &mut Default::default(),
