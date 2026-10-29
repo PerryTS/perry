@@ -73,13 +73,6 @@ fn collect(
                 continue;
             }
             let end = super::closing_paren(ts, i + 1)?;
-            if ts[i + 2]
-                .string
-                .as_ref()
-                .is_some_and(|s| s.contains(".realm.json#") || s.starts_with('{'))
-            {
-                continue;
-            }
             facts::parse_many(&ts[i + 2..end])?
         };
         for facts in humans {

@@ -372,14 +372,12 @@ fn declarations(
     source: &str,
     path: &str,
     package: &str,
-    load: impl FnMut(&str) -> Result<String, String>,
     resolve: impl FnMut(&str) -> Result<(String, String), String>,
 ) -> Result<Vec<Value>, String> {
     let mut all = declarations_with_receivers(
         source,
         path,
         package,
-        load,
         resolve,
         &mut Vec::new(),
         &native::runtime_abi()?,
@@ -392,7 +390,6 @@ fn declarations_with_receivers(
     source: &str,
     path: &str,
     package: &str,
-    mut load: impl FnMut(&str) -> Result<String, String>,
     mut resolve: impl FnMut(&str) -> Result<(String, String), String>,
     native_receivers: &mut Vec<(String, String)>,
     native_abi: &native::Abi,
@@ -763,220 +760,68 @@ fn declarations_with_receivers(
         if ts.get(open + 1).is_some_and(|t| t.text == "$") {
             continue;
         }
-        let old_literal = ts
+        // Realm facts are declared at their birth; a JSON selector (the
+        // retired companion transport) or inline JSON is not a declaration.
+        if ts
             .get(open + 1)
             .and_then(|t| t.string.as_ref())
             .is_some_and(|literal| {
                 literal.contains(".realm.json#") || literal.trim_start().starts_with(['[', '{'])
-            });
-        if !old_literal {
-            if !annotation {
-                return Err(format!(
-                    "{path}: expected structured fn_info realm attribute"
-                ));
-            }
-            let end = closing_paren(&ts, open)?;
-            if ts.get(end + 1).is_none_or(|t| t.text != "]") {
-                return Err(format!("{path}: malformed realm attribute"));
-            }
-            let fn_start = (0..index)
-                .rev()
-                .find(|&i| {
-                    matches!(ts[i].text, "fn_info" | "js_function_info")
-                        && ts.get(i + 1).is_some_and(|t| t.text == "!")
-                        && ts.get(i + 2).is_some_and(|t| t.text == "(")
-                        && closing_paren(&ts, i + 2).is_ok_and(|close| close > end)
-                })
-                .ok_or_else(|| format!("{path}: realm attribute must belong to fn_info!"))?;
-            let fn_end = closing_paren(&ts, fn_start + 2)?;
-            let body_info = info::fn_info(&ts[end + 2..fn_end], abi_constants())?;
-            let (body, symbol) = resolve(&body_info.body)?;
-            let humans = facts::parse_many(&ts[open + 1..end])?;
-            let binding = info::metadata_binding(&ts[end + 2..fn_end]);
-            if binding && humans.len() != 1 {
-                return Err("metadata binding needs one physical cell".into());
-            }
-            for human in humans {
-                if human.emit_metadata != (binding || human.metadata_macro.is_some()) {
-                    return Err("public metadata needs a runtime macro binding at fn_info!".into());
-                }
-                if binding && human.spec_name.is_none() && human.spec_length.is_none() {
-                    return Err(
-                        "metadata binding requires a nondefault public name or length".into(),
-                    );
-                }
-                let mut declaration = facts::callable(
-                    human,
-                    &body_info,
-                    abi_constants(),
-                    body.clone(),
-                    symbol.clone(),
-                    source,
-                )?;
-                let Value::Object(ref mut map) = declaration else {
-                    unreachable!()
-                };
-                map.insert("source".into(), Value::String(path.replace('\\', "/")));
-                map.insert(
-                    "line".into(),
-                    Value::Number(
-                        (source[..ts[fn_start].start]
-                            .bytes()
-                            .filter(|&b| b == b'\n')
-                            .count()
-                            + 1)
-                        .to_string(),
-                    ),
-                );
-                out.push(declaration);
-            }
-            skip_until = end + 1;
-            continue;
-        }
-        let literal = ts
-            .get(open + 1)
-            .and_then(|t| t.string.as_ref())
-            .ok_or_else(|| format!("{path}: realm needs a literal selector"))?;
-        if ts.get(open + 2).is_none_or(|t| t.text != ")") {
-            return Err(format!("{path}: realm needs one literal selector"));
-        }
-        let data = if literal.trim_start().starts_with('[') || literal.trim_start().starts_with('{')
+            })
         {
-            json::parse(literal)?
-        } else {
-            let (file, group) = literal
-                .split_once('#')
-                .ok_or_else(|| format!("{path}: expected file.realm.json#group"))?;
-            let data = json::parse(&load(file)?)?;
-            if data.get("version") != Some(&Value::Number(REALM_MANIFEST_VERSION.to_string())) {
-                return Err(format!("{path}: unsupported realm group version"));
-            }
-            if group == "*" {
-                let Some(Value::Object(groups)) = data.get("groups") else {
-                    return Err(format!("{path}: missing realm groups"));
-                };
-                let mut bodies = BTreeSet::new();
-                for (i, t) in ts.iter().enumerate() {
-                    if t.text != "fn_info"
-                        || ts.get(i + 1).is_none_or(|t| t.text != "!")
-                        || ts.get(i + 2).is_none_or(|t| t.text != "(")
-                    {
-                        continue;
-                    }
-                    let mut begin = i + 3;
-                    while ts.get(begin).is_some_and(|t| t.text == "#") {
-                        begin += 1;
-                        let mut depth = 0;
-                        loop {
-                            let t = ts.get(begin).ok_or("unterminated fn_info attribute")?;
-                            if t.text == "[" {
-                                depth += 1;
-                            } else if t.text == "]" {
-                                depth -= 1;
-                            }
-                            begin += 1;
-                            if depth == 0 {
-                                break;
-                            }
-                        }
-                    }
-                    if ts.get(begin).is_some_and(|t| t.text == "export") {
-                        begin += 1;
-                    }
-                    if ts.get(begin).is_some_and(|t| {
-                        matches!(t.text, "native_args" | "unwind" | "unwind_in_tests")
-                    }) {
-                        begin += 1;
-                    }
-                    if let Some(end) = ts[begin..].iter().position(|t| t.text == ",") {
-                        if end > 0 {
-                            bodies.insert(ts[begin + end - 1].text);
-                        }
-                    }
-                }
-                let mut all = Vec::new();
-                for (group, values) in groups {
-                    let values = values.array().ok_or("realm group is not an array")?;
-                    if let Some(body) = group.strip_prefix("body:") {
-                        if !bodies.contains(body)
-                            || values.iter().any(|v| {
-                                v.get("body")
-                                    .and_then(Value::string)
-                                    .is_none_or(|b| b.rsplit("::").next() != Some(body))
-                            })
-                        {
-                            return Err(format!(
-                                "{path}: realm group {group} disagrees with fn_info bodies"
-                            ));
-                        }
-                    }
-                    all.extend_from_slice(values);
-                }
-                Value::Array(all)
-            } else {
-                data.get("groups")
-                    .and_then(|g| g.get(group))
-                    .cloned()
-                    .ok_or_else(|| format!("{path}: missing realm group {literal}"))?
-            }
-        };
-        let mut ds = match data {
-            Value::Array(ds) => ds,
-            Value::Object(_) => vec![data],
-            _ => return Err(format!("{path}: realm declaration is not an object/array")),
-        };
-        let mut body = None;
-        let mut info_symbol = None;
-        if annotation {
-            let mut after = open + 3;
-            if ts.get(after).is_none_or(|t| t.text != "]") {
-                return Err(format!("{path}: malformed realm attribute"));
-            }
-            after += 1;
-            let exported = ts.get(after).is_some_and(|t| t.text == "export");
-            if exported {
-                after += 1;
-            }
-            if ts
-                .get(after)
-                .is_some_and(|t| matches!(t.text, "native_args" | "unwind" | "unwind_in_tests"))
-            {
-                after += 1;
-            }
-            let end = ts[after..]
-                .iter()
-                .position(|t| t.text == ",")
-                .ok_or("missing fn_info body")?
-                + after;
-            body = Some(ts[after..end].iter().map(|t| t.text).collect::<String>());
-            if exported {
-                let lexical =
-                    rust_tokens(&source[ts[after].start..]).map_err(|e| format!("{path}: {e}"))?;
-                info_symbol = Some(
-                    image_info_symbol(&lexical, 0, package).map_err(|e| format!("{path}: {e}"))?,
-                );
-            }
+            return Err(format!(
+                "{path}: realm facts are declared at their birth, not in a JSON selector"
+            ));
         }
-        for d in &mut ds {
-            let Value::Object(d) = d else {
-                return Err(format!("{path}: realm declaration is not an object"));
-            };
-            let name = d
-                .get("name")
-                .and_then(Value::string)
-                .ok_or("realm declaration has no name")?
-                .to_owned();
-            if d.contains_key("source") || d.contains_key("line") {
-                return Err(format!(
-                    "{path}: {name}: provenance is derived from its declaring macro"
-                ));
+        if !annotation {
+            return Err(format!(
+                "{path}: expected structured fn_info realm attribute"
+            ));
+        }
+        let end = closing_paren(&ts, open)?;
+        if ts.get(end + 1).is_none_or(|t| t.text != "]") {
+            return Err(format!("{path}: malformed realm attribute"));
+        }
+        let fn_start = (0..index)
+            .rev()
+            .find(|&i| {
+                matches!(ts[i].text, "fn_info" | "js_function_info")
+                    && ts.get(i + 1).is_some_and(|t| t.text == "!")
+                    && ts.get(i + 2).is_some_and(|t| t.text == "(")
+                    && closing_paren(&ts, i + 2).is_ok_and(|close| close > end)
+            })
+            .ok_or_else(|| format!("{path}: realm attribute must belong to fn_info!"))?;
+        let fn_end = closing_paren(&ts, fn_start + 2)?;
+        let body_info = info::fn_info(&ts[end + 2..fn_end], abi_constants())?;
+        let (body, symbol) = resolve(&body_info.body)?;
+        let humans = facts::parse_many(&ts[open + 1..end])?;
+        let binding = info::metadata_binding(&ts[end + 2..fn_end]);
+        if binding && humans.len() != 1 {
+            return Err("metadata binding needs one physical cell".into());
+        }
+        for human in humans {
+            if human.emit_metadata != (binding || human.metadata_macro.is_some()) {
+                return Err("public metadata needs a runtime macro binding at fn_info!".into());
             }
-            crate::realm_storage::resolve(source, d).map_err(|e| format!("{path}: {name}: {e}"))?;
-            d.insert("source".into(), Value::String(path.replace('\\', "/")));
-            d.insert(
+            if binding && human.spec_name.is_none() && human.spec_length.is_none() {
+                return Err("metadata binding requires a nondefault public name or length".into());
+            }
+            let mut declaration = facts::callable(
+                human,
+                &body_info,
+                abi_constants(),
+                body.clone(),
+                symbol.clone(),
+                source,
+            )?;
+            let Value::Object(ref mut map) = declaration else {
+                unreachable!()
+            };
+            map.insert("source".into(), Value::String(path.replace('\\', "/")));
+            map.insert(
                 "line".into(),
                 Value::Number(
-                    (source[..token.start]
+                    (source[..ts[fn_start].start]
                         .bytes()
                         .filter(|&b| b == b'\n')
                         .count()
@@ -984,30 +829,9 @@ fn declarations_with_receivers(
                     .to_string(),
                 ),
             );
-            if let Some(symbol) = &info_symbol {
-                if d.get("info_symbol")
-                    .and_then(Value::string)
-                    .is_some_and(|s| s != symbol)
-                {
-                    return Err(format!("{path}: {name} has a stale fn_info export symbol"));
-                }
-                d.insert("info_symbol".into(), Value::String(symbol.clone()));
-            }
-            if let Some(body) = &body {
-                if d.get("body")
-                    .and_then(Value::string)
-                    .is_some_and(|b| b != body && b.rsplit("::").next() != body.rsplit("::").next())
-                {
-                    return Err(format!("{path}: {name} disagrees with fn_info body {body}"));
-                }
-                d.entry("body".into())
-                    .or_insert_with(|| Value::String(body.clone()));
-            }
+            out.push(declaration);
         }
-        // Retain token end in the scanner so malformed strings cannot leak
-        // into the following annotation; source offsets are UTF-8 boundaries.
-        debug_assert!(token.end <= source.len());
-        out.extend(ds);
+        skip_until = end + 1;
     }
     Ok(out)
 }
@@ -1066,7 +890,6 @@ pub fn read(runtime_src: &Path) -> Result<Value, String> {
     let mut exports = crate::realm_exports::InfoExports::default();
     let mut export_sources = Vec::new();
     let mut native_receivers = Vec::new();
-    let mut selectors = BTreeSet::new();
     let sources = files
         .into_iter()
         .map(|file| {
@@ -1088,15 +911,6 @@ pub fn read(runtime_src: &Path) -> Result<Value, String> {
             &source,
             &relative.to_string_lossy(),
             &package,
-            |selector| {
-                let path = file.parent().unwrap().join(selector);
-                if path.extension().is_none_or(|e| e != "json") {
-                    return Err("realm selector must name a JSON source".into());
-                }
-                selectors.insert(path.clone());
-                println!("cargo:rerun-if-changed={}", path.display());
-                std::fs::read_to_string(path).map_err(|e| e.to_string())
-            },
             |body| match body.strip_prefix("@provider:") {
                 Some(name) => symbols
                     .provider_body(name, file)
@@ -1224,13 +1038,9 @@ pub fn generate(runtime_src: &Path, out: &Path) -> Result<Value, String> {
 mod tests {
     use super::*;
     fn inline(source: &str) -> Result<Vec<Value>, String> {
-        declarations(
-            source,
-            "array.rs",
-            "perry-runtime",
-            |_| Err("unexpected file".into()),
-            |body| Ok((body.into(), format!("source:{body}"))),
-        )
+        declarations(source, "array.rs", "perry-runtime", |body| {
+            Ok((body.into(), format!("source:{body}")))
+        })
     }
     #[test]
     fn bare_constructors_and_reference_captures_keep_one_instance_property() {
@@ -1547,86 +1357,24 @@ mod tests {
     }
 
     #[test]
-    fn body_is_owned_by_fn_info_and_drift_fails() {
-        let source = r##"crate::fn_info!(#[realm(r#"{"name":"Array.slice","kind":"method"}"#)] slice_thunk,2);"##;
+    fn body_is_owned_by_fn_info_and_json_declarations_are_rejected() {
+        let source = "crate::fn_info!(#[realm(Array.slice)] slice_thunk,2);";
         assert_eq!(
             inline(source).unwrap()[0]
                 .get("body")
                 .and_then(Value::string),
             Some("slice_thunk")
         );
-        assert!(inline(&source.replace(
-            "\"kind\":\"method\"",
-            "\"kind\":\"method\",\"body\":\"other\""
-        ))
-        .is_err());
+        let json = r##"crate::fn_info!(#[realm(r#"{"name":"Array.slice","kind":"method"}"#)] slice_thunk,2);"##;
+        assert!(inline(json).is_err());
     }
     #[test]
-    fn export_symbol_comes_from_owning_body_and_builders() {
-        let source = r##"fn_info!(#[realm(r#"{"name":"Array","kind":"constructor"}"#)] export crate::object::array, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN));"##;
+    fn rust_lexing_skips_comments_and_raw_strings_and_rejects_json_selectors() {
+        let source = "// realm_decl!(\"fake\")\n/* /* realm_decl! */ */ let x=r###\"realm_decl!(fake)\"###;\nfn_info!(#[ realm (Example.slice) ] slice,2);";
         let ds = inline(source).unwrap();
-        assert_eq!(ds[0].get("info_symbol").and_then(Value::string), Some(
-            "perry_fn_info_perry-runtime::crate::object::array::1::with_rest(0 );with_flags(crate :: closure :: FN_BUILTIN );"
-        ));
-        assert_eq!(
-            ds[0].get("body").and_then(Value::string),
-            Some("crate::object::array")
-        );
-        assert!(inline(&source.replace("export crate::object::array", "export array")).is_err());
-        let numeric =
-            inline(&source.replace("with_rest(0)", "with_length(0x20_u32 + 10)")).unwrap();
-        assert_eq!(numeric[0].get("info_symbol").and_then(Value::string), Some(
-            "perry_fn_info_perry-runtime::crate::object::array::1::with_length(0x20_u32 + 10 );with_flags(crate :: closure :: FN_BUILTIN );"
-        ));
-        let compound = inline(&source.replace(
-            "with_rest(0)",
-            "with_rest_kind(0, (crate::FN_A | crate::FN_B)), plain()",
-        ))
-        .unwrap();
-        assert_eq!(compound[0].get("info_symbol").and_then(Value::string), Some(
-            "perry_fn_info_perry-runtime::crate::object::array::1::with_rest_kind(0 , ( crate :: FN_A | crate :: FN_B ) );plain();with_flags(crate :: closure :: FN_BUILTIN );"
-        ));
-        assert!(inline(&source.replace(
-            "\"kind\":\"constructor\"",
-            "\"kind\":\"constructor\",\"info_symbol\":\"stale\""
-        ))
-        .is_err());
-        // Unwind and native-argument ABIs retain the owning static's spelling.
-        for abi in ["unwind", "unwind_in_tests", "native_args"] {
-            assert_eq!(
-                inline(&source.replace("export crate", &format!("export {abi} crate"))).unwrap()[0]
-                    .get("info_symbol"),
-                ds[0].get("info_symbol")
-            );
-        }
-    }
-    #[test]
-    fn rust_lexing_and_external_groups() {
-        let source = "// realm_decl!(\"fake\")\n/* /* realm_decl! */ */ let x=r###\"realm_decl!(fake)\"###;\nfn_info!(#[ realm (\"array.realm.json#slice\") ] native_args slice,2);";
-        let ds=declarations(source,"array.rs","perry-runtime",|file|{assert_eq!(file,"array.realm.json");Ok(r#"{"version":1,"groups":{"slice":[{"name":"Array.slice","kind":"method","body":"crate::array::slice"}]}}"#.into())}, |body| Ok((body.into(), format!("source:{body}")))).unwrap();
         assert_eq!(ds.len(), 1);
         assert_eq!(ds[0].get("line"), Some(&Value::Number("3".into())));
-    }
-    #[test]
-    fn group_markers_validate_existing_body_ownership() {
-        let data = r#"{"version":1,"groups":{"body:slice":[{"name":"A.slice","kind":"method","body":"crate::array::slice"}],"objects":[{"name":"A","kind":"prototype"}]}}"#;
-        let source = "fn_info!(slice,2); realm_decl!(\"array.realm.json#*\");";
-        let declarations = declarations(
-            source,
-            "array.rs",
-            "perry-runtime",
-            |_| Ok(data.into()),
-            |body| Ok((body.into(), format!("source:{body}"))),
-        )
-        .unwrap();
-        assert_eq!(declarations.len(), 2);
-        assert!(super::declarations(
-            &source.replace("slice,", "other,"),
-            "array.rs",
-            "perry-runtime",
-            |_| Ok(data.into()),
-            |body| Ok((body.into(), format!("source:{body}")))
-        )
-        .is_err());
+        assert!(inline("fn_info!(slice,2); realm_decl!(\"array.realm.json#*\");").is_err());
+        assert!(inline("fn_info!(#[realm(\"array.realm.json#slice\")] slice,2);").is_err());
     }
 }

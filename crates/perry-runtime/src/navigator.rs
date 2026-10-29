@@ -217,4 +217,3 @@ mod tests {
     }
 }
 
-crate::realm_decl!("navigator.realm.json#*");

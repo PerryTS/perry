@@ -1544,7 +1544,6 @@ pub(crate) use cjs_default::{
 #[cfg(test)]
 mod buffer_pool_size_tests;
 
-crate::realm_decl!("native_module.realm.json#*");
 
 #[cfg(test)]
 mod namespace_accessor_tests;
