@@ -1409,3 +1409,5 @@ fn emit_descriptor(
 
 #[cfg(test)]
 mod comdat_tests;
+#[cfg(test)]
+mod gc_plan_tests;
