@@ -24,13 +24,13 @@ pub(super) fn install_primitive_proto_methods(
             ipm(
                 proto_obj,
                 "toExponential",
-                crate::fn_info!(number_proto_to_exponential_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(Number.prototype.toExponential)] number_proto_to_exponential_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
             ipm(
                 proto_obj,
                 "toFixed",
-                crate::fn_info!(number_proto_to_fixed_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(Number.prototype.toFixed)] number_proto_to_fixed_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
             // `.length` is 0 (both params are optional), but the thunk needs
@@ -40,25 +40,25 @@ pub(super) fn install_primitive_proto_methods(
             super::global_this::install_proto_method_rest_with_length(
                 proto_obj,
                 "toLocaleString",
-                crate::fn_info!(number_proto_to_locale_string_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(Number.prototype.toLocaleString)] number_proto_to_locale_string_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
             ipm(
                 proto_obj,
                 "toPrecision",
-                crate::fn_info!(number_proto_to_precision_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(Number.prototype.toPrecision)] number_proto_to_precision_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
             ipm(
                 proto_obj,
                 "toString",
-                crate::fn_info!(number_proto_to_string_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(Number.prototype.toString)] number_proto_to_string_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
             ipm(
                 proto_obj,
                 "valueOf",
-                crate::fn_info!(number_proto_value_of_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(Number.prototype.valueOf)] number_proto_value_of_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
         }
@@ -66,13 +66,13 @@ pub(super) fn install_primitive_proto_methods(
             ipm(
                 proto_obj,
                 "toString",
-                crate::fn_info!(boolean_proto_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(Boolean.prototype.toString)] boolean_proto_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
             ipm(
                 proto_obj,
                 "valueOf",
-                crate::fn_info!(boolean_proto_value_of_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(Boolean.prototype.valueOf)] boolean_proto_value_of_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
         }
@@ -80,13 +80,13 @@ pub(super) fn install_primitive_proto_methods(
             ipm(
                 proto_obj,
                 "toString",
-                crate::fn_info!(symbol_proto_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(Symbol.prototype.toString)] symbol_proto_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
             ipm(
                 proto_obj,
                 "valueOf",
-                crate::fn_info!(symbol_proto_value_of_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(Symbol.prototype.valueOf)] symbol_proto_value_of_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
         }
@@ -94,7 +94,7 @@ pub(super) fn install_primitive_proto_methods(
             let to_string = ipm(
                 proto_obj,
                 "toString",
-                crate::fn_info!(bigint_proto_to_string_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(BigInt.prototype.toString, spec = {length = 0}, emit = metadata(realm_bigint_to_string_public))] bigint_proto_to_string_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
             // The optional radix does not contribute to the observable
@@ -102,12 +102,12 @@ pub(super) fn install_primitive_proto_methods(
             // so a missing argument arrives as undefined rather than garbage.
             super::native_module::set_builtin_closure_length(
                 crate::value::js_nanbox_get_pointer(to_string) as usize,
-                0,
+                realm_bigint_to_string_public!(length),
             );
             ipm(
                 proto_obj,
                 "valueOf",
-                crate::fn_info!(bigint_proto_value_of_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(BigInt.prototype.valueOf)] bigint_proto_value_of_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
             // `.length` is 0 despite the optional `(locales?, options?)`
@@ -118,7 +118,7 @@ pub(super) fn install_primitive_proto_methods(
             super::global_this::install_proto_method_rest_with_length(
                 proto_obj,
                 "toLocaleString",
-                crate::fn_info!(bigint_proto_to_locale_string_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(BigInt.prototype.toLocaleString)] bigint_proto_to_locale_string_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
         }
@@ -517,5 +517,3 @@ pub(super) extern "C" fn string_proto_value_of_thunk(
 ) -> f64 {
     string_receiver_or_throw(this, "valueOf")
 }
-
-crate::realm_decl!("primitive_proto_thunks.realm.json#*");

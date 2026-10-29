@@ -313,21 +313,21 @@ pub(super) fn install(name: &str, proto: *mut ObjectHeader) {
         "EventTarget" => {
             method(
                 "addEventListener",
-                crate::fn_info!(event_target_add_event_listener_thunk, 3; with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(EventTarget.prototype.addEventListener, spec = {length = 2}, emit = metadata(realm_eventtarget_prototype_addeventlistener_metadata))] event_target_add_event_listener_thunk, 3; with_flags(crate::closure::FN_BUILTIN)),
                 3,
-                2,
+                realm_eventtarget_prototype_addeventlistener_metadata!(length),
                 true,
             );
             method(
                 "removeEventListener",
-                crate::fn_info!(event_target_remove_event_listener_thunk, 3; with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(EventTarget.prototype.removeEventListener, spec = {length = 2}, emit = metadata(realm_eventtarget_prototype_removeeventlistener_metadata))] event_target_remove_event_listener_thunk, 3; with_flags(crate::closure::FN_BUILTIN)),
                 3,
-                2,
+                realm_eventtarget_prototype_removeeventlistener_metadata!(length),
                 true,
             );
             method(
                 "dispatchEvent",
-                crate::fn_info!(event_target_dispatch_event_thunk, 1; with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(EventTarget.prototype.dispatchEvent)] event_target_dispatch_event_thunk, 1; with_flags(crate::closure::FN_BUILTIN)),
                 1,
                 1,
                 true,
@@ -336,32 +336,32 @@ pub(super) fn install(name: &str, proto: *mut ObjectHeader) {
         "Event" => {
             method(
                 "initEvent",
-                crate::fn_info!(event_proto_init_event_thunk, 3; with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(Event.prototype.initEvent, spec = {length = 1}, emit = metadata(realm_event_prototype_initevent_metadata))] event_proto_init_event_thunk, 3; with_flags(crate::closure::FN_BUILTIN)),
                 3,
-                1,
+                realm_event_prototype_initevent_metadata!(length),
                 true,
             );
             method(
                 "stopImmediatePropagation",
-                crate::fn_info!(event_proto_stop_immediate_propagation_thunk, 0; with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(Event.prototype.stopImmediatePropagation)] event_proto_stop_immediate_propagation_thunk, 0; with_flags(crate::closure::FN_BUILTIN)),
                 0,
                 0,
                 true,
             );
             method(
                 "preventDefault",
-                crate::fn_info!(event_proto_prevent_default_thunk, 0; with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(Event.prototype.preventDefault)] event_proto_prevent_default_thunk, 0; with_flags(crate::closure::FN_BUILTIN)),
                 0,
                 0,
                 true,
             );
             get(
                 "target",
-                crate::fn_info!(get_target, 0; with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(realm_decl! { "Event.prototype.srcElement.<get>"; "Event.prototype.target.<get>"; })] get_target, 0; with_flags(crate::closure::FN_BUILTIN)),
             );
             get(
                 "currentTarget",
-                crate::fn_info!(get_current_target, 0; with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm("Event.prototype.currentTarget.<get>")] get_current_target, 0; with_flags(crate::closure::FN_BUILTIN)),
             );
             get(
                 "srcElement",
@@ -369,23 +369,23 @@ pub(super) fn install(name: &str, proto: *mut ObjectHeader) {
             );
             get(
                 "type",
-                crate::fn_info!(get_type, 0; with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm("Event.prototype.type.<get>")] get_type, 0; with_flags(crate::closure::FN_BUILTIN)),
             );
             get(
                 "cancelable",
-                crate::fn_info!(get_cancelable, 0; with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm("Event.prototype.cancelable.<get>")] get_cancelable, 0; with_flags(crate::closure::FN_BUILTIN)),
             );
             get(
                 "defaultPrevented",
-                crate::fn_info!(get_default_prevented, 0; with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm("Event.prototype.defaultPrevented.<get>")] get_default_prevented, 0; with_flags(crate::closure::FN_BUILTIN)),
             );
             get(
                 "timeStamp",
-                crate::fn_info!(get_timestamp, 0; with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm("Event.prototype.timeStamp.<get>")] get_timestamp, 0; with_flags(crate::closure::FN_BUILTIN)),
             );
             method(
                 "composedPath",
-                crate::fn_info!(event_proto_composed_path_thunk, 0; with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(Event.prototype.composedPath)] event_proto_composed_path_thunk, 0; with_flags(crate::closure::FN_BUILTIN)),
                 0,
                 0,
                 true,
@@ -393,73 +393,73 @@ pub(super) fn install(name: &str, proto: *mut ObjectHeader) {
             accessor(
                 proto,
                 "returnValue",
-                crate::fn_info!(get_return_value, 0; with_flags(crate::closure::FN_BUILTIN)),
-                Some(crate::fn_info!(set_return_value, 1; with_flags(crate::closure::FN_BUILTIN))),
+                crate::fn_info!(#[realm("Event.prototype.returnValue.<get>")] get_return_value, 0; with_flags(crate::closure::FN_BUILTIN)),
+                Some(crate::fn_info!(#[realm("Event.prototype.returnValue.<set>")] set_return_value, 1; with_flags(crate::closure::FN_BUILTIN))),
                 true,
             );
             get(
                 "bubbles",
-                crate::fn_info!(get_bubbles, 0; with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm("Event.prototype.bubbles.<get>")] get_bubbles, 0; with_flags(crate::closure::FN_BUILTIN)),
             );
             get(
                 "composed",
-                crate::fn_info!(get_composed, 0; with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm("Event.prototype.composed.<get>")] get_composed, 0; with_flags(crate::closure::FN_BUILTIN)),
             );
             get(
                 "eventPhase",
-                crate::fn_info!(get_phase, 0; with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm("Event.prototype.eventPhase.<get>")] get_phase, 0; with_flags(crate::closure::FN_BUILTIN)),
             );
             accessor(
                 proto,
                 "cancelBubble",
-                crate::fn_info!(get_cancel_bubble, 0; with_flags(crate::closure::FN_BUILTIN)),
-                Some(crate::fn_info!(set_cancel_bubble, 1; with_flags(crate::closure::FN_BUILTIN))),
+                crate::fn_info!(#[realm("Event.prototype.cancelBubble.<get>")] get_cancel_bubble, 0; with_flags(crate::closure::FN_BUILTIN)),
+                Some(crate::fn_info!(#[realm("Event.prototype.cancelBubble.<set>")] set_cancel_bubble, 1; with_flags(crate::closure::FN_BUILTIN))),
                 true,
             );
             method(
                 "stopPropagation",
-                crate::fn_info!(event_proto_stop_propagation_thunk, 0; with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(Event.prototype.stopPropagation)] event_proto_stop_propagation_thunk, 0; with_flags(crate::closure::FN_BUILTIN)),
                 0,
                 0,
                 true,
             );
             get(
                 "isTrusted",
-                crate::fn_info!(get_trusted, 0; with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm("Event.prototype.isTrusted.<get>")] get_trusted, 0; with_flags(crate::closure::FN_BUILTIN)),
             );
         }
         "CustomEvent" => get(
             "detail",
-            crate::fn_info!(get_detail, 0; with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm("CustomEvent.prototype.detail.<get>")] get_detail, 0; with_flags(crate::closure::FN_BUILTIN)),
         ),
         "AbortController" => {
             get(
                 "signal",
-                crate::fn_info!(get_signal, 0; with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm("AbortController.prototype.signal.<get>")] get_signal, 0; with_flags(crate::closure::FN_BUILTIN)),
             );
             method(
                 "abort",
-                crate::fn_info!(abort, 1; with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(AbortController.prototype.abort, spec = {length = 0}, emit = metadata(realm_abortcontroller_prototype_abort_metadata))] abort, 1; with_flags(crate::closure::FN_BUILTIN)),
                 1,
-                0,
+                realm_abortcontroller_prototype_abort_metadata!(length),
                 true,
             );
         }
         "AbortSignal" => {
             get(
                 "aborted",
-                crate::fn_info!(get_aborted, 0; with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm("AbortSignal.prototype.aborted.<get>")] get_aborted, 0; with_flags(crate::closure::FN_BUILTIN)),
             );
             accessor(
                 proto,
                 "reason",
-                crate::fn_info!(get_reason, 0; with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm("AbortSignal.prototype.reason.<get>")] get_reason, 0; with_flags(crate::closure::FN_BUILTIN)),
                 None,
                 false,
             );
             method(
                 "throwIfAborted",
-                crate::fn_info!(throw_if_aborted, 0; with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(AbortSignal.prototype.throwIfAborted)] throw_if_aborted, 0; with_flags(crate::closure::FN_BUILTIN)),
                 0,
                 0,
                 false,
@@ -467,23 +467,23 @@ pub(super) fn install(name: &str, proto: *mut ObjectHeader) {
             accessor(
                 proto,
                 "onabort",
-                crate::fn_info!(get_onabort, 0; with_flags(crate::closure::FN_BUILTIN)),
-                Some(crate::fn_info!(set_onabort, 1; with_flags(crate::closure::FN_BUILTIN))),
+                crate::fn_info!(#[realm("AbortSignal.prototype.onabort.<get>")] get_onabort, 0; with_flags(crate::closure::FN_BUILTIN)),
+                Some(crate::fn_info!(#[realm("AbortSignal.prototype.onabort.<set>")] set_onabort, 1; with_flags(crate::closure::FN_BUILTIN))),
                 true,
             );
         }
         "DOMException" => {
             get(
                 "name",
-                crate::fn_info!(get_dom_name, 0; with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm("DOMException.prototype.name.<get>")] get_dom_name, 0; with_flags(crate::closure::FN_BUILTIN)),
             );
             get(
                 "message",
-                crate::fn_info!(get_dom_message, 0; with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm("DOMException.prototype.message.<get>")] get_dom_message, 0; with_flags(crate::closure::FN_BUILTIN)),
             );
             get(
                 "code",
-                crate::fn_info!(get_dom_code, 0; with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm("DOMException.prototype.code.<get>")] get_dom_code, 0; with_flags(crate::closure::FN_BUILTIN)),
             );
             for (index, name) in DOM_CODES.iter().enumerate() {
                 js_object_set_field_by_name(proto, key(name.as_bytes()), (index + 1) as f64);
@@ -558,5 +558,3 @@ pub(crate) fn install_constructor_constants(name: &str, constructor: *mut Object
         );
     }
 }
-
-crate::realm_decl!("prototype.realm.json#*");

@@ -1075,13 +1075,13 @@ fn make_instance_this(
             install_function_from_handle(
                 &obj_handle,
                 "formatRange",
-                crate::fn_info!(number_format_range_thunk, 2; with_declared(2)),
+                crate::fn_info!(#[realm(Intl.NumberFormat.prototype.formatRange)] number_format_range_thunk, 2; with_declared(2)),
                 2,
             );
             install_function_from_handle(
                 &obj_handle,
                 "formatRangeToParts",
-                crate::fn_info!(number_format_range_to_parts_thunk, 2; with_declared(2)),
+                crate::fn_info!(#[realm(Intl.NumberFormat.prototype.formatRangeToParts)] number_format_range_to_parts_thunk, 2; with_declared(2)),
                 2,
             );
             install_bound_instance_function_from_handle(
@@ -1762,25 +1762,25 @@ fn install_intl_namespace_members(ns_obj: *mut ObjectHeader) {
     install_function(
         ns_obj,
         "getCanonicalLocales",
-        crate::fn_info!(get_canonical_locales_thunk, 1; with_declared(1)),
+        crate::fn_info!(#[realm(Intl.getCanonicalLocales)] get_canonical_locales_thunk, 1; with_declared(1)),
         1,
     );
     install_function(
         ns_obj,
         "supportedValuesOf",
-        crate::fn_info!(supported_values_of_thunk, 1; with_declared(1)),
+        crate::fn_info!(#[realm(Intl.supportedValuesOf)] supported_values_of_thunk, 1; with_declared(1)),
         1,
     );
     locale::install_locale(ns_obj);
     install_constructor(
         ns_obj,
         "NumberFormat",
-        crate::fn_info!(number_format_constructor_thunk, 1; with_rest(0)),
+        crate::fn_info!(#[realm(Intl.NumberFormat, kind = constructor, members = { supportedLocalesOf; })] number_format_constructor_thunk, 1; with_rest(0)),
         0,
         &[
             (
                 "formatToParts",
-                crate::fn_info!(number_format_to_parts_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(Intl.NumberFormat.prototype.formatToParts)] number_format_to_parts_thunk, 1; with_declared(1)),
                 1,
             ),
             // `formatRange`/`formatRangeToParts` are plain (non-bound) prototype
@@ -1799,78 +1799,78 @@ fn install_intl_namespace_members(ns_obj: *mut ObjectHeader) {
             ),
             (
                 "resolvedOptions",
-                crate::fn_info!(number_format_resolved_options_thunk, 0; with_declared(0)),
+                crate::fn_info!(#[realm(Intl.NumberFormat.prototype.resolvedOptions)] number_format_resolved_options_thunk, 0; with_declared(0)),
                 0,
             ),
         ],
         // `format` is an accessor (getter) per ECMA-402, not a plain method.
         &[(
             "format",
-            crate::fn_info!(number_format_format_getter_thunk, 0; with_declared(0)),
+            crate::fn_info!(#[realm("Intl.NumberFormat.prototype.format.<get>")] number_format_format_getter_thunk, 0; with_declared(0)),
         )],
     );
     install_constructor(
         ns_obj,
         "DateTimeFormat",
-        crate::fn_info!(date_time_format_constructor_thunk, 1; with_rest(0)),
+        crate::fn_info!(#[realm(Intl.DateTimeFormat, kind = constructor, members = { supportedLocalesOf; })] date_time_format_constructor_thunk, 1; with_rest(0)),
         0,
         &[
             // `format` is an accessor (getter) per ECMA-402 §11.4.3 — see below.
             (
                 "formatToParts",
-                crate::fn_info!(date_time_format_to_parts_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(Intl.DateTimeFormat.prototype.formatToParts)] date_time_format_to_parts_thunk, 1; with_declared(1)),
                 1,
             ),
             (
                 "formatRange",
-                crate::fn_info!(date_time_format_range_thunk, 2; with_declared(2)),
+                crate::fn_info!(#[realm(Intl.DateTimeFormat.prototype.formatRange)] date_time_format_range_thunk, 2; with_declared(2)),
                 2,
             ),
             (
                 "formatRangeToParts",
-                crate::fn_info!(date_time_format_range_to_parts_thunk, 2; with_declared(2)),
+                crate::fn_info!(#[realm(Intl.DateTimeFormat.prototype.formatRangeToParts)] date_time_format_range_to_parts_thunk, 2; with_declared(2)),
                 2,
             ),
             (
                 "resolvedOptions",
-                crate::fn_info!(date_time_format_resolved_options_thunk, 0; with_declared(0)),
+                crate::fn_info!(#[realm(Intl.DateTimeFormat.prototype.resolvedOptions)] date_time_format_resolved_options_thunk, 0; with_declared(0)),
                 0,
             ),
         ],
         &[(
             "format",
-            crate::fn_info!(date_time_format_format_getter_thunk, 0; with_declared(0)),
+            crate::fn_info!(#[realm("Intl.DateTimeFormat.prototype.format.<get>")] date_time_format_format_getter_thunk, 0; with_declared(0)),
         )],
     );
     install_constructor(
         ns_obj,
         "Collator",
-        crate::fn_info!(collator_constructor_thunk, 1; with_rest(0)),
+        crate::fn_info!(#[realm(Intl.Collator, kind = constructor, members = { supportedLocalesOf; })] collator_constructor_thunk, 1; with_rest(0)),
         0,
         &[(
             "resolvedOptions",
-            crate::fn_info!(collator_resolved_options_thunk, 0; with_declared(0)),
+            crate::fn_info!(#[realm(Intl.Collator.prototype.resolvedOptions)] collator_resolved_options_thunk, 0; with_declared(0)),
             0,
         )],
         &[(
             "compare",
-            crate::fn_info!(collator_compare_getter_thunk, 0; with_declared(0)),
+            crate::fn_info!(#[realm("Intl.Collator.prototype.compare.<get>")] collator_compare_getter_thunk, 0; with_declared(0)),
         )],
     );
     install_constructor(
         ns_obj,
         "Segmenter",
-        crate::fn_info!(segmenter_constructor_thunk, 1; with_rest(0)),
+        crate::fn_info!(#[realm(Intl.Segmenter, kind = constructor, members = { supportedLocalesOf; })] segmenter_constructor_thunk, 1; with_rest(0)),
         0,
         &[
             (
                 "segment",
-                crate::fn_info!(segmenter_segment_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(Intl.Segmenter.prototype.segment)] segmenter_segment_thunk, 1; with_declared(1)),
                 1,
             ),
             (
                 "resolvedOptions",
-                crate::fn_info!(segmenter_resolved_options_thunk, 0; with_declared(0)),
+                crate::fn_info!(#[realm(Intl.Segmenter.prototype.resolvedOptions)] segmenter_resolved_options_thunk, 0; with_declared(0)),
                 0,
             ),
         ],
@@ -1879,22 +1879,22 @@ fn install_intl_namespace_members(ns_obj: *mut ObjectHeader) {
     install_constructor(
         ns_obj,
         "ListFormat",
-        crate::fn_info!(list_format_constructor_thunk, 1; with_rest(0)),
+        crate::fn_info!(#[realm(Intl.ListFormat, kind = constructor, members = { supportedLocalesOf; })] list_format_constructor_thunk, 1; with_rest(0)),
         0,
         &[
             (
                 "format",
-                crate::fn_info!(list_format_format_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(Intl.ListFormat.prototype.format)] list_format_format_thunk, 1; with_declared(1)),
                 1,
             ),
             (
                 "formatToParts",
-                crate::fn_info!(list_format_to_parts_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(Intl.ListFormat.prototype.formatToParts)] list_format_to_parts_thunk, 1; with_declared(1)),
                 1,
             ),
             (
                 "resolvedOptions",
-                crate::fn_info!(list_format_resolved_options_thunk, 0; with_declared(0)),
+                crate::fn_info!(#[realm(Intl.ListFormat.prototype.resolvedOptions)] list_format_resolved_options_thunk, 0; with_declared(0)),
                 0,
             ),
         ],
@@ -1903,22 +1903,22 @@ fn install_intl_namespace_members(ns_obj: *mut ObjectHeader) {
     install_constructor(
         ns_obj,
         "RelativeTimeFormat",
-        crate::fn_info!(relative_time_format_constructor_thunk, 1; with_rest(0)),
+        crate::fn_info!(#[realm(Intl.RelativeTimeFormat, kind = constructor, members = { supportedLocalesOf; })] relative_time_format_constructor_thunk, 1; with_rest(0)),
         0,
         &[
             (
                 "format",
-                crate::fn_info!(rtf_format_thunk, 2; with_declared(2)),
+                crate::fn_info!(#[realm(Intl.RelativeTimeFormat.prototype.format)] rtf_format_thunk, 2; with_declared(2)),
                 2,
             ),
             (
                 "formatToParts",
-                crate::fn_info!(rtf_to_parts_thunk, 2; with_declared(2)),
+                crate::fn_info!(#[realm(Intl.RelativeTimeFormat.prototype.formatToParts)] rtf_to_parts_thunk, 2; with_declared(2)),
                 2,
             ),
             (
                 "resolvedOptions",
-                crate::fn_info!(rtf_resolved_options_thunk, 0; with_declared(0)),
+                crate::fn_info!(#[realm(Intl.RelativeTimeFormat.prototype.resolvedOptions)] rtf_resolved_options_thunk, 0; with_declared(0)),
                 0,
             ),
         ],
@@ -1927,12 +1927,12 @@ fn install_intl_namespace_members(ns_obj: *mut ObjectHeader) {
     install_constructor(
         ns_obj,
         "PluralRules",
-        crate::fn_info!(plural_rules_constructor_thunk, 1; with_rest(0)),
+        crate::fn_info!(#[realm(Intl.PluralRules, kind = constructor, members = { supportedLocalesOf; })] plural_rules_constructor_thunk, 1; with_rest(0)),
         0,
         &[
             (
                 "select",
-                crate::fn_info!(plural_rules_select_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(Intl.PluralRules.prototype.select)] plural_rules_select_thunk, 1; with_declared(1)),
                 1,
             ),
             (
@@ -1942,7 +1942,7 @@ fn install_intl_namespace_members(ns_obj: *mut ObjectHeader) {
             ),
             (
                 "resolvedOptions",
-                crate::fn_info!(plural_rules_resolved_options_thunk, 0; with_declared(0)),
+                crate::fn_info!(#[realm(Intl.PluralRules.prototype.resolvedOptions)] plural_rules_resolved_options_thunk, 0; with_declared(0)),
                 0,
             ),
         ],
@@ -1951,7 +1951,7 @@ fn install_intl_namespace_members(ns_obj: *mut ObjectHeader) {
     install_constructor(
         ns_obj,
         "DurationFormat",
-        crate::fn_info!(duration_format::constructor_thunk, 1; with_rest(0)),
+        crate::fn_info!(#[realm(Intl.DurationFormat, kind = constructor, members = { supportedLocalesOf; })] duration_format::constructor_thunk, 1; with_rest(0)),
         0,
         &[
             (
@@ -1975,22 +1975,20 @@ fn install_intl_namespace_members(ns_obj: *mut ObjectHeader) {
     install_constructor(
         ns_obj,
         "DisplayNames",
-        crate::fn_info!(display_names::constructor_thunk, 1; with_rest(0)),
-        2,
+        crate::fn_info!(#[realm(Intl.DisplayNames, kind = constructor, members = { supportedLocalesOf; }, spec = {length = 2}, emit = metadata(realm_intl_displaynames_metadata))] display_names::constructor_thunk, 1; with_rest(0)),
+        realm_intl_displaynames_metadata!(length),
         &[
             (
                 "of",
-                crate::fn_info!(display_names::of_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(Intl.DisplayNames.prototype.of)] display_names::of_thunk, 1; with_declared(1)),
                 1,
             ),
             (
                 "resolvedOptions",
-                crate::fn_info!(display_names::resolved_options_thunk, 0; with_declared(0)),
+                crate::fn_info!(#[realm(Intl.DisplayNames.prototype.resolvedOptions)] display_names::resolved_options_thunk, 0; with_declared(0)),
                 0,
             ),
         ],
         &[],
     );
 }
-
-crate::realm_decl!("intl.realm.json#*");

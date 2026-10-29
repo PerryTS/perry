@@ -1865,5 +1865,3 @@ mod collator_compare_tests {
         );
     }
 }
-
-crate::realm_decl!("date_collator.realm.json#*");

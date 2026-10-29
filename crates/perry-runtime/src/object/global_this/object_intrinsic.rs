@@ -152,10 +152,10 @@ fn build_object_intrinsics() -> Option<ObjectPair> {
     // `gc::never_move`): the terminal of most inherited and absent reads.
     // SAFETY: a registered runtime descriptor with a null prototype.
     let proto_obj = unsafe {
-        crate::object::layout_desc::alloc_layout_prototype(
+        crate::realm_decl! { birth crate::object::layout_desc::alloc_layout_prototype(
             std::ptr::addr_of!(crate::object::runtime_layouts::OBJECT_PROTOTYPE),
             0,
-        )
+        ); realm { Object.prototype, members = { constructor; __defineGetter__; __defineSetter__; hasOwnProperty; __lookupGetter__; __lookupSetter__; isPrototypeOf; propertyIsEnumerable; toString; valueOf; __proto__ = accessor(get = "Object.prototype.__proto__.<get>", set = "Object.prototype.__proto__.<set>"); toLocaleString; }; } }
     };
     if proto_obj.is_null() {
         return None;
@@ -249,5 +249,3 @@ mod tests {
         });
     }
 }
-
-crate::realm_decl!("object_intrinsic.realm.json#*");

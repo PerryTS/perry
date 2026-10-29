@@ -1358,7 +1358,7 @@ fn ensure_secure_context_prototype() {
 
     let keys = b"constructor\0";
     let proto =
-        crate::object::js_object_alloc_with_shape(0x7FFF_FF41, 1, keys.as_ptr(), keys.len() as u32);
+        crate::realm_decl! { birth crate::object::js_object_alloc_with_shape(0x7FFF_FF41, 1, keys.as_ptr(), keys.len() as u32); realm { "node:tls.SecureContext.prototype", members = { constructor, attrs = writable | enumerable | configurable; }; } };
     crate::object::class_prototype_object_root_store(CLASS_ID_TLS_SECURE_CONTEXT, proto);
 }
 

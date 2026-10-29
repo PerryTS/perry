@@ -72,7 +72,7 @@ fn cluster_worker_id() -> Option<&'static str> {
 }
 
 fn empty_object_value() -> f64 {
-    let obj = js_object_alloc(0, 0);
+    let obj = crate::realm_decl! { birth js_object_alloc(0, 0); realm { "node:cluster.default._events", kind = namespace, members = { }; } };
     f64::from_bits(JSValue::object_ptr(obj as *mut u8).bits())
 }
 
@@ -681,30 +681,30 @@ mod infos {
         JsFunctionInfo::of(cluster_internal_disconnect as JsBody0<ClosureHeader>).with_declared(0);
     pub(super) static CLUSTER_INTERNAL_EXIT: JsFunctionInfo =
         JsFunctionInfo::of(cluster_internal_exit as JsBody2<ClosureHeader>).with_declared(2);
-    pub(super) static CLUSTER_WORKER_SEND: JsFunctionInfo =
+    crate::realm_decl! { info pub(super) static CLUSTER_WORKER_SEND: JsFunctionInfo =
         JsFunctionInfo::of(cluster_worker_send as JsBody4<ClosureHeader>)
             .with_declared(4)
-            .with_length(0);
-    pub(super) static CLUSTER_WORKER_KILL: JsFunctionInfo =
+            .with_length(0); realm { "node:cluster.Worker.prototype.send", constructible = true; } }
+    crate::realm_decl! { info pub(super) static CLUSTER_WORKER_KILL: JsFunctionInfo =
         JsFunctionInfo::of(cluster_worker_kill as JsBody1<ClosureHeader>)
             .with_declared(1)
-            .with_length(0);
-    pub(super) static CLUSTER_WORKER_DESTROY: JsFunctionInfo =
+            .with_length(0); realm { "node:cluster.Worker.prototype.kill", constructible = true; } }
+    crate::realm_decl! { info pub(super) static CLUSTER_WORKER_DESTROY: JsFunctionInfo =
         JsFunctionInfo::of(cluster_worker_destroy as JsBody1<ClosureHeader>)
             .with_declared(1)
-            .with_length(1);
-    pub(super) static CLUSTER_WORKER_DISCONNECT: JsFunctionInfo =
+            .with_length(1); realm { "node:cluster.Worker.prototype.destroy", constructible = true; } }
+    crate::realm_decl! { info pub(super) static CLUSTER_WORKER_DISCONNECT: JsFunctionInfo =
         JsFunctionInfo::of(cluster_worker_disconnect as JsBody0<ClosureHeader>)
             .with_declared(0)
-            .with_length(0);
-    pub(super) static CLUSTER_WORKER_IS_CONNECTED: JsFunctionInfo =
+            .with_length(0); realm { "node:cluster.Worker.prototype.disconnect", constructible = true; } }
+    crate::realm_decl! { info pub(super) static CLUSTER_WORKER_IS_CONNECTED: JsFunctionInfo =
         JsFunctionInfo::of(cluster_worker_is_connected as JsBody0<ClosureHeader>)
             .with_declared(0)
-            .with_length(0);
-    pub(super) static CLUSTER_WORKER_IS_DEAD: JsFunctionInfo =
+            .with_length(0); realm { "node:cluster.Worker.prototype.isConnected", constructible = true; } }
+    crate::realm_decl! { info pub(super) static CLUSTER_WORKER_IS_DEAD: JsFunctionInfo =
         JsFunctionInfo::of(cluster_worker_is_dead as JsBody0<ClosureHeader>)
             .with_declared(0)
-            .with_length(0);
+            .with_length(0); realm { "node:cluster.Worker.prototype.isDead", constructible = true; } }
     pub(super) static CLUSTER_SETUP_EMIT_THUNK: JsFunctionInfo =
         JsFunctionInfo::of(cluster_setup_emit_thunk as JsBody0<ClosureHeader>)
             .with_declared(0)
@@ -742,7 +742,7 @@ pub(crate) fn ensure_worker_constructor(value: f64) -> f64 {
     }
 
     ensure_cluster_runtime();
-    let proto = js_object_alloc(0, 7);
+    let proto = crate::realm_decl! { birth js_object_alloc(0, 7); realm { "node:cluster.Worker.prototype", extends = "node:events.EventEmitter.prototype", members = { constructor; send; kill; destroy; disconnect; isConnected; isDead; }; } };
     let proto_value = box_ptr(proto as *const u8);
     set_field(proto_value, b"constructor", value);
     crate::object::set_builtin_property_attrs(
@@ -1571,7 +1571,7 @@ fn listener_key(event: &str) -> Vec<u8> {
 }
 
 fn alloc_object_value(field_count: u32) -> f64 {
-    box_ptr(js_object_alloc(CLUSTER_SHAPE_ID, field_count) as *const u8)
+    box_ptr(crate::realm_decl! { birth js_object_alloc(CLUSTER_SHAPE_ID, field_count); realm { "node:cluster.settings", kind = namespace, extends = "node:cluster.settings", members = { }; "node:cluster.workers", kind = namespace, extends = "node:cluster.workers", members = { }; } } as *const u8)
 }
 
 fn alloc_array_value(capacity: u32) -> f64 {
@@ -1663,5 +1663,3 @@ fn value_to_string(value: f64) -> Option<String> {
             .map(|s| s.to_string())
     }
 }
-
-crate::realm_decl!("cluster.realm.json#*");

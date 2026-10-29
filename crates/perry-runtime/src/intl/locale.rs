@@ -1039,16 +1039,16 @@ fn install_getter(
     }
 }
 
-pub(super) fn install_locale(ns_obj: *mut ObjectHeader) {
+#[rustfmt::skip] pub(super) fn install_locale(ns_obj: *mut ObjectHeader) {
     let ctor = crate::closure::js_closure_alloc(
-        crate::fn_info!(locale_constructor_thunk, 1; with_rest(0)),
+        crate::fn_info!(#[realm(Intl.Locale, kind = constructor, spec = {length = 1}, emit = metadata(realm_locale_constructor_public))] locale_constructor_thunk, 1; with_rest(0)),
         0,
     );
     if ctor.is_null() {
         return;
     }
     crate::object::set_bound_native_closure_name(ctor, "Locale");
-    crate::object::set_builtin_closure_length(ctor as usize, 1);
+    crate::object::set_builtin_closure_length(ctor as usize, realm_locale_constructor_public!(length));
     crate::object::set_builtin_property_attrs(
         ctor as usize,
         "name".to_string(),
@@ -1072,118 +1072,118 @@ pub(super) fn install_locale(ns_obj: *mut ObjectHeader) {
     install_function(
         proto,
         "toString",
-        crate::fn_info!(locale_to_string_thunk, 0; with_declared(0)),
+        crate::fn_info!(#[realm(Intl.Locale.prototype.toString)] locale_to_string_thunk, 0; with_declared(0)),
         0,
     );
     install_function(
         proto,
         "maximize",
-        crate::fn_info!(locale_maximize_thunk, 0; with_declared(0)),
+        crate::fn_info!(#[realm(Intl.Locale.prototype.maximize)] locale_maximize_thunk, 0; with_declared(0)),
         0,
     );
     install_function(
         proto,
         "minimize",
-        crate::fn_info!(locale_minimize_thunk, 0; with_declared(0)),
+        crate::fn_info!(#[realm(Intl.Locale.prototype.minimize)] locale_minimize_thunk, 0; with_declared(0)),
         0,
     );
     install_function(
         proto,
         "getCalendars",
-        crate::fn_info!(locale_get_calendars_thunk, 0; with_declared(0)),
+        crate::fn_info!(#[realm(Intl.Locale.prototype.getCalendars)] locale_get_calendars_thunk, 0; with_declared(0)),
         0,
     );
     install_function(
         proto,
         "getCollations",
-        crate::fn_info!(locale_get_collations_thunk, 0; with_declared(0)),
+        crate::fn_info!(#[realm(Intl.Locale.prototype.getCollations)] locale_get_collations_thunk, 0; with_declared(0)),
         0,
     );
     install_function(
         proto,
         "getHourCycles",
-        crate::fn_info!(locale_get_hour_cycles_thunk, 0; with_declared(0)),
+        crate::fn_info!(#[realm(Intl.Locale.prototype.getHourCycles)] locale_get_hour_cycles_thunk, 0; with_declared(0)),
         0,
     );
     install_function(
         proto,
         "getNumberingSystems",
-        crate::fn_info!(locale_get_numbering_systems_thunk, 0; with_declared(0)),
+        crate::fn_info!(#[realm(Intl.Locale.prototype.getNumberingSystems)] locale_get_numbering_systems_thunk, 0; with_declared(0)),
         0,
     );
     install_function(
         proto,
         "getTimeZones",
-        crate::fn_info!(locale_get_time_zones_thunk, 0; with_declared(0)),
+        crate::fn_info!(#[realm(Intl.Locale.prototype.getTimeZones)] locale_get_time_zones_thunk, 0; with_declared(0)),
         0,
     );
     install_function(
         proto,
         "getTextInfo",
-        crate::fn_info!(locale_get_text_info_thunk, 0; with_declared(0)),
+        crate::fn_info!(#[realm(Intl.Locale.prototype.getTextInfo)] locale_get_text_info_thunk, 0; with_declared(0)),
         0,
     );
     install_function(
         proto,
         "getWeekInfo",
-        crate::fn_info!(locale_get_week_info_thunk, 0; with_declared(0)),
+        crate::fn_info!(#[realm(Intl.Locale.prototype.getWeekInfo)] locale_get_week_info_thunk, 0; with_declared(0)),
         0,
     );
 
     install_getter(
         proto,
         "baseName",
-        crate::fn_info!(getter_base_name, 0; with_declared(0)),
+        crate::fn_info!(#[realm("Intl.Locale.prototype.baseName.<get>", constructible = true)] getter_base_name, 0; with_declared(0)),
     );
     install_getter(
         proto,
         "language",
-        crate::fn_info!(getter_language, 0; with_declared(0)),
+        crate::fn_info!(#[realm("Intl.Locale.prototype.language.<get>", constructible = true)] getter_language, 0; with_declared(0)),
     );
     install_getter(
         proto,
         "script",
-        crate::fn_info!(getter_script, 0; with_declared(0)),
+        crate::fn_info!(#[realm("Intl.Locale.prototype.script.<get>", constructible = true)] getter_script, 0; with_declared(0)),
     );
     install_getter(
         proto,
         "region",
-        crate::fn_info!(getter_region, 0; with_declared(0)),
+        crate::fn_info!(#[realm("Intl.Locale.prototype.region.<get>", constructible = true)] getter_region, 0; with_declared(0)),
     );
     install_getter(
         proto,
         "calendar",
-        crate::fn_info!(getter_calendar, 0; with_declared(0)),
+        crate::fn_info!(#[realm("Intl.Locale.prototype.calendar.<get>", constructible = true)] getter_calendar, 0; with_declared(0)),
     );
     install_getter(
         proto,
         "caseFirst",
-        crate::fn_info!(getter_case_first, 0; with_declared(0)),
+        crate::fn_info!(#[realm("Intl.Locale.prototype.caseFirst.<get>", constructible = true)] getter_case_first, 0; with_declared(0)),
     );
     install_getter(
         proto,
         "collation",
-        crate::fn_info!(getter_collation, 0; with_declared(0)),
+        crate::fn_info!(#[realm("Intl.Locale.prototype.collation.<get>", constructible = true)] getter_collation, 0; with_declared(0)),
     );
     install_getter(
         proto,
         "hourCycle",
-        crate::fn_info!(getter_hour_cycle, 0; with_declared(0)),
+        crate::fn_info!(#[realm("Intl.Locale.prototype.hourCycle.<get>", constructible = true)] getter_hour_cycle, 0; with_declared(0)),
     );
     install_getter(
         proto,
         "numeric",
-        crate::fn_info!(getter_numeric, 0; with_declared(0)),
+        crate::fn_info!(#[realm("Intl.Locale.prototype.numeric.<get>", constructible = true)] getter_numeric, 0; with_declared(0)),
     );
     install_getter(
         proto,
         "firstDayOfWeek",
-        crate::fn_info!(getter_first_day_of_week, 0; with_declared(0)),
+        crate::fn_info!(#[realm("Intl.Locale.prototype.firstDayOfWeek.<get>", constructible = true)] getter_first_day_of_week, 0; with_declared(0)),
     );
     install_getter(
         proto,
         "numberingSystem",
-        crate::fn_info!(getter_numbering_system, 0; with_declared(0)),
+        crate::fn_info!(#[realm("Intl.Locale.prototype.numberingSystem.<get>", constructible = true)] getter_numbering_system, 0; with_declared(0)),
     );
 
     set_proto_to_string_tag(proto, "Intl.Locale");
@@ -1203,5 +1203,3 @@ pub(super) fn install_locale(ns_obj: *mut ObjectHeader) {
 mod info;
 mod likely_subtags;
 pub(in crate::intl) use likely_subtags::install as install_likely_subtags;
-
-crate::realm_decl!("locale.realm.json#*");
