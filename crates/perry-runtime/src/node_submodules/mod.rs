@@ -1119,13 +1119,15 @@ fn find_export(submod: &SubmoduleSpec, name: &str) -> Option<&'static ExportSpec
 /// not the namespace itself). Null until first use. The submodule's bucket and
 /// the export ordinal are the identity; no address of the spec or of its
 /// names enters, so lookups do the same work wherever the link put them.
+/// An empty record is all zero bits, so the thread-local array is `.tbss`
+/// (zeroed at thread start) rather than an init image copied per thread.
 struct SubmodSlots {
-    exports: Vec<*mut ClosureHeader>,
+    exports: Option<Box<[*mut ClosureHeader]>>,
     namespace: *mut ObjectHeader,
     default_object: *mut ObjectHeader,
 }
 const EMPTY_SUBMOD_SLOTS: SubmodSlots = SubmodSlots {
-    exports: Vec::new(),
+    exports: None,
     namespace: std::ptr::null_mut(),
     default_object: std::ptr::null_mut(),
 };
@@ -1426,11 +1428,9 @@ fn ensure_export_singleton(
         allocated
     };
     SUBMOD_SINGLETONS.with(|m| {
-        let exports = &mut m.borrow_mut()[bucket].exports;
-        if exports.is_empty() {
-            exports.resize(submod.exports.len(), std::ptr::null_mut());
-        }
-        exports[ordinal] = allocated;
+        m.borrow_mut()[bucket].exports.get_or_insert_with(|| {
+            vec![std::ptr::null_mut(); submod.exports.len()].into_boxed_slice()
+        })[ordinal] = allocated;
     });
     ANY_SINGLETON_ALLOCATED.store(1, Ordering::Release);
     allocated
@@ -1441,6 +1441,7 @@ fn export_singleton(bucket: usize, ordinal: usize) -> Option<*mut ClosureHeader>
     SUBMOD_SINGLETONS.with(|m| {
         m.borrow()[bucket]
             .exports
+            .as_ref()?
             .get(ordinal)
             .copied()
             .filter(|p| !p.is_null())
@@ -1671,7 +1672,7 @@ pub fn scan_node_submodule_singleton_roots_mut(visitor: &mut crate::gc::RuntimeR
     }
     SUBMOD_SINGLETONS.with(|m| {
         for slots in m.borrow_mut().iter_mut() {
-            for closure_ptr in slots.exports.iter_mut().filter(|p| !p.is_null()) {
+            for closure_ptr in slots.exports.iter_mut().flatten().filter(|p| !p.is_null()) {
                 visitor.visit_raw_mut_ptr_slot(closure_ptr);
             }
             for obj_ptr in [&mut slots.namespace, &mut slots.default_object] {
@@ -1732,7 +1733,7 @@ pub(crate) fn test_seed_node_submodule_roots(
     SUBMOD_SINGLETONS.with(|m| {
         let mut m = m.borrow_mut();
         *m = [EMPTY_SUBMOD_SLOTS; SUBMOD_COUNT];
-        m[0].exports = vec![closure];
+        m[0].exports = Some(vec![closure].into_boxed_slice());
         m[0].namespace = namespace;
     });
     DIAG_NOOP_CLOSURE.with(|slot| {
