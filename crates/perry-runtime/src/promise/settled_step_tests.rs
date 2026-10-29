@@ -221,3 +221,181 @@ fn settled_step_notifies_producers_outside_the_job_drain() {
         );
     });
 }
+
+// ---- SNC (settled self-next continuation): one decline test per predicate ----
+// Each test starts from the same admitted state and breaks exactly one
+// condition. A declined probe must change nothing observable.
+
+const TAG_TRUE_BITS: u64 = 0x7FFC_0000_0000_0004;
+
+fn snc_arm(step: ClosurePtr) {
+    super::microtasks::CURRENT_MICROTASK_CALLBACK.with(|c| c.set(step));
+}
+
+struct SncReset;
+impl Drop for SncReset {
+    fn drop(&mut self) {
+        super::microtasks::CURRENT_MICROTASK_CALLBACK.with(|c| c.set(std::ptr::null()));
+    }
+}
+
+fn admitted(value: f64, step: ClosurePtr) -> bool {
+    js_async_step_resume_now(value, step).to_bits() == TAG_TRUE_BITS
+}
+
+fn cell_value() -> u64 {
+    js_iter_result_get_value().to_bits()
+}
+
+#[test]
+fn snc_admits_primitive_and_native_fulfilled_and_writes_payload() {
+    fixture(|step, _, inner| {
+        let _reset = SncReset;
+        snc_arm(step);
+        js_iter_result_set(-1.0, 1);
+        assert!(admitted(5.0, step));
+        assert_eq!(f64::from_bits(cell_value()), 5.0);
+        assert!(admitted(boxed(inner), step));
+        assert_eq!(f64::from_bits(cell_value()), 19.0);
+        assert!(
+            TASK_QUEUE.with(|q| q.borrow().is_empty()),
+            "SNC never publishes"
+        );
+    });
+}
+
+#[test]
+fn snc_p1_requires_own_step_job() {
+    fixture(|step, _, _| {
+        let _reset = SncReset;
+        js_iter_result_set(-1.0, 0);
+        // not inside any microtask job (first call / thunk)
+        assert!(!admitted(5.0, step));
+        // a different callback owns the current job
+        let other = crate::closure::js_closure_alloc(crate::fn_info!(resume, 2), 0);
+        snc_arm(other);
+        assert!(!admitted(5.0, step));
+        assert!(!admitted(5.0, std::ptr::null()));
+        assert_eq!(f64::from_bits(cell_value()), -1.0);
+    });
+}
+
+#[test]
+fn snc_p2_requires_reusable_result_promise() {
+    fixture(|step, next, _| {
+        let _reset = SncReset;
+        snc_arm(step);
+        js_iter_result_set(-1.0, 0);
+        INLINE_TRAP.with(|slot| {
+            let mut trap = slot.get();
+            trap.trap_next = std::ptr::null_mut();
+            slot.set(trap);
+        });
+        assert!(!admitted(5.0, step), "first call has no reusable result");
+        let other = crate::closure::js_closure_alloc(crate::fn_info!(resume, 2), 0);
+        INLINE_TRAP.with(|slot| {
+            let mut trap = slot.get();
+            trap.trap_next = next;
+            trap.current_step = other as usize;
+            slot.set(trap);
+        });
+        assert!(!admitted(5.0, step), "another activation owns the trap");
+        assert_eq!(f64::from_bits(cell_value()), -1.0);
+    });
+}
+
+#[test]
+fn snc_p3_declines_while_async_hooks_are_active() {
+    fixture(|step, _, _| {
+        let _reset = SncReset;
+        snc_arm(step);
+        crate::async_hook_slots::install();
+        let options = crate::object::js_object_alloc(0, 0);
+        let callback = crate::closure::js_closure_alloc(crate::fn_info!(init, 4), 0);
+        let key = crate::string::js_string_from_bytes(b"init".as_ptr(), 4);
+        crate::object::js_object_set_field_by_name(options, key, boxed(callback));
+        let hook = crate::async_hooks::js_async_hooks_create_hook(boxed(options));
+        struct Disable(f64);
+        impl Drop for Disable {
+            fn drop(&mut self) {
+                crate::async_hooks::js_async_hook_disable(crate::value::js_nanbox_get_pointer(
+                    self.0,
+                ));
+            }
+        }
+        let _disable = Disable(hook);
+        crate::async_hooks::js_async_hook_enable(crate::value::js_nanbox_get_pointer(hook));
+        js_iter_result_set(-1.0, 0);
+        assert!(!admitted(5.0, step));
+        assert_eq!(f64::from_bits(cell_value()), -1.0);
+    });
+}
+
+#[test]
+fn snc_p4_declines_non_settled_or_observable_values() {
+    fixture(|step, _, inner| unsafe {
+        let _reset = SncReset;
+        snc_arm(step);
+        js_iter_result_set(-1.0, 0);
+        for state in [PromiseState::Pending, PromiseState::Rejected] {
+            (*inner).state = state;
+            assert!(!admitted(boxed(inner), step));
+        }
+        (*inner).state = PromiseState::Fulfilled;
+        crate::object::prototype_chain::object_set_static_prototype(
+            inner as usize,
+            crate::value::TAG_NULL,
+        );
+        assert!(!(*inner).meta.is_null());
+        assert!(!admitted(boxed(inner), step), "patched prototype");
+        let object = crate::object::js_object_alloc(0, 0);
+        assert!(
+            !admitted(boxed(object), step),
+            "thenable/object is not a native promise"
+        );
+        assert_eq!(f64::from_bits(cell_value()), -1.0);
+    });
+}
+
+#[test]
+fn snc_p5_requires_an_empty_microtask_queue() {
+    fixture(|step, next, _| {
+        let _reset = SncReset;
+        snc_arm(step);
+        js_iter_result_set(-1.0, 0);
+        TASK_QUEUE.with(|queue| {
+            queue.borrow_mut().push_back(Task::Inline(
+                std::ptr::null(),
+                0.0,
+                next,
+                true,
+                capture_context(),
+            ))
+        });
+        assert!(
+            !admitted(5.0, step),
+            "a queued job runs before the continuation"
+        );
+        assert_eq!(f64::from_bits(cell_value()), -1.0);
+        TASK_QUEUE.with(|queue| queue.borrow_mut().clear());
+        assert!(admitted(5.0, step));
+    });
+}
+
+#[test]
+fn snc_p6_declines_a_cancelled_job_domain_and_marks_ready_otherwise() {
+    fixture(|step, _, _| {
+        let _reset = SncReset;
+        snc_arm(step);
+        let domain = crate::async_context::job_domain::JobDomain::new();
+        domain.run(|| {
+            js_iter_result_set(-1.0, 0);
+            assert!(admitted(5.0, step), "live current domain is eligible");
+            assert!(domain.take_ready(), "the same ready mark as enqueue");
+            domain.cancel();
+            js_iter_result_set(-1.0, 0);
+            assert!(!admitted(5.0, step), "cancelled domain drops the job");
+            assert_eq!(f64::from_bits(cell_value()), -1.0);
+        });
+    });
+}

@@ -202,6 +202,13 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
                 crate::diagnostics::quote(unit), crate::diagnostics::quote(&pf.module_paths[site.module as usize]),
                 site.byte_offset, crate::diagnostics::quote(&site.key), site.is_call,
                 crate::diagnostics::quote(&format!("{:?}", site.verdict))));
+            for (copy, v) in &site.diagnostic_copies {
+                out.push_str(&format!(
+                    "D {{\"record\":\"copy-verdict\",\"unit\":{},\"file\":{},\"start\":{},\"key\":{},\"call\":{},\"copy\":{},\"verdict\":{}}}\n",
+                    crate::diagnostics::quote(unit), crate::diagnostics::quote(&pf.module_paths[site.module as usize]),
+                    site.byte_offset, crate::diagnostics::quote(&site.key), site.is_call,
+                    crate::diagnostics::quote(copy), crate::diagnostics::quote(&format!("{v:?}"))));
+            }
         }
         for line in lines {
             out.push_str("D {");

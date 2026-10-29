@@ -705,6 +705,7 @@ pub(crate) fn compute_in<'a>(
                     None => Some(units::FnContract {
                         compiled_body: None,
                         method: false,
+                        callable: false,
                         this_class: None,
                         name: format!("{name}.constructor"),
                         params: Vec::new(),
@@ -1201,11 +1202,13 @@ pub(crate) fn compute_in<'a>(
     // of the stand-ins bind (`arg_contract_of`, as for a closed function,
     // decision 13). A stub method (no function contract) or one called
     // under no name (through ⊤) passes what no contract describes: `top`.
+    // DECISIONS 224: the same for a function its owner published to a known
+    // closed callee (`FnContract::callable`).
     let method_args_out: Vec<(String, units::ArgContract)> = match g.view {
         Some(_) if cfg.unit && !g.m.aborted => {
             let mut by: Vec<(String, Vec<model::Tok>)> = Vec::new();
             for (&t, fc) in &g.stand_in_fc {
-                if !fc.method || !g.m.called.contains(&g.m.tok_fn(t)) {
+                if !(fc.method || fc.callable) || !g.m.called.contains(&g.m.tok_fn(t)) {
                     continue;
                 }
                 match by.iter_mut().find(|(n, _)| *n == fc.name) {
@@ -1414,10 +1417,29 @@ pub(crate) fn compute_in<'a>(
         std::mem::take(&mut g.m.shared_out).into_iter().collect()
     };
     let diagnostics = if cfg.diagnostics {
-        vec![(
-            view.map_or("<whole>", |v| v.key.as_str()).to_owned(),
-            diagnostics::collect(&g),
-        )]
+        vec![(view.map_or("<whole>", |v| v.key.as_str()).to_owned(), {
+            let mut rows = diagnostics::collect(&g);
+            for (name, ac) in &args_out {
+                rows.push(format!(
+                    "{{\"record\":\"argument-output\",\"name\":{},\"top\":{},\"params\":[{}]}}",
+                    diagnostics::quote(name),
+                    ac.top,
+                    ac.params
+                        .iter()
+                        .map(diagnostics::value_brief)
+                        .collect::<Vec<_>>()
+                        .join(",")
+                ));
+            }
+            for (name, vc) in &values_out {
+                rows.push(format!(
+                    "{{\"record\":\"value-output\",\"name\":{},\"value\":{}}}",
+                    diagnostics::quote(&format!("{:?}", name)),
+                    diagnostics::value_brief(vc)
+                ));
+            }
+            rows
+        })]
     } else {
         Vec::new()
     };

@@ -1912,6 +1912,11 @@ POLL_CAPABLE_RUNTIME = {
     # `js_string_concat_value_box` on its miss path, so it can allocate and
     # re-enter a moving minor exactly like its callee (the #7616 shape).
     "js_string_concat_site_value",
+    # JST slice 3: the literal-operand concat entries. `js_string_concat_parts`
+    # takes the collecting allocation (and the general arm's ToString) like
+    # `js_string_concat_chain`; `js_string_concat_lit_value_box` is the
+    # literal-prefix twin of `js_string_concat_value_box`.
+    "js_string_concat_parts", "js_string_concat_lit_value_box",
     # `js_private_brand_add` is the referent-with-no-name that NEITHER audit can
     # ask for: `--audit-poll-reach` only walks symbols `ALLOC_RE` matches, and
     # `js_private_brand_add` matches no alloc/new/create convention, so the one

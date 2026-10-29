@@ -358,13 +358,13 @@ fn blob_method_value(
 
 fn file_blob_method_value(info: *const crate::closure::JsFunctionInfo, id: usize) -> f64 {
     let closure = js_closure_alloc(info, 1);
-    js_closure_set_capture_ptr(closure, 0, id as i64);
+    crate::closure::closure_set_capture_word(closure, 0, id as i64);
     f64::from_bits(JSValue::pointer(closure as *const u8).bits())
 }
 
 fn file_blob_stream_method_value(info: *const crate::closure::JsFunctionInfo, id: usize) -> f64 {
     let closure = js_closure_alloc(info, 1);
-    js_closure_set_capture_ptr(closure, 0, id as i64);
+    crate::closure::closure_set_capture_word(closure, 0, id as i64);
     f64::from_bits(JSValue::pointer(closure as *const u8).bits())
 }
 

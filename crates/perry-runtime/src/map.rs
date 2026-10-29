@@ -313,6 +313,7 @@ pub(crate) fn test_map_side_deallocation_snapshot() -> (u64, u64) {
     )
 }
 
+mod entry;
 mod store;
 mod string_key;
 
@@ -1866,92 +1867,7 @@ fn map_op_returning_receiver(
 /// The map pointer is stable (never reallocated)
 #[no_mangle]
 pub extern "C" fn js_map_set(map: *mut MapHeader, key: f64, value: f64) -> *mut MapHeader {
-    map_op_returning_receiver(map, |map| map_set_resolved(map, key, value))
-}
-
-/// `js_map_set`'s body, on a receiver already resolved to a genuine `MapHeader`.
-fn map_set_resolved(map: *mut MapHeader, key: f64, value: f64) {
-    let key = normalize_zero(key);
-    unsafe {
-        // Check if key already exists (O(1) via the numeric side index)
-        let idx = find_key_index(map, key);
-
-        if idx >= 0 {
-            // Update existing value (key position unchanged → no index update)
-            let entries = entries_ptr_mut(map);
-            let value_slot = entries.add((idx as usize) * 2 + 1);
-            // GC_STORE_AUDIT(BARRIERED): exact heap slot belongs to the owned store.
-            crate::gc::runtime_store_gc_jsvalue_slot(
-                (*map).store as usize,
-                value_slot as usize,
-                value.to_bits(),
-            );
-            return;
-        }
-
-        // Key doesn't exist, append a new entry. `ensure_capacity` can fire a
-        // MOVING minor (via gc_note_external_side_alloc) — its "conservative +
-        // non-moving" comment is false under evacuation. `key`/`value` are held
-        // only in these native-stack params (a freshly-built, not-yet-inserted
-        // object is reachable via nothing else), which an evacuating minor does
-        // not scan, so root them across the grow and re-derive after. gh #6206.
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let key_handle = scope.root_nanbox_f64(key);
-        let value_handle = scope.root_nanbox_f64(value);
-        let grew = ensure_capacity(map);
-        let key = key_handle.get_nanbox_f64();
-        let value = value_handle.get_nanbox_f64();
-        let size = (*map).size;
-        let used = (*map).used;
-        let entries = entries_ptr_mut(map);
-        if grew && used > 0 {
-            crate::gc::replay_old_parent_slot_range_barriers(
-                (*map).store as usize,
-                entries as *mut u64,
-                used as usize * 2,
-            );
-        }
-
-        let key_slot = entries.add((used as usize) * 2);
-        let value_slot = entries.add((used as usize) * 2 + 1);
-        // GC_STORE_AUDIT(EXTERNAL_BARRIERED): map append key/value slots use the shared external-slot helper.
-        crate::gc::runtime_store_gc_jsvalue_slot(
-            (*map).store as usize,
-            key_slot as usize,
-            key.to_bits(),
-        );
-        crate::gc::runtime_store_gc_jsvalue_slot(
-            (*map).store as usize,
-            value_slot as usize,
-            value.to_bits(),
-        );
-
-        (*map).size = size + 1;
-        (*map).used = used + 1;
-        (*(*map).store).used = (*map).used as usize;
-
-        // Update the O(1) side-tables: numeric keys by bits, string keys by
-        // content hash, pointer keys (objects/symbols/bigints) in the
-        // GC-rebuilt pointer index (#6084).
-        let key_bits = key.to_bits();
-        if is_safe_numeric_key(key_bits) {
-            if let Some(index) = (*map).store.as_mut().map(|store| &mut store.numeric) {
-                index.insert(NumericKey(key_bits), used);
-            }
-        } else if is_string_like(key_bits) {
-            // String key: content-hashed index bypasses the gen-GC stale-bits
-            // constraint by storing entry indexes (not pointers) keyed by
-            // Map-local word digest of the bytes.
-            if let Some(h) = string_content_hash(key_bits) {
-                (*(*map).store).strings.insert(h, used);
-            }
-        } else {
-            let index = &mut (*(*map).store).pointers;
-            let before = hash_index_bytes(index);
-            index.insert(MapPtrKey(key), used);
-            note_index_bytes_changed(before, hash_index_bytes(index));
-        }
-    }
+    entry::set(map, key, value)
 }
 
 /// Shared tail for the `js_map_set_string_*` specializations: store into the
@@ -2053,27 +1969,54 @@ pub extern "C" fn js_map_set_string_string(
 /// Returns the value, or TAG_UNDEFINED if not found
 #[no_mangle]
 pub extern "C" fn js_map_get(map: *const MapHeader, key: f64) -> f64 {
-    let map = clean_map_ptr(map);
-    if map.is_null() {
-        return f64::from_bits(TAG_UNDEFINED);
+    if let Some(map) = entry::plain_receiver(map) {
+        return map_get_resolved(map, key);
     }
-    map_get_resolved(map, key)
+    entry::get_receiver_fallback(map, key)
+}
+
+/// `m.get(k)` that also reports the entry's value slot (0 when absent) through
+/// `slot_out`, so a following `m.set(k, v)` on the same receiver and key bits
+/// can store straight into it. See [`entry::get_with_slot`].
+#[no_mangle]
+pub extern "C" fn js_map_get_entry(map: *const MapHeader, key: f64, slot_out: *mut u64) -> f64 {
+    entry::get_with_slot(map, key, slot_out)
 }
 
 #[inline(always)]
 fn map_get_resolved(map: *const MapHeader, key: f64) -> f64 {
-    let key = normalize_zero(key);
     unsafe {
-        let idx = find_key_index(map, key);
-
-        if idx >= 0 {
-            let entries = entries_ptr(map);
-            let value_slot = entries.add((idx as usize) * 2 + 1);
-            let value = ptr::read(value_slot);
-            return heal_forwarded_array_value(map, value_slot, value);
+        if let Some(index) = entry::identical_entry(map, key) {
+            return map_read_entry_value(map, index);
         }
+    }
+    map_get_resolved_fallback(map, key)
+}
 
-        f64::from_bits(TAG_UNDEFINED)
+#[inline(never)]
+fn map_get_resolved_fallback(map: *const MapHeader, key: f64) -> f64 {
+    unsafe {
+        let index = find_key_index(map, normalize_zero(key));
+        if index >= 0 {
+            return map_read_entry_value(map, index);
+        }
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+#[inline(always)]
+unsafe fn map_read_entry_value(map: *const MapHeader, index: i32) -> f64 {
+    let slot = entries_ptr(map).add(index as usize * 2 + 1);
+    let value = ptr::read(slot);
+    if value.to_bits() & crate::value::TAG_MASK != crate::value::POINTER_TAG {
+        return value;
+    }
+    heal_forwarded_array_value(map, slot, value)
+}
+
+crate::entry_contracts::kind_entry! {
+    js_map_get_entry__Map, Map, fn(map: *const MapHeader, key: f64, slot_out: *mut u64) -> f64 {
+        entry::get_with_slot_resolved(map, key, slot_out)
     }
 }
 
@@ -2318,6 +2261,10 @@ static KEEP_JS_MAP_SET_STRING_STRING: extern "C" fn(
 #[used(compiler)]
 static KEEP_JS_MAP_GET_STRING_KEY: extern "C" fn(*const MapHeader, *const StringHeader) -> f64 =
     js_map_get_string_key;
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_MAP_GET_ENTRY: extern "C" fn(*const MapHeader, f64, *mut u64) -> f64 =
+    js_map_get_entry;
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
 static KEEP_JS_MAP_GET_NUMBER_KEY: extern "C" fn(*const MapHeader, f64) -> f64 =

@@ -204,14 +204,72 @@ fn emit_dynamic_pointer_push_store(
     let done_idx = ctx.new_block("apush.pointer_layout.done");
     let bookkeeping_label = ctx.block_label(bookkeeping_idx);
     let done_label = ctx.block_label(done_idx);
-    {
+    // A heap string is pointer-bearing exactly like an object pointer, so it
+    // is admitted by the same header proof; what it still owes is the shared-
+    // string demote, and only when the string is not already shared.
+    // `layout_pointer_bearing_bits` accepts a `STRING_TAG` payload iff it is
+    // non-zero; the `>= 0x1000` floor is what makes the refcount read below
+    // safe, and a string that fails it takes the full sequence.
+    let admit_strings = string_addref_needed;
+    // Created only for the string arm: an unterminated block is invalid IR.
+    let (fast_idx, string_addref_idx, string_demote_idx) = if admit_strings {
+        (
+            ctx.new_block("apush.pointer_layout.fast"),
+            ctx.new_block("apush.pointer_layout.str_addref"),
+            ctx.new_block("apush.pointer_layout.str_demote"),
+        )
+    } else {
+        (done_idx, done_idx, done_idx)
+    };
+    let fast_label = ctx.block_label(fast_idx);
+    let string_addref_label = ctx.block_label(string_addref_idx);
+    let string_demote_label = ctx.block_label(string_demote_idx);
+    let (is_heap_string, payload) = {
         let blk = ctx.block();
         let top16 = blk.lshr(I64, &value_bits, "48");
         let is_object_pointer = blk.icmp_eq(I64, &top16, crate::nanbox::POINTER_TAG_TOP16_I64);
+        let is_heap_string = blk.icmp_eq(I64, &top16, crate::nanbox::STRING_TAG_TOP16_I64);
+        let payload = blk.and(I64, &value_bits, crate::nanbox::POINTER_MASK_I64);
+        let admitted_value = if admit_strings {
+            let payload_valid = blk.icmp_uge(I64, &payload, "4096");
+            let string_ok = blk.and(I1, &is_heap_string, &payload_valid);
+            blk.or(I1, &is_object_pointer, &string_ok)
+        } else {
+            is_object_pointer
+        };
         let proof_bits = blk.and(I16, object_flags, ARRAY_PUSH_POINTER_LAYOUT_MASK_I16);
         let pointer_layout = blk.icmp_eq(I16, &proof_bits, ARRAY_PUSH_POINTER_LAYOUT_EXPECT_I16);
-        let fast = blk.and(I1, &is_object_pointer, &pointer_layout);
-        blk.cond_br(&fast, &done_label, &bookkeeping_label);
+        let fast = blk.and(I1, &admitted_value, &pointer_layout);
+        if admit_strings {
+            blk.cond_br(&fast, &fast_label, &bookkeeping_label);
+        } else {
+            blk.cond_br(&fast, &done_label, &bookkeeping_label);
+        }
+        (is_heap_string, payload)
+    };
+
+    if admit_strings {
+        ctx.current_block = fast_idx;
+        ctx.block()
+            .cond_br(&is_heap_string, &string_addref_label, &done_label);
+        ctx.current_block = string_addref_idx;
+        {
+            let blk = ctx.block();
+            // `StringHeader.refcount` (offset 12): 0 is already shared. A fresh
+            // concat result is born shared, so the helper runs only for a
+            // uniquely-owned string that must be demoted.
+            let refcount_addr = blk.add(I64, &payload, "12");
+            let refcount_ptr = blk.inttoptr(I64, &refcount_addr);
+            let refcount = blk.load(I32, &refcount_ptr);
+            let unique = blk.icmp_ne(I32, &refcount, "0");
+            blk.cond_br(&unique, &string_demote_label, &done_label);
+        }
+        ctx.current_block = string_demote_idx;
+        {
+            let blk = ctx.block();
+            blk.call_void("js_string_addref_if_heap_string", &[(DOUBLE, value_double)]);
+            blk.br(&done_label);
+        }
     }
 
     ctx.current_block = bookkeeping_idx;
@@ -1873,3 +1931,7 @@ mod parent_gate_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "array_push_string_gate_tests.rs"]
+mod string_gate_tests;

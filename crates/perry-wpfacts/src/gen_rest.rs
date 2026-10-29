@@ -1065,6 +1065,20 @@ impl<'a> Gen<'a> {
                 let b = self.prim_node(prim::BOOL);
                 self.callback(s, vec![arg, b])
             }
+            Expr::AsyncStepResumeNow {
+                value,
+                step_closure,
+            } => {
+                // On admission the awaited value (promise unwrapped) is
+                // rewritten into the iter-result cell, which the step then
+                // reads back as its next resume value.
+                let v = self.expr(fx, value);
+                let _ = self.expr(fx, step_closure);
+                let aw = self.awaited(v);
+                let r = self.iter_res_node(fx);
+                self.m.edge(aw, r);
+                self.prim_node(prim::BOOL)
+            }
             Expr::AsyncStepDone {
                 value,
                 step_closure,

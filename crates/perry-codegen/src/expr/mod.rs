@@ -851,6 +851,8 @@ pub(crate) struct FnCtx<'a> {
     /// The owner stays rooted; only capture addressing adds the frame offset.
     pub private_resume_frame: bool,
     pub private_async_resume_frame: bool,
+    /// Resume-local copies of the private controls (see resume_locals.rs).
+    pub resume_locals: Option<resume_locals::ResumeLocals>,
     /// Stack context supplied only to a compiler-private versioned-loop
     /// callback clone. Its cold arms record the exact resume index and poison
     /// the caller's private counter before executing observable fallback code.
@@ -1482,6 +1484,8 @@ pub(crate) struct FnCtx<'a> {
     pub create_families: crate::layout_desc::create_families::CreateState,
     /// The open class-guard run (`class_guard_memo`).
     pub class_guard_window: Option<class_guard_memo::Window>,
+    /// The open Map get-then-set regions (`map_entry_fusion`).
+    pub map_entry_fusion: map_entry_fusion::State,
 
     /// Parallel `i1` slots for ordinary boolean locals that have stayed inside
     /// the representation-first subset. The generic `double` slot remains as a
@@ -3280,6 +3284,8 @@ mod index_get_claim_tests;
 mod index_key;
 #[cfg(test)]
 mod kind_entry_selection_tests;
+#[cfg(test)]
+mod map_entry_fusion_tests;
 pub(crate) mod masked_window;
 #[cfg(test)]
 mod null_default_numeric_add_tests;
@@ -3291,6 +3297,7 @@ pub(crate) mod suffix_cursor;
 mod bigint_bitwise_tests;
 pub(crate) mod byte_cell;
 pub(crate) mod class_guard_memo;
+pub(crate) mod map_entry_fusion;
 mod ptr_numarray_access;
 pub(crate) mod ta_element_read;
 mod ta_param_f64_read;
@@ -3327,6 +3334,7 @@ pub(crate) mod class_field_inline_guard;
 pub(crate) mod element_shape_guard;
 pub(crate) mod element_shape_reads;
 mod generator_control_slots;
+pub(crate) mod resume_locals;
 pub(crate) mod ic_fast_split;
 mod js_runtime;
 mod literals_vars;

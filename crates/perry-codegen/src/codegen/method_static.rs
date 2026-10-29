@@ -358,6 +358,7 @@ pub(in crate::codegen) fn compile_static_method(
         fixed_generator_state: false,
         private_resume_frame: false,
         private_async_resume_frame: false,
+        resume_locals: None,
         versioned_loop_deopt_context: None,
         trusted_box_capture_ptrs: HashMap::new(),
         ready_cell_roots: crate::stmt::binding_cell::ReadyCellRoots::with_entry_cells(
@@ -451,6 +452,7 @@ pub(in crate::codegen) fn compile_static_method(
         typed_element_locals: std::collections::HashSet::new(),
         create_families: Default::default(),
         class_guard_window: None,
+        map_entry_fusion: Default::default(),
         i1_local_slots: HashMap::new(),
         index_used_locals: native_facts.index_used_locals(),
         strictly_i32_bounded_locals: native_facts.strictly_i32_bounded_locals(),

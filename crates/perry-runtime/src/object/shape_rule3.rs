@@ -253,6 +253,12 @@ pub(crate) const RULE3_KINDS: &[(u8, &str, &str, Rule3Word)] = &[
         "high half of word_count (< 2^30)",
         Rule3Word::NotPointerTagged,
     ),
+    (
+        gc::GC_TYPE_REGEX_CACHE,
+        "RegexCache",
+        "perex::dfa header word 1: zero before the first build, then the layout number (2)",
+        Rule3Word::NotPointerTagged,
+    ),
     // Cells are compiler-private raw addresses, never JavaScript receivers.
     (
         gc::GC_TYPE_BOX,
