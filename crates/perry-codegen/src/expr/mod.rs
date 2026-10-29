@@ -1482,6 +1482,8 @@ pub(crate) struct FnCtx<'a> {
     pub create_families: crate::layout_desc::create_families::CreateState,
     /// The open class-guard run (`class_guard_memo`).
     pub class_guard_window: Option<class_guard_memo::Window>,
+    /// The open Map get-then-set regions (`map_entry_fusion`).
+    pub map_entry_fusion: map_entry_fusion::State,
 
     /// Parallel `i1` slots for ordinary boolean locals that have stayed inside
     /// the representation-first subset. The generic `double` slot remains as a
@@ -3280,6 +3282,8 @@ mod index_get_claim_tests;
 mod index_key;
 #[cfg(test)]
 mod kind_entry_selection_tests;
+#[cfg(test)]
+mod map_entry_fusion_tests;
 pub(crate) mod masked_window;
 #[cfg(test)]
 mod null_default_numeric_add_tests;
@@ -3291,6 +3295,7 @@ pub(crate) mod suffix_cursor;
 mod bigint_bitwise_tests;
 pub(crate) mod byte_cell;
 pub(crate) mod class_guard_memo;
+pub(crate) mod map_entry_fusion;
 mod ptr_numarray_access;
 pub(crate) mod ta_element_read;
 mod ta_param_f64_read;
