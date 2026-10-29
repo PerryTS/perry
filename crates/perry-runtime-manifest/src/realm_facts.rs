@@ -920,6 +920,12 @@ mod tests {
     use super::super::tokens;
     use super::*;
     #[test]
+    fn integrity_is_only_frozen() {
+        assert!(parse(&tokens("Example, integrity = sealed").unwrap()).is_err());
+        let facts = parse(&tokens("Example, integrity = frozen").unwrap()).unwrap();
+        assert!(facts.frozen);
+    }
+    #[test]
     fn human_paths_symbols_and_births_are_structured() {
         let facts =
             parse(&tokens("Array.prototype[Symbol.iterator], births = [Array, Object]").unwrap())
