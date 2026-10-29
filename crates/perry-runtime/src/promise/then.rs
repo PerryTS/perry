@@ -1997,3 +1997,58 @@ extern "C" fn finally_passthrough_reject(
     }
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
+
+#[cfg(test)]
+mod leaf_arm_tests {
+    use super::*;
+
+    fn on_fresh_thread(f: impl FnOnce() + Send + 'static) {
+        std::thread::spawn(move || {
+            crate::gc::gc_init();
+            let _no_move = crate::gc::GcSuppressScope::new();
+            f();
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    fn leaf_arm_builds_a_pending_unpinned_promise_with_fresh_ids() {
+        on_fresh_thread(|| {
+            let first = js_promise_new();
+            let second = js_promise_new();
+            unsafe {
+                assert!(matches!((*first).state, PromiseState::Pending));
+                assert!((*first).meta.is_null());
+                assert_eq!((*first).native_pinned, 0);
+                assert!((*second).async_id > (*first).async_id);
+                assert_eq!(
+                    (*first).trigger_async_id,
+                    crate::async_hook_slots::execution_async_id_u64()
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn a_parent_keeps_the_rooted_arm_and_its_trigger_id() {
+        on_fresh_thread(|| {
+            let parent = js_promise_new();
+            unsafe { (*parent).async_id = 4242 };
+            let child = js_promise_new_with_parent_impl(parent, false);
+            unsafe {
+                assert_eq!((*child).trigger_async_id, 4242);
+            }
+        });
+    }
+
+    #[test]
+    fn force_malloc_keeps_the_pinned_arm() {
+        on_fresh_thread(|| {
+            let promise = js_promise_new_with_parent_impl(std::ptr::null_mut(), true);
+            unsafe {
+                assert_eq!((*promise).native_pinned, 1);
+            }
+        });
+    }
+}
