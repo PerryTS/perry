@@ -332,6 +332,8 @@ crate::perry_thread_local! {
     /// bounds or no match), so a test can assert the automaton answered.
     pub(crate) static DFA_ANSWERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     pub(crate) static DFA_CAPTURE_ANSWERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Test-only: how many capture passes ran, answered or declined.
+    pub(crate) static DFA_CAPTURE_PASSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     pub(crate) static LITERAL_PREFIX_ANSWERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
@@ -875,9 +877,10 @@ fn grow_lent_frames(cell: &mut ScratchCell, required: ScratchRequirements) {
 enum Bounds {
     /// No match at or after the start: nothing else needs to run.
     NoMatch,
-    /// The span of the match the evaluator would return, and whether the
-    /// program has capture groups beyond group zero.
-    Match(Span, bool),
+    /// The span of the match the evaluator would return, whether the program
+    /// has capture groups beyond group zero, and whether the automaton's
+    /// capture pass may read them (it has not found two paths alive).
+    Match(Span, bool, bool),
     /// The automaton cannot answer this search; the evaluator does.
     Declined,
     /// The program tries one start and its groups are wanted: no bounds
@@ -895,14 +898,30 @@ enum Captured {
     Declined,
 }
 
-/// The program's automaton storage after the automaton reported it thrashes:
-/// a leaf of the size Perex reports for it, when that is larger and allowed.
+/// Storage for a search the automaton declined for want of it: the
+/// program's first storage when it had none, or, after the automaton reported
+/// it thrashes, a leaf of the size Perex reports, when that is larger and
+/// allowed. `None` leaves the search to the evaluator.
 #[inline(never)]
-fn regrown_cache<'a>(program: perex::program::Program<'_>, cache: &[u32]) -> Option<&'a mut [u32]> {
-    let words = dfa::stats(cache)?.required_words;
+fn storage_for<'a>(
+    program: perex::program::Program<'_>,
+    cache: &[u32],
+    why: dfa::Decline,
+) -> Option<&'a mut [u32]> {
     // SAFETY: `program` is a cell view (`CellProgram`), and the reference to
     // the storage it replaces is not used again by the caller.
-    unsafe { super::perex_owner::cell_dfa_regrow(program, words) }
+    unsafe {
+        match why {
+            dfa::Decline::Storage { .. } if cache.is_empty() => {
+                super::perex_owner::cell_dfa_first(program)
+            }
+            dfa::Decline::Disabled => {
+                let words = dfa::stats(cache)?.required_words;
+                super::perex_owner::cell_dfa_regrow(program, words)
+            }
+            _ => None,
+        }
+    }
 }
 
 /// Word 2 of a program holds its flags; `Y` is sticky (perex `program.rs`).
@@ -959,7 +978,7 @@ where
             LITERAL_PREFIX_ANSWERS.with(|n| n.set(n.get() + 1));
             return prefix
                 .find(input, start, budget)
-                .map(|span| span.map_or(Bounds::NoMatch, |span| Bounds::Match(span, false)))
+                .map(|span| span.map_or(Bounds::NoMatch, |span| Bounds::Match(span, false, false)))
                 .map_err(EngineError::Execution);
         }
         // SAFETY: `P: CellProgram`, so these are a program cell's words; the
@@ -972,13 +991,18 @@ where
         }
         let groups = program.capture_count() > 1;
         if matches!(mode, CaptureMode::All) && groups && tries_one_start(program.words()) {
+            // Once a capture pass found two paths alive, the evaluator answers
+            // from the start, as it would without the automaton.
+            if dfa::captures_declined(cache) {
+                return Ok(Bounds::Declined);
+            }
             return Ok(Bounds::OneStart);
         }
         let found = loop {
             let found = dfa::find(program, input, start, &mut *cache, budget);
-            if matches!(found, Ok(dfa::Found::Declined(dfa::Decline::Disabled))) {
-                if let Some(grown) = regrown_cache(program, cache) {
-                    cache = grown;
+            if let Ok(dfa::Found::Declined(why)) = found {
+                if let Some(storage) = storage_for(program, cache, why) {
+                    cache = storage;
                     continue;
                 }
             }
@@ -989,7 +1013,9 @@ where
             DFA_ANSWERS.with(|n| n.set(n.get() + 1));
         }
         match found {
-            Ok(dfa::Found::Match(span)) => Ok(Bounds::Match(span, groups)),
+            Ok(dfa::Found::Match(span)) => {
+                Ok(Bounds::Match(span, groups, !dfa::captures_declined(cache)))
+            }
             Ok(dfa::Found::NoMatch) => Ok(Bounds::NoMatch),
             Ok(dfa::Found::Declined(_)) => Ok(Bounds::Declined),
             Err(error) => Err(EngineError::Execution(error)),
@@ -1026,12 +1052,14 @@ where
         let Some(mut cache) = (unsafe { super::perex_owner::cell_dfa_cache(program) }) else {
             return Ok(Captured::Declined);
         };
+        #[cfg(test)]
+        DFA_CAPTURE_PASSES.with(|n| n.set(n.get() + 1));
         let output = captures.insert(Slots::new(memory, program.capture_count())?);
         let found = loop {
             let found = dfa::captures(program, input, start, &mut *cache, budget, output);
-            if matches!(found, Ok(dfa::Found::Declined(dfa::Decline::Disabled))) {
-                if let Some(grown) = regrown_cache(program, cache) {
-                    cache = grown;
+            if let Ok(dfa::Found::Declined(why)) = found {
+                if let Some(storage) = storage_for(program, cache, why) {
+                    cache = storage;
                     continue;
                 }
             }
@@ -1090,7 +1118,8 @@ where
     let answer = program_bounds(resources, start, follows, mode, budget)?;
     let (start, bounds) = match answer {
         Bounds::NoMatch => return Ok((None, None)),
-        Bounds::Match(span, groups) => match mode {
+        Bounds::Match(span, groups, pass) => match mode {
+            CaptureMode::All if groups && !pass => (span.start(), Some(span)),
             CaptureMode::All if groups => {
                 match program_captures(resources, span.start(), budget, memory, captures)? {
                     Captured::Match(found) if found == span => {

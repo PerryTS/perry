@@ -136,8 +136,56 @@ fn dfa_first_search_matches_the_evaluator() {
     );
 }
 
-/// A program the automaton cannot read carries no cache, and one it can
-/// carries at least its minimum.
+/// One bound program searched over `subjects` from their start: the answers,
+/// and its automaton storage's length after each search (`None`: it can carry
+/// none).
+fn searched(
+    pattern: &str,
+    flags: &str,
+    subjects: &[&str],
+    mode: CaptureMode,
+) -> Vec<(Answer, Option<usize>)> {
+    let scope = RuntimeHandleScope::new();
+    let re = scope.root_raw_mut_ptr(regexp(&scope, pattern, flags));
+    let mut budget = Budget::new(WORK);
+    let memory = MemoryBudget::new(super::super::perex_api::SCRATCH_BYTES);
+    let owner = re
+        .with_const_ptr::<RegExpHeader, _>(|re| unsafe { GcProgram::from_regexp(&scope, re) })
+        .unwrap();
+    let program = super::super::perex_api::bind_program(owner, &mut budget).unwrap();
+    subjects
+        .iter()
+        .map(|line| {
+            let input = scope.root_string_ptr(make_string(line));
+            let subject = super::super::perex_api::bind_heap_subject(input).unwrap();
+            let (found, _) = find_near(
+                &program,
+                &subject,
+                0,
+                None,
+                mode,
+                &mut budget,
+                &memory,
+                64,
+                &mut poll,
+            )
+            .unwrap();
+            let answer = found.map(|m| match m.captures {
+                Some(captures) => captures.to_vec(),
+                None => vec![Some(m.full)],
+            });
+            let words = program
+                .with_view(|p| {
+                    unsafe { super::super::perex_owner::cell_dfa_cache(p) }.map(|c| c.len())
+                })
+                .unwrap();
+            (answer, words)
+        })
+        .collect()
+}
+
+/// A program the automaton cannot read carries no storage. One it can carries
+/// none until a search needs automaton states, then the size Perex gives it.
 #[test]
 fn only_eligible_programs_carry_a_cache() {
     let _lock = crate::gc::global_side_table_test_lock();
@@ -149,28 +197,22 @@ fn only_eligible_programs_carry_a_cache() {
     ] {
         let scope = RuntimeHandleScope::new();
         let re = scope.root_raw_mut_ptr(regexp(&scope, pattern, ""));
-        let mut budget = Budget::new(WORK);
         let owner = re
             .with_const_ptr::<RegExpHeader, _>(|re| unsafe { GcProgram::from_regexp(&scope, re) })
             .unwrap();
-        let program = super::super::perex_api::bind_program(owner, &mut budget).unwrap();
-        let cache = program
-            .with_view(|p| {
-                let len = unsafe { super::super::perex_owner::cell_dfa_cache(p) }
-                    .map(|cache| cache.len());
-                (len, dfa::minimum_words(p))
-            })
-            .unwrap();
-        match cache {
-            (Some(len), Some(minimum)) => {
-                assert!(eligible, "/{pattern}/ carries a cache");
-                assert!(
-                    len >= minimum,
-                    "/{pattern}/: {len} words < minimum {minimum}"
-                );
-            }
-            (None, None) => assert!(!eligible, "/{pattern}/ carries no cache"),
-            other => panic!("/{pattern}/: cache and eligibility disagree: {other:?}"),
+        let program = super::super::perex_api::bind_program(owner, &mut Budget::new(WORK)).unwrap();
+        let initial = program.with_view(|p| dfa::initial_words(p)).unwrap();
+        assert_eq!(initial.is_some(), eligible, "/{pattern}/");
+        let runs = searched(pattern, "", &["zzz", "xaab", "ab"], CaptureMode::Full);
+        for (_, words) in &runs {
+            assert_eq!(words.is_some(), eligible, "/{pattern}/");
+        }
+        if eligible {
+            // `z` begins no match: decided before any state, no storage.
+            assert_eq!(runs[0], (None, Some(0)), "/{pattern}/");
+            let words = runs[1].1.unwrap();
+            assert_eq!(words, (initial.unwrap() + 1) & !1, "/{pattern}/");
+            assert_eq!(runs[2].1, Some(words), "/{pattern}/");
         }
     }
 }
@@ -278,11 +320,11 @@ fn dfa_capture_pass_matches_the_evaluator() {
     }
 }
 
-/// One program searched over many subjects: its storage starts at the
-/// minimum plus a few states, thrashes, is reallocated once at the size
-/// Perex reports, and the pass answers every later search.
+/// The log-line program over many subjects: its first storage, the size
+/// Perex gives it, holds the automaton, so it never grows, and the capture
+/// pass answers every search.
 #[test]
-fn dfa_storage_grows_for_a_program_that_thrashes() {
+fn dfa_first_storage_holds_a_one_pass_program() {
     let _lock = crate::gc::global_side_table_test_lock();
     let pattern = "^(\\d{4})-(\\d{2})-(\\d{2})T[\\d:]+ \\[(\\w+)\\] user=(\\d+) action=(\\w+) latency=(\\d+)ms$";
     let lines: Vec<String> = (0..120)
@@ -302,49 +344,91 @@ fn dfa_storage_grows_for_a_program_that_thrashes() {
             )
         })
         .collect();
-    let scope = RuntimeHandleScope::new();
-    let re = scope.root_raw_mut_ptr(regexp(&scope, pattern, ""));
-    let mut budget = Budget::new(WORK);
-    let memory = MemoryBudget::new(super::super::perex_api::SCRATCH_BYTES);
-    let owner = re
-        .with_const_ptr::<RegExpHeader, _>(|re| unsafe { GcProgram::from_regexp(&scope, re) })
-        .unwrap();
-    let program = super::super::perex_api::bind_program(owner, &mut budget).unwrap();
-    let words = |program: &BoundProgram<GcProgram<'_>>| {
-        program
-            .with_view(|p| unsafe { super::super::perex_owner::cell_dfa_cache(p) }.map(|c| c.len()))
-            .unwrap()
-    };
+    let subjects: Vec<&str> = lines.iter().map(String::as_str).collect();
     let before = DFA_CAPTURE_ANSWERS.with(std::cell::Cell::get);
-    let mut first_len = None;
-    for (n, line) in lines.iter().enumerate() {
-        let (_, reference) = both(pattern, "", line, 0, CaptureMode::All);
-        let input = scope.root_string_ptr(make_string(line));
-        let subject = super::super::perex_api::bind_heap_subject(input).unwrap();
-        let (found, _) = find_near(
-            &program,
-            &subject,
-            0,
-            None,
-            CaptureMode::All,
-            &mut budget,
-            &memory,
-            64,
-            &mut poll,
-        )
-        .unwrap();
-        let got = found.map(|m| m.captures.unwrap().to_vec());
-        assert_eq!(got, reference, "line {n}");
-        if n == 0 {
-            first_len = words(&program);
-        }
-    }
-    let grown = words(&program).unwrap();
-    assert!(grown > first_len.unwrap(), "storage never grew");
+    let runs = searched(pattern, "", &subjects, CaptureMode::All);
     let answered = DFA_CAPTURE_ANSWERS.with(std::cell::Cell::get) - before;
-    assert!(
-        answered >= lines.len() - 12,
-        "the pass answered {answered} of {} searches",
-        lines.len()
+    assert_eq!(
+        answered,
+        lines.len(),
+        "the pass answered {answered} searches"
     );
+    for (n, (got, _)) in runs.iter().enumerate() {
+        let (_, reference) = both(pattern, "", &lines[n], 0, CaptureMode::All);
+        assert_eq!(*got, reference, "line {n}");
+    }
+    let first = runs[0].1.unwrap();
+    assert!(first > 0);
+    assert!(
+        runs.iter().all(|(_, words)| *words == Some(first)),
+        "storage grew"
+    );
+}
+
+/// A program with more states than its first storage holds thrashes, is
+/// reallocated at the size Perex reports, and every answer stays exact.
+#[test]
+fn dfa_storage_grows_for_a_program_that_thrashes() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let pattern = "a[ab]{8}c";
+    let mut x: u64 = 0x2545_f491_4f6c_dd1d;
+    let lines: Vec<String> = (0..12)
+        .map(|_| {
+            (0..3000)
+                .map(|_| {
+                    x ^= x << 13;
+                    x ^= x >> 7;
+                    x ^= x << 17;
+                    ['a', 'b', 'c'][(x % 3) as usize]
+                })
+                .collect()
+        })
+        .collect();
+    let subjects: Vec<&str> = lines.iter().map(String::as_str).collect();
+    let runs = searched(pattern, "", &subjects, CaptureMode::Full);
+    for (n, (got, _)) in runs.iter().enumerate() {
+        let (_, reference) = both(pattern, "", &lines[n], 0, CaptureMode::Full);
+        assert_eq!(*got, reference, "line {n}");
+    }
+    let first = runs[0].1.unwrap();
+    let last = runs.last().unwrap().1.unwrap();
+    assert!(last > first, "storage never grew: {first} words");
+}
+
+/// A program whose capture pass found two paths alive is not asked again:
+/// every later search runs the evaluator from the automaton's span, exactly.
+#[test]
+fn a_declined_capture_pass_is_not_repeated() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let pattern = "(a|ab)(c|bcd)(d*)";
+    let subjects = ["xxxabcd and more", "qqq abcd", "zz abcdd tail", "no", "ac"];
+    let many: Vec<&str> = subjects.iter().cycle().take(40).copied().collect();
+    let before = DFA_CAPTURE_PASSES.with(std::cell::Cell::get);
+    let runs = searched(pattern, "", &many, CaptureMode::All);
+    let passes = DFA_CAPTURE_PASSES.with(std::cell::Cell::get) - before;
+    for (n, (got, _)) in runs.iter().enumerate() {
+        let (_, reference) = both(pattern, "", many[n], 0, CaptureMode::All);
+        assert_eq!(*got, reference, "search {n}");
+    }
+    assert_eq!(passes, 1, "{passes} capture passes");
+    // The same for a sticky program, which the pass would answer at the start.
+    let before = DFA_CAPTURE_PASSES.with(std::cell::Cell::get);
+    let runs = searched(
+        pattern,
+        "y",
+        &["abcd", "abcdd", "ac", "abcd"],
+        CaptureMode::All,
+    );
+    let passes = DFA_CAPTURE_PASSES.with(std::cell::Cell::get) - before;
+    for (n, (got, _)) in runs.iter().enumerate() {
+        let (_, reference) = both(
+            pattern,
+            "y",
+            ["abcd", "abcdd", "ac", "abcd"][n],
+            0,
+            CaptureMode::All,
+        );
+        assert_eq!(*got, reference, "sticky search {n}");
+    }
+    assert_eq!(passes, 1, "{passes} sticky capture passes");
 }
