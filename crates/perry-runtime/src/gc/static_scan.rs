@@ -44,7 +44,7 @@ pub(super) struct StaticScan {
     /// The prototype edge, for a full mark only (`None` in a minor, see the
     /// module docs).
     pub(super) prototype: Option<*mut u64>,
-    pub(super) meta: Option<*mut u64>,
+    pub(super) meta_edge: Option<*mut u64>,
     pub(super) arguments: Option<*mut u64>,
     pub(super) payload: *mut u64,
     /// Payload slot indices to scan, ascending.
@@ -55,7 +55,7 @@ pub(super) struct StaticScan {
 /// the header and the (constant) type table alone; trace state is the caller's.
 #[inline(always)]
 pub(super) unsafe fn static_scan_admissible(header: *mut GcHeader) -> bool {
-    (*header).obj_type == GC_TYPE_OBJECT
+    crate::gc_type_is_object!((*header).obj_type)
         && (*header).gc_flags & GC_FLAG_FORWARDED == 0
         && matches!(
             gc_type_rewrite_descriptor_kind(GC_TYPE_OBJECT),
@@ -73,6 +73,17 @@ pub(super) unsafe fn static_scan_admissible(header: *mut GcHeader) -> bool {
 /// de-duplication it decides exactly as the generic walk does).
 #[inline(always)]
 pub(super) unsafe fn static_scan(header: *mut GcHeader, full: Option<bool>) -> Option<StaticScan> {
+    static_scan_body::<{ crate::object::header::meta_form_alloc_bytes(0) }, true>(header, full)
+}
+
+/// The walk's one body: `BASE` is the byte offset of the first slot from the
+/// object, `META` whether the form carries a meta word. Only the meta form
+/// (`BASE = 16`, `META = true`) is instantiated today.
+#[inline(always)]
+unsafe fn static_scan_body<const BASE: usize, const META: bool>(
+    header: *mut GcHeader,
+    full: Option<bool>,
+) -> Option<StaticScan> {
     let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
     let obj = user_ptr as *mut crate::object::ObjectHeader;
     let record = crate::object::shapes::object_shape_record(obj)?;
@@ -86,9 +97,13 @@ pub(super) unsafe fn static_scan(header: *mut GcHeader, full: Option<bool>) -> O
             Some(full) => crate::object::gc_shape_prototype_edge_slot(Some(record), full),
             None => None,
         },
-        meta: crate::object::gc_object_meta_slot(user_ptr as usize),
+        meta_edge: if META {
+            crate::object::gc_object_meta_slot(user_ptr as usize)
+        } else {
+            None
+        },
         arguments: crate::object::arguments_mapping_slot(obj),
-        payload: user_ptr.add(std::mem::size_of::<crate::object::ObjectHeader>()) as *mut u64,
+        payload: crate::object::header::object_slot_at(obj, BASE as u32),
         mask,
     };
     #[cfg(any(test, debug_assertions))]
@@ -106,7 +121,7 @@ impl CopyingNurseryCollector {
         weak: bool,
         remembering: ParentRemembering,
     ) {
-        if let Some(slot) = scan.meta {
+        if let Some(slot) = scan.meta_edge {
             self.visit_slot_with_parent_facts::<DIAGNOSTICS>(
                 GcMutableSlot::pointer(slot.cast()),
                 header,
@@ -145,7 +160,7 @@ pub(super) unsafe fn for_each_mark_slot(scan: &StaticScan, mut visit: impl FnMut
         slot.layout_kind = Some(HeapChildSlotReadKind::Prefix);
         visit(slot);
     }
-    if let Some(slot) = scan.meta {
+    if let Some(slot) = scan.meta_edge {
         let mut slot = GcMutableSlot::pointer(slot.cast());
         slot.layout_kind = Some(HeapChildSlotReadKind::Prefix);
         visit(slot);
@@ -215,7 +230,7 @@ unsafe fn assert_matches_generic_walk(
         }
     });
     let mut expected = Vec::new();
-    if let Some(slot) = scan.meta {
+    if let Some(slot) = scan.meta_edge {
         expected.push((
             slot as usize,
             GcMutableSlot::pointer(slot.cast()).is_parent_owned(),

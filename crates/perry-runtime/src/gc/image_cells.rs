@@ -206,7 +206,7 @@ unsafe fn cell_shape_needs_visit(header: *mut GcHeader) -> bool {
     if (*header).obj_type == GC_TYPE_ARRAY && (*header).gc_flags & GC_FLAG_SHAPE_SHARED != 0 {
         return false;
     }
-    if (*header).obj_type != GC_TYPE_OBJECT {
+    if crate::gc_type_is_not_object!((*header).obj_type) {
         return true;
     }
     let object = (header as *mut u8).add(GC_HEADER_SIZE) as *const crate::object::ObjectHeader;

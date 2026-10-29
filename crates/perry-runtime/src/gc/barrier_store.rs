@@ -107,7 +107,7 @@ fn slot_holds_raw_f64(parent_user: usize, slot_index: usize) -> bool {
         let Some(header) = super::layout::layout_header_for_user(parent_user) else {
             return false;
         };
-        if (*header).obj_type == GC_TYPE_OBJECT {
+        if crate::gc_type_is_object!((*header).obj_type) {
             if (*header).gc_flags & GC_FLAG_FORWARDED != 0 {
                 return false;
             }

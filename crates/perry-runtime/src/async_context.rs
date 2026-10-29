@@ -191,6 +191,10 @@ fn entry_matches(entry: &AsyncContextEntry, token: i64, generation: u64) -> bool
 }
 
 fn discard_disabled_entries(snapshot: &mut AsyncContextSnapshot) {
+    // Most jobs carry no ALS entries: nothing to test, no retain loop.
+    if snapshot.entries.is_empty() {
+        return;
+    }
     snapshot
         .entries
         .retain(|entry| entry.generation == entry.token.generation.load(Ordering::Acquire));
@@ -706,6 +710,25 @@ pub(crate) fn test_snapshot_token_lifetime(snapshot: &AsyncContextSnapshot) -> i
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn discard_drops_disabled_entries_and_tolerates_an_empty_snapshot() {
+        std::thread::spawn(|| {
+            let storage = AsyncLocalStoragePayload::default();
+            set_store(storage.token(), 1.0);
+            let mut snapshot = capture_context();
+            assert_eq!(snapshot.entries.len(), 1);
+            unsafe { token_ref(storage.token()) }
+                .generation
+                .fetch_add(1, Ordering::AcqRel);
+            discard_disabled_entries(&mut snapshot);
+            assert!(snapshot.entries.is_empty(), "a disabled entry must be dropped");
+            discard_disabled_entries(&mut snapshot);
+            assert!(snapshot.entries.is_empty());
+        })
+        .join()
+        .unwrap();
+    }
+
     use super::*;
 
     #[test]

@@ -162,7 +162,7 @@ unsafe fn node_label(rec: &NodeRec) -> (u32, String) {
             .unwrap_or_default();
             (NODE_TYPE_STRING, name)
         }
-        GC_TYPE_OBJECT => {
+        crate::gc_object_type_pat!() => {
             let obj = rec.user as *const crate::object::ObjectHeader;
             let class_id = (*obj).class_id;
             let name = if class_id != 0 {
@@ -317,7 +317,7 @@ pub(crate) fn gc_build_v8_heap_snapshot_json_with_format(format: HeapSnapshotFor
     for (i, rec) in recs.iter().enumerate() {
         let from = i + 1;
         let mut ordinal: u32 = 0;
-        let (fields_base, fields_len) = if rec.obj_type == GC_TYPE_OBJECT {
+        let (fields_base, fields_len) = if crate::gc_type_is_object!(rec.obj_type) {
             let obj = rec.user as *const crate::object::ObjectHeader;
             let fc = unsafe {
                 crate::object::shapes::object_shape_descriptor(obj)
@@ -327,7 +327,12 @@ pub(crate) fn gc_build_v8_heap_snapshot_json_with_format(format: HeapSnapshotFor
             };
             if fc <= 10_000 {
                 (
-                    rec.user + std::mem::size_of::<crate::object::ObjectHeader>(),
+                    unsafe {
+                        crate::object::header::object_slot_at(
+                            obj as *mut crate::object::ObjectHeader,
+                            crate::object::header::meta_form_alloc_bytes(0) as u32,
+                        )
+                    } as usize,
                     fc * 8,
                 )
             } else {
