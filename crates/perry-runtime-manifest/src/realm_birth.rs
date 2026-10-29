@@ -455,6 +455,8 @@ pub(super) fn birth_at(
     let mut declared = None;
     let mut never_move = false;
     let mut integrity = Integrity::Extensible;
+    let mut native_namespace = None;
+    let mut module = None;
     let mut seen = BTreeSet::new();
     for clause in &clauses[1..] {
         if clause.len() < 3 || clause[1].text != "=" || !seen.insert(clause[0].text) {
@@ -484,6 +486,17 @@ pub(super) fn birth_at(
                 declared = Some(pair_members(&name, source, clause[4].text)?);
             }
             "never_move" if clause.len() == 3 && clause[2].text == "true" => never_move = true,
+            "native_namespace" | "module" if clause.len() == 3 && native => {
+                let literal = clause[2]
+                    .string
+                    .clone()
+                    .ok_or("a native namespace names its module as a literal")?;
+                if clause[0].text == "module" {
+                    module = Some(literal);
+                } else {
+                    native_namespace = Some(literal);
+                }
+            }
             "members_source" if clause.len() == 3 && !native => {
                 if declared.is_some() {
                     return Err("members and members_source are one fact".into());
@@ -618,10 +631,21 @@ pub(super) fn birth_at(
     if prototype.is_empty() {
         map.remove("prototype");
     }
-    // js_create_native_module_namespace stores the requested module name in
-    // slot 0. A global namespace (not a node: path) is requested by its name.
-    if native && !name.starts_with("node:") {
+    // The module its vtable serves (declared), and the module whose namespace
+    // it is. js_create_native_module_namespace stores the requested module
+    // name in slot 0: a global namespace (not a node: path) is requested by
+    // its name.
+    if let Some(namespace) = native_namespace {
+        map.insert("native_namespace".into(), string(namespace));
+        map.insert(
+            "exotic_vtable".into(),
+            string("crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL"),
+        );
+    } else if native && !name.starts_with("node:") {
         map.insert("native_namespace".into(), string(&name));
+    }
+    if let Some(module) = module {
+        map.insert("module".into(), string(module));
     }
     if kind == "exotic" {
         map.insert(
