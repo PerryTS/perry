@@ -28,6 +28,7 @@ mod tests;
 
 #[cfg(test)]
 pub(crate) use alloc::closure_allocs_on_this_thread;
+pub use alloc::closure_set_capture_word;
 pub use alloc::{
     closure_alloc_storage, closure_capture_slots_mut, closure_payload_size, js_closure_alloc,
     js_closure_alloc_empty, js_closure_alloc_fixed, js_closure_alloc_init,

@@ -479,7 +479,7 @@ pub(crate) fn make_stream_closure(
     stream_id: usize,
 ) -> *mut ClosureHeader {
     let closure = js_closure_alloc(info, 1);
-    js_closure_set_capture_ptr(closure, 0, stream_id as i64);
+    crate::closure::closure_set_capture_word(closure, 0, stream_id as i64);
     closure
 }
 
@@ -1324,7 +1324,7 @@ fn install_pipe_drain_resume(source_id: usize, dest: f64) {
         crate::fn_info!(read_stream_resume_from_drain_impl, 0; with_declared(0)),
         1,
     );
-    js_closure_set_capture_ptr(closure, 0, source_id as i64);
+    crate::closure::closure_set_capture_word(closure, 0, source_id as i64);
     let listener = f64::from_bits(JSValue::pointer(closure as *const u8).bits());
     let _ = call_js_method2(dest, b"once", string_value(b"drain"), listener);
 }
@@ -1847,7 +1847,7 @@ fn create_utf8_stream_with_state(state: Utf8StreamState) -> f64 {
             crate::fn_info!(utf8_periodic_flush_impl, 0; with_declared(0)),
             1,
         );
-        js_closure_set_capture_ptr(closure, 0, id as i64);
+        crate::closure::closure_set_capture_word(closure, 0, id as i64);
         // Unref and cancellation consume a native ID, not a JS Timeout pointer.
         let timer = crate::timer::schedule_interval_callback(closure as i64, periodic_flush as f64);
         crate::timer::js_timer_unref(timer);

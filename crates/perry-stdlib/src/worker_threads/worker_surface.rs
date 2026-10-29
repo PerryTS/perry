@@ -738,7 +738,7 @@ pub(super) fn worker_profile_handle(kind_bits: i64) -> f64 {
         perry_runtime::fn_info!(worker_profile_stop, 0; with_declared(0)),
         1,
     );
-    perry_runtime::closure::js_closure_set_capture_ptr(closure, 0, kind_bits);
+    perry_runtime::closure::closure_set_capture_word(closure, 0, kind_bits);
     let obj = perry_runtime::object::js_object_alloc(0, 0);
     set_object_field(
         obj,
