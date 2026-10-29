@@ -522,15 +522,13 @@ fn object_set_static_prototype_impl_with(
             // identity answers nothing from its shape, keeps the same bits in
             // it: the cheaper read, written here and nowhere else.
             if per_object
-                || !crate::object::header::MetaObj::runtime_born(obj as *mut _)
-                    .meta()
-                    .is_null()
+                || !crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _)).is_null()
             {
                 // `object_meta_ensure` allocates and may evacuate the owner.
                 let (meta, moved) = obj_handle.across_mut::<crate::object::ObjectHeader, _>(|| {
                     // A1_UNPROVEN: receiver from a JS value, no type test (kind-A/B question for S0b-S0e).
                     crate::object::object_meta_ensure(
-                        crate::object::MetaObj::runtime_born(obj),
+                        crate::meta_obj_runtime_born!(obj),
                         crate::object::MetaReason::PrototypeOnReceiver,
                     )
                 });
@@ -576,7 +574,7 @@ fn object_set_static_prototype_impl_with(
         if !holder.is_null() {
             // A1_UNPROVEN: descriptor_holder(obj_ptr) may return the user object itself (kind-A/B question for S0b-S0e).
             let meta = crate::object::object_meta_ensure(
-                crate::object::MetaObj::runtime_born(holder),
+                crate::meta_obj_runtime_born!(holder),
                 crate::object::MetaReason::PrototypeHolder,
             );
             // GC_STORE_AUDIT(BARRIERED): the bag owns this NaN-boxed prototype
@@ -633,15 +631,12 @@ pub fn object_static_prototype(obj_ptr: usize) -> Option<u64> {
         let holder = crate::object::descriptor_state::descriptor_holder(obj_ptr);
         // A1_UNPROVEN: record-first: holder may be the user object (kind-A/B question for S0f).
         if holder.is_null()
-            || crate::object::header::MetaObj::runtime_born(holder as *mut _)
-                .meta()
-                .is_null()
+            || crate::meta_read!(crate::meta_obj_runtime_born!(holder as *mut _)).is_null()
         {
             return None;
         }
         // A1_UNPROVEN: record-first: holder may be the user object (kind-A/B question for S0f).
-        let bits =
-            (*crate::object::header::MetaObj::runtime_born(holder as *mut _).meta()).prototype;
+        let bits = (*crate::meta_read!(crate::meta_obj_runtime_born!(holder as *mut _))).prototype;
         (bits != 0).then_some(bits)
     }
 }
@@ -1074,7 +1069,7 @@ mod tests {
         // The prototype is a shape fact, and a link records no flag: the
         // receiver needs no meta record at all.
         assert!(unsafe {
-            crate::object::header::MetaObj::runtime_born(class_default as *mut _).meta()
+            crate::meta_read!(crate::meta_obj_runtime_born!(class_default as *mut _))
         }
         .is_null());
         assert_eq!(
@@ -1092,7 +1087,7 @@ mod tests {
         object_link_class_evaluation_prototype(evaluated as usize, crate::value::TAG_NULL);
         assert!(object_has_individual_class_prototype(evaluated as usize));
         assert!(
-            unsafe { crate::object::header::MetaObj::runtime_born(evaluated as *mut _).meta() }
+            unsafe { crate::meta_read!(crate::meta_obj_runtime_born!(evaluated as *mut _)) }
                 .is_null(),
             "no flag, no record"
         );
@@ -1109,10 +1104,8 @@ mod tests {
             user_overridden as usize
         ));
         assert!(
-            unsafe {
-                crate::object::header::MetaObj::runtime_born(user_overridden as *mut _).meta()
-            }
-            .is_null(),
+            unsafe { crate::meta_read!(crate::meta_obj_runtime_born!(user_overridden as *mut _)) }
+                .is_null(),
             "no flag, no record"
         );
     }

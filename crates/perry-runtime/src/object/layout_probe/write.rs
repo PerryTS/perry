@@ -29,7 +29,7 @@ pub(super) unsafe fn hole_fill_admitted(
         return false;
     }
     // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
-    let meta = crate::object::header::MetaObj::runtime_born(obj as *mut _).meta();
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
     if !meta.is_null() && (*meta).flags & crate::object::OBJECT_META_FLAG_IS_PROTOTYPE != 0 {
         return false;
     }
@@ -73,7 +73,7 @@ pub(super) unsafe fn probe_add(
         return false;
     }
     // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
-    let meta = crate::object::header::MetaObj::runtime_born(obj as *mut _).meta();
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
     if !meta.is_null()
         && ((*meta).elements != 0
             || (*meta).flags
@@ -138,7 +138,7 @@ pub(crate) unsafe fn layouts_admit_add(
         return None;
     }
     // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
-    let meta = crate::object::header::MetaObj::runtime_born(obj as *mut _).meta();
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
     if !meta.is_null() && (*meta).overflow != 0 {
         return None;
     }
@@ -232,7 +232,7 @@ pub(super) unsafe fn chain_admits_add(
         }
         if w & crate::object::overflow::SHADOW_BIT != 0 {
             // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
-            let meta = crate::object::header::MetaObj::runtime_born(next as *mut _).meta();
+            let meta = crate::meta_read!(crate::meta_obj_runtime_born!(next as *mut _));
             if !meta.is_null() && (*meta).overflow != 0 {
                 let t = (*meta).overflow as usize as *const crate::object::overflow::Table;
                 if let Some(i) = crate::object::overflow::find_hashed(t, key_bits, hash) {

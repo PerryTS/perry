@@ -80,7 +80,7 @@ pub(crate) unsafe fn mark_object_as_prototype(obj: usize) -> Option<u64> {
 /// moving; collection is suppressed by the caller.
 pub(crate) unsafe fn mark_born_prototype(obj: *mut crate::object::ObjectHeader) {
     let meta = crate::object::object_meta_ensure(
-        crate::object::MetaObj::runtime_born(obj),
+        crate::meta_obj_runtime_born!(obj),
         crate::object::MetaReason::BecomesPrototype,
     );
     if meta.is_null() {
@@ -110,7 +110,7 @@ static PROTOTYPE_SERIAL_NEXT: std::sync::atomic::AtomicU64 =
 pub(crate) unsafe fn ensure_object_identity_serial(obj: *mut crate::object::ObjectHeader) -> u64 {
     // A1_UNPROVEN: ensure_object_identity_serial(obj) parameter, no type test (kind-A/B question for S0b-S0e).
     let meta = crate::object::object_meta_ensure(
-        crate::object::MetaObj::runtime_born(obj),
+        crate::meta_obj_runtime_born!(obj),
         crate::object::MetaReason::BecomesPrototype,
     );
     // GC_STORE_AUDIT(POINTER_FREE): a scalar identity, never a heap reference.
@@ -280,7 +280,10 @@ unsafe fn ensure_meta_for_mark(obj: usize, flag: u64) -> Option<*mut crate::obje
     // Marking is idempotent. The existing owner record already carries a
     // completed mark, so no allocation or semantic transition remains. Do
     // not reopen handles and enter object_meta_ensure for that same record.
-    let meta = crate::object::header::MetaObj::from_type(object as *mut _, header.obj_type).meta();
+    let meta = crate::meta_read!(crate::meta_obj_from_type!(
+        object as *mut _,
+        header.obj_type
+    ));
     if !meta.is_null() && (*meta).flags & flag != 0 {
         return Some(meta);
     }
@@ -290,7 +293,7 @@ unsafe fn ensure_meta_for_mark(obj: usize, flag: u64) -> Option<*mut crate::obje
         // A1_UNPROVEN: object parameter, no type test (kind-A/B question for S0b-S0e).
         .across_mut::<crate::object::ObjectHeader, _>(|| {
             crate::object::object_meta_ensure(
-                crate::object::MetaObj::runtime_born(object),
+                crate::meta_obj_runtime_born!(object),
                 crate::object::MetaReason::BecomesPrototype,
             )
         });
@@ -323,8 +326,10 @@ unsafe fn ensure_meta_for_mark(obj: usize, flag: u64) -> Option<*mut crate::obje
                 crate::object::shapes::transition_object_shape_semantics(object)
             }
         });
-        let meta =
-            crate::object::header::MetaObj::from_type(object as *mut _, header.obj_type).meta();
+        let meta = crate::meta_read!(crate::meta_obj_from_type!(
+            object as *mut _,
+            header.obj_type
+        ));
         if meta.is_null() {
             return None;
         }
@@ -377,11 +382,10 @@ unsafe fn meta_flag_is_set(obj: usize, flag: u64) -> bool {
     }
     match crate::value::addr_class::try_read_gc_header(obj) {
         Some(header) if crate::object_has_meta_word!(header.obj_type) => {
-            let meta = crate::object::header::MetaObj::from_type(
+            let meta = crate::meta_read!(crate::meta_obj_from_type!(
                 obj as *const crate::object::ObjectHeader as *mut _,
                 header.obj_type,
-            )
-            .meta();
+            ));
             !meta.is_null() && (*meta).flags & flag != 0
         }
         _ => false,

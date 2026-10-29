@@ -995,7 +995,7 @@ pub(crate) unsafe fn prototype_from_template<'s>(
     let (meta, _) = proto.across_mut::<ObjectHeader, _>(|| {
         proto.with_mut_ptr::<ObjectHeader, _>(|p| {
             crate::object::object_meta_ensure(
-                crate::object::MetaObj::runtime_born(p),
+                crate::meta_obj_runtime_born!(p),
                 crate::object::MetaReason::CtorFnPrototype,
             )
         })
@@ -1072,7 +1072,7 @@ pub(crate) unsafe fn record_prototype_template(
     };
     let final_shape = crate::object::shapes::object_layout_stamp(proto);
     let count = d.logical_key_count as usize;
-    let meta = crate::object::header::MetaObj::runtime_born(proto as *mut _).meta();
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(proto as *mut _));
     let owner = crate::value::js_nanbox_pointer(class as i64).to_bits();
     if final_shape == LayoutWord(0)
         || d.proto_id != proto_id
@@ -1448,9 +1448,7 @@ pub(crate) unsafe fn record_instance_link(
     // A1_UNPROVEN: record-first: inst layout word (kind-A/B question for S0f).
     if !cell.owned()
         || birth == LayoutWord(0)
-        || !crate::object::header::MetaObj::runtime_born(inst as *mut _)
-            .meta()
-            .is_null()
+        || !crate::meta_read!(crate::meta_obj_runtime_born!(inst as *mut _)).is_null()
     {
         return;
     }

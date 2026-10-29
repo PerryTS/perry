@@ -10,7 +10,7 @@ pub use super::alloc_basic::{
     js_object_alloc, js_object_alloc_fast, js_object_alloc_fast_with_parent, js_object_alloc_plain,
     js_object_alloc_with_parent, js_object_coerce,
 };
-use super::header::{meta_form_alloc_bytes, MetaObj};
+use super::header::meta_form_alloc_bytes;
 use super::*;
 use crate::codegen_abi::LayoutWord;
 
@@ -445,7 +445,7 @@ pub(super) fn object_alloc_class_inline_keys_impl(
         (*ptr).class_id = class_id;
         (*ptr).parent_class_id = parent_class_id;
         // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
-        *crate::object::header::MetaObj::runtime_born(ptr).meta_slot() = ptr::null_mut();
+        *crate::meta_slot_of!(crate::meta_obj_runtime_born!(ptr)) = ptr::null_mut();
         if premark_plain {
             // Charter step 3: marked before the first stamp, so the birth
             // shape is minted `Ordinary` and no twin is ever needed.
@@ -479,7 +479,7 @@ pub(super) fn object_alloc_class_inline_keys_impl(
         // job (the inline bump path and `json/parser.rs` both zero-filled by hand);
         // folding it in here keeps every caller — including the outlined `new C()`
         // codegen path — correct by construction.
-        let fields_ptr = MetaObj::runtime_born(ptr).slots() as *mut JSValue;
+        let fields_ptr = crate::meta_slots_of!(crate::meta_obj_runtime_born!(ptr)) as *mut JSValue;
         for i in 0..alloc_field_count {
             // GC_STORE_AUDIT(INIT): freshly allocated object field slot initialized to undefined.
             ptr::write(fields_ptr.add(i), JSValue::undefined());
@@ -711,7 +711,7 @@ pub extern "C" fn js_object_alloc_class_with_keys(
         (*ptr).class_id = class_id;
         (*ptr).parent_class_id = parent_class_id;
         // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
-        *crate::object::header::MetaObj::runtime_born(ptr).meta_slot() = ptr::null_mut();
+        *crate::meta_slot_of!(crate::meta_obj_runtime_born!(ptr)) = ptr::null_mut();
         crate::gc::layout_init_pointer_free(ptr as *mut u8);
         set_object_keys_with_live(ptr, keys_arr, field_count);
         // #6759 C3 rung 2, completed: birth-stamp here too. #8009 stamped the
@@ -831,8 +831,8 @@ pub extern "C" fn js_object_alloc_class_dynamic_parent(
         (*ptr).class_id = class_id;
         (*ptr).parent_class_id = parent_cid;
         // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
-        *crate::object::header::MetaObj::runtime_born(ptr).meta_slot() = ptr::null_mut();
-        let fields_ptr = MetaObj::runtime_born(ptr).slots() as *mut JSValue;
+        *crate::meta_slot_of!(crate::meta_obj_runtime_born!(ptr)) = ptr::null_mut();
+        let fields_ptr = crate::meta_slots_of!(crate::meta_obj_runtime_born!(ptr)) as *mut JSValue;
         for i in 0..alloc_field_count {
             // GC_STORE_AUDIT(INIT): freshly allocated object field slot is initialized pointer-free.
             ptr::write(fields_ptr.add(i), JSValue::undefined());
@@ -889,10 +889,11 @@ pub extern "C" fn js_object_alloc_with_shape(
         // validation; otherwise every class-less record remints these facts.
         super::shapes::store_kind::premark_plain_ordinary(obj_ptr);
         // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
-        *crate::object::header::MetaObj::runtime_born(obj_ptr).meta_slot() = ptr::null_mut();
+        *crate::meta_slot_of!(crate::meta_obj_runtime_born!(obj_ptr)) = ptr::null_mut();
 
         // Initialize all allocated field slots to undefined (including extra padding)
-        let fields_ptr = MetaObj::runtime_born(obj_ptr).slots() as *mut JSValue;
+        let fields_ptr =
+            crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj_ptr)) as *mut JSValue;
         for i in 0..alloc_field_count {
             // GC_STORE_AUDIT(INIT): freshly allocated object field slot is initialized pointer-free.
             ptr::write(fields_ptr.add(i), JSValue::undefined());
@@ -1026,8 +1027,8 @@ pub unsafe extern "C" fn js_object_clone_with_extra(
         (*new_ptr).class_id = 0;
         (*new_ptr).parent_class_id = 0;
         // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
-        *crate::object::header::MetaObj::runtime_born(new_ptr).meta_slot() = ptr::null_mut();
-        let fields_ptr = MetaObj::runtime_born(new_ptr).slots() as *mut u64;
+        *crate::meta_slot_of!(crate::meta_obj_runtime_born!(new_ptr)) = ptr::null_mut();
+        let fields_ptr = crate::meta_slots_of!(crate::meta_obj_runtime_born!(new_ptr)) as *mut u64;
         for i in 0..phys_slots as usize {
             // GC_STORE_AUDIT(INIT): freshly allocated clone field slot is initialized pointer-free.
             ptr::write(fields_ptr.add(i), crate::value::TAG_UNDEFINED);
@@ -1068,11 +1069,11 @@ pub unsafe extern "C" fn js_object_clone_with_extra(
     (*new_ptr).class_id = 0;
     (*new_ptr).parent_class_id = 0;
     // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
-    *crate::object::header::MetaObj::runtime_born(new_ptr).meta_slot() = ptr::null_mut();
+    *crate::meta_slot_of!(crate::meta_obj_runtime_born!(new_ptr)) = ptr::null_mut();
 
     // Copy source fields (as raw f64/u64 words — preserves NaN-boxing)
     let src_fields = (src_ptr as *const u8).add(header_size) as *const u64;
-    let dst_fields = MetaObj::runtime_born(new_ptr).slots() as *mut u64;
+    let dst_fields = crate::meta_slots_of!(crate::meta_obj_runtime_born!(new_ptr)) as *mut u64;
     for i in 0..src_field_count as usize {
         let field_val = *src_fields.add(i);
         // Guard: null POINTER_TAG (0x7FFD_0000_0000_0000) is never legitimate — replace with undefined

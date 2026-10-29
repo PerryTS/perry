@@ -163,9 +163,11 @@ fn stable_single_own_for_in_keys(value: f64) -> Option<*mut ArrayHeader> {
         if class_id != 0 && !super::super::shapes::object_is_plain_record(object) {
             return stable_miss("receiver_class");
         }
-        if !crate::object::header::MetaObj::from_type(object as *mut _, receiver_gc.obj_type)
-            .meta()
-            .is_null()
+        if !crate::meta_read!(crate::meta_obj_from_type!(
+            object as *mut _,
+            receiver_gc.obj_type
+        ))
+        .is_null()
         {
             return stable_miss("receiver_meta");
         }

@@ -197,7 +197,7 @@ unsafe fn chain(obj: *const ObjectHeader, key_bits: u64) -> String {
         let r = record_of(dir, LayoutWord(word));
         let gc = crate::value::addr_class::try_read_gc_header(cur as usize);
         // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
-        let meta = crate::object::header::MetaObj::runtime_born(cur as *mut _).meta();
+        let meta = crate::meta_read!(crate::meta_obj_runtime_born!(cur as *mut _));
         let mproto = if meta.is_null() { 0 } else { (*meta).prototype };
         let mflags = if meta.is_null() {
             0

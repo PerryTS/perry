@@ -750,7 +750,7 @@ pub(crate) use call_method_depth::call_method_depth;
 pub(crate) use call_method_depth::test_enter_catch_method;
 #[cfg(test)]
 mod a1_death_tests;
-mod header;
+pub(crate) mod header;
 pub(crate) use header::*;
 mod meta_accessors;
 use call_method_depth::CallMethodDepthGuard;

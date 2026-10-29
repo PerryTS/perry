@@ -138,7 +138,7 @@ unsafe fn hop_admitted(addr: usize) -> bool {
     {
         return false;
     }
-    let meta = crate::object::header::MetaObj::from_type(obj as *mut _, header.obj_type).meta();
+    let meta = crate::meta_read!(crate::meta_obj_from_type!(obj as *mut _, header.obj_type));
     if !meta.is_null()
         && ((*meta).elements != 0
             || (*meta).flags
@@ -201,7 +201,7 @@ pub(crate) unsafe fn admitted_link(obj: *const ObjectHeader) -> Option<(u64, u64
         }
         // A1_UNPROVEN: record-first: obj before holder test (kind-A/B question for S0f).
         // Preserve the read-semantics exclusions of object_proto_id_for.
-        let meta = crate::object::header::MetaObj::runtime_born(obj as *mut _).meta();
+        let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
         if (*obj).class_id == crate::object::NATIVE_MODULE_CLASS_ID
             || (!meta.is_null()
                 && (*meta).flags & crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER != 0)

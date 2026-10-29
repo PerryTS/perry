@@ -59,9 +59,7 @@ unsafe fn admitted_receiver(obj: *mut ObjectHeader) -> Option<super::shapes::Sha
                 | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO)
             != 0
         || (*obj).class_id != 0
-        || !crate::object::header::MetaObj::from_type(obj as *mut _, header.obj_type)
-            .meta()
-            .is_null()
+        || !crate::meta_read!(crate::meta_obj_from_type!(obj as *mut _, header.obj_type)).is_null()
     {
         return None;
     }

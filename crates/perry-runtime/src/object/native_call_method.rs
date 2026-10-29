@@ -137,7 +137,7 @@ unsafe fn class_receiver_fast_guard(object: f64, method_bytes: &[u8]) -> Option<
         return None;
     }
     // A1_UNPROVEN: record-first: classifier result, no t (kind-A/B question for S0f).
-    let meta = crate::object::header::MetaObj::runtime_born(obj as *mut _).meta();
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
     if !meta.is_null() && (*meta).flags != 0 {
         return None;
     }

@@ -37,14 +37,14 @@ pub(super) unsafe fn metadata_record(target: f64, create: bool) -> *mut ObjectHe
         return std::ptr::null_mut();
     }
     // A1_UNPROVEN: record-first: holder may be the user object (kind-A/B question for S0f).
-    let mut meta = crate::object::header::MetaObj::runtime_born(owner as *mut _).meta();
+    let mut meta = crate::meta_read!(crate::meta_obj_runtime_born!(owner as *mut _));
     if meta.is_null() {
         if !create {
             return std::ptr::null_mut();
         }
         // A1_UNPROVEN: descriptor_holder(addr) may return the user object itself (kind-A/B question for S0b-S0e).
         meta = crate::object::object_meta_ensure(
-            crate::object::MetaObj::runtime_born(owner),
+            crate::meta_obj_runtime_born!(owner),
             crate::object::MetaReason::ReflectMetadata,
         );
     }

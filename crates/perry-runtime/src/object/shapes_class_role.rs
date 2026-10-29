@@ -92,9 +92,7 @@ pub(super) unsafe fn newborn_proto_matches(
     proto: u64,
 ) -> bool {
     // A1_UNPROVEN: record-first: newborn shape (kind-A/B question for S0f).
-    if !crate::object::header::MetaObj::runtime_born(obj as *mut _)
-        .meta()
-        .is_null()
+    if !crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _)).is_null()
         || (*super::super::gc_header_for(obj))._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0
     {
         return object_proto_id(obj) == proto;

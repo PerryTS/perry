@@ -396,7 +396,7 @@ unsafe fn definition_admitted(obj_bits: u64, key_value: f64) -> Option<Admitted>
     {
         return None;
     }
-    let meta = crate::object::header::MetaObj::from_type(obj as *mut _, header.obj_type).meta();
+    let meta = crate::meta_read!(crate::meta_obj_from_type!(obj as *mut _, header.obj_type));
     if !meta.is_null()
         && ((*meta).elements != 0
             || (*meta).flags

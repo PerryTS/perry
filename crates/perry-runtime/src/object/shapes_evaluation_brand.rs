@@ -52,7 +52,7 @@ pub(crate) unsafe fn object_evaluation_brand(obj: *const crate::object::ObjectHe
     // holder in its metadata (`stamp_evaluation_holder`); one on a class
     // evaluation's copy of the layout carries it in its shape, as every
     // other receiver does.
-    let meta = crate::object::header::MetaObj::runtime_born(obj as *mut _).meta();
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
     if !meta.is_null()
         && (*meta).private_evaluation_brand != 0
         && crate::object::layout_desc::is_family_object(obj)
@@ -116,7 +116,7 @@ pub(crate) unsafe fn stamp_evaluation_holder(obj: *mut crate::object::ObjectHead
         let (meta, _) = receiver.across_mut::<crate::object::ObjectHeader, _>(|| {
             // A1_UNPROVEN: tested by the layout word (is_family_layout_word), not the type byte (kind-A/B question for S0b-S0e).
             crate::object::object_meta_ensure(
-                crate::object::MetaObj::runtime_born(obj),
+                crate::meta_obj_runtime_born!(obj),
                 crate::object::MetaReason::EvalBrand,
             )
         });
@@ -195,30 +195,22 @@ mod tests {
             assert_eq!(object_evaluation_brand(sibling), brand_a);
             let class = crate::JSValue::from_bits(holder_a).as_pointer::<crate::ObjectHeader>();
             assert_eq!(
-                (*crate::object::header::MetaObj::runtime_born(class as *mut _).meta()).flags
+                (*crate::meta_read!(crate::meta_obj_runtime_born!(class as *mut _))).flags
                     & crate::object::OBJECT_META_FLAG_IS_PROTOTYPE,
                 0
             );
             assert_eq!(crate::object::object_keys(a).arr(), keys);
             assert_eq!(crate::object::object_live_slot_count(a), width);
             crate::object::stamp_private_evaluation_brand(a, f64::from_bits(brand_a));
-            assert!(crate::object::header::MetaObj::runtime_born(a as *mut _)
-                .meta()
-                .is_null());
-            assert!(
-                crate::object::header::MetaObj::runtime_born(sibling as *mut _)
-                    .meta()
-                    .is_null()
-            );
-            assert!(crate::object::header::MetaObj::runtime_born(b as *mut _)
-                .meta()
-                .is_null());
+            assert!(crate::meta_read!(crate::meta_obj_runtime_born!(a as *mut _)).is_null());
+            assert!(crate::meta_read!(crate::meta_obj_runtime_born!(sibling as *mut _)).is_null());
+            assert!(crate::meta_read!(crate::meta_obj_runtime_born!(b as *mut _)).is_null());
             // An exceptional receiver can later return to its birth owner.
             // Its previous metadata override must not defeat that stamp.
             crate::object::stamp_private_evaluation_brand(a, f64::from_bits(brand_b));
             crate::object::stamp_private_evaluation_brand(a, f64::from_bits(brand_a));
             assert_eq!(
-                (*crate::object::header::MetaObj::runtime_born(a as *mut _).meta())
+                (*crate::meta_read!(crate::meta_obj_runtime_born!(a as *mut _)))
                     .private_evaluation_brand,
                 brand_a
             );
@@ -237,11 +229,7 @@ mod tests {
             );
             // Constructor-returned objects keep their own metadata authority.
             crate::object::stamp_private_evaluation_brand(plain, f64::from_bits(brand_b));
-            assert!(
-                !crate::object::header::MetaObj::runtime_born(plain as *mut _)
-                    .meta()
-                    .is_null()
-            );
+            assert!(!crate::meta_read!(crate::meta_obj_runtime_born!(plain as *mut _)).is_null());
             assert_eq!(
                 crate::object::private_evaluation_brand_value(crate::value::js_nanbox_pointer(
                     plain as i64

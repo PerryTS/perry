@@ -413,7 +413,7 @@ unsafe fn finalized_constfn_facts(
     // A1_UNPROVEN: record-first: obj layout word (kind-A/B question for S0f).
     if obj.is_null()
         || !shapes::shape_word_is_writable(obj)
-        || !crate::object::header::MetaObj::runtime_born(obj as *mut _).meta().is_null()
+        || !crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _)).is_null()
         // A receiver whose shape names a recorded prototype keeps it: a
         // static class shape names the class's.
         || shapes::object_prototype_word(obj) != 0

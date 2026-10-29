@@ -443,7 +443,7 @@ unsafe fn plain_ordinary(addr: usize) -> bool {
     {
         return false;
     }
-    let meta = crate::object::header::MetaObj::from_type(obj as *mut _, header.obj_type).meta();
+    let meta = crate::meta_read!(crate::meta_obj_from_type!(obj as *mut _, header.obj_type));
     meta.is_null()
         || ((*meta).elements == 0
             && (*meta).flags & super::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER == 0)

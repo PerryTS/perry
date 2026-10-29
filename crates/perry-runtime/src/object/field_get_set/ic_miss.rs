@@ -582,7 +582,7 @@ pub(crate) unsafe fn stamp_private_evaluation_brand(obj: *mut ObjectHeader, clas
         return;
     }
     // A1_UNPROVEN: record-first: ic_miss entry (kind-A/B question for S0f).
-    let meta = crate::object::header::MetaObj::runtime_born(obj as *mut _).meta();
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
     if (meta.is_null() || (*meta).private_evaluation_brand == 0)
         && crate::object::shapes::object_evaluation_brand(obj) == class_value.to_bits()
     {
@@ -593,7 +593,7 @@ pub(crate) unsafe fn stamp_private_evaluation_brand(obj: *mut ObjectHeader, clas
     let class_handle = scope.root_nanbox_f64(class_value);
     let (meta, _) =
         // A1_UNPROVEN: instance from a JS value, no type test (kind-A/B question for S0b-S0e).
-        obj_handle.across_mut::<ObjectHeader, _>(|| crate::object::object_meta_ensure(crate::object::MetaObj::runtime_born(obj), crate::object::MetaReason::EvalBrand));
+        obj_handle.across_mut::<ObjectHeader, _>(|| crate::object::object_meta_ensure(crate::meta_obj_runtime_born!(obj), crate::object::MetaReason::EvalBrand));
     let brand = class_handle.get_nanbox_f64().to_bits();
     (*meta).private_evaluation_brand = brand;
     crate::gc::runtime_write_barrier_slot(
@@ -660,7 +660,7 @@ fn private_evaluation_brand(value: f64, declaring_class_id: u32) -> Option<u64> 
 #[inline]
 unsafe fn private_receiver_evaluation_bits(object: *const ObjectHeader) -> u64 {
     // A1_UNPROVEN: record-first: ic_miss entry (kind-A/B question for S0f).
-    let meta = crate::object::header::MetaObj::runtime_born(object as *mut _).meta();
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(object as *mut _));
     if !meta.is_null() && (*meta).private_evaluation_brand != 0 {
         return (*meta).private_evaluation_brand;
     }

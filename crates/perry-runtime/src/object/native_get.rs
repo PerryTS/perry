@@ -184,8 +184,7 @@ unsafe fn try_data_lookup_key(
                     let attrs = *super::overflow::attrs_at(table, entry) as u8;
                     let header = &*crate::gc::header_from_trusted_user_ptr(object.cast());
                     // A1_UNPROVEN: record-first: class not yet known (kind-A/B question for S0f).
-                    let meta =
-                        crate::object::header::MetaObj::runtime_born(object as *mut _).meta();
+                    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(object as *mut _));
                     if attrs & super::key_attrs::ENTRY_ACCESSOR != 0
                         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
                         || header._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0
@@ -216,7 +215,7 @@ unsafe fn try_data_lookup_key(
                 // still controls forwarding and indexed/exotic receiver layouts.
                 let header = &*crate::gc::header_from_trusted_user_ptr(object.cast());
                 // A1_UNPROVEN: record-first: class not yet known (kind-A/B question for S0f).
-                let meta = crate::object::header::MetaObj::runtime_born(object as *mut _).meta();
+                let meta = crate::meta_read!(crate::meta_obj_runtime_born!(object as *mut _));
                 if header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
                     && header._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO == 0
                     && (meta.is_null() || (*meta).elements == 0)
@@ -306,7 +305,7 @@ unsafe fn try_data_lookup_key(
             return None;
         }
         // A1_UNPROVEN: record-first: class not yet known (kind-A/B question for S0f).
-        let meta = crate::object::header::MetaObj::runtime_born(object as *mut _).meta();
+        let meta = crate::meta_read!(crate::meta_obj_runtime_born!(object as *mut _));
         if !meta.is_null() && (*meta).elements != 0 {
             return None;
         }

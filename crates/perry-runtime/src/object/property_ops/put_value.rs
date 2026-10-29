@@ -785,7 +785,7 @@ fn object_array_numeric_write_slots(
     // sets bit 15 of its result lane; the caller's `+1` packing cannot carry
     // into it (slot ≤ 4096).
     unsafe fn spill_lane_covers(obj: *const crate::ObjectHeader, slot: u32) -> bool {
-        let meta = crate::object::header::MetaObj::from_storage(obj as *mut _, slot).meta();
+        let meta = crate::meta_read!(crate::meta_obj_from_storage!(obj as *mut _, slot));
         if meta.is_null() {
             return false;
         }

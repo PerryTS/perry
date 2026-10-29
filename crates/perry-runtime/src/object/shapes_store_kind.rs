@@ -102,10 +102,8 @@ pub(crate) unsafe fn receiver_ordinary_kind(obj: *const ObjectHeader) -> ShapeOb
         // A1_UNPROVEN: record-first: receiver shape (kind-A/B question for S0f).
         // A1_UNPROVEN: record-first: receiver shape (kind-A/B question for S0f).
         ShapeObjectKind::NativeNamespace
-    } else if !crate::object::header::MetaObj::runtime_born(obj as *mut _)
-        .meta()
-        .is_null()
-        && (*crate::object::header::MetaObj::runtime_born(obj as *mut _).meta()).flags
+    } else if !crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _)).is_null()
+        && (*crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _))).flags
             & crate::object::OBJECT_META_FLAG_NATIVE_ALIAS
             != 0
     {

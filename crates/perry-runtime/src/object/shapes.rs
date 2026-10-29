@@ -5199,11 +5199,10 @@ unsafe fn prototype_serial(bits: u64) -> u64 {
     let addr = value.as_pointer::<u8>() as usize;
     match crate::value::addr_class::try_read_gc_header(addr) {
         Some(header) if crate::object_has_meta_word!(header.obj_type) => {
-            let meta = crate::object::header::MetaObj::from_type(
+            let meta = crate::meta_read!(crate::meta_obj_from_type!(
                 addr as *const crate::object::ObjectHeader as *mut _,
                 header.obj_type,
-            )
-            .meta();
+            ));
             if meta.is_null() {
                 0
             } else {
@@ -5403,7 +5402,7 @@ pub(crate) const SYNTHETIC_CLASS_ID_BASE: u32 =
 #[inline(always)]
 pub(crate) unsafe fn object_prototype_word(obj: *const crate::object::ObjectHeader) -> u64 {
     // A1_UNPROVEN: record-first: shape word (kind-A/B question for S0f).
-    let meta = crate::object::header::MetaObj::runtime_born(obj as *mut _).meta();
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
     if !meta.is_null() && (*meta).prototype != 0 {
         return (*meta).prototype;
     }
@@ -5479,7 +5478,7 @@ pub(crate) unsafe fn object_proto_id_for(
         return PROTO_ID_PER_OBJECT;
     }
     // A1_UNPROVEN: record-first: shape word (kind-A/B question for S0f).
-    let meta = crate::object::header::MetaObj::runtime_born(obj as *mut _).meta();
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
     // Read semantics take precedence over every prototype link, including
     // null. Changing an exotic receiver's prototype cannot turn its virtual
     // reads into physical own-slot reads.

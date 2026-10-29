@@ -72,7 +72,7 @@ unsafe fn ordinary_word(obj: *const ObjectHeader) -> Option<u32> {
     {
         return None;
     }
-    let meta = crate::object::header::MetaObj::from_type(obj as *mut _, (*h).obj_type).meta();
+    let meta = crate::meta_read!(crate::meta_obj_from_type!(obj as *mut _, (*h).obj_type));
     if !meta.is_null()
         && (*meta).flags
             & (crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER

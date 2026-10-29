@@ -46,7 +46,7 @@ pub(crate) fn attach(wrapper: usize, kind: Kind, handle: usize) {
         .as_ref()
         .obj_type;
         let meta = crate::object::object_meta_ensure(
-            crate::object::MetaObj::from_type(wrapper as *mut crate::ObjectHeader, wrapper_type),
+            crate::meta_obj_from_type!(wrapper as *mut crate::ObjectHeader, wrapper_type),
             crate::object::MetaReason::WasmWrapper,
         );
         let cell = crate::native_handle::native_handle_new_rust_payload(
@@ -77,10 +77,9 @@ pub(crate) fn handle(wrapper: usize, kind: Kind) -> Option<usize> {
             return None;
         }
         // A1_UNPROVEN: record-first: wrapper tested by tracked type, no t (kind-A/B question for S0f).
-        let meta = crate::object::header::MetaObj::runtime_born(
+        let meta = crate::meta_read!(crate::meta_obj_runtime_born!(
             wrapper as *const crate::ObjectHeader as *mut _,
-        )
-        .meta();
+        ));
         if meta.is_null() {
             return None;
         }

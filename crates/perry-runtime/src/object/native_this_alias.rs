@@ -108,7 +108,7 @@ pub(crate) fn is_alias_word(word: u64) -> bool {
 #[inline]
 pub(crate) unsafe fn object_alias(obj: *const super::ObjectHeader) -> Option<(f64, bool)> {
     // A1_UNPROVEN: record-first: caller classification (kind-A/B question for S0f).
-    let meta = crate::object::header::MetaObj::runtime_born(obj as *mut _).meta();
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
     if meta.is_null() {
         return None;
     }
@@ -177,7 +177,7 @@ pub(crate) fn register_this_to_handle_alias(this_arg: f64, result: f64, composit
     // A1_UNPROVEN: plain_object_addr_of(this_arg): a JS value (kind-A/B question for S0b-S0e).
     object.with_mut_ptr(|obj: *mut super::ObjectHeader| unsafe {
         super::object_meta_ensure(
-            super::MetaObj::runtime_born(obj),
+            crate::meta_obj_runtime_born!(obj),
             super::MetaReason::NativeThisAlias,
         )
     });
@@ -197,7 +197,7 @@ pub(crate) fn register_this_to_handle_alias(this_arg: f64, result: f64, composit
     });
     let installed = object.with_mut_ptr(|obj: *mut super::ObjectHeader| unsafe {
         // A1_UNPROVEN: record-first: this_arg heap object (kind-A/B question for S0f).
-        let meta = crate::object::header::MetaObj::runtime_born(obj as *mut _).meta();
+        let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
         let word = (*meta).native_state;
         let alias = record
             .with_mut_ptr(|r: *mut crate::array::ArrayHeader| {
@@ -226,7 +226,7 @@ pub(crate) fn register_this_to_handle_alias(this_arg: f64, result: f64, composit
     // ordinary slots remain describable; undefined still forwards natively.
     object.with_mut_ptr(|obj: *mut super::ObjectHeader| unsafe {
         // A1_UNPROVEN: record-first: this_arg heap object (kind-A/B question for S0f).
-        (*crate::object::header::MetaObj::runtime_born(obj as *mut _).meta()).flags |=
+        (*crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _))).flags |=
             super::OBJECT_META_FLAG_NATIVE_ALIAS;
         super::shapes::restamp_object_proto_id(obj);
     });

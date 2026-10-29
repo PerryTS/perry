@@ -131,7 +131,7 @@ unsafe fn ordinary_receiver(addr: usize) -> Option<*const ObjectHeader> {
     if !super::shapes::is_layout_word(stamp.0) {
         return None;
     }
-    let meta = crate::object::header::MetaObj::from_type(obj as *mut _, header.obj_type).meta();
+    let meta = crate::meta_read!(crate::meta_obj_from_type!(obj as *mut _, header.obj_type));
     if !meta.is_null()
         && ((*meta).elements != 0
             || (*meta).flags & super::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER != 0)

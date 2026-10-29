@@ -124,7 +124,7 @@ pub(crate) unsafe fn derived_layout(proto: u64) -> Option<*const PerryLayoutDesc
         {
             return None;
         }
-        let meta = crate::object::header::MetaObj::from_type(obj as *mut _, header.obj_type).meta();
+        let meta = crate::meta_read!(crate::meta_obj_from_type!(obj as *mut _, header.obj_type));
         if !meta.is_null() {
             if let Some(layout) = instance_layout_of_prototype((*meta).proto_serial) {
                 return sealed_chain(f64::from_bits(bits), layout).then_some(layout);

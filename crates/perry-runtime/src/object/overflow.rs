@@ -62,13 +62,11 @@ pub(crate) unsafe fn table(obj: *const ObjectHeader) -> *mut Table {
         || !crate::value::addr_class::is_plausible_heap_addr(obj as usize)
         || !shadowed(obj)
         || !super::object_is_shaped(obj)
-        || crate::object::header::MetaObj::from_kind(obj as *mut _, ())
-            .meta()
-            .is_null()
+        || crate::meta_read!(crate::meta_obj_from_kind!(obj as *mut _, ())).is_null()
     {
         return std::ptr::null_mut();
     }
-    (*crate::object::header::MetaObj::from_kind(obj as *mut _, ()).meta()).overflow as usize
+    (*crate::meta_read!(crate::meta_obj_from_kind!(obj as *mut _, ()))).overflow as usize
         as *mut Table
 }
 
@@ -235,7 +233,7 @@ pub(crate) unsafe fn find(t: *const Table, key: u64) -> Option<u32> {
 }
 
 unsafe fn install(obj: *mut ObjectHeader, t: *mut Table) {
-    let meta = crate::object::header::MetaObj::from_storage(obj as *mut _, t).meta();
+    let meta = crate::meta_read!(crate::meta_obj_from_storage!(obj as *mut _, t));
     (*meta).overflow = t as usize as u64;
     // The slot owner is the live metadata record, whose generation can
     // differ from the receiver's after a collection. Its header decides
@@ -268,7 +266,7 @@ pub(crate) unsafe fn ensure_adding(obj: *mut ObjectHeader, adding: Option<u32>) 
     let owner = scope.root_raw_mut_ptr(obj);
     // A1_UNPROVEN: a user object whose keys overflow, no type test (kind-A/B question for S0b-S0e).
     super::object_meta_ensure(
-        super::MetaObj::runtime_born(obj),
+        crate::meta_obj_runtime_born!(obj),
         super::MetaReason::Overflow,
     );
     let obj = owner.get_raw_mut_ptr::<ObjectHeader>();
@@ -854,7 +852,7 @@ pub(crate) unsafe fn own_has_key(obj: *const ObjectHeader, key_bits: u64) -> Opt
     if overflow_key(key_bits).is_some_and(|key| find(t, key).is_some()) {
         return Some(true);
     }
-    let meta = crate::object::header::MetaObj::from_storage(obj as *mut _, t).meta();
+    let meta = crate::meta_read!(crate::meta_obj_from_storage!(obj as *mut _, t));
     let conclusive = (*meta).elements == 0
         && super::object_is_regular(obj)
         && super::native_this_alias::object_alias(obj).is_none();

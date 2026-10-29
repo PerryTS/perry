@@ -1,6 +1,6 @@
 //! Basic object allocation and coercion.
 
-use super::header::{meta_form_alloc_bytes, MetaObj};
+use super::header::meta_form_alloc_bytes;
 use super::*;
 use crate::codegen_abi::LayoutWord;
 
@@ -269,12 +269,12 @@ fn object_alloc_with_parent_impl<
         (*ptr).class_id = class_id;
         (*ptr).parent_class_id = parent_class_id;
         // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
-        *crate::object::header::MetaObj::runtime_born(ptr).meta_slot() = ptr::null_mut();
+        *crate::meta_slot_of!(crate::meta_obj_runtime_born!(ptr)) = ptr::null_mut();
 
         // Initialize ALL allocated field slots to undefined (not just field_count)
         // We allocate max(field_count, 8) slots but must zero all of them to prevent
         // stale data from previously freed GC objects from bleeding through.
-        let fields_ptr = MetaObj::runtime_born(ptr).slots() as *mut JSValue;
+        let fields_ptr = crate::meta_slots_of!(crate::meta_obj_runtime_born!(ptr)) as *mut JSValue;
         for i in 0..alloc_field_count {
             // GC_STORE_AUDIT(INIT): freshly allocated object field slot is initialized pointer-free.
             ptr::write(fields_ptr.add(i), JSValue::undefined());
@@ -425,8 +425,8 @@ fn object_alloc_born_impl(
         (*ptr).class_id = class_id;
         (*ptr).parent_class_id = 0;
         // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
-        *crate::object::header::MetaObj::runtime_born(ptr).meta_slot() = ptr::null_mut();
-        let fields_ptr = MetaObj::runtime_born(ptr).slots() as *mut JSValue;
+        *crate::meta_slot_of!(crate::meta_obj_runtime_born!(ptr)) = ptr::null_mut();
+        let fields_ptr = crate::meta_slots_of!(crate::meta_obj_runtime_born!(ptr)) as *mut JSValue;
         for i in 0..alloc_field_count {
             // GC_STORE_AUDIT(INIT): freshly allocated object field slot is initialized pointer-free.
             ptr::write(fields_ptr.add(i), JSValue::undefined());
@@ -473,8 +473,8 @@ pub(super) unsafe fn init_unpublished(
         (*ptr).class_id = class_id;
         (*ptr).parent_class_id = shape.0;
         // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
-        *crate::object::header::MetaObj::runtime_born(ptr).meta_slot() = ptr::null_mut();
-        let fields_ptr = MetaObj::runtime_born(ptr).slots() as *mut JSValue;
+        *crate::meta_slot_of!(crate::meta_obj_runtime_born!(ptr)) = ptr::null_mut();
+        let fields_ptr = crate::meta_slots_of!(crate::meta_obj_runtime_born!(ptr)) as *mut JSValue;
         for i in 0..initialized_slots {
             // GC_STORE_AUDIT(INIT): freshly allocated object field slot is initialized pointer-free.
             ptr::write(fields_ptr.add(i), JSValue::undefined());
@@ -499,7 +499,7 @@ pub extern "C" fn js_object_alloc_fast(class_id: u32, field_count: u32) -> *mut 
         (*ptr).class_id = class_id;
         (*ptr).parent_class_id = 0;
         // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
-        *crate::object::header::MetaObj::runtime_born(ptr).meta_slot() = ptr::null_mut();
+        *crate::meta_slot_of!(crate::meta_obj_runtime_born!(ptr)) = ptr::null_mut();
         // GC_TYPE_OBJECT layout is carried by its shape, not header layout bits.
         // #8113: the birth live-slot bound is published here and nowhere else.
         crate::object::shapes::birth_publish_object_shape(ptr, field_count);
@@ -529,7 +529,7 @@ pub extern "C" fn js_object_alloc_fast_with_parent(
         (*ptr).class_id = class_id;
         (*ptr).parent_class_id = parent_class_id;
         // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
-        *crate::object::header::MetaObj::runtime_born(ptr).meta_slot() = ptr::null_mut();
+        *crate::meta_slot_of!(crate::meta_obj_runtime_born!(ptr)) = ptr::null_mut();
         // GC_TYPE_OBJECT layout is carried by its shape, not header layout bits.
         // #8113: the birth live-slot bound is published here and nowhere else.
         crate::object::shapes::birth_publish_object_shape(ptr, field_count);

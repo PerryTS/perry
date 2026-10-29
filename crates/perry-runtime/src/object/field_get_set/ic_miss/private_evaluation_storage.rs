@@ -123,13 +123,13 @@ fn private_storage_evaluation_id(class_id: u32, receiver: Option<f64>, owner: Op
     let object = JSValue::from_bits(brand).as_pointer::<ObjectHeader>();
     unsafe {
         // A1_UNPROVEN: record-first: ic_miss entry (kind-A/B question for S0f).
-        let meta = crate::object::header::MetaObj::runtime_born(object as *mut _).meta();
+        let meta = crate::meta_read!(crate::meta_obj_runtime_born!(object as *mut _));
         if !meta.is_null() && (*meta).native_state != 0 {
             return (*meta).native_state;
         }
         // Metadata allocation can move the class; object_meta_ensure roots it.
         let meta = crate::object::object_meta_ensure(
-            crate::object::MetaObj::runtime_born(object as *mut ObjectHeader),
+            crate::meta_obj_runtime_born!(object as *mut ObjectHeader),
             crate::object::MetaReason::ClassEvaluationPrivateStorage,
         );
         let id = NEXT_PRIVATE_EVALUATION_ID

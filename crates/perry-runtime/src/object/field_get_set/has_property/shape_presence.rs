@@ -43,7 +43,7 @@ pub(crate) unsafe fn own_position(
         return None;
     }
     // A1_UNPROVEN: record-first: shape word read after the key lookup (kind-A/B question for S0f).
-    let meta = crate::object::header::MetaObj::runtime_born(obj as *mut _).meta();
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
     if !meta.is_null()
         && ((*meta).elements != 0
             || (*meta).flags

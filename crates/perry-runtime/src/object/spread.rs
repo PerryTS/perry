@@ -544,7 +544,7 @@ unsafe fn finish_header(object: *mut ObjectHeader, shape: LayoutWord) -> *mut Ob
     (*object).class_id = 0;
     (*object).parent_class_id = shape.0;
     // GC_STORE_AUDIT(INIT): unpublished fresh object has no metadata.
-    *crate::object::header::MetaObj::runtime_born(object).meta_slot() = ptr::null_mut();
+    *crate::meta_slot_of!(crate::meta_obj_runtime_born!(object)) = ptr::null_mut();
     shapes::store_kind::premark_plain_ordinary(object);
     object
 }

@@ -311,7 +311,7 @@ pub(crate) unsafe fn publish_word(
         return word;
     }
     // A1_UNPROVEN: record-first: shape word publish (kind-A/B question for S0f).
-    let meta = crate::object::header::MetaObj::runtime_born(obj as *mut _).meta();
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
     let prototype = !meta.is_null() && (*meta).flags & super::OBJECT_META_FLAG_IS_PROTOTYPE != 0;
     if !prototype
         && shape_record_of_receiver((id).0).is_some_and(|r| {
@@ -348,7 +348,7 @@ pub(crate) unsafe fn publish_key_add_word(
         return word;
     }
     // A1_UNPROVEN: record-first: shape word publish (kind-A/B question for S0f).
-    let meta = crate::object::header::MetaObj::runtime_born(obj as *mut _).meta();
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
     let prototype = !meta.is_null() && (*meta).flags & super::OBJECT_META_FLAG_IS_PROTOTYPE != 0;
     let Some(names) = names() else {
         return word;

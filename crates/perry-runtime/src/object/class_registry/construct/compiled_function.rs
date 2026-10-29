@@ -184,7 +184,7 @@ pub(crate) unsafe fn forget_birth_record_of_class(old: *mut ObjectHeader, class_
     if old.is_null() {
         return;
     }
-    let meta = crate::object::header::MetaObj::runtime_born(old as *mut _).meta();
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(old as *mut _));
     if !meta.is_null() && (*meta).instance_birth as u32 == class_id {
         // GC_STORE_AUDIT(POINTER_FREE): clears a class id / ShapeId pair.
         (*meta).instance_birth = 0;
@@ -235,7 +235,7 @@ pub(super) unsafe fn construct_ordinary_compiled_function(
     // `EventEmitter`): born on its instance layout's keys with `F.prototype`
     // as prototype, so the ancestor's constructor (`X.call(this)`) fills
     // slots. The chain decides at every birth (one record load per level).
-    let recorded = ((*crate::object::header::MetaObj::runtime_born(proto as *mut _).meta())
+    let recorded = ((*crate::meta_read!(crate::meta_obj_runtime_born!(proto as *mut _)))
         .instance_birth
         >> 32) as u32;
     {
@@ -251,7 +251,7 @@ pub(super) unsafe fn construct_ordinary_compiled_function(
                     let ptr = crate::value::JSValue::from_bits(proto_handle.get_nanbox_u64())
                         .as_pointer::<ObjectHeader>();
                     // GC_STORE_AUDIT(POINTER_FREE): the existing weak class-id-zero / ShapeId pair.
-                    (*crate::object::header::MetaObj::runtime_born(ptr as *mut _).meta())
+                    (*crate::meta_read!(crate::meta_obj_runtime_born!(ptr as *mut _)))
                         .instance_birth = u64::from(shape.0) << 32;
                     crate::object::shapes::note_old_generation_carrier(
                         crate::object::shapes::shape_record_for_word(shape),
@@ -284,7 +284,7 @@ pub(super) unsafe fn construct_ordinary_compiled_function(
     // The existing owner record supplies a scalar shape proof to the same
     // allocator as Object.create. It validates the chosen width and actual
     // prototype serial once, then revalidates after any collecting allocation.
-    let recorded = ((*crate::object::header::MetaObj::runtime_born(proto as *mut _).meta())
+    let recorded = ((*crate::meta_read!(crate::meta_obj_runtime_born!(proto as *mut _)))
         .instance_birth
         >> 32) as u32;
     let obj = crate::object::alloc_basic::object_alloc_created(
@@ -298,7 +298,7 @@ pub(super) unsafe fn construct_ordinary_compiled_function(
         let ptr = crate::value::JSValue::from_bits(proto_handle.get_nanbox_u64())
             .as_pointer::<ObjectHeader>();
         // GC_STORE_AUDIT(POINTER_FREE): the existing weak class-id-zero / ShapeId pair.
-        (*crate::object::header::MetaObj::runtime_born(ptr as *mut _).meta()).instance_birth =
+        (*crate::meta_read!(crate::meta_obj_runtime_born!(ptr as *mut _))).instance_birth =
             u64::from(shape.0) << 32;
         crate::object::shapes::note_old_generation_carrier(
             crate::object::shapes::shape_record_for_word(shape),
@@ -410,8 +410,7 @@ pub(crate) fn ordinary_compiled_function_has_instance(
         if crate::object_lacks_meta_word!(header.obj_type) {
             return None;
         }
-        let meta =
-            crate::object::header::MetaObj::from_type(proto as *mut _, header.obj_type).meta();
+        let meta = crate::meta_read!(crate::meta_obj_from_type!(proto as *mut _, header.obj_type));
         if !meta.is_null() && (*meta).proto_serial != 0 {
             let shape_id = crate::object::shapes::object_shape_stamp(obj as *const ObjectHeader);
             if crate::object::shapes::shape_proto_id(shape_id) == Some((*meta).proto_serial) {

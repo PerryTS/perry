@@ -515,7 +515,7 @@ pub(crate) unsafe fn holder_word_blocks_store(mut bits: u64, name: &[u8]) -> Opt
             _ => return None,
         };
         // A1_UNPROVEN: record-first: holder may be the user object (kind-A/B question for S0f).
-        let meta = crate::object::header::MetaObj::runtime_born(holder as *mut _).meta();
+        let meta = crate::meta_read!(crate::meta_obj_runtime_born!(holder as *mut _));
         if !meta.is_null() && (*meta).flags & super::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER != 0 {
             return None;
         }
@@ -623,7 +623,7 @@ pub(crate) unsafe fn declared_class_chain_blocks_store(
                 return None;
             }
             // A1_UNPROVEN: record-first: holder may be the user object (kind-A/B question for S0f).
-            let meta = crate::object::header::MetaObj::runtime_born(holder as *mut _).meta();
+            let meta = crate::meta_read!(crate::meta_obj_runtime_born!(holder as *mut _));
             let recorded = if meta.is_null() { 0 } else { (*meta).prototype };
             if recorded != 0 {
                 let parent_agrees = if record.proto_id() == super::shapes::PROTO_ID_NULL {

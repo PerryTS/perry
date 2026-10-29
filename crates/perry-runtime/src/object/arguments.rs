@@ -4,7 +4,7 @@
 //! It moves and dies with the object; birth needs no metadata allocation.
 
 use super::descriptors::{build_accessor_descriptor, build_data_descriptor};
-use super::header::{meta_form_alloc_bytes, MetaObj};
+use super::header::meta_form_alloc_bytes;
 use super::*;
 use crate::codegen_abi::LayoutWord;
 
@@ -407,8 +407,8 @@ fn unstamped_arguments_object(slots: u32) -> *mut ObjectHeader {
         });
         (*obj).parent_class_id = 0;
         // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record.
-        *crate::object::header::MetaObj::runtime_born(obj).meta_slot() = std::ptr::null_mut();
-        let fields = MetaObj::runtime_born(obj).slots() as *mut JSValue;
+        *crate::meta_slot_of!(crate::meta_obj_runtime_born!(obj)) = std::ptr::null_mut();
+        let fields = crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj)) as *mut JSValue;
         for i in 0..alloc_slots {
             // GC_STORE_AUDIT(INIT): freshly allocated slot, initialized pointer-free.
             std::ptr::write(fields.add(i), JSValue::undefined());
@@ -516,7 +516,7 @@ pub(crate) fn arguments_object_alloc_rooted(
     // A newborn has no observer and no collection can occur during these
     // stores. Initialize physical slots once, then publish their GC layout.
     obj.with_mut_ptr(|obj| unsafe {
-        let fields = MetaObj::runtime_born(obj).slots();
+        let fields = crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj));
         for (i, value) in values.iter().enumerate() {
             // GC_STORE_AUDIT(INIT): rooted values; stores cannot collect.
             fields.add(i).write(value.get_nanbox_f64().to_bits());
@@ -759,15 +759,13 @@ unsafe fn born_arguments_index(obj: *const ObjectHeader, index: u32) -> f64 {
     if let Some(cell) = arguments_state(obj).and_then(|state| state.mapped_box(index)) {
         return crate::r#box::js_box_get(cell);
     }
-    *(MetaObj::runtime_born(obj as *mut ObjectHeader)
-        .slots()
+    *(crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut ObjectHeader))
         .cast::<f64>()
         .add(index as usize))
 }
 
 unsafe fn born_arguments_length_value(obj: *const ObjectHeader, len: u32) -> f64 {
-    *(MetaObj::runtime_born(obj as *mut ObjectHeader)
-        .slots()
+    *(crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut ObjectHeader))
         .cast::<f64>()
         .add(len as usize))
 }
@@ -788,8 +786,7 @@ pub(crate) unsafe fn arguments_object_born_slice<'a>(
     if !length.is_finite() || length < 0.0 || length > born_len as f64 {
         return None;
     }
-    let fields = MetaObj::runtime_born(obj as *mut ObjectHeader)
-        .slots()
+    let fields = crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut ObjectHeader))
         .cast::<f64>();
     Some(std::slice::from_raw_parts(fields, length.floor() as usize))
 }

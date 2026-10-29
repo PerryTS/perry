@@ -140,7 +140,7 @@ pub(crate) unsafe fn shape_answers(addr: usize) -> bool {
     if (*obj).class_id == NATIVE_MODULE_CLASS_ID {
         return false;
     }
-    let meta = crate::object::header::MetaObj::from_type(obj as *mut _, header.obj_type).meta();
+    let meta = crate::meta_read!(crate::meta_obj_from_type!(obj as *mut _, header.obj_type));
     meta.is_null()
         || ((*meta).elements == 0
             && (*meta).flags

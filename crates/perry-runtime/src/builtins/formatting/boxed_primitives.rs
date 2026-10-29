@@ -102,7 +102,7 @@ fn register_boxed_primitive_payload(obj: *mut crate::object::ObjectHeader, paylo
     unsafe {
         // A1_UNPROVEN: register_boxed_primitive_payload(obj) parameter, no type test (kind-A/B question for S0b-S0e).
         let meta = crate::object::object_meta_ensure(
-            crate::object::MetaObj::runtime_born(obj),
+            crate::meta_obj_runtime_born!(obj),
             crate::object::MetaReason::BoxedPrimitive,
         );
         // GC_STORE_AUDIT(BARRIERED): private metadata child slot + exact barrier.

@@ -31,7 +31,7 @@ unsafe fn key_identity(addr: usize, create: bool) -> Option<u64> {
             }
             if create {
                 crate::object::object_meta_ensure(
-                    crate::object::MetaObj::runtime_born(bag),
+                    crate::meta_obj_runtime_born!(bag),
                     crate::object::MetaReason::SetKeyIdentity,
                 )
             } else {
@@ -49,7 +49,7 @@ unsafe fn key_identity(addr: usize, create: bool) -> Option<u64> {
             }
             if create {
                 crate::object::object_meta_ensure(
-                    crate::object::MetaObj::runtime_born(bag),
+                    crate::meta_obj_runtime_born!(bag),
                     crate::object::MetaReason::SetKeyIdentity,
                 )
             } else {

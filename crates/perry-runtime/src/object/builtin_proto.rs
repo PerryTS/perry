@@ -195,7 +195,7 @@ pub(crate) unsafe fn seal_object_family(obj: *mut ObjectHeader, family: usize) {
     // Marking may have moved nothing (startup runs with collection
     // suppressed by the caller) but it did ensure a meta record.
     let meta = super::object_meta_ensure(
-        super::MetaObj::runtime_born(obj),
+        crate::meta_obj_runtime_born!(obj),
         super::MetaReason::BuiltinSeal,
     );
     if meta.is_null() {
@@ -275,7 +275,7 @@ pub(crate) unsafe fn name_runtime_prototype(
 ) -> Option<*mut super::ObjectMeta> {
     let _no_move = crate::gc::GcSuppressScope::new();
     let meta = super::object_meta_ensure(
-        super::MetaObj::runtime_born(proto),
+        crate::meta_obj_runtime_born!(proto),
         super::MetaReason::RuntimePrototypeName,
     );
     if meta.is_null() {
@@ -392,7 +392,7 @@ pub(crate) unsafe fn note_write(obj: *const ObjectHeader, site: &'static str) {
         return;
     }
     // A1_UNPROVEN: record-first: caller intrinsic-proto membership (kind-A/B question for S0f).
-    let meta = crate::object::header::MetaObj::runtime_born(obj as *mut _).meta();
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
     if meta.is_null() {
         return;
     }
@@ -464,7 +464,7 @@ pub(crate) unsafe fn note_value_store(
     site: &'static str,
 ) {
     // A1_UNPROVEN: record-first: caller intrinsic-proto membership (kind-A/B question for S0f).
-    let meta = crate::object::header::MetaObj::runtime_born(obj as *mut _).meta();
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
     if meta.is_null() || (*meta).flags & super::OBJECT_META_FLAG_IS_PROTOTYPE == 0 {
         return;
     }

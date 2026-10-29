@@ -109,7 +109,10 @@ pub(crate) unsafe fn plain_receiver_miss_is_final(object: *const ObjectHeader, k
     {
         return false;
     }
-    let meta = crate::object::header::MetaObj::from_type(object as *mut _, header.obj_type).meta();
+    let meta = crate::meta_read!(crate::meta_obj_from_type!(
+        object as *mut _,
+        header.obj_type
+    ));
     if !meta.is_null()
         && (*meta).flags
             & (crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER

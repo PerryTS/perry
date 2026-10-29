@@ -49,9 +49,9 @@ pub(crate) unsafe fn cell_meta_slot_for_header(
     gc_hdr: &crate::gc::GcHeader,
 ) -> Option<*mut *mut ObjectMeta> {
     match gc_hdr.obj_type {
-        ty @ crate::gc_object_type_pat!() => {
-            Some(header::MetaObj::from_type(user_ptr as *mut ObjectHeader, ty).meta_slot())
-        }
+        ty @ crate::gc_object_type_pat!() => Some(crate::meta_slot_of!(
+            crate::meta_obj_from_type!(user_ptr as *mut ObjectHeader, ty)
+        )),
         crate::gc::GC_TYPE_ERROR => {
             Some(&mut (*(user_ptr as *mut crate::error::ErrorHeader)).meta as *mut *mut ObjectMeta)
         }

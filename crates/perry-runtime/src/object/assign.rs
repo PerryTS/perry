@@ -398,7 +398,7 @@ unsafe fn positional_source_plan(src: *const ObjectHeader) -> PositionalPlan {
     {
         return PositionalPlan::Refused;
     }
-    let meta = crate::object::header::MetaObj::from_type(src as *mut _, header.obj_type).meta();
+    let meta = crate::meta_read!(crate::meta_obj_from_type!(src as *mut _, header.obj_type));
     if !meta.is_null() && (*meta).flags & super::OBJECT_META_FLAG_IS_PROTOTYPE != 0 {
         return PositionalPlan::Refused;
     }

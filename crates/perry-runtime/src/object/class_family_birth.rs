@@ -198,9 +198,7 @@ mod evaluation_layout_tests {
                     shapes::class_proto_id(CLASS),
                 ));
                 assert!(
-                    crate::object::header::MetaObj::runtime_born(obj as *mut _)
-                        .meta()
-                        .is_null(),
+                    crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _)).is_null(),
                     "the link is a shape fact, not a meta one"
                 );
                 assert_eq!(shapes::object_prototype_word(obj), bits);
@@ -257,9 +255,7 @@ mod evaluation_layout_tests {
             shapes::stamp_evaluation_holder(obj, class_bits);
             let copy = shapes::object_shape_stamp(obj);
             assert!(
-                crate::object::header::MetaObj::runtime_born(obj as *mut _)
-                    .meta()
-                    .is_null(),
+                crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _)).is_null(),
                 "the brand is a shape fact"
             );
             assert_eq!(shapes::object_evaluation_brand(obj), class_bits);
@@ -287,9 +283,7 @@ mod evaluation_layout_tests {
             );
             let born = crate::object::layout_desc::alloc_family_layout_copy(desc, copy);
             assert_eq!((*born).parent_class_id, (*obj).parent_class_id);
-            assert!(crate::object::header::MetaObj::runtime_born(born as *mut _)
-                .meta()
-                .is_null());
+            assert!(crate::meta_read!(crate::meta_obj_runtime_born!(born as *mut _)).is_null());
             assert_eq!(shapes::object_evaluation_brand(born), class_bits);
             assert_eq!(shapes::object_prototype_word(born), proto_bits);
             assert_eq!(
@@ -320,9 +314,7 @@ mod evaluation_layout_tests {
             );
             heritage::pin_instance_constructing_class(born, f64::from_bits(class_bits));
             assert!(
-                crate::object::header::MetaObj::runtime_born(born as *mut _)
-                    .meta()
-                    .is_null(),
+                crate::meta_read!(crate::meta_obj_runtime_born!(born as *mut _)).is_null(),
                 "the pin is the shape brand"
             );
             assert_eq!(
