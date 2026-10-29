@@ -57,6 +57,8 @@ pub(super) struct SubmoduleSpec {
     /// Stable key — matches the prefix used in the generated FFI symbol
     /// names (`js_node_submod_<key>_export_<name>`).
     key: &'static str,
+    /// The submodule's ordinal: its registry slot and its singleton slots.
+    bucket: SubmodBucket,
     exports: &'static [ExportSpec],
 }
 
@@ -166,6 +168,7 @@ extern "C" fn thunk_vm_create_context(
 // ----- per-submodule specs (devirt) -----
 static SUBMOD_VM: SubmoduleSpec = SubmoduleSpec {
     key: "vm",
+    bucket: SubmodBucket::Vm,
     exports: &[ExportSpec {
         name: "createContext",
         info: unsafe { &*crate::fn_info!(thunk_vm_create_context, 2;with_declared(2)) },
@@ -176,6 +179,7 @@ static SUBMOD_TIMERS: SubmoduleSpec = SubmoduleSpec {
     // node:timers namespace object (`import * as timers`). Named imports
     // bypass this (compile.rs) to keep the global fast-path. (#1213)
     key: "timers",
+    bucket: SubmodBucket::Timers,
     exports: &[
         ExportSpec {
             name: "setTimeout",
@@ -206,6 +210,7 @@ static SUBMOD_TIMERS: SubmoduleSpec = SubmoduleSpec {
 
 static SUBMOD_TIMERS_PROMISES: SubmoduleSpec = SubmoduleSpec {
     key: "timers_promises",
+    bucket: SubmodBucket::TimersPromises,
     exports: &[
         ExportSpec {
             name: "setTimeout",
@@ -228,6 +233,7 @@ static SUBMOD_TIMERS_PROMISES: SubmoduleSpec = SubmoduleSpec {
 
 static SUBMOD_FS_PROMISES: SubmoduleSpec = SubmoduleSpec {
     key: "fs_promises",
+    bucket: SubmodBucket::FsPromises,
     exports: &[
         ExportSpec {
             name: "readFile",
@@ -366,6 +372,7 @@ static SUBMOD_FS_PROMISES: SubmoduleSpec = SubmoduleSpec {
 
 static SUBMOD_READLINE_PROMISES: SubmoduleSpec = SubmoduleSpec {
     key: "readline_promises",
+    bucket: SubmodBucket::ReadlinePromises,
     exports: &[
         ExportSpec {
             name: "createInterface",
@@ -384,6 +391,7 @@ static SUBMOD_READLINE_PROMISES: SubmoduleSpec = SubmoduleSpec {
 
 static SUBMOD_STREAM_PROMISES: SubmoduleSpec = SubmoduleSpec {
     key: "stream_promises",
+    bucket: SubmodBucket::StreamPromises,
     exports: &[
         ExportSpec {
             name: "pipeline",
@@ -398,6 +406,7 @@ static SUBMOD_STREAM_PROMISES: SubmoduleSpec = SubmoduleSpec {
 
 static SUBMOD_STREAM_CONSUMERS: SubmoduleSpec = SubmoduleSpec {
     key: "stream_consumers",
+    bucket: SubmodBucket::StreamConsumers,
     exports: &[
         ExportSpec {
             name: "text",
@@ -428,6 +437,7 @@ static SUBMOD_STREAM_CONSUMERS: SubmoduleSpec = SubmoduleSpec {
 
 static SUBMOD_STREAM_WEB: SubmoduleSpec = SubmoduleSpec {
     key: "stream_web",
+    bucket: SubmodBucket::StreamWeb,
     exports: &[
         ExportSpec {
             name: "ReadableStream",
@@ -502,6 +512,7 @@ static SUBMOD_STREAM_WEB: SubmoduleSpec = SubmoduleSpec {
 
 static SUBMOD_HONO_JSX_SERVER: SubmoduleSpec = SubmoduleSpec {
     key: "hono_jsx_server",
+    bucket: SubmodBucket::HonoJsxServer,
     exports: &[
         ExportSpec {
             name: "jsx",
@@ -524,6 +535,7 @@ static SUBMOD_HONO_JSX_SERVER: SubmoduleSpec = SubmoduleSpec {
 
 static SUBMOD_HONO_JSX_STREAMING: SubmoduleSpec = SubmoduleSpec {
     key: "hono_jsx_streaming",
+    bucket: SubmodBucket::HonoJsxStreaming,
     exports: &[
         ExportSpec {
             name: "renderToReadableStream",
@@ -540,6 +552,7 @@ static SUBMOD_HONO_JSX_STREAMING: SubmoduleSpec = SubmoduleSpec {
 
 static SUBMOD_SYS: SubmoduleSpec = SubmoduleSpec {
     key: "sys",
+    bucket: SubmodBucket::Sys,
     exports: &[
         ExportSpec {
             name: "format",
@@ -574,6 +587,7 @@ static SUBMOD_SYS: SubmoduleSpec = SubmoduleSpec {
 
 static SUBMOD_DIAGNOSTICS_CHANNEL: SubmoduleSpec = SubmoduleSpec {
     key: "diagnostics_channel",
+    bucket: SubmodBucket::DiagnosticsChannel,
     exports: &[
         ExportSpec {
             name: "tracingChannel",
@@ -612,6 +626,7 @@ static SUBMOD_DIAGNOSTICS_CHANNEL: SubmoduleSpec = SubmoduleSpec {
 
 static SUBMOD_TRACE_EVENTS: SubmoduleSpec = SubmoduleSpec {
     key: "trace_events",
+    bucket: SubmodBucket::TraceEvents,
     exports: &[
         ExportSpec {
             name: "createTracing",
@@ -626,6 +641,7 @@ static SUBMOD_TRACE_EVENTS: SubmoduleSpec = SubmoduleSpec {
 
 static SUBMOD_TEST: SubmoduleSpec = SubmoduleSpec {
     key: "test",
+    bucket: SubmodBucket::Test,
     exports: &[
         ExportSpec {
             name: "default",
@@ -703,6 +719,7 @@ static SUBMOD_TEST: SubmoduleSpec = SubmoduleSpec {
 
 static SUBMOD_TEST_REPORTERS: SubmoduleSpec = SubmoduleSpec {
     key: "test_reporters",
+    bucket: SubmodBucket::TestReporters,
     exports: &[
         ExportSpec {
             name: "spec",
@@ -979,23 +996,39 @@ fn find_export(submod: &SubmoduleSpec, name: &str) -> Option<&'static ExportSpec
 // singletons are allocated on first reach and live until process exit
 // (they're root-marked by `scan_node_submodule_singleton_roots` below).
 
+/// The singletons one submodule owns: its export thunks' closures by export
+/// ordinal (the export's index in `exports`), its namespace object and its
+/// CommonJS-style default object (for submodules whose `namespace.default` is
+/// not the namespace itself). Null until first use. The submodule's bucket and
+/// the export ordinal are the identity; no address of the spec or of its
+/// names enters, so lookups do the same work wherever the link put them.
+struct SubmodSlots {
+    exports: Vec<*mut ClosureHeader>,
+    namespace: *mut ObjectHeader,
+    default_object: *mut ObjectHeader,
+}
+const EMPTY_SUBMOD_SLOTS: SubmodSlots = SubmodSlots {
+    exports: Vec::new(),
+    namespace: std::ptr::null_mut(),
+    default_object: std::ptr::null_mut(),
+};
+
+/// `export`'s ordinal in `submod.exports`.
+fn export_ordinal(submod: &SubmoduleSpec, export: &ExportSpec) -> usize {
+    let base = submod.exports.as_ptr() as usize;
+    let offset = (export as *const ExportSpec as usize).wrapping_sub(base);
+    let ordinal = offset / std::mem::size_of::<ExportSpec>();
+    assert!(
+        ordinal < submod.exports.len() && std::ptr::eq(&submod.exports[ordinal], export),
+        "export does not belong to its submodule"
+    );
+    ordinal
+}
+
 thread_local! {
-    /// Map from (submod_key_ptr, export_name_ptr) — both `&'static str`,
-    /// so pointer-equality is sufficient — to the cached singleton
-    /// ClosureHeader pointer for that export's thunk.
-    static EXPORT_SINGLETONS: RefCell<std::collections::HashMap<(usize, usize), *mut ClosureHeader>> =
-        RefCell::new(std::collections::HashMap::new());
-
-    /// Map from submod_key_ptr to the cached namespace ObjectHeader
-    /// pointer — populated once per submodule on first namespace use.
-    static NAMESPACE_SINGLETONS: RefCell<std::collections::HashMap<usize, *mut ObjectHeader>> =
-        RefCell::new(std::collections::HashMap::new());
-
-    /// Map from submod_key_ptr to the cached CommonJS-style default
-    /// object for submodules whose `namespace.default` is not the
-    /// namespace object itself.
-    static DEFAULT_OBJECT_SINGLETONS: RefCell<std::collections::HashMap<usize, *mut ObjectHeader>> =
-        RefCell::new(std::collections::HashMap::new());
+    /// Per-submodule singleton slots, indexed by `SubmodBucket`.
+    static SUBMOD_SINGLETONS: RefCell<[SubmodSlots; SUBMOD_COUNT]> =
+        const { RefCell::new([EMPTY_SUBMOD_SLOTS; SUBMOD_COUNT]) };
 
     /// `node:timers/promises.scheduler` is a non-callable object with
     /// function-valued `wait` and `yield` properties.
@@ -1195,20 +1228,19 @@ fn ensure_export_singleton(
     submod: &'static SubmoduleSpec,
     export: &'static ExportSpec,
 ) -> *mut ClosureHeader {
-    let key_name = if submod.key == "test" {
+    let owner = if submod.key == "test" {
         let canonical = match export.name {
             "default" | "test" | "it" => "test",
             "suite" | "describe" => "suite",
             _ => export.name,
         };
-        find_export(submod, canonical)
-            .map(|canonical| canonical.name)
-            .unwrap_or(export.name)
+        find_export(submod, canonical).unwrap_or(export)
     } else {
-        export.name
+        export
     };
-    let key = (submod.key.as_ptr() as usize, key_name.as_ptr() as usize);
-    if let Some(cached) = EXPORT_SINGLETONS.with(|m| m.borrow().get(&key).copied()) {
+    let key_name = owner.name;
+    let (bucket, ordinal) = (submod.bucket as usize, export_ordinal(submod, owner));
+    if let Some(cached) = export_singleton(bucket, ordinal) {
         return cached;
     }
     let allocated = js_closure_alloc(export.info, 0);
@@ -1276,11 +1308,26 @@ fn ensure_export_singleton(
     } else {
         allocated
     };
-    EXPORT_SINGLETONS.with(|m| {
-        m.borrow_mut().insert(key, allocated);
+    SUBMOD_SINGLETONS.with(|m| {
+        let exports = &mut m.borrow_mut()[bucket].exports;
+        if exports.is_empty() {
+            exports.resize(submod.exports.len(), std::ptr::null_mut());
+        }
+        exports[ordinal] = allocated;
     });
     ANY_SINGLETON_ALLOCATED.store(1, Ordering::Release);
     allocated
+}
+
+/// The closure already minted for export `ordinal` of submodule `bucket`.
+fn export_singleton(bucket: usize, ordinal: usize) -> Option<*mut ClosureHeader> {
+    SUBMOD_SINGLETONS.with(|m| {
+        m.borrow()[bucket]
+            .exports
+            .get(ordinal)
+            .copied()
+            .filter(|p| !p.is_null())
+    })
 }
 
 fn submodule_has_default_object(submod_key: &str) -> bool {
@@ -1336,8 +1383,9 @@ fn submodule_default_object_value(submod: &'static SubmoduleSpec) -> Option<f64>
     if !submodule_has_default_object(submod.key) {
         return None;
     }
-    let key = submod.key.as_ptr() as usize;
-    if let Some(cached) = DEFAULT_OBJECT_SINGLETONS.with(|m| m.borrow().get(&key).copied()) {
+    let bucket = submod.bucket as usize;
+    let cached = SUBMOD_SINGLETONS.with(|m| m.borrow()[bucket].default_object);
+    if !cached.is_null() {
         return Some(f64::from_bits(JSValue::pointer(cached as *const u8).bits()));
     }
 
@@ -1350,9 +1398,7 @@ fn submodule_default_object_value(submod: &'static SubmoduleSpec) -> Option<f64>
         set_named_value(obj, "constants", fs_promises_constants_value());
     }
 
-    DEFAULT_OBJECT_SINGLETONS.with(|m| {
-        m.borrow_mut().insert(key, obj);
-    });
+    SUBMOD_SINGLETONS.with(|m| m.borrow_mut()[bucket].default_object = obj);
     ANY_SINGLETON_ALLOCATED.store(1, Ordering::Release);
     Some(f64::from_bits(JSValue::pointer(obj as *const u8).bits()))
 }
@@ -1393,8 +1439,7 @@ pub(crate) fn is_diagnostics_channel_constructor_value(value: f64) -> bool {
     let Some(export) = find_export(submod, "Channel") else {
         return false;
     };
-    let key = (submod.key.as_ptr() as usize, export.name.as_ptr() as usize);
-    EXPORT_SINGLETONS.with(|m| m.borrow().get(&key).copied() == Some(ptr))
+    export_singleton(submod.bucket as usize, export_ordinal(submod, export)) == Some(ptr)
 }
 
 pub(crate) fn is_diagnostics_bounded_channel_constructor_value(value: f64) -> bool {
@@ -1409,13 +1454,13 @@ pub(crate) fn is_diagnostics_bounded_channel_constructor_value(value: f64) -> bo
     let Some(export) = find_export(submod, "BoundedChannel") else {
         return false;
     };
-    let key = (submod.key.as_ptr() as usize, export.name.as_ptr() as usize);
-    EXPORT_SINGLETONS.with(|m| m.borrow().get(&key).copied() == Some(ptr))
+    export_singleton(submod.bucket as usize, export_ordinal(submod, export)) == Some(ptr)
 }
 
 fn ensure_namespace_singleton(submod: &'static SubmoduleSpec) -> *mut ObjectHeader {
-    let key = submod.key.as_ptr() as usize;
-    if let Some(cached) = NAMESPACE_SINGLETONS.with(|m| m.borrow().get(&key).copied()) {
+    let bucket = submod.bucket as usize;
+    let cached = SUBMOD_SINGLETONS.with(|m| m.borrow()[bucket].namespace);
+    if !cached.is_null() {
         return cached;
     }
     // Allocate a fresh object with one inline slot per known export;
@@ -1481,9 +1526,7 @@ fn ensure_namespace_singleton(submod: &'static SubmoduleSpec) -> *mut ObjectHead
     if let Some(default_value) = submodule_default_object_value(submod) {
         set_named_value(obj, "default", default_value);
     }
-    NAMESPACE_SINGLETONS.with(|m| {
-        m.borrow_mut().insert(key, obj);
-    });
+    SUBMOD_SINGLETONS.with(|m| m.borrow_mut()[bucket].namespace = obj);
     ANY_SINGLETON_ALLOCATED.store(1, Ordering::Release);
     obj
 }
@@ -1509,19 +1552,16 @@ pub fn scan_node_submodule_singleton_roots_mut(visitor: &mut crate::gc::RuntimeR
     if ANY_SINGLETON_ALLOCATED.load(Ordering::Acquire) == 0 {
         return;
     }
-    EXPORT_SINGLETONS.with(|m| {
-        for closure_ptr in m.borrow_mut().values_mut() {
-            visitor.visit_raw_mut_ptr_slot(closure_ptr);
-        }
-    });
-    NAMESPACE_SINGLETONS.with(|m| {
-        for obj_ptr in m.borrow_mut().values_mut() {
-            visitor.visit_raw_mut_ptr_slot(obj_ptr);
-        }
-    });
-    DEFAULT_OBJECT_SINGLETONS.with(|m| {
-        for obj_ptr in m.borrow_mut().values_mut() {
-            visitor.visit_raw_mut_ptr_slot(obj_ptr);
+    SUBMOD_SINGLETONS.with(|m| {
+        for slots in m.borrow_mut().iter_mut() {
+            for closure_ptr in slots.exports.iter_mut().filter(|p| !p.is_null()) {
+                visitor.visit_raw_mut_ptr_slot(closure_ptr);
+            }
+            for obj_ptr in [&mut slots.namespace, &mut slots.default_object] {
+                if !obj_ptr.is_null() {
+                    visitor.visit_raw_mut_ptr_slot(obj_ptr);
+                }
+            }
         }
     });
     TIMERS_PROMISES_SCHEDULER_OBJECT.with(|slot| {
@@ -1572,15 +1612,11 @@ pub(crate) fn test_seed_node_submodule_roots(
     namespace: *mut ObjectHeader,
     diag_noop: *mut ClosureHeader,
 ) {
-    EXPORT_SINGLETONS.with(|m| {
+    SUBMOD_SINGLETONS.with(|m| {
         let mut m = m.borrow_mut();
-        m.clear();
-        m.insert((1, 2), closure);
-    });
-    NAMESPACE_SINGLETONS.with(|m| {
-        let mut m = m.borrow_mut();
-        m.clear();
-        m.insert(3, namespace);
+        *m = [EMPTY_SUBMOD_SLOTS; SUBMOD_COUNT];
+        m[0].exports = vec![closure];
+        m[0].namespace = namespace;
     });
     DIAG_NOOP_CLOSURE.with(|slot| {
         *slot.borrow_mut() = Some(diag_noop);
@@ -1598,14 +1634,8 @@ pub(crate) fn test_seed_node_submodule_roots(
 
 #[cfg(test)]
 pub(crate) fn test_node_submodule_roots() -> (usize, usize, usize, u64) {
-    let closure = EXPORT_SINGLETONS.with(|m| {
-        m.borrow()
-            .get(&(1, 2))
-            .map(|ptr| *ptr as usize)
-            .unwrap_or(0)
-    });
-    let namespace =
-        NAMESPACE_SINGLETONS.with(|m| m.borrow().get(&3).map(|ptr| *ptr as usize).unwrap_or(0));
+    let closure = export_singleton(0, 0).map_or(0, |ptr| ptr as usize);
+    let namespace = SUBMOD_SINGLETONS.with(|m| m.borrow()[0].namespace as usize);
     let diag =
         DIAG_NOOP_CLOSURE.with(|slot| slot.borrow().as_ref().map(|ptr| *ptr as usize).unwrap_or(0));
     let pending = DIAG_PENDING_UNCAUGHT.with(|pending| {
