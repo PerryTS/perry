@@ -30,7 +30,7 @@
 // WASI (#11377): `std::os::wasi::fs::symlink_path` for `fs.symlink`.
 #![cfg_attr(target_os = "wasi", feature(wasi_ext))]
 #![cfg_attr(all(target_os = "wasi", target_env = "p2"), feature(wasip2))]
-
+include!(concat!(env!("OUT_DIR"), "/realm-metadata.rs"));
 /// Issue #62: route every Rust heap allocation through mimalloc instead of
 /// the system `malloc`. `gc_malloc`, arena block allocation, Vec/HashMap
 /// growth inside the runtime, and the compiled-program side of the FFI all

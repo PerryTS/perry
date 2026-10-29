@@ -232,27 +232,27 @@ pub(crate) fn install_async_resource_prototype(
 ) {
     proto.method(
         "runInAsyncScope",
-        crate::fn_info!(async_resource_run_thunk, 3; with_rest(2), with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm("node:async_hooks.AsyncResource.prototype.runInAsyncScope")] async_resource_run_thunk, 3; with_rest(2), with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
         2,
     );
     proto.method(
         "emitDestroy",
-        crate::fn_info!(async_resource_destroy_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm("node:async_hooks.AsyncResource.prototype.emitDestroy")] async_resource_destroy_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
         0,
     );
     proto.method(
         "asyncId",
-        crate::fn_info!(async_resource_id_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm("node:async_hooks.AsyncResource.prototype.asyncId")] async_resource_id_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
         0,
     );
     proto.method(
         "triggerAsyncId",
-        crate::fn_info!(async_resource_trigger_id_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm("node:async_hooks.AsyncResource.prototype.triggerAsyncId")] async_resource_trigger_id_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
         0,
     );
     proto.method(
         "bind",
-        crate::fn_info!(async_resource_bind_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm("node:async_hooks.AsyncResource.prototype.bind")] async_resource_bind_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
         2,
     );
 }
@@ -1921,5 +1921,3 @@ pub(crate) fn register_roots() {
         crate::gc::async_hooks_mutable_root_scanner,
     );
 }
-
-crate::realm_decl!("async_hooks.realm.json#*");

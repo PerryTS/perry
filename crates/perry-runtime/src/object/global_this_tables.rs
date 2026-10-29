@@ -3,13 +3,13 @@
 use super::global_this::*;
 
 const NOOP_CONSTRUCTOR_INFO: *const crate::closure::JsFunctionInfo =
-    crate::fn_info!(global_this_builtin_noop_thunk, 1);
+    crate::fn_info!(#[realm(realm_decl! { WebSocket.prototype.send; CompressionStream, kind = constructor, provider = builtin_constructor, births = [ArrayBuffer, TransformStream, Uint8Array]; AbortController, kind = constructor, provider = builtin_constructor, births = [AbortSignal, Event], spec = {length = 0}, emit = metadata(realm_urlpattern_metadata); AsyncDisposableStack, kind = constructor, provider = builtin_constructor, births = [Promise, SuppressedError], spec = {length = 0}, emit = metadata(realm_urlpattern_metadata); DisposableStack, kind = constructor, provider = builtin_constructor, births = [SuppressedError], spec = {length = 0}, emit = metadata(realm_urlpattern_metadata); FormData, kind = constructor, provider = builtin_constructor, births = ["%IteratorPrototype%", Array, Blob, File], spec = {length = 0}, emit = metadata(realm_urlpattern_metadata); Navigator, kind = constructor, provider = builtin_constructor, spec = {length = 0}, emit = metadata(realm_urlpattern_metadata); TextDecoder, kind = constructor, provider = builtin_constructor, births = [Uint8Array], spec = {length = 0}, emit = metadata(realm_urlpattern_metadata); TextDecoderStream, kind = constructor, provider = builtin_constructor, births = [TextDecoder, TransformStream, Uint8Array], spec = {length = 0}, emit = metadata(realm_urlpattern_metadata); TextEncoder, kind = constructor, provider = builtin_constructor, births = [Uint8Array], spec = {length = 0}, emit = metadata(realm_urlpattern_metadata); TextEncoderStream, kind = constructor, provider = builtin_constructor, births = [TextEncoder, TransformStream, Uint8Array], spec = {length = 0}, emit = metadata(realm_urlpattern_metadata); URLSearchParams, kind = constructor, provider = builtin_constructor, births = ["%IteratorPrototype%", Array], spec = {length = 0}, emit = metadata(realm_urlpattern_metadata); Event, kind = constructor, provider = builtin_constructor, members = { NONE = 0.0, attrs = enumerable; CAPTURING_PHASE = 1.0, attrs = enumerable; AT_TARGET = 2.0, attrs = enumerable; BUBBLING_PHASE = 3.0, attrs = enumerable; }; WebSocket, kind = constructor, provider = builtin_constructor, members = { CONNECTING = 0.0, attrs = enumerable; OPEN = 1.0, attrs = enumerable; CLOSING = 2.0, attrs = enumerable; CLOSED = 3.0, attrs = enumerable; }; URL, kind = constructor, provider = builtin_constructor, members = { canParse; parse; prototype; }, births = [URLSearchParams]; CustomEvent, kind = constructor, provider = builtin_constructor, extends = Event; SuppressedError, kind = constructor, provider = builtin_constructor, extends = Error, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); AbortSignal, kind = constructor, provider = builtin_constructor, extends = EventTarget, members = { abort; timeout; any; prototype; }, spec = {length = 0}, emit = metadata(realm_urlpattern_metadata), births = [Array, DOMException, Event, Promise]; AggregateError, kind = constructor, provider = builtin_constructor, extends = Error, spec = {length = 2}, emit = metadata(realm_file_metadata), births = [Array]; DOMException, kind = constructor, provider = builtin_constructor, members = { INDEX_SIZE_ERR = 1.0, attrs = enumerable; DOMSTRING_SIZE_ERR = 2.0, attrs = enumerable; HIERARCHY_REQUEST_ERR = 3.0, attrs = enumerable; WRONG_DOCUMENT_ERR = 4.0, attrs = enumerable; INVALID_CHARACTER_ERR = 5.0, attrs = enumerable; NO_DATA_ALLOWED_ERR = 6.0, attrs = enumerable; NO_MODIFICATION_ALLOWED_ERR = 7.0, attrs = enumerable; NOT_FOUND_ERR = 8.0, attrs = enumerable; NOT_SUPPORTED_ERR = 9.0, attrs = enumerable; INUSE_ATTRIBUTE_ERR = 10.0, attrs = enumerable; INVALID_STATE_ERR = 11.0, attrs = enumerable; SYNTAX_ERR = 12.0, attrs = enumerable; INVALID_MODIFICATION_ERR = 13.0, attrs = enumerable; NAMESPACE_ERR = 14.0, attrs = enumerable; INVALID_ACCESS_ERR = 15.0, attrs = enumerable; VALIDATION_ERR = 16.0, attrs = enumerable; TYPE_MISMATCH_ERR = 17.0, attrs = enumerable; SECURITY_ERR = 18.0, attrs = enumerable; NETWORK_ERR = 19.0, attrs = enumerable; ABORT_ERR = 20.0, attrs = enumerable; URL_MISMATCH_ERR = 21.0, attrs = enumerable; QUOTA_EXCEEDED_ERR = 22.0, attrs = enumerable; TIMEOUT_ERR = 23.0, attrs = enumerable; INVALID_NODE_TYPE_ERR = 24.0, attrs = enumerable; DATA_CLONE_ERR = 25.0, attrs = enumerable; }, spec = {length = 0}, emit = metadata(realm_urlpattern_metadata); EventTarget, kind = constructor, provider = builtin_constructor, members = { ["@for:nodejs.event_target"] = true, attrs = writable | enumerable | configurable; }, spec = {length = 0}, emit = metadata(realm_urlpattern_metadata), births = [Event]; Proxy, kind = constructor, provider = builtin_constructor, members = { revocable; prototype; }, spec = {length = 2}, emit = metadata(realm_file_metadata); DecompressionStream, kind = constructor, provider = builtin_constructor, births = [ArrayBuffer, TransformStream, Uint8Array]; FinalizationRegistry, kind = constructor, provider = builtin_constructor; ReadableStream, kind = constructor, provider = builtin_constructor, members = { from, attrs = writable | enumerable | configurable; }, spec = {length = 0}, emit = metadata(realm_stream_constructor_public), births = ["%AsyncIteratorPrototype%", ArrayBuffer, Promise, Uint8Array]; TransformStream, kind = constructor, provider = builtin_constructor, spec = {length = 0}, emit = metadata(realm_stream_constructor_public), births = [ReadableStream, WritableStream]; WritableStream, kind = constructor, provider = builtin_constructor, spec = {length = 0}, emit = metadata(realm_stream_constructor_public), births = [ArrayBuffer, Promise, Uint8Array]; })] global_this_builtin_noop_thunk, 1);
 const TYPED_ARRAY_CONSTRUCTOR_INFO: *const crate::closure::JsFunctionInfo =
     crate::fn_info!(typed_array_constructor_call_thunk, 1; with_declared(0));
 const CONSTRUCT_ONLY_INFO: *const crate::closure::JsFunctionInfo =
-    crate::fn_info!(construct_only_builtin_call_thunk, 0);
+    crate::fn_info!(#[realm(realm_decl! { DataView, kind = constructor, provider = builtin_constructor, births = [ArrayBuffer], spec = {length = 1}, emit = metadata(realm_function_metadata); ArrayBuffer, kind = constructor, provider = builtin_constructor, members = { isView; prototype; [Symbol.species] = accessor(get = "ArrayBuffer[\"@@species\"].<get>"); }, spec = {length = 1}, emit = metadata(realm_function_metadata); SharedArrayBuffer, kind = constructor, provider = builtin_constructor, members = { [Symbol.species] = accessor(get = "SharedArrayBuffer[\"@@species\"].<get>"); }, spec = {length = 1}, emit = metadata(realm_function_metadata); })] construct_only_builtin_call_thunk, 0);
 const WEBCRYPTO_CONSTRUCTOR_INFO: *const crate::closure::JsFunctionInfo =
-    crate::fn_info!(webcrypto_illegal_constructor_thunk, 0);
+    crate::fn_info!(#[realm(realm_decl! { Crypto, kind = constructor, provider = builtin_constructor, births = [ArrayBuffer, CryptoKey, DOMException, Promise, SubtleCrypto, Uint8Array]; CryptoKey, kind = constructor, provider = builtin_constructor; SubtleCrypto, kind = constructor, provider = builtin_constructor, members = { supports, attrs = writable | enumerable | configurable; prototype; }, births = [ArrayBuffer, CryptoKey, DOMException, Promise, Uint8Array]; })] webcrypto_illegal_constructor_thunk, 0);
 
 /// A builtin's own declaration, including the CLASS identity of its instances
 /// when its prototype occupies a class identity word. As with a member's
@@ -96,31 +96,31 @@ macro_rules! builtin_constructors {
 // `globalThis.<Name>` should route through the singleton instead of the
 // legacy `0.0` no-value placeholder.
 builtin_constructors! {
-    Array => crate::fn_info!(global_this_array_thunk, 1; with_rest(0)); instance BuiltinInstanceIdentity::Class(0xFFFF0024); named_serial crate::closure::shape::INTRINSIC_SERIAL_ARRAY_PROTOTYPE,
-    Object => crate::fn_info!(global_this_object_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(0xFFFF0050),
-    String => crate::fn_info!(global_this_string_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(0xFFFF00D1),
-    Number => crate::fn_info!(global_this_number_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(0xFFFF00D0),
-    Boolean => crate::fn_info!(global_this_boolean_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(0xFFFF00D2),
-    Function => crate::fn_info!(unwind_in_tests global_this_function_call_thunk, 1; with_rest(0)); serial crate::closure::shape::INTRINSIC_SERIAL_FUNCTION; instance BuiltinInstanceIdentity::Class(0xFFFF00F0); prototype_callable true,
-    RegExp => crate::fn_info!(regexp_constructor_call_thunk, 2; with_declared(2)); instance BuiltinInstanceIdentity::Class(0xFFFF0021),
-    Date => crate::fn_info!(global_this_date_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(0xFFFF0020),
-    Error => crate::fn_info!(error_constructor_call_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(crate::error::CLASS_ID_ERROR),
-    TypeError => crate::fn_info!(type_error_constructor_call_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(crate::error::CLASS_ID_TYPE_ERROR),
-    RangeError => crate::fn_info!(range_error_constructor_call_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(crate::error::CLASS_ID_RANGE_ERROR),
-    SyntaxError => crate::fn_info!(syntax_error_constructor_call_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(crate::error::CLASS_ID_SYNTAX_ERROR),
-    ReferenceError => crate::fn_info!(reference_error_constructor_call_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(crate::error::CLASS_ID_REFERENCE_ERROR),
-    EvalError => crate::fn_info!(eval_error_constructor_call_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(crate::error::CLASS_ID_EVAL_ERROR),
-    URIError => crate::fn_info!(uri_error_constructor_call_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(crate::error::CLASS_ID_URI_ERROR),
+    Array => crate::fn_info!(#[realm(Array, kind = constructor, provider = builtin_constructor, members = { isArray; from; of; prototype; [Symbol.species] = accessor(get = "Array[\"@@species\"].<get>"); }, spec = {length = 1}, emit = metadata(realm_function_metadata), births = ["%ArrayIteratorPrototype%"])] global_this_array_thunk, 1; with_rest(0)); instance BuiltinInstanceIdentity::Class(0xFFFF0024); named_serial crate::closure::shape::INTRINSIC_SERIAL_ARRAY_PROTOTYPE,
+    Object => crate::fn_info!(#[realm(Object, kind = constructor, provider = builtin_constructor, members = { keys; values; entries; freeze; create; seal; isSealed; isFrozen; isExtensible; preventExtensions; is; setPrototypeOf; getOwnPropertySymbols; getOwnPropertyDescriptors; defineProperties; groupBy; getPrototypeOf; getOwnPropertyNames; getOwnPropertyDescriptor; defineProperty; fromEntries; assign; hasOwn; hasOwnProperty; isPrototypeOf; propertyIsEnumerable; toString; toLocaleString; valueOf; prototype; })] global_this_object_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(0xFFFF0050),
+    String => crate::fn_info!(#[realm(String, kind = constructor, provider = builtin_constructor, members = { fromCharCode; fromCodePoint; raw; prototype; }, births = ["%StringIteratorPrototype%", Array, RegExp])] global_this_string_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(0xFFFF00D1),
+    Number => crate::fn_info!(#[realm(Number, kind = constructor, provider = builtin_constructor, members = { isNaN; isFinite; isInteger; isSafeInteger; parseFloat = ref(parseFloat); parseInt = ref(parseInt); NaN = NaN; POSITIVE_INFINITY = Infinity; NEGATIVE_INFINITY = -Infinity; MAX_VALUE = 1.7976931348623157e+308; MIN_VALUE = 5e-324; EPSILON = 2.220446049250313e-16; MAX_SAFE_INTEGER = 9007199254740991.0; MIN_SAFE_INTEGER = -9007199254740991.0; prototype; })] global_this_number_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(0xFFFF00D0),
+    Boolean => crate::fn_info!(#[realm(Boolean, kind = constructor, provider = builtin_constructor)] global_this_boolean_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(0xFFFF00D2),
+    Function => crate::fn_info!(#[realm(Function, kind = constructor, provider = builtin_constructor, spec = {length = 1}, emit = metadata(realm_function_metadata))] unwind_in_tests global_this_function_call_thunk, 1; with_rest(0)); serial crate::closure::shape::INTRINSIC_SERIAL_FUNCTION; instance BuiltinInstanceIdentity::Class(0xFFFF00F0); prototype_callable true,
+    RegExp => crate::fn_info!(#[realm(RegExp, kind = constructor, provider = builtin_constructor, members = { escape; prototype; [Symbol.species] = accessor(get = "RegExp[\"@@species\"].<get>"); }, births = [Array, String])] regexp_constructor_call_thunk, 2; with_declared(2)); instance BuiltinInstanceIdentity::Class(0xFFFF0021),
+    Date => crate::fn_info!(#[realm(Date, kind = constructor, provider = builtin_constructor, members = { now; parse; UTC; prototype; }, spec = {length = 7}, emit = metadata(realm_date_metadata))] global_this_date_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(0xFFFF0020),
+    Error => crate::fn_info!(#[realm(Error, kind = constructor, provider = builtin_constructor, members = { captureStackTrace; isError; prepareStackTrace; stackTraceLimit = 10.0, attrs = writable | enumerable | configurable; })] error_constructor_call_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(crate::error::CLASS_ID_ERROR),
+    TypeError => crate::fn_info!(#[realm(TypeError, kind = constructor, provider = builtin_constructor, extends = Error)] type_error_constructor_call_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(crate::error::CLASS_ID_TYPE_ERROR),
+    RangeError => crate::fn_info!(#[realm(RangeError, kind = constructor, provider = builtin_constructor, extends = Error)] range_error_constructor_call_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(crate::error::CLASS_ID_RANGE_ERROR),
+    SyntaxError => crate::fn_info!(#[realm(SyntaxError, kind = constructor, provider = builtin_constructor, extends = Error, attrs = {prototype = writable})] syntax_error_constructor_call_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(crate::error::CLASS_ID_SYNTAX_ERROR),
+    ReferenceError => crate::fn_info!(#[realm(ReferenceError, kind = constructor, provider = builtin_constructor, extends = Error)] reference_error_constructor_call_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(crate::error::CLASS_ID_REFERENCE_ERROR),
+    EvalError => crate::fn_info!(#[realm(EvalError, kind = constructor, provider = builtin_constructor, extends = Error)] eval_error_constructor_call_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(crate::error::CLASS_ID_EVAL_ERROR),
+    URIError => crate::fn_info!(#[realm(URIError, kind = constructor, provider = builtin_constructor, extends = Error)] uri_error_constructor_call_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(crate::error::CLASS_ID_URI_ERROR),
     AggregateError => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::error::CLASS_ID_AGGREGATE_ERROR),
-    Symbol => crate::fn_info!(global_this_symbol_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(0xFFFF00D4),
-    Promise => crate::fn_info!(promise_constructor_call_thunk, 1); instance BuiltinInstanceIdentity::Class(0xFFFF0027),
-    Map => crate::fn_info!(map_constructor_call_thunk, 1); instance BuiltinInstanceIdentity::Class(0xFFFF0022),
-    Set => crate::fn_info!(set_constructor_call_thunk, 1); instance BuiltinInstanceIdentity::Class(0xFFFF0023),
-    WeakMap => crate::fn_info!(weak_map_constructor_call_thunk, 1); class crate::weakref::CLASS_ID_WEAKMAP; instance BuiltinInstanceIdentity::Class(0xFFFF002C),
-    WeakSet => crate::fn_info!(weak_set_constructor_call_thunk, 1); class crate::weakref::CLASS_ID_WEAKSET; instance BuiltinInstanceIdentity::Class(0xFFFF002D),
-    WeakRef => crate::fn_info!(weak_ref_constructor_call_thunk, 1); class crate::weakref::CLASS_ID_WEAKREF; instance BuiltinInstanceIdentity::Class(crate::weakref::CLASS_ID_WEAKREF),
+    Symbol => crate::fn_info!(#[realm(Symbol, kind = constructor, provider = builtin_constructor, members = { for; keyFor; iterator = Symbol.iterator; asyncIterator = Symbol.asyncIterator; prototype; }, spec = {length = 0}, emit = metadata(realm_urlpattern_metadata))] global_this_symbol_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(0xFFFF00D4),
+    Promise => crate::fn_info!(#[realm(Promise, kind = constructor, provider = builtin_constructor, members = { resolve; reject; all; race; allSettled; any; withResolvers; try; prototype; [Symbol.species] = accessor(get = "Promise[\"@@species\"].<get>"); }, births = [Array])] promise_constructor_call_thunk, 1); instance BuiltinInstanceIdentity::Class(0xFFFF0027),
+    Map => crate::fn_info!(#[realm(Map, kind = constructor, provider = builtin_constructor, members = { groupBy; prototype; [Symbol.species] = accessor(get = "Map[\"@@species\"].<get>"); }, spec = {length = 0}, emit = metadata(realm_urlpattern_metadata), births = ["%MapIteratorPrototype%", Array])] map_constructor_call_thunk, 1); instance BuiltinInstanceIdentity::Class(0xFFFF0022),
+    Set => crate::fn_info!(#[realm(Set, kind = constructor, provider = builtin_constructor, members = { [Symbol.species] = accessor(get = "Set[\"@@species\"].<get>"); }, spec = {length = 0}, emit = metadata(realm_urlpattern_metadata), births = ["%SetIteratorPrototype%", Array])] set_constructor_call_thunk, 1); instance BuiltinInstanceIdentity::Class(0xFFFF0023),
+    WeakMap => crate::fn_info!(#[realm(WeakMap, kind = constructor, provider = builtin_constructor, spec = {length = 0}, emit = metadata(realm_urlpattern_metadata))] weak_map_constructor_call_thunk, 1); class crate::weakref::CLASS_ID_WEAKMAP; instance BuiltinInstanceIdentity::Class(0xFFFF002C),
+    WeakSet => crate::fn_info!(#[realm(WeakSet, kind = constructor, provider = builtin_constructor, spec = {length = 0}, emit = metadata(realm_urlpattern_metadata))] weak_set_constructor_call_thunk, 1); class crate::weakref::CLASS_ID_WEAKSET; instance BuiltinInstanceIdentity::Class(0xFFFF002D),
+    WeakRef => crate::fn_info!(#[realm(WeakRef, kind = constructor, provider = builtin_constructor)] weak_ref_constructor_call_thunk, 1); class crate::weakref::CLASS_ID_WEAKREF; instance BuiltinInstanceIdentity::Class(crate::weakref::CLASS_ID_WEAKREF),
     Proxy => NOOP_CONSTRUCTOR_INFO,
-    BigInt => crate::fn_info!(global_this_bigint_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(0xFFFF00D3),
+    BigInt => crate::fn_info!(#[realm(BigInt, kind = constructor, provider = builtin_constructor, members = { asIntN; asUintN; prototype; })] global_this_bigint_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(0xFFFF00D3),
     Uint8Array => TYPED_ARRAY_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::typedarray_hook_slots::CLASS_ID_UINT8_ARRAY),
     Int8Array => TYPED_ARRAY_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::typedarray_hook_slots::CLASS_ID_INT8_ARRAY),
     Uint16Array => TYPED_ARRAY_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::typedarray_hook_slots::CLASS_ID_UINT16_ARRAY),
@@ -156,7 +156,7 @@ builtin_constructors! {
     Navigator => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::navigator::NAVIGATOR_CLASS_ID),
     URL => NOOP_CONSTRUCTOR_INFO; sealed crate::closure::shape::INTRINSIC_SERIAL_URL; instance BuiltinInstanceIdentity::Class(0xFFFF0063),
     URLSearchParams => NOOP_CONSTRUCTOR_INFO; sealed crate::closure::shape::INTRINSIC_SERIAL_URL_SEARCH_PARAMS,
-    URLPattern => crate::fn_info!(global_this_url_pattern_call_thunk, 2; with_declared(2)),
+    URLPattern => crate::fn_info!(#[realm(URLPattern, kind = constructor, provider = builtin_constructor, spec = {length = 0}, emit = metadata(realm_urlpattern_metadata))] global_this_url_pattern_call_thunk, 2; with_declared(2)),
     AbortController => NOOP_CONSTRUCTOR_INFO,
     AbortSignal => NOOP_CONSTRUCTOR_INFO,
     EventTarget => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::event_target::CLASS_ID_EVENT_TARGET),
@@ -167,15 +167,15 @@ builtin_constructors! {
     CustomEvent => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::event_target::CLASS_ID_CUSTOM_EVENT),
     DOMException => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::event_target::CLASS_ID_DOM_EXCEPTION),
     FormData => NOOP_CONSTRUCTOR_INFO,
-    Blob => crate::fn_info!(global_this_blob_thunk, 2; with_declared(2)); instance BuiltinInstanceIdentity::Class(0xFFFF0026),
-    File => crate::fn_info!(global_this_file_thunk, 3; with_declared(3)); instance BuiltinInstanceIdentity::Class(0xFFFF002F),
-    Headers => crate::fn_info!(global_this_headers_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(0xFFFF002A),
-    Request => crate::fn_info!(global_this_request_thunk, 2; with_declared(2)); instance BuiltinInstanceIdentity::Class(0xFFFF0029),
-    Response => crate::fn_info!(global_this_response_thunk, 2; with_declared(2)); instance BuiltinInstanceIdentity::Class(0xFFFF0028),
-    MessageChannel => crate::fn_info!(crate::messaging_hook_slots::js_message_channel_constructor_call_error, 0; with_declared(0)),
-    MessagePort => crate::fn_info!(crate::messaging_hook_slots::js_message_port_constructor_call_error, 0; with_declared(0)),
-    BroadcastChannel => crate::fn_info!(crate::messaging_hook_slots::js_broadcast_channel_constructor_call_error, 1; with_declared(1)),
-    Storage => crate::fn_info!(crate::web_storage::storage_constructor_illegal, 0; with_declared(0)),
+    Blob => crate::fn_info!(#[realm(Blob, kind = constructor, provider = builtin_constructor, births = [ArrayBuffer, Promise, ReadableStream, Uint8Array], spec = {length = 0}, emit = metadata(realm_urlpattern_metadata))] global_this_blob_thunk, 2; with_declared(2)); instance BuiltinInstanceIdentity::Class(0xFFFF0026),
+    File => crate::fn_info!(#[realm(File, kind = constructor, provider = builtin_constructor, births = [Blob], spec = {length = 2}, emit = metadata(realm_file_metadata))] global_this_file_thunk, 3; with_declared(3)); instance BuiltinInstanceIdentity::Class(0xFFFF002F),
+    Headers => crate::fn_info!(#[realm(Headers, kind = constructor, provider = builtin_constructor, births = ["%IteratorPrototype%", Array], spec = {length = 0}, emit = metadata(realm_urlpattern_metadata))] global_this_headers_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(0xFFFF002A),
+    Request => crate::fn_info!(#[realm(Request, kind = constructor, provider = builtin_constructor, births = [AbortSignal, ArrayBuffer, Blob, FormData, Headers, Promise, ReadableStream, URL], spec = {length = 1}, emit = metadata(realm_function_metadata))] global_this_request_thunk, 2; with_declared(2)); instance BuiltinInstanceIdentity::Class(0xFFFF0029),
+    Response => crate::fn_info!(#[realm(Response, kind = constructor, provider = builtin_constructor, members = { error; json; redirect; prototype; }, spec = {length = 0}, emit = metadata(realm_urlpattern_metadata), births = [ArrayBuffer, Blob, FormData, Headers, Promise, ReadableStream])] global_this_response_thunk, 2; with_declared(2)); instance BuiltinInstanceIdentity::Class(0xFFFF0028),
+    MessageChannel => crate::fn_info!(#[realm(MessageChannel, kind = constructor, provider = builtin_constructor)] crate::messaging_hook_slots::js_message_channel_constructor_call_error, 0; with_declared(0)),
+    MessagePort => crate::fn_info!(#[realm(MessagePort, kind = constructor, provider = builtin_constructor)] crate::messaging_hook_slots::js_message_port_constructor_call_error, 0; with_declared(0)),
+    BroadcastChannel => crate::fn_info!(#[realm(BroadcastChannel, kind = constructor, provider = builtin_constructor)] crate::messaging_hook_slots::js_broadcast_channel_constructor_call_error, 1; with_declared(1)),
+    Storage => crate::fn_info!(#[realm(Storage, kind = constructor, provider = builtin_constructor)] crate::web_storage::storage_constructor_illegal, 0; with_declared(0)),
     WebSocket => NOOP_CONSTRUCTOR_INFO,
     FinalizationRegistry => NOOP_CONSTRUCTOR_INFO; class crate::weakref::CLASS_ID_FINALIZATION_REGISTRY; instance BuiltinInstanceIdentity::Class(crate::weakref::CLASS_ID_FINALIZATION_REGISTRY),
     // #2875: TC39 explicit-resource-management globals. Backed by the
@@ -216,7 +216,7 @@ pub(crate) fn is_global_this_builtin_constructor_name(name: &str) -> bool {
 /// these are the runtime fallback for rebound / passed-as-value constructors.
 /// Values verified against `node --experimental-strip-types`. Unlisted names
 /// fall through to the closure arity registry (0).
-pub(crate) fn builtin_constructor_spec_length(name: &str) -> Option<u32> {
+#[rustfmt::skip] pub(crate) fn builtin_constructor_spec_length(name: &str) -> Option<u32> {
     let len = match name {
         "Symbol"
         | "Map"
@@ -242,7 +242,7 @@ pub(crate) fn builtin_constructor_spec_length(name: &str) -> Option<u32> {
         | "Storage"
         | "Navigator"
         | "DisposableStack"
-        | "AsyncDisposableStack" => 0,
+        | "AsyncDisposableStack" => realm_urlpattern_metadata!(length),
         "CompressionStream" | "DecompressionStream" => 1,
         "Array"
         | "Object"
@@ -269,12 +269,12 @@ pub(crate) fn builtin_constructor_spec_length(name: &str) -> Option<u32> {
         | "WebSocket"
         | "BroadcastChannel"
         | "FinalizationRegistry"
-        | "Promise" => 1,
-        "RegExp" | "Proxy" | "AggregateError" | "File" => 2,
-        "Date" => 7,
+        | "Promise" => realm_function_metadata!(length),
+        "RegExp" | "Proxy" | "AggregateError" | "File" => realm_file_metadata!(length),
+        "Date" => realm_date_metadata!(length),
         "SuppressedError" | "Buffer" | "Uint8Array" | "Int8Array" | "Uint16Array"
         | "Int16Array" | "Uint32Array" | "Int32Array" | "Float16Array" | "Float32Array"
-        | "Float64Array" | "Uint8ClampedArray" | "BigInt64Array" | "BigUint64Array" => 3,
+        | "Float64Array" | "Uint8ClampedArray" | "BigInt64Array" | "BigUint64Array" => realm_suppressederror_metadata!(length),
         _ => return None,
     };
     Some(len)

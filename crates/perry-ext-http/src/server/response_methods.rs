@@ -18,7 +18,7 @@ extern "C" {
 }
 
 macro_rules! method {
-    ($body:ident, $op:ident, $info:ident, $min:expr, $server_only:expr) => {
+    ($body:ident, $op:ident, $info:ident, $min:expr, $server_only:expr, $initializer:expr) => {
         extern "C" fn $body(
             c: *const RawClosureHeader,
             this: JsThis,
@@ -45,13 +45,13 @@ macro_rules! method {
                 $op(handle, &args[..len])
             }
         }
-        static $info: JsFunctionInfo = JsFunctionInfo::of($body as JsBody3).with_declared(3);
+        static $info: JsFunctionInfo = $initializer;
     };
 }
-method!(set_header_body, set_header, SET_HEADER, 1, false);
-method!(write_head_body, write_head, WRITE_HEAD, 1, true);
-method!(write_body, write, WRITE, 1, false);
-method!(end_body, end, END, 0, false);
+#[rustfmt::skip] method!(set_header_body, set_header, SET_HEADER, 1, false, perry_ffi::realm_decl! { info_expr JsFunctionInfo::of(set_header_body as JsBody3).with_declared(3); realm { "node:http.OutgoingMessage.prototype.setHeader", capture = property_key, constructible = true, spec = {length = 2}, emit = metadata(realm_http_set_header_public); } });
+#[rustfmt::skip] method!(write_head_body, write_head, WRITE_HEAD, 1, true, perry_ffi::realm_decl! { info_expr JsFunctionInfo::of(write_head_body as JsBody3).with_declared(3); realm { "node:http.ServerResponse.prototype.writeHead", capture = property_key, constructible = true; } });
+#[rustfmt::skip] method!(write_body, write, WRITE, 1, false, perry_ffi::realm_decl! { info_expr JsFunctionInfo::of(write_body as JsBody3).with_declared(3); realm { "node:http.OutgoingMessage.prototype.write", capture = property_key, constructible = true; } });
+#[rustfmt::skip] method!(end_body, end, END, 0, false, perry_ffi::realm_decl! { info_expr JsFunctionInfo::of(end_body as JsBody3).with_declared(3); realm { "node:http.OutgoingMessage.prototype.end", capture = property_key, constructible = true; } });
 
 /// Cold prototype construction protocol of the existing HTTP export provider.
 /// The result is immutable image metadata, never a JS value or a heap edge.
@@ -274,4 +274,3 @@ mod tests {
 macro_rules! realm_decl {
     ($facts:literal) => {};
 }
-realm_decl!("response_methods.realm.json#*");

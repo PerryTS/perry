@@ -155,16 +155,16 @@ pub(super) fn snapshot_object_value() -> f64 {
         if let Some(ptr) = *slot.borrow() {
             return boxed_ptr(ptr);
         }
-        let obj = js_object_alloc(0, 2);
+        let obj = crate::realm_decl! { birth js_object_alloc(0, 2); realm { "node:test.snapshot", kind = namespace, members = { setDefaultSnapshotSerializers, attrs = writable | enumerable | configurable; setResolveSnapshotPath, attrs = writable | enumerable | configurable; }; } };
         set_field(
             obj,
             "setDefaultSnapshotSerializers",
-            closure_value(crate::fn_info!(snapshot_set_default_serializers, 1), 1),
+            closure_value(crate::fn_info!(#[realm("node:test.snapshot.setDefaultSnapshotSerializers", provider = closure, spec = {length = 1}, emit = metadata(realm_node_test_snapshot_setdefaultsnapshotserializers_metadata))] snapshot_set_default_serializers, 1), realm_node_test_snapshot_setdefaultsnapshotserializers_metadata!(length)),
         );
         set_field(
             obj,
             "setResolveSnapshotPath",
-            closure_value(crate::fn_info!(snapshot_set_resolve_snapshot_path, 1), 1),
+            closure_value(crate::fn_info!(#[realm("node:test.snapshot.setResolveSnapshotPath", provider = closure, spec = {length = 1}, emit = metadata(realm_node_test_snapshot_setresolvesnapshotpath_metadata))] snapshot_set_resolve_snapshot_path, 1), realm_node_test_snapshot_setresolvesnapshotpath_metadata!(length)),
         );
         *slot.borrow_mut() = Some(obj);
         boxed_ptr(obj)

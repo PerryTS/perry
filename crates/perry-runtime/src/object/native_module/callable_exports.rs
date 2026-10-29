@@ -154,13 +154,13 @@ pub fn bound_native_callable_export_value(module_name: &str, property_name: &str
     let exposed_name = if export_module_name == "fs" {
         native_callable_export_display_name(export_module_name, property_name)
     } else if export_module_name == "url" && property_name == "resolveObject" {
-        "urlResolveObject"
+        realm_native_url_resolveObject_metadata!(name)
     } else if export_module_name == "http" && property_name == "_connectionListener" {
-        "connectionListener"
+        realm_native_http_connectionListener_metadata!(name)
     } else if export_module_name == "module" && property_name == "runMain" {
-        "executeUserEntryPoint"
+        realm_native_module_runMain_metadata!(name)
     } else if export_module_name == "fs" && property_name == "_toUnixTimestamp" {
-        "toUnixTimestamp"
+        realm_native_fs_toUnixTimestamp_metadata!(name)
     } else {
         property_name
     };
@@ -321,12 +321,12 @@ pub(crate) fn fs_namespace_descriptor_getter_value(property_name: &str) -> f64 {
     }
 
     let property_bytes: &'static [u8] = property_name.as_bytes().to_vec().leak();
-    let func_ptr = crate::fn_info!(fs_namespace_descriptor_getter_thunk, 0; with_declared(0));
+    let func_ptr = crate::fn_info!(#[realm(realm_decl! { "node:fs.default.FileReadStream.<get>", capture = property_key, constructible = true; "node:fs.default.FileWriteStream.<get>", capture = property_key, constructible = true; "node:fs.default.ReadStream.<get>", capture = property_key, constructible = true; "node:fs.default.Utf8Stream.<get>", capture = property_key, constructible = true; "node:fs.default.WriteStream.<get>", capture = property_key, constructible = true; "node:fs.default.promises.<get>", capture = property_key, constructible = true, spec = {name = "get"}, emit = metadata(realm_fs_promises_get_name); })] fs_namespace_descriptor_getter_thunk, 0; with_declared(0));
     let closure = crate::closure::js_closure_alloc(func_ptr, 2);
     crate::closure::closure_set_capture_word(closure, 0, property_bytes.as_ptr() as i64);
     crate::closure::closure_set_capture_word(closure, 1, property_bytes.len() as i64);
     let name = if property_name == "promises" {
-        "get".to_string()
+        realm_fs_promises_get_name!(name).to_string()
     } else {
         format!("get {property_name}")
     };
@@ -346,7 +346,7 @@ pub(crate) fn fs_namespace_descriptor_setter_value(property_name: &str) -> f64 {
         return f64::from_bits(bits);
     }
 
-    let func_ptr = crate::fn_info!(fs_namespace_descriptor_setter_thunk, 1; with_declared(1));
+    let func_ptr = crate::fn_info!(#[realm(realm_decl! { "node:fs.default.FileReadStream.<set>", constructible = true; "node:fs.default.FileWriteStream.<set>", constructible = true; "node:fs.default.ReadStream.<set>", constructible = true; "node:fs.default.WriteStream.<set>", constructible = true; })] fs_namespace_descriptor_setter_thunk, 1; with_declared(1));
     let closure = crate::closure::js_closure_alloc(func_ptr, 0);
     let name = format!("set {property_name}");
     set_bound_native_closure_name(closure, &name);
@@ -384,8 +384,8 @@ pub(crate) fn is_cluster_emitter_method(prop: &str) -> bool {
 fn native_callable_export_display_name<'a>(module: &str, prop: &'a str) -> &'a str {
     if module == "fs" {
         match prop {
-            "_toUnixTimestamp" => "toUnixTimestamp",
-            "Stats" => "deprecated",
+            "_toUnixTimestamp" => realm_native_fs_toUnixTimestamp_metadata!(name),
+            "Stats" => realm_native_fs_Stats_metadata!(name),
             _ => prop,
         }
     } else {
@@ -732,7 +732,7 @@ fn attach_assert_prototype(constructor_value: f64) {
         return;
     }
 
-    let proto = js_object_alloc(0, 0);
+    let proto = crate::realm_decl! { birth js_object_alloc(0, 0); realm { "node:assert.Assert.prototype", members = { constructor; fail = ref("node:assert.fail"); ok = ref("node:assert.default"); equal = ref("node:assert.equal"); notEqual = ref("node:assert.notEqual"); deepEqual = ref("node:assert.deepEqual"); notDeepEqual = ref("node:assert.notDeepEqual"); deepStrictEqual = ref("node:assert.deepStrictEqual"); notDeepStrictEqual = ref("node:assert.notDeepStrictEqual"); strictEqual = ref("node:assert.strictEqual"); notStrictEqual = ref("node:assert.notStrictEqual"); partialDeepStrictEqual = ref("node:assert.partialDeepStrictEqual"); throws = ref("node:assert.throws"); rejects = ref("node:assert.rejects"); doesNotThrow = ref("node:assert.doesNotThrow"); doesNotReject = ref("node:assert.doesNotReject"); ifError = ref("node:assert.ifError"); match = ref("node:assert.match"); doesNotMatch = ref("node:assert.doesNotMatch"); }; } };
     if proto.is_null() {
         return;
     }
@@ -778,7 +778,7 @@ fn attach_crypto_key_object_shape(closure_addr: usize, constructor_value: f64) {
         super::PropertyAttrs::new(true, false, true),
     );
 
-    let proto = js_object_alloc(0, 0);
+    let proto = crate::realm_decl! { birth js_object_alloc(0, 0); realm { "node:crypto.KeyObject.prototype", members = { constructor; }; } };
     if proto.is_null() {
         return;
     }
@@ -810,7 +810,7 @@ extern "C" fn x509_issuer_certificate_getter_thunk(
 }
 
 fn attach_crypto_x509_certificate_shape(closure_addr: usize, constructor_value: f64) {
-    let proto = js_object_alloc(0, 0);
+    let proto = crate::realm_decl! { birth js_object_alloc(0, 0); realm { "node:crypto.X509Certificate.prototype", members = { constructor; issuerCertificate = accessor(get = "node:crypto.X509Certificate.prototype.issuerCertificate.<get>"); }; } };
     if proto.is_null() {
         return;
     }
@@ -827,7 +827,7 @@ fn attach_crypto_x509_certificate_shape(closure_addr: usize, constructor_value: 
 
     unsafe {
         let getter = crate::closure::js_closure_alloc(
-            crate::fn_info!(x509_issuer_certificate_getter_thunk, 0; with_declared(0)),
+            crate::fn_info!(#[realm("node:crypto.X509Certificate.prototype.issuerCertificate.<get>", provider = intrinsic_closure, constructible = true)] x509_issuer_certificate_getter_thunk, 0; with_declared(0)),
             0,
         );
         if !getter.is_null() {
@@ -888,19 +888,19 @@ pub(crate) fn util_inspect_default_options_value() -> f64 {
             return f64::from_bits(bits);
         }
 
-        let obj = js_object_alloc(0, 0);
-        native_set_field(obj, "showHidden", native_bool_value(false));
-        native_set_field(obj, "depth", 2.0);
-        native_set_field(obj, "colors", native_bool_value(false));
-        native_set_field(obj, "customInspect", native_bool_value(true));
-        native_set_field(obj, "showProxy", native_bool_value(false));
-        native_set_field(obj, "maxArrayLength", 100.0);
-        native_set_field(obj, "maxStringLength", 10000.0);
-        native_set_field(obj, "breakLength", 80.0);
-        native_set_field(obj, "compact", 3.0);
-        native_set_field(obj, "sorted", native_bool_value(false));
-        native_set_field(obj, "getters", native_bool_value(false));
-        native_set_field(obj, "numericSeparator", native_bool_value(false));
+        crate::realm_decl! { object "node:sys.inspect.defaultOptions", obj;
+        "showHidden" => boolean(false);
+        "depth" => number(2.0);
+        "colors" => boolean(false);
+        "customInspect" => boolean(true);
+        "showProxy" => boolean(false);
+        "maxArrayLength" => number(100.0);
+        "maxStringLength" => number(10000.0);
+        "breakLength" => number(80.0);
+        "compact" => number(3.0);
+        "sorted" => boolean(false);
+        "getters" => boolean(false);
+        "numericSeparator" => boolean(false); }
 
         let value = native_object_value(obj);
         slot.set(value.to_bits());
@@ -916,18 +916,18 @@ fn util_inspect_styles() -> f64 {
             return f64::from_bits(bits);
         }
 
-        let obj = js_object_alloc(0, 0);
-        native_set_field(obj, "special", native_string_value("cyan"));
-        native_set_field(obj, "number", native_string_value("yellow"));
-        native_set_field(obj, "bigint", native_string_value("yellow"));
-        native_set_field(obj, "boolean", native_string_value("yellow"));
-        native_set_field(obj, "undefined", native_string_value("grey"));
-        native_set_field(obj, "null", native_string_value("bold"));
-        native_set_field(obj, "string", native_string_value("green"));
-        native_set_field(obj, "symbol", native_string_value("green"));
-        native_set_field(obj, "date", native_string_value("magenta"));
-        native_set_field(obj, "regexp", native_string_value("red"));
-        native_set_field(obj, "module", native_string_value("underline"));
+        crate::realm_decl! { object "node:sys.inspect.styles", obj;
+        "special" => string("cyan");
+        "number" => string("yellow");
+        "bigint" => string("yellow");
+        "boolean" => string("yellow");
+        "undefined" => string("grey");
+        "null" => string("bold");
+        "string" => string("green");
+        "symbol" => string("green");
+        "date" => string("magenta");
+        "regexp" => string("red");
+        "module" => string("underline"); }
 
         let value = native_object_value(obj);
         slot.set(value.to_bits());
@@ -942,7 +942,7 @@ fn util_inspect_colors() -> f64 {
         if bits != 0 {
             return f64::from_bits(bits);
         }
-
+        crate::realm_decl! { "node:sys.inspect.colors", provider = ansi_colors; }
         let obj = js_object_alloc(0, 0);
         for style in crate::util_style_text::INSPECT_COLOR_STYLES {
             native_set_field(obj, style.name, native_color_tuple(style.open, style.close));
@@ -1022,7 +1022,7 @@ fn attach_tls_secure_context_prototype(constructor_value: f64) {
 }
 
 pub(super) const TLS_SOCKET_PROTOTYPE_METHODS: &[(&str, u32)] = &[
-    ("setKeyCert", 1),
+    ("setKeyCert", realm_tls_setkey_public!(length)),
     ("getSharedSigalgs", 0),
     ("getX509Certificate", 0),
     ("getPeerX509Certificate", 0),
@@ -1079,7 +1079,7 @@ fn attach_tls_constructor_prototype(constructor_value: f64, constructor_name: &s
     let scope = crate::gc::RuntimeHandleScope::new();
     let constructor_handle =
         scope.root_raw_mut_ptr(constructor as *mut crate::closure::ClosureHeader);
-    let prototype = js_object_alloc(0, 0);
+    let prototype = crate::realm_decl! { birth js_object_alloc(0, 0); realm { "node:tls.TLSSocket.prototype", extends = "node:net.Socket.prototype", members = { constructor; setKeyCert; getSharedSigalgs; getX509Certificate; getPeerX509Certificate; }; } };
     if prototype.is_null() {
         return crate::value::js_nanbox_pointer(
             constructor_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,
@@ -1102,7 +1102,7 @@ fn attach_tls_constructor_prototype(constructor_value: f64, constructor_name: &s
         super::super::PropertyAttrs::new(true, false, true),
     );
 
-    let thunk = crate::fn_info!(tls_prototype_method_thunk, 1; with_rest(0));
+    let thunk = crate::fn_info!(#[realm(realm_decl! { "node:tls.TLSSocket.prototype.getPeerX509Certificate", capture = property_key, constructible = true; "node:tls.TLSSocket.prototype.getSharedSigalgs", capture = property_key, constructible = true; "node:tls.TLSSocket.prototype.getX509Certificate", capture = property_key, constructible = true; "node:tls.TLSSocket.prototype.setKeyCert", capture = property_key, constructible = true, spec = {length = 1}, emit = metadata(realm_tls_setkey_public); })] tls_prototype_method_thunk, 1; with_rest(0));
     for &(name, length) in methods {
         let method = crate::closure::js_closure_alloc(thunk, 2);
         if method.is_null() {
@@ -1265,14 +1265,14 @@ unsafe fn bound_native_export_metadata(
     Some((module, method))
 }
 
-pub(crate) unsafe fn bound_native_callable_value_arity(value: f64) -> Option<u32> {
+#[rustfmt::skip] pub(crate) unsafe fn bound_native_callable_value_arity(value: f64) -> Option<u32> {
     let (module, method) = bound_native_callable_module_and_method(value)?;
     let module = normalize_native_module_alias(&module);
     match (module, method.as_str()) {
-        ("console", "Console") => Some(1),
-        ("util", "isArray") => Some(1),
+        ("console", "Console") => Some(realm_native_console_Console_metadata!(length)),
+        ("util", "isArray") => Some(realm_native_util_isArray_metadata!(length)),
         ("module", "isBuiltin") => Some(1),
-        ("process", "getBuiltinModule") => Some(1),
+        ("process", "getBuiltinModule") => Some(realm_native_process_getBuiltinModule_metadata!(length)),
         _ => native_callable_export_arity(module, method.as_str()),
     }
 }
@@ -1415,12 +1415,12 @@ pub(crate) unsafe fn ensure_child_process_prototype(value: f64) -> f64 {
     {
         return constructor.get_nanbox_f64();
     }
-    let proto = js_object_alloc_with_shape(
+    let proto = crate::realm_decl! { birth js_object_alloc_with_shape(
         0x7FFF_FDA0,
         1,
         b"constructor\0".as_ptr(),
         b"constructor\0".len() as u32,
-    );
+    ); realm { "node:child_process.ChildProcess.prototype", extends = "node:events.EventEmitter.prototype", members = { constructor; }; } };
     js_object_set_field(
         proto,
         0,
@@ -1550,7 +1550,7 @@ pub(crate) unsafe fn nm_attach_async_hooks(
             ),
         );
         let bind = scope.root_nanbox_f64(async_hooks_static_method_value(
-            crate::fn_info!(crate::async_hook_slots::js_async_local_storage_static_bind_method, 2; with_rest(1)),
+            crate::fn_info!(#[realm("node:async_hooks.AsyncLocalStorage.bind")] crate::async_hook_slots::js_async_local_storage_static_bind_method, 2; with_rest(1)),
             "bind",
             1,
         ));
@@ -1565,7 +1565,7 @@ pub(crate) unsafe fn nm_attach_async_hooks(
             super::PropertyAttrs::new(true, false, true),
         );
         let snapshot = scope.root_nanbox_f64(async_hooks_static_method_value(
-            crate::fn_info!(crate::async_hook_slots::js_async_local_storage_static_snapshot_method, 1; with_rest(0)),
+            crate::fn_info!(#[realm("node:async_hooks.AsyncLocalStorage.snapshot")] crate::async_hook_slots::js_async_local_storage_static_snapshot_method, 1; with_rest(0)),
             "snapshot",
             0,
         ));
@@ -1588,7 +1588,7 @@ pub(crate) unsafe fn nm_attach_async_hooks(
             ),
         );
         let bind = scope.root_nanbox_f64(async_hooks_static_method_value(
-            crate::fn_info!(crate::async_hook_slots::js_async_resource_static_bind_method, 4; with_rest(3)),
+            crate::fn_info!(#[realm("node:async_hooks.AsyncResource.bind")] crate::async_hook_slots::js_async_resource_static_bind_method, 4; with_rest(3)),
             "bind",
             3,
         ));
@@ -1644,5 +1644,3 @@ pub(crate) unsafe fn nm_attach_util(
     }
     value
 }
-
-crate::realm_decl!("callable_exports.realm.json#*");

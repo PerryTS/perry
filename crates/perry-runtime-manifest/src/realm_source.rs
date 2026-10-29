@@ -4,6 +4,69 @@ use crate::realm_json::{self as json, Value};
 pub const REALM_MANIFEST_VERSION: u32 = 1;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+#[path = "realm_array.rs"]
+mod array;
+#[path = "realm_birth.rs"]
+mod birth;
+#[path = "realm_capture.rs"]
+mod capture;
+#[path = "realm_capture_call.rs"]
+mod capture_call;
+#[path = "realm_colors.rs"]
+mod colors;
+#[path = "realm_facts.rs"]
+mod facts;
+#[path = "realm_families.rs"]
+mod families;
+#[path = "realm_hash.rs"]
+mod hash;
+#[path = "realm_imports.rs"]
+mod imports;
+#[path = "realm_info.rs"]
+mod info;
+#[path = "realm_layout_birth.rs"]
+mod layout_birth;
+#[path = "realm_module_namespace.rs"]
+mod module_namespace;
+#[path = "realm_namespace.rs"]
+mod namespace;
+#[path = "realm_native.rs"]
+mod native;
+#[path = "realm_object.rs"]
+mod object;
+#[path = "realm_projection.rs"]
+mod projection;
+#[path = "realm_record.rs"]
+mod record;
+#[path = "realm_symbols.rs"]
+mod symbols;
+#[path = "realm_typed_info.rs"]
+mod typed_info;
+
+fn abi_constants() -> &'static std::collections::BTreeMap<String, u64> {
+    static CONSTANTS: std::sync::OnceLock<std::collections::BTreeMap<String, u64>> =
+        std::sync::OnceLock::new();
+    CONSTANTS.get_or_init(|| {
+        info::constants(include_str!("../../perry-abi/src/lib.rs"))
+            .expect("read ABI source constants")
+    })
+}
+
+fn closing_paren(ts: &[Token<'_>], open: usize) -> Result<usize, String> {
+    let mut depth = 0;
+    for (i, token) in ts.iter().enumerate().skip(open) {
+        if token.text == "(" {
+            depth += 1;
+        }
+        if token.text == ")" {
+            depth -= 1;
+            if depth == 0 {
+                return Ok(i);
+            }
+        }
+    }
+    Err("unterminated realm/fn_info declaration".into())
+}
 
 #[derive(Debug)]
 struct Token<'a> {
@@ -147,17 +210,41 @@ fn tokens(source: &str) -> Result<Vec<Token<'_>>, String> {
     Ok(out)
 }
 
+#[cfg(test)]
 fn declarations(
     source: &str,
     path: &str,
+    load: impl FnMut(&str) -> Result<String, String>,
+    resolve: impl FnMut(&str) -> Result<(String, String), String>,
+) -> Result<Vec<Value>, String> {
+    declarations_with_receivers(
+        source,
+        path,
+        load,
+        resolve,
+        &mut Vec::new(),
+        &native::runtime_abi()?,
+    )
+}
+
+fn declarations_with_receivers(
+    source: &str,
+    path: &str,
     mut load: impl FnMut(&str) -> Result<String, String>,
+    mut resolve: impl FnMut(&str) -> Result<(String, String), String>,
+    native_receivers: &mut Vec<(String, String)>,
+    native_abi: &native::Abi,
 ) -> Result<Vec<Value>, String> {
     if !source.contains("realm") {
         return Ok(Vec::new());
     }
     let ts = tokens(source)?;
     let mut out = Vec::new();
+    let mut skip_until = 0;
     for (index, token) in ts.iter().enumerate() {
+        if index < skip_until {
+            continue;
+        }
         let annotation = token.text == "realm"
             && index >= 2
             && ts[index - 1].text == "["
@@ -167,10 +254,353 @@ fn declarations(
             continue;
         }
         let open = index + if object { 2 } else { 1 };
+        if object
+            && ts.get(open).is_some_and(|t| t.text == "(")
+            && ts.get(open + 1).is_some_and(|t| t.text == "@")
+        {
+            // Internal projection helpers carry expressions, not realm births.
+            continue;
+        }
+        if object && ts.get(open).is_some_and(|t| t.text == "{") {
+            let mut depth = 1;
+            let mut end = open + 1;
+            while depth != 0 {
+                let token = ts.get(end).ok_or("unterminated realm_decl! block")?;
+                match token.text {
+                    "{" => depth += 1,
+                    "}" => depth -= 1,
+                    _ => {}
+                }
+                if depth != 0 {
+                    end += 1;
+                }
+            }
+            if ts.get(open + 1).is_some_and(|t| t.text == "$") {
+                continue;
+            }
+            if ts
+                .get(open + 1)
+                .is_some_and(|t| t.text == "native_nonconstructors")
+            {
+                native::nonconstructors(&ts[open + 1..end])?;
+                skip_until = end + 1;
+                continue;
+            }
+            let mut entries = &ts[open + 1..end];
+            if entries
+                .first()
+                .is_some_and(|t| matches!(t.text, "birth" | "record"))
+            {
+                let first = info::split(entries, ";")[0].len();
+                let expression = &entries[1..first];
+                let tail = &entries[first + 1..];
+                if tail.len() < 3
+                    || tail[0].text != "realm"
+                    || tail[1].text != "{"
+                    || tail.last().is_none_or(|t| t.text != "}")
+                {
+                    return Err("birth expression needs its realm block".into());
+                }
+                for entry in info::split(&tail[2..tail.len() - 1], ";") {
+                    let mut declaration = if entries[0].text == "record" {
+                        record::birth(expression, entry)?
+                    } else {
+                        birth::birth_at(expression, entry, source)?
+                    };
+                    let Value::Object(map) = &mut declaration else {
+                        unreachable!()
+                    };
+                    map.insert("source".into(), Value::String(path.replace('\\', "/")));
+                    map.insert(
+                        "line".into(),
+                        Value::Number(
+                            (source[..token.start]
+                                .bytes()
+                                .filter(|&b| b == b'\n')
+                                .count()
+                                + 1)
+                            .to_string(),
+                        ),
+                    );
+                    out.push(declaration);
+                }
+                skip_until = end + 1;
+                continue;
+            }
+            if entries.first().is_some_and(|t| t.text == "object") {
+                let mut declaration = object::birth(entries)?;
+                let Value::Object(map) = &mut declaration else {
+                    unreachable!()
+                };
+                map.insert("source".into(), Value::String(path.replace('\\', "/")));
+                map.insert(
+                    "line".into(),
+                    Value::Number(
+                        (source[..token.start]
+                            .bytes()
+                            .filter(|&b| b == b'\n')
+                            .count()
+                            + 1)
+                        .to_string(),
+                    ),
+                );
+                out.push(declaration);
+                skip_until = end + 1;
+                continue;
+            }
+            if entries.first().is_some_and(|t| t.text == "module_provider") {
+                let function = entries
+                    .iter()
+                    .position(|t| t.text == "fn")
+                    .ok_or("module provider needs its function item")?;
+                let function_name = entries
+                    .get(function + 1)
+                    .ok_or("missing module provider name")?
+                    .text;
+                let open = entries[function + 2..]
+                    .iter()
+                    .position(|t| t.text == "{")
+                    .ok_or("missing module provider body")?
+                    + function
+                    + 2;
+                let mut depth = 1;
+                let mut close = open + 1;
+                while depth != 0 {
+                    match entries
+                        .get(close)
+                        .ok_or("unterminated module provider body")?
+                        .text
+                    {
+                        "{" => depth += 1,
+                        "}" => depth -= 1,
+                        _ => {}
+                    }
+                    close += 1;
+                }
+                let tail = &entries[close..];
+                if tail.len() < 3
+                    || tail[0].text != "realm"
+                    || tail[1].text != "{"
+                    || tail.last().unwrap().text != "}"
+                {
+                    return Err("module provider needs its realm exports".into());
+                }
+                let (body, _) = resolve(&format!("@provider:{function_name}"))?;
+                for entry in info::split(&tail[2..tail.len() - 1], ";") {
+                    let mut declaration = module_namespace::birth(entry)?;
+                    let Value::Object(map) = &mut declaration else {
+                        unreachable!()
+                    };
+                    map.insert("body".into(), Value::String(body.clone()));
+                    map.insert("source".into(), Value::String(path.replace('\\', "/")));
+                    map.insert(
+                        "line".into(),
+                        Value::Number(
+                            (source[..token.start]
+                                .bytes()
+                                .filter(|&b| b == b'\n')
+                                .count()
+                                + 1)
+                            .to_string(),
+                        ),
+                    );
+                    out.push(declaration);
+                }
+                skip_until = end + 1;
+                continue;
+            }
+            let native_key = if entries.first().is_some_and(|t| t.text == "native_key") {
+                if entries.len() < 7
+                    || entries[2].text != ";"
+                    || entries[3].text != "realm"
+                    || entries[4].text != "{"
+                    || entries.last().unwrap().text != "}"
+                {
+                    return Err("native key birth requires a literal and realm cells".into());
+                }
+                let key = entries[1]
+                    .string
+                    .clone()
+                    .ok_or("native key must be a literal")?;
+                entries = &entries[5..entries.len() - 1];
+                Some(key)
+            } else {
+                None
+            };
+            let owned_info = if entries.first().is_some_and(|t| t.text == "info_expr") {
+                let first = info::split(entries, ";")[0].len();
+                let body_info =
+                    typed_info::expression(source, &entries[1..first], abi_constants())?;
+                let tail = &entries[first + 1..];
+                if tail.len() < 3
+                    || tail[0].text != "realm"
+                    || tail[1].text != "{"
+                    || tail.last().is_none_or(|t| t.text != "}")
+                {
+                    return Err("owned info expression requires a realm cell block".into());
+                }
+                entries = &tail[2..tail.len() - 1];
+                Some(body_info)
+            } else if entries.first().is_some_and(|t| t.text == "info") {
+                let mut item = 1;
+                if entries.get(item).is_some_and(|t| t.text == "pub") {
+                    item += 1;
+                    if entries.get(item).is_some_and(|t| t.text == "(") {
+                        item = closing_paren(entries, item)? + 1;
+                    }
+                }
+                if entries
+                    .get(item)
+                    .is_none_or(|t| !matches!(t.text, "static" | "const"))
+                {
+                    return Err("info realm block must own its existing static declaration".into());
+                }
+                let binding = entries.get(item + 1).ok_or("missing owned info name")?.text;
+                let first = info::split(entries, ";")[0].len();
+                let tail = &entries[first + 1..];
+                if tail.len() < 3
+                    || tail[0].text != "realm"
+                    || tail[1].text != "{"
+                    || tail.last().is_none_or(|t| t.text != "}")
+                {
+                    return Err("owned info requires a realm cell block".into());
+                }
+                entries = &tail[2..tail.len() - 1];
+                Some(typed_info::named(source, binding, abi_constants())?)
+            } else {
+                None
+            };
+            for entry in info::split(entries, ";") {
+                let mut human = facts::parse(entry)?;
+                if let Some(key) = &native_key {
+                    if human.native_method {
+                        return Err("native key birth already determines its provider".into());
+                    }
+                    human.native_method = true;
+                    human.native_key = Some(key.clone());
+                }
+                if human.native_method {
+                    native_receivers.push((
+                        human.canonical_name().to_owned(),
+                        human.receiver.clone().ok_or("missing native receiver")?,
+                    ));
+                }
+                let declarations = if human.ansi_colors {
+                    if owned_info.is_some() || info::split(entry, ",").len() != 2 {
+                        return Err(
+                            "AnsiStyle provider owns its typed rows without extra facts".into()
+                        );
+                    }
+                    colors::birth(&human.name, source)?
+                } else if let Some(body_info) = &owned_info {
+                    let (body, symbol) = resolve(&body_info.body)?;
+                    vec![facts::callable(
+                        human,
+                        body_info,
+                        abi_constants(),
+                        body,
+                        symbol,
+                        source,
+                    )?]
+                } else {
+                    vec![facts::logical(human, source, native_abi)?]
+                };
+                for mut declaration in declarations {
+                    let Value::Object(ref mut map) = declaration else {
+                        unreachable!()
+                    };
+                    map.insert("source".into(), Value::String(path.replace('\\', "/")));
+                    map.insert(
+                        "line".into(),
+                        Value::Number(
+                            (source[..token.start]
+                                .bytes()
+                                .filter(|&b| b == b'\n')
+                                .count()
+                                + 1)
+                            .to_string(),
+                        ),
+                    );
+                    out.push(declaration);
+                }
+            }
+            skip_until = end + 1;
+            continue;
+        }
         if ts.get(open).is_none_or(|t| t.text != "(") {
             return Err(format!("{path}: malformed realm declaration"));
         }
         if ts.get(open + 1).is_some_and(|t| t.text == "$") {
+            continue;
+        }
+        let old_literal = ts
+            .get(open + 1)
+            .and_then(|t| t.string.as_ref())
+            .is_some_and(|literal| {
+                literal.contains(".realm.json#") || literal.trim_start().starts_with(['[', '{'])
+            });
+        if !old_literal {
+            if !annotation {
+                return Err(format!(
+                    "{path}: expected structured fn_info realm attribute"
+                ));
+            }
+            let end = closing_paren(&ts, open)?;
+            if ts.get(end + 1).is_none_or(|t| t.text != "]") {
+                return Err(format!("{path}: malformed realm attribute"));
+            }
+            let fn_start = (0..index)
+                .rev()
+                .find(|&i| {
+                    matches!(ts[i].text, "fn_info" | "js_function_info")
+                        && ts.get(i + 1).is_some_and(|t| t.text == "!")
+                        && ts.get(i + 2).is_some_and(|t| t.text == "(")
+                        && closing_paren(&ts, i + 2).is_ok_and(|close| close > end)
+                })
+                .ok_or_else(|| format!("{path}: realm attribute must belong to fn_info!"))?;
+            let fn_end = closing_paren(&ts, fn_start + 2)?;
+            let body_info = info::fn_info(&ts[end + 2..fn_end], abi_constants())?;
+            let (body, symbol) = resolve(&body_info.body)?;
+            let humans = facts::parse_many(&ts[open + 1..end])?;
+            let binding = info::metadata_binding(&ts[end + 2..fn_end]);
+            if binding && humans.len() != 1 {
+                return Err("metadata binding needs one physical cell".into());
+            }
+            for human in humans {
+                if human.emit_metadata != (binding || human.metadata_macro.is_some()) {
+                    return Err("public metadata needs a runtime macro binding at fn_info!".into());
+                }
+                if binding && human.spec_name.is_none() && human.spec_length.is_none() {
+                    return Err(
+                        "metadata binding requires a nondefault public name or length".into(),
+                    );
+                }
+                let mut declaration = facts::callable(
+                    human,
+                    &body_info,
+                    abi_constants(),
+                    body.clone(),
+                    symbol.clone(),
+                    source,
+                )?;
+                let Value::Object(ref mut map) = declaration else {
+                    unreachable!()
+                };
+                map.insert("source".into(), Value::String(path.replace('\\', "/")));
+                map.insert(
+                    "line".into(),
+                    Value::Number(
+                        (source[..ts[fn_start].start]
+                            .bytes()
+                            .filter(|&b| b == b'\n')
+                            .count()
+                            + 1)
+                        .to_string(),
+                    ),
+                );
+                out.push(declaration);
+            }
+            skip_until = end + 1;
             continue;
         }
         let literal = ts
@@ -291,6 +721,11 @@ fn declarations(
                 .and_then(Value::string)
                 .ok_or("realm declaration has no name")?
                 .to_owned();
+            if d.contains_key("source") || d.contains_key("line") {
+                return Err(format!(
+                    "{path}: {name}: provenance is derived from its declaring macro"
+                ));
+            }
             d.insert("source".into(), Value::String(path.replace('\\', "/")));
             d.insert(
                 "line".into(),
@@ -356,12 +791,21 @@ pub fn read(runtime_src: &Path) -> Result<Value, String> {
         }
     }
     let mut all = Vec::new();
+    let mut native_receivers = Vec::new();
     let mut selectors = BTreeSet::new();
-    for file in files {
+    let sources = files
+        .into_iter()
+        .map(|file| {
+            let source = std::fs::read_to_string(&file).map_err(|e| e.to_string())?;
+            Ok((file, source))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let symbols = symbols::Sources::new(&sources, crates)?;
+    let native_abi = native::runtime_abi()?;
+    for (file, source) in &sources {
         println!("cargo:rerun-if-changed={}", file.display());
-        let source = std::fs::read_to_string(&file).map_err(|e| e.to_string())?;
         let relative = file.strip_prefix(crates).unwrap();
-        all.extend(declarations(
+        all.extend(declarations_with_receivers(
             &source,
             &relative.to_string_lossy(),
             |selector| {
@@ -373,8 +817,18 @@ pub fn read(runtime_src: &Path) -> Result<Value, String> {
                 println!("cargo:rerun-if-changed={}", path.display());
                 std::fs::read_to_string(path).map_err(|e| e.to_string())
             },
+            |body| match body.strip_prefix("@provider:") {
+                Some(name) => symbols
+                    .provider_body(name, file)
+                    .map(|body| (body, String::new())),
+                None => symbols.resolve(body, file),
+            },
+            &mut native_receivers,
+            &native_abi,
         )?);
     }
+    native::resolve_receivers(&mut all, &native_receivers)?;
+    birth::mark_inherited_objects(&mut all)?;
     all.sort_by(|a, b| {
         a.get("name")
             .and_then(Value::string)
@@ -399,6 +853,55 @@ pub fn read(runtime_src: &Path) -> Result<Value, String> {
     ])))
 }
 
+/// Check every entry against the declaration actually present in source.
+/// Neither a valid file nor an annotation-shaped comment is sufficient: the
+/// source reader must find this name at this exact declaring macro.
+pub fn validate_provenance(runtime_src: &Path, manifest: &Value) -> Result<(), String> {
+    let source = read(runtime_src)?;
+    let expected = source
+        .get("declarations")
+        .and_then(Value::array)
+        .ok_or("missing source declarations")?;
+    let expected: std::collections::BTreeMap<_, _> = expected
+        .iter()
+        .map(|d| (d.get("name").and_then(Value::string).unwrap(), d))
+        .collect();
+    let entries = manifest
+        .get("declarations")
+        .and_then(Value::array)
+        .ok_or("missing manifest declarations")?;
+    let mut seen = BTreeSet::new();
+    for entry in entries {
+        let name = entry
+            .get("name")
+            .and_then(Value::string)
+            .ok_or("missing name")?;
+        if !seen.insert(name) {
+            return Err(format!("duplicate provenance entry: {name}"));
+        }
+        let declaration = expected
+            .get(name)
+            .ok_or_else(|| format!("no source declaration for {name}"))?;
+        assert_origin(entry, declaration)?;
+    }
+    if seen.len() != expected.len() {
+        return Err("manifest omits source declarations".into());
+    }
+    Ok(())
+}
+
+fn assert_origin(entry: &Value, declaration: &Value) -> Result<(), String> {
+    for field in ["source", "line"] {
+        if entry.get(field).is_none() || entry.get(field) != declaration.get(field) {
+            return Err(format!(
+                "realm provenance disagrees with declaring macro: {:?} ({field})",
+                entry.get("name").and_then(Value::string)
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Emit runtime build artifact and compiler-only table. Nothing includes this
 /// table in the runtime, and WRT3a does not emit any realm data into programs.
 pub fn generate(runtime_src: &Path, out: &Path) -> Result<Value, String> {
@@ -416,6 +919,8 @@ pub fn generate(runtime_src: &Path, out: &Path) -> Result<Value, String> {
             return Err(format!("missing realm root {root}"));
         }
     }
+    validate_provenance(runtime_src, &manifest)?;
+    projection::generate(runtime_src, out)?;
     std::fs::write(out.join("realm-v1.json"), manifest.encode()).map_err(|e| e.to_string())?;
     std::fs::write(
         out.join("realm-build-time-ns"),
@@ -429,8 +934,327 @@ pub fn generate(runtime_src: &Path, out: &Path) -> Result<Value, String> {
 mod tests {
     use super::*;
     fn inline(source: &str) -> Result<Vec<Value>, String> {
-        declarations(source, "array.rs", |_| Err("unexpected file".into()))
+        declarations(
+            source,
+            "array.rs",
+            |_| Err("unexpected file".into()),
+            |body| Ok((body.into(), format!("source:{body}"))),
+        )
     }
+    #[test]
+    fn bare_constructors_and_reference_captures_keep_one_instance_property() {
+        let d = &inline("fn_info!(#[realm(Example,kind=constructor,provider=closure)] body,1;with_declared(1));").unwrap()[0];
+        assert_eq!(
+            d.get("own_key_order").unwrap().encode(),
+            r#"["length","name","prototype"]"#
+        );
+        let d = &inline("fn_info!(#[realm(Example.method,constructible=true,capture=[ref(Example.prototype)])] body,0);").unwrap()[0];
+        assert_eq!(
+            d.get("header").unwrap().get("reserved"),
+            Some(&Value::Number("0".into()))
+        );
+        assert_eq!(
+            d.get("births").unwrap().encode(),
+            r#"["Example.prototype","Function.prototype"]"#
+        );
+        assert_eq!(
+            d.get("captures").unwrap().array().unwrap()[0]
+                .get("kind")
+                .unwrap()
+                .string(),
+            Some("reference")
+        );
+    }
+
+    #[test]
+    fn ffi_body_declarations_share_the_typed_info_and_local_projection_contract() {
+        let source = r#"js_function_info!(#[realm("Example.method",spec={length=1},emit=metadata)] body,2;with_flags(FN_BUILTIN);bind info,metadata);"#;
+        let ds = inline(source).unwrap();
+        assert_eq!(ds[0].get("length"), Some(&Value::Number("1".into())));
+        assert_eq!(
+            ds[0].get("function_info").unwrap().get("params"),
+            Some(&Value::Number("2".into()))
+        );
+        assert_eq!(ds[0].get("line"), Some(&Value::Number("1".into())));
+    }
+
+    #[test]
+    fn public_metadata_is_separate_from_abi_and_requires_a_runtime_projection() {
+        let source = "fn_info!(#[realm(Foo, spec={length=0}, emit=metadata)] body,3;with_declared(3);bind info, metadata);";
+        let declarations = inline(source).unwrap();
+        assert_eq!(
+            declarations[0].get("length"),
+            Some(&Value::Number("0".into()))
+        );
+        assert_eq!(
+            declarations[0].get("function_info").unwrap().get("params"),
+            Some(&Value::Number("3".into()))
+        );
+        assert!(inline(&source.replace(";bind info, metadata", "")).is_err());
+        assert!(inline(&source.replace("length=0", "length=3")).is_err());
+    }
+
+    #[test]
+    fn callable_members_derive_edges_and_can_state_nondefault_intrinsic_order() {
+        let source = r#"fn_info!(#[realm(Example,kind=constructor,members={from; prototype; [Symbol.species]=accessor(get="Example.species.<get>"); custom=Symbol.for("example");})] body,1);"#;
+        let ds = inline(source).unwrap();
+        let d = &ds[0];
+        assert_eq!(
+            d.get("own_key_order").unwrap().encode(),
+            r#"["length","name","from","prototype","custom"]"#
+        );
+        let properties = d.get("properties").unwrap().array().unwrap();
+        let prototype = properties
+            .iter()
+            .find(|p| p.get("key").and_then(Value::string) == Some("prototype"))
+            .unwrap();
+        assert_eq!(
+            prototype.get("attributes"),
+            Some(&Value::Number("0".into()))
+        );
+        assert_eq!(
+            d.get("births").unwrap().encode(),
+            r#"["Example.from","Example.prototype","Example.species.<get>","Function.prototype"]"#
+        );
+        assert!(
+            inline("fn_info!(#[realm(Example,kind=constructor,members={length=1;})] body,1);")
+                .is_err()
+        );
+        assert!(inline(
+            "fn_info!(#[realm(Example,kind=constructor,members={prototype;})] body,1);"
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn callable_alias_keeps_the_birth_name_and_canonicalizes_cell_identity() {
+        let ds = inline("fn_info!(#[realm(String.prototype.trimStart,alias=String.prototype.trimLeft)] body,0);").unwrap();
+        assert_eq!(ds.len(), 1);
+        let d = &ds[0];
+        assert_eq!(
+            d.get("name").and_then(Value::string),
+            Some("String.prototype.trimLeft")
+        );
+        assert_eq!(
+            d.get("properties").unwrap().array().unwrap()[1]
+                .get("value")
+                .unwrap()
+                .get("value")
+                .and_then(Value::string),
+            Some("trimStart")
+        );
+        assert_eq!(d.get("line"), Some(&Value::Number("1".into())));
+        assert!(inline("fn_info!(#[realm(A.x,alias=A.x)] body,0);").is_err());
+    }
+
+    #[test]
+    fn uncaptured_bare_closure_derives_empty_name_and_unrecorded_arity() {
+        let d = &inline("fn_info!(#[realm(Example.method,provider=closure)] body,3);").unwrap()[0];
+        assert_eq!(d.get("length"), Some(&Value::Number("0".into())));
+        assert_eq!(d.get("captures").unwrap().array().unwrap().len(), 0);
+        assert_eq!(
+            d.get("header").unwrap().get("reserved"),
+            Some(&Value::Number("0".into()))
+        );
+        assert_eq!(
+            d.get("own_key_order").unwrap().encode(),
+            r#"["length","name","prototype"]"#
+        );
+        assert_eq!(
+            d.get("properties").unwrap().array().unwrap()[1]
+                .get("value")
+                .unwrap()
+                .get("value")
+                .and_then(Value::string),
+            Some("")
+        );
+    }
+
+    #[test]
+    fn allocator_birth_without_metadata_preserves_pointer_free_layout() {
+        let d = &inline("fn_info!(#[realm(A.method,provider=closure_alloc)] body,1);").unwrap()[0];
+        assert_eq!(d.get("length"), Some(&Value::Number("0".into())));
+        assert_eq!(
+            d.get("header").unwrap().get("reserved"),
+            Some(&Value::Number(
+                abi_constants()["GC_LAYOUT_POINTER_FREE"].to_string()
+            ))
+        );
+        assert_eq!(d.get("captures").unwrap().array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn accessor_label_can_derive_from_its_property_key() {
+        let source = r#"fn_info!(#[realm("Example.connection.<get>",spec={name=property_key},emit=metadata(realm_connection))] body,0);"#;
+        let d = &inline(source).unwrap()[0];
+        assert_eq!(
+            d.get("properties").unwrap().array().unwrap()[1]
+                .get("value")
+                .unwrap()
+                .get("value")
+                .and_then(Value::string),
+            Some("connection")
+        );
+        assert!(inline(&source.replace("connection.<get>", "connection")).is_err());
+    }
+
+    #[test]
+    fn native_constructor_derives_its_instance_prototype_birth() {
+        let d=&inline(r#"realm_decl! { "node:example.Thing",kind=constructor,provider=bound_method,receiver="node:example"; }"#).unwrap()[0];
+        assert_eq!(
+            d.get("construct").and_then(Value::string),
+            Some("crate::object::js_new_function_construct")
+        );
+        assert_eq!(
+            d.get("properties").unwrap().array().unwrap()[2]
+                .get("value")
+                .unwrap()
+                .get("value")
+                .and_then(Value::string),
+            Some("node:example.Thing.prototype")
+        );
+        assert!(d
+            .get("births")
+            .unwrap()
+            .array()
+            .unwrap()
+            .contains(&Value::String("node:example.Thing.prototype".into())));
+    }
+
+    #[test]
+    fn constructible_birth_derives_synthetic_key_without_a_descriptor() {
+        let source = "fn_info!(#[realm(Storage.prototype.clear,constructible=true)] clear,0;with_declared(0));";
+        let d = &inline(source).unwrap()[0];
+        assert_eq!(
+            d.get("header").unwrap().get("reserved"),
+            Some(&Value::Number("0".into()))
+        );
+        assert_eq!(d.get("own_key_order").unwrap().array().unwrap().len(), 3);
+        assert_eq!(d.get("properties").unwrap().array().unwrap().len(), 2);
+        assert!(inline(&source.replace(
+            "with_declared(0)",
+            "with_flags(crate::closure::FN_NON_CONSTRUCTOR)"
+        ))
+        .is_err());
+        assert!(inline(&source.replace("constructible=true", "constructible=false")).is_err());
+    }
+
+    #[test]
+    fn builtin_constructor_birth_uses_the_declared_family_identity() {
+        let d = &inline(
+            "fn_info!(#[realm(Storage,kind=constructor,provider=builtin_constructor)] body,0);",
+        )
+        .unwrap()[0];
+        let identity = d.get("constructor").unwrap().get("identity").unwrap();
+        assert_eq!(
+            d.get("captures").unwrap().array().unwrap()[0].get("value"),
+            Some(identity)
+        );
+        let Value::Number(bits) = d.get("header").unwrap().get("capture_flags").unwrap() else {
+            panic!("numeric capture flags")
+        };
+        let bits = bits.parse::<u64>().unwrap();
+        let constants = abi_constants();
+        assert_ne!(bits & constants["CLOSURE_NO_THIS_REBIND_FLAG"], 0);
+        assert_eq!(
+            Value::Number(
+                ((bits & constants["CLOSURE_CONSTRUCT_MASK"])
+                    >> constants["CLOSURE_CONSTRUCT_SHIFT"])
+                    .to_string()
+            ),
+            *identity
+        );
+        assert!(inline(
+            "fn_info!(#[realm(Unknown,kind=constructor,provider=builtin_constructor)] body,0);"
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn property_key_capture_derives_utf8_bytes_and_length_without_accessor_prefix() {
+        let d = &inline(
+            "fn_info!(#[realm(\"Example.prototype.é.<get>\",capture=property_key)] body,0);",
+        )
+        .unwrap()[0];
+        let captures = d.get("captures").unwrap().array().unwrap();
+        assert_eq!(captures[0].get("value").and_then(Value::string), Some("é"));
+        assert_eq!(
+            captures[1].get("value").and_then(Value::string),
+            Some("0x2")
+        );
+        assert_eq!(
+            d.get("header").unwrap().get("capture_flags"),
+            Some(&Value::Number("0".into()))
+        );
+    }
+
+    #[test]
+    fn owned_info_block_preserves_body_abi_and_reports_the_block_line() {
+        let source="realm_decl! { info static EMIT:JsFunctionInfo=JsFunctionInfo::of_native_args(emit,1); realm { Stream.emit,provider=closure,receiver=undefined; Events.emit,provider=closure,receiver=undefined; } }";
+        let ds = inline(source).unwrap();
+        assert_eq!(ds.len(), 2);
+        assert_eq!(ds[0].get("line"), Some(&Value::Number("1".into())));
+        assert_eq!(ds[0].get("body").and_then(Value::string), Some("emit"));
+        assert_eq!(
+            ds[0].get("header").unwrap().get("reserved"),
+            Some(&Value::Number(
+                abi_constants()["GC_LAYOUT_POINTER_FREE"].to_string()
+            ))
+        );
+        assert_eq!(ds[0].get("function_info"), ds[1].get("function_info"));
+        assert_eq!(
+            ds[0].get("captures").unwrap().array().unwrap()[0]
+                .get("value")
+                .and_then(Value::string),
+            Some("0x7ffc000000000001")
+        );
+    }
+
+    #[test]
+    fn provenance_rejects_wrong_file_wrong_line_and_missing_location() {
+        let declared =
+            json::parse(r#"{"name":"Atomics.add","source":"install_static.rs","line":1000}"#)
+                .unwrap();
+        for wrong in [
+            r#"{"name":"Atomics.add","source":"atomics.rs","line":1000}"#,
+            r#"{"name":"Atomics.add","source":"install_static.rs","line":825}"#,
+            r#"{"name":"Atomics.add","source":"install_static.rs"}"#,
+        ] {
+            assert!(assert_origin(&json::parse(wrong).unwrap(), &declared).is_err());
+        }
+        assert!(assert_origin(&declared, &declared).is_ok());
+    }
+
+    #[test]
+    fn structured_facts_derive_abi_and_report_the_actual_fn_info_line() {
+        let ds = inline("fn_info!(\n#[realm(Atomics.add)]\njs_atomics_add,3; with_declared(3), with_flags(crate::closure::FN_BUILTIN));").unwrap();
+        let d = &ds[0];
+        assert_eq!(d.get("line"), Some(&Value::Number("1".into())));
+        assert_eq!(d.get("length"), Some(&Value::Number("3".into())));
+        assert_eq!(
+            d.get("info_symbol").and_then(Value::string),
+            Some("perry_realm_info_ce5097e0ac446db8a939")
+        );
+        assert_eq!(
+            d.get("header").unwrap().get("reserved"),
+            Some(&Value::Number("128".into()))
+        );
+        let changed = inline("fn_info!(#[realm(Atomics.add)]js_atomics_add,4; with_declared(4), with_flags(crate::closure::FN_BUILTIN));").unwrap();
+        assert_eq!(changed[0].get("length"), Some(&Value::Number("4".into())));
+        assert_ne!(changed[0].get("info_symbol"), d.get("info_symbol"));
+    }
+
+    #[test]
+    fn shared_body_block_declares_each_physical_cell_at_one_body() {
+        let ds =
+            inline("fn_info!(#[realm(realm_decl! { A.next; B.next, births=[Array]; })] next,0);")
+                .unwrap();
+        assert_eq!(ds.len(), 2);
+        assert_eq!(ds[0].get("body"), ds[1].get("body"));
+        assert_eq!(ds[1].get("births").unwrap().array().unwrap().len(), 2);
+        assert_eq!(ds[0].get("line"), ds[1].get("line"));
+    }
+
     #[test]
     fn body_is_owned_by_fn_info_and_drift_fails() {
         let source = r##"crate::fn_info!(#[realm(r#"{"name":"Array.slice","kind":"method"}"#)] slice_thunk,2);"##;
@@ -448,8 +1272,8 @@ mod tests {
     }
     #[test]
     fn rust_lexing_and_external_groups() {
-        let source="// realm_decl!(\"fake\")\n/* /* realm_decl! */ */ let x=r###\"realm_decl!(fake)\"###;\nfn_info!(#[ realm (\"array.realm.json#slice\") ] native_args slice,2);";
-        let ds=declarations(source,"array.rs",|file|{assert_eq!(file,"array.realm.json");Ok(r#"{"version":1,"groups":{"slice":[{"name":"Array.slice","kind":"method","body":"crate::array::slice"}]}}"#.into())}).unwrap();
+        let source = "// realm_decl!(\"fake\")\n/* /* realm_decl! */ */ let x=r###\"realm_decl!(fake)\"###;\nfn_info!(#[ realm (\"array.realm.json#slice\") ] native_args slice,2);";
+        let ds=declarations(source,"array.rs",|file|{assert_eq!(file,"array.realm.json");Ok(r#"{"version":1,"groups":{"slice":[{"name":"Array.slice","kind":"method","body":"crate::array::slice"}]}}"#.into())}, |body| Ok((body.into(), format!("source:{body}")))).unwrap();
         assert_eq!(ds.len(), 1);
         assert_eq!(ds[0].get("line"), Some(&Value::Number("3".into())));
     }
@@ -457,13 +1281,20 @@ mod tests {
     fn group_markers_validate_existing_body_ownership() {
         let data = r#"{"version":1,"groups":{"body:slice":[{"name":"A.slice","kind":"method","body":"crate::array::slice"}],"objects":[{"name":"A","kind":"prototype"}]}}"#;
         let source = "fn_info!(slice,2); realm_decl!(\"array.realm.json#*\");";
-        let declarations = declarations(source, "array.rs", |_| Ok(data.into())).unwrap();
+        let declarations = declarations(
+            source,
+            "array.rs",
+            |_| Ok(data.into()),
+            |body| Ok((body.into(), format!("source:{body}"))),
+        )
+        .unwrap();
         assert_eq!(declarations.len(), 2);
-        assert!(
-            super::declarations(&source.replace("slice,", "other,"), "array.rs", |_| Ok(
-                data.into()
-            ))
-            .is_err()
-        );
+        assert!(super::declarations(
+            &source.replace("slice,", "other,"),
+            "array.rs",
+            |_| Ok(data.into()),
+            |body| Ok((body.into(), format!("source:{body}")))
+        )
+        .is_err());
     }
 }

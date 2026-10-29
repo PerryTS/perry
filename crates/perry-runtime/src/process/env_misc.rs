@@ -1427,7 +1427,7 @@ fn js_process_env_impl() -> f64 {
     // Pad alloc_limit so small env sets still have headroom; large
     // environments (CI runners) spill to the overflow Vec path.
     let alloc_limit = std::cmp::max(vars.len() as u32, crate::object::INLINE_SLOT_FLOOR as u32);
-    let obj = crate::object::js_object_alloc(0, alloc_limit);
+    let obj = crate::realm_decl! { birth crate::object::js_object_alloc(0, alloc_limit); realm { process.env, kind = exotic, members = { }; } };
     for (k, v) in &vars {
         #[cfg(windows)]
         ENV_KEY_CASING.with(|casing| {

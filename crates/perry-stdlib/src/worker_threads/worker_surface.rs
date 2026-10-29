@@ -395,7 +395,7 @@ pub(super) fn worker_resource_limits_object(
 }
 
 pub(super) fn empty_object() -> *mut perry_runtime::object::ObjectHeader {
-    perry_runtime::object::js_object_alloc(0, 0)
+    perry_runtime::realm_decl! { birth perry_runtime::object::js_object_alloc(0, 0); realm { "node:worker_threads.resourceLimits", kind = namespace, members = { }; "node:worker_threads.default.resourceLimits", kind = namespace, members = { }; } }
 }
 
 fn worker_performance_object() -> *mut perry_runtime::object::ObjectHeader {

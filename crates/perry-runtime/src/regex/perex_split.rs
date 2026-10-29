@@ -609,5 +609,3 @@ pub(crate) extern "C" fn regexp_thunk(
 pub extern "C" fn js_string_split_js(receiver: f64, separator: f64, limit: f64) -> f64 {
     api::finish(string(receiver, separator, limit))
 }
-
-crate::realm_decl!("perex_split.realm.json#*");

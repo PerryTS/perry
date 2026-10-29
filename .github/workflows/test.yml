@@ -863,6 +863,13 @@ jobs:
           python3 scripts/check_js_body_call_funnel.py --self-test
           python3 scripts/check_js_body_call_funnel.py
 
+      - name: Realm source declarations
+        if: ${{ !cancelled() }}
+        run: |
+          python3 -m unittest discover -s scripts -p 'realm_*_tests.py'
+          python3 -m unittest discover -s scripts -p 'check_no_realm_companions_tests.py'
+          python3 scripts/check_no_realm_companions.py
+
       # #7982. The in-process LLVM reader's unit gate builds three tracked `.ll`
       # corpora and asserts they RAN — which proves the tests ran, not that they
       # test today's IR. All three froze on 2026-08-03 and carried zero

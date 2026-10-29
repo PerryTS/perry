@@ -667,7 +667,7 @@ pub(crate) unsafe fn attach_v8_constructor(
     let prototype =
         crate::object::js_function_prototype_value_for_read(constructor.get_nanbox_f64());
     let prototype = scope.root_nanbox_f64(prototype);
-    let method = crate::closure::js_closure_alloc_singleton(crate::fn_info!(
+    let method = crate::closure::js_closure_alloc_singleton(crate::fn_info!(#[realm("node:v8.GCProfiler.prototype[\"@@dispose\"]", constructible = true)] 
         unwind gc_profiler_dispose_body,
         0
     ));
@@ -858,5 +858,3 @@ mod snapshot_thread_name_tests {
         )));
     }
 }
-
-crate::realm_decl!("node_v8.realm.json#*");

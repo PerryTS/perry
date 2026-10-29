@@ -518,20 +518,20 @@ fn global_agent_method_value(
 
 fn global_agent_listener_value(is_https: bool, once: bool) -> f64 {
     let closure = crate::closure::js_closure_alloc(
-        crate::fn_info!(global_agent_listener_thunk, 3; with_declared(3)),
+        crate::fn_info!(#[realm(realm_decl! { "node:http.globalAgent.<prototype>.on", capture = [flag_owner(global_agent_prototype, is_https, "node:http.globalAgent"), flag_property(global_agent_listener_value, once)], spec = {length = 2}, emit = metadata(realm_agent_listener_public); "node:http.globalAgent.<prototype>.once", capture = [flag_owner(global_agent_prototype, is_https, "node:http.globalAgent"), flag_property(global_agent_listener_value, once)], spec = {length = 2}, emit = metadata(realm_agent_listener_public); "node:https.globalAgent.<prototype>.on", capture = [flag_owner(global_agent_prototype, is_https, "node:https.globalAgent"), flag_property(global_agent_listener_value, once)], spec = {length = 2}, emit = metadata(realm_agent_listener_public); "node:https.globalAgent.<prototype>.once", capture = [flag_owner(global_agent_prototype, is_https, "node:https.globalAgent"), flag_property(global_agent_listener_value, once)], spec = {length = 2}, emit = metadata(realm_agent_listener_public); })] global_agent_listener_thunk, 3; with_declared(3)),
         2,
     );
     crate::closure::closure_set_capture_word(closure, 0, i64::from(is_https));
     crate::closure::closure_set_capture_word(closure, 1, i64::from(once));
     let name = if once { "once" } else { "on" };
     set_bound_native_closure_name(closure, name);
-    set_builtin_closure_length(closure as usize, 2);
+    set_builtin_closure_length(closure as usize, realm_agent_listener_public!(length));
     set_builtin_closure_non_constructable(closure as usize);
     crate::value::js_nanbox_pointer(closure as i64)
 }
 
 unsafe fn global_agent_prototype(is_https: bool, agent: *mut ObjectHeader) -> f64 {
-    let proto = js_object_alloc(0, 0);
+    let proto = crate::realm_decl! { birth js_object_alloc(0, 0); realm { "node:http.globalAgent.<prototype>", members = { keepSocketAlive; reuseSocket; getName; addRequest; destroy; on; once; }; "node:https.globalAgent.<prototype>", members = { keepSocketAlive; reuseSocket; getName; addRequest; destroy; on; once; }; } };
     let proto_value = crate::value::js_nanbox_pointer(proto as i64);
     let attrs = super::PropertyAttrs::new(true, false, true);
     for (name, value) in [
@@ -539,7 +539,7 @@ unsafe fn global_agent_prototype(is_https: bool, agent: *mut ObjectHeader) -> f6
             "keepSocketAlive",
             global_agent_method_value(
                 "keepSocketAlive",
-                crate::fn_info!(global_agent_keep_socket_alive_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(realm_decl! { "node:http.globalAgent.<prototype>.keepSocketAlive"; "node:https.globalAgent.<prototype>.keepSocketAlive"; })] global_agent_keep_socket_alive_thunk, 1; with_declared(1)),
                 1,
                 None,
             ),
@@ -548,7 +548,7 @@ unsafe fn global_agent_prototype(is_https: bool, agent: *mut ObjectHeader) -> f6
             "reuseSocket",
             global_agent_method_value(
                 "reuseSocket",
-                crate::fn_info!(global_agent_reuse_socket_thunk, 2; with_declared(2)),
+                crate::fn_info!(#[realm(realm_decl! { "node:http.globalAgent.<prototype>.reuseSocket"; "node:https.globalAgent.<prototype>.reuseSocket"; })] global_agent_reuse_socket_thunk, 2; with_declared(2)),
                 2,
                 None,
             ),
@@ -557,8 +557,8 @@ unsafe fn global_agent_prototype(is_https: bool, agent: *mut ObjectHeader) -> f6
             "getName",
             global_agent_method_value(
                 "getName",
-                crate::fn_info!(global_agent_get_name_thunk, 2; with_declared(2)),
-                0,
+                crate::fn_info!(#[realm(realm_decl! { "node:http.globalAgent.<prototype>.getName", capture = [flag_owner(global_agent_prototype, is_https, "node:http.globalAgent")], spec = {length = 0}, emit = metadata(realm_agent_getName_public); "node:https.globalAgent.<prototype>.getName", capture = [flag_owner(global_agent_prototype, is_https, "node:https.globalAgent")], spec = {length = 0}, emit = metadata(realm_agent_getName_public); })] global_agent_get_name_thunk, 2; with_declared(2)),
+                realm_agent_getName_public!(length),
                 Some(i64::from(is_https)),
             ),
         ),
@@ -566,8 +566,8 @@ unsafe fn global_agent_prototype(is_https: bool, agent: *mut ObjectHeader) -> f6
             "addRequest",
             global_agent_method_value(
                 "addRequest",
-                crate::fn_info!(global_agent_add_request_thunk, 5; with_declared(5)),
-                4,
+                crate::fn_info!(#[realm(realm_decl! { "node:http.globalAgent.<prototype>.addRequest", capture = [raw_ref("node:http.globalAgent")], spec = {length = 4}, emit = metadata(realm_agent_addRequest_public); "node:https.globalAgent.<prototype>.addRequest", capture = [raw_ref("node:https.globalAgent")], spec = {length = 4}, emit = metadata(realm_agent_addRequest_public); })] global_agent_add_request_thunk, 5; with_declared(5)),
+                realm_agent_addRequest_public!(length),
                 Some(agent as i64),
             ),
         ),
@@ -575,7 +575,7 @@ unsafe fn global_agent_prototype(is_https: bool, agent: *mut ObjectHeader) -> f6
             "destroy",
             global_agent_method_value(
                 "destroy",
-                crate::fn_info!(global_agent_destroy_thunk, 0; with_declared(0)),
+                crate::fn_info!(#[realm(realm_decl! { "node:http.globalAgent.<prototype>.destroy"; "node:https.globalAgent.<prototype>.destroy"; })] global_agent_destroy_thunk, 0; with_declared(0)),
                 0,
                 None,
             ),
@@ -698,12 +698,12 @@ pub(crate) unsafe fn https_global_agent_object() -> f64 {
         "requests",
     ];
     let packed = field_names.join("\0");
-    let obj = js_object_alloc_with_shape(
+    let obj = crate::realm_decl! { birth js_object_alloc_with_shape(
         0x7FFF_FF12,
         field_names.len() as u32,
         packed.as_ptr(),
         packed.len() as u32,
-    );
+    ); realm { "node:https.globalAgent", kind = namespace, extends = "node:https.globalAgent.<prototype>", members = { defaultPort = 443.0, attrs = writable | enumerable | configurable; protocol = "https:", attrs = writable | enumerable | configurable; keepAlive = true, attrs = writable | enumerable | configurable; maxSockets = Infinity, attrs = writable | enumerable | configurable; maxFreeSockets = 256.0, attrs = writable | enumerable | configurable; sockets, attrs = writable | enumerable | configurable; freeSockets, attrs = writable | enumerable | configurable; requests, attrs = writable | enumerable | configurable; }; } };
     if obj.is_null() {
         return f64::from_bits(JSValue::undefined().bits());
     }
@@ -718,7 +718,7 @@ pub(crate) unsafe fn https_global_agent_object() -> f64 {
             obj,
             index,
             JSValue::from_bits(
-                crate::value::js_nanbox_pointer(js_object_alloc(0, 0) as i64).to_bits(),
+                crate::value::js_nanbox_pointer(crate::realm_decl! { birth js_object_alloc(0, 0); realm { "node:https.globalAgent.freeSockets", kind = namespace, members = { }; "node:https.globalAgent.requests", kind = namespace, members = { }; "node:https.globalAgent.sockets", kind = namespace, members = { }; } } as i64).to_bits(),
             ),
         );
     }
@@ -754,12 +754,12 @@ pub(crate) unsafe fn http_global_agent_object() -> f64 {
         "requests",
     ];
     let packed = field_names.join("\0");
-    let obj = js_object_alloc_with_shape(
+    let obj = crate::realm_decl! { birth js_object_alloc_with_shape(
         0x7FFF_FF12,
         field_names.len() as u32,
         packed.as_ptr(),
         packed.len() as u32,
-    );
+    ); realm { "node:http.globalAgent", kind = namespace, extends = "node:http.globalAgent.<prototype>", members = { defaultPort = 80.0, attrs = writable | enumerable | configurable; protocol = "http:", attrs = writable | enumerable | configurable; keepAlive = true, attrs = writable | enumerable | configurable; maxSockets = Infinity, attrs = writable | enumerable | configurable; maxFreeSockets = 256.0, attrs = writable | enumerable | configurable; sockets, attrs = writable | enumerable | configurable; freeSockets, attrs = writable | enumerable | configurable; requests, attrs = writable | enumerable | configurable; }; } };
     if obj.is_null() {
         return f64::from_bits(JSValue::undefined().bits());
     }
@@ -775,7 +775,7 @@ pub(crate) unsafe fn http_global_agent_object() -> f64 {
             obj,
             index,
             JSValue::from_bits(
-                crate::value::js_nanbox_pointer(js_object_alloc(0, 0) as i64).to_bits(),
+                crate::value::js_nanbox_pointer(crate::realm_decl! { birth js_object_alloc(0, 0); realm { "node:http.globalAgent.freeSockets", kind = namespace, members = { }; "node:http.globalAgent.requests", kind = namespace, members = { }; "node:http.globalAgent.sockets", kind = namespace, members = { }; } } as i64).to_bits(),
             ),
         );
     }
@@ -870,12 +870,12 @@ pub(crate) unsafe fn http_status_codes_object() -> f64 {
 
     let keys: Vec<String> = STATUS_CODES.iter().map(|(c, _)| c.to_string()).collect();
     let packed = keys.join("\0");
-    let obj = js_object_alloc_with_shape(
+    let obj = crate::realm_decl! { birth js_object_alloc_with_shape(
         0x7FFF_FF13,
         keys.len() as u32,
         packed.as_ptr(),
         packed.len() as u32,
-    );
+    ); realm { "node:http.STATUS_CODES", kind = namespace, members = pairs(STATUS_CODES); } };
     if obj.is_null() {
         return f64::from_bits(JSValue::undefined().bits());
     }
@@ -992,5 +992,3 @@ pub(crate) unsafe fn create_fs_constants_object() -> f64 {
     });
     result
 }
-
-crate::realm_decl!("namespace_builders.realm.json#*");

@@ -1400,5 +1400,3 @@ mod dynamic_super_new_target_tests {
         }
     }
 }
-
-crate::realm_decl!("fetch_globals.realm.json#*");

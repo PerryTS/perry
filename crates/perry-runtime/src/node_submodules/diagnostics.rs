@@ -1598,5 +1598,3 @@ pub(crate) use diagnostics_trace::{
     call_fn_value, channel_from_object_property, diag_trace_callback, diag_trace_promise,
     diag_trace_subscribe, diag_trace_sync, diag_trace_unsubscribe, tracing_event_name,
 };
-
-crate::realm_decl!("diagnostics.realm.json#*");
