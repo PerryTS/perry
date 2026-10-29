@@ -635,12 +635,13 @@ impl GcTriggerThresholdTestGuard {
     }
 
     pub(super) fn make_arena_trigger_due(&self) {
-        // Just-due, not zero: with debt-proportional assist pacing
+        // Just-due against the compared quantity (copying capacity: gross arena
+        // bytes minus dedicated-leaf capacity), not zero: with debt-proportional assist pacing
         // (`gc_mutator_assist_scaled_work_units`), trigger=0 would read the
         // ENTIRE arena as debt and scale the first assist into a monolithic
         // collection — these tests want "trigger due, collector keeping up"
         // (debt ≈ 1 byte). Pacing-specific tests inflate debt explicitly.
-        let just_due = crate::arena::arena_total_bytes().saturating_sub(1);
+        let just_due = crate::arena::copying_capacity_bytes().saturating_sub(1);
         GC_NEXT_TRIGGER_BYTES.with(|trigger| trigger.set(just_due));
     }
 }

@@ -19,7 +19,7 @@ struct Matched {
     max_idx_exclusive: i64,
 }
 
-fn is_declared_string_array(ctx: &FnCtx<'_>, id: u32) -> bool {
+pub(super) fn is_declared_string_array(ctx: &FnCtx<'_>, id: u32) -> bool {
     use perry_hir::types::Type;
     let is_string = |ty: &Type| matches!(ty, Type::String | Type::StringLiteral(_));
     match crate::type_analysis::static_type_of(ctx, &Expr::LocalGet(id)) {

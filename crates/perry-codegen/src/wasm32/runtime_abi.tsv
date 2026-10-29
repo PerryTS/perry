@@ -392,6 +392,7 @@ js_async_resource_subclass_init	f64	f64,f64,f64
 js_async_resource_trigger_async_id	f64	i64
 js_async_step_chain	ptr	f64,ptr
 js_async_step_done	ptr	f64,ptr
+js_async_step_resume_now	f64	f64,ptr
 js_atob	ptr	f64
 js_atomics_add	f64	ptr,i64,f64,f64,f64
 js_atomics_and	f64	ptr,i64,f64,f64,f64
@@ -2076,6 +2077,8 @@ js_map_from_array	ptr	ptr
 js_map_from_iterable	ptr	f64
 js_map_get	f64	ptr,f64
 js_map_get__Map	f64	ptr,f64
+js_map_get_entry	f64	ptr,f64,ptr
+js_map_get_entry__Map	f64	ptr,f64,ptr
 js_map_get_number_key	f64	ptr,f64
 js_map_get_string_key	f64	ptr,ptr
 js_map_group_by	f64	f64,f64
@@ -4009,6 +4012,10 @@ js_string_concat_box	f64	f64,f64
 js_string_concat_chain	ptr	ptr,i32s
 js_string_concat_lit_value_box	f64	ptr,i64,f64
 js_string_concat_parts	ptr	ptr,i32s
+js_string_concat_parts_2	ptr	ptr
+js_string_concat_parts_3	ptr	ptr
+js_string_concat_parts_4	ptr	ptr
+js_string_concat_parts_5	ptr	ptr
 js_string_concat_site_value	f64	ptr,ptr,f64
 js_string_concat_value	ptr	ptr,f64
 js_string_concat_value_box	f64	ptr,f64

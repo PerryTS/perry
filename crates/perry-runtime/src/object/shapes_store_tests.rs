@@ -329,7 +329,7 @@ fn the_record_geometry_is_bounded_and_facts_key_is_o1() {
         "record grew"
     );
     assert_eq!(std::mem::align_of::<ShapeRecord>(), 8, "record realigned");
-    assert_eq!(std::mem::offset_of!(ShapeRecord, element_kind), 72);
+    assert_eq!(std::mem::offset_of!(ShapeRecord, keys_node_and_element_kind), 72);
     assert_eq!(
         std::mem::offset_of!(ShapeRecord, family_desc_index_plus_one),
         76

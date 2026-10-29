@@ -1222,6 +1222,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 return Ok(value);
             }
             if matches!(op, BinaryOp::Add) {
+                // CLS D2: Numbers and primitive-kind reads the facts prove:
+                // an fadd of the two ToNumber values, no dynamic helper.
+                if let Some(value) = super::facts_number::try_lower_add(ctx, left, right)? {
+                    return Ok(value);
+                }
                 // Use the stricter `is_definitely_string_expr` check for
                 // the string-concat fast path. A union type `string|number`
                 // that happens to contain a number at runtime would get
@@ -1532,14 +1537,26 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let l_needs_coerce = operand_needs_residual_coerce(ctx, left, l_fallback_coerced);
             let r_needs_coerce = operand_needs_residual_coerce(ctx, right, r_fallback_coerced);
             let l = if l_needs_coerce {
-                ctx.block()
-                    .call(DOUBLE, "js_number_coerce", &[(DOUBLE, &l_raw)])
+                if super::facts_number::operand(ctx, left)
+                    == Some(super::facts_number::Operand::Prim)
+                {
+                    super::facts_number::emit_prim_to_number(ctx, &l_raw)
+                } else {
+                    ctx.block()
+                        .call(DOUBLE, "js_number_coerce", &[(DOUBLE, &l_raw)])
+                }
             } else {
                 l_raw
             };
             let r = if r_needs_coerce {
-                ctx.block()
-                    .call(DOUBLE, "js_number_coerce", &[(DOUBLE, &r_raw)])
+                if super::facts_number::operand(ctx, right)
+                    == Some(super::facts_number::Operand::Prim)
+                {
+                    super::facts_number::emit_prim_to_number(ctx, &r_raw)
+                } else {
+                    ctx.block()
+                        .call(DOUBLE, "js_number_coerce", &[(DOUBLE, &r_raw)])
+                }
             } else {
                 r_raw
             };

@@ -291,7 +291,8 @@ pub(super) fn evacuation_policy_snapshot_after_mark(
         let header = header_ptr as *mut GcHeader;
         unsafe {
             let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
-            if !crate::arena::pointer_in_nursery(user_ptr as usize) {
+            if !crate::arena::pointer_in_nursery(user_ptr as usize)
+                || crate::arena::is_large_storage(user_ptr as usize) {
                 return;
             }
             let flags = (*header).gc_flags;
@@ -736,7 +737,7 @@ pub(super) fn sweep_with_age_bump_and_malloc(
     sweep_with_age_bump_and_old_reclaim_targets(do_age_bump, false, None, sweep_malloc)
 }
 
-unsafe fn finalize_dead_arena_payload(
+pub(crate) unsafe fn finalize_dead_arena_payload(
     header: *mut GcHeader,
     user_ptr: *mut u8,
     full_dead_owners_pruned: bool,
@@ -832,6 +833,7 @@ fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
     // live objects to offset=0 — the load-bearing optimization that lets the
     // inline bump allocator reuse memory instead of page-faulting fresh blocks.
     let n_blocks = crate::arena::arena_block_count();
+    let large_snapshots = crate::arena::arena_block_snapshots();
     let mut block_has_live: Vec<bool> = vec![false; n_blocks];
     // Inclusive upper bound on indices that age. `general_block_count()`
     // is the first non-general index; objects with `block_idx < general_n`
@@ -1073,6 +1075,8 @@ fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
             eprintln!("[gc-old-free] reusable_bytes={}", old_free_bytes());
         }
     }
+    let old_reset = add_reset_stats(old_reset,
+        crate::arena::finish_swept_young_large(&large_snapshots, &block_has_live));
     let reset = crate::arena::ArenaResetStats {
         reset_blocks: nursery_reset
             .reset_blocks
@@ -1280,7 +1284,9 @@ impl IncrementalSweepState {
             SweepCycleSubphase::BlockCleanup => {
                 let cleanup = self.cleanup.as_mut().expect("sweep cleanup state exists");
                 if cleanup.step(budget) {
-                    let reset = cleanup.stats();
+                    let large_reset = crate::arena::finish_swept_young_large(
+                        self.arena.block_snapshots(), self.arena.block_has_live());
+                    let reset = add_reset_stats(cleanup.stats(), large_reset);
                     let freed_bytes = self
                         .malloc
                         .freed_bytes

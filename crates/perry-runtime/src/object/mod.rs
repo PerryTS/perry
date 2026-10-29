@@ -844,12 +844,8 @@ fn shape_cache_insert(
     // the caller holds another is exactly the divergence this stage exists to
     // remove.
     let (live, keys) = live.across(|| unsafe {
-        canonical_keys::canonicalize(
-            &canonical_keys::SharedLayout::shape_cache_entry(),
-            keys.arr(),
-            keys.count(),
-        )
-        .view()
+        canonical_keys::canonicalize_keys(&canonical_keys::SharedLayout::shape_cache_entry(), keys)
+            .view()
     });
     let keys_array = keys.arr();
     // Mark the array as shape-shared so `js_object_set_field_by_name`
@@ -1711,11 +1707,7 @@ pub(crate) unsafe fn object_keys_from_shape_record(
     }
 
     if record.keys() != 0 {
-        let keys = ObjectKeys::new(
-            record.keys() as usize as *mut ArrayHeader,
-            record.logical_key_count(),
-        );
-        return keys;
+        return record.keys_view();
     }
     ObjectKeys::NONE
 }
@@ -1731,15 +1723,7 @@ pub(crate) unsafe fn object_keys_and_live_slots(
         return None;
     }
 
-    shapes::object_shape_record(obj).map(|record| {
-        (
-            ObjectKeys::new(
-                record.keys() as usize as *mut ArrayHeader,
-                record.logical_key_count(),
-            ),
-            record.live_inline_slot_count(),
-        )
-    })
+    shapes::object_shape_record(obj).map(|record| (record.keys_view(), record.live_inline_slot_count()))
 }
 
 pub(crate) mod meta_flags;

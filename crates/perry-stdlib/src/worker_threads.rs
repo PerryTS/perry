@@ -683,7 +683,7 @@ fn closure_value_with_worker_id(
     worker_id: u64,
 ) -> f64 {
     let closure = perry_runtime::closure::js_closure_alloc(info, 1);
-    perry_runtime::closure::js_closure_set_capture_ptr(closure, 0, worker_id as i64);
+    perry_runtime::closure::closure_set_capture_word(closure, 0, worker_id as i64);
     f64::from_bits(JSValue::pointer(closure as *const u8).bits())
 }
 

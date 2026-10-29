@@ -220,9 +220,11 @@ pub const LARGE_OBJECT_THRESHOLD_BYTES: usize = 16 * 1024;
 ///
 /// # Why the two thresholds cannot be the same number
 ///
-/// Crossing the threshold does not merely change where an object is allocated.
-/// [`crate::arena::arena_alloc_gc`] births it in the old generation **and
-/// stamps `GC_FLAG_TENURED`**, and a minor collection never sweeps old-gen. So
+/// For pointer-bearing containers in this staged implementation, crossing the
+/// threshold still births the object old and stamps `GC_FLAG_TENURED`.
+/// Pointer-free whole-cell leaves instead get dedicated non-moving storage
+/// with ordinary young age; size alone no longer makes those leaves old.
+/// A minor never sweeps the old generation. For an old container,
 /// the object — and, if it holds pointers, *everything reachable from it* —
 /// is immortal until a full mark-sweep runs. The threshold is therefore a
 /// trade between two costs:
@@ -232,9 +234,10 @@ pub const LARGE_OBJECT_THRESHOLD_BYTES: usize = 16 * 1024;
 /// * **retention cost**, paid by a born-tenured object that dies: its bytes,
 ///   held until the next full collection.
 ///
-/// For a `pointer_free` object those two quantities are the *same* quantity,
-/// so trading one against the other at 16 KB is a defensible wash. For a
-/// pointer-BEARING object the retention is **transitive and unbounded**: the
+/// The historical pointer-free cutoff traded those equal quantities at
+/// 16 KB. That cutoff now selects young large storage without copying. For
+/// the still-pretenured pointer-bearing containers, retention remains
+/// **transitive and unbounded**: the
 /// write barrier records old→young edges out of it, and every minor's dirty
 /// scan then marks its children live, whether or not anything still refers to
 /// the container.
@@ -474,7 +477,7 @@ pub(crate) enum GcExternalBytePolicy {
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GcLargeObjectPolicy {
-    OldArenaWhenOverThreshold,
+    ArenaWhenOverThreshold,
     MallocTracked,
     NotApplicable,
 }
@@ -605,7 +608,7 @@ const CORE_TYPE_INFOS: &[Option<GcTypeInfo>] = &[
         GcLayoutSlotKind::ArrayElements,
         true,
         GcExternalBytePolicy::InlinePayload,
-        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        GcLargeObjectPolicy::ArenaWhenOverThreshold,
         false,
         GcMoveHookKind::None,
         GcRewriteHookKind::None,
@@ -620,7 +623,7 @@ const CORE_TYPE_INFOS: &[Option<GcTypeInfo>] = &[
         GcLayoutSlotKind::ObjectFields,
         true,
         GcExternalBytePolicy::InlinePayload,
-        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        GcLargeObjectPolicy::ArenaWhenOverThreshold,
         false,
         GcMoveHookKind::None,
         GcRewriteHookKind::None,
@@ -635,7 +638,7 @@ const CORE_TYPE_INFOS: &[Option<GcTypeInfo>] = &[
         GcLayoutSlotKind::None,
         true,
         GcExternalBytePolicy::InlinePayload,
-        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        GcLargeObjectPolicy::ArenaWhenOverThreshold,
         true,
         GcMoveHookKind::None,
         GcRewriteHookKind::None,
@@ -681,7 +684,7 @@ const CORE_TYPE_INFOS: &[Option<GcTypeInfo>] = &[
         GcLayoutSlotKind::None,
         true,
         GcExternalBytePolicy::InlinePayload,
-        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        GcLargeObjectPolicy::ArenaWhenOverThreshold,
         true,
         GcMoveHookKind::None,
         GcRewriteHookKind::None,
@@ -696,7 +699,7 @@ const CORE_TYPE_INFOS: &[Option<GcTypeInfo>] = &[
         GcLayoutSlotKind::None,
         true,
         GcExternalBytePolicy::None,
-        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        GcLargeObjectPolicy::ArenaWhenOverThreshold,
         false,
         GcMoveHookKind::ErrorSideTables,
         GcRewriteHookKind::None,
@@ -747,7 +750,7 @@ const CORE_TYPE_INFOS: &[Option<GcTypeInfo>] = &[
         // collection, so per-iteration-dead tapes drove `old_gen_bytes`
         // fulls (6 of 9 fulls on the `field_access` fixture).
         GcExternalBytePolicy::SideAllocation,
-        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        GcLargeObjectPolicy::ArenaWhenOverThreshold,
         false,
         GcMoveHookKind::LazyArrayTape,
         GcRewriteHookKind::None,
@@ -795,7 +798,7 @@ const CORE_TYPE_INFOS: &[Option<GcTypeInfo>] = &[
         GcLayoutSlotKind::None,
         false,
         GcExternalBytePolicy::None,
-        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        GcLargeObjectPolicy::ArenaWhenOverThreshold,
         false,
         GcMoveHookKind::None,
         GcRewriteHookKind::None,
@@ -907,7 +910,7 @@ const CORE_TYPE_INFOS: &[Option<GcTypeInfo>] = &[
         GcLayoutSlotKind::None,
         true,
         GcExternalBytePolicy::InlinePayload,
-        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        GcLargeObjectPolicy::ArenaWhenOverThreshold,
         false,
         GcMoveHookKind::None,
         GcRewriteHookKind::None,
@@ -922,7 +925,7 @@ const CORE_TYPE_INFOS: &[Option<GcTypeInfo>] = &[
         GcLayoutSlotKind::None,
         true,
         GcExternalBytePolicy::InlinePayload,
-        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        GcLargeObjectPolicy::ArenaWhenOverThreshold,
         true,
         GcMoveHookKind::None,
         GcRewriteHookKind::None,
@@ -937,7 +940,7 @@ const CORE_TYPE_INFOS: &[Option<GcTypeInfo>] = &[
         GcLayoutSlotKind::None,
         true,
         GcExternalBytePolicy::InlinePayload,
-        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        GcLargeObjectPolicy::ArenaWhenOverThreshold,
         false,
         GcMoveHookKind::None,
         GcRewriteHookKind::None,
@@ -952,7 +955,7 @@ const CORE_TYPE_INFOS: &[Option<GcTypeInfo>] = &[
         GcLayoutSlotKind::None,
         true,
         GcExternalBytePolicy::InlinePayload,
-        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        GcLargeObjectPolicy::ArenaWhenOverThreshold,
         true,
         GcMoveHookKind::None,
         GcRewriteHookKind::None,
@@ -967,7 +970,7 @@ const CORE_TYPE_INFOS: &[Option<GcTypeInfo>] = &[
         GcLayoutSlotKind::None,
         true,
         GcExternalBytePolicy::InlinePayload,
-        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        GcLargeObjectPolicy::ArenaWhenOverThreshold,
         true,
         GcMoveHookKind::None,
         GcRewriteHookKind::None,
@@ -983,7 +986,7 @@ const CORE_TYPE_INFOS: &[Option<GcTypeInfo>] = &[
         GcLayoutSlotKind::None,
         true,
         GcExternalBytePolicy::InlinePayload,
-        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        GcLargeObjectPolicy::ArenaWhenOverThreshold,
         false,
         GcMoveHookKind::None,
         GcRewriteHookKind::None,
@@ -1024,7 +1027,7 @@ const CORE_TYPE_INFOS: &[Option<GcTypeInfo>] = &[
         GcLayoutSlotKind::None,
         true,
         GcExternalBytePolicy::InlinePayload,
-        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        GcLargeObjectPolicy::ArenaWhenOverThreshold,
         false,
         GcMoveHookKind::None,
         GcRewriteHookKind::None,
@@ -1039,7 +1042,7 @@ const CORE_TYPE_INFOS: &[Option<GcTypeInfo>] = &[
         GcLayoutSlotKind::None,
         true,
         GcExternalBytePolicy::InlinePayload,
-        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        GcLargeObjectPolicy::ArenaWhenOverThreshold,
         false,
         GcMoveHookKind::None,
         GcRewriteHookKind::WeakStorageIndex,
@@ -1099,7 +1102,7 @@ const CORE_TYPE_INFOS: &[Option<GcTypeInfo>] = &[
         GcLayoutSlotKind::None,
         true,
         GcExternalBytePolicy::SideAllocation,
-        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        GcLargeObjectPolicy::ArenaWhenOverThreshold,
         false,
         GcMoveHookKind::OwnedSetStore,
         GcRewriteHookKind::None,
@@ -1114,7 +1117,7 @@ const CORE_TYPE_INFOS: &[Option<GcTypeInfo>] = &[
         GcLayoutSlotKind::None,
         true,
         GcExternalBytePolicy::SideAllocation,
-        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        GcLargeObjectPolicy::ArenaWhenOverThreshold,
         false,
         GcMoveHookKind::OwnedMapStore,
         GcRewriteHookKind::OwnedMapIndex,
@@ -1223,7 +1226,7 @@ const fn buffer_family_type_info(type_id: u8, name: &'static str) -> GcTypeInfo 
         GcLayoutSlotKind::None,
         false,
         GcExternalBytePolicy::InlinePayload,
-        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        GcLargeObjectPolicy::ArenaWhenOverThreshold,
         false,
         GcMoveHookKind::None,
         GcRewriteHookKind::None,

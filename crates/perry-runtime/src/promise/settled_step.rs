@@ -56,6 +56,85 @@ pub(super) fn try_enqueue(value: f64, step: ClosurePtr) -> Option<*mut Promise> 
     ))
 }
 
+/// Settled self-next continuation (SNC). The running job J is this
+/// activation's own step dispatch and the await it reaches is already
+/// determined, so the FIFO round trip (publish T, return to J's tail, pop T,
+/// dispatch T) is unobservable when all six conditions hold:
+///  1. J is the activation's own AsyncStep job (`CURRENT_MICROTASK_CALLBACK`
+///     is this step; a thunk/reaction job or a re-entrant drain declines);
+///  2. the result promise is reusable (`INLINE_TRAP` names this step);
+///  3. no async_hooks / V8 promise hooks (elided before/after/init unseen);
+///  4. the awaited value is a primitive or a native fulfilled promise with
+///     null metadata (the `try_enqueue` admission);
+///  5. the microtask queue is empty, so T would be the next job popped;
+///  6. the job domain is not cancelled (eligible by construction).
+/// On admission the awaited result is written to the iter-result cell and
+/// true is returned; the step loops in place. Otherwise nothing changed and
+/// the caller takes the ordinary FIFO path. Never restarts. Leaf: no JS, no
+/// allocation, no collection.
+#[no_mangle]
+pub extern "C" fn js_async_step_resume_now(value: f64, step: ClosurePtr) -> f64 {
+    const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
+    const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
+    f64::from_bits(if resume_now(value, step) {
+        TAG_TRUE
+    } else {
+        TAG_FALSE
+    })
+}
+
+#[inline]
+fn resume_now(value: f64, step: ClosurePtr) -> bool {
+    if step.is_null() {
+        return false;
+    }
+    // P1
+    if super::microtasks::CURRENT_MICROTASK_CALLBACK.with(|c| c.get()) != step {
+        return false;
+    }
+    // P2
+    let trap = INLINE_TRAP.with(|slot| slot.get());
+    if trap.trap_next.is_null() || trap.current_step != step as usize {
+        return false;
+    }
+    // P3
+    if crate::async_hook_slots::promise_hooks_active() || crate::v8::promise_hooks_active() {
+        return false;
+    }
+    // P4
+    let primitive = is_definitely_primitive(value);
+    let payload = if primitive {
+        value
+    } else {
+        if js_value_is_promise(value) == 0 {
+            return false;
+        }
+        let inner = crate::value::js_nanbox_get_pointer(value) as *const Promise;
+        unsafe {
+            if (*inner).state != PromiseState::Fulfilled || !(*inner).meta.is_null() {
+                return false;
+            }
+            (*inner).value
+        }
+    };
+    // P5
+    if TASK_QUEUE.with(|queue| !queue.borrow().is_empty()) {
+        return false;
+    }
+    // P6 (last: the only predicate with effects, and only when admitted)
+    if !crate::async_context::job_domain::admit_inline_self_next_job() {
+        return false;
+    }
+    bump(&MT_RUN_COUNT);
+    if primitive {
+        bump(&MT_FAST_PATH_HIT);
+    }
+    bump(&MT_STEP_CHAIN_REUSE_HIT);
+    crate::closure::reset_throw_not_callable_counter();
+    js_iter_result_set(payload, 0);
+    true
+}
+
 /// Called only after the no-async-hook effect check. Native context/token
 /// operations cannot move any of these values. The existing queue owns every
 /// published edge before the producer returns; no interior pointer is retained.

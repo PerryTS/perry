@@ -1178,11 +1178,21 @@ pub(crate) fn emit_string_concat_parts(ctx: &mut FnCtx<'_>, parts: &[ConcatPartA
     }
     let base_i64 = blk.next_reg();
     blk.emit_raw(format!("{} = ptrtoint ptr {} to i64", base_i64, buf_reg));
-    let result_handle = blk.call(
-        I64,
-        "js_string_concat_parts",
-        &[(I64, &base_i64), (I32, &n.to_string())],
-    );
+    // A count the runtime has a specialized entry for takes it (the count is
+    // then a constant of the callee); any other count takes the generic entry.
+    let result_handle = if (2..=5).contains(&n) {
+        blk.call(
+            I64,
+            &format!("js_string_concat_parts_{n}"),
+            &[(I64, &base_i64)],
+        )
+    } else {
+        blk.call(
+            I64,
+            "js_string_concat_parts",
+            &[(I64, &base_i64), (I32, &n.to_string())],
+        )
+    };
     nanbox_string_inline(blk, &result_handle)
 }
 

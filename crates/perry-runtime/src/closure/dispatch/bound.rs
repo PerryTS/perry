@@ -1162,8 +1162,8 @@ pub(crate) unsafe fn reify_function_method_value(receiver: f64, method: &'static
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     js_closure_set_capture_f64(closure, 0, receiver);
-    js_closure_set_capture_ptr(closure, 1, method.as_ptr() as i64);
-    js_closure_set_capture_ptr(closure, 2, method.len() as i64);
+    crate::closure::closure_set_capture_word(closure, 1, method.as_ptr() as i64);
+    crate::closure::closure_set_capture_word(closure, 2, method.len() as i64);
     // `.name` = the method name so `typeof v === "function"` and `v.name`
     // read back sensibly (e.g. `"bind"`).
     if let Ok(name) = std::str::from_utf8(method) {

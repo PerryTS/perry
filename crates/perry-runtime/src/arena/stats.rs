@@ -52,7 +52,7 @@ fn arena_free_bytes() -> usize {
 /// high-water but NOT inside `live_bytes`.
 pub(crate) fn record_arena_live_census(live_bytes: usize, from_space_live_bytes: Option<usize>) {
     let high_water_bytes = arena_in_use_bytes();
-    let from_space_high_water_bytes = copying_from_space_in_use_bytes();
+    let from_space_high_water_bytes = moving_from_space_in_use_bytes();
     // Live can never exceed the high-water it sits in; clamping keeps one
     // miscounted walk from making the derived non-from-space figure negative
     // (and, through `saturating_sub`, silently zero).
@@ -88,7 +88,7 @@ pub(crate) fn record_arena_live_census(live_bytes: usize, from_space_live_bytes:
 /// With no valid census the running figure is itself high-water-derived, so
 /// the high-water is the consistent answer.
 pub(crate) fn arena_live_from_space_bytes() -> usize {
-    let high_water_now = copying_from_space_in_use_bytes();
+    let high_water_now = moving_from_space_in_use_bytes();
     ARENA_LIVE_CENSUS.with(|census_cell| {
         let census = census_cell.get();
         if !census.valid {

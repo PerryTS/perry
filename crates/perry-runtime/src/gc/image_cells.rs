@@ -403,3 +403,9 @@ pub(crate) mod sabotage {
         }
     }
 }
+
+pub(super) unsafe fn visit_leaf_service_roots(mut visit: impl FnMut(u64)) {
+    for header in image_remembered_headers() {
+        visit_cell_slots(header, &mut |slot| visit(slot.read()));
+    }
+}

@@ -90,6 +90,14 @@ pub(crate) struct ModInfo {
     pub iterout: FxHashMap<FnIdx, NodeId>,
 }
 
+/// A body generation walks once its function is active (DECISIONS 225).
+pub(crate) enum PendingWalk<'a> {
+    Fn(u32, FnIdx, &'a perry_hir::Function, Option<TmplId>, Option<TmplId>),
+    Fields(u32, &'a perry_hir::Class),
+    /// A closure's body (its emitted definition) in its creation context.
+    Closure(crate::gen::Fx, &'a perry_hir::Expr),
+}
+
 pub struct Gen<'a> {
     pub m: Model,
     pub(crate) diagnostic: Option<crate::diagnostics::Capture>,
@@ -249,6 +257,9 @@ pub struct Gen<'a> {
     pub prim_const: [NodeId; 7],
     pub(crate) shared_closures: shared_closures::SharedClosures<'a>,
     pub walked: crate::pts::FxHashSet<FnIdx>,
+    /// DECISIONS 225: the bodies not walked yet because they are not
+    /// active (`Gen::walk_activated` walks each once it is).
+    pub(crate) pending_walk: FxHashMap<FnIdx, Vec<PendingWalk<'a>>>,
     pub class_envs: FxHashMap<String, NodeId>,
     /// The driver's resolution of each module's `export … from "src"`
     /// sources (module path → source → module path). A re-export declares
@@ -444,6 +455,7 @@ impl<'a> Gen<'a> {
             static_init_fn: FxHashMap::default(),
             prim_const,
             walked: Default::default(),
+            pending_walk: Default::default(),
             shared_closures: Default::default(),
             class_envs: FxHashMap::default(),
             export_sources: Default::default(),

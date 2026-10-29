@@ -32,7 +32,7 @@ impl ShapeRecord {
 
 impl ShapeRecord {
     pub(super) fn refresh_element_kind(&mut self) {
-        self.element_kind = if self.summary() == 0 {
+        let kind: u8 = if self.summary() == 0 {
             0
         } else if self.keys == 0 {
             2
@@ -51,5 +51,48 @@ impl ShapeRecord {
                 }
             }
         };
+        // The kind owns the word's low byte, so this is one byte store and
+        // the node above it is untouched.
+        self.keys_node_and_element_kind =
+            (self.keys_node_and_element_kind & !RECORD_ELEMENT_KIND_MASK) | u32::from(kind);
+    }
+
+    /// Element properties of this key prefix (see the packed field).
+    #[inline]
+    pub(crate) fn element_kind(&self) -> u32 {
+        self.keys_node_and_element_kind & RECORD_ELEMENT_KIND_MASK
+    }
+
+    /// The canonical trie node of this record's key list, or
+    /// `canonical_keys::NO_NODE`.
+    #[inline]
+    pub(crate) fn keys_node(&self) -> u32 {
+        (self.keys_node_and_element_kind >> RECORD_KEYS_NODE_SHIFT).wrapping_sub(1)
+    }
+
+    /// Carry `node` as this record's key-list node. A node past the packed
+    /// field's capacity is unreachable: the trie aborts before minting one.
+    #[inline]
+    pub(crate) fn set_keys_node(&mut self, node: u32) {
+        let stored = if node < crate::object::canonical_keys::NODE_ID_LIMIT {
+            (node + 1) << RECORD_KEYS_NODE_SHIFT
+        } else {
+            0
+        };
+        self.keys_node_and_element_kind =
+            (self.keys_node_and_element_kind & RECORD_ELEMENT_KIND_MASK) | stored;
+    }
+
+    /// This record carrying `node` as its key-list node.
+    #[inline]
+    pub(crate) fn with_keys_node(mut self, node: u32) -> ShapeRecord {
+        self.set_keys_node(node);
+        self
     }
 }
+
+const RECORD_ELEMENT_KIND_MASK: u32 = 0xFF;
+const RECORD_KEYS_NODE_SHIFT: u32 = 8;
+const _: () = assert!(
+    crate::object::canonical_keys::NODE_ID_LIMIT as u64 == (1u64 << (32 - RECORD_KEYS_NODE_SHIFT)) - 1
+);

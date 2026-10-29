@@ -139,6 +139,9 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
         "# interp_guard {}\n",
         pf.interp_guard.clone().unwrap_or_else(|| "none".into())
     ));
+    if let Some(a) = &pf.activation {
+        out.push_str(&format!("# activation {a}\n"));
+    }
     out.push_str(&format!("# top_calls {}\n", s.top_calls));
     for (k, n, ms) in &s.profile {
         out.push_str(&format!("# profile {k} {n} {ms:.1}\n"));
@@ -197,11 +200,16 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
     }
     for (unit, lines) in &pf.diagnostics {
         for site in verdicts.get(unit.as_str()).into_iter().flatten() {
+            let bodies: Vec<String> = site
+                .bodies
+                .iter()
+                .map(|(id, name)| format!("[{id},{}]", crate::diagnostics::quote(name)))
+                .collect();
             out.push_str(&format!(
-                "D {{\"record\":\"verdict\",\"unit\":{},\"file\":{},\"start\":{},\"key\":{},\"call\":{},\"verdict\":{}}}\n",
+                "D {{\"record\":\"verdict\",\"unit\":{},\"file\":{},\"start\":{},\"key\":{},\"call\":{},\"verdict\":{},\"bodies\":[{}]}}\n",
                 crate::diagnostics::quote(unit), crate::diagnostics::quote(&pf.module_paths[site.module as usize]),
                 site.byte_offset, crate::diagnostics::quote(&site.key), site.is_call,
-                crate::diagnostics::quote(&format!("{:?}", site.verdict))));
+                crate::diagnostics::quote(&format!("{:?}", site.verdict)), bodies.join(",")));
             for (copy, v) in &site.diagnostic_copies {
                 out.push_str(&format!(
                     "D {{\"record\":\"copy-verdict\",\"unit\":{},\"file\":{},\"start\":{},\"key\":{},\"call\":{},\"copy\":{},\"verdict\":{}}}\n",
@@ -209,6 +217,13 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
                     site.byte_offset, crate::diagnostics::quote(&site.key), site.is_call,
                     crate::diagnostics::quote(copy), crate::diagnostics::quote(&format!("{v:?}"))));
             }
+        }
+        // DECISIONS 225: the bodies the whole program can run, the
+        // exemption of the per-unit <= whole residual (`dead_site`).
+        for (file, id, name) in pf.active_bodies.iter().flatten() {
+            out.push_str(&format!(
+                "D {{\"record\":\"active\",\"unit\":{},\"file\":{},\"fn\":{id},\"name\":{}}}\n",
+                crate::diagnostics::quote(unit), crate::diagnostics::quote(file), crate::diagnostics::quote(name)));
         }
         for line in lines {
             out.push_str("D {");

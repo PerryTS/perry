@@ -20,7 +20,7 @@ static mut SYMBOL: u64 = crate::value::TAG_UNDEFINED;
 static mut LAYOUT: PerryLayoutDesc = PerryLayoutDesc {
     image_keys: std::ptr::null_mut(),
     shape_id: 0,
-    _layout_pad: 0,
+    gc_plan: 0,
     family: 0x464e4201,
     variant: crate::codegen_abi::LAYOUT_VARIANT_FUNCTION_CONSTRUCTOR,
     kind: 0,

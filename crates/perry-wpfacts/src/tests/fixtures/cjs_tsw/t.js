@@ -110,7 +110,7 @@ module.exports = __toCommonJS(ts_exports);
 function filter(a, f) { const r = []; for (const x of a) if (f(x)) r.push(x); return r; }
 function isId(n) { return n.k === 1; }
 function other(n) { return n.k + 2; }
-function user(n) { return isId(n) ? other(n) : filter([n], isId).length; }
+function user(n) { return isId(n) ? other(n) : filter([n], isId).length + (user2(n) ? 1 : 0); }
 function user2(n) { return isId(n); }
 })(typeof module !== "undefined" && module);
 

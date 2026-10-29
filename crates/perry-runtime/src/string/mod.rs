@@ -204,7 +204,10 @@ pub use concat::{
     js_string_concat_chain, js_string_concat_value, js_value_add_string, js_value_concat_string,
     scan_concat_memo_roots, scan_concat_memo_roots_mut,
 };
-pub use concat_parts::{js_string_concat_lit_value_box, js_string_concat_parts};
+pub use concat_parts::{
+    js_string_concat_lit_value_box, js_string_concat_parts, js_string_concat_parts_2,
+    js_string_concat_parts_3, js_string_concat_parts_4, js_string_concat_parts_5,
+};
 pub use concat_site::{js_string_concat_site_value, CONCAT_SITE_SLOTS};
 pub(crate) use format::ascii_char_string;
 pub(crate) use format::fix_exponent_format;
@@ -742,8 +745,9 @@ pub(crate) fn byte_offset_to_utf16_index(s: &str, byte_off: usize) -> usize {
 ///   strings that do not require a real `StringHeader*`.
 /// - Normal heap strings, including native input, use GC-managed arenas.
 ///   Large JSON result leaves may use GC-tracked malloc storage instead.
-/// - `arena_alloc_gc` routes small and medium payloads to nursery pages and
-///   large payloads to old-gen pages using `LARGE_OBJECT_THRESHOLD_BYTES`.
+/// - `arena_alloc_gc` routes small and medium payloads to moving nursery pages
+///   and large pointer-free leaves to individually owned young non-moving
+///   storage using the existing `LARGE_OBJECT_THRESHOLD_BYTES`.
 ///
 /// Keep this helper as the single normal heap-string storage entry point. Other
 /// `GC_TYPE_STRING` users, notably `SymbolHeader` and JSON tape scratch buffers,
@@ -819,7 +823,11 @@ pub(crate) fn json_output_storage_alloc(capacity: u32) -> (*mut StringHeader, *m
         return (ptr, data, false);
     }
     if json_leaf_prefers_arena(capacity) {
-        let (ptr, data) = string_storage_alloc(capacity);
+        let payload_size = std::mem::size_of::<StringHeader>() + capacity as usize;
+        let raw = crate::arena::arena_alloc_gc_old(payload_size, 8, crate::gc::GC_TYPE_STRING);
+        let ptr = raw as *mut StringHeader;
+        let data = string_data(ptr).cast_mut();
+        zero_alignment_padding_tail(raw, payload_size);
         crate::gc::note_young_leaf_born_old();
         return (ptr, data, false);
     }
@@ -841,8 +849,8 @@ pub(crate) fn json_output_storage_alloc(capacity: u32) -> (*mut StringHeader, *m
 #[inline]
 pub(crate) fn json_leaf_prefers_arena(capacity: u32) -> bool {
     crate::gc::gen_gc_enabled()
-        && crate::arena::copying_from_space_in_use_bytes() >= capacity as usize
-        && crate::gc::young_generation_holds_a_nursery()
+        && crate::arena::moving_from_space_in_use_bytes() >= capacity as usize
+        && crate::gc::allocation_pacing::moving_young_generation_holds_a_nursery()
         && !crate::gc::young_generation_measured_dying()
 }
 
@@ -878,6 +886,38 @@ pub(crate) fn string_storage_alloc_no_collect(
     let data = unsafe { raw.add(std::mem::size_of::<StringHeader>()) };
     zero_alignment_padding_tail(raw, payload_size);
     Some((ptr, data))
+}
+
+/// [`string_storage_alloc_for`] with **no collection point** (JST slice 4,
+/// design D). `Some` proves nothing on the heap moved, so a raw string or array
+/// pointer the caller read before the call is still valid. `None` is a refusal,
+/// not an event: root the operands and call [`string_storage_alloc_for`].
+///
+/// Both arms are the no-collect forms of the allocators the collecting call
+/// reaches, so a `Some` is byte-identical to what it would have returned.
+#[inline(always)]
+pub(crate) fn string_storage_alloc_for_no_collect(
+    birth: crate::gc::ProducerChildBirth,
+    capacity: u32,
+) -> Option<(*mut StringHeader, *mut u8)> {
+    match birth {
+        crate::gc::ProducerChildBirth::Young => string_storage_alloc_no_collect(capacity),
+        crate::gc::ProducerChildBirth::Old => {
+            let payload_size = std::mem::size_of::<StringHeader>() + capacity as usize;
+            let raw = crate::arena::arena_alloc_gc_old_no_collect(
+                payload_size,
+                8,
+                crate::gc::GC_TYPE_STRING,
+            );
+            if raw.is_null() {
+                return None;
+            }
+            let ptr = raw as *mut StringHeader;
+            let data = unsafe { raw.add(std::mem::size_of::<StringHeader>()) };
+            zero_alignment_padding_tail(raw, payload_size);
+            Some((ptr, data))
+        }
+    }
 }
 
 #[inline]

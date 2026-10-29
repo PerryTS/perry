@@ -169,9 +169,15 @@ pub(crate) struct ShapeRecord {
     /// Borrowed stable identity-word address; zero for DEFAULT/null/per-object.
     /// GC rewrites the word, not this derived address; no new identity fact.
     pub(super) proto_cell: u64,
-    /// Element properties described by this immutable key prefix: 0 plain,
-    /// 1 indexed/length descriptors, 2 a per-object mutable key list.
-    pub(super) element_kind: u32,
+    /// Low byte: element properties described by this immutable key
+    /// prefix: 0 plain, 1 indexed/length descriptors, 2 a per-object mutable
+    /// key list. Bits 8-31: the canonical trie node of `keys` plus one, 0 for
+    /// none (an owned list, no keys, or a holder that never learned it). The
+    /// node is the list's identity in this agent (CKI S1), carried here so
+    /// a receiver's keys reach the trie with no address lookup; it is a fact
+    /// of the key list, never of shape identity (`facts_match` compares the
+    /// `keys` word). Offset 72; codegen never reads it.
+    keys_node_and_element_kind: u32,
     /// The class family layout (its ShapeId, `layout_desc`) this record is a
     /// class evaluation's copy of: the family's keys, slots, holes, kind,
     /// attributes and lanes at the identity `MIXED | class | serial` naming
@@ -304,7 +310,7 @@ impl ShapeRecord {
         rep: 0,
         extras: 0,
         proto_cell: 0,
-        element_kind: 0,
+        keys_node_and_element_kind: 0,
         family_desc_index_plus_one: 0,
         probe: 0,
         colour_mask: [0; 2],
@@ -430,7 +436,7 @@ impl ShapeRecord {
             rep: 0,
             extras: 0,
             proto_cell: 0,
-            element_kind: 0,
+            keys_node_and_element_kind: 0,
             family_desc_index_plus_one: 0,
             probe: 0,
             colour_mask: [0; 2],

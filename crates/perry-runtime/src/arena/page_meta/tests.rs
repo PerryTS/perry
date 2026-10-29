@@ -86,6 +86,7 @@ mod page_generation_hasher_tests {
                     generation: HeapGeneration::Old,
                     space: HeapSpace::Old,
                     object_starts: std::ptr::null_mut(),
+                    large_storage: false,
                 }),
             );
         }

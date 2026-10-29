@@ -188,6 +188,7 @@ fn closed_effects(module: &Module) -> bool {
             | Expr::CurrentStepClosure
             | Expr::AsyncFirstCall { .. }
             | Expr::AsyncStepChain { .. }
+            | Expr::AsyncStepResumeNow { .. }
             | Expr::AsyncStepDone { .. }
             | Expr::IterResultSet(..)
             | Expr::IterResultGetValue

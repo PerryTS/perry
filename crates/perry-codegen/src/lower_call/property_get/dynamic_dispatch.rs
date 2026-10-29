@@ -130,6 +130,17 @@ fn build_direct_method_args(
     direct_args
 }
 
+/// Is implementor `class`'s `property` (body `function`) a prototype constant
+/// a proven site may call directly? (`select::cased`.)
+pub(crate) fn method_target_is_cased(
+    ctx: &FnCtx<'_>,
+    class: &str,
+    property: &str,
+    function: &str,
+) -> bool {
+    select::cased(ctx, class, property, function)
+}
+
 /// Every class whose `extends` chain resolves `property`: each class the
 /// method table registers it under, and every transitive subclass of one.
 /// Unordered and possibly repeating; callers sort and dedup by their own key.

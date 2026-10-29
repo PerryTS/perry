@@ -229,7 +229,11 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
             op: BinaryOp::Add,
             left,
             right,
-        } => is_numeric_expr(ctx, left) && is_numeric_expr(ctx, right),
+        } => {
+            (is_numeric_expr(ctx, left) && is_numeric_expr(ctx, right))
+                // CLS D2: Numbers and primitive-kind field reads (facts).
+                || crate::expr::facts_number::add_is_number(ctx, left, right)
+        }
         // Non-`+` arithmetic is numeric only when it cannot successfully
         // produce a BigInt. With two erased operands, the lowering uses a
         // BigInt-aware dynamic helper whose result may be a NaN-boxed BigInt;
@@ -582,6 +586,10 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
             if crate::stmt::numeric_callbacks::returns_number(ctx, callee, args.len()) {
                 return true;
             }
+            // CLS D2: a closed method call whose every body returns a Number.
+            if crate::expr::facts_number::closed_number_call(ctx, e) {
+                return true;
+            }
             if let Expr::PropertyGet {
                 object, property, ..
             } = callee.as_ref()
@@ -789,6 +797,12 @@ pub(crate) fn expr_produces_canonical_raw_f64(ctx: &FnCtx<'_>, e: &Expr) -> bool
             fact.numeric_fields.contains(property.as_str())
                 && receiver_class_name(ctx, object).as_deref() == Some(fact.class_name.as_str())
         }
+        Expr::Binary {
+            op: BinaryOp::Add,
+            left,
+            right,
+        } if crate::expr::facts_number::add_is_number(ctx, left, right) => true,
+        Expr::Call { .. } => crate::expr::facts_number::closed_number_call(ctx, e),
         Expr::Binary { .. } => {
             is_numeric_expr(ctx, e)
                 && is_provably_not_bigint(ctx, e)
