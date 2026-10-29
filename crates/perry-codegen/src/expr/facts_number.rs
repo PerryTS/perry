@@ -68,8 +68,20 @@ pub(crate) fn operand(ctx: &FnCtx<'_>, e: &Expr) -> Option<Operand> {
             if mask & !K_PRIMS == 0 {
                 return Some(Operand::Prim);
             }
+            return None;
         }
-        return None;
+    }
+    // A nested `+` is classified by this module alone. Routing it through
+    // `expr_produces_canonical_raw_f64` re-enters `add_is_number` and, when
+    // the proof fails, `is_numeric_expr`, which descends again: two walks
+    // per level of a left-nested chain, exponential in its length.
+    if let Expr::Binary {
+        op: BinaryOp::Add,
+        left,
+        right,
+    } = e
+    {
+        return add_is_number(ctx, left, right).then_some(Operand::Number);
     }
     crate::type_analysis::expr_produces_canonical_raw_f64(ctx, e).then_some(Operand::Number)
 }
