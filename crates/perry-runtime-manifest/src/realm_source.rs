@@ -371,13 +371,11 @@ fn rust_identifier(text: &str) -> bool {
 fn declarations(
     source: &str,
     path: &str,
-    package: &str,
     resolve: impl FnMut(&str) -> Result<(String, String), String>,
 ) -> Result<Vec<Value>, String> {
     let mut all = declarations_with_receivers(
         source,
         path,
-        package,
         resolve,
         &mut Vec::new(),
         &native::runtime_abi()?,
@@ -389,7 +387,6 @@ fn declarations(
 fn declarations_with_receivers(
     source: &str,
     path: &str,
-    package: &str,
     mut resolve: impl FnMut(&str) -> Result<(String, String), String>,
     native_receivers: &mut Vec<(String, String)>,
     native_abi: &native::Abi,
@@ -910,7 +907,6 @@ pub fn read(runtime_src: &Path) -> Result<Value, String> {
         all.extend(declarations_with_receivers(
             &source,
             &relative.to_string_lossy(),
-            &package,
             |body| match body.strip_prefix("@provider:") {
                 Some(name) => symbols
                     .provider_body(name, file)
@@ -1038,7 +1034,7 @@ pub fn generate(runtime_src: &Path, out: &Path) -> Result<Value, String> {
 mod tests {
     use super::*;
     fn inline(source: &str) -> Result<Vec<Value>, String> {
-        declarations(source, "array.rs", "perry-runtime", |body| {
+        declarations(source, "array.rs", |body| {
             Ok((body.into(), format!("source:{body}")))
         })
     }

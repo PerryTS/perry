@@ -103,53 +103,22 @@ pub(super) fn ordinary(expression: &str, entry: &[Token<'_>]) -> Result<Value, S
         )
         .and_then(|s| s.strip_suffix("))"))
         .ok_or("invalid layout birth")?;
-    let ts = tokens(include_str!(
-        "../../perry-runtime/src/object/runtime_layouts/stream_prototypes.rs"
-    ))?;
-    let start = ts
-        .windows(4)
-        .position(|w| {
-            w[0].text == "mut"
-                && w[1].text == name
-                && w[2].text == ":"
-                && w[3].text == "PerryLayoutDesc"
-        })
-        .ok_or_else(|| format!("missing static layout {name}"))?;
-    let open = start
-        + ts[start..]
-            .iter()
-            .position(|t| t.text == "{")
-            .ok_or("static layout has no fields")?;
-    let mut depth = 0usize;
-    let close = open
-        + ts[open..]
-            .iter()
-            .position(|t| {
-                match t.text {
-                    "{" => depth += 1,
-                    "}" => depth -= 1,
-                    _ => {}
-                }
-                depth == 0
-            })
-            .ok_or("unterminated static layout")?;
-    let mut kind = None;
-    let mut proto = None;
-    for field in info::split(&ts[open + 1..close], ",") {
-        if field.len() >= 3 && field[1].text == ":" {
-            match field[0].text {
-                "kind" => kind = Some(info::text(&field[2..])),
-                "proto" => proto = Some(info::text(&field[2..])),
-                _ => {}
-            }
-        }
-    }
-    let layout = match kind.as_deref() {
-        Some("0") => ObjectLayout::PlainOrdinary,
-        Some("crate::object::runtime_layouts::LAYOUT_KIND_UNMARKED") => ObjectLayout::Unmarked,
+    // `runtime_layout!(NAME, [kind = K,] family, variant, proto, [keys])`;
+    // an omitted kind is the plain ordinary kind 0.
+    let fields = descriptor(
+        include_str!("../../perry-runtime/src/object/runtime_layouts/stream_prototypes.rs"),
+        name,
+    )?;
+    let (kind, rest) = match fields.get(1).and_then(|f| f.strip_prefix("kind=")) {
+        Some(kind) => (kind.to_owned(), &fields[2..]),
+        None => ("0".to_owned(), &fields[1..]),
+    };
+    let layout = match kind.as_str() {
+        "0" => ObjectLayout::PlainOrdinary,
+        "LAYOUT_KIND_UNMARKED" => ObjectLayout::Unmarked,
         _ => return Err(format!("{name}: unsupported static layout kind")),
     };
-    if proto.as_deref() != Some("crate::object::layout_desc::LAYOUT_PROTO_OBJECT") {
+    if rest.get(2).map(String::as_str) != Some("crate::object::layout_desc::LAYOUT_PROTO_OBJECT") {
         return Err(format!("{name}: unsupported static layout inheritance"));
     }
     let mut d = birth::birth(&tokens("js_object_alloc(0,0)")?, entry)?;
