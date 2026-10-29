@@ -22,17 +22,18 @@ pub(crate) unsafe fn install_declared_layout(
 ) {
     let table = &crate::state::state().shapes;
     let keys = list.arr();
+    let keys_node = ShapeKeys::from(list).resolved_node(key_count);
     let mut record = ShapeRecord::new(keys as u64, key_count, slot_count, generation, kind, 0)
         .with_proto_id(proto_id)
         .with_summary(summary)
         .with_special_facts(rep, &[], &[])
-        .with_keys_node(ShapeKeys::from(list).node_for(key_count));
+        .with_keys_node(keys_node);
     record.set_integrity_flags(integrity);
     record.family_desc_index_plus_one = family_desc_index_plus_one;
     record.set(RECORD_FLAG_EXTERNAL_CARRIER, true);
     let facts = shapes_store::integrity_facts_key(
         shapes_store::facts_key_proto_with_special(
-            keys as u64,
+            shapes_store::list_identity(keys_node, keys as u64),
             key_count,
             slot_count,
             generation,
@@ -110,8 +111,8 @@ mod tests {
                     .count()
             })
             .sum();
-        let in_families: usize = inner
-            .families
+        let mut in_families: usize = inner
+            .owned_families
             .values()
             .map(|ids| {
                 ids.as_slice()
@@ -120,6 +121,20 @@ mod tests {
                     .count()
             })
             .sum();
+        in_families += inner
+            .keyless_family
+            .as_slice()
+            .iter()
+            .filter(|&&w| w == crate::codegen_abi::LayoutWord(word))
+            .count();
+        crate::object::canonical_keys::for_each_list_shapes(|_, _, list| {
+            in_families += list
+                .family
+                .as_slice()
+                .iter()
+                .filter(|&&w| w == crate::codegen_abi::LayoutWord(word))
+                .count();
+        });
         assert_eq!((in_facts, in_families), (1, 1));
     }
 }

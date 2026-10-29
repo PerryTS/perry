@@ -74,19 +74,20 @@ const INDEXED_SCAN_MIN_KEYS: u32 = 24;
 /// `keys` is null or a live key list.
 #[inline]
 pub(crate) unsafe fn key_position(
-    keys: *const ArrayHeader,
+    keys_view: crate::object::ObjectKeys,
     count: u32,
     key: &MethodKey<'_>,
 ) -> Option<u32> {
+    let keys = keys_view.arr() as *const ArrayHeader;
     if keys.is_null() || count == 0 {
         return None;
     }
     if count >= INDEXED_SCAN_MIN_KEYS {
-        return own_slot::find_method_slot(keys, count, key.bytes);
+        return own_slot::find_method_slot(keys_view, count, key.bytes);
     }
     let (slots, len) = crate::object::keys_array_dense_slots_resolved(keys);
     if slots.is_null() {
-        return crate::object::keys_find_slot_by_bytes(keys, count, key.bytes);
+        return crate::object::keys_find_slot_by_bytes(keys_view, count, key.bytes);
     }
     let n = (count as usize).min(len);
     let want = key.bytes;
@@ -263,7 +264,7 @@ unsafe fn chain_method_admitting(
         let position = if keys.is_null() || family.is_some() {
             None
         } else {
-            key_position(keys, record.logical_key_count(), key)
+            key_position(record.keys_view(), record.logical_key_count(), key)
         };
         if shadowed && position.is_none() {
             let t = crate::object::overflow::table(holder);

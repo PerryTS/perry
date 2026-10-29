@@ -10,7 +10,7 @@ unsafe fn position(obj: *const ObjectHeader, key: Key<'_>) -> Option<u32> {
     let keys = crate::object::object_keys(obj);
     match key {
         Key::Name(name) => {
-            crate::object::keys_find_property_slot_by_bytes(keys.arr(), keys.count(), name)
+            crate::object::keys_find_property_slot_by_bytes(keys, keys.count(), name)
         }
         Key::Symbol(symbol) => crate::object::shaped_symbols::position(obj, symbol),
     }

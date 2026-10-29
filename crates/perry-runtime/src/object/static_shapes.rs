@@ -711,7 +711,7 @@ pub(crate) fn install_image_seed(seed: &crate::codegen_abi::PerryStaticSeedV1) {
     if seed.constfn_count == 0 {
         publish_layout_facts(
             path,
-            keys.arr(),
+            keys.into(),
             count,
             seed.live,
             shapes::PROTO_ID_DEFAULT,
@@ -720,8 +720,8 @@ pub(crate) fn install_image_seed(seed: &crate::codegen_abi::PerryStaticSeedV1) {
             seed.request,
         );
     } else {
-        js_object_final_layout_for_class_keys_static_constfn(
-            keys.arr() as usize as u64,
+        final_layout_constfn(
+            keys.into(),
             count,
             seed.live,
             0,
@@ -854,7 +854,7 @@ fn census_layout_request(
 #[allow(clippy::too_many_arguments)]
 fn publish_layout_facts(
     path: &str,
-    keys: *const ArrayHeader,
+    list: shapes::ShapeKeys,
     count: u32,
     live: u32,
     proto: u64,
@@ -865,11 +865,12 @@ fn publish_layout_facts(
     if let Some(word) = unsafe { shapes::published_static_request(request, count) } {
         return census_layout_request(path, request, word);
     }
+    let keys = list.arr();
     let summary = unsafe { super::key_attrs::keys_summary_checked(keys, count) };
     let static_request = request;
     let request = unsafe { resolve_layout_request(request, proto) };
     let word = shapes::publish_shape_result(shapes::intern_static_layout(
-        keys,
+        list,
         count,
         live,
         0,
@@ -903,9 +904,16 @@ pub extern "C" fn js_object_layout_for_class_keys_static(
     if rep & !lanes != 0 {
         return shapes::publish_shape_result(Err(shapes::ShapeDescriptorError::InvalidFacts)).0;
     }
+    // The class's keys memo holds this list with its trie node.
+    let list: shapes::ShapeKeys = match super::alloc::registered_class_keys_array(class_id) {
+        Some((view, _)) if view.arr() as usize as u64 == keys && view.count() == key_count => {
+            view.into()
+        }
+        _ => (keys as usize as *const ArrayHeader).into(),
+    };
     publish_layout_facts(
         "class",
-        keys as usize as *const ArrayHeader,
+        list,
         key_count,
         live.max(key_count),
         shapes::class_proto_id(class_id),
@@ -941,7 +949,7 @@ pub(crate) fn seed_plain_by_names(
     let keys = unsafe { canonical_keys_for_names(&names) };
     publish_layout_facts(
         "seed",
-        keys.arr(),
+        keys.into(),
         count,
         live,
         shapes::PROTO_ID_DEFAULT,
@@ -977,8 +985,8 @@ pub(crate) fn seed_plain_constfn_by_names(
         invalid_constfn_static_seed();
     }
     let keys = unsafe { canonical_keys_for_names(&names) };
-    js_object_final_layout_for_class_keys_static_constfn(
-        keys.arr() as usize as u64,
+    final_layout_constfn(
+        keys.into(),
         count,
         live,
         0,
@@ -1000,6 +1008,32 @@ pub extern "C" fn js_object_final_layout_for_class_keys_static_constfn(
     entries: *const ConstFnStaticEntry,
     entry_count: u32,
 ) -> u32 {
+    final_layout_constfn(
+        (keys as usize as *const ArrayHeader).into(),
+        key_count,
+        live,
+        class_id,
+        request,
+        rep,
+        entries,
+        entry_count,
+    )
+}
+
+/// [`js_object_final_layout_for_class_keys_static_constfn`] for a holder that
+/// may carry the list's trie node (a linked seed list).
+#[allow(clippy::too_many_arguments)]
+fn final_layout_constfn(
+    list: shapes::ShapeKeys,
+    key_count: u32,
+    live: u32,
+    class_id: u32,
+    request: *mut crate::codegen_abi::PerryStaticLayoutRequestV1,
+    rep: u64,
+    entries: *const ConstFnStaticEntry,
+    entry_count: u32,
+) -> u32 {
+    let keys = list.arr() as usize as u64;
     let infos = checked_constfn_static_entries(entries, entry_count);
     let lanes = if key_count >= super::field_rep::REP_SLOTS {
         u64::MAX
@@ -1011,7 +1045,7 @@ pub extern "C" fn js_object_final_layout_for_class_keys_static_constfn(
     }
     publish_layout_facts(
         "class-constfn",
-        keys as usize as *const ArrayHeader,
+        list,
         key_count,
         live.max(key_count),
         shapes::class_proto_id(class_id),

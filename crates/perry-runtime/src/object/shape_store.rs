@@ -445,7 +445,7 @@ pub(crate) unsafe fn try_dynamic_store(
     }
     let keys = record.keys() as usize as *const crate::ArrayHeader;
     if !keys.is_null()
-        && super::keys_find_property_slot_by_bytes(keys, record.logical_key_count(), bytes)
+        && super::keys_find_property_slot_by_bytes(record.keys_view(), record.logical_key_count(), bytes)
             .is_some()
     {
         return None;

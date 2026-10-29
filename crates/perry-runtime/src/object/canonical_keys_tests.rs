@@ -980,16 +980,19 @@ fn the_shape_record_carries_its_lists_node() {
         for name in ["cki_rec_c", "cki_rec_d", "cki_rec_e"] {
             other = extend_key(&proof, other, key(name));
         }
+        // CKI S2: a node-less spelling of a published list resolves the
+        // list's node at mint, so the record carries it from birth.
         let raw_word =
             crate::object::shapes::shape_descriptor_ensure(other.as_const_ptr(), 3, 3).unwrap();
         let raw_record = crate::object::shapes::shape_record_for_word(raw_word).unwrap();
-        assert_eq!(raw_record.keys_view().node(), NO_NODE);
-        let learned = crate::object::shapes::shape_descriptor_ensure(other, 3, 3).unwrap();
-        assert_eq!(learned, raw_word, "the node is not identity");
         assert_eq!(raw_record.keys_view().node(), other.node());
-        // A node recorded for one count never answers for another.
+        let carried = crate::object::shapes::shape_descriptor_ensure(other, 3, 3).unwrap();
+        assert_eq!(carried, raw_word, "one list, one shape, whichever holder");
+        // A node recorded for one count never answers for another: the
+        // 2-key prefix on the same backing is its own (published) list.
         let short = crate::object::shapes::shape_descriptor_ensure(other, 2, 2).unwrap();
         let short_record = crate::object::shapes::shape_record_for_word(short).unwrap();
-        assert_eq!(short_record.keys_view().node(), NO_NODE);
+        assert_ne!(short_record.keys_view().node(), other.node());
+        assert!(node_publishes_for_test(short_record.keys_view()));
     }
 }

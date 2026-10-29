@@ -240,7 +240,7 @@ mod tests {
                 crate::object::shapes::shape_descriptor_for_word(LayoutWord(id)).expect("shape");
             let wrong = crate::object::shapes::publish_shape_result(
                 crate::object::shapes::shape_descriptor_ensure_with_rep(
-                    d.keys as usize as *const crate::array::ArrayHeader,
+                    d.keys_view(),
                     d.logical_key_count,
                     d.live_inline_slot_count,
                     d.semantic_generation,

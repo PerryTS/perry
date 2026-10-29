@@ -124,7 +124,7 @@ mod tests {
                 // Never-move from birth.
                 assert!(crate::gc::never_move::is_never_move(header));
                 let d = crate::object::shapes::object_shape_descriptor(bag).expect("shape");
-                let list = d.keys as usize as *const crate::array::ArrayHeader;
+                let list = d.keys_view();
                 for name in ["constructor", "slice", "toString"] {
                     let s = crate::object::keys_find_slot_by_bytes_resolved(
                         list,
@@ -157,7 +157,7 @@ mod tests {
                     d.live_inline_slot_count,
                     keys.max(crate::object::INLINE_SLOT_FLOOR as u32)
                 );
-                let list = d.keys as usize as *const crate::array::ArrayHeader;
+                let list = d.keys_view();
                 for name in ["constructor", "toString", "hasOwnProperty", "valueOf"] {
                     let s = crate::object::keys_find_slot_by_bytes_resolved(
                         list,

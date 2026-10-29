@@ -14,7 +14,8 @@ use super::*;
 use crate::codegen_abi::LayoutWord;
 
 // Storage: `ObjectHotTables::class_keys_by_id` (this agent's class_id ->
-// (keys array address, field count) memo). See its field docs for why it is
+// (keys array address, field count, key count, trie node) memo: a holder of
+// a canonical list keeps its node). See its field docs for why it is
 // per agent and weak.
 
 fn remember_class_keys(class_id: u32, field_count: u32, keys: crate::object::ObjectKeys) {
@@ -25,7 +26,10 @@ fn remember_class_keys(class_id: u32, field_count: u32, keys: crate::object::Obj
         .object_hot
         .class_keys_by_id
         .borrow_mut()
-        .insert(class_id, (keys.arr() as usize, field_count, keys.count()));
+        .insert(
+            class_id,
+            (keys.arr() as usize, field_count, keys.count(), keys.node()),
+        );
 }
 
 /// Post-trace death prune. A dropped entry costs one rebuild of the class's
@@ -70,7 +74,7 @@ pub(crate) fn prune_dead_class_keys_entries(is_dead_owner: &dyn Fn(usize) -> boo
 pub(crate) fn registered_class_keys_array(
     class_id: u32,
 ) -> Option<(crate::object::ObjectKeys, u32)> {
-    let (addr, field_count, key_count) = crate::state::state()
+    let (addr, field_count, key_count, node) = crate::state::state()
         .object_hot
         .class_keys_by_id
         .borrow()
@@ -80,7 +84,7 @@ pub(crate) fn registered_class_keys_array(
         return None;
     }
     Some((
-        crate::object::ObjectKeys::new(addr as *mut ArrayHeader, key_count),
+        crate::object::ObjectKeys::with_node(addr as *mut ArrayHeader, key_count, node),
         field_count,
     ))
 }

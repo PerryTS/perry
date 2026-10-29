@@ -318,7 +318,7 @@ pub(crate) fn get_property_attrs_bytes(obj: usize, key: &[u8]) -> Option<Propert
             let keys = super::object_keys(bag);
             if entry != 0
                 || (bag as usize != obj
-                    && super::keys_find_property_slot_by_bytes(keys.arr(), keys.count(), key)
+                    && super::keys_find_property_slot_by_bytes(keys, keys.count(), key)
                         .is_some())
             {
                 return Some(PropertyAttrs {

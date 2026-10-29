@@ -468,7 +468,7 @@ unsafe fn own_data_key(obj: *const ObjectHeader, name: &[u8]) -> bool {
     };
     let keys = shape.keys as usize as *const crate::array::ArrayHeader;
     !keys.is_null()
-        && super::keys_find_slot_by_bytes_resolved(keys, shape.logical_key_count, name)
+        && super::keys_find_slot_by_bytes_resolved(shape.keys_view(), shape.logical_key_count, name)
             .is_some_and(|slot| !super::key_attrs::key_is_accessor_at(keys, slot))
 }
 

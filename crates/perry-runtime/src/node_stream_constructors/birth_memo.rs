@@ -132,7 +132,7 @@ unsafe fn plain_fields(obj: *mut ObjectHeader, names: &[&[u8]], write: bool) -> 
     let keys = shape.keys_view();
     names.iter().all(|name| {
         let Some(slot) =
-            crate::object::keys_find_property_slot_by_bytes(keys.arr(), keys.count(), name)
+            crate::object::keys_find_property_slot_by_bytes(keys, keys.count(), name)
         else {
             return true;
         };
@@ -337,7 +337,7 @@ fn seed_new_count(stream: f64, proto: f64, source_shape: Option<LayoutWord>) {
         };
         if unsafe {
             crate::object::keys_find_property_slot_by_bytes(
-                shape.keys_view().arr(),
+                shape.keys_view(),
                 shape.logical_key_count,
                 count.bytes,
             )

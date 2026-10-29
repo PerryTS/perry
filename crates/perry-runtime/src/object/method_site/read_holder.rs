@@ -372,7 +372,7 @@ pub(crate) unsafe fn dynamic_own_or_absent(
     let keys = shape.keys as usize as *const crate::array::ArrayHeader;
     if !keys.is_null() {
         if let Some(slot) =
-            crate::object::keys_find_slot_by_bytes_resolved(keys, shape.logical_key_count, name)
+            crate::object::keys_find_slot_by_bytes_resolved(shape.keys_view(), shape.logical_key_count, name)
         {
             if crate::object::key_attrs::key_is_accessor_at(keys, slot) {
                 return None;

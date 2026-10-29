@@ -945,7 +945,7 @@ pub(super) unsafe fn dispatch_handle(
                     let key_count = keys_view.count() as usize;
                     if key_count <= 65536 {
                         if let Some(slot) = super::own_slot::find_method_slot(
-                            keys,
+                            keys_view,
                             key_count as u32,
                             method_name.as_bytes(),
                         ) {
