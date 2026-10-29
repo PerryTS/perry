@@ -27,6 +27,18 @@ class GcDiagnosticBoundary(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertFalse(link_absence.matches({"name": "perry_runtime::gc::" + name}, self.rule))
 
+    def test_generic_arguments_do_not_decide(self):
+        # Collector generic instantiated with a diagnostic closure: not a diagnostic.
+        collector = ("perry_runtime::gc::roots::stack_maps::unwind::walk_frame::<perry_runtime::gc::"
+                     "roots::stack_maps::verify_native_slots_post_walk::{closure#2}>::{closure#0}")
+        self.assertFalse(link_absence.matches({"name": collector}, self.rule))
+        # Diagnostic generic over a collector type: still a diagnostic.
+        for name in ["perry_runtime::gc::mark::report_heap_counts::<perry_runtime::gc::mark::Marker>",
+                     "perry_runtime::gc::roots::stack_maps::verify::visit::<perry_runtime::gc::mark::Marker>::{closure#0}",
+                     "<perry_runtime::gc::mark::Marker as perry_runtime::gc::mark::Visit<perry_runtime::gc::mark::X>>::verify_slot"]:
+            with self.subTest(name=name):
+                self.assertTrue(link_absence.matches({"name": name}, self.rule))
+
 
 if __name__ == "__main__":
     unittest.main()
