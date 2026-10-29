@@ -24,6 +24,9 @@ mod hash;
 mod imports;
 #[path = "realm_info.rs"]
 mod info;
+#[cfg(test)]
+#[path = "realm_header_44.rs"]
+mod header_44;
 #[path = "realm_layout_birth.rs"]
 mod layout_birth;
 #[path = "realm_module_namespace.rs"]
