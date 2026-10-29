@@ -236,7 +236,8 @@ fn born_on_evaluation_layout(
 /// branded onto, for its class object to name: meta-less, so the copy is
 /// everything the birth was given.
 unsafe fn evaluation_layout_to_record(inst: *const ObjectHeader) -> Option<u32> {
-    if !(*inst).meta.is_null()
+    // A1_UNPROVEN: record-first: inst layout word (kind-A/B question for S0f).
+    if !crate::meta_read!(crate::meta_obj_runtime_born!(inst as *mut _)).is_null()
         || crate::object::layout_desc::family_of_class((*inst).class_id).is_none()
     {
         return None;

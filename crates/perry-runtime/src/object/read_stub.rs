@@ -175,7 +175,7 @@ unsafe fn stub_receiver_token(obj: *const ObjectHeader) -> Option<u64> {
     let gc = crate::value::addr_class::try_read_gc_header(obj as usize)?;
     const STUB_BLOCKING: u16 =
         crate::gc::OBJ_FLAG_HAS_DESCRIPTORS | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
-    if gc.obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::gc_type_is_not_object!(gc.obj_type)
         || gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || gc._reserved & STUB_BLOCKING != 0
     {

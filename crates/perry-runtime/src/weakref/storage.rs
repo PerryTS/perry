@@ -230,7 +230,7 @@ pub(super) fn initialize(this: f64, class: u32) -> f64 {
 pub(super) unsafe fn grow(map: crate::gc::RuntimeHandle<'_>) -> *mut WeakStorage {
     let owner = js_nanbox_get_pointer(map.get_nanbox_f64()) as *mut ObjectHeader;
     crate::object::object_meta_ensure(
-        crate::object::MetaObj::runtime_born(owner),
+        crate::meta_obj_runtime_born!(owner),
         crate::object::MetaReason::WeakStorage,
     );
     let old = owned_storage(js_nanbox_get_pointer(map.get_nanbox_f64()) as *mut ObjectHeader);

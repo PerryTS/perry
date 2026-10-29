@@ -32,7 +32,7 @@ fn finish_builtin_prototype(
             }
         };
         if crate::value::addr_class::try_read_gc_header(proto_obj as usize)
-            .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_OBJECT)
+            .is_some_and(|h| crate::gc_type_is_object!(h.obj_type))
         {
             learn(proto_obj);
         } else {

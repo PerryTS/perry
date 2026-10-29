@@ -99,9 +99,13 @@ pub(crate) unsafe fn receiver_ordinary_kind(obj: *const ObjectHeader) -> ShapeOb
     if (*gc_header(obj))._reserved & crate::gc::GC_OBJECT_CALLABLE != 0 {
         ShapeObjectKind::CallableOrdinary
     } else if (*obj).class_id == crate::object::NATIVE_MODULE_CLASS_ID {
+        // A1_UNPROVEN: record-first: receiver shape (kind-A/B question for S0f).
+        // A1_UNPROVEN: record-first: receiver shape (kind-A/B question for S0f).
         ShapeObjectKind::NativeNamespace
-    } else if !(*obj).meta.is_null()
-        && (*(*obj).meta).flags & crate::object::OBJECT_META_FLAG_NATIVE_ALIAS != 0
+    } else if !crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _)).is_null()
+        && (*crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _))).flags
+            & crate::object::OBJECT_META_FLAG_NATIVE_ALIAS
+            != 0
     {
         // Read forwarding is independent of plain-store admission. Runtime
         // births need a distinct kind too: an unmarked shape can otherwise
@@ -415,7 +419,7 @@ pub(crate) unsafe fn restore_unproven_twin(obj: *mut ObjectHeader, unproven: Lay
 /// `obj` is a live `ObjectHeader`.
 #[inline]
 pub(crate) unsafe fn retire_proof_before_stamp(obj: *mut ObjectHeader, new_id: LayoutWord) {
-    if (*gc_header(obj)).obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::gc_type_is_not_object!((*gc_header(obj)).obj_type)
         || !receiver_carries_numeric_proof(obj)
     {
         return;
@@ -426,7 +430,7 @@ pub(crate) unsafe fn retire_proof_before_stamp(obj: *mut ObjectHeader, new_id: L
 #[cold]
 #[inline(never)]
 unsafe fn retire_proof_before_stamp_slow(obj: *mut ObjectHeader, new_id: LayoutWord) {
-    if (*gc_header(obj)).obj_type != crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_not_object!((*gc_header(obj)).obj_type) {
         return;
     }
     if super::shape_object_kind_of_receiver((new_id).0)

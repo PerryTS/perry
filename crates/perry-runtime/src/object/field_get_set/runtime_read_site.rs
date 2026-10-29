@@ -224,7 +224,8 @@ pub(crate) unsafe fn probe_integer_key(
     // the probe does not read: the complete read answers. Only an ordinary
     // object is handed an index key (an Array's index is an element read).
     if index {
-        let meta = (*obj).meta;
+        // A1_UNPROVEN: record-first: runtime read site (kind-A/B question for S0f).
+        let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
         let class_id = (*obj).class_id;
         if (!meta.is_null() && (*meta).elements != 0)
             || (class_id != 0 && crate::array::is_array_subclass_class_id(class_id))
@@ -275,7 +276,7 @@ pub(crate) fn object_receiver(value: f64) -> Option<*mut ObjectHeader> {
         return None;
     }
     let header = unsafe { crate::value::addr_class::try_read_gc_header(addr)? };
-    (header.obj_type == crate::gc::GC_TYPE_OBJECT
+    (crate::gc_type_is_object!(header.obj_type)
         && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0)
         .then_some(addr as *mut ObjectHeader)
 }

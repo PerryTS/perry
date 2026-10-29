@@ -17,7 +17,7 @@ fn check_first_dynamic_key(old_owner: bool, old_meta: bool) {
     if old_meta {
         unsafe {
             crate::object::object_meta_ensure(
-                crate::object::MetaObj::runtime_born(obj),
+                crate::meta_obj_runtime_born!(obj),
                 crate::object::MetaReason::RuntimeHandle,
             )
         };

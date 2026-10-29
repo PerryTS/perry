@@ -131,14 +131,14 @@ unsafe fn hop_admitted(addr: usize) -> bool {
         return false;
     };
     let obj = addr as *const ObjectHeader;
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::object_lacks_meta_word!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || header._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0
         || crate::object::overflow::has_overflow(obj)
     {
         return false;
     }
-    let meta = (*obj).meta;
+    let meta = crate::meta_read!(crate::meta_obj_from_type!(obj as *mut _, header.obj_type));
     if !meta.is_null()
         && ((*meta).elements != 0
             || (*meta).flags
@@ -199,8 +199,9 @@ pub(crate) unsafe fn admitted_link(obj: *const ObjectHeader) -> Option<(u64, u64
         if crate::object::shapes::declaration_parent_identity(obj, word) != Some(pid) {
             return None;
         }
+        // A1_UNPROVEN: record-first: obj before holder test (kind-A/B question for S0f).
         // Preserve the read-semantics exclusions of object_proto_id_for.
-        let meta = (*obj).meta;
+        let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
         if (*obj).class_id == crate::object::NATIVE_MODULE_CLASS_ID
             || (!meta.is_null()
                 && (*meta).flags & crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER != 0)
@@ -371,9 +372,11 @@ pub(crate) unsafe fn dynamic_own_or_absent(
     }
     let keys = shape.keys as usize as *const crate::array::ArrayHeader;
     if !keys.is_null() {
-        if let Some(slot) =
-            crate::object::keys_find_slot_by_bytes_resolved(shape.keys_view(), shape.logical_key_count, name)
-        {
+        if let Some(slot) = crate::object::keys_find_slot_by_bytes_resolved(
+            shape.keys_view(),
+            shape.logical_key_count,
+            name,
+        ) {
             if crate::object::key_attrs::key_is_accessor_at(keys, slot) {
                 return None;
             }

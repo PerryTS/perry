@@ -703,6 +703,5 @@ fn is_plain_non_array_object(object: f64) -> bool {
     let Some(header) = (unsafe { crate::value::addr_class::try_read_gc_header(addr) }) else {
         return false;
     };
-    header.obj_type == crate::gc::GC_TYPE_OBJECT
-        && !crate::array::is_array_subclass_instance(object)
+    crate::gc_type_is_object!(header.obj_type) && !crate::array::is_array_subclass_instance(object)
 }
