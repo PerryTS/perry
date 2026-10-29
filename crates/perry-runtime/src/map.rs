@@ -2154,6 +2154,23 @@ pub extern "C" fn js_map_get_string_key(map: *const MapHeader, key: *const Strin
 /// Returns 1 if found, 0 if not found
 #[no_mangle]
 pub extern "C" fn js_map_has(map: *const MapHeader, key: f64) -> i32 {
+    if let Some(map) = entry::plain_receiver(map) {
+        // Same shape as `js_map_get`: the bit-identity pass answers a hit, and
+        // only a miss normalizes the key and decides it, without scanning the
+        // small extent again.
+        unsafe {
+            let index = match entry::identical_entry(map, key) {
+                Some(index) => index,
+                None => entry::find_entry_after_identity_miss(map, key),
+            };
+            return (index >= 0) as i32;
+        }
+    }
+    map_has_receiver_fallback(map, key)
+}
+
+#[inline(never)]
+fn map_has_receiver_fallback(map: *const MapHeader, key: f64) -> i32 {
     let map = clean_map_ptr(map);
     if map.is_null() {
         return 0;
@@ -2300,6 +2317,21 @@ static KEEP_JS_MAP_DELETE_NUMBER_KEY: extern "C" fn(*mut MapHeader, f64) -> i32 
 /// Returns 1 if deleted, 0 if key not found
 #[no_mangle]
 pub extern "C" fn js_map_delete(map: *mut MapHeader, key: f64) -> i32 {
+    if let Some(map) = entry::plain_receiver(map as *const MapHeader) {
+        let map = map as *mut MapHeader;
+        unsafe {
+            let index = match entry::identical_entry(map, key) {
+                Some(index) => index,
+                None => entry::find_entry_after_identity_miss(map, key),
+            };
+            return delete_entry_at_index(map, index);
+        }
+    }
+    map_delete_receiver_fallback(map, key)
+}
+
+#[inline(never)]
+fn map_delete_receiver_fallback(map: *mut MapHeader, key: f64) -> i32 {
     let map = clean_map_ptr_mut(map);
     if map.is_null() {
         return 0;
