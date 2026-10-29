@@ -1002,11 +1002,6 @@ fn find_export(submod: &SubmoduleSpec, name: &str) -> Option<&'static ExportSpec
 /// not the namespace itself). Null until first use. The submodule's bucket and
 /// the export ordinal are the identity; no address of the spec or of its
 /// names enters, so lookups do the same work wherever the link put them.
-/// An empty record is all zero bits, so the thread-local array is `.tbss`
-/// (zeroed at thread start) rather than an init image copied per thread. The
-/// exports box is thin on purpose: `None` of a boxed slice leaves its length
-/// word undefined, and an initializer with undefined bytes is emitted as
-/// `.tdata`.
 struct SubmodSlots {
     exports: Option<Box<Vec<*mut ClosureHeader>>>,
     namespace: *mut ObjectHeader,
@@ -1031,9 +1026,12 @@ fn export_ordinal(submod: &SubmoduleSpec, export: &ExportSpec) -> usize {
 }
 
 thread_local! {
-    /// Per-submodule singleton slots, indexed by `SubmodBucket`.
+    /// Per-submodule singleton slots, indexed by `SubmodBucket`. Lazily
+    /// initialized: a `const` initializer of a type with a destructor keeps
+    /// its state word in an init image (`.tdata`) that every thread start
+    /// copies; the lazy form is `.tbss`.
     static SUBMOD_SINGLETONS: RefCell<[SubmodSlots; SUBMOD_COUNT]> =
-        const { RefCell::new([EMPTY_SUBMOD_SLOTS; SUBMOD_COUNT]) };
+        RefCell::new([EMPTY_SUBMOD_SLOTS; SUBMOD_COUNT]);
 
     /// `node:timers/promises.scheduler` is a non-callable object with
     /// function-valued `wait` and `yield` properties.
