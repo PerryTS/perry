@@ -25,7 +25,7 @@ fn test_trace_closure_uses_pointer_layout_mask() {
         &valid_ptrs
     ));
     test_reset_trace_slot_reads();
-    trace_marked_objects(&valid_ptrs);
+    trace_marked_objects::<{ cfg!(test) }>(&valid_ptrs);
     assert_eq!(test_trace_slot_reads(), 0);
     clear_marks();
     clear_mark_seeds();
@@ -48,7 +48,7 @@ fn test_trace_closure_uses_pointer_layout_mask() {
         &valid_ptrs
     ));
     test_reset_trace_slot_reads();
-    trace_marked_objects(&valid_ptrs);
+    trace_marked_objects::<{ cfg!(test) }>(&valid_ptrs);
     assert_eq!(test_trace_slot_reads(), 8);
     unsafe {
         assert_ne!((*child_header).gc_flags & GC_FLAG_MARKED, 0);

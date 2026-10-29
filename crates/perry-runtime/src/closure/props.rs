@@ -636,7 +636,10 @@ unsafe fn state_ensure(ptr: usize) -> Option<*mut ObjectHeader> {
     // A null-prototype record (its `"p"` key is not a JS property, and no
     // inherited setter may run on it), hung off the bag's `meta.expando` —
     // an ordinary traced edge of the bag.
-    let meta = crate::object::object_meta_ensure(bag);
+    let meta = crate::object::object_meta_ensure(
+        crate::object::MetaObj::runtime_born(bag),
+        crate::object::MetaReason::ClosureProps,
+    );
     if meta.is_null() {
         return None;
     }

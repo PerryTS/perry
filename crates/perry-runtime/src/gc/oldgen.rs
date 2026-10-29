@@ -463,7 +463,7 @@ pub(super) fn maybe_print_evacuation_policy_diag(
     decision: EvacuationPolicyDecision,
     evacuation: EvacuationTraceStats,
 ) {
-    if !crate::gc::gc_diag_enabled() {
+    if !crate::gc::diagnostic_hooks::enabled() {
         return;
     }
     if !decision.considered && decision.reason != "barriers_inactive" {
@@ -1034,7 +1034,7 @@ fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
 
     // Reset every block that ended up with zero live objects.
     // Diagnostic: PERRY_GC_DIAG=1 reports block-level liveness.
-    if crate::gc::gc_diag_enabled() {
+    if crate::gc::diagnostic_hooks::enabled() {
         let live_general = (0..resettable_general_n)
             .filter(|&i| block_has_live[i])
             .count();
@@ -1071,7 +1071,7 @@ fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
     // better than hole-by-hole reuse.
     if reclaim_dead_old_blocks {
         old_free_rebuild_from_live_old_blocks(&block_has_live, old_block_start);
-        if crate::gc::gc_diag_enabled() {
+        if crate::gc::diagnostic_hooks::enabled() {
             eprintln!("[gc-old-free] reusable_bytes={}", old_free_bytes());
         }
     }
@@ -1229,7 +1229,7 @@ impl IncrementalSweepState {
     /// #10182: let the arena walk reclaim whole dead blocks without visiting
     /// them, from the synchronous full cycle's census. See
     /// `ArenaSweepObjectsState::apply_block_skip`.
-    pub(super) fn with_block_skip(mut self, census: &super::trace::BlockCensus) -> Self {
+    pub(super) fn with_block_skip(mut self, census: &super::mark::BlockCensus) -> Self {
         self.arena.apply_block_skip(census);
         self
     }
@@ -1577,7 +1577,7 @@ pub(super) fn evacuate_selected_old_pages_collecting(
     // per-allocation exclusion scan in `old_free_take_exact` has nothing to
     // walk (see `old_free_filter_pages` for the #9644 measurement).
     let dropped_holes = crate::gc::old_free_filter_pages(excluded_pages);
-    if crate::gc::gc_diag_enabled() && dropped_holes > 0 {
+    if crate::gc::diagnostic_hooks::enabled() && dropped_holes > 0 {
         eprintln!("[gc-old-page-defrag] dropped_excluded_holes_bytes={dropped_holes}");
     }
 

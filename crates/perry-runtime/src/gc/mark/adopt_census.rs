@@ -38,7 +38,7 @@
 //! two agree, so every test that reaches adoption checks the argument.
 
 use super::*;
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 
 /// One promoted block's census record.
 pub(crate) struct AdoptableBlock {
@@ -108,8 +108,6 @@ enum State {
 
 crate::perry_thread_local! {
     static STATE: RefCell<State> = const { RefCell::new(State::Off) };
-    /// Blocks the census adopted instead of walking (live-subject counter).
-    static ADOPTED_BLOCKS: Cell<u64> = const { Cell::new(0) };
 }
 
 /// Record the census facts of the blocks the next promotion walk promotes.
@@ -195,7 +193,7 @@ fn take(data: usize) -> Option<AdoptableBlock> {
 }
 
 pub(crate) fn adopted_blocks() -> u64 {
-    ADOPTED_BLOCKS.with(Cell::get)
+    GC_STATS.with(|stats| stats.borrow().adopted_blocks)
 }
 
 /// Builds one block's record during the promotion walk. Inert when recording
@@ -327,7 +325,10 @@ impl ValidPointerSetBuilder {
         // Extent/generation checks above establish that the recorded starts
         // still describe this block. No mutator ran; only trace marks changed.
         block.refresh_traced_header_facts(data);
-        ADOPTED_BLOCKS.with(|c| c.set(c.get().saturating_add(1)));
+        GC_STATS.with(|stats| {
+            let mut stats = stats.borrow_mut();
+            stats.adopted_blocks = stats.adopted_blocks.saturating_add(1);
+        });
         if block.objects == 0 {
             // The census opens no block for one without a walkable object.
             return true;

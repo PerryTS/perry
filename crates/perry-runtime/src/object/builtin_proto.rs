@@ -194,7 +194,10 @@ pub(crate) unsafe fn seal_object_family(obj: *mut ObjectHeader, family: usize) {
     let _ = super::proto_validity::mark_object_as_prototype(obj as usize);
     // Marking may have moved nothing (startup runs with collection
     // suppressed by the caller) but it did ensure a meta record.
-    let meta = super::object_meta_ensure(obj);
+    let meta = super::object_meta_ensure(
+        super::MetaObj::runtime_born(obj),
+        super::MetaReason::BuiltinSeal,
+    );
     if meta.is_null() {
         return;
     }
@@ -271,7 +274,10 @@ pub(crate) unsafe fn name_runtime_prototype(
     serial: u64,
 ) -> Option<*mut super::ObjectMeta> {
     let _no_move = crate::gc::GcSuppressScope::new();
-    let meta = super::object_meta_ensure(proto);
+    let meta = super::object_meta_ensure(
+        super::MetaObj::runtime_born(proto),
+        super::MetaReason::RuntimePrototypeName,
+    );
     if meta.is_null() {
         return None;
     }

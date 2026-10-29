@@ -118,7 +118,8 @@ mod transfer_tests {
             )
             .unwrap()
         };
-        CURRENT_WORKER_DATA.with(|slot| *slot.borrow_mut() = Some(WorkerData::Serialized(message)));
+        let received = unsafe { deserialize_nanbox_on_current_thread(&message) };
+        CURRENT_WORKER_DATA.with(|slot| *slot.borrow_mut() = Some(received));
         let first = js_worker_threads_get_worker_data();
         let root = scope.root_nanbox_f64(first);
         perry_runtime::gc::js_gc_collect();

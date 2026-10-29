@@ -6,3 +6,6 @@ unchanged, since the keys still come from the OS once per process; probe order
 and key-compare work no longer depend on link layout or the environment. The
 timer handle table, keyed by our own monotonic ids, no longer seeds at all.
 Wide JSON objects share the process key instead of drawing one per object.
+The measurement-only `fixed-hash-seeds` feature (its marker and the flag in
+`scripts/a1/build-arm.sh` / `irdiff.sh`) is removed: the default hasher state is
+now layout-independent on its own.

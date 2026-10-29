@@ -281,7 +281,13 @@ fn only_the_private_identity_identifies_an_arguments_object() {
         "an exotic-flagged ordinary object is not an arguments object"
     );
     let with_meta = js_object_alloc(0, 1);
-    assert!(!unsafe { object_meta_ensure(with_meta) }.is_null());
+    assert!(!unsafe {
+        object_meta_ensure(
+            crate::object::MetaObj::runtime_born(with_meta),
+            crate::object::MetaReason::RuntimeHandle,
+        )
+    }
+    .is_null());
     assert!(!is_arguments_object(with_meta));
     // A restricted object is never mapped, whatever the prologue asks.
     let restricted = arguments(&[1.0], undefined, true);

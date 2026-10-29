@@ -690,7 +690,8 @@ unsafe fn mint_birth_record(
     let shape_id =
         obj.with_mut_ptr::<ObjectHeader, _>(|obj| crate::object::shapes::object_shape_stamp(obj));
     let meta =
-        proto.with_mut_ptr::<ObjectHeader, _>(|proto| crate::object::object_meta_ensure(proto));
+        // A1_UNPROVEN: proto parameter of mint_birth_record, no type test (kind-A/B question for S0b-S0e).
+        proto.with_mut_ptr::<ObjectHeader, _>(|proto| crate::object::object_meta_ensure(crate::object::MetaObj::runtime_born(proto), crate::object::MetaReason::NativePayload));
     if !meta.is_null() {
         // GC_STORE_AUDIT(POINTER_FREE): a class id and a ShapeId, never a heap
         // reference.

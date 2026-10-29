@@ -14,7 +14,8 @@ static KEYS: [PerryLayoutKey; 1] = [PerryLayoutKey {
     atom: &ATOM,
     slot: 0,
     attrs: crate::codegen_abi::LAYOUT_KEY_OPTIONAL,
-    _pad: [0; 3],
+    _pad: 0,
+    off: crate::object::layout_desc::layout_key_off(0 as u32),
 }];
 static mut SYMBOL: u64 = crate::value::TAG_UNDEFINED;
 static mut LAYOUT: PerryLayoutDesc = PerryLayoutDesc {
@@ -36,6 +37,8 @@ static mut LAYOUT: PerryLayoutDesc = PerryLayoutDesc {
     class_id: 0,
     parent_class_id: 0,
     methods: std::ptr::null(),
+    gc_header_word: crate::object::layout_desc::layout_gc_header_word(1),
+    _tail_pad: [0; 32],
 };
 unsafe impl Sync for ConstructorOperand {}
 static OPERANDS: [ConstructorOperand; 1] = [ConstructorOperand {

@@ -99,32 +99,6 @@ fn mix(h: u64) -> u64 {
 pub type PtrHashSet<T> = HashSet<T, PtrHasher>;
 pub type PtrHashMap<K, V> = HashMap<K, V, PtrHasher>;
 
-/// Randomly keyed hasher for maps whose keys come from program input (member
-/// names, JSON property bytes, export names), where hash flooding matters.
-///
-/// Every instance shares the one per-process key block ahash draws from the OS
-/// at first use, so the keys stay unpredictable to an attacker. Nothing
-/// address-derived is mixed in: `ahash::RandomState::new()` folds in the
-/// addresses of one of its statics and of the stack, which makes probe order
-/// and collision compares depend on link layout and on the environment.
-#[derive(Clone)]
-pub struct ProcessSeeded(ahash::RandomState);
-
-impl Default for ProcessSeeded {
-    #[inline]
-    fn default() -> Self {
-        ProcessSeeded(ahash::RandomState::with_seed(0))
-    }
-}
-
-impl BuildHasher for ProcessSeeded {
-    type Hasher = ahash::AHasher;
-    #[inline]
-    fn build_hasher(&self) -> ahash::AHasher {
-        self.0.build_hasher()
-    }
-}
-
 /// Constructor convenience: `PtrHashSet::default()` works because
 /// `PtrHasher` impls `Default`, but call sites that need an explicit
 /// builder for a `RefCell::new(...)` initializer reach for this helper.
@@ -398,7 +372,7 @@ mod tests {
     /// `write_u64` -> `write(&n.to_ne_bytes())` byte loop (eight dependent
     /// multiplies instead of one) and turns this red.
     fn seeded_hash(key: &[u8]) -> u64 {
-        ProcessSeeded::default().hash_one(key)
+        AHashState::default().hash_one(key)
     }
 
     /// The seed is one per-process block: no address of a static or of the
@@ -573,5 +547,38 @@ mod tests {
         m.remove(&(base, "key0".to_string()));
         assert_eq!(m.get(&(base, "key0".to_string())), None);
         assert_eq!(m.get(&(base, "length".to_string())), Some(&0x07));
+    }
+}
+
+/// The hasher state of the runtime's startup-path `ahash` maps, which are keyed
+/// by program input (member names, JSON property bytes, export names).
+///
+/// Every instance shares the one per-process key block ahash draws from the OS
+/// at first use, so the keys stay unpredictable to an attacker (flood
+/// resistance). Nothing address-derived is mixed in: `ahash::RandomState::new()`
+/// folds in the addresses of one of its statics and of the stack, which makes
+/// probe order and key-compare work depend on link layout and on the
+/// environment.
+#[derive(Clone)]
+pub struct AHashState(ahash::RandomState);
+
+impl Default for AHashState {
+    #[inline]
+    fn default() -> Self {
+        AHashState(ahash::RandomState::with_seed(0))
+    }
+}
+
+impl BuildHasher for AHashState {
+    type Hasher = ahash::AHasher;
+
+    #[inline]
+    fn build_hasher(&self) -> ahash::AHasher {
+        self.0.build_hasher()
+    }
+
+    #[inline]
+    fn hash_one<T: std::hash::Hash>(&self, x: T) -> u64 {
+        self.0.hash_one(x)
     }
 }

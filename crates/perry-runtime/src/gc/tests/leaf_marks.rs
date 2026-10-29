@@ -9,7 +9,7 @@
 
 use super::super::*;
 use super::support::*;
-use crate::gc::trace::leaf_mark_sabotage;
+use crate::gc::mark::leaf_mark_sabotage;
 
 /// Returns `(held strings surviving, held strings, target survived)`.
 fn collect(sabotaged: bool) -> (usize, usize, bool) {

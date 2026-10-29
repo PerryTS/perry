@@ -583,3 +583,37 @@ fn native_input_bulk_debt_does_not_arm_a_disabled_loop_poll() {
         result.with_string_bytes(|bytes| assert_eq!(bytes, b"off"));
     }
 }
+
+/// OWNER 2026-10-29 (lane GCT): the byte-pacing full is due at the last full's
+/// live bytes times the growth factor, and a retaining heap (live data, not
+/// garbage) carries a larger multiplier on that term, so a
+/// program that is building its live set does not pay a full that frees
+/// nothing at 2x. The control (not retaining) fires at the old 2x point, so
+/// the test can fail if the multiplier is not what moves the boundary.
+#[test]
+fn a_retaining_heap_scales_the_byte_pacing_full_by_the_growth_multiplier() {
+    let _isolation = GcTestIsolationGuard::new();
+    let _placement = policy::ByteStorePolicyTestGuard::new(usize::MAX);
+    let _moving = policy::force_moving_gc_pacing();
+    let _thresholds = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let frame = js_shadow_frame_push(1);
+    let keep = crate::buffer::js_buffer_alloc((40 * MIB) as i32, 37);
+    js_shadow_slot_set(0, crate::value::JSValue::pointer(keep.cast()).bits());
+    finish_full(40 * MIB, 0);
+    let live = crate::arena::old_gen_in_use_bytes();
+    assert!(live >= 40 * MIB);
+    // Enough allocation debt for every published-bytes band below.
+    note_allocation(2048 * MIB, false);
+    // Not retaining: due once the mature heap has doubled (live + max(32, live)).
+    policy::note_copying_minor_young_survival(0);
+    assert!(!due(live + live / 2, false));
+    assert!(due(live + live + MIB, false), "control: the plain 2x point fires");
+    // Retaining: the same heap is not due at 2x, nor at 3x, but is at 1 + 3x.
+    policy::note_copying_minor_young_survival(1000);
+    assert!(policy::major_pacing_retaining());
+    assert!(!due(live + live + MIB, false), "retaining heap fired at 2x");
+    assert!(!due(live + 2 * live, false), "retaining heap fired below 4x");
+    assert!(due(live + 3 * live + MIB, false), "retaining heap never fires");
+    policy::note_copying_minor_young_survival(0);
+    js_shadow_frame_pop(frame);
+}

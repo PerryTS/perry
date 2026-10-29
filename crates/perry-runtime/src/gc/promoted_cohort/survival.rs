@@ -53,7 +53,7 @@
 //! # Exact or nothing
 //!
 //! The blocks are the ones the minor's promotion walk recorded for census
-//! adoption (`trace::adopt_census`), keyed by data address with the bump extent
+//! adoption (`mark::adopt_census`), keyed by data address with the bump extent
 //! and header bytes they held at promotion. Each is accounted when the full's
 //! sweep either walks it whole at the same extent (its live bytes are the
 //! sweep's own `arena_live_bytes` delta) or reclaims it unwalked as a dead block
@@ -146,7 +146,7 @@ crate::perry_thread_local! {
 /// A copying minor took its remembered-set snapshot. Kept only while the
 /// promotion census is recording for a cohort full at this safepoint.
 pub(in crate::gc) fn note_minor_remembered_parents(snapshot: &RememberedDirtySnapshot) {
-    if !super::super::trace::adopt_census::recording() {
+    if !super::super::mark::adopt_census::recording() {
         return;
     }
     // Parents named by header are not re-derivable from page keys: leave the
@@ -266,7 +266,7 @@ unsafe fn dead_parent_refers_into(
     }
     let mut hit = false;
     let mut scratch = RememberedSetTraceStats::default();
-    visit_gc_rewrite_slot_descriptors(header, |descriptor| unsafe {
+    visit_gc_rewrite_slot_descriptors::<{ cfg!(test) }>(header, |descriptor| unsafe {
         if hit {
             return;
         }

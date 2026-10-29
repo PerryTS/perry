@@ -62,6 +62,16 @@ fn gc_header_size_overflow(total: usize) -> ! {
 // Object type constants
 pub const GC_TYPE_ARRAY: u8 = 1;
 pub const GC_TYPE_OBJECT: u8 = 2;
+/// "Is an ordinary object", either header form. S0f meaning (A): `t >= 0xFE`.
+#[inline(always)]
+pub const fn gc_type_is_object(t: u8) -> bool {
+    t == GC_TYPE_OBJECT
+}
+/// "Might carry the meta word". S0f meaning (B): `t == 0xFF`.
+#[inline(always)]
+pub const fn object_has_meta_word(t: u8) -> bool {
+    t == GC_TYPE_OBJECT
+}
 pub const GC_TYPE_STRING: u8 = 3;
 pub const GC_TYPE_CLOSURE: u8 = 4;
 const _: () = assert!(GC_TYPE_CLOSURE == crate::codegen_abi::GC_TYPE_CLOSURE);

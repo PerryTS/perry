@@ -748,7 +748,11 @@ unsafe fn install_console_instance_state(
     ] {
         crate::array::js_array_push_f64(state, word);
     }
-    let meta = crate::object::object_meta_ensure(obj);
+    // A1_UNPROVEN: install_console_instance_state(obj) parameter, no type test (kind-A/B question for S0b-S0e).
+    let meta = crate::object::object_meta_ensure(
+        crate::object::MetaObj::runtime_born(obj),
+        crate::object::MetaReason::RuntimeHandle,
+    );
     (*meta).native_state = crate::value::JSValue::pointer(state.cast()).bits();
     crate::gc::runtime_write_barrier_slot(
         meta as usize,

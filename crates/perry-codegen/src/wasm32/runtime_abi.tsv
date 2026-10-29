@@ -3610,6 +3610,7 @@ js_register_stream_handle_probe	void	ptr
 js_register_text_id_handler	void	ptr
 js_register_tls_handle_kind_probe	void	ptr
 js_register_widget_hidden_handler	void	ptr
+js_register_worker_threads_environment_data	void	ptr,ptr
 js_register_worker_threads_messaging_constructors	void	ptr,ptr
 js_register_worker_threads_namespace_getters	void	ptr,ptr,ptr,ptr,ptr,ptr
 js_register_worker_threads_worker_constructor	void	ptr

@@ -191,7 +191,10 @@ impl CopyingNurseryCollector {
     /// Scan an ordinary object through its [`PlainObjectPlan`]. `false` means
     /// nothing was done and the caller must take the generic walk.
     #[inline(always)]
-    pub(super) unsafe fn scan_plain_object(&mut self, header: *mut GcHeader) -> bool {
+    pub(super) unsafe fn scan_plain_object<const DIAGNOSTICS: bool>(
+        &mut self,
+        header: *mut GcHeader,
+    ) -> bool {
         if !plain_object_admissible(header) {
             return false;
         }
@@ -204,7 +207,7 @@ impl CopyingNurseryCollector {
         // descriptor carries (`static_scan`); every other object builds its
         // plan from the shape below.
         if let Some(scan) = super::static_scan::static_scan(header, None) {
-            self.visit_static_scan(&scan, header, weak, remembering);
+            self.visit_static_scan::<DIAGNOSTICS>(&scan, header, weak, remembering);
             return true;
         }
         let plan = plain_object_plan(header);
@@ -220,14 +223,14 @@ impl CopyingNurseryCollector {
         // fixed metadata positions out of the payload loop: re-entering
         // next_slot dispatched all five Options for every payload word.
         for slot in plan.prefix.into_iter().flatten() {
-            self.visit_slot_with_parent_facts(slot, header, weak, remembering);
+            self.visit_slot_with_parent_facts::<DIAGNOSTICS>(slot, header, weak, remembering);
         }
         match plan.walk {
             PayloadWalk::Word(mut word) => {
                 while word != 0 {
                     let index = word.trailing_zeros() as usize;
                     word &= word - 1;
-                    self.visit_slot_with_parent_facts(
+                    self.visit_slot_with_parent_facts::<DIAGNOSTICS>(
                         GcMutableSlot::new(plan.payload.slot(index), None),
                         header,
                         weak,
@@ -237,7 +240,7 @@ impl CopyingNurseryCollector {
             }
             PayloadWalk::Range { next, count } => {
                 for index in next..count {
-                    self.visit_slot_with_parent_facts(
+                    self.visit_slot_with_parent_facts::<DIAGNOSTICS>(
                         GcMutableSlot::new(plan.payload.slot(index), None),
                         header,
                         weak,
@@ -256,7 +259,7 @@ impl CopyingNurseryCollector {
 #[cfg(any(test, debug_assertions))]
 unsafe fn assert_matches_generic_walk(header: *mut GcHeader, plan: &PlainObjectPlan) {
     let mut generic = Vec::new();
-    visit_gc_rewrite_slots(header, |slot| {
+    visit_gc_rewrite_slots::<{ cfg!(test) }>(header, |slot| {
         generic.push((slot.slot as usize, slot.is_parent_owned()));
     });
     let mut replay = plan.clone();

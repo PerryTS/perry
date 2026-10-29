@@ -9,7 +9,7 @@
 
 use super::super::*;
 use super::support::*;
-use crate::gc::trace::mark_hoist_sabotage;
+use crate::gc::mark::mark_hoist_sabotage;
 
 fn weak_target_cleared(sabotaged: bool) -> bool {
     std::thread::spawn(move || {

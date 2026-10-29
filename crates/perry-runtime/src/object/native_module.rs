@@ -33,6 +33,7 @@ mod namespace_builders;
 mod namespace_prototype;
 mod vtable_impls;
 mod web_locks;
+pub(crate) mod worker_environment;
 
 pub(crate) use callable_export_check::is_native_module_callable_export;
 pub use callable_exports::bound_native_callable_export_value;
@@ -85,7 +86,7 @@ crate::perry_thread_local! {
     /// Every minted bound export by `"<module>\0<property>"`. Read on hot
     /// paths (`new EventEmitter()` resolves its prototype through it), so it
     /// hashes with aHash, which keeps a random key without SipHash's rounds.
-    pub(crate) static NATIVE_CALLABLE_EXPORTS: RefCell<HashMap<String, u64, crate::fast_hash::ProcessSeeded>> =
+    pub(crate) static NATIVE_CALLABLE_EXPORTS: RefCell<HashMap<String, u64, crate::fast_hash::AHashState>> =
         RefCell::new(HashMap::default());
     pub(crate) static NATIVE_MODULE_ACCESSOR_EXPORTS: RefCell<HashMap<String, u64>> =
         RefCell::new(HashMap::new());
