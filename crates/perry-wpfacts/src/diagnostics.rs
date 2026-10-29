@@ -14,6 +14,44 @@ pub(crate) struct Trace {
     pub source_calls: BTreeSet<CallId>,
     pub raw: BTreeMap<CallId, BTreeSet<Tok>>,
     pub builtins: BTreeMap<CallId, BTreeSet<String>>,
+    /// The tokens whose `Model::escape` is running, innermost last.
+    pub escaping: Vec<Tok>,
+    /// The call whose transfer is running (`Model::diagnostic_callee`).
+    pub cur_call: Option<CallId>,
+    /// The node whose rule is being applied (`Model::apply_tokens`).
+    pub cause_node: Option<NodeId>,
+    /// Why each `TopSink` node sinks: the token whose escape made it, the
+    /// call, and the function generation was walking.
+    pub sink_by: BTreeMap<NodeId, SinkBy>,
+    /// Each token's first escape (where it first became escaped).
+    pub esc_first: BTreeMap<Tok, EscFirst>,
+    /// Every (token, cause) of an escape attempt, taking effect or not.
+    pub esc_causes: BTreeSet<(Tok, Cause)>,
+    /// Every (function, transfer kind, cause) that reached a body, with the
+    /// first call it was seen at.
+    pub reach: BTreeMap<(FnIdx, &'static str, Cause), Option<CallId>>,
+}
+
+/// The operation an event belongs to: a function body's (`Fn`), a token's
+/// escape (`Tok`), or none known (`Unknown`).
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub(crate) enum Cause {
+    Fn(FnIdx),
+    Tok(Tok),
+    Unknown,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct SinkBy {
+    pub by: Option<Tok>,
+    pub call: Option<CallId>,
+    pub gen_fn: FnIdx,
+}
+
+pub(crate) struct EscFirst {
+    pub reason: u32,
+    pub cause: Cause,
+    pub call: Option<CallId>,
 }
 
 #[derive(Default)]
@@ -87,7 +125,140 @@ impl Model {
         let source = *self.sum.tmpl_of.get(&call)?;
         d.source_calls.contains(&source).then_some(source)
     }
+    /// The function a node's rules run for: its body's owner, or the
+    /// function of the run (instance or shared run) it belongs to.
+    pub(crate) fn diagnostic_owner(&self, n: NodeId) -> Option<FnIdx> {
+        if n == NO_NODE || n as usize >= self.nodes.len() {
+            return None;
+        }
+        let f = self.node_fn[n as usize];
+        if f != NO_FN {
+            return Some(f);
+        }
+        let fr = self.nodes[n as usize].frame;
+        if fr == 0 {
+            None
+        } else if fr & FN_RUN != 0 {
+            Some(fr & !FN_RUN)
+        } else {
+            self.sum.insts.get((fr - 1) as usize).map(|i| i.f)
+        }
+    }
+    fn diagnostic_call_owner(&self, call: Option<CallId>) -> Option<FnIdx> {
+        let c = call?;
+        let cs = self.calls.get(c as usize)?;
+        self.diagnostic_owner(cs.ret).or_else(|| {
+            let src = self.diagnostic_source_call(c)?;
+            self.diagnostic_owner(self.calls.get(src as usize)?.ret)
+        })
+    }
+    fn diagnostic_sink_cause(&self, n: Option<NodeId>) -> Option<Cause> {
+        let d = self.diagnostic.as_ref()?;
+        let s = d.sink_by.get(&n?)?;
+        if let Some(t) = s.by {
+            return Some(Cause::Tok(t));
+        }
+        if let Some(f) = self.diagnostic_call_owner(s.call) {
+            return Some(Cause::Fn(f));
+        }
+        (s.gen_fn != NO_FN).then_some(Cause::Fn(s.gen_fn))
+    }
+    /// The operation an escape attempt now belongs to.
+    fn diagnostic_escape_cause(&self) -> Cause {
+        let Some(d) = self.diagnostic.as_ref() else {
+            return Cause::Unknown;
+        };
+        if let Some(f) = d.cause_node.and_then(|n| self.diagnostic_owner(n)) {
+            return Cause::Fn(f);
+        }
+        if let Some(&t) = d.escaping.last() {
+            return Cause::Tok(t);
+        }
+        if let Some(c) = self.diagnostic_sink_cause(d.cause_node) {
+            return c;
+        }
+        if let Some(f) = self.diagnostic_call_owner(d.cur_call) {
+            return Cause::Fn(f);
+        }
+        if self.cur_fn != NO_FN {
+            return Cause::Fn(self.cur_fn);
+        }
+        Cause::Unknown
+    }
+    /// The operation a transfer into a body (by `call`) belongs to.
+    fn diagnostic_reach_cause(&self, call: Option<CallId>) -> Cause {
+        let Some(d) = self.diagnostic.as_ref() else {
+            return Cause::Unknown;
+        };
+        if let Some(f) = self.diagnostic_call_owner(call) {
+            return Cause::Fn(f);
+        }
+        if let Some(&t) = d.escaping.last() {
+            return Cause::Tok(t);
+        }
+        if let Some(f) = d.cause_node.and_then(|n| self.diagnostic_owner(n)) {
+            return Cause::Fn(f);
+        }
+        if let Some(c) = self.diagnostic_sink_cause(d.cause_node) {
+            return c;
+        }
+        if self.cur_fn != NO_FN {
+            return Cause::Fn(self.cur_fn);
+        }
+        Cause::Unknown
+    }
+    /// Escape of `t` begins: the cause of this attempt, and of its first
+    /// escape when it takes effect.
+    pub(crate) fn diagnostic_escape_begin(&mut self, t: Tok, reason: u32) -> Option<EscFirst> {
+        self.diagnostic.as_ref()?;
+        let was = self.is_escaped(t);
+        let cause = self.diagnostic_escape_cause();
+        let d = self.diagnostic.as_mut()?;
+        d.esc_causes.insert((t, cause));
+        let cand = (!was).then(|| EscFirst {
+            reason,
+            cause,
+            call: d.cur_call,
+        });
+        d.escaping.push(t);
+        cand
+    }
+    pub(crate) fn diagnostic_escape_end(&mut self, t: Tok, cand: Option<EscFirst>) {
+        let now = self.is_escaped(t);
+        let Some(d) = self.diagnostic.as_mut() else {
+            return;
+        };
+        d.escaping.pop();
+        if let Some(c) = cand.filter(|_| now) {
+            d.esc_first.entry(t).or_insert(c);
+        }
+    }
+    pub(crate) fn diagnostic_sink(&mut self, n: NodeId) {
+        let gen_fn = self.cur_fn;
+        if let Some(d) = self.diagnostic.as_mut() {
+            let s = SinkBy {
+                by: d.escaping.last().copied(),
+                call: d.cur_call,
+                gen_fn,
+            };
+            d.sink_by.entry(n).or_insert(s);
+        }
+    }
+    /// A transfer reached the body of `f` (`call`: `u32::MAX` for none).
+    pub(crate) fn diagnostic_reach(&mut self, f: FnIdx, kind: &'static str, call: CallId) {
+        if self.diagnostic.is_none() {
+            return;
+        }
+        let call = (call != u32::MAX).then_some(call);
+        let cause = self.diagnostic_reach_cause(call);
+        if let Some(d) = self.diagnostic.as_mut() {
+            d.reach.entry((f, kind, cause)).or_insert(call);
+        }
+    }
     pub(crate) fn diagnostic_callee(&mut self, call: CallId, tok: Tok) {
+        if let Some(d) = self.diagnostic.as_mut() {
+            d.cur_call = Some(call);
+        }
         let Some(source) = self.diagnostic_source_call(call) else {
             return;
         };
@@ -427,6 +598,30 @@ pub(crate) fn collect(g: &Gen) -> Vec<String> {
         out.push(format!("{{\"record\":\"token\",\"id\":{i},\"kind\":{},\"name\":{},\"layout\":{},\"function\":{},\"context\":{},\"bound\":{},\"escape\":{},\"marker\":{},\"closedMarker\":{}}}",
             quote(kind),quote(&m.tok_name(i as Tok)),opt(layout),opt(function),opt(context),bound,
             quote(m.escaped.get(&(i as Tok)).map_or("",|r|&m.reasons[*r as usize])), m.is_marker(i as Tok), m.closed_marker(i as Tok)));
+    }
+
+    // FCT slice 0: where each token first escaped, every cause of an
+    // escape attempt, and every transfer into a body with its cause.
+    let cause = |c: &Cause| -> String {
+        match c {
+            Cause::Fn(f) => format!("{{\"function\":{f}}}"),
+            Cause::Tok(t) => format!("{{\"token\":{t}}}"),
+            Cause::Unknown => "null".into(),
+        }
+    };
+    let src_call = |c: Option<CallId>| c.map(|c| m.diagnostic_source_call(c).unwrap_or(c));
+    if let Some(d) = m.diagnostic.as_ref() {
+        for (t, e) in &d.esc_first {
+            out.push(format!("{{\"record\":\"escape-first\",\"token\":{t},\"reason\":{},\"cause\":{},\"call\":{}}}",
+                quote(m.reasons.get(e.reason as usize).map_or("", |s| s)), cause(&e.cause), opt(src_call(e.call))));
+        }
+        for (t, c) in &d.esc_causes {
+            out.push(format!("{{\"record\":\"escape-cause\",\"token\":{t},\"cause\":{}}}", cause(c)));
+        }
+        for ((f, kind, c), call) in &d.reach {
+            out.push(format!("{{\"record\":\"reach\",\"function\":{f},\"kind\":{},\"cause\":{},\"call\":{}}}",
+                quote(kind), cause(c), opt(src_call(*call))));
+        }
     }
 
     // PUB: read existing ownership/member maps, without settling or creating flow.

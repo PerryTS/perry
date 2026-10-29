@@ -359,6 +359,9 @@ impl Model {
     /// Attach a complex constraint and apply it to what the node holds now.
     pub fn cons(&mut self, n: NodeId, c: Cons) {
         self.stats_cons += 1;
+        if self.diagnostic.is_some() && matches!(c, Cons::TopSink { .. }) {
+            self.diagnostic_sink(n);
+        }
         if self.relations.is_some()
             && !matches!(
                 c,
@@ -909,6 +912,17 @@ impl Model {
         self.apply_tokens(n, c, Tokens::Slice(toks), prim);
     }
     fn apply_tokens(&mut self, n: NodeId, c: &Cons, toks: Tokens<'_>, prim: u16) {
+        if let Some(d) = self.diagnostic.as_mut() {
+            let saved = (d.cur_call.take(), d.cause_node.replace(n));
+            self.apply_tokens_in(n, c, toks, prim);
+            if let Some(d) = self.diagnostic.as_mut() {
+                (d.cur_call, d.cause_node) = saved;
+            }
+            return;
+        }
+        self.apply_tokens_in(n, c, toks, prim);
+    }
+    fn apply_tokens_in(&mut self, n: NodeId, c: &Cons, toks: Tokens<'_>, prim: u16) {
         if self.sum_skip(n, c) {
             return;
         }

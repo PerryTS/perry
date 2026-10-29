@@ -949,6 +949,10 @@ impl Model {
     /// instance for the call gets the explicit token (the call's own
     /// operand reaches it in `bind_summarized`).
     pub(crate) fn this_into(&mut self, call: CallId, ft: Tok, this_tok: Option<Tok>) {
+        if self.diagnostic.is_some() {
+            let f = self.tok_fn(ft);
+            self.diagnostic_reach(f, "this", call);
+        }
         if !self.sum.ready {
             self.sum.deferred.push(Deferred::This(call, ft, this_tok));
             return;

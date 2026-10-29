@@ -179,6 +179,10 @@ impl Model {
         let TokKind::Func(f, _) = self.toks[t as usize] else {
             return;
         };
+        if self.diagnostic.is_some() {
+            let kind = if self.ctor_calls.contains(&call) { "new" } else { "call" };
+            self.diagnostic_reach(f, kind, call);
+        }
         if !self.ctor_calls.contains(&call) {
             self.called.insert(f);
         }
@@ -779,6 +783,15 @@ impl Model {
     }
 
     pub fn escape(&mut self, t: Tok, reason: u32) {
+        if self.diagnostic.is_none() {
+            return self.escape_body(t, reason);
+        }
+        let first = self.diagnostic_escape_begin(t, reason);
+        self.escape_body(t, reason);
+        self.diagnostic_escape_end(t, first);
+    }
+
+    fn escape_body(&mut self, t: Tok, reason: u32) {
         if t == TOP {
             return;
         }
