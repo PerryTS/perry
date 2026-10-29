@@ -238,6 +238,9 @@ pub(crate) fn block_pool_put(data: *mut u8, size: usize) -> bool {
     true
 }
 
+// Inlined into each caller, as when it had a single caller: the dedicated
+// leaf allocator must not take the ordinary refill's inlining from it.
+#[inline(always)]
 pub(super) fn block_pool_take(size: usize) -> Option<*mut u8> {
     let taken = BLOCK_POOL.with(|p| {
         let mut pool = p.borrow_mut();

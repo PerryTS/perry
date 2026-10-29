@@ -153,6 +153,7 @@ unsafe fn advise_thp(data: *mut libc::c_void, len: usize, advice: libc::c_int) {
 
 /// Fresh private anonymous backing, or null on refusal. This entry never
 /// collects. The existing caller owns emergency reclaim outside arena borrows.
+#[inline(always)]
 pub(super) unsafe fn map(kind: Kind, len: usize) -> *mut u8 {
     #[cfg(target_os = "linux")]
     {

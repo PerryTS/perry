@@ -166,10 +166,15 @@ fn young_scavenge_cap_probe(old_reclaimable: impl FnOnce() -> usize) -> YoungSca
     } else {
         cap.min(super::tenuring::object_census_seed_point_bytes())
     };
-    let (leaf_due, leaf_small_limit) = leaf_memory_due_at_cap(cap, from_space_in_use);
     // Growing the inline small allocation can cross the leaf window before
     // the copying cap. Publish the same residual bound to the fast shortcut.
-    let limit = limit.min(leaf_small_limit);
+    // With no young leaf alive this is one load and a not-taken branch.
+    let (leaf_due, limit) = if crate::arena::young_large_in_use_bytes() == 0 {
+        (false, limit)
+    } else {
+        let (due, small_limit) = leaf_memory_due_at_cap(cap, from_space_in_use);
+        (due, limit.min(small_limit))
+    };
     YoungScavengeCapProbe {
         due: from_space_in_use >= cap || leaf_due,
         reading: Some(super::trigger_watermark::YoungArmReading {
@@ -3925,7 +3930,7 @@ pub(crate) fn gc_safepoint_moving_minor() -> bool {
     let _declared = DeclaredSafepointGuard::enter();
     // The trigger ladder coalesces the two young resources into the existing
     // precise handoff. Only small occupancy/capacity selects small copying.
-    if !scheduled && gen_gc_enabled() && due == Some(BudgetedGcTrigger::YoungScavengeCap)
+    if due == Some(BudgetedGcTrigger::YoungScavengeCap) && !scheduled && gen_gc_enabled()
         && crate::arena::copying_from_space_in_use_bytes() < scavenge_nursery_cap_dueness_bytes()
     {
         super::leaf_service::collect();
@@ -5384,6 +5389,7 @@ pub(crate) fn byte_store_test_external_live_bytes() -> usize {
     external_side_live_bytes()
 }
 
+#[cold]
 fn leaf_memory_due_at_cap(cap: usize, small_bytes: usize) -> (bool, usize) {
     let leaf_bytes = crate::arena::young_large_in_use_bytes();
     if leaf_bytes == 0 {
