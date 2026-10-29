@@ -36,7 +36,7 @@ use crate::array::ArrayHeader;
 ///   * string: `string/iter_object.rs` (fields 0..1)
 ///   * buffer: `buffer/iter.rs` (fields 0..2)
 ///   * regexp-string: `regex/match_all.rs` (fields 0..4)
-///   * iterator helpers: `iterator_helpers.rs` (fields 0..3)
+///   * iterator helpers: `iterator_helpers.rs` (`FIELD_COUNT` fields)
 #[inline(always)]
 pub(crate) fn reserved_slot_floor_for_class_id(class_id: u32) -> u32 {
     match class_id {
@@ -46,7 +46,7 @@ pub(crate) fn reserved_slot_floor_for_class_id(class_id: u32) -> u32 {
         crate::string::STRING_ITERATOR_CLASS_ID => 2,
         crate::buffer::BUFFER_ITERATOR_CLASS_ID => 3,
         crate::regex::REGEXP_STRING_ITERATOR_CLASS_ID => 5,
-        crate::iterator_helpers::ITERATOR_HELPER_CLASS_ID => 4,
+        crate::iterator_helpers::ITERATOR_HELPER_CLASS_ID => crate::iterator_helpers::FIELD_COUNT,
         _ => 0,
     }
 }
@@ -354,7 +354,7 @@ mod tests {
         );
         assert_eq!(
             reserved_slot_floor_for_class_id(crate::iterator_helpers::ITERATOR_HELPER_CLASS_ID),
-            4
+            crate::iterator_helpers::FIELD_COUNT
         );
         assert_eq!(reserved_slot_floor_for_class_id(0), 0);
         assert_eq!(reserved_slot_floor_for_class_id(42), 0);

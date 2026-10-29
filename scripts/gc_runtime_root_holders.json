@@ -108,12 +108,6 @@
       "why": "HashSet of perry-ffi registry handle ids already found stale, kept only to log each once. Registry ids are indices into the ffi DashMap, not heap addresses."
     },
     {
-      "file": "crates/perry-runtime/src/alloc_census.rs",
-      "name": "CREDIT",
-      "verdict": "not_a_gc_pointer",
-      "why": "#9771: bytes remaining to allocate before the next native-heap sample. A `Cell<i64>` counter, const-initialised so the TLS access itself never allocates."
-    },
-    {
       "file": "crates/perry-runtime/src/arena/alloc_sample.rs",
       "name": "UNTIL",
       "verdict": "not_a_gc_pointer",
@@ -256,7 +250,7 @@
       "file": "crates/perry-runtime/src/gc/census.rs",
       "name": "PASS1_MARKED",
       "verdict": "non_moving_snapshot",
-      "why": "Re-audited 2026-10-23 against the pinned-source diffs and current collection phases. Raw header-address snapshot exists only in a synchronous full run_to_completion: step_mark_propagation records it after tracing, then block persistence and weak/ephemeron processing only mark or clear existing edges. Full finalization skips the relocating minor prelude. step_sweep consumes the snapshot before census reporting and before reclamation; budgeted cycles and minors skip its creation and consumption. No JS callback, object relocation, or mutator window occurs between the boundaries. The added full-sweep honest-pointer verifier only reads heap slots and allocator metadata; it neither calls JS nor relocates. Scanner registration and optional feature installation occur in gc_init before this window. Trigger-watermark admission, promotion-policy estimates and test-only throw sabotage do not change the synchronous mark-to-sweep sequence; the production throw check aborts rather than calling JS or unwinding. Native Rust allocations do not collect. Removing the retired PIC census row changes reporting only. Re-audited b7f3d56fed: policy.rs adds old_gen_growth_since_last_full_bytes, a read-only query of existing pressure and post-full baseline counters for idle-reducer admission. It does not call JS, collect or relocate, and neither snapshot boundary nor the synchronous mark-to-sweep sequence changes. Re-audited DPA-R: js_gc_init_with_layouts binds immutable image metadata before runtime initialization; the compatibility wrapper and linker keepalive anchor do not touch collection, either snapshot boundary, or the synchronous mark-to-sweep sequence. Re-audited WRT2b: the added image-root scan precedes mark propagation and snapshot creation; image cells are immortal MARKED|PINNED and do not enter the moving arena set. The honest-pointer verifier enumerates those immutable image addresses read-only. The new module declarations change no snapshot boundary, JS callback, relocation, or synchronous mark-to-sweep window. WRT3a re-audit: these source files equal e6e7cc419 and the parent; the synchronous census_pass1_if_armed to census_take_if_armed_at_full_sweep_start window remains inside run_to_completion, before reclamation, with no mutator resumption or relocation. Full runtime tests exercise this current source. Release-readiness re-audit 2026-10-28: census.rs only narrows the proc_pid_rusage reporter to macOS. Current gc_init installs roots and intrinsic layouts before collection; js_gc_init_with_layouts binds image metadata before gc_init. The unchanged run_to_completion, mark-completion capture, and pre-reclamation step_sweep consumption still provide the synchronous non-moving window. Re-audited release CI head: burst_boundary now arms the existing precise-poll flag and records the arena baseline. It does not collect or call JavaScript; collection remains deferred until a later precise poll outside the synchronous mark-to-sweep snapshot window. Re-audited #13405: cycle.rs routes birth-color changes through set_birth_extra_flags; it stores the same flags and refreshes the existing inline allocation bound. The refresh only reads existing TLS/arena state and changes the bound, without allocation, JS callbacks, collection or relocation. The synchronous mark-to-sweep custody window is unchanged.",
+      "why": "Re-audited 2026-10-23 against the pinned-source diffs and current collection phases. Raw header-address snapshot exists only in a synchronous full run_to_completion: step_mark_propagation records it after tracing, then block persistence and weak/ephemeron processing only mark or clear existing edges. Full finalization skips the relocating minor prelude. step_sweep consumes the snapshot before census reporting and before reclamation; budgeted cycles and minors skip its creation and consumption. No JS callback, object relocation, or mutator window occurs between the boundaries. The added full-sweep honest-pointer verifier only reads heap slots and allocator metadata; it neither calls JS nor relocates. Scanner registration and optional feature installation occur in gc_init before this window. Trigger-watermark admission, promotion-policy estimates and test-only throw sabotage do not change the synchronous mark-to-sweep sequence; the production throw check aborts rather than calling JS or unwinding. Native Rust allocations do not collect. Removing the retired PIC census row changes reporting only. Re-audited b7f3d56fed: policy.rs adds old_gen_growth_since_last_full_bytes, a read-only query of existing pressure and post-full baseline counters for idle-reducer admission. It does not call JS, collect or relocate, and neither snapshot boundary nor the synchronous mark-to-sweep sequence changes. Re-audited DPA-R: js_gc_init_with_layouts binds immutable image metadata before runtime initialization; the compatibility wrapper and linker keepalive anchor do not touch collection, either snapshot boundary, or the synchronous mark-to-sweep sequence. Re-audited WRT2b: the added image-root scan precedes mark propagation and snapshot creation; image cells are immortal MARKED|PINNED and do not enter the moving arena set. The honest-pointer verifier enumerates those immutable image addresses read-only. The new module declarations change no snapshot boundary, JS callback, relocation, or synchronous mark-to-sweep window. WRT3a re-audit: these source files equal e6e7cc419 and the parent; the synchronous census_pass1_if_armed to census_take_if_armed_at_full_sweep_start window remains inside run_to_completion, before reclamation, with no mutator resumption or relocation. Full runtime tests exercise this current source. Release-readiness re-audit 2026-10-28: census.rs only narrows the proc_pid_rusage reporter to macOS. Current gc_init installs roots and intrinsic layouts before collection; js_gc_init_with_layouts binds image metadata before gc_init. The unchanged run_to_completion, mark-completion capture, and pre-reclamation step_sweep consumption still provide the synchronous non-moving window. Re-audited release CI head: burst_boundary now arms the existing precise-poll flag and records the arena baseline. It does not collect or call JavaScript; collection remains deferred until a later precise poll outside the synchronous mark-to-sweep snapshot window. Re-audited #13405: cycle.rs routes birth-color changes through set_birth_extra_flags; it stores the same flags and refreshes the existing inline allocation bound. The refresh only reads existing TLS/arena state and changes the bound, without allocation, JS callbacks, collection or relocation. The synchronous mark-to-sweep custody window is unchanged. Re-audited 2026-10-29 against #13443 (trace.rs -> mark.rs, AtomicFinalize split out to cycle/atomic_finalize.rs, GC_STATS consolidated into gc/progress.rs), the #13457/#13463/#13479 GC slices, and the #13405/#13471/#13472 pacing changes. Both boundaries and both predicates are unchanged and still name the same condition: pass 1 needs minor.is_none() && !is_budgeted(), pass 2 needs full_trace (= minor.is_none()) && !is_budgeted(). The window now runs BlockPersistence -> AtomicFinalize -> the sweep entry before note_sweep_started, and each phase was read rather than assumed: BlockPersistence only marks; the only relocating subphase of AtomicFinalize, MinorPrelude, is entered solely from the minor branch of the ephemeron clear (cycle/weak_ephemerons.rs), while a full goes WeakProcessing -> DisableBarrier -> Sweep, so a full cycle never evacuates between the boundaries; no phase inside the window invokes JavaScript. The const-generic DIAGNOSTICS split of #13443 gates only trace_phase_* recording and the read-only honest-pointer and minor-unmarked verifiers. The new leaf-escape and in-place-promotion machinery (#13463/#13479, #13439) is reached from allocation, store and copying-minor promotion sites, never from this window. census.rs changed only its diagnostic gate predicate. The rest of the interval was read too: HeapChange::begin(Sweep) only clears the weak intern cache and advances the scope counter, the sweep-entry gap drain only traces seeds the barrier shaded, and finish_full_trace invokes perry-stdlib provider hooks that release native payloads owned by the stdlib rather than GC objects. The snapshot's own Vec is a native Rust allocation, which does not collect.",
       "window": {
         "start": {
           "file": "crates/perry-runtime/src/gc/census.rs",
@@ -271,17 +265,17 @@
           "function": "run_to_completion"
         },
         "sources": {
-          "crates/perry-runtime/src/gc/census.rs": "1dbb9bc008c7cfc0849d2727d5d6238f719bdd7338723337cc8c487134dd78cb",
-          "crates/perry-runtime/src/gc/cycle.rs": "ff75f24b281883f601a694dc8022b0907d1890f00e0b4085e617e51e8fd9b27d",
-          "crates/perry-runtime/src/gc/barrier/mod.rs": "ab8da93db0ce15ec594ce340e32c8a12cea9847151b070407042f895a9df3d2c",
+          "crates/perry-runtime/src/gc/census.rs": "1f8f47bb2eaedf1eeb93be9f3042d74291f9d4ba22a9be7c698eaa7c8dfd434f",
+          "crates/perry-runtime/src/gc/cycle.rs": "34f0fe91de16f0597e96a1856863e7a13b4afe39c6c5c3110158e9b2ac6a4a96",
+          "crates/perry-runtime/src/gc/barrier/mod.rs": "01e34f1351cfb07c298572a6ec5a8500ec187db45421811b09f8db182d30dfc4",
           "crates/perry-runtime/src/arena/inline.rs": "fc97cfec2c6d644194b4dcdee7a689219acedf0939d31e3da1e285a008a81c41",
-          "crates/perry-runtime/src/gc/mod.rs": "25403919040986ab242bebbd4e9a6a4db38f1b4928803da4c06f69d61ce6579c",
-          "crates/perry-runtime/src/gc/policy.rs": "ca0026e4c24890e3f2f7a00c4526a1c3f34e0968dbb850cfbc9b7fda27f06959",
-          "crates/perry-runtime/src/gc/progress.rs": "acb439ba3c6a100f08ea4aa0ba4b96c30afb8cb5d84264436948524144b9342b",
-          "crates/perry-runtime/src/gc/allocation_pacing.rs": "465e5fe1d00152e36cc7f1be3b4edccf30305aba80b69f9aa5c66240d5000bcf",
-          "crates/perry-runtime/src/gc/ephemeron.rs": "b6a62662078caf02e5fa716e6bd8089f20e67efca8c9bb55ea234567e81adc06",
-          "crates/perry-runtime/src/gc/cycle/weak_ephemerons.rs": "4c2183d3f5bff96acd2df6fbc1b0ad4d47eec23317ef378781e220b4700cf1f4",
-          "crates/perry-runtime/src/gc/verify_honest.rs": "81074a8f84874abdd395c09e8d5029930ec8bce1342dd8812721435061d408fb"
+          "crates/perry-runtime/src/gc/mod.rs": "9069fe9d2d052f319645bc3cdd17a9f50a636f28e9b8e7aa6db023085c729c4b",
+          "crates/perry-runtime/src/gc/policy.rs": "dd268c2aa26e01e5f9ef1c106d14857eedf3e44c0830732c8be4374b372b4d7a",
+          "crates/perry-runtime/src/gc/progress.rs": "d2cf96a624dff35e405ac15fa37fe6ba31e7e158668581428fb3765f2c7160c3",
+          "crates/perry-runtime/src/gc/allocation_pacing.rs": "3a42f6633cd6fc8ee3258fb8d9e57954aa73f2855005f0f21fdf8df5a47d0308",
+          "crates/perry-runtime/src/gc/ephemeron.rs": "fd477a0729117b514c7a41fd0c48ba430afaf40f26f9c85dab6890ef1171f437",
+          "crates/perry-runtime/src/gc/cycle/weak_ephemerons.rs": "895c5b3baf0bc76b30c86edc48e649d2a1f51a8bf2dd4ca86bc15c373c813405",
+          "crates/perry-runtime/src/gc/verify_honest.rs": "4cef1e74f207342fd0dd954a7e07d3dad9a08993bc9d79f1366e99305d3d3bd2"
         }
       }
     },
@@ -466,46 +460,10 @@
       "why": "#9794: monotonic per-minor sequence number used to label survival-origin records. A `Cell<u64>`."
     },
     {
-      "file": "crates/perry-runtime/src/gc/trace.rs",
-      "name": "FORWARDED_STUB_MEMBERSHIP_RECOVERIES",
-      "verdict": "not_a_gc_pointer",
-      "why": "#9717: monotonic count of array-growth forwarding stubs a budgeted full cycle admitted through `classifier_valid_object_start`, reported as `forwarded_stub_recoveries=` on the PERRY_GC_DIAG `[gc-incremental]` line. A `Cell<u64>` holding a tally, never an address \u2014 the stubs it counts are reached through the worklist, not retained here. Nothing for the collector."
-    },
-    {
-      "file": "crates/perry-runtime/src/gc/trace/adopt_census.rs",
-      "name": "ADOPTED_BLOCKS",
-      "verdict": "not_a_gc_pointer",
-      "why": "#10182 live-subject counter: a `Cell<u64>` count of arena blocks whose census record the census adopted from the in-place promotion walk instead of walking them. A tally, never an address."
-    },
-    {
-      "file": "crates/perry-runtime/src/gc/trace/block_skip.rs",
-      "name": "BLOCK_SKIP_RECLAIMED_BLOCKS",
-      "verdict": "not_a_gc_pointer",
-      "why": "#10182 live-subject counter: a `Cell<u64>` count of arena blocks this thread's full sweeps reclaimed without visiting. Written only by `note_block_skip_reclaimed` with a block count; holds no address."
-    },
-    {
-      "file": "crates/perry-runtime/src/gc/trace/block_skip.rs",
-      "name": "BLOCK_SKIP_RECLAIMED_BYTES",
-      "verdict": "not_a_gc_pointer",
-      "why": "#10182 live-subject counter: a `Cell<u64>` sum of header sizes in blocks reclaimed without a visit. A byte count, never an address."
-    },
-    {
-      "file": "crates/perry-runtime/src/gc/trace/block_skip.rs",
-      "name": "BLOCK_SKIP_RECLAIMED_OBJECTS",
-      "verdict": "not_a_gc_pointer",
-      "why": "#10182 live-subject counter: a `Cell<u64>` count of objects in blocks reclaimed without a visit. An object count, never an address."
-    },
-    {
-      "file": "crates/perry-runtime/src/gc/trace/block_skip.rs",
-      "name": "HOLE_REBUILD_BLOCKS_SKIPPED",
-      "verdict": "not_a_gc_pointer",
-      "why": "#10182 live-subject counter: a `Cell<u64>` count of live old blocks a full sweep's hole-list rebuild did not parse because the census proved them hole-free. A tally, never an address."
-    },
-    {
-      "file": "crates/perry-runtime/src/gc/trace/block_skip.rs",
+      "file": "crates/perry-runtime/src/gc/mark/block_skip.rs",
       "name": "LAST_SKIPPED_BASES",
       "verdict": "test_only",
-      "why": "#[cfg(test)] `RefCell<Vec<usize>>` in `block_skip::sabotage`: the `data` base addresses of the arena BLOCKS the last full sweep skipped, recorded so tests can ask whether a given block was skipped. Block bases, not object pointers; never dereferenced, never traced, absent from shipped binaries."
+      "why": "#[cfg(test)] `RefCell<Vec<usize>>` in `mark::block_skip::sabotage`: the `data` base addresses of the arena BLOCKS the last full sweep skipped, recorded so tests can ask whether a given block was skipped. Block bases, not object pointers; never dereferenced, never traced, absent from shipped binaries."
     },
     {
       "file": "crates/perry-runtime/src/gc/trigger_watermark.rs",
@@ -942,6 +900,18 @@
       "name": "LENT_SCRATCH",
       "verdict": "not_a_gc_pointer",
       "why": "Per-thread match scratch lent to one search at a time (#10166): registers are subject offsets in UTF-16 units, frames and undo entries are perex's own opaque evaluator scratch. No GC pointer is ever stored, exactly as for the per-call MatchBuffers it replaces (this module's header and perex_memory.rs). The cell is borrowed for one search and holds no program, subject or result: those stay in GcProgram/HeapSubject roots and in the operation's MemoryBudget-charged slots."
+    },
+    {
+      "file": "crates/perry-runtime/src/regex/perex_runtime.rs",
+      "name": "DFA_CAPTURE_ANSWERS",
+      "verdict": "test_only",
+      "why": "Declared inside a `#[cfg(test)] crate::perry_thread_local!` block: a `Cell<usize>` tally of capture passes the lazy automaton answered, asserted by its own tests. Absent from shipped binaries and holds no address."
+    },
+    {
+      "file": "crates/perry-runtime/src/regex/perex_runtime.rs",
+      "name": "DFA_CAPTURE_PASSES",
+      "verdict": "test_only",
+      "why": "Declared inside a `#[cfg(test)] crate::perry_thread_local!` block: a `Cell<usize>` tally of capture passes the lazy automaton ran, answered or declined. Sibling of DFA_CAPTURE_ANSWERS; absent from shipped binaries and holds no address."
     },
     {
       "file": "crates/perry-runtime/src/regex/perex_runtime.rs",
@@ -2648,12 +2618,6 @@
       "why": "Test-only AtomicUsize invocation counter. Its only writes store zero or fetch_add(1); reads compare the numeric callback count. No address or tagged value is ever stored."
     },
     {
-      "file": "crates/perry-runtime/src/gc/trace.rs",
-      "name": "BLOCK_PERSIST_FORCE_MARKS",
-      "verdict": "not_a_gc_pointer",
-      "why": "Numeric diagnostic count of block-persistence forced marks. It holds no pointer; B4 scanner deletions exposed incidental prior call-graph coverage."
-    },
-    {
       "file": "crates/perry-ext-http/src/client_turnloop/mod.rs",
       "name": "DEFERRED_FIRED",
       "verdict": "not_a_gc_pointer",
@@ -2741,12 +2705,12 @@
       "file": "crates/perry-runtime/src/string/intern.rs",
       "name": "INTERN_TABLE",
       "verdict": "weak_heap_change_cache",
-      "why": "Re-audited 2026-10-23 against the pinned-source diffs. The existing direct-mapped string-reuse cache is weak: every collection HeapChange clears all entries at entry before any free or move. gc_realloc validates the malloc cell and clears before realloc only for GC_TYPE_STRING; unrelated reallocations leave cached string addresses unchanged. Both production insertion funnels still use publish_intern_entry, which refuses publication throughout every open HeapChange, including nested scopes and realloc. Ordinary readers need no per-lookup scope check. New property-atom creation, image seeding, mixed-hash probing and weak metadata rewrite/prune operate on the separate ATOMS table; atom hits published into INTERN_TABLE still use the same guarded publication funnel. The cache itself is not scanned and holds no strong root. Const-initialized malloc bookkeeping only defers native Vec capacity reservation; it does not change string realloc validation or HeapChange ordering. Concat changes isolate numeric test counters and add no publication path. Existing tests cover unrelated/string realloc, nested publication exclusion through both writers, young-string death and live relocation. WRT3a re-audit: these sources equal e6e7cc419 and the parent. INTERN_TABLE publication still passes the HeapChange exclusion funnel; collection and string realloc clear the weak cache before changing heap addresses, and the current runtime suite covers nested scopes, realloc and relocation. Re-audited #13411: concat.rs extracts numeric heap-string construction into concat_formatted_number and reuses formatted digits after the inline-string capacity/ASCII checks decline. The existing INTERN_TABLE lookup in js_string_concat is unchanged. The extracted helper uses the separate concat memo and the same rooted allocation fallback; it adds no INTERN_TABLE writer. All weak-cache publication still goes through publish_intern_entry, and HeapChange exclusion/invalidation is unchanged.",
+      "why": "Re-audited 2026-10-23 against the pinned-source diffs. The existing direct-mapped string-reuse cache is weak: every collection HeapChange clears all entries at entry before any free or move. gc_realloc validates the malloc cell and clears before realloc only for GC_TYPE_STRING; unrelated reallocations leave cached string addresses unchanged. Both production insertion funnels still use publish_intern_entry, which refuses publication throughout every open HeapChange, including nested scopes and realloc. Ordinary readers need no per-lookup scope check. New property-atom creation, image seeding, mixed-hash probing and weak metadata rewrite/prune operate on the separate ATOMS table; atom hits published into INTERN_TABLE still use the same guarded publication funnel. The cache itself is not scanned and holds no strong root. Const-initialized malloc bookkeeping only defers native Vec capacity reservation; it does not change string realloc validation or HeapChange ordering. Concat changes isolate numeric test counters and add no publication path. Existing tests cover unrelated/string realloc, nested publication exclusion through both writers, young-string death and live relocation. WRT3a re-audit: these sources equal e6e7cc419 and the parent. INTERN_TABLE publication still passes the HeapChange exclusion funnel; collection and string realloc clear the weak cache before changing heap addresses, and the current runtime suite covers nested scopes, realloc and relocation. Re-audited #13411: concat.rs extracts numeric heap-string construction into concat_formatted_number and reuses formatted digits after the inline-string capacity/ASCII checks decline. The existing INTERN_TABLE lookup in js_string_concat is unchanged. The extracted helper uses the separate concat memo and the same rooted allocation fallback; it adds no INTERN_TABLE writer. All weak-cache publication still goes through publish_intern_entry, and HeapChange exclusion/invalidation is unchanged. Re-audited 2026-10-29 against #13431 and the #13397/#13472 concat and ASCII-region work. INTERN_TABLE still has exactly two production writers: publish_intern_entry, which returns early for the whole duration of every open HeapChange, and discard_weak_interns, a full clear called from HeapChange::begin for every kind except Realloc and from gc_realloc before a GC_TYPE_STRING cell can move or be released. Every other slot site in the crate is a read: the concat fast path, js_string_intern, intern_prehashed_bytes and intern_lookup_bytes only load entries. #13431's new AtomTable::probe_from/seed_if_absent and the weak metadata rewrite/prune sites write ATOMS, the immutable image atom table repaired by scan_property_atoms and pruned before sweep. gc/malloc.rs gained only malloc_object_count(). No new publication path was added.",
       "sources": {
-        "crates/perry-runtime/src/string/intern.rs": "61dfaf4c7f84ebfbffe132307545a70793a90f0f0330a72ecd60a99b65a35cfd",
+        "crates/perry-runtime/src/string/intern.rs": "4e6fa04533d3a87a3b88a19ae51f0d69ab61b21871205f93ee40982a81b64baa",
         "crates/perry-runtime/src/gc/heap_generation.rs": "8344c9995c62342714b40a947dd20338a56fcd1cb8f031356e865b9121d6ee2f",
-        "crates/perry-runtime/src/string/concat.rs": "f42fde2d1033fa7854d7972ced6865c3502b0f497b28de70b1d6a4195e2f2d74",
-        "crates/perry-runtime/src/gc/malloc.rs": "5473dff1ad0d1b5e596268b2193e341f823d11a659e66b6fe6537a5e021c9076"
+        "crates/perry-runtime/src/string/concat.rs": "26ea161cdae524ed2b157889f45802f97f6caac0e4e253049b038725c180b64c",
+        "crates/perry-runtime/src/gc/malloc.rs": "507412b031f677b5acdc0a846f3adca4cda39d24a08cf1a07c995dd482044367"
       }
     },
     {
@@ -3030,6 +2994,18 @@
       "name": "WORKER_IPC_ENABLED",
       "verdict": "not_a_gc_pointer",
       "why": "Boolean bootstrap snapshot of whether this Worker environment enables IPC facade members. WorkerProcessState installs only a bool; no address or NaN-boxed value is stored."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/progress.rs",
+      "name": "GC_STATS",
+      "verdict": "not_a_gc_pointer",
+      "why": "#13443 folded the seven per-counter TLS declarations (FORWARDED_STUB_MEMBERSHIP_RECOVERIES, BLOCK_PERSIST_FORCE_MARKS, ADOPTED_BLOCKS, HOLE_REBUILD_BLOCKS_SKIPPED, BLOCK_SKIP_RECLAIMED_*) into one `GcStats` behind this slot and moved it from gc/telemetry.rs to gc/progress.rs. Every GcStats field is a u64 counter, the [u64; GC_RECENT_PAUSE_WINDOW] duration ring, or a u8 cursor/len into it: no address, never traced, never read as a pointer."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/mark.rs",
+      "name": "CLASSIFIER_VERIFY_SUPPRESSED",
+      "verdict": "not_a_gc_pointer",
+      "why": "#13443 moved the declaration from gc/trace.rs to gc/mark.rs. A `Cell<bool>` latch set by the test-only page-metadata wipes and read only by the differential classifier verifier: a flag, never an address."
     }
   ],
   "_FRONTIER_README": "Identity-pinned debt ratchet over new perry-ui* candidates and otherwise-unclassified core raw/Perry TLS declarations (see the census docstring, \u201cThe identity-pinned frontier\u201d). A new uncovered holder fails until it is scanned, receives a researched holders verdict, or is deliberately pinned as debt. Moving a researched false positive to holders graduates it from this list. A fixed or classified holder makes its old frontier pin stale, so the receipt must be deleted.",
@@ -3291,18 +3267,6 @@
       "name": "REMEMBERED_SET"
     },
     {
-      "file": "crates/perry-runtime/src/gc/barrier_arming.rs",
-      "name": "RECONSTRUCT_CENSUS"
-    },
-    {
-      "file": "crates/perry-runtime/src/gc/barrier_arming.rs",
-      "name": "REMEMBERED_SET_RECONSTRUCTED"
-    },
-    {
-      "file": "crates/perry-runtime/src/gc/barrier_arming.rs",
-      "name": "TEST_ARMED_OVERRIDE"
-    },
-    {
       "file": "crates/perry-runtime/src/gc/copying.rs",
       "name": "UNTRACED_DECLINE_REASON"
     },
@@ -3408,10 +3372,6 @@
     },
     {
       "file": "crates/perry-runtime/src/gc/policy.rs",
-      "name": "GC_LAST_OLD_RECLAIM_IN_USE_BYTES"
-    },
-    {
-      "file": "crates/perry-runtime/src/gc/policy.rs",
       "name": "GC_MAJOR_PACING_BACKOFF_SHIFT"
     },
     {
@@ -3500,14 +3460,6 @@
     },
     {
       "file": "crates/perry-runtime/src/gc/roots.rs",
-      "name": "FFI_MUTABLE_ROOT_SCANNERS"
-    },
-    {
-      "file": "crates/perry-runtime/src/gc/roots.rs",
-      "name": "FFI_NAMED_MUTABLE_ROOT_SCANNERS"
-    },
-    {
-      "file": "crates/perry-runtime/src/gc/roots.rs",
       "name": "FFI_ROOT_SCANNERS"
     },
     {
@@ -3564,10 +3516,6 @@
     },
     {
       "file": "crates/perry-runtime/src/gc/telemetry.rs",
-      "name": "GC_STATS"
-    },
-    {
-      "file": "crates/perry-runtime/src/gc/telemetry.rs",
       "name": "TEST_LAST_GC_TRACE_JSON"
     },
     {
@@ -3593,10 +3541,6 @@
     {
       "file": "crates/perry-runtime/src/gc/tenuring.rs",
       "name": "UNLOCK_STREAK"
-    },
-    {
-      "file": "crates/perry-runtime/src/gc/trace.rs",
-      "name": "CLASSIFIER_VERIFY_SUPPRESSED"
     },
     {
       "file": "crates/perry-runtime/src/intl/number_format.rs",
@@ -3820,6 +3764,11 @@
     {
       "file": "crates/perry-runtime/src/object/iterator_prototypes.rs",
       "name": "SET_ITERATOR_PROTOTYPE_PTR_SLOT"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/iterator_prototypes.rs",
+      "name": "WRAP_FOR_VALID_ITERATOR_PROTOTYPE_PTR_SLOT",
+      "scanner": "scan_object_cache_roots_mut"
     },
     {
       "file": "crates/perry-runtime/src/object/iterator_prototypes.rs",
@@ -4048,18 +3997,6 @@
     {
       "file": "crates/perry-runtime/src/promise/mod.rs",
       "name": "INLINE_TRAP"
-    },
-    {
-      "file": "crates/perry-runtime/src/promise/mod.rs",
-      "name": "ITER_RESULT_DONE"
-    },
-    {
-      "file": "crates/perry-runtime/src/promise/mod.rs",
-      "name": "ITER_RESULT_VALUE_I1"
-    },
-    {
-      "file": "crates/perry-runtime/src/promise/mod.rs",
-      "name": "ITER_RESULT_VALUE_I32"
     },
     {
       "file": "crates/perry-runtime/src/promise/mod.rs",

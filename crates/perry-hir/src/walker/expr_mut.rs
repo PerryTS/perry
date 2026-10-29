@@ -224,6 +224,7 @@ where
         | Expr::EncodeURIComponent(v)
         | Expr::DecodeURIComponent(v)
         | Expr::QueueMicrotask(v)
+        | Expr::AsyncStepDeclined(v)
         | Expr::IterResultSet(v, _)
         | Expr::CryptoRandomBytes(v)
         | Expr::CryptoSha256(v)

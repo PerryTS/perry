@@ -162,7 +162,7 @@ mod tests {
         for cell in cells() {
             let Some(header) = &cell.header else { continue };
             let result = match header.gc_type {
-                GC_TYPE_OBJECT => object_word(&cell, header),
+                perry_abi::gc_object_type_pat!() => object_word(&cell, header),
                 GC_TYPE_CLOSURE => closure_word(&cell, header),
                 GC_TYPE_ARRAY => {
                     match super::super::arrays::ArrayParts::from_cell(&cell) {

@@ -17,7 +17,7 @@ P='(crate::gc::|gc::|crate::|perry_runtime::gc::|perry_abi::|crate::codegen_abi:
 find_rs() { grep -rnP "$1" --include=*.rs $SRC 2>/dev/null | grep -vE "/tests?/|_tests?\.rs:|/tests?\.rs:|/test_[a-z_]*\.rs:"; }
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 find_rs "(==|!=)\s*${P}GC_TYPE_OBJECT\b(?!_)|\bGC_TYPE_OBJECT\b(?!_)\s*(=>|\||==|!=)|\|\s*${P}GC_TYPE_OBJECT\b(?!_)|matches!\([^)]*\bGC_TYPE_OBJECT\b(?!_)|_of_type\([^)]*\bGC_TYPE_OBJECT\b(?!_)" \
-  | grep -vE "^crates/perry-runtime/src/(gc/types|object/header)\.rs:" | grep -vP "^\S+:\d+:\s*//" > "$tmp/a"
+  | grep -vE "^crates/perry-runtime/src/(gc/types|object/header)\.rs:|^crates/perry-abi/src/object_type\.rs:" | grep -vP "^\S+:\d+:\s*//" > "$tmp/a"
 find_rs "size_of::<(crate::object::|super::|crate::|perry_runtime::)?ObjectHeader>\(\)|ObjectHeader>\(\)\.add|as \*(mut|const) ObjectHeader\)\.add\(1\)|ObjectHeader\)\.add\(1\)" \
   | grep -vE "^crates/perry-runtime/src/object/header\.rs:" | grep -vP "^\S+:\d+:\s*//" > "$tmp/b"
 find_rs "\.meta\b" | grep -E "^crates/(perry-runtime|perry-stdlib|perry-codegen|perry-ext-zlib|perry-perex)/" | grep -vE "shadow_stack|\(\*entry\)\.meta|module\.meta|\.meta\.(span|kind)" \

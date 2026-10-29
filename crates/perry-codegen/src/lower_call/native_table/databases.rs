@@ -71,6 +71,32 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         args: &[],
         ret: NR_HANDLE_ID,
     },
+    // `stmt.columns()` — the result columns' metadata. ActiveRecord's
+    // SQLite adapter reads the declared `type` of each to decide whether to
+    // turn safe integers on; without this the call reads `undefined` and
+    // `.map` on the result throws.
+    NativeModSig {
+        module: "better-sqlite3",
+        has_receiver: true,
+        method: "columns",
+        class_filter: None,
+        runtime: "js_sqlite_stmt_columns",
+        args: &[],
+        ret: NR_GCPTR,
+    },
+    // `stmt.safeIntegers([toggle])` — INTEGER columns come back as BigInt.
+    // Returns the same handle so the call chains, as `raw()` does. Unlike
+    // `raw`, the toggle IS threaded through, because the adapter calls
+    // `setReadBigInts(true)` explicitly.
+    NativeModSig {
+        module: "better-sqlite3",
+        has_receiver: true,
+        method: "safeIntegers",
+        class_filter: None,
+        runtime: "js_sqlite_stmt_safe_integers",
+        args: &[NA_F64],
+        ret: NR_HANDLE_ID,
+    },
     NativeModSig {
         module: "better-sqlite3",
         has_receiver: true,

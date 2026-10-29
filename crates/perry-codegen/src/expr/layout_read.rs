@@ -142,7 +142,8 @@ pub(crate) fn begin(
 ) -> Option<LayoutRead> {
     let (bit, slot) = admitted(ctx, property)?;
     crate::expr::note_site("case2c");
-    let header = crate::target_layout::object_header_size_bytes(ctx.target_triple);
+    let header =
+        crate::target_layout::object_slot_base_bytes(ctx.target_triple, ctx.program_layouts.form());
     let word_idx = ctx.new_block("l2c.word");
     let load_idx = ctx.new_block("l2c.load");
     let hit_idx = ctx.new_block("l2c.hit");
@@ -233,9 +234,10 @@ pub(crate) fn begin_store(
 ) -> Option<LayoutStore> {
     let (bit, slot) = admitted(ctx, property)?;
     crate::expr::note_site("case2c-store");
-    let header = crate::target_layout::object_header_size_bytes(ctx.target_triple);
+    let header =
+        crate::target_layout::object_slot_base_bytes(ctx.target_triple, ctx.program_layouts.form());
     let word_idx = ctx.new_block("l2s.word");
-    let meta_idx = ctx.new_block("l2s.meta");
+    let meta_idx = ctx.new_block("l2s_meta");
     let load_idx = ctx.new_block("l2s.load");
     let hit_idx = ctx.new_block("l2s.hit");
     let miss_idx = ctx.new_block("l2s.miss");
@@ -791,7 +793,8 @@ pub(crate) fn begin_family_init_store(
     );
     let slot = arm.slot;
     crate::expr::note_site("case2c-run");
-    let header = crate::target_layout::object_header_size_bytes(ctx.target_triple);
+    let header =
+        crate::target_layout::object_slot_base_bytes(ctx.target_triple, ctx.program_layouts.form());
     let gate_idx = ctx.new_block("l2i.gate");
     let word_idx = ctx.new_block("l2i.word");
     let load_idx = ctx.new_block("l2i.load");

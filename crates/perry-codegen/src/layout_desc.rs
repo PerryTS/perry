@@ -36,17 +36,21 @@ pub(crate) mod methods;
 pub const KEY_TY: &str = "{ ptr, i32, i8, i8, i16 }";
 
 /// The descriptor tail after `image_keys`: `gc_header_word` for a layout of `slot_count` slots.
-pub(crate) fn desc_tail(triple: &str, slot_count: u32) -> String {
+pub(crate) fn desc_tail(
+    triple: &str,
+    form: crate::target_layout::HeaderForm,
+    slot_count: u32,
+) -> String {
     use crate::target_layout::layout_gc_header_word;
     format!(
         "i64 {}, [32 x i8] zeroinitializer",
-        layout_gc_header_word(triple, slot_count)
+        layout_gc_header_word(triple, form, slot_count)
     )
 }
 
 /// The `off` field of the key stored in `slot`.
-pub(crate) fn key_off(triple: &str, slot: u32) -> u64 {
-    crate::target_layout::layout_key_off(triple, slot)
+pub(crate) fn key_off(triple: &str, form: crate::target_layout::HeaderForm, slot: u32) -> u64 {
+    crate::target_layout::layout_key_off(triple, form, slot)
 }
 /// `%StaticAtom`: hash, string, kind, pad, index (24 bytes; §6a).
 pub const ATOM_TY: &str = "{ i64, ptr, i8, [3 x i8], i32 }";
@@ -407,7 +411,11 @@ fn emit_image_descriptor(
 ) {
     let count = keys.len();
     let triple = llmod.target_triple.clone();
-    let tail = desc_tail(&triple, count.max(1) as u32);
+    let tail = desc_tail(
+        &triple,
+        crate::target_layout::HeaderForm::Meta,
+        count.max(1) as u32,
+    );
     let cap = (count * 2).next_power_of_two().max(2);
     let mut index = vec![u32::MAX; cap];
     for (pos, (_, hash, _)) in keys.iter().enumerate() {
@@ -424,7 +432,7 @@ fn emit_image_descriptor(
             format!(
                 "{KEY_TY} {{ ptr @{a}, i32 {i}, i8 {}, i8 0, i16 {} }}",
                 *attrs as i8,
-                key_off(&triple, i as u32)
+                key_off(&triple, crate::target_layout::HeaderForm::Meta, i as u32)
             )
         })
         .collect();
@@ -754,7 +762,7 @@ fn emit_desc(
     let (keys_name, index_name, desc_name) = names;
     let count = keys.len();
     let triple = llmod.target_triple.clone();
-    let tail = desc_tail(&triple, slot_count);
+    let tail = desc_tail(&triple, crate::target_layout::HeaderForm::Meta, slot_count);
     let cap = (count * 2).next_power_of_two().max(2);
     let mut index = vec![u32::MAX; cap];
     // The index answers property lookups (`perry-runtime`
@@ -786,7 +794,7 @@ fn emit_desc(
             format!(
                 "{KEY_TY} {{ ptr @{a}, i32 {slot}, i8 {}, i8 0, i16 {} }}",
                 attrs as i8,
-                key_off(&triple, *slot)
+                key_off(&triple, crate::target_layout::HeaderForm::Meta, *slot)
             )
         })
         .collect();
@@ -1360,7 +1368,7 @@ fn emit_descriptor(
     {
         let count = keys.len();
         let triple = llmod.target_triple.clone();
-        let tail = desc_tail(&triple, slot_count);
+        let tail = desc_tail(&triple, crate::target_layout::HeaderForm::Meta, slot_count);
         let cap = (count * 2).next_power_of_two().max(2);
         let mut index = vec![u32::MAX; cap];
         for (pos, k) in keys.iter().enumerate() {
@@ -1383,7 +1391,7 @@ fn emit_descriptor(
             .map(|(i, a)| {
                 format!(
                     "{KEY_TY} {{ ptr @{a}, i32 {i}, i8 0, i8 0, i16 {} }}",
-                    key_off(&triple, i as u32)
+                    key_off(&triple, crate::target_layout::HeaderForm::Meta, i as u32)
                 )
             })
             .collect();
@@ -1439,3 +1447,11 @@ fn emit_descriptor(
 mod comdat_tests;
 #[cfg(test)]
 mod gc_plan_tests;
+
+impl FamilyAdd {
+    /// The header form predicted for the family's objects: the base of its
+    /// slots.
+    pub(crate) fn form(&self) -> crate::target_layout::HeaderForm {
+        crate::target_layout::HeaderForm::Meta
+    }
+}

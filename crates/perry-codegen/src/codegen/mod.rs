@@ -2651,7 +2651,11 @@ fn lower_module(
             let Some(&class_id) = class_ids.get(class_name) else {
                 continue;
             };
-            let gc_packed = crate::target_layout::inline_alloc_gc_packed(&triple, field_count);
+            let gc_packed = crate::target_layout::inline_alloc_gc_packed(
+                &triple,
+                crate::target_layout::class_instance_form(class_name),
+                field_count,
+            );
             match inits.get(keys_global) {
                 // Two names (an alias) sharing one keys global must agree on
                 // the word module init writes; if they do not, neither may use

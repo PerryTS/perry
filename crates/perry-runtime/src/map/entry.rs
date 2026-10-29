@@ -37,7 +37,7 @@ unsafe fn find_entry(map: *const MapHeader, key: f64) -> i32 {
 /// straight to the general comparison. Past the small extent the indexed
 /// lookup owns the decision.
 #[inline(always)]
-unsafe fn find_entry_after_identity_miss(map: *const MapHeader, key: f64) -> i32 {
+pub(super) unsafe fn find_entry_after_identity_miss(map: *const MapHeader, key: f64) -> i32 {
     let key = normalize_zero(key);
     if (*map).used <= SIDE_TABLE_THRESHOLD {
         if is_plain_nonzero_number_bits(key.to_bits()) {
@@ -105,7 +105,7 @@ pub(super) fn get_with_slot_resolved(map: *const MapHeader, key: f64, slot_out: 
     unsafe {
         let index = match identical_entry(map, key) {
             Some(index) => index,
-            None => find_key_index(map, normalize_zero(key)),
+            None => find_entry_after_identity_miss(map, key),
         };
         if index < 0 {
             *slot_out = 0;

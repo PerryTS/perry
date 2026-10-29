@@ -305,3 +305,23 @@ fn computed_method_names_preserve_surrogate_bytes() {
         assert!(crate::object::own_property_get_by_bytes(object, b"", prototype).is_none());
     }
 }
+
+#[test]
+fn native_names_carry_the_utf8_fact_and_unproven_wtf8_names_name_no_member() {
+    let code = method_body as *const () as *const u8;
+    for m in [
+        ClassMemberDecl::native_method("size", code, 0),
+        ClassMemberDecl::native_accessor("at", code, false),
+        ClassMemberDecl::native_accessor("at", code, true),
+    ] {
+        assert_ne!(m.flags & CLASS_MEMBER_NAME_UTF8, 0, "{m:?}");
+        assert!(m.literal_name().is_some_and(|n| n == "size" || n == "at"));
+    }
+    // A lone surrogate (WTF-8) without the fact is validated and names no member.
+    static LONE: [u8; 3] = [0xED, 0xA0, 0x80];
+    let mut w = method();
+    w.name = LONE.as_ptr();
+    w.name_len = LONE.len() as u32;
+    assert_eq!(w.flags & CLASS_MEMBER_NAME_UTF8, 0);
+    assert_eq!(w.literal_name(), None);
+}

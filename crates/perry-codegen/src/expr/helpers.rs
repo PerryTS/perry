@@ -544,6 +544,7 @@ pub(crate) fn is_global_this_builtin_name(name: &str) -> bool {
             | "DisposableStack"
             | "AsyncDisposableStack"
             | "SuppressedError"
+            | "Iterator"
             | "Buffer"
             // Global functions (typeof === "function" in spec).
             | "eval"

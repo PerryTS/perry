@@ -185,6 +185,8 @@ builtin_constructors! {
     DisposableStack => NOOP_CONSTRUCTOR_INFO,
     AsyncDisposableStack => NOOP_CONSTRUCTOR_INFO,
     SuppressedError => NOOP_CONSTRUCTOR_INFO,
+    // Abstract: `prototype` is the realm's %IteratorPrototype% (`iterator_ctor`).
+    Iterator => CONSTRUCT_ONLY_INFO,
     Buffer => NOOP_CONSTRUCTOR_INFO,
 }
 
@@ -242,7 +244,8 @@ pub(crate) fn is_global_this_builtin_constructor_name(name: &str) -> bool {
         | "Storage"
         | "Navigator"
         | "DisposableStack"
-        | "AsyncDisposableStack" => realm_urlpattern_metadata!(length),
+        | "AsyncDisposableStack"
+        | "Iterator" => realm_urlpattern_metadata!(length),
         "CompressionStream" | "DecompressionStream" => 1,
         "Array"
         | "Object"

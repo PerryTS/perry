@@ -20,7 +20,10 @@ fn object_header_word() -> String {
     const GC_FLAG_ARENA: u64 = 0x02;
     let slots = std::cmp::max(2, crate::target_layout::INLINE_SLOT_FLOOR);
     let size =
-        8 + crate::target_layout::object_header_size_bytes("aarch64-apple-darwin") + 8 * slots;
+        8 + crate::target_layout::object_slot_base_bytes(
+            "aarch64-apple-darwin",
+            crate::target_layout::HeaderForm::Meta,
+        ) + 8 * slots;
     let word = (size << 32) | (GC_FLAG_ARENA << 8) | GC_TYPE_OBJECT;
     format!("constant <2 x i64> <i64 {word}, i64 ")
 }

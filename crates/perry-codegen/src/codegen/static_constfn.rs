@@ -1008,14 +1008,23 @@ pub(crate) fn birth_literal(
     Some(crate::rooting::with_operands_rooted_across_call(
         ctx,
         &exprs,
-        |ctx| Ok(crate::expr::inline_birth::layout(ctx, &desc, shape.live, 0)),
+        |ctx| {
+            Ok(crate::expr::inline_birth::layout(
+                ctx,
+                shape.form(),
+                &desc,
+                shape.live,
+                0,
+            ))
+        },
         |ctx, values, object| {
             use crate::types::{I32, I64, I8};
             let raw = ctx.block().inttoptr(I64, &object);
             // The literal's synthetic class identity is independent of its layout.
             // GC_STORE_AUDIT(POINTER_FREE): The i32 store writes the synthetic class ID at ObjectHeader offset0, not a pointer or JSValue; rooted operands survive the surrounding inline_birth allocation.
             ctx.block().store(I32, &class_id.to_string(), &raw);
-            let header = crate::target_layout::object_header_size_bytes(ctx.target_triple);
+            let header =
+                crate::target_layout::object_slot_base_bytes(ctx.target_triple, shape.form());
             let fields = ctx.block().gep(I8, &raw, &[(I64, &header.to_string())]);
             for (slot, value) in values.iter().enumerate() {
                 // A chunked literal slot (`Expr::LiteralChunks`) stays a hole
@@ -1162,3 +1171,30 @@ fn finalize_shape(ctx: &mut crate::expr::FnCtx<'_>, shape: &BirthShape, object: 
 #[cfg(test)]
 #[path = "static_constfn_tests.rs"]
 mod tests;
+
+impl super::static_shape_ids::BirthShape {
+    /// The header form predicted for the objects this record describes (`HeaderForm`:
+    /// every ordinary object has the meta word today). Sites take their slot base
+    /// from here, never from the type byte.
+    pub(crate) fn form(&self) -> crate::target_layout::HeaderForm {
+        crate::target_layout::HeaderForm::Meta
+    }
+}
+
+impl ConstructedObject {
+    /// The header form predicted for the objects this record describes (`HeaderForm`:
+    /// every ordinary object has the meta word today). Sites take their slot base
+    /// from here, never from the type byte.
+    pub(crate) fn form(&self) -> crate::target_layout::HeaderForm {
+        self.shape.form()
+    }
+}
+
+impl StaticMethodLane {
+    /// The header form predicted for the objects this record describes (`HeaderForm`:
+    /// every ordinary object has the meta word today). Sites take their slot base
+    /// from here, never from the type byte.
+    pub(crate) fn form(&self) -> crate::target_layout::HeaderForm {
+        crate::target_layout::HeaderForm::Meta
+    }
+}

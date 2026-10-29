@@ -744,6 +744,17 @@ mod tests {
 /// `byteOffset` / `buffer`. Reflection-only: this does NOT flip the hot-path
 /// descriptor gate (see `set_builtin_accessor_descriptor`). #2060.
 pub(crate) unsafe fn install_builtin_getter(proto: *mut ObjectHeader, key: &str, getter_bits: u64) {
+    install_builtin_accessor(proto, key, getter_bits, 0);
+}
+
+/// [`install_builtin_getter`] with a setter too (`setter_bits`, 0 = none), for
+/// the few spec accessors that have one (`Iterator.prototype.constructor`).
+pub(crate) unsafe fn install_builtin_accessor(
+    proto: *mut ObjectHeader,
+    key: &str,
+    getter_bits: u64,
+    setter_bits: u64,
+) {
     if proto.is_null() || (proto as usize) < 0x10000 {
         return;
     }
@@ -757,24 +768,27 @@ pub(crate) unsafe fn install_builtin_getter(proto: *mut ObjectHeader, key: &str,
     // rewritten. Mirrors `set_builtin_accessor_descriptor` below, which then
     // finds the entry already in place.
     let entry = crate::object::key_attrs::AttrsEdit::Data(&[], BUILTIN_GETTER_ATTRS.bits).apply(
-        crate::object::key_attrs::AttrsEdit::Accessor(&[], getter_bits != 0, false).apply(0),
+        crate::object::key_attrs::AttrsEdit::Accessor(&[], getter_bits != 0, setter_bits != 0)
+            .apply(0),
     );
     ensure_key_in_keys_array_with_entry(proto, key_str, entry);
     // Spec: an accessor getter's `.name` is `"get " + key` (e.g.
     // `Object.getOwnPropertyDescriptor(ArrayBuffer.prototype,"byteLength").get.name
     // === "get byteLength"`). Register it against the getter closure's func_ptr;
     // without this the `.name` read returned `""`.
-    let getter_ptr = (getter_bits & 0x0000_FFFF_FFFF_FFFF) as usize;
-    if getter_ptr >= 0x1000 && crate::closure::is_closure_ptr(getter_ptr) {
-        let info = &*(*(getter_ptr as *const crate::closure::ClosureHeader)).info;
-        crate::builtins::register_function_name_if_absent(info, &format!("get {key}"));
+    for (bits, prefix) in [(getter_bits, "get"), (setter_bits, "set")] {
+        let ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
+        if ptr >= 0x1000 && crate::closure::is_closure_ptr(ptr) {
+            let info = &*(*(ptr as *const crate::closure::ClosureHeader)).info;
+            crate::builtins::register_function_name_if_absent(info, &format!("{prefix} {key}"));
+        }
     }
     set_builtin_accessor_descriptor(
         proto as usize,
         key.to_string(),
         AccessorDescriptor {
             get: getter_bits,
-            set: 0,
+            set: setter_bits,
         },
         BUILTIN_GETTER_ATTRS,
     );
