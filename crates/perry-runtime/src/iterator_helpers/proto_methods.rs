@@ -339,30 +339,12 @@ unsafe fn call_resolved(
         std::slice::from_raw_parts(args_ptr, args_len)
     });
     let name = m.name().as_bytes();
-    let mut method = scope.root_nanbox_f64(get(receiver.get_nanbox_f64(), name));
-    let mut claim = claim_overrides;
-    if JSValue::from_bits(method.get_nanbox_f64().to_bits()).is_undefined() {
-        // Generator objects do not inherit from `%Iterator.prototype%` yet:
-        // an iterator resolves the name there.
-        let next = get(receiver.get_nanbox_f64(), b"next");
-        if !crate::object::value_is_callable(next) {
-            return None;
-        }
-        let proto =
-            js_nanbox_pointer(crate::object::iterator_ctor::iterator_prototype_object() as i64);
-        let key = crate::js_nanbox_string(crate::string::intern_ascii_literal(name) as i64);
-        method = scope.root_nanbox_f64(crate::proxy::js_reflect_get(
-            proto,
-            key,
-            receiver.get_nanbox_f64(),
-        ));
-        claim = true;
-    }
+    let method = scope.root_nanbox_f64(get(receiver.get_nanbox_f64(), name));
     let args = RuntimeHandleScope::refreshed_nanbox_f64_slice(&args);
     if m.is_builtin(method.get_nanbox_f64()) {
         return Some(run(m, receiver.get_nanbox_f64(), &args));
     }
-    if claim && crate::object::value_is_callable(method.get_nanbox_f64()) {
+    if claim_overrides && crate::object::value_is_callable(method.get_nanbox_f64()) {
         return Some(call(
             method.get_nanbox_f64(),
             receiver.get_nanbox_f64(),
@@ -372,9 +354,9 @@ unsafe fn call_resolved(
     None
 }
 
-/// #2874: a helper name called on an ordinary object (a generator, a class
-/// instance, any `{ next() }`). `has_own_field` keeps the caller's own-method
-/// precedence. `None` falls through to ordinary method lookup.
+/// #2874: a helper name called on an ordinary object that inherits it (a
+/// generator, an `Iterator` subclass instance). `has_own_field` keeps the
+/// caller's own-method precedence. `None` falls through to ordinary method lookup.
 pub unsafe fn maybe_dispatch_helper_on_iterator(
     obj: *mut ObjectHeader,
     method_name: &str,

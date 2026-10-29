@@ -565,17 +565,6 @@ extern "C" fn async_generator_proto_async_iterator_thunk(
     this.as_f64()
 }
 
-/// `%Generator.prototype%[Symbol.iterator]()` returns `this` (spec inherits this
-/// from `%IteratorPrototype%`). Mirrors the async thunk above; see the install
-/// note in `build_generator_tower` for why the sync prototype now carries this.
-extern "C" fn generator_proto_iterator_thunk(
-    _c: *const crate::closure::ClosureHeader,
-    this: crate::closure::JsThis,
-    _arg: f64,
-) -> f64 {
-    this.as_f64()
-}
-
 /// Install a well-known-symbol-keyed method (returning `this`) on a
 /// generator/async-generator prototype, with the spec descriptor shape
 /// (`name`/`length` own props, non-enumerable value).
@@ -888,7 +877,7 @@ pub extern "C" fn js_generator_attach_closure_prototype(
     // the installed keys and final shape still own the live inline bound.
     let proto = crate::realm_decl! { birth super::proto_room::alloc_builtin_prototype_with_room(3); realm { "%AsyncGeneratorFunctionPrototype%", extends = Function.prototype, members = { constructor, attrs = configurable; prototype = ref("%AsyncGeneratorPrototype%"), attrs = configurable; [Symbol.toStringTag] = "AsyncGeneratorFunction"; }; "%GeneratorFunctionPrototype%", extends = Function.prototype, members = { constructor, attrs = configurable; prototype = ref("%GeneratorPrototype%"), attrs = configurable; [Symbol.toStringTag] = "GeneratorFunction"; }; } };
     let gen_proto =
-        crate::realm_decl! { birth super::proto_room::alloc_builtin_prototype_with_room(if is_async { 5 } else { 6 }); realm { "%AsyncGeneratorPrototype%", extends = "%AsyncIteratorPrototype%", members = { constructor = ref("%AsyncGeneratorFunctionPrototype%"), attrs = configurable; next; return; throw; [Symbol.toStringTag] = "AsyncGenerator"; }, births = [Promise]; "%GeneratorPrototype%", members = { constructor = ref("%GeneratorFunctionPrototype%"), attrs = configurable; next; return; throw; [Symbol.iterator]; [Symbol.toStringTag] = "Generator"; }; } };
+        crate::realm_decl! { birth super::proto_room::alloc_builtin_prototype_with_room(5); realm { "%AsyncGeneratorPrototype%", extends = "%AsyncIteratorPrototype%", members = { constructor = ref("%AsyncGeneratorFunctionPrototype%"), attrs = configurable; next; return; throw; [Symbol.toStringTag] = "AsyncGenerator"; }, births = [Promise]; "%GeneratorPrototype%", extends = "%IteratorPrototype%", members = { constructor = ref("%GeneratorFunctionPrototype%"), attrs = configurable; next; return; throw; [Symbol.toStringTag] = "Generator"; }; } };
     if ctor.is_null() || proto.is_null() || gen_proto.is_null() {
         return;
     }
@@ -961,50 +950,35 @@ pub extern "C" fn js_generator_attach_closure_prototype(
     ] {
         install_proto_method_with_key(gen_proto, name, info, 1, key);
     }
-    // Spec: `%AsyncGenerator.prototype%` inherits `[Symbol.asyncIterator]` from
+    // `%AsyncGenerator.prototype%` inherits `[Symbol.asyncIterator]` from
     // `%AsyncIteratorPrototype%` and `%Generator.prototype%` inherits
-    // `[Symbol.iterator]` from `%IteratorPrototype%` — both returning `this`.
-    // Without the async one, `for await (x of gen())` over an async-generator
-    // *method instance* can't resolve the async iterator and hangs/yields nothing
-    // (the instance carries no own iterator symbol). The async-iterator-
-    // acquisition path (`js_get_async_iterator`) passes the receiver as `this`
-    // when invoking this thunk, so it returns the generator instance.
-    //
-    // The SYNC `%Generator.prototype%` carries `[Symbol.iterator]` for the same
-    // reason (#6696): a *computed* read `gen[Symbol.iterator]` walks the
-    // prototype chain and must resolve to a callable that returns the generator
-    // — Node exposes it via `%IteratorPrototype%`, and esbuild's `__yieldStar`
-    // helper (emitted for `yield*` at `--target=es2015|es2017`) does
-    // `value[Symbol.iterator]()` on the delegate generator. `for (x of gen())`
-    // is unaffected: it drives the generator's own `.next()` directly (the
-    // builtin-iterator recognizers), and where the sync iterator-acquisition
-    // path (`js_get_iterator`) does read `[Symbol.iterator]`, it passes the
-    // receiver as `this` when invoking the method, so the thunk returns the
-    // generator instance.
-    let (symbol_name, display_name, thunk) = if is_async {
-        (
+    // `[Symbol.iterator]` (and the helper methods) from `%IteratorPrototype%`,
+    // both returning `this`. `for await (x of gen())` over an async-generator
+    // *method instance* resolves the async iterator through that parent;
+    // `js_get_async_iterator` / `js_get_iterator` pass the receiver as `this`,
+    // so the thunk returns the generator instance (#6696).
+    if is_async {
+        // Reflection reaches this parent with two `Object.getPrototypeOf`
+        // calls from an async generator function's `.prototype`.
+        let async_iterator_proto = crate::realm_decl! { birth crate::object::object_alloc_prototype_old(0, 0); realm { "%AsyncIteratorPrototype%", members = { [Symbol.asyncIterator]; }, births = [Promise]; } };
+        install_proto_symbol_self_method(
+            async_iterator_proto,
             "asyncIterator",
             "[Symbol.asyncIterator]",
             crate::fn_info!(#[realm("%AsyncIteratorPrototype%[\"@@asyncIterator\"]", constructible = true)] export crate::object::global_this::generator::async_generator_proto_async_iterator_thunk, 1; with_declared(0)),
-        )
-    } else {
-        (
-            "iterator",
-            "[Symbol.iterator]",
-            crate::fn_info!(#[realm("%GeneratorPrototype%[\"@@iterator\"]", constructible = true)] export crate::object::global_this::generator::generator_proto_iterator_thunk, 1; with_declared(0)),
-        )
-    };
-    if is_async {
-        // `%AsyncGenerator.prototype%` inherits from a distinct
-        // `%AsyncIteratorPrototype%`; reflection reaches that parent with two
-        // `Object.getPrototypeOf` calls from an async generator function's
-        // `.prototype`.
-        let async_iterator_proto = crate::realm_decl! { birth crate::object::object_alloc_prototype_old(0, 0); realm { "%AsyncIteratorPrototype%", members = { [Symbol.asyncIterator]; }, births = [Promise]; } };
-        install_proto_symbol_self_method(async_iterator_proto, symbol_name, display_name, thunk);
+        );
         let parent_bits = crate::value::js_nanbox_pointer(async_iterator_proto as i64).to_bits();
         super::super::prototype_chain::object_set_static_prototype(gen_proto as usize, parent_bits);
     } else {
-        install_proto_symbol_self_method(gen_proto, symbol_name, display_name, thunk);
+        // Class-default link, like the built-in iterator families
+        // (`iterator_prototypes::chain_to`): an intrinsic chain, not a user
+        // reparenting.
+        let parent = crate::object::iterator_ctor::iterator_prototype_object();
+        let parent_bits = crate::value::js_nanbox_pointer(parent as i64).to_bits();
+        super::super::prototype_chain::object_link_class_default_prototype(
+            gen_proto as usize,
+            parent_bits,
+        );
     }
     set_intrinsic_to_string_tag(gen_proto, inst_tag);
 
