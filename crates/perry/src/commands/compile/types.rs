@@ -808,6 +808,11 @@ pub struct CompilationContext {
     /// automatic wasm imports also register bytes there but must still lower
     /// their executable adapter on a later metadata pass.
     pub file_loader_asset_paths: HashSet<PathBuf>,
+    /// Canonical paths a static import read with `{ type: "text" }`. Such a
+    /// file becomes a text module (default export = its contents) whatever
+    /// its extension, as with Bun (`import s from "./Dockerfile" with
+    /// { type: "text" }`).
+    pub text_loader_asset_paths: HashSet<PathBuf>,
     /// Stable `$perryfs` names chosen for generated asset-module members.
     /// These are keyed by canonical source path so the ordinary file-loader
     /// collection path can reuse them without knowing how the import arose.
@@ -856,6 +861,10 @@ pub struct CompilationContext {
     pub compile_package_dirs: BTreeSet<PathBuf>,
     /// Compile package roots already checked for unsupported Node native addon markers.
     pub checked_compile_package_native_addon_roots: HashSet<PathBuf>,
+    /// Canonical roots of `perry.nativeAddons` packages the walk entered. A
+    /// platform payload is approved through the wrapper copy that loads it,
+    /// which an isolated store (pnpm) keeps outside the payload's ancestors.
+    pub native_addon_wrapper_roots: BTreeSet<PathBuf>,
     /// #1680 (Phase 2 of #1677): build-time codegen steps declared in the
     /// host `package.json` `perry.codegen`. Each is a shell command run
     /// (in `codegen_dir`) before module collection, so a codegen library
@@ -1406,6 +1415,7 @@ impl CompilationContext {
             embedded_assets: Vec::new(),
             bunfs_root: None,
             file_loader_asset_paths: HashSet::new(),
+            text_loader_asset_paths: HashSet::new(),
             file_loader_asset_names: HashMap::new(),
             generated_asset_modules: BTreeMap::new(),
             module_aliases: BTreeMap::new(),
@@ -1418,6 +1428,7 @@ impl CompilationContext {
             app_metadata: perry_codegen::AppMetadata::default(),
             compile_package_dirs: BTreeSet::new(),
             checked_compile_package_native_addon_roots: HashSet::new(),
+            native_addon_wrapper_roots: BTreeSet::new(),
             codegen_steps: Vec::new(),
             codegen_dir: None,
             type_checker: None,

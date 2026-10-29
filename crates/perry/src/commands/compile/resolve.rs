@@ -362,6 +362,7 @@ pub(super) fn enumerate_installed_package_roots(
     for nm in ancestor_node_modules_dirs(project_root) {
         collect_packages_in_node_modules(&nm, &mut out, &mut visited);
         collect_packages_in_bun_store(&nm, &mut out, &mut visited);
+        collect_packages_in_pnpm_store(&nm, &mut out, &mut visited);
     }
     // Symlinks and recursively discovered nested packages can expose the same
     // physical root more than once. Keep its first occurrence, preserving the
@@ -391,6 +392,33 @@ fn collect_packages_in_bun_store(
         Ok(e) => e,
         Err(_) => return,
     };
+    for entry in entries.flatten() {
+        let nested = entry.path().join("node_modules");
+        if nested.is_dir() {
+            collect_packages_in_node_modules(&nested, out, visited);
+        }
+    }
+}
+
+/// pnpm's isolated layout links only a workspace package's direct
+/// dependencies into its `node_modules`; transitive ones are reachable through
+/// `node_modules/.pnpm`, either its hidden-hoist `node_modules` (the only
+/// entry when pnpm links packages from a global virtual store) or
+/// `.pnpm/<pkg>@<version>/node_modules`. Without them the
+/// wildcard compiles a package from TypeScript source while its transitive
+/// dependency stays on published JavaScript, which lacks source-only exports
+/// such as a `const enum` (`tldts` importing `FLAG` from `tldts-core`).
+fn collect_packages_in_pnpm_store(
+    node_modules: &Path,
+    out: &mut HashMap<String, Vec<PathBuf>>,
+    visited: &mut HashSet<PathBuf>,
+) {
+    let pnpm_dir = node_modules.join(".pnpm");
+    let entries = match fs::read_dir(&pnpm_dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    collect_packages_in_node_modules(&pnpm_dir.join("node_modules"), out, visited);
     for entry in entries.flatten() {
         let nested = entry.path().join("node_modules");
         if nested.is_dir() {
