@@ -66,7 +66,7 @@ impl LeafVerdict {
         if gc_type_rewrite_descriptor_kind((*h).obj_type) == GcRewriteDescriptorKind::Leaf {
             return;
         }
-        visit_gc_rewrite_slots_inline(h, |slot| self.word(slot.read()));
+        visit_gc_rewrite_slots_inline::<false>(h, |slot| self.word(slot.read()));
     }
 }
 
@@ -112,7 +112,7 @@ mod oracle {
         }
         unsafe fn drain(&mut self) {
             while let Some(h) = self.work.pop() {
-                visit_gc_rewrite_slots_inline(h, |slot| self.bits(slot.read()));
+                visit_gc_rewrite_slots_inline::<false>(h, |slot| self.bits(slot.read()));
             }
         }
     }
@@ -145,8 +145,8 @@ mod oracle {
             }
             visit_ffi_mutable_registered_roots_with_sources(&mut visitor, None);
         }
-        let snapshot = remembered_dirty_snapshot();
-        scan_remembered_dirty_slots_copying(&snapshot, None, |slot, _, _, _| unsafe {
+        let snapshot = remembered_dirty_snapshot::<false>();
+        scan_remembered_dirty_slots_copying::<false>(&snapshot, None, |slot, _, _, _| unsafe {
             trace.bits(slot.read());
         });
         unsafe {
@@ -180,7 +180,7 @@ pub(super) fn collect() {
     let pre_large = crate::arena::young_large_in_use_bytes();
     // Stores made before the barrier armed were never evidence-tested: the
     // arming rebuild applies the escape test to every old and malloc slot.
-    super::barrier_arming::arm_and_reconstruct_remembered_set_if_unarmed();
+    super::barrier_arming::arm_and_reconstruct_remembered_set_if_unarmed::<false>();
     #[cfg(any(test, debug_assertions))]
     let precise = oracle::live_leaves();
     let mut verdict = LeafVerdict::new();
@@ -260,7 +260,7 @@ pub(crate) unsafe fn repair_promoted_leaf_edges(h: *mut GcHeader) {
         sticky.restore();
         return;
     }
-    visit_gc_rewrite_slots_inline(h, |slot| {
+    visit_gc_rewrite_slots_inline::<false>(h, |slot| {
         let bits = slot.read();
         if let Some(word) = decode_root_word(bits) {
             if barrier::remembered_child_needs_tracking(word.addr()) {
