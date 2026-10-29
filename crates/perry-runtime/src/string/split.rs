@@ -9,7 +9,11 @@ use crate::array::ArrayHeader;
 /// a per-element layout-map update. The write barrier remains necessary if a
 /// collection has promoted the rooted result array while it is being built.
 /// A result is born young at any size (a large one in young large storage),
-/// so its parts are born young too.
+/// so its parts are born young too, and while it stays young with marking
+/// idle a store owes nothing: the runtime twin of the generated parent gate
+/// decides, from the header the store is about to touch anyway. A
+/// collection during the split that promotes the result, or starts marking,
+/// flips that answer for every later store.
 #[inline]
 unsafe fn store_split_string(arr: *mut ArrayHeader, index: usize, string: *mut StringHeader) {
     const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
@@ -19,7 +23,9 @@ unsafe fn store_split_string(arr: *mut ArrayHeader, index: usize, string: *mut S
     let value_bits = STRING_TAG | (string as u64 & POINTER_MASK);
     // GC_STORE_AUDIT(BARRIERED): split result string slot is followed by a runtime write barrier.
     std::ptr::write(elements_ptr.add(index), f64::from_bits(value_bits));
-    crate::gc::runtime_write_barrier_slot(arr as usize, elements_ptr.add(index) as usize, value_bits);
+    if crate::gc::newborn_parent_needs_barrier(arr as usize) {
+        crate::gc::runtime_write_barrier_slot(arr as usize, elements_ptr.add(index) as usize, value_bits);
+    }
     // The all-pointer layout only covers the initialized prefix. Publish this
     // element after the write and barrier, before the next allocation can run
     // a collection.

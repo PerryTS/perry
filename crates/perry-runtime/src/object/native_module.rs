@@ -695,9 +695,14 @@ pub extern "C" fn js_create_native_module_namespace(
     // Install the vtable the moment the first namespace exists — the only
     // static reference to the dispatch/table machinery in the crate.
     install_native_module_vtable();
+    // Invariant: every caller passes the bytes of a Rust `&str` -- codegen
+    // emits the specifier through `strings.intern(&str)`/`add_string_constant`
+    // with that str's `len()`, runtime callers pass literals -- so the bytes
+    // are UTF-8 by construction and are not validated again on each call.
     let module_name = unsafe {
-        std::str::from_utf8(std::slice::from_raw_parts(module_name_ptr, module_name_len))
-            .unwrap_or("")
+        let bytes = std::slice::from_raw_parts(module_name_ptr, module_name_len);
+        debug_assert!(std::str::from_utf8(bytes).is_ok(), "native module name is not UTF-8");
+        std::str::from_utf8_unchecked(bytes)
     };
     let module_name = normalize_native_module_alias(module_name);
     if module_name == "wasi" {
