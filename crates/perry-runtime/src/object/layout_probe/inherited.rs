@@ -8,7 +8,8 @@ use super::*;
 pub(super) unsafe fn walks_from(obj: *const ObjectHeader, r: *const ShapeRecord) -> bool {
     match (*r).object_kind() {
         super::super::ShapeObjectKind::Ordinary => {
-            let meta = (*obj).meta;
+            // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
+            let meta = crate::object::header::MetaObj::runtime_born(obj as *mut _).meta();
             meta.is_null()
                 || (*meta).flags & crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER == 0
         }
@@ -33,7 +34,8 @@ pub(super) const READ_BEYOND_LIST: u64 = crate::object::OBJECT_META_FLAG_EXOTIC_
 /// [`crate::object::builtin_proto::on_static_layout`]).
 #[inline(always)]
 pub(super) unsafe fn listed(obj: *const ObjectHeader, kind: super::super::ShapeObjectKind) -> bool {
-    let meta = (*obj).meta;
+    // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
+    let meta = crate::object::header::MetaObj::runtime_born(obj as *mut _).meta();
     let flags = if meta.is_null() { 0 } else { (*meta).flags };
     if flags & crate::object::meta_flags::OBJECT_META_FLAG_SEALED_INTRINSIC != 0 {
         return flags & READ_BEYOND_LIST == 0
@@ -93,8 +95,12 @@ pub(super) unsafe fn prototype_of(
     r: *const ShapeRecord,
 ) -> Next {
     let header = crate::gc::header_from_trusted_user_ptr(obj.cast());
+    // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
     if (*header)._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0
-        && ((*obj).meta.is_null() || (*(*obj).meta).prototype == 0)
+        && (crate::object::header::MetaObj::runtime_born(obj as *mut _)
+            .meta()
+            .is_null()
+            || (*crate::object::header::MetaObj::runtime_born(obj as *mut _).meta()).prototype == 0)
         && (*r).proto_id == super::super::PROTO_ID_DEFAULT
     {
         return Next::Unknown;
@@ -111,7 +117,8 @@ pub(super) unsafe fn realm_default_link(cur: *const ObjectHeader, rc: *const Sha
     if (*header)._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0 {
         return false;
     }
-    let meta = (*cur).meta;
+    // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
+    let meta = crate::object::header::MetaObj::runtime_born(cur as *mut _).meta();
     if !meta.is_null()
         && ((*meta).flags & crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER != 0
             || (*meta).prototype != 0)
@@ -131,7 +138,8 @@ pub(super) unsafe fn link_of(
     cur: *const ObjectHeader,
     rc: *const ShapeRecord,
 ) -> Next {
-    let meta = (*cur).meta;
+    // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
+    let meta = crate::object::header::MetaObj::runtime_born(cur as *mut _).meta();
     let mut bits = 0u64;
     if !meta.is_null() {
         if (*meta).flags & crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER != 0 {
@@ -425,10 +433,16 @@ pub(super) unsafe fn walk_step<const ABSENT: bool>(
         }
     };
     if !walks_from(cur, rc) {
+        // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
         // A runtime-born record (unmarked, its keys all in its list and
         // overflow) whose chain ends here proves absence.
         if (*rc).object_kind() == super::super::ShapeObjectKind::OrdinaryUnmarked
-            && ((*cur).meta.is_null() || (*(*cur).meta).flags & READ_BEYOND_LIST == 0)
+            && (crate::object::header::MetaObj::runtime_born(cur as *mut _)
+                .meta()
+                .is_null()
+                || (*crate::object::header::MetaObj::runtime_born(cur as *mut _).meta()).flags
+                    & READ_BEYOND_LIST
+                    == 0)
             && matches!(prototype_of(dir, cur, rc), Next::End)
         {
             return Err(absent());

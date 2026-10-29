@@ -163,7 +163,11 @@ fn stable_single_own_for_in_keys(value: f64) -> Option<*mut ArrayHeader> {
         if class_id != 0 && !super::super::shapes::object_is_plain_record(object) {
             return stable_miss("receiver_class");
         }
-        if !(*object).meta.is_null() {
+        // A1_UNPROVEN: record-first: receiver before its layout word (kind-A/B question for S0f).
+        if !crate::object::header::MetaObj::runtime_born(object as *mut _)
+            .meta()
+            .is_null()
+        {
             return stable_miss("receiver_meta");
         }
         if !object_is_regular(object) {

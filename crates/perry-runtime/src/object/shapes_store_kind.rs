@@ -99,9 +99,15 @@ pub(crate) unsafe fn receiver_ordinary_kind(obj: *const ObjectHeader) -> ShapeOb
     if (*gc_header(obj))._reserved & crate::gc::GC_OBJECT_CALLABLE != 0 {
         ShapeObjectKind::CallableOrdinary
     } else if (*obj).class_id == crate::object::NATIVE_MODULE_CLASS_ID {
+        // A1_UNPROVEN: record-first: receiver shape (kind-A/B question for S0f).
+        // A1_UNPROVEN: record-first: receiver shape (kind-A/B question for S0f).
         ShapeObjectKind::NativeNamespace
-    } else if !(*obj).meta.is_null()
-        && (*(*obj).meta).flags & crate::object::OBJECT_META_FLAG_NATIVE_ALIAS != 0
+    } else if !crate::object::header::MetaObj::runtime_born(obj as *mut _)
+        .meta()
+        .is_null()
+        && (*crate::object::header::MetaObj::runtime_born(obj as *mut _).meta()).flags
+            & crate::object::OBJECT_META_FLAG_NATIVE_ALIAS
+            != 0
     {
         // Read forwarding is independent of plain-store admission. Runtime
         // births need a distinct kind too: an unmarked shape can otherwise

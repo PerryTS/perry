@@ -1072,7 +1072,7 @@ pub(crate) unsafe fn record_prototype_template(
     };
     let final_shape = crate::object::shapes::object_layout_stamp(proto);
     let count = d.logical_key_count as usize;
-    let meta = (*proto).meta;
+    let meta = crate::object::header::MetaObj::runtime_born(proto as *mut _).meta();
     let owner = crate::value::js_nanbox_pointer(class as i64).to_bits();
     if final_shape == LayoutWord(0)
         || d.proto_id != proto_id
@@ -1445,7 +1445,13 @@ pub(crate) unsafe fn record_instance_link(
     let Some(cell) = class_object_template_cell(class) else {
         return;
     };
-    if !cell.owned() || birth == LayoutWord(0) || !(*inst).meta.is_null() {
+    // A1_UNPROVEN: record-first: inst layout word (kind-A/B question for S0f).
+    if !cell.owned()
+        || birth == LayoutWord(0)
+        || !crate::object::header::MetaObj::runtime_born(inst as *mut _)
+            .meta()
+            .is_null()
+    {
         return;
     }
     let Some(proto_id) =

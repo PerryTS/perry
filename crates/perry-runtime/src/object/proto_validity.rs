@@ -273,14 +273,14 @@ unsafe fn ensure_meta_for_mark(obj: usize, flag: u64) -> Option<*mut crate::obje
         return None;
     }
     let header = crate::value::addr_class::try_read_gc_header(obj)?;
-    if !crate::gc::object_has_meta_word(header.obj_type) {
+    if !crate::gc::gc_type_is_object(header.obj_type) {
         return None;
     }
     let object = obj as *mut crate::object::ObjectHeader;
     // Marking is idempotent. The existing owner record already carries a
     // completed mark, so no allocation or semantic transition remains. Do
     // not reopen handles and enter object_meta_ensure for that same record.
-    let meta = (*object).meta;
+    let meta = crate::object::header::object_meta_if_present(object as *mut _, header.obj_type);
     if !meta.is_null() && (*meta).flags & flag != 0 {
         return Some(meta);
     }
@@ -323,7 +323,7 @@ unsafe fn ensure_meta_for_mark(obj: usize, flag: u64) -> Option<*mut crate::obje
                 crate::object::shapes::transition_object_shape_semantics(object)
             }
         });
-        let meta = (*object).meta;
+        let meta = crate::object::header::object_meta_if_present(object as *mut _, header.obj_type);
         if meta.is_null() {
             return None;
         }
@@ -376,7 +376,11 @@ unsafe fn meta_flag_is_set(obj: usize, flag: u64) -> bool {
     }
     match crate::value::addr_class::try_read_gc_header(obj) {
         Some(header) if crate::gc::object_has_meta_word(header.obj_type) => {
-            let meta = (*(obj as *const crate::object::ObjectHeader)).meta;
+            let meta = crate::object::header::MetaObj::from_type(
+                obj as *const crate::object::ObjectHeader as *mut _,
+                header.obj_type,
+            )
+            .meta();
             !meta.is_null() && (*meta).flags & flag != 0
         }
         _ => false,

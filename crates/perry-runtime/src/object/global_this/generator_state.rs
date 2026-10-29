@@ -712,7 +712,11 @@ unsafe fn prototype_identity(value: f64) -> Option<u64> {
     let addr = (value.to_bits() & crate::value::POINTER_MASK) as usize;
     if let Some(header) = crate::value::addr_class::try_read_gc_header(addr) {
         if crate::gc::object_has_meta_word(header.obj_type) {
-            let meta = (*(addr as *const ObjectHeader)).meta;
+            let meta = crate::object::header::MetaObj::from_type(
+                addr as *const ObjectHeader as *mut _,
+                header.obj_type,
+            )
+            .meta();
             if !meta.is_null()
                 && (*meta).flags & crate::object::OBJECT_META_FLAG_IS_PROTOTYPE != 0
                 && (*meta).proto_serial != 0

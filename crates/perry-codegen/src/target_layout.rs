@@ -682,11 +682,18 @@ fn emitted_descriptor_type_has_exact_llvm_target_layout() {
         assert_eq!(data.offset_of_element(&ty, 16), Some(identity + 4));
         assert_eq!(data.offset_of_element(&ty, 17), Some(identity + 8));
         let lp64 = size == 128;
-        for (element, lp, ilp) in [(
-            18,
-            perry_abi::LAYOUT_DESC_GC_HEADER_WORD_OFFSET_LP64,
-            perry_abi::LAYOUT_DESC_GC_HEADER_WORD_OFFSET_ILP32,
-        )] {
+        for (element, lp, ilp) in [
+            (
+                18,
+                perry_abi::LAYOUT_DESC_GC_HEADER_WORD_OFFSET_LP64,
+                perry_abi::LAYOUT_DESC_GC_HEADER_WORD_OFFSET_ILP32,
+            ),
+            (
+                19,
+                perry_abi::LAYOUT_DESC_SLOTS_FIRST_OFFSET_LP64,
+                perry_abi::LAYOUT_DESC_SLOTS_FIRST_OFFSET_ILP32,
+            ),
+        ] {
             let want = if lp64 { lp } else { ilp };
             assert_eq!(data.offset_of_element(&ty, element), Some(want as u64));
         }

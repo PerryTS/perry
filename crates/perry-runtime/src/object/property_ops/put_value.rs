@@ -730,8 +730,12 @@ fn object_array_numeric_write_slots(
         if key_count > 4096 {
             return None;
         }
-        crate::object::keys_find_slot_by_key_ptr(crate::object::ObjectKeys::new(keys, key_count), key_count, key)
-            .map(|position| crate::object::key_attrs::key_storage_slot(keys, position))
+        crate::object::keys_find_slot_by_key_ptr(
+            crate::object::ObjectKeys::new(keys, key_count),
+            key_count,
+            key,
+        )
+        .map(|position| crate::object::key_attrs::key_storage_slot(keys, position))
     }
 
     let elements = unsafe {
@@ -781,7 +785,7 @@ fn object_array_numeric_write_slots(
     // sets bit 15 of its result lane; the caller's `+1` packing cannot carry
     // into it (slot ≤ 4096).
     unsafe fn spill_lane_covers(obj: *const crate::ObjectHeader, slot: u32) -> bool {
-        let meta = (*obj).meta;
+        let meta = crate::object::header::MetaObj::from_storage(obj as *mut _, slot).meta();
         if meta.is_null() {
             return false;
         }

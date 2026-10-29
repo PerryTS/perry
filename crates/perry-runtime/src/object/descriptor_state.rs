@@ -318,8 +318,7 @@ pub(crate) fn get_property_attrs_bytes(obj: usize, key: &[u8]) -> Option<Propert
             let keys = super::object_keys(bag);
             if entry != 0
                 || (bag as usize != obj
-                    && super::keys_find_property_slot_by_bytes(keys, keys.count(), key)
-                        .is_some())
+                    && super::keys_find_property_slot_by_bytes(keys, keys.count(), key).is_some())
             {
                 return Some(PropertyAttrs {
                     bits: super::key_attrs::entry_to_attr_bits(entry),
@@ -515,7 +514,8 @@ pub(crate) unsafe fn holder_word_blocks_store(mut bits: u64, name: &[u8]) -> Opt
             super::shapes::ShapeObjectKind::OrdinaryUnmarked => true,
             _ => return None,
         };
-        let meta = (*holder).meta;
+        // A1_UNPROVEN: record-first: holder may be the user object (kind-A/B question for S0f).
+        let meta = crate::object::header::MetaObj::runtime_born(holder as *mut _).meta();
         if !meta.is_null() && (*meta).flags & super::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER != 0 {
             return None;
         }
@@ -622,7 +622,8 @@ pub(crate) unsafe fn declared_class_chain_blocks_store(
             if (*holder).parent_class_id != word.0 {
                 return None;
             }
-            let meta = (*holder).meta;
+            // A1_UNPROVEN: record-first: holder may be the user object (kind-A/B question for S0f).
+            let meta = crate::object::header::MetaObj::runtime_born(holder as *mut _).meta();
             let recorded = if meta.is_null() { 0 } else { (*meta).prototype };
             if recorded != 0 {
                 let parent_agrees = if record.proto_id() == super::shapes::PROTO_ID_NULL {

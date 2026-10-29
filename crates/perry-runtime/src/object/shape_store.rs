@@ -446,8 +446,12 @@ pub(crate) unsafe fn try_dynamic_store(
     }
     let keys = record.keys() as usize as *const crate::ArrayHeader;
     if !keys.is_null()
-        && super::keys_find_property_slot_by_bytes(record.keys_view(), record.logical_key_count(), bytes)
-            .is_some()
+        && super::keys_find_property_slot_by_bytes(
+            record.keys_view(),
+            record.logical_key_count(),
+            bytes,
+        )
+        .is_some()
     {
         return None;
     }
@@ -500,7 +504,8 @@ unsafe fn dynamic_store_receiver(obj: *mut ObjectHeader) -> Option<shapes::Shape
     {
         return None;
     }
-    let meta = (*obj).meta;
+    // A1_UNPROVEN: record-first: receiver shape (kind-A/B question for S0f).
+    let meta = crate::object::header::MetaObj::runtime_born(obj as *mut _).meta();
     if !meta.is_null()
         && ((*meta).elements != 0
             || (*meta).flags
@@ -885,7 +890,8 @@ unsafe fn apply_proven_add(
         let obj = owner.get_raw_mut_ptr::<ObjectHeader>();
         let proof = super::canonical_keys::SharedLayout::of_receiver(obj)?;
         let keys = super::object_keys(obj);
-        let parent = super::canonical_keys::canonical_prefix(&proof, keys, (slot as u32).min(keys.count()));
+        let parent =
+            super::canonical_keys::canonical_prefix(&proof, keys, (slot as u32).min(keys.count()));
         let next = super::canonical_keys::extend_key(
             &proof,
             parent,

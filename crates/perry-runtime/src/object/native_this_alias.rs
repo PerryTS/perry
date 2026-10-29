@@ -107,7 +107,8 @@ pub(crate) fn is_alias_word(word: u64) -> bool {
 /// it).
 #[inline]
 pub(crate) unsafe fn object_alias(obj: *const super::ObjectHeader) -> Option<(f64, bool)> {
-    let meta = (*obj).meta;
+    // A1_UNPROVEN: record-first: caller classification (kind-A/B question for S0f).
+    let meta = crate::object::header::MetaObj::runtime_born(obj as *mut _).meta();
     if meta.is_null() {
         return None;
     }
@@ -195,7 +196,8 @@ pub(crate) fn register_this_to_handle_alias(this_arg: f64, result: f64, composit
         );
     });
     let installed = object.with_mut_ptr(|obj: *mut super::ObjectHeader| unsafe {
-        let meta = (*obj).meta;
+        // A1_UNPROVEN: record-first: this_arg heap object (kind-A/B question for S0f).
+        let meta = crate::object::header::MetaObj::runtime_born(obj as *mut _).meta();
         let word = (*meta).native_state;
         let alias = record
             .with_mut_ptr(|r: *mut crate::array::ArrayHeader| {
@@ -223,7 +225,9 @@ pub(crate) fn register_this_to_handle_alias(this_arg: f64, result: f64, composit
     // Pre-alias absence entries cannot survive construction (#11725). Own
     // ordinary slots remain describable; undefined still forwards natively.
     object.with_mut_ptr(|obj: *mut super::ObjectHeader| unsafe {
-        (*(*obj).meta).flags |= super::OBJECT_META_FLAG_NATIVE_ALIAS;
+        // A1_UNPROVEN: record-first: this_arg heap object (kind-A/B question for S0f).
+        (*crate::object::header::MetaObj::runtime_born(obj as *mut _).meta()).flags |=
+            super::OBJECT_META_FLAG_NATIVE_ALIAS;
         super::shapes::restamp_object_proto_id(obj);
     });
 }

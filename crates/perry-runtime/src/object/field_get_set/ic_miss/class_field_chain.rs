@@ -84,12 +84,13 @@ pub(super) unsafe fn try_define(receiver: f64, key: f64, value: f64) -> bool {
     {
         return false;
     }
+    // A1_UNPROVEN: record-first: ic_miss entry (kind-A/B question for S0f).
     // DefineField of a class body: the census never makes an instance field
     // name a constant method (`proto_census::ProtoCensus::fields`), so the
     // add names nothing a binding site relies on and needs no shadow
     // admission. A receiver already marked as a prototype keeps the full
     // publication (its member slots are what holder tests prove).
-    let meta = (*obj).meta;
+    let meta = crate::object::header::MetaObj::runtime_born(obj as *mut _).meta();
     if meta.is_null() || (*meta).flags & crate::object::OBJECT_META_FLAG_IS_PROTOTYPE == 0 {
         shapes::stamp_birth_shape_id_with_carrier_note(obj, target);
     } else {

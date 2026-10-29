@@ -581,7 +581,8 @@ pub(crate) unsafe fn stamp_private_evaluation_brand(obj: *mut ObjectHeader, clas
     if obj.is_null() || !super::super::class_registry::is_class_object_value(class_value) {
         return;
     }
-    let meta = (*obj).meta;
+    // A1_UNPROVEN: record-first: ic_miss entry (kind-A/B question for S0f).
+    let meta = crate::object::header::MetaObj::runtime_born(obj as *mut _).meta();
     if (meta.is_null() || (*meta).private_evaluation_brand == 0)
         && crate::object::shapes::object_evaluation_brand(obj) == class_value.to_bits()
     {
@@ -658,7 +659,8 @@ fn private_evaluation_brand(value: f64, declaring_class_id: u32) -> Option<u64> 
 /// ordinary instances carry their evaluation on the shape.
 #[inline]
 unsafe fn private_receiver_evaluation_bits(object: *const ObjectHeader) -> u64 {
-    let meta = (*object).meta;
+    // A1_UNPROVEN: record-first: ic_miss entry (kind-A/B question for S0f).
+    let meta = crate::object::header::MetaObj::runtime_born(object as *mut _).meta();
     if !meta.is_null() && (*meta).private_evaluation_brand != 0 {
         return (*meta).private_evaluation_brand;
     }

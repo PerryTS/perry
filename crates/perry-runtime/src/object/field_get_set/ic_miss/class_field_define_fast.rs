@@ -78,9 +78,10 @@ pub(super) fn try_define_new_class_field(receiver: f64, key: f64, value: f64) ->
         {
             return false;
         }
+        // A1_UNPROVEN: record-first: ic_miss entry (kind-A/B question for S0f).
         // Custom prototype and branding require the general define route.
         // The own shape entry below decides the property attributes.
-        let meta = (*obj).meta;
+        let meta = crate::object::header::MetaObj::runtime_born(obj as *mut _).meta();
         if !meta.is_null() {
             if (*meta).prototype != 0 || (*meta).flags != 0 || (*meta).private_evaluation_brand != 0
             {

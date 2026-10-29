@@ -372,7 +372,11 @@ pub(crate) fn own_set_descriptor(target: f64, key: f64) -> Option<OwnSetDescript
                 // The indexed answer reads the layout alone; a prototype with
                 // an overflow keeps keys and attributes in its entries (object
                 // model step 4), which the complete lookup below reads.
-                let meta = (*(addr as *const crate::ObjectHeader)).meta;
+                let meta = crate::object::header::MetaObj::from_type(
+                    addr as *const crate::ObjectHeader as *mut _,
+                    header.obj_type,
+                )
+                .meta();
                 (!meta.is_null()
                     && (*meta).flags & crate::object::OBJECT_META_FLAG_IS_PROTOTYPE != 0
                     && (*meta).overflow == 0)

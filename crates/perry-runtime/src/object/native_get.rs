@@ -183,7 +183,9 @@ unsafe fn try_data_lookup_key(
                 if let Some(entry) = super::overflow::find_key(table, key_bits, key) {
                     let attrs = *super::overflow::attrs_at(table, entry) as u8;
                     let header = &*crate::gc::header_from_trusted_user_ptr(object.cast());
-                    let meta = (*object).meta;
+                    // A1_UNPROVEN: record-first: class not yet known (kind-A/B question for S0f).
+                    let meta =
+                        crate::object::header::MetaObj::runtime_born(object as *mut _).meta();
                     if attrs & super::key_attrs::ENTRY_ACCESSOR != 0
                         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
                         || header._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0
@@ -213,7 +215,8 @@ unsafe fn try_data_lookup_key(
                 // The live shape proves a shaped ObjectHeader. Owner-local state
                 // still controls forwarding and indexed/exotic receiver layouts.
                 let header = &*crate::gc::header_from_trusted_user_ptr(object.cast());
-                let meta = (*object).meta;
+                // A1_UNPROVEN: record-first: class not yet known (kind-A/B question for S0f).
+                let meta = crate::object::header::MetaObj::runtime_born(object as *mut _).meta();
                 if header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
                     && header._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO == 0
                     && (meta.is_null() || (*meta).elements == 0)
@@ -302,7 +305,8 @@ unsafe fn try_data_lookup_key(
         if key == b"toJSON" && crate::perf_hook_slots::is_perf_entry_object(object) {
             return None;
         }
-        let meta = (*object).meta;
+        // A1_UNPROVEN: record-first: class not yet known (kind-A/B question for S0f).
+        let meta = crate::object::header::MetaObj::runtime_born(object as *mut _).meta();
         if !meta.is_null() && (*meta).elements != 0 {
             return None;
         }
@@ -338,11 +342,17 @@ unsafe fn try_data_lookup_key(
                 // shape lookup or allocation.
                 let slot = if summary & super::key_attrs::SUMMARY_PRIVATE == 0 {
                     super::keys_lookup::keys_find_slot_by_bytes_resolved_hashed(
-                        crate::object::ObjectKeys::new(keys as *mut _, key_count), key_count, key, key_hash,
+                        crate::object::ObjectKeys::new(keys as *mut _, key_count),
+                        key_count,
+                        key,
+                        key_hash,
                     )
                 } else {
                     super::keys_lookup::keys_find_property_slot_by_bytes_resolved_hashed(
-                        crate::object::ObjectKeys::new(keys as *mut _, key_count), key_count, key, key_hash,
+                        crate::object::ObjectKeys::new(keys as *mut _, key_count),
+                        key_count,
+                        key,
+                        key_hash,
                     )
                 };
                 if let Some(position) = slot {

@@ -61,16 +61,15 @@ pub(crate) unsafe fn note_out_of_order_pair(obj: *const ObjectHeader, pos: u32) 
         return;
     };
     let keys = std::slice::from_raw_parts(d.keys, d.key_count as usize);
-    let fields = (obj as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64;
     let name = |k: &PerryLayoutKey| {
         atom_bytes(k.atom)
             .map(|b| String::from_utf8_lossy(b).into_owned())
             .unwrap_or_default()
     };
-    let Some(later) = keys[pos as usize + 1..]
-        .iter()
-        .find(|k| *fields.add(k.slot as usize) != crate::value::TAG_HOLE)
-    else {
+    let Some(later) = keys[pos as usize + 1..].iter().find(|k| {
+        *super::super::header::object_slot_at(obj as *mut _, u32::from(k.off))
+            != crate::value::TAG_HOLE
+    }) else {
         return;
     };
     let key = (d.class_id, name(&keys[pos as usize]), name(later));

@@ -76,7 +76,11 @@ pub(crate) fn handle(wrapper: usize, kind: Kind) -> Option<usize> {
         if header.as_ref().gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
             return None;
         }
-        let meta = (*(wrapper as *const crate::ObjectHeader)).meta;
+        // A1_UNPROVEN: record-first: wrapper tested by tracked type, no t (kind-A/B question for S0f).
+        let meta = crate::object::header::MetaObj::runtime_born(
+            wrapper as *const crate::ObjectHeader as *mut _,
+        )
+        .meta();
         if meta.is_null() {
             return None;
         }

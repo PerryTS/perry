@@ -73,7 +73,8 @@ mod tests {
         parent_class_id: PARENT,
         methods: std::ptr::null(),
         gc_header_word: crate::object::layout_desc::layout_gc_header_word(0),
-        _tail_pad: [0; 32],
+        slots_first: crate::object::layout_desc::layout_slots_first(),
+        _tail_pad: [0; 30],
     };
     wasm_layout!(LAYOUT);
 
@@ -150,7 +151,8 @@ mod evaluation_layout_tests {
         parent_class_id: 0,
         methods: std::ptr::null(),
         gc_header_word: crate::object::layout_desc::layout_gc_header_word(0),
-        _tail_pad: [0; 32],
+        slots_first: crate::object::layout_desc::layout_slots_first(),
+        _tail_pad: [0; 30],
     };
 
     static DECLARATION: ClassDeclaration = ClassDeclaration {
@@ -198,7 +200,9 @@ mod evaluation_layout_tests {
                     shapes::class_proto_id(CLASS),
                 ));
                 assert!(
-                    (*obj).meta.is_null(),
+                    crate::object::header::MetaObj::runtime_born(obj as *mut _)
+                        .meta()
+                        .is_null(),
                     "the link is a shape fact, not a meta one"
                 );
                 assert_eq!(shapes::object_prototype_word(obj), bits);
@@ -254,7 +258,12 @@ mod evaluation_layout_tests {
             );
             shapes::stamp_evaluation_holder(obj, class_bits);
             let copy = shapes::object_shape_stamp(obj);
-            assert!((*obj).meta.is_null(), "the brand is a shape fact");
+            assert!(
+                crate::object::header::MetaObj::runtime_born(obj as *mut _)
+                    .meta()
+                    .is_null(),
+                "the brand is a shape fact"
+            );
             assert_eq!(shapes::object_evaluation_brand(obj), class_bits);
             assert_eq!(shapes::object_prototype_word(obj), proto_bits);
             assert_eq!(
@@ -280,7 +289,9 @@ mod evaluation_layout_tests {
             );
             let born = crate::object::layout_desc::alloc_family_layout_copy(desc, copy);
             assert_eq!((*born).parent_class_id, (*obj).parent_class_id);
-            assert!((*born).meta.is_null());
+            assert!(crate::object::header::MetaObj::runtime_born(born as *mut _)
+                .meta()
+                .is_null());
             assert_eq!(shapes::object_evaluation_brand(born), class_bits);
             assert_eq!(shapes::object_prototype_word(born), proto_bits);
             assert_eq!(
@@ -310,7 +321,12 @@ mod evaluation_layout_tests {
                 Some(class_bits)
             );
             heritage::pin_instance_constructing_class(born, f64::from_bits(class_bits));
-            assert!((*born).meta.is_null(), "the pin is the shape brand");
+            assert!(
+                crate::object::header::MetaObj::runtime_born(born as *mut _)
+                    .meta()
+                    .is_null(),
+                "the pin is the shape brand"
+            );
             assert_eq!(
                 heritage::instance_pinned_constructing_class(born).map(f64::to_bits),
                 Some(class_bits)

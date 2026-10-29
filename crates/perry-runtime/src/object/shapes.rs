@@ -1182,7 +1182,10 @@ impl ShapeTableInner {
     // remaining consumer, and it is `#[cfg(test)]`.
     #[cfg(test)]
     fn family_push_back(&mut self, node: u32, keys: u64, id: LayoutWord) {
-        if self.with_canonical_family(node, keys, |f| f.push_back(id)).is_some() {
+        if self
+            .with_canonical_family(node, keys, |f| f.push_back(id))
+            .is_some()
+        {
             return;
         }
         self.note_young_keys(keys);
@@ -1205,12 +1208,18 @@ impl ShapeTableInner {
             return;
         }
         self.note_young_keys(keys);
-        self.owned_families.entry(keys).or_default().append_unchecked(id);
+        self.owned_families
+            .entry(keys)
+            .or_default()
+            .append_unchecked(id);
     }
 
     #[inline]
     fn family_push_front(&mut self, node: u32, keys: u64, id: LayoutWord) {
-        if self.with_canonical_family(node, keys, |f| f.push_front(id)).is_some() {
+        if self
+            .with_canonical_family(node, keys, |f| f.push_front(id))
+            .is_some()
+        {
             return;
         }
         self.note_young_keys(keys);
@@ -4098,8 +4107,9 @@ pub(crate) unsafe fn stamp_object_shape(
         return LayoutWord(0);
     }
     let Some(lineage) = object_shape_descriptor(obj) else {
-        let id = shape_descriptor_ensure_for_object(obj, shape_keys, key_count, live_inline_slot_count)
-            .unwrap_or_else(|error| shape_descriptor_error_abort(error));
+        let id =
+            shape_descriptor_ensure_for_object(obj, shape_keys, key_count, live_inline_slot_count)
+                .unwrap_or_else(|error| shape_descriptor_error_abort(error));
         stamp_object_shape_id_with_carrier_note(obj, id);
         debug_assert_object_shape_parity(obj);
         return id;
@@ -4587,7 +4597,10 @@ fn retire_owned_shape_siblings(keys: u64, keep: LayoutWord) {
     let mut inner = table.inner.borrow_mut();
     // An owned array's family is keyed by its heap address; `keep` names the
     // list's node should the array be canonical after all.
-    let node = table.slab().get_handle(keep).map_or(NO_NODE, |record| record.keys_node());
+    let node = table
+        .slab()
+        .get_handle(keep)
+        .map_or(NO_NODE, |record| record.keys_node());
     let stale: Vec<LayoutWord> = inner
         .family_ids(node, keys)
         .into_iter()
@@ -5186,7 +5199,11 @@ unsafe fn prototype_serial(bits: u64) -> u64 {
     let addr = value.as_pointer::<u8>() as usize;
     match crate::value::addr_class::try_read_gc_header(addr) {
         Some(header) if crate::gc::object_has_meta_word(header.obj_type) => {
-            let meta = (*(addr as *const crate::object::ObjectHeader)).meta;
+            let meta = crate::object::header::MetaObj::from_type(
+                addr as *const crate::object::ObjectHeader as *mut _,
+                header.obj_type,
+            )
+            .meta();
             if meta.is_null() {
                 0
             } else {
@@ -5385,7 +5402,8 @@ pub(crate) const SYNTHETIC_CLASS_ID_BASE: u32 =
 /// send it down the re-prototyped-receiver paths instead.
 #[inline(always)]
 pub(crate) unsafe fn object_prototype_word(obj: *const crate::object::ObjectHeader) -> u64 {
-    let meta = (*obj).meta;
+    // A1_UNPROVEN: record-first: shape word (kind-A/B question for S0f).
+    let meta = crate::object::header::MetaObj::runtime_born(obj as *mut _).meta();
     if !meta.is_null() && (*meta).prototype != 0 {
         return (*meta).prototype;
     }
@@ -5460,7 +5478,8 @@ pub(crate) unsafe fn object_proto_id_for(
     {
         return PROTO_ID_PER_OBJECT;
     }
-    let meta = (*obj).meta;
+    // A1_UNPROVEN: record-first: shape word (kind-A/B question for S0f).
+    let meta = crate::object::header::MetaObj::runtime_born(obj as *mut _).meta();
     // Read semantics take precedence over every prototype link, including
     // null. Changing an exotic receiver's prototype cannot turn its virtual
     // reads into physical own-slot reads.
@@ -5752,7 +5771,6 @@ fn remove_descriptor_and_reverse_indices(inner: &mut ShapeTableInner, id: Layout
     remove_descriptor_indexed_under(inner, id, indexed);
 }
 
-
 /// [`remove_descriptor_and_reverse_indices`] for a caller that knows the
 /// address the id is indexed under — the metadata scan, which retires a
 /// family whose keys address was recycled while a live edge may already have
@@ -5951,11 +5969,8 @@ pub(crate) unsafe fn shape_slot_lookup_verdict(
     let keys = shape_keys.arr();
     let node = shape_keys.node_for(key_count);
     if node != NO_NODE {
-        let verdict = crate::object::canonical_keys::with_backing_shapes(
-            keys,
-            key_count,
-            node,
-            |list| {
+        let verdict =
+            crate::object::canonical_keys::with_backing_shapes(keys, key_count, node, |list| {
                 let shape = match &mut list.index {
                     Some(shape) => shape,
                     None if !build => return KeysIndexVerdict::Unindexed,
@@ -5965,8 +5980,7 @@ pub(crate) unsafe fn shape_slot_lookup_verdict(
                     })),
                 };
                 consult_shape_index(shape, keys, key_bytes, key_hash, key_count)
-            },
-        );
+            });
         if let Some(verdict) = verdict {
             return verdict;
         }
@@ -6074,7 +6088,10 @@ pub(crate) fn indexed_slots_for_test() -> u64 {
         .map(|ix| u64::from(ix.indexed_len))
         .sum();
     crate::object::canonical_keys::for_each_list_shapes(|_, _, list| {
-        slots += list.index.as_ref().map_or(0, |ix| u64::from(ix.indexed_len));
+        slots += list
+            .index
+            .as_ref()
+            .map_or(0, |ix| u64::from(ix.indexed_len));
     });
     slots
 }
@@ -6499,7 +6516,9 @@ fn scan_shape_table_keys_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     relogged.dedup();
     let mut kept = Vec::with_capacity(relogged.len());
     for keys in relogged {
-        if inner.owned_families.contains_key(&keys) || inner.owned_indices.contains_key(&(keys as usize)) {
+        if inner.owned_families.contains_key(&keys)
+            || inner.owned_indices.contains_key(&(keys as usize))
+        {
             relog_or_retire_shape_keys(table, &mut inner, &mut kept, keys);
         }
     }
@@ -6876,7 +6895,11 @@ pub(crate) fn shape_table_census() -> Vec<crate::gc::census::SideTableRow> {
     let slab = table.slab();
     let mut rows = Vec::new();
     rows.push(("shapes.descriptors", slab.len(), slab.estimated_bytes()));
-    let index_inner: usize = inner.owned_indices.values().map(|ix| ix.slots.heap_bytes()).sum();
+    let index_inner: usize = inner
+        .owned_indices
+        .values()
+        .map(|ix| ix.slots.heap_bytes())
+        .sum();
     rows.push((
         "shapes.owned_indices",
         inner.owned_indices.len(),
@@ -6909,7 +6932,11 @@ pub(crate) fn shape_table_census() -> Vec<crate::gc::census::SideTableRow> {
         inner.owned_families.len(),
         map_bytes(&inner.owned_families) + families_inner,
     ));
-    rows.push(("shapes.list_families(node)", list_families, list_family_bytes));
+    rows.push((
+        "shapes.list_families(node)",
+        list_families,
+        list_family_bytes,
+    ));
     rows.push((
         "shapes.keyless_family",
         inner.keyless_family.len(),

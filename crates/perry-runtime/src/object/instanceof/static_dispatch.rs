@@ -722,7 +722,7 @@ fn native_instanceof(
             if let Some(header) =
                 unsafe { crate::value::addr_class::try_read_gc_header(value_addr(value)) }
             {
-                if crate::gc::object_has_meta_word(header.obj_type) {
+                if crate::gc::gc_type_is_object(header.obj_type) {
                     let obj = value_addr(value) as *const ObjectHeader;
                     let answer = unsafe {
                         super::shape_ancestry::class_shape_reaches(obj, CLASS_ID_OBJECT, true)

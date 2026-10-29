@@ -125,7 +125,7 @@ unsafe fn class_receiver_fast_guard(object: f64, method_bytes: &[u8]) -> Option<
     // resolution uses, so the fast path cannot classify a receiver differently
     // from the code it is short-circuiting.
     let (ptr, gc_type) = gc_pointer_and_type_from_value(object)?;
-    if !crate::gc::object_has_meta_word(gc_type) || ptr as usize != obj_addr {
+    if !crate::gc::gc_type_is_object(gc_type) || ptr as usize != obj_addr {
         return None;
     }
     // `meta_capable_object` rather than a bare header read: it is the
@@ -136,7 +136,8 @@ unsafe fn class_receiver_fast_guard(object: f64, method_bytes: &[u8]) -> Option<
     if !crate::object::object_is_regular(obj) {
         return None;
     }
-    let meta = (*obj).meta;
+    // A1_UNPROVEN: record-first: classifier result, no t (kind-A/B question for S0f).
+    let meta = crate::object::header::MetaObj::runtime_born(obj as *mut _).meta();
     if !meta.is_null() && (*meta).flags != 0 {
         return None;
     }
@@ -186,7 +187,9 @@ unsafe fn class_receiver_fast_guard(object: f64, method_bytes: &[u8]) -> Option<
         }
         // #10502: the shared shape index proves presence AND absence after
         // its first build. Do not re-scan every field on every call.
-        if own_slot::find_method_slot(descriptor.keys_view(), key_count as u32, method_bytes).is_some() {
+        if own_slot::find_method_slot(descriptor.keys_view(), key_count as u32, method_bytes)
+            .is_some()
+        {
             return None;
         }
     }

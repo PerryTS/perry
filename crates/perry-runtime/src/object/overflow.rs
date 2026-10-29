@@ -62,11 +62,14 @@ pub(crate) unsafe fn table(obj: *const ObjectHeader) -> *mut Table {
         || !crate::value::addr_class::is_plausible_heap_addr(obj as usize)
         || !shadowed(obj)
         || !super::object_is_shaped(obj)
-        || (*obj).meta.is_null()
+        || crate::object::header::MetaObj::from_kind(obj as *mut _, ())
+            .meta()
+            .is_null()
     {
         return std::ptr::null_mut();
     }
-    (*(*obj).meta).overflow as usize as *mut Table
+    (*crate::object::header::MetaObj::from_kind(obj as *mut _, ()).meta()).overflow as usize
+        as *mut Table
 }
 
 #[inline]
@@ -232,7 +235,7 @@ pub(crate) unsafe fn find(t: *const Table, key: u64) -> Option<u32> {
 }
 
 unsafe fn install(obj: *mut ObjectHeader, t: *mut Table) {
-    let meta = (*obj).meta;
+    let meta = crate::object::header::MetaObj::from_storage(obj as *mut _, t).meta();
     (*meta).overflow = t as usize as u64;
     // The slot owner is the live metadata record, whose generation can
     // differ from the receiver's after a collection. Its header decides
@@ -677,9 +680,11 @@ pub(crate) unsafe fn delete(obj: *mut ObjectHeader, key: &[u8]) -> bool {
         // orders, so it is established before the atom is looked up.
         if let Some(record) = super::shapes::object_shape_record(obj) {
             let keys = record.keys() as usize as *const ArrayHeader;
-            if let Some(slot) =
-                super::keys_find_property_slot_by_bytes(record.keys_view(), record.logical_key_count(), key)
-            {
+            if let Some(slot) = super::keys_find_property_slot_by_bytes(
+                record.keys_view(),
+                record.logical_key_count(),
+                key,
+            ) {
                 // A hole is an absent property, including allocator-owned
                 // placeholders before a derived constructor's super call.
                 // Deleting it changes neither membership nor insertion order.
@@ -849,7 +854,7 @@ pub(crate) unsafe fn own_has_key(obj: *const ObjectHeader, key_bits: u64) -> Opt
     if overflow_key(key_bits).is_some_and(|key| find(t, key).is_some()) {
         return Some(true);
     }
-    let meta = (*obj).meta;
+    let meta = crate::object::header::MetaObj::from_storage(obj as *mut _, t).meta();
     let conclusive = (*meta).elements == 0
         && super::object_is_regular(obj)
         && super::native_this_alias::object_alias(obj).is_none();

@@ -228,7 +228,7 @@ pub(crate) fn function_kind_prototype_unwritten(
     // SAFETY: a live realm intrinsic (born old, never moved); its meta record
     // is null or live.
     unsafe {
-        let meta = (*proto).meta;
+        let meta = crate::object::header::MetaObj::runtime_born(proto as *mut _).meta();
         !meta.is_null()
             && (*meta).flags & crate::object::meta_flags::OBJECT_META_FLAG_SEALED_INTRINSIC != 0
             && (*proto).parent_class_id < crate::object::layout_desc::UNSHADOWED_WORD_END

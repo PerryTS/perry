@@ -144,7 +144,10 @@ impl ObjectHeader {
     /// objects carry, so `meta` is theirs.
     #[inline(always)]
     pub fn overflow_installed(&self) -> bool {
-        let meta = self.meta;
+        // SAFETY: only meaningful for a shadowed-band word, which only meta-form objects carry.
+        let meta = unsafe {
+            crate::object::header::MetaObj::from_kind(self as *const Self as *mut _, ()).meta()
+        };
         !meta.is_null() && unsafe { (*meta).overflow } != 0
     }
 }
@@ -277,14 +280,19 @@ pub struct PerryLayoutKey {
 /// `PerryLayoutKey.off` of slot `slot`; the same value codegen emits
 /// (`target_layout::layout_key_off`).
 pub const fn layout_key_off(slot: u32) -> u16 {
-    let off = std::mem::size_of::<ObjectHeader>() as u32 + slot * 8;
+    let off = super::header::meta_form_alloc_bytes(slot as usize) as u32;
     assert!(off <= u16::MAX as u32);
     off as u16
 }
 
 /// `PerryLayoutDesc.slots_end` (and `alloc_bytes`) of a layout of `slot_count` slots.
 pub const fn layout_slots_end(slot_count: u32) -> u32 {
-    std::mem::size_of::<ObjectHeader>() as u32 + slot_count * 8
+    super::header::meta_form_alloc_bytes(slot_count as usize) as u32
+}
+
+/// `PerryLayoutDesc.slots_first` of every layout (the meta-form header size today).
+pub const fn layout_slots_first() -> u16 {
+    layout_key_off(0)
 }
 
 /// `PerryLayoutDesc.gc_header_word`: the idle `GcHeader` image of a layout
@@ -346,8 +354,11 @@ pub struct PerryLayoutDesc {
     /// A1 precompute, emitted by codegen under the asserts below. It has a reader in
     /// the birth: the idle `GcHeader` image ([`layout_gc_header_word`]).
     pub gc_header_word: u64,
+    /// Byte offset of the first slot from the object ([`layout_slots_first`]); a
+    /// walk over every slot of a layout-born object starts here.
+    pub slots_first: u16,
     /// Keeps the size at 128 bytes (112 on ILP32), see `LAYOUT_DESC_FULL_SIZE_LP64`.
-    pub _tail_pad: [u8; 32],
+    pub _tail_pad: [u8; 30],
 }
 
 const _: () = assert!(
@@ -356,6 +367,14 @@ const _: () = assert!(
             crate::codegen_abi::LAYOUT_DESC_GC_HEADER_WORD_OFFSET_LP64
         } else {
             crate::codegen_abi::LAYOUT_DESC_GC_HEADER_WORD_OFFSET_ILP32
+        }
+);
+const _: () = assert!(
+    std::mem::offset_of!(PerryLayoutDesc, slots_first)
+        == if cfg!(target_pointer_width = "64") {
+            crate::codegen_abi::LAYOUT_DESC_SLOTS_FIRST_OFFSET_LP64
+        } else {
+            crate::codegen_abi::LAYOUT_DESC_SLOTS_FIRST_OFFSET_ILP32
         }
 );
 const _: () =
@@ -504,7 +523,8 @@ section_sentinel!(
         parent_class_id: 0,
         methods: std::ptr::null(),
         gc_header_word: crate::object::layout_desc::layout_gc_header_word(0),
-        _tail_pad: [0; 32],
+        slots_first: crate::object::layout_desc::layout_slots_first(),
+        _tail_pad: [0; 30],
     },
     "perry_layouts",
     "__DATA,__perry_layouts",
@@ -798,13 +818,7 @@ unsafe fn alloc_layout_object(d: &PerryLayoutDesc, id: LayoutWord) -> *mut Objec
     // The descriptor carries the header image (with the size) and where the slots start.
     let obj = crate::arena::arena_alloc_gc_object_word(&d.gc_header_word, d.slot_count)
         .cast::<ObjectHeader>();
-    finish_layout_object(
-        obj,
-        d,
-        id,
-        std::mem::size_of::<ObjectHeader>() as u32,
-        d.slot_count,
-    )
+    finish_layout_object(obj, d, id, u32::from(d.slots_first), d.slot_count)
 }
 
 /// Function births alone retain the ordinary inline floor. Keep their
@@ -830,16 +844,10 @@ unsafe fn alloc_layout_object_sized(
     physical_slots: usize,
 ) -> *mut ObjectHeader {
     // A birth writes only holes; constructor stores check the live chain.
-    let size = std::mem::size_of::<ObjectHeader>() + physical_slots * 8;
+    let size = super::header::meta_form_alloc_bytes(physical_slots);
     let obj =
         crate::arena::arena_alloc_gc(size, 8, crate::gc::GC_TYPE_OBJECT).cast::<ObjectHeader>();
-    finish_layout_object(
-        obj,
-        d,
-        id,
-        std::mem::size_of::<ObjectHeader>() as u32,
-        physical_slots as u32,
-    )
+    finish_layout_object(obj, d, id, u32::from(d.slots_first), physical_slots as u32)
 }
 
 /// Header, holes and shape facts of a layout birth whose slot region is
@@ -939,7 +947,7 @@ pub(crate) unsafe fn alloc_derived_layout_object(
     recorded: LayoutWord,
 ) -> Option<*mut ObjectHeader> {
     let id = layout_word_for_birth(d)?;
-    let size = std::mem::size_of::<ObjectHeader>() + d.slot_count as usize * 8;
+    let size = super::header::meta_form_alloc_bytes(d.slot_count as usize);
     let obj =
         crate::arena::arena_alloc_gc(size, 8, crate::gc::GC_TYPE_OBJECT).cast::<ObjectHeader>();
     // No collection from here until the newborn carries its shape.
@@ -984,10 +992,7 @@ pub(crate) unsafe fn alloc_derived_layout_object(
             _slot_alignment_padding: 0,
         },
     );
-    let fields = obj
-        .cast::<u8>()
-        .add(std::mem::size_of::<ObjectHeader>())
-        .cast::<u64>();
+    let fields = super::header::object_slot_at(obj, u32::from(d.slots_first));
     for i in 0..d.slot_count as usize {
         // GC_STORE_AUDIT(POINTER_FREE): All three stores write the immediate TAG_HOLE to physical object slots. They introduce no pointer/child edge; allocation or rooted object custody surrounds the fill and shape publication follows.
         *fields.add(i) = crate::value::TAG_HOLE;
@@ -1033,7 +1038,7 @@ pub(crate) unsafe fn alloc_layout_prototype(
     mark_layout_object_facts(obj, d);
     // A birth: the bit is carried, never admitted.
     super::shapes::stamp_birth_shape_id_with_carrier_note(obj, LayoutWord(id));
-    let fields = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
+    let fields = super::header::object_slot_at(obj, u32::from(d.slots_first));
     for i in 0..d.slot_count as usize {
         // GC_STORE_AUDIT(INIT): the hole marker is a scalar.
         *fields.add(i) = crate::value::TAG_HOLE;
@@ -1208,9 +1213,7 @@ pub(crate) unsafe fn prototype_image(
         } else {
             super::key_attrs::object_slot_data(obj, pos).bits()
         };
-        let slot_addr = image as usize
-            + std::mem::size_of::<ObjectHeader>()
-            + key.slot as usize * std::mem::size_of::<u64>();
+        let slot_addr = super::header::object_slot_at(image, u32::from(key.off)) as usize;
         crate::gc::runtime_store_object_jsvalue_slot(
             image as usize,
             slot_addr,
@@ -1247,14 +1250,14 @@ unsafe fn image_matches(d: &PerryLayoutDesc, built: f64, bound: &[u64]) -> bool 
     let Some(header) = crate::value::addr_class::try_read_gc_header(p) else {
         return false;
     };
-    if !crate::gc::object_has_meta_word(header.obj_type)
+    if !crate::gc::gc_type_is_object(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || header._reserved & super::shapes::INTEGRITY_FLAGS != 0
     {
         return false;
     }
     let obj = p as *const ObjectHeader;
-    let meta = (*obj).meta;
+    let meta = crate::object::header::object_meta_if_present(obj as *mut _, header.obj_type);
     if !meta.is_null()
         && ((*meta).boxed_primitive != 0
             || (*meta).reflect_metadata != 0
@@ -1298,8 +1301,11 @@ unsafe fn image_matches(d: &PerryLayoutDesc, built: f64, bound: &[u64]) -> bool 
             serial != 0
                 && proto & !crate::value::POINTER_MASK == crate::value::POINTER_TAG
                 && crate::value::addr_class::is_above_handle_band(q as usize)
-                && !(*q).meta.is_null()
-                && (*(*q).meta).proto_serial == serial
+                && !crate::object::header::object_meta_if_present(q as *mut _, header.obj_type)
+                    .is_null()
+                && (*crate::object::header::object_meta_if_present(q as *mut _, header.obj_type))
+                    .proto_serial
+                    == serial
         }
     }
 }
@@ -1345,7 +1351,11 @@ unsafe fn family_birth(d: &PerryLayoutDesc, proto: f64) -> Option<*mut ObjectHea
     {
         return None;
     }
-    let meta = (*(p as *const ObjectHeader)).meta;
+    let meta = crate::object::header::MetaObj::from_type(
+        p as *const ObjectHeader as *mut _,
+        header.obj_type,
+    )
+    .meta();
     if meta.is_null() || (*meta).proto_serial != serial {
         return None;
     }
@@ -1401,10 +1411,14 @@ pub unsafe extern "C-unwind" fn js_create_family_contract_check(
     };
     let proto = super::js_object_get_prototype_of(obj).to_bits();
     let p = (proto & crate::value::POINTER_MASK) as *const ObjectHeader;
+    // A1_UNPROVEN: record-first: the prototype word of obj (kind-A/B question for S0f).
     if serial == 0
         || proto & !crate::value::POINTER_MASK != crate::value::POINTER_TAG
-        || (*p).meta.is_null()
-        || (*(*p).meta).proto_serial != serial
+        || crate::object::header::MetaObj::runtime_born(p as *mut _)
+            .meta()
+            .is_null()
+        || (*crate::object::header::MetaObj::runtime_born(p as *mut _).meta()).proto_serial
+            != serial
     {
         violated("prototype is not the family's", b"");
     }
@@ -1629,10 +1643,7 @@ pub(crate) unsafe fn adopt_family_layout(obj: *mut ObjectHeader) -> *mut ObjectH
         let _ = current;
     }
     let obj = object.get_raw_mut_ptr::<ObjectHeader>();
-    let fields = obj
-        .cast::<u8>()
-        .add(std::mem::size_of::<ObjectHeader>())
-        .cast::<u64>();
+    let fields = super::header::object_slot_at(obj, u32::from(d.slots_first));
     for i in 0..d.slot_count as usize {
         // GC_STORE_AUDIT(POINTER_FREE): All three stores write the immediate TAG_HOLE to physical object slots. They introduce no pointer/child edge; allocation or rooted object custody surrounds the fill and shape publication follows.
         *fields.add(i) = crate::value::TAG_HOLE;

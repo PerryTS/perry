@@ -46,7 +46,8 @@ pub(crate) unsafe fn bag(owner: usize, create: bool, last_slot: u32) -> *mut Arr
             super::MetaReason::OwnedState,
         )
     } else {
-        (*holder).meta
+        // A1_UNPROVEN: record-first: holder may be the user object (kind-A/B question for S0f).
+        crate::object::header::MetaObj::runtime_born(holder as *mut _).meta()
     };
     if meta.is_null() {
         return std::ptr::null_mut();

@@ -250,11 +250,9 @@ unsafe fn positional_assign_target_is_safe(
         };
 
         if !target_keys.is_null() {
-            if let Some(pos) = crate::object::keys_find_slot_by_bytes(
-                target_keys,
-                target_keys.count(),
-                key_bytes,
-            ) {
+            if let Some(pos) =
+                crate::object::keys_find_slot_by_bytes(target_keys, target_keys.count(), key_bytes)
+            {
                 let entry = super::key_attrs::keys_entry(target_keys.arr(), pos as u32);
                 if !super::key_attrs::entry_is_plain_overwrite(entry) {
                     return false;
@@ -267,8 +265,7 @@ unsafe fn positional_assign_target_is_safe(
             if keys.is_null() {
                 continue;
             }
-            if let Some(pos) =
-                crate::object::keys_find_slot_by_bytes(keys, keys.count(), key_bytes)
+            if let Some(pos) = crate::object::keys_find_slot_by_bytes(keys, keys.count(), key_bytes)
             {
                 let entry = super::key_attrs::keys_entry(keys.arr(), pos as u32);
                 if !super::key_attrs::entry_is_plain_writable_data(entry) {
@@ -401,7 +398,8 @@ unsafe fn positional_source_plan(src: *const ObjectHeader) -> PositionalPlan {
     {
         return PositionalPlan::Refused;
     }
-    let meta = (*src).meta;
+    // A1_UNPROVEN: record-first: source before its type test (kind-A/B question for S0f).
+    let meta = crate::object::header::MetaObj::runtime_born(src as *mut _).meta();
     if !meta.is_null() && (*meta).flags & super::OBJECT_META_FLAG_IS_PROTOTYPE != 0 {
         return PositionalPlan::Refused;
     }

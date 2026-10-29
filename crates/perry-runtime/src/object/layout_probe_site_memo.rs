@@ -66,13 +66,13 @@ pub(crate) enum Answer {
 #[inline(always)]
 unsafe fn ordinary_word(obj: *const ObjectHeader) -> Option<u32> {
     let h = crate::gc::header_from_trusted_user_ptr(obj.cast());
-    if !crate::gc::object_has_meta_word((*h).obj_type)
+    if !crate::gc::gc_type_is_object((*h).obj_type)
         || (*h).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || (*h)._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0
     {
         return None;
     }
-    let meta = (*obj).meta;
+    let meta = crate::object::header::object_meta_if_present(obj as *mut _, (*h).obj_type);
     if !meta.is_null()
         && (*meta).flags
             & (crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER

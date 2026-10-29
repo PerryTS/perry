@@ -131,7 +131,8 @@ unsafe fn ordinary_receiver(addr: usize) -> Option<*const ObjectHeader> {
     if !super::shapes::is_layout_word(stamp.0) {
         return None;
     }
-    let meta = (*obj).meta;
+    // A1_UNPROVEN: record-first: receiver before its type test (kind-A/B question for S0f).
+    let meta = crate::object::header::MetaObj::runtime_born(obj as *mut _).meta();
     if !meta.is_null()
         && ((*meta).elements != 0
             || (*meta).flags & super::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER != 0)

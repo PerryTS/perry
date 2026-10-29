@@ -76,6 +76,40 @@ impl MetaObj {
         MetaObj(obj)
     }
 
+    /// An object reached because a key entry says its storage is a spill or an
+    /// overflow table; only a meta-form object has either (P3).
+    ///
+    /// # Safety
+    /// `entry` is the key entry (or position) that led here and names spill or
+    /// overflow storage; `obj` is a live ordinary object.
+    #[inline(always)]
+    pub(crate) unsafe fn from_storage<E>(obj: *mut ObjectHeader, _entry: E) -> Self {
+        debug_assert!(object_has_meta_word(object_type(obj)));
+        MetaObj(obj)
+    }
+
+    /// An object whose layout word names a kind other than PLAIN/CLASS (P10),
+    /// which is always meta-form.
+    ///
+    /// # Safety
+    /// `word` is the layout word of `obj`, read in this scope.
+    #[inline(always)]
+    pub(crate) unsafe fn from_kind<W>(obj: *mut ObjectHeader, _word: W) -> Self {
+        debug_assert!(object_has_meta_word(object_type(obj)));
+        MetaObj(obj)
+    }
+
+    /// An object whose record is a runtime-minted shape (DESIGN §3.2): such
+    /// objects exist only in meta form.
+    ///
+    /// # Safety
+    /// `shape` is the runtime-minted shape record of `obj`.
+    #[inline(always)]
+    pub(crate) unsafe fn of_runtime_shape<S>(obj: *mut ObjectHeader, _shape: S) -> Self {
+        debug_assert!(object_has_meta_word(object_type(obj)));
+        MetaObj(obj)
+    }
+
     #[inline(always)]
     pub(crate) fn as_ptr(self) -> *mut ObjectHeader {
         self.0
@@ -96,4 +130,12 @@ impl MetaObj {
     pub(crate) unsafe fn slots(self) -> *mut u64 {
         self.0.add(1).cast::<u64>()
     }
+}
+
+/// The allocation size, in bytes, of a runtime birth with `slots` inline
+/// slots. Runtime births are meta-form (P10), so the size is the meta-form
+/// header plus the slots.
+#[inline(always)]
+pub(crate) const fn meta_form_alloc_bytes(slots: usize) -> usize {
+    std::mem::size_of::<ObjectHeader>() + slots * std::mem::size_of::<u64>()
 }

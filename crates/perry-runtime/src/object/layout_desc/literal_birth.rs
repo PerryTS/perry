@@ -30,7 +30,8 @@ static mut SENTINEL: PerryLayoutDesc = PerryLayoutDesc {
     shape_id: 0,
     gc_plan: 0,
     gc_header_word: crate::object::layout_desc::layout_gc_header_word(0),
-    _tail_pad: [0; 32],
+    slots_first: crate::object::layout_desc::layout_slots_first(),
+    _tail_pad: [0; 30],
 };
 
 #[cfg(target_os = "windows")]

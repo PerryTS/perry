@@ -78,9 +78,8 @@ pub(crate) unsafe fn fit_builtin_prototype(obj: *mut ObjectHeader) {
     }
     let header = (obj as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
     let total = (*header).size as usize;
-    let fitted = crate::gc::GC_HEADER_SIZE
-        + std::mem::size_of::<ObjectHeader>()
-        + used as usize * std::mem::size_of::<u64>();
+    let fitted =
+        crate::gc::GC_HEADER_SIZE + super::super::header::meta_form_alloc_bytes(used as usize);
     if fitted + crate::gc::GC_HEADER_SIZE > total {
         return;
     }
@@ -176,8 +175,9 @@ mod tests {
                     assert_eq!(
                         (*header).size as usize,
                         crate::gc::GC_HEADER_SIZE
-                            + std::mem::size_of::<ObjectHeader>()
-                            + d.live_inline_slot_count as usize * 8
+                            + super::super::header::meta_form_alloc_bytes(
+                                d.live_inline_slot_count as usize
+                            )
                     );
                     let tail = (header as *const u8).add((*header).size as usize)
                         as *const crate::gc::GcHeader;

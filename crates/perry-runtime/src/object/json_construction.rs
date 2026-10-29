@@ -1,4 +1,5 @@
 //! Completed plain-record construction in the JSON suppression window.
+use super::header::{meta_form_alloc_bytes, MetaObj};
 use super::*;
 use crate::codegen_abi::LayoutWord;
 
@@ -31,7 +32,7 @@ unsafe fn finish_inline_json_object(
     (*object).class_id = 0;
     (*object).parent_class_id = 0;
     // GC_STORE_AUDIT(INIT): fresh inline JSON objects have no metadata edge.
-    (*object).meta = ptr::null_mut();
+    *crate::object::header::MetaObj::runtime_born(object).meta_slot() = ptr::null_mut();
     // Charter step 3: marked plain-ordinary BEFORE the stamp, so the cached
     // `Ordinary` id is the receiver's (`mark_object_plain_ordinary`).
     shapes::store_kind::premark_plain_ordinary(object);
@@ -48,10 +49,7 @@ unsafe fn finish_inline_json_object(
     }
     shapes::store_kind::check_store_facts(object);
 
-    let slots = object
-        .cast::<u8>()
-        .add(std::mem::size_of::<ObjectHeader>())
-        .cast::<JSValue>();
+    let slots = MetaObj::runtime_born(object).slots().cast::<JSValue>();
     for (index, &(_, value)) in fields.iter().enumerate() {
         // GC_STORE_AUDIT(INIT): the bounded decoder accepts pointer-free
         // scalars and short strings only.
@@ -68,7 +66,7 @@ unsafe fn finish_inline_json_object(
 #[inline(always)]
 fn inline_json_object_size(field_count: usize) -> usize {
     let capacity = field_count.max(INLINE_SLOT_FLOOR);
-    std::mem::size_of::<ObjectHeader>() + capacity * std::mem::size_of::<JSValue>()
+    meta_form_alloc_bytes(capacity)
 }
 
 /// Birth the steady-state one-field JSON object from a cache entry whose exact
@@ -96,13 +94,11 @@ pub(crate) unsafe fn try_object_from_prevalidated_one_field(
     let object = raw.cast::<ObjectHeader>();
     (*object).class_id = 0;
     (*object).parent_class_id = shape_id.0;
-    (*object).meta = ptr::null_mut();
+    *crate::object::header::MetaObj::runtime_born(object).meta_slot() = ptr::null_mut();
     // Charter step 3: the cached id is an `Ordinary` (marked) record's.
     shapes::store_kind::premark_plain_ordinary(object);
     shapes::store_kind::check_store_facts(object);
-    let slots = raw
-        .add(std::mem::size_of::<ObjectHeader>())
-        .cast::<JSValue>();
+    let slots = MetaObj::runtime_born(raw.cast()).slots().cast::<JSValue>();
     slots.write(value);
     // GC_STORE_AUDIT(INIT): freshly allocated JSON object inline slot.
     slots.add(1).write(JSValue::undefined());
@@ -131,14 +127,12 @@ pub(crate) unsafe fn try_empty_json_object_preinstalled(
     let object = raw.cast::<ObjectHeader>();
     (*object).class_id = 0;
     (*object).parent_class_id = shape_id.0;
-    (*object).meta = ptr::null_mut();
+    *crate::object::header::MetaObj::runtime_born(object).meta_slot() = ptr::null_mut();
     // Charter step 3: a keyless JSON object is born marked plain-ordinary,
     // and its cached id (`parse_empty`) is the marked record's.
     shapes::store_kind::premark_plain_ordinary(object);
     shapes::store_kind::check_store_facts(object);
-    let slots = raw
-        .add(std::mem::size_of::<ObjectHeader>())
-        .cast::<JSValue>();
+    let slots = MetaObj::runtime_born(raw.cast()).slots().cast::<JSValue>();
     slots.write(JSValue::undefined());
     // GC_STORE_AUDIT(INIT): freshly allocated JSON object inline slot.
     slots.add(1).write(JSValue::undefined());
@@ -197,7 +191,7 @@ pub(crate) unsafe fn object_from_json_fields_preinstalled(
 ) -> *mut ObjectHeader {
     let count = values.len();
     let capacity = count.max(INLINE_SLOT_FLOOR);
-    let size = std::mem::size_of::<ObjectHeader>() + capacity * 8;
+    let size = meta_form_alloc_bytes(capacity);
     let raw = batch.as_mut().map_or(ptr::null_mut(), |b| {
         b.try_alloc(size, crate::gc::GC_TYPE_OBJECT)
     });
@@ -216,7 +210,7 @@ pub(crate) unsafe fn object_from_json_fields_preinstalled(
         (*obj).class_id = 0;
         (*obj).parent_class_id = 0;
         // GC_STORE_AUDIT(INIT): fresh record has no metadata edge.
-        (*obj).meta = ptr::null_mut();
+        *crate::object::header::MetaObj::runtime_born(obj).meta_slot() = ptr::null_mut();
         shapes::store_kind::premark_plain_ordinary(obj);
         // Keep shape publication in the existing mint-and-stamp funnel.
         let keys_view = super::ObjectKeys::new(keys, count as u32);
@@ -230,10 +224,7 @@ pub(crate) unsafe fn object_from_json_fields_preinstalled(
         obj
     };
     shapes::store_kind::check_store_facts(obj);
-    let slots = obj
-        .cast::<u8>()
-        .add(std::mem::size_of::<ObjectHeader>())
-        .cast::<JSValue>();
+    let slots = MetaObj::runtime_born(obj).slots().cast::<JSValue>();
     let mut saw_pointer = false;
     for (index, &value) in values.iter().enumerate() {
         if batch.is_none() {

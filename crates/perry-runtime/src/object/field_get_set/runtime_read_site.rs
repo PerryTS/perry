@@ -224,7 +224,8 @@ pub(crate) unsafe fn probe_integer_key(
     // the probe does not read: the complete read answers. Only an ordinary
     // object is handed an index key (an Array's index is an element read).
     if index {
-        let meta = (*obj).meta;
+        // A1_UNPROVEN: record-first: runtime read site (kind-A/B question for S0f).
+        let meta = crate::object::header::MetaObj::runtime_born(obj as *mut _).meta();
         let class_id = (*obj).class_id;
         if (!meta.is_null() && (*meta).elements != 0)
             || (class_id != 0 && crate::array::is_array_subclass_class_id(class_id))

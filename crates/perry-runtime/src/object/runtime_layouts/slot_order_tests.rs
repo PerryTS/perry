@@ -382,7 +382,8 @@ fn static_layout_slot_order_rejects_slots_that_are_not_a_permutation() {
         parent_class_id: 0,
         methods: std::ptr::null(),
         gc_header_word: crate::object::layout_desc::layout_gc_header_word(5),
-        _tail_pad: [0; 32],
+        slots_first: crate::object::layout_desc::layout_slots_first(),
+        _tail_pad: [0; 30],
     };
     unsafe {
         desc.keys = std::ptr::addr_of!(KEYS).cast();

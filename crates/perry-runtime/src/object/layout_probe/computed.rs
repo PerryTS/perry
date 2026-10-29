@@ -91,7 +91,8 @@ pub unsafe extern "C" fn perry_probe_get_value(
                 note_run(4);
                 return 0;
             }
-            let meta = (*obj).meta;
+            // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
+            let meta = crate::object::header::MetaObj::runtime_born(obj as *mut _).meta();
             if !meta.is_null()
                 && ((*meta).overflow != 0
                     || (*meta).flags & crate::object::OBJECT_META_FLAG_IS_PROTOTYPE != 0)

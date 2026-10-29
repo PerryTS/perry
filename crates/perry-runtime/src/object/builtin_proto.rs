@@ -391,7 +391,8 @@ pub(crate) unsafe fn note_write(obj: *const ObjectHeader, site: &'static str) {
     if obj.is_null() {
         return;
     }
-    let meta = (*obj).meta;
+    // A1_UNPROVEN: record-first: caller intrinsic-proto membership (kind-A/B question for S0f).
+    let meta = crate::object::header::MetaObj::runtime_born(obj as *mut _).meta();
     if meta.is_null() {
         return;
     }
@@ -462,7 +463,8 @@ pub(crate) unsafe fn note_value_store(
     spill: bool,
     site: &'static str,
 ) {
-    let meta = (*obj).meta;
+    // A1_UNPROVEN: record-first: caller intrinsic-proto membership (kind-A/B question for S0f).
+    let meta = crate::object::header::MetaObj::runtime_born(obj as *mut _).meta();
     if meta.is_null() || (*meta).flags & super::OBJECT_META_FLAG_IS_PROTOTYPE == 0 {
         return;
     }
@@ -502,7 +504,9 @@ pub(crate) fn note_write_addr(addr: usize, site: &'static str) {
         return;
     };
     match header.obj_type {
-        ty if crate::gc::gc_type_is_object(ty) => unsafe { note_write(addr as *const ObjectHeader, site) },
+        ty if crate::gc::gc_type_is_object(ty) => unsafe {
+            note_write(addr as *const ObjectHeader, site)
+        },
         crate::gc::GC_TYPE_ARRAY => note_array_prototype_write(addr, site),
         crate::gc::GC_TYPE_CLOSURE => unsafe {
             note_write(

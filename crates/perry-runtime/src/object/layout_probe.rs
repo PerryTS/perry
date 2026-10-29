@@ -721,7 +721,8 @@ pub unsafe extern "C" fn perry_probe_get_length(
     if record_of(dir, LayoutWord((*obj).parent_class_id)).is_null() {
         return hole();
     }
-    let meta = (*obj).meta;
+    // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
+    let meta = crate::object::header::MetaObj::runtime_born(obj as *mut _).meta();
     let class_id = (*obj).class_id;
     if (!meta.is_null() && (*meta).elements != 0)
         || (class_id != 0 && crate::array::is_array_subclass_class_id(class_id))
@@ -769,7 +770,8 @@ unsafe fn owned_get<const ABSENT: bool, const LAZY_HASH: bool>(
     hash: u64,
     table: *const crate::object::overflow::Table,
 ) -> f64 {
-    let meta = (*obj).meta;
+    // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
+    let meta = crate::object::header::MetaObj::runtime_born(obj as *mut _).meta();
     if (*obj).class_id == crate::object::NATIVE_MODULE_CLASS_ID
         || (*meta).elements != 0
         || (*meta).flags
@@ -840,7 +842,8 @@ unsafe fn probe_get_at<const ABSENT: bool, const SITE: bool, const LAZY_HASH: bo
         && (*r).present()
         && (*r).object_kind() == super::ShapeObjectKind::Ordinary
     {
-        let meta = (*obj).meta;
+        // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
+        let meta = crate::object::header::MetaObj::runtime_born(obj as *mut _).meta();
         if !meta.is_null() {
             let table = (*meta).overflow as usize as *const crate::object::overflow::Table;
             if !table.is_null() {
@@ -1305,7 +1308,8 @@ unsafe fn overflow_then_inherited<const ABSENT: bool>(
 /// accessor, which the slow operation calls), `None` when the overflow
 /// proves the key absent.
 unsafe fn overflow_get(obj: *const ObjectHeader, key_bits: u64, hash: u64) -> Option<f64> {
-    let meta = (*obj).meta;
+    // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
+    let meta = crate::object::header::MetaObj::runtime_born(obj as *mut _).meta();
     // A shadow bit with no overflow (an intrinsic prototype written in
     // place, a relink, a deleted shadow name): the layout's list is every
     // own key.
@@ -1672,7 +1676,8 @@ pub(crate) unsafe fn probe_has(obj_bits: u64, key_bits: u64, own_only: bool) -> 
             Err(true) => {}
         }
         if w & crate::object::overflow::SHADOW_BIT != 0 {
-            let meta = (*cur).meta;
+            // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
+            let meta = crate::object::header::MetaObj::runtime_born(cur as *mut _).meta();
             if !meta.is_null() && (*meta).overflow != 0 {
                 let t = (*meta).overflow as usize as *const crate::object::overflow::Table;
                 if let Some(i) = crate::object::overflow::find_hashed(t, key, hash) {
@@ -1693,9 +1698,10 @@ pub(crate) unsafe fn probe_has(obj_bits: u64, key_bits: u64, own_only: bool) -> 
             return -1;
         }
         if own_only {
+            // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
             // An Array subclass's elements store holds its own index keys and
             // `length`, which no key list names.
-            let meta = (*cur).meta;
+            let meta = crate::object::header::MetaObj::runtime_born(cur as *mut _).meta();
             if !meta.is_null() && (*meta).elements != 0 {
                 return -1;
             }
@@ -1767,7 +1773,8 @@ pub unsafe extern "C" fn perry_probe_set(
     // A clear shadow bit proves there is no overflow. Otherwise its
     // entries, when present, own every current key and attribute.
     if word & crate::object::overflow::SHADOW_BIT != 0 {
-        let meta = (*obj).meta;
+        // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
+        let meta = crate::object::header::MetaObj::runtime_born(obj as *mut _).meta();
         if !meta.is_null() && (*meta).overflow != 0 {
             return store_target::overflow(
                 obj,

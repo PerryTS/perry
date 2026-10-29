@@ -50,7 +50,7 @@ pub(crate) unsafe fn cell_meta_slot_for_header(
 ) -> Option<*mut *mut ObjectMeta> {
     match gc_hdr.obj_type {
         ty if crate::gc::object_has_meta_word(ty) => {
-            Some(&mut (*(user_ptr as *mut ObjectHeader)).meta as *mut *mut ObjectMeta)
+            Some(header::MetaObj::from_type(user_ptr as *mut ObjectHeader, ty).meta_slot())
         }
         crate::gc::GC_TYPE_ERROR => {
             Some(&mut (*(user_ptr as *mut crate::error::ErrorHeader)).meta as *mut *mut ObjectMeta)

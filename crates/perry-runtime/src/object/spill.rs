@@ -108,7 +108,7 @@ pub(crate) fn spill_get_present(obj_ptr: usize, field_index: usize) -> Option<u6
     }
     unsafe {
         let obj = obj_ptr as *const ObjectHeader;
-        let meta = (*obj).meta;
+        let meta = crate::object::header::MetaObj::from_storage(obj as *mut _, field_index).meta();
         if meta.is_null() {
             return None;
         }
@@ -163,10 +163,15 @@ pub(crate) fn spill_get(obj_ptr: usize, field_index: usize) -> Option<u64> {
 pub(crate) fn spill_get_inline(obj_ptr: usize, field_index: usize) -> Option<u64> {
     unsafe {
         let obj = obj_ptr as *mut ObjectHeader;
-        if (*obj).meta.is_null() {
+        if crate::object::header::MetaObj::from_storage(obj as *mut _, field_index)
+            .meta()
+            .is_null()
+        {
             return None;
         }
-        let spill = (*(*obj).meta).spill as *const crate::array::ArrayHeader;
+        let spill = (*crate::object::header::MetaObj::from_storage(obj as *mut _, field_index)
+            .meta())
+        .spill as *const crate::array::ArrayHeader;
         if spill.is_null() || field_index >= (*spill).length as usize {
             return None;
         }
@@ -186,7 +191,7 @@ pub(crate) fn spill_get_inline(obj_ptr: usize, field_index: usize) -> Option<u64
 pub(crate) fn spill_store_would_be_in_capacity(obj_ptr: usize, field_index: usize) -> bool {
     unsafe {
         let obj = obj_ptr as *const ObjectHeader;
-        let meta = (*obj).meta;
+        let meta = crate::object::header::MetaObj::from_storage(obj as *mut _, field_index).meta();
         if meta.is_null() {
             return false;
         }
@@ -203,7 +208,7 @@ pub(crate) fn spill_store_would_be_in_capacity(obj_ptr: usize, field_index: usiz
 pub(crate) fn spill_overwrite_present(obj_ptr: usize, field_index: usize, vbits: u64) -> bool {
     unsafe {
         let obj = obj_ptr as *mut ObjectHeader;
-        let meta = (*obj).meta;
+        let meta = crate::object::header::MetaObj::from_storage(obj as *mut _, field_index).meta();
         if meta.is_null() || (*meta).elements != 0 {
             return false;
         }
@@ -229,7 +234,7 @@ pub(crate) fn spill_set(obj_ptr: usize, field_index: usize, vbits: u64) {
         // in-range barriered store cannot allocate or move anything, so no
         // handle scope is needed. This is every write after the first to a
         // given width (e.g. round-robin updates across an object array).
-        let meta = (*obj).meta;
+        let meta = crate::object::header::MetaObj::from_storage(obj as *mut _, field_index).meta();
         // The physical write below belongs to the spill Array, so its layout
         // note cannot identify the owning Array-subclass object. Retire that
         // owner's cached numeric-prefix proof before changing any spill slot.
@@ -294,7 +299,7 @@ pub(crate) fn reserve_object_spill(obj_ptr: usize, field_count: u32) {
         let (_, obj) = obj_handle.across_mut::<ObjectHeader, _>(|| {
             object_meta_ensure(MetaObj::runtime_born(obj), MetaReason::SpillReserve)
         });
-        let meta = (*obj).meta;
+        let meta = crate::object::header::MetaObj::from_storage(obj as *mut _, field_count).meta();
         if (*meta).spill != 0 {
             return;
         }
@@ -302,7 +307,7 @@ pub(crate) fn reserve_object_spill(obj_ptr: usize, field_count: u32) {
         let (spill, obj) = obj_handle.across_mut::<ObjectHeader, _>(|| {
             crate::array::js_array_alloc_with_length_exact(field_count)
         });
-        let meta = (*obj).meta;
+        let meta = crate::object::header::MetaObj::from_storage(obj as *mut _, field_count).meta();
         if (*meta).spill == 0 {
             (*meta).spill = spill as u64;
             crate::gc::runtime_write_barrier_slot(
@@ -387,7 +392,7 @@ fn spill_set_slow(obj_ptr: usize, field_index: usize, vbits: u64) {
         // in it is a coin flip. Compiles to nothing outside `cfg(test)`.
         spill_safepoint(obj_ptr);
         let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
-        let meta = (*obj).meta;
+        let meta = crate::object::header::MetaObj::from_storage(obj as *mut _, field_index).meta();
         let spill = (*meta).spill as *mut crate::array::ArrayHeader;
         let needed = field_index + 1;
         if spill.is_null() || ((*spill).capacity as usize) < needed {
@@ -403,7 +408,8 @@ fn spill_set_slow(obj_ptr: usize, field_index: usize, vbits: u64) {
             let (new_spill, obj) = obj_handle.across_mut::<ObjectHeader, _>(|| {
                 crate::array::js_array_alloc_with_length(new_cap)
             });
-            let meta = (*obj).meta;
+            let meta =
+                crate::object::header::MetaObj::from_storage(obj as *mut _, field_index).meta();
             let old = (*meta).spill as *const crate::array::ArrayHeader;
             if !old.is_null() {
                 let old_len = (*old).length as usize;
@@ -433,7 +439,7 @@ fn spill_set_slow(obj_ptr: usize, field_index: usize, vbits: u64) {
             );
         }
         let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
-        let meta = (*obj).meta;
+        let meta = crate::object::header::MetaObj::from_storage(obj as *mut _, field_index).meta();
         let spill = (*meta).spill as *mut crate::array::ArrayHeader;
         spill_store_slot(spill, field_index, value_handle.get_nanbox_u64());
     }

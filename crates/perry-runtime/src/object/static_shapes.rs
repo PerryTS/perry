@@ -133,7 +133,11 @@ pub extern "C" fn js_object_final_shape_id_for_class_keys_static_private(
                 key_count,
             )
         };
-        (scope.root_raw_mut_ptr(base.as_ptr()), base.len(), Some(base))
+        (
+            scope.root_raw_mut_ptr(base.as_ptr()),
+            base.len(),
+            Some(base),
+        )
     };
     for name in &names {
         let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
@@ -406,9 +410,10 @@ unsafe fn finalized_constfn_facts(
     rebuilt: bool,
     expected: Option<&shapes::ShapeDescriptor>,
 ) -> Option<shapes::ShapeDescriptor> {
+    // A1_UNPROVEN: record-first: obj layout word (kind-A/B question for S0f).
     if obj.is_null()
         || !shapes::shape_word_is_writable(obj)
-        || !(*obj).meta.is_null()
+        || !crate::object::header::MetaObj::runtime_born(obj as *mut _).meta().is_null()
         // A receiver whose shape names a recorded prototype keeps it: a
         // static class shape names the class's.
         || shapes::object_prototype_word(obj) != 0
@@ -1112,7 +1117,11 @@ pub extern "C" fn js_object_final_layout_for_class_keys_static_private(
                 key_count,
             )
         };
-        (scope.root_raw_mut_ptr(base.as_ptr()), base.len(), Some(base))
+        (
+            scope.root_raw_mut_ptr(base.as_ptr()),
+            base.len(),
+            Some(base),
+        )
     };
     for name in &names {
         let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);

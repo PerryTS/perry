@@ -130,7 +130,7 @@ pub(crate) unsafe fn shape_answers(addr: usize) -> bool {
         return false;
     };
     // A function object is a GC_TYPE_CLOSURE cell, never GC_TYPE_OBJECT.
-    if !crate::gc::object_has_meta_word(header.obj_type)
+    if !crate::gc::gc_type_is_object(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || header._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0
     {
@@ -140,7 +140,7 @@ pub(crate) unsafe fn shape_answers(addr: usize) -> bool {
     if (*obj).class_id == NATIVE_MODULE_CLASS_ID {
         return false;
     }
-    let meta = (*obj).meta;
+    let meta = crate::object::header::object_meta_if_present(obj as *mut _, header.obj_type);
     meta.is_null()
         || ((*meta).elements == 0
             && (*meta).flags

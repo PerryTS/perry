@@ -235,7 +235,8 @@ fn object_hot_for_owner(
 ) -> &'static crate::object::ObjectHotTables {
     unsafe {
         if !owner.is_null() {
-            let meta = (*owner).meta;
+            // A1_UNPROVEN: record-first: owner layout word (kind-A/B question for S0f).
+            let meta = crate::object::header::MetaObj::runtime_born(owner as *mut _).meta();
             if !meta.is_null() {
                 let hot = &crate::state::state().object_hot;
                 let cached =

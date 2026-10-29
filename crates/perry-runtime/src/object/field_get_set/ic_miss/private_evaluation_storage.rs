@@ -122,7 +122,8 @@ fn private_storage_evaluation_id(class_id: u32, receiver: Option<f64>, owner: Op
     };
     let object = JSValue::from_bits(brand).as_pointer::<ObjectHeader>();
     unsafe {
-        let meta = (*object).meta;
+        // A1_UNPROVEN: record-first: ic_miss entry (kind-A/B question for S0f).
+        let meta = crate::object::header::MetaObj::runtime_born(object as *mut _).meta();
         if !meta.is_null() && (*meta).native_state != 0 {
             return (*meta).native_state;
         }

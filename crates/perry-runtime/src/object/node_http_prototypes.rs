@@ -368,7 +368,7 @@ fn pending_data_nop() -> f64 {
         return undefined();
     };
     // SAFETY: the agent's live, sealed OutgoingMessage.prototype.
-    let meta = unsafe { (*proto).meta };
+    let meta = unsafe { crate::object::header::MetaObj::runtime_born(proto as *mut _).meta() };
     if meta.is_null() {
         return undefined();
     }
@@ -387,8 +387,9 @@ fn native_receiver(receiver: f64) -> Option<f64> {
         return Some(receiver);
     }
     let obj = crate::object::field_get_set::runtime_read_site::object_receiver(receiver)?;
+    // A1_UNPROVEN: record-first: native payload receiver (kind-A/B question for S0f).
     // SAFETY: a live ordinary object.
-    let meta = unsafe { (*obj).meta };
+    let meta = unsafe { crate::object::header::MetaObj::runtime_born(obj as *mut _).meta() };
     if meta.is_null() {
         return None;
     }
@@ -415,7 +416,8 @@ pub extern "C" fn js_node_http_response_layout_receiver(receiver: f64) -> i32 {
         {
             return 0;
         }
-        let meta = (*obj).meta;
+        // A1_UNPROVEN: record-first: receiver layout (kind-A/B question for S0f).
+        let meta = crate::object::header::MetaObj::runtime_born(obj as *mut _).meta();
         if meta.is_null() {
             return 0;
         }
