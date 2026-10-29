@@ -137,6 +137,10 @@ pub struct ProgramFacts {
     pub diagnostics: Vec<(String, Vec<String>)>,
     /// DECISIONS 225: the activation pass's count (the whole program).
     pub activation: Option<String>,
+    /// DECISIONS 225: the bodies the whole program walked, the ones that
+    /// can run (module path, `SiteFacts::bodies` identity); `None`: every
+    /// body is walked.
+    pub active_bodies: Option<std::collections::BTreeSet<(String, u32, String)>>,
     pub module_paths: Vec<String>,
     pub templates: Vec<TemplateFacts>,
     pub sites: Vec<SiteFacts>,
@@ -1518,9 +1522,21 @@ fn compute_act<'a>(
     } else {
         Vec::new()
     };
+    // Every body the analysis walked, and every body holding a site (a
+    // context generation enters without a walk of its own).
+    let active_bodies = g.m.act.as_ref().map(|a| {
+        let holding = g.read_sites.iter().map(|s| g.m.act_key(s.func));
+        a.walked
+            .iter()
+            .cloned()
+            .chain(holding)
+            .map(|(mi, id, name)| (sorted[mi as usize].0.to_owned(), id, name))
+            .collect()
+    });
     let mut pf = ProgramFacts {
         diagnostics,
         activation,
+        active_bodies,
         super_unrelinked,
         fnproto_bind_written,
         module_paths: sorted.iter().map(|(p, _)| p.to_string()).collect(),
@@ -1582,6 +1598,26 @@ pub fn compute_units(modules: &[(String, &Module)], cfg: &FactsConfig) -> Progra
 }
 
 impl ProgramFacts {
+    /// DECISIONS 225: `s`, a site of another run (`path` its module), is
+    /// dead in this whole-program run: no view of it here, and activation
+    /// proved that no body holding it can run. Any fact about it is
+    /// vacuously true, so the other run proving it is not stronger. `false`
+    /// when every body was walked.
+    pub fn dead_site(&self, path: &str, s: &SiteFacts) -> bool {
+        let Some(on) = &self.active_bodies else {
+            return false;
+        };
+        !self.sites.iter().any(|w| {
+            self.module_paths[w.module as usize] == path
+                && w.byte_offset == s.byte_offset
+                && w.key == s.key
+                && w.is_call == s.is_call
+        }) && s
+            .bodies
+            .iter()
+            .all(|(id, name)| !on.contains(&(path.to_owned(), *id, name.clone())))
+    }
+
     /// Conservative program-wide metadata effect contract. Handing a shared
     /// object to another analyzed unit is not itself a mutation; every actual
     /// mutation or exposure to unmodeled code withholds this proof.

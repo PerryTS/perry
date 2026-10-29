@@ -152,6 +152,9 @@ pub struct SiteFacts {
     /// names these keys; its verdict is decided after the census
     /// (`units::typed_param_verdicts`).
     pub(crate) guard_keys: Option<Vec<String>>,
+    /// DECISIONS 225: the bodies holding the site, in its module (HIR
+    /// function id, and for a synthetic context its name; `Model::act_key`).
+    pub bodies: Vec<(u32, String)>,
 }
 
 /// `Some` (a reason a claim fails) absorbs `None`; of two reasons the
@@ -857,7 +860,17 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
         let mut t: Vec<String> = targets.into_values().collect();
         t.sort();
         t.dedup();
+        let mut bodies: Vec<(u32, String)> = funcs
+            .iter()
+            .map(|&f| {
+                let (_, id, name) = m.act_key(f);
+                (id, name)
+            })
+            .collect();
+        bodies.sort_unstable();
+        bodies.dedup();
         out.push(SiteFacts {
+            bodies,
             diagnostic_copies: diagnostic_copies.unwrap_or_default(),
             diagnostic_unit: g
                 .diagnostic

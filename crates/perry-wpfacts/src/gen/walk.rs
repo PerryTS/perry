@@ -38,6 +38,7 @@ impl<'a> Gen<'a> {
             }
             let mi = mi as u32;
             let init_fn = self.synthetic_fn(mi, "<init>");
+            self.m.note_walked(init_fn);
             let this = self.m.funcs[init_fn as usize].this;
             // Module top-level `this`: CJS `module.exports`-like object or
             // undefined in ESM; ⊤-free: a fresh literal-ish object.
@@ -294,6 +295,7 @@ impl<'a> Gen<'a> {
         class: Option<TmplId>,
         ctor_of: Option<TmplId>,
     ) {
+        self.m.note_walked(fxi);
         let info = self.m.funcs[fxi as usize].clone();
         let fn_ctor = class.is_none() && ctor_of.is_none();
         let fx = Fx {
@@ -361,6 +363,7 @@ impl<'a> Gen<'a> {
         let tm = self.mods[mi as usize].classes[&c.name];
         // Instance field initializers run in the field-init context.
         let fi = self.field_init_fn[&tm];
+        self.m.note_walked(fi);
         let fthis = self.m.funcs[fi as usize].this;
         let ffx = Fx {
             module: mi,
@@ -429,6 +432,7 @@ impl<'a> Gen<'a> {
         let tm = self.mods[mi as usize].classes[&c.name];
         // Static fields and static blocks: `this` is the class object.
         let si = self.static_init_fn[&tm];
+        self.m.note_walked(si);
         let sfx = Fx {
             module: mi,
             f: si,

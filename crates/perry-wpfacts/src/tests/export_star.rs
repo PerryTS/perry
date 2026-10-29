@@ -78,8 +78,10 @@ fn barrel(n: usize) -> ProgramFacts {
         "m".into(),
         "import { f } from './ts';\nimport * as ts from './ts';\n\
          const o = f(); console.log(o.A);\nconst p = f(); console.log(p.A);\n\
-         const q = ts.f(); console.log(q.A);\nconst r = ts.f(); console.log(r.A);"
-            .into(),
+         const q = ts.f(); console.log(q.A);\nconst r = ts.f(); console.log(r.A);\n"
+            .to_string()
+            // Each gK runs once (DECISIONS 225: an uncalled body is not walked).
+            + &(0..n).map(|i| format!("console.log(ts.g{i}().B{i});\n")).collect::<String>(),
     ));
     whole(&mods)
 }
@@ -88,11 +90,13 @@ fn barrel(n: usize) -> ProgramFacts {
 fn a_name_through_export_star_holds_that_name_only() {
     let pf = barrel(8);
     assert!(proven(&pf, "A"), "{}", pf.dump_text());
-    // A call site runs `f` alone: 24 more modules add their 24 functions'
-    // own instances, none per call site (on the union of the barrel's
-    // exports each of the four sites ran every function).
+    // A call site runs `f` alone: 24 more modules add, per function, its
+    // own instance and the one of the call site that runs it (each gK runs
+    // once, DECISIONS 225), none per call site of `f` (on the union of the
+    // barrel's exports each of the four sites ran every function: 4 more
+    // per module).
     let (small, big) = (pf.stats.instances, barrel(32).stats.instances);
-    assert_eq!(big - small, 24, "instances {small} -> {big}");
+    assert_eq!(big - small, 2 * 24, "instances {small} -> {big}");
 }
 
 #[test]

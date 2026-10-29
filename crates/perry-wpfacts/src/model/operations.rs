@@ -446,6 +446,15 @@ impl Model {
         }
     }
 
+    /// DECISIONS 225: generation walks the body of `f` (noted once the
+    /// activation set is final).
+    pub fn note_walked(&mut self, f: FnIdx) {
+        if self.act.as_ref().is_some_and(|a| a.fixed) {
+            let k = self.act_key(f);
+            self.act.as_mut().unwrap().walked.insert(k);
+        }
+    }
+
     /// DECISIONS 225: whether generation walks the body of `f` now.
     pub fn body_active(&self, f: FnIdx) -> bool {
         match &self.act {
