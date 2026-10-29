@@ -574,11 +574,13 @@ impl ArenaSweepObjectsState {
             self.arena_live_bytes = self.arena_live_bytes.saturating_add(size);
             // #7901: the from-space share of the census, so a following copied
             // minor can remove exactly what it replaces.
-            if !crate::arena::is_large_storage(header as usize) && crate::arena::block_in_copying_from_space(
+            // The cheap block-index test first: only a from-space block can
+            // hold a young leaf, so old objects never pay the storage lookup.
+            if crate::arena::block_in_copying_from_space(
                 block_idx,
                 self.resettable_general_n,
                 &self.active_survivor_blocks,
-            ) {
+            ) && !crate::arena::is_large_storage(header as usize) {
                 self.arena_live_from_space_bytes =
                     self.arena_live_from_space_bytes.saturating_add(size);
             }
