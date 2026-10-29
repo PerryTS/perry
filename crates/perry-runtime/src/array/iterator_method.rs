@@ -39,9 +39,8 @@ pub(super) unsafe fn property_at(owner: *const ObjectHeader, pos: u32) -> Iterat
 // need not re-prove the bound or search overflow for each iterator entry.
 #[inline(always)]
 unsafe fn iterator_slot_value(owner: *const ObjectHeader, slot: u32) -> u64 {
-    *owner
-        .cast::<u8>()
-        .add(std::mem::size_of::<ObjectHeader>())
+    // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
+    *crate::meta_slots_of!(crate::meta_obj_runtime_born!(owner as *mut _))
         .cast::<u64>()
         .add(slot as usize)
 }

@@ -33,7 +33,7 @@ unsafe fn ordinary_object(bits: u64) -> Option<(*const crate::ObjectHeader, usiz
         || header._reserved & crate::gc::OBJ_FLAG_PLAIN_ORDINARY == 0
         || header._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS != 0
         || (header.size as usize)
-            < crate::gc::GC_HEADER_SIZE + std::mem::size_of::<crate::ObjectHeader>()
+            < crate::gc::GC_HEADER_SIZE + crate::object::header::meta_form_alloc_bytes(0)
         || !super::stringify_tojson_probe::object_is_plain_record(obj)
         || crate::object::prototype_chain::object_static_prototype(obj as usize).is_some()
     {
@@ -49,13 +49,13 @@ unsafe fn record(bits: u64) -> Option<Record> {
     )?;
     let len = key_count(descriptor.keys_view())?;
     if len > descriptor.live_inline_slot_count as usize
-        || size < crate::gc::GC_HEADER_SIZE + std::mem::size_of::<crate::ObjectHeader>() + len * 8
+        || size < crate::gc::GC_HEADER_SIZE + crate::object::header::meta_form_alloc_bytes(len)
     {
         return None;
     }
     Some(Record {
-        values: (obj as *const u8)
-            .add(std::mem::size_of::<crate::ObjectHeader>())
+        // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
+        values: crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _))
             .cast(),
         len,
     })
@@ -194,15 +194,15 @@ impl Emitter {
         let (object, size) = ordinary_object(bits)?;
         let index = self.plan(object)?;
         let len = self.get(index).len as usize;
-        if size < crate::gc::GC_HEADER_SIZE + std::mem::size_of::<crate::ObjectHeader>() + len * 8 {
+        if size < crate::gc::GC_HEADER_SIZE + crate::object::header::meta_form_alloc_bytes(len) {
             return None;
         }
         if len == 0 {
             buf.push_str("{}");
             return Some(());
         }
-        let values = (object as *const u8)
-            .add(std::mem::size_of::<crate::ObjectHeader>())
+        // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
+        let values = crate::meta_slots_of!(crate::meta_obj_runtime_born!(object as *mut _))
             .cast::<u64>();
         for i in 0..len {
             let value = *values.add(i);

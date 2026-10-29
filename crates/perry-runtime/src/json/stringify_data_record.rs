@@ -58,15 +58,15 @@ unsafe fn inline_fields_with_live<'a>(
         || crate::gc_type_is_not_object!(header.obj_type)
         || header._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS != 0
         || (header.size as usize)
-            < crate::gc::GC_HEADER_SIZE + std::mem::size_of::<crate::ObjectHeader>() + count * 8
+            < crate::gc::GC_HEADER_SIZE + crate::object::header::meta_form_alloc_bytes(count)
         || !super::stringify_tojson_probe::object_is_plain_record(obj)
         || count > live_inline_slots as usize
     {
         return None;
     }
     Some(std::slice::from_raw_parts(
-        (obj as *const u8)
-            .add(std::mem::size_of::<crate::ObjectHeader>())
+        // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
+        crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _))
             .cast(),
         count,
     ))

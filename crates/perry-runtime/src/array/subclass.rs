@@ -562,8 +562,8 @@ unsafe fn ensure_subclass_numeric_prefix(
             return false;
         };
         let value_ptr = if slot < layout.live_inline_slots {
-            (obj as *mut u8)
-                .add(std::mem::size_of::<ObjectHeader>())
+            // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
+            crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _))
                 .cast::<u64>()
                 .add(slot as usize)
         } else {
@@ -643,7 +643,8 @@ fn layout_field_value(obj: *const ObjectHeader, slot: u32, live_inline_slots: u3
     unsafe {
         if slot < live_inline_slots {
             let fields =
-                (obj as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const JSValue;
+                // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
+                crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _)) as *const JSValue;
             return *fields.add(slot as usize);
         }
 
@@ -791,8 +792,8 @@ unsafe fn store_dense_nonpointer_number_slot(
 ) -> bool {
     let value_bits = number.to_bits();
     if slot < live_inline_slots {
-        let fields = (obj as *mut u8)
-            .add(std::mem::size_of::<ObjectHeader>())
+        // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
+        let fields = crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _))
             .cast::<u64>();
         // GC_STORE_AUDIT(POINTER_FREE): the caller proved `number` is a raw nonnegative i32 Number; no edge changes.
         ptr::write(fields.add(slot as usize), value_bits);
@@ -820,8 +821,8 @@ unsafe fn clear_retired_dense_slot(
     former_live_inline_slots: u32,
 ) {
     if slot < former_live_inline_slots {
-        let fields = (obj as *mut u8)
-            .add(std::mem::size_of::<ObjectHeader>())
+        // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
+        let fields = crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _))
             .cast::<u64>();
         // The predecessor ShapeId is already installed, so this physical tail
         // is outside the object's traced slot range. Clearing it is storage
@@ -856,8 +857,8 @@ unsafe fn clear_retired_dense_numeric_tail_slot(
     former_live_inline_slots: u32,
 ) {
     if slot < former_live_inline_slots {
-        let fields = (obj as *mut u8)
-            .add(std::mem::size_of::<ObjectHeader>())
+        // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
+        let fields = crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _))
             .cast::<u64>();
         // GC_STORE_AUDIT(POINTER_FREE): retiring a physical tail slot to `undefined` publishes no edge.
         ptr::write(fields.add(slot as usize), crate::value::TAG_UNDEFINED);

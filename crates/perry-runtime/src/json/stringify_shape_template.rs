@@ -291,7 +291,8 @@ unsafe fn object_alloc_limit(obj: *const crate::ObjectHeader) -> u32 {
 unsafe fn template_field_bits(obj: *const crate::ObjectHeader, f: u32) -> u64 {
     if f < object_alloc_limit(obj) {
         let fields_ptr =
-            (obj as *const u8).add(std::mem::size_of::<crate::ObjectHeader>()) as *const f64;
+            // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
+            crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _)) as *const f64;
         (*fields_ptr.add(f as usize)).to_bits()
     } else {
         crate::object::js_object_get_field(obj, f).bits()
@@ -455,7 +456,8 @@ pub(crate) unsafe fn try_emit_shape_element(
         let obj = elem_handle.get_raw_const_ptr::<crate::ObjectHeader>();
         if (f as u32) < alloc_limit {
             let fields_ptr =
-                (obj as *const u8).add(std::mem::size_of::<crate::ObjectHeader>()) as *const f64;
+                // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
+                crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _)) as *const f64;
             (*fields_ptr.add(f)).to_bits()
         } else {
             crate::object::js_object_get_field(obj, f as u32).bits()

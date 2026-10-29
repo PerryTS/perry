@@ -219,8 +219,7 @@ fn is_callable_value(value: f64) -> bool {
 
 #[inline]
 unsafe fn object_field_slot(obj: *mut ObjectHeader, field_index: usize) -> *mut u64 {
-    (obj as *mut u8)
-        .add(std::mem::size_of::<ObjectHeader>())
+    crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _))
         .cast::<u64>()
         .add(field_index)
 }

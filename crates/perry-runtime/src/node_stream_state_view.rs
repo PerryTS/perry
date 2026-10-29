@@ -353,7 +353,8 @@ pub(super) fn read_birth_data(obj: *const ObjectHeader, data: StateData) -> Opti
     }
     // This declared family has all its public data slots inline.
     let bits = unsafe {
-        let fields = (obj as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64;
+        // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
+        let fields = crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _)) as *const u64;
         *fields.add(index)
     };
     Some(f64::from_bits(bits))

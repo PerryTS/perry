@@ -28,7 +28,7 @@ pub(crate) const PROTOTYPE_KEY: &str = "#<perry:prototype>";
 const _: () = assert!(std::mem::size_of::<BufferHeader>() == crate::codegen_abi::BYTES_STORE);
 const _: () = assert!(std::mem::offset_of!(BufferHeader, link) == crate::codegen_abi::BYTES_LINK);
 const _: () =
-    assert!(std::mem::size_of::<ObjectHeader>() == crate::codegen_abi::BYTES_VIEW_BAG_OWNER);
+    assert!(crate::object::header::meta_form_alloc_bytes(0) == crate::codegen_abi::BYTES_VIEW_BAG_OWNER);
 const _: () = assert!(crate::gc_type_is_object!(crate::codegen_abi::GC_TYPE_OBJECT));
 
 #[inline(always)]

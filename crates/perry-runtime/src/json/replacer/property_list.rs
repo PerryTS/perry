@@ -41,7 +41,8 @@ pub(crate) unsafe fn stringify_object_with_array_replacer(
     let keys_len = keys_view.count();
     let keys_elements = crate::object::keys_array_dense_slots(keys_view.arr()).0;
     let fields_ptr =
-        (ptr as *const u8).add(std::mem::size_of::<crate::ObjectHeader>()) as *const f64;
+        // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
+        crate::meta_slots_of!(crate::meta_obj_runtime_born!(ptr as *mut _)) as *const f64;
     // Iterate keys_len, not min(...): ≥9-field objects keep overflow values in
     // OVERFLOW_FIELDS (see the function-replacer walk above / plain #307 fix).
     let alloc_limit = std::cmp::max(num_fields, crate::object::INLINE_SLOT_FLOOR as u32);

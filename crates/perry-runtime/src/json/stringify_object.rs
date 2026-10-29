@@ -378,7 +378,8 @@ unsafe fn stringify_object_walk(
             if slotted {
                 crate::object::field_get_set::js_object_get_key_field(obj, f).bits()
             } else if f < alloc_limit {
-                let fields_ptr = (obj as *const u8).add(std::mem::size_of::<crate::ObjectHeader>())
+                // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
+                let fields_ptr = crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _))
                     as *const f64;
                 (*fields_ptr.add(f as usize)).to_bits()
             } else {

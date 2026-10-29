@@ -19,7 +19,7 @@ const KEY_PREFIX_CACHE_SLOTS: usize = 8;
 const MAX_KEY_PREFIX_BYTES: usize = 256;
 const MAX_REPEATED_OUTPUT_BYTES: usize = 256;
 const SCALAR_FIELD: u8 = u8::MAX;
-const OBJECT_BYTES: usize = std::mem::size_of::<crate::ObjectHeader>();
+const OBJECT_BYTES: usize = crate::object::header::meta_form_alloc_bytes(0);
 const ARRAY_BYTES: usize = std::mem::size_of::<crate::ArrayHeader>();
 
 #[derive(Clone, Copy)]

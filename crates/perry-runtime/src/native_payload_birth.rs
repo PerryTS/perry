@@ -261,7 +261,7 @@ fn any_lanes(id: LayoutWord, count: usize) -> bool {
 /// shape: the canonical store's string alias and barrier work; the shape's
 /// rep is what traces the slot.
 unsafe fn init_slot(obj: *mut ObjectHeader, i: usize, bits: u64) {
-    let fields = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
+    let fields = crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _)) as *mut u64;
     crate::gc::runtime_store_jsvalue_slot_layout_deferred(
         obj as usize,
         fields.add(i) as usize,

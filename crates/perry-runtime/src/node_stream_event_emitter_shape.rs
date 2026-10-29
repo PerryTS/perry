@@ -28,7 +28,7 @@ pub(super) fn ordinary_object(value: f64) -> Option<(*mut crate::object::ObjectH
 /// `obj` is a live object with at least `slot + 1` inline slots.
 #[inline]
 pub(super) unsafe fn slot_bits(obj: *const crate::object::ObjectHeader, slot: u32) -> u64 {
-    let fields = (obj as *const u8).add(std::mem::size_of::<crate::object::ObjectHeader>());
+    let fields = crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _));
     std::ptr::read((fields as *const u64).add(slot as usize))
 }
 
