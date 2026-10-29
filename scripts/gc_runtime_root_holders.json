@@ -3742,7 +3742,8 @@
     },
     {
       "file": "crates/perry-runtime/src/object/iterator_prototypes.rs",
-      "name": "ARRAY_ITERATOR_PROTOTYPE_PTR_SLOT"
+      "name": "ARRAY_ITERATOR_PROTOTYPE_PTR_SLOT",
+      "scanner": "scan_object_cache_roots_mut"
     },
     {
       "file": "crates/perry-runtime/src/object/iterator_prototypes.rs",
@@ -3751,19 +3752,23 @@
     },
     {
       "file": "crates/perry-runtime/src/object/iterator_prototypes.rs",
-      "name": "ITERATOR_PROTOTYPE_PTR_SLOT"
+      "name": "ITERATOR_PROTOTYPE_PTR_SLOT",
+      "scanner": "scan_object_cache_roots_mut"
     },
     {
       "file": "crates/perry-runtime/src/object/iterator_prototypes.rs",
-      "name": "MAP_ITERATOR_PROTOTYPE_PTR_SLOT"
+      "name": "MAP_ITERATOR_PROTOTYPE_PTR_SLOT",
+      "scanner": "scan_object_cache_roots_mut"
     },
     {
       "file": "crates/perry-runtime/src/object/iterator_prototypes.rs",
-      "name": "REGEXP_STRING_ITERATOR_PROTOTYPE_PTR_SLOT"
+      "name": "REGEXP_STRING_ITERATOR_PROTOTYPE_PTR_SLOT",
+      "scanner": "scan_object_cache_roots_mut"
     },
     {
       "file": "crates/perry-runtime/src/object/iterator_prototypes.rs",
-      "name": "SET_ITERATOR_PROTOTYPE_PTR_SLOT"
+      "name": "SET_ITERATOR_PROTOTYPE_PTR_SLOT",
+      "scanner": "scan_object_cache_roots_mut"
     },
     {
       "file": "crates/perry-runtime/src/object/iterator_prototypes.rs",
@@ -3772,7 +3777,8 @@
     },
     {
       "file": "crates/perry-runtime/src/object/iterator_prototypes.rs",
-      "name": "STRING_ITERATOR_PROTOTYPE_PTR_SLOT"
+      "name": "STRING_ITERATOR_PROTOTYPE_PTR_SLOT",
+      "scanner": "scan_object_cache_roots_mut"
     },
     {
       "file": "crates/perry-runtime/src/object/mod.rs",
