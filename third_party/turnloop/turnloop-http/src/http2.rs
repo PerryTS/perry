@@ -425,6 +425,9 @@ pub struct Connection {
     /// belong to a live stream. HPACK is connection state, so such a block
     /// still has to advance the decoder before it is thrown away.
     disposal: Option<Disposal>,
+    /// PINGs sent and not yet acknowledged. An acknowledgement with none
+    /// outstanding answers nothing this endpoint sent.
+    pings: usize,
     /// The PUSH_PROMISE whose header block is being assembled: the promised
     /// stream and whether the block is only to be decoded and dropped (the
     /// associated stream is gone).
@@ -490,6 +493,7 @@ impl Connection {
             scratch: Vec::new(),
             continuation: None,
             disposal: None,
+            pings: 0,
             promise: None,
             output: Vec::new(),
             output_pos: 0,
@@ -989,7 +993,9 @@ impl Connection {
         self.frame(3, 0, id, &code.to_be_bytes())
     }
     pub fn ping(&mut self, data: [u8; 8]) -> Result<()> {
-        self.frame(6, 0, 0, &data)
+        self.frame(6, 0, 0, &data)?;
+        self.pings += 1;
+        Ok(())
     }
     /// Graceful close: GOAWAY(NO_ERROR) naming the last stream this connection
     /// has processed, then drain. A stream the peer opens before it sees the
@@ -1029,6 +1035,7 @@ impl Connection {
             self.failed = true;
             let code = match e.code {
                 "FLOW_CONTROL_ERROR" => 3,
+                "INTERNAL_ERROR" => 2,
                 "FRAME_SIZE_ERROR" => 6,
                 "COMPRESSION_ERROR" => 9,
                 "ENHANCE_YOUR_CALM" => 11,
@@ -1373,6 +1380,12 @@ impl Connection {
                 let ack = f.flags & 1 != 0;
                 if !ack {
                     self.frame(6, 1, 0, f.payload)?;
+                } else if self.pings == 0 {
+                    // Node answers GOAWAY(INTERNAL_ERROR) and drops the
+                    // connection (measured against a raw peer).
+                    return Err(error("INTERNAL_ERROR", "unsolicited PING acknowledgement"));
+                } else {
+                    self.pings -= 1;
                 }
                 step.event = Some(Event::Ping { ack, data });
             }

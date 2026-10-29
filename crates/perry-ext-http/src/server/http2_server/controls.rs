@@ -39,6 +39,11 @@ fn turnloop_of(handle: i64) -> Option<crate::server::turnloop_h2::target::Target
     super::turnloop_conn_of_session(handle)
 }
 
+fn is_nullish(value: f64) -> bool {
+    let v = JsValue::from_bits(value.to_bits());
+    v.is_undefined() || v.is_null()
+}
+
 pub(crate) fn queue_session_ping(handle: i64, args: &[f64]) -> f64 {
     let first_callback = args
         .first()
@@ -50,20 +55,38 @@ pub(crate) fn queue_session_ping(handle: i64, args: &[f64]) -> f64 {
         .copied()
         .map(|v| closure_arg(Some(v)))
         .unwrap_or(0);
-    let (callback, payload_value) = if second_callback != 0 {
-        (second_callback, args.first().copied())
-    } else {
+    // Node: `ping([payload, ]callback)`. A payload is checked before the
+    // callback is.
+    let (callback, payload_value) = if first_callback != 0 {
         (first_callback, None)
+    } else {
+        (
+            second_callback,
+            args.first()
+                .copied()
+                .filter(|v| !is_nullish(*v)),
+        )
+    };
+    let payload = match payload_value {
+        Some(value) => {
+            crate::server::http2_settings::checked_ping_payload(JsValue::from_bits(value.to_bits()))
+        }
+        // No payload: eight random bytes, which the acknowledgement echoes.
+        None => {
+            use std::hash::{BuildHasher, Hasher};
+            std::collections::hash_map::RandomState::new()
+                .build_hasher()
+                .finish()
+                .to_be_bytes()
+                .to_vec()
+        }
     };
     if callback == 0 {
-        return bool_value(false);
-    }
-    let mut payload = payload_value
-        .and_then(jsvalue_to_body_bytes)
-        .unwrap_or_else(|| vec![0; 8]);
-    if payload.len() != 8 {
-        payload.resize(8, 0);
-        payload.truncate(8);
+        let received = args
+            .get(if first_callback != 0 { 0 } else { 1 })
+            .copied()
+            .unwrap_or(f64::from_bits(TAG_UNDEFINED));
+        crate::server::http2_settings::throw_ping_callback(JsValue::from_bits(received.to_bits()));
     }
     if let Some(conn) = turnloop_of(handle) {
         let mut data = [0u8; 8];
