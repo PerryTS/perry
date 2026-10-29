@@ -1013,6 +1013,21 @@ const EMPTY_SUBMOD_SLOTS: SubmodSlots = SubmodSlots {
     default_object: std::ptr::null_mut(),
 };
 
+/// Read this thread's slots (`None` before its first submodule singleton).
+fn with_submod_slots<R>(read: impl FnOnce(Option<&[SubmodSlots; SUBMOD_COUNT]>) -> R) -> R {
+    SUBMOD_SINGLETONS.with(|m| read(m.borrow().as_deref()))
+}
+
+/// Write this thread's slots, allocating them on first use.
+fn with_submod_slots_mut<R>(write: impl FnOnce(&mut [SubmodSlots; SUBMOD_COUNT]) -> R) -> R {
+    SUBMOD_SINGLETONS.with(|m| {
+        write(
+            m.borrow_mut()
+                .get_or_insert_with(|| Box::new([EMPTY_SUBMOD_SLOTS; SUBMOD_COUNT])),
+        )
+    })
+}
+
 /// `export`'s ordinal in `submod.exports`.
 fn export_ordinal(submod: &SubmoduleSpec, export: &ExportSpec) -> usize {
     let base = submod.exports.as_ptr() as usize;
@@ -1026,12 +1041,12 @@ fn export_ordinal(submod: &SubmoduleSpec, export: &ExportSpec) -> usize {
 }
 
 thread_local! {
-    /// Per-submodule singleton slots, indexed by `SubmodBucket`. Lazily
-    /// initialized: a `const` initializer of a type with a destructor keeps
-    /// its state word in an init image (`.tdata`) that every thread start
-    /// copies; the lazy form is `.tbss`.
-    static SUBMOD_SINGLETONS: RefCell<[SubmodSlots; SUBMOD_COUNT]> =
-        RefCell::new([EMPTY_SUBMOD_SLOTS; SUBMOD_COUNT]);
+    /// Per-submodule singleton slots, indexed by `SubmodBucket`, allocated on
+    /// the thread's first submodule use. The thread-local itself is one
+    /// pointer, so a thread that never touches a submodule pays no per-thread
+    /// TLS for the slots (no init image to copy, nothing extra to zero).
+    static SUBMOD_SINGLETONS: RefCell<Option<Box<[SubmodSlots; SUBMOD_COUNT]>>> =
+        const { RefCell::new(None) };
 
     /// `node:timers/promises.scheduler` is a non-callable object with
     /// function-valued `wait` and `yield` properties.
@@ -1311,8 +1326,8 @@ fn ensure_export_singleton(
     } else {
         allocated
     };
-    SUBMOD_SINGLETONS.with(|m| {
-        m.borrow_mut()[bucket]
+    with_submod_slots_mut(|slots| {
+        slots[bucket]
             .exports
             .get_or_insert_with(|| Box::new(vec![std::ptr::null_mut(); submod.exports.len()]))
             [ordinal] = allocated;
@@ -1323,8 +1338,8 @@ fn ensure_export_singleton(
 
 /// The closure already minted for export `ordinal` of submodule `bucket`.
 fn export_singleton(bucket: usize, ordinal: usize) -> Option<*mut ClosureHeader> {
-    SUBMOD_SINGLETONS.with(|m| {
-        m.borrow()[bucket]
+    with_submod_slots(|slots| {
+        slots?[bucket]
             .exports
             .as_ref()?
             .get(ordinal)
@@ -1387,7 +1402,8 @@ fn submodule_default_object_value(submod: &'static SubmoduleSpec) -> Option<f64>
         return None;
     }
     let bucket = submod.bucket as usize;
-    let cached = SUBMOD_SINGLETONS.with(|m| m.borrow()[bucket].default_object);
+    let cached =
+        with_submod_slots(|slots| slots.map_or(std::ptr::null_mut(), |s| s[bucket].default_object));
     if !cached.is_null() {
         return Some(f64::from_bits(JSValue::pointer(cached as *const u8).bits()));
     }
@@ -1401,7 +1417,7 @@ fn submodule_default_object_value(submod: &'static SubmoduleSpec) -> Option<f64>
         set_named_value(obj, "constants", fs_promises_constants_value());
     }
 
-    SUBMOD_SINGLETONS.with(|m| m.borrow_mut()[bucket].default_object = obj);
+    with_submod_slots_mut(|slots| slots[bucket].default_object = obj);
     ANY_SINGLETON_ALLOCATED.store(1, Ordering::Release);
     Some(f64::from_bits(JSValue::pointer(obj as *const u8).bits()))
 }
@@ -1462,7 +1478,8 @@ pub(crate) fn is_diagnostics_bounded_channel_constructor_value(value: f64) -> bo
 
 fn ensure_namespace_singleton(submod: &'static SubmoduleSpec) -> *mut ObjectHeader {
     let bucket = submod.bucket as usize;
-    let cached = SUBMOD_SINGLETONS.with(|m| m.borrow()[bucket].namespace);
+    let cached =
+        with_submod_slots(|slots| slots.map_or(std::ptr::null_mut(), |s| s[bucket].namespace));
     if !cached.is_null() {
         return cached;
     }
@@ -1529,7 +1546,7 @@ fn ensure_namespace_singleton(submod: &'static SubmoduleSpec) -> *mut ObjectHead
     if let Some(default_value) = submodule_default_object_value(submod) {
         set_named_value(obj, "default", default_value);
     }
-    SUBMOD_SINGLETONS.with(|m| m.borrow_mut()[bucket].namespace = obj);
+    with_submod_slots_mut(|slots| slots[bucket].namespace = obj);
     ANY_SINGLETON_ALLOCATED.store(1, Ordering::Release);
     obj
 }
@@ -1556,7 +1573,7 @@ pub fn scan_node_submodule_singleton_roots_mut(visitor: &mut crate::gc::RuntimeR
         return;
     }
     SUBMOD_SINGLETONS.with(|m| {
-        for slots in m.borrow_mut().iter_mut() {
+        for slots in m.borrow_mut().iter_mut().flat_map(|all| all.iter_mut()) {
             for closure_ptr in slots.exports.iter_mut().flat_map(|e| e.iter_mut()) {
                 if closure_ptr.is_null() {
                     continue;
@@ -1618,11 +1635,10 @@ pub(crate) fn test_seed_node_submodule_roots(
     namespace: *mut ObjectHeader,
     diag_noop: *mut ClosureHeader,
 ) {
-    SUBMOD_SINGLETONS.with(|m| {
-        let mut m = m.borrow_mut();
-        *m = [EMPTY_SUBMOD_SLOTS; SUBMOD_COUNT];
-        m[0].exports = Some(Box::new(vec![closure]));
-        m[0].namespace = namespace;
+    SUBMOD_SINGLETONS.with(|m| *m.borrow_mut() = None);
+    with_submod_slots_mut(|slots| {
+        slots[0].exports = Some(Box::new(vec![closure]));
+        slots[0].namespace = namespace;
     });
     DIAG_NOOP_CLOSURE.with(|slot| {
         *slot.borrow_mut() = Some(diag_noop);
@@ -1641,7 +1657,7 @@ pub(crate) fn test_seed_node_submodule_roots(
 #[cfg(test)]
 pub(crate) fn test_node_submodule_roots() -> (usize, usize, usize, u64) {
     let closure = export_singleton(0, 0).map_or(0, |ptr| ptr as usize);
-    let namespace = SUBMOD_SINGLETONS.with(|m| m.borrow()[0].namespace as usize);
+    let namespace = with_submod_slots(|slots| slots.map_or(0, |s| s[0].namespace as usize));
     let diag =
         DIAG_NOOP_CLOSURE.with(|slot| slot.borrow().as_ref().map(|ptr| *ptr as usize).unwrap_or(0));
     let pending = DIAG_PENDING_UNCAUGHT.with(|pending| {
