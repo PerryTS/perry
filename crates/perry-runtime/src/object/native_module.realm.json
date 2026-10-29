@@ -879,44 +879,6 @@
         ]
       },
       {
-        "name": "process.argv",
-        "kind": "exotic",
-        "properties": [],
-        "own_key_order": [],
-        "own_symbol_order": [],
-        "header": {
-          "gc_type": 1,
-          "reserved": 40960
-        },
-        "prototype": "Array.prototype",
-        "births": [
-          "Array.prototype"
-        ],
-        "value": {
-          "kind": "dynamic",
-          "value": "process.argv"
-        }
-      },
-      {
-        "name": "process.execArgv",
-        "kind": "exotic",
-        "properties": [],
-        "own_key_order": [],
-        "own_symbol_order": [],
-        "header": {
-          "gc_type": 1,
-          "reserved": 16384
-        },
-        "prototype": "Array.prototype",
-        "births": [
-          "Array.prototype"
-        ],
-        "value": {
-          "kind": "dynamic",
-          "value": "process.execArgv"
-        }
-      },
-      {
         "name": "process.stderr",
         "kind": "namespace",
         "properties": [

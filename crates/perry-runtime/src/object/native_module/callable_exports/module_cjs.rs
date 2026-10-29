@@ -138,21 +138,8 @@ pub(crate) fn module_cjs_global_paths_value() -> f64 {
             .unwrap_or_else(|| std::path::PathBuf::from("/usr/local"));
         paths.push(prefix.join("lib/node").to_string_lossy().into_owned());
 
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let arr = scope.root_nanbox_f64(f64::from_bits(
-            JSValue::array_ptr(crate::array::js_array_alloc_with_length(paths.len() as u32)).bits(),
-        ));
-        store_module_cjs_root(slot, arr.get_nanbox_f64());
-        for (i, path) in paths.iter().enumerate() {
-            let value = scope.root_nanbox_f64(native_string_value(path));
-            crate::array::js_array_set_f64(
-                JSValue::from_bits(arr.get_nanbox_f64().to_bits())
-                    .as_pointer::<crate::array::ArrayHeader>() as *mut _,
-                i as u32,
-                value.get_nanbox_f64(),
-            );
-        }
-        store_module_cjs_root(slot, arr.get_nanbox_f64())
+        let arr = crate::realm_decl! { birth crate::array::realm_string_array(paths.as_slice(), false); realm { "node:module.globalPaths", value = dynamic, elements = string } };
+        store_module_cjs_root(slot, arr)
     })
 }
 
@@ -162,26 +149,7 @@ pub(crate) fn module_builtin_modules_value() -> f64 {
         if bits != 0 {
             return f64::from_bits(bits);
         }
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let arr = scope.root_nanbox_f64(f64::from_bits(
-            JSValue::array_ptr(crate::array::js_array_alloc_with_length(
-                crate::process::MODULE_BUILTIN_MODULES.len() as u32,
-            ))
-            .bits(),
-        ));
-        store_module_cjs_root(slot, arr.get_nanbox_f64());
-        for (i, name) in crate::process::MODULE_BUILTIN_MODULES.iter().enumerate() {
-            let value = scope.root_nanbox_f64(native_string_value(name));
-            crate::array::js_array_set_f64(
-                JSValue::from_bits(arr.get_nanbox_f64().to_bits())
-                    .as_pointer::<crate::array::ArrayHeader>() as *mut _,
-                i as u32,
-                value.get_nanbox_f64(),
-            );
-        }
-        let value = arr.get_nanbox_f64();
-        crate::object::js_object_freeze(value);
-        store_module_cjs_root(slot, value)
+        store_module_cjs_root(slot, crate::process::module_builtin_modules_array())
     })
 }
 
@@ -257,28 +225,14 @@ fn module_wrap_value() -> f64 {
     })
 }
 
+/// `Module.wrapper`, in Node's order.
+const MODULE_WRAPPER: &[&str] = &[
+    "(function (exports, require, module, __filename, __dirname) { ",
+    "\n});",
+];
+
 fn module_wrapper_value() -> f64 {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let arr = scope.root_nanbox_f64(f64::from_bits(
-        JSValue::array_ptr(crate::array::js_array_alloc_with_length(2)).bits(),
-    ));
-    let prefix = scope.root_nanbox_f64(native_string_value(
-        "(function (exports, require, module, __filename, __dirname) { ",
-    ));
-    crate::array::js_array_set_f64(
-        JSValue::from_bits(arr.get_nanbox_f64().to_bits()).as_pointer::<crate::array::ArrayHeader>()
-            as *mut _,
-        0,
-        prefix.get_nanbox_f64(),
-    );
-    let suffix = scope.root_nanbox_f64(native_string_value("\n});"));
-    crate::array::js_array_set_f64(
-        JSValue::from_bits(arr.get_nanbox_f64().to_bits()).as_pointer::<crate::array::ArrayHeader>()
-            as *mut _,
-        1,
-        suffix.get_nanbox_f64(),
-    );
-    arr.get_nanbox_f64()
+    crate::realm_decl! { birth crate::array::realm_string_array(MODULE_WRAPPER, false); realm { "node:module.Module.wrapper", elements_source = MODULE_WRAPPER } }
 }
 
 extern "C" fn module_prototype_method_thunk(

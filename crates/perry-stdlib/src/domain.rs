@@ -159,7 +159,7 @@ fn active_stack_value() -> f64 {
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let values = ACTIVE_DOMAINS.with(|stack| stack.borrow().clone());
     let values = scope.root_nanbox_f64_slice(&values);
-    let mut array = scope.root_nanbox_f64(js_nanbox_pointer(js_array_alloc(0) as i64));
+    let mut array = scope.root_nanbox_f64(js_nanbox_pointer(perry_runtime::realm_decl! { birth perry_runtime::array::realm_array_alloc(0, perry_runtime::array::ArrayElements::Scalars, false); realm { "node:domain._stack"; "node:domain.default._stack"; } } as i64));
     for domain in values {
         let next = js_array_push_f64(
             js_nanbox_get_pointer(array.get_nanbox_f64()) as *mut ArrayHeader,

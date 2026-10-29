@@ -22,9 +22,6 @@ mod facts;
 mod families;
 #[path = "realm_hash.rs"]
 mod hash;
-#[cfg(test)]
-#[path = "realm_header_44.rs"]
-mod header_44;
 #[path = "realm_imports.rs"]
 mod imports;
 #[path = "realm_info.rs"]
@@ -449,6 +446,7 @@ fn declarations_with_receivers(
                 {
                     return Err("birth expression needs its realm block".into());
                 }
+                let mut birth_name = None;
                 for entry in info::split(&tail[2..tail.len() - 1], ";") {
                     let mut declaration = if entries[0].text == "record" {
                         record::birth(expression, entry)?
@@ -482,6 +480,17 @@ fn declarations_with_receivers(
                         );
                         crate::realm_storage::resolve(source, map)
                             .map_err(|e| format!("{path}: {e}"))?;
+                    }
+                    // Every path of one birth names the same cell: a dynamic
+                    // value names that birth, the block's first path.
+                    let name = map.get("name").and_then(Value::string).map(str::to_owned);
+                    let birth_name = birth_name.get_or_insert(name).clone();
+                    if let (Some(Value::Object(value)), Some(birth_name)) =
+                        (map.get_mut("value"), birth_name)
+                    {
+                        if value.get("kind").and_then(Value::string) == Some("dynamic") {
+                            value.insert("value".into(), Value::String(birth_name));
+                        }
                     }
                     map.insert("source".into(), Value::String(path.replace('\\', "/")));
                     map.insert(

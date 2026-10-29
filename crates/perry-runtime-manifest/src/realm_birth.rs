@@ -299,6 +299,9 @@ pub(super) fn birth_at(
     if expression == "super::layout_desc::perry_alloc_layout(desc)" {
         return super::module_namespace::birth(entry);
     }
+    if super::array::is_realm_birth(&expression) {
+        return super::array::realm(&expression, entry, source);
+    }
     if expression == "module_array_value(&[])" {
         return super::array::empty(&expression, entry);
     }
