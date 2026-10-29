@@ -264,3 +264,132 @@ fn async_adapter_queues_the_allocation_owner_and_keeps_managed_slot_barriers() {
         );
     });
 }
+
+fn private_resume_ir(body: Vec<Stmt>) -> String {
+    let let_any = |id, init| Stmt::Let {
+        id,
+        name: format!("frame{id}"),
+        ty: Type::Any,
+        mutable: true,
+        init: Some(init),
+    };
+    let params = [100, 101]
+        .into_iter()
+        .map(|id| Param {
+            id,
+            name: format!("p{id}"),
+            ty: Type::Any,
+            default: None,
+            decorators: vec![],
+            is_rest: false,
+            arguments_object: None,
+        })
+        .collect();
+    let closure = Expr::Closure {
+        func_id: 1,
+        params,
+        return_type: Type::Any,
+        body,
+        captures: vec![1, 2, 3, 4, 5, 6, 7],
+        mutable_captures: vec![],
+        captures_this: false,
+        captures_new_target: false,
+        enclosing_class: None,
+        is_arrow: false,
+        is_strict: true,
+        is_async: false,
+        is_generator: false,
+    };
+    let link = Expr::LinkGeneratorPrototype {
+        obj: Box::new(closure),
+        is_async: false,
+        fixed_state: true,
+        i32_controls: vec![1, 5],
+        i1_controls: vec![2, 4],
+    };
+    let mut init: Vec<_> = (1..=7).map(|id| let_any(id, Expr::Undefined)).collect();
+    init.extend([
+        let_any(10, runtime("privateResumeFrame", vec![link])),
+        let_any(11, Expr::Undefined),
+        Stmt::Expr(runtime(
+            "privateResumeFrameStep",
+            vec![
+                Expr::LocalGet(10),
+                Expr::Integer(1),
+                Expr::LocalSet(11, Box::new(runtime("iteratorStepOutput", vec![]))),
+            ],
+        )),
+        crate::temp_root_coverage::console_log(vec![Expr::LocalGet(11)]),
+    ]);
+    let module = crate::temp_root_coverage::module_with_init(
+        "frame_owner",
+        vec![Stmt::If {
+            condition: Expr::Bool(true),
+            then_branch: init,
+            else_branch: None,
+        }],
+    );
+    String::from_utf8(crate::compile_module(&module, crate::temp_root_coverage::entry_opts()).unwrap())
+        .unwrap()
+}
+
+fn private_definition(ir: &str) -> String {
+    let start = ir
+        .lines()
+        .position(|l| l.starts_with("define ") && l.contains("@perry_resume_frame__"))
+        .expect("private definition");
+    ir.lines()
+        .skip(start)
+        .take_while(|l| *l != "}")
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// RLF: the state, kind and done controls are resume-local SSA values. The
+/// body must not re-read them from the frame and every exit must write the
+/// written ones back. Each `ret` and each explicit throw is an exit.
+#[test]
+fn resume_locals_write_back_on_every_exit() {
+    crate::temp_root_coverage::under_both_lowerings(|mode| {
+        let set = |id, value| Stmt::Expr(Expr::LocalSet(id, Box::new(value)));
+        let body = vec![
+            set(1, Expr::Number(3.0)),
+            set(5, Expr::Number(1.0)),
+            set(2, Expr::Bool(true)),
+            Stmt::If {
+                condition: Expr::Bool(false),
+                then_branch: vec![
+                    set(1, Expr::Number(4.0)),
+                    Stmt::Throw(Expr::Number(1.0)),
+                ],
+                else_branch: None,
+            },
+            Stmt::Return(Some(Expr::LocalGet(7))),
+        ];
+        let def = private_definition(&private_resume_ir(body));
+        let exits = def.matches("ret double").count() + def.matches("@js_throw(").count();
+        let writes = def.matches("; rlf.write_back").count();
+        assert!(exits >= 2, "{mode}: body has a return and a throw\n{def}");
+        assert_eq!(writes, exits, "{mode}: every exit writes the controls back\n{def}");
+    });
+}
+
+/// The controls are never `executing`: capture index three stays in the
+/// frame, so a re-entrant resume still observes it.
+#[test]
+fn resume_locals_keep_executing_in_the_frame() {
+    crate::temp_root_coverage::under_both_lowerings(|mode| {
+        let set = |id, value| Stmt::Expr(Expr::LocalSet(id, Box::new(value)));
+        let body = vec![
+            set(4, Expr::Bool(true)),
+            set(1, Expr::Number(2.0)),
+            Stmt::Return(Some(Expr::LocalGet(7))),
+        ];
+        let def = private_definition(&private_resume_ir(body));
+        // state and kind are localized (entry allocas); executing (id 4, frame
+        // word index 3 + 1) is a direct frame store, never copied.
+        assert!(def.contains("alloca i32"), "{mode}: resume locals\n{def}");
+        let writes = def.matches("; rlf.write_back").count();
+        assert_eq!(writes, 1, "{mode}: one return, one write-back\n{def}");
+    });
+}
