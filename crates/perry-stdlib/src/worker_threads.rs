@@ -7,7 +7,7 @@
 //! - parentPort.on('message', callback): Async stdin reader, dispatch on main thread
 
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::io::{self, BufRead, Write};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -34,12 +34,12 @@ mod parent_port;
 #[cfg(test)]
 mod parent_port_tests;
 mod thread_values;
+#[cfg(test)]
+mod worker_constructor_tests;
 mod worker_error;
 #[cfg(test)]
 mod worker_error_tests;
 mod worker_options;
-#[cfg(test)]
-mod worker_constructor_tests;
 use worker_error::{plain_error_message, worker_error_message};
 #[cfg(test)]
 mod worker_owner_tests;
@@ -97,10 +97,6 @@ thread_local! {
     static STDIN_READER_STARTED: RefCell<bool> = const { RefCell::new(false) };
     /// Whether stdin has reached EOF
     static STDIN_EOF: RefCell<bool> = const { RefCell::new(false) };
-    /// Objects marked through worker_threads.markAsUntransferable().
-    static UNTRANSFERABLE_OBJECTS: RefCell<HashSet<u64>> = RefCell::new(HashSet::new());
-    /// Objects marked through worker_threads.markAsUncloneable().
-    static UNCLONEABLE_OBJECTS: RefCell<HashSet<u64>> = RefCell::new(HashSet::new());
     /// Same-process MessageChannel ports keyed by port id (#3157).
     static MESSAGE_PORTS: RefCell<HashMap<u64, MessagePortState>> = RefCell::new(HashMap::new());
     /// Monotonic counter handing out MessagePort ids. Port ids start at 100 so
@@ -1222,25 +1218,21 @@ fn worker_terminate_by_id(worker_id: u64) -> f64 {
 /// worker_threads.markAsUntransferable(object)
 #[no_mangle]
 pub extern "C" fn js_worker_threads_mark_as_untransferable(value: f64) -> f64 {
-    UNTRANSFERABLE_OBJECTS.with(|objects| {
-        objects.borrow_mut().insert(value.to_bits());
-    });
+    perry_runtime::clone_markers::mark_untransferable(value);
     js_undefined()
 }
 
 /// worker_threads.isMarkedAsUntransferable(object)
 #[no_mangle]
 pub extern "C" fn js_worker_threads_is_marked_as_untransferable(value: f64) -> f64 {
-    let marked = UNTRANSFERABLE_OBJECTS.with(|objects| objects.borrow().contains(&value.to_bits()));
+    let marked = perry_runtime::clone_markers::is_untransferable(value);
     js_bool(marked)
 }
 
 /// worker_threads.markAsUncloneable(object)
 #[no_mangle]
 pub extern "C" fn js_worker_threads_mark_as_uncloneable(value: f64) -> f64 {
-    UNCLONEABLE_OBJECTS.with(|objects| {
-        objects.borrow_mut().insert(value.to_bits());
-    });
+    perry_runtime::clone_markers::mark_uncloneable(value);
     js_undefined()
 }
 
