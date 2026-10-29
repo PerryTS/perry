@@ -1917,6 +1917,9 @@ POLL_CAPABLE_RUNTIME = {
     # `js_string_concat_chain`; `js_string_concat_lit_value_box` is the
     # literal-prefix twin of `js_string_concat_value_box`.
     "js_string_concat_parts", "js_string_concat_lit_value_box",
+    # JST slice 4: the count-specialized forms of `js_string_concat_parts`.
+    "js_string_concat_parts_2", "js_string_concat_parts_3",
+    "js_string_concat_parts_4", "js_string_concat_parts_5",
     # `js_private_brand_add` is the referent-with-no-name that NEITHER audit can
     # ask for: `--audit-poll-reach` only walks symbols `ALLOC_RE` matches, and
     # `js_private_brand_add` matches no alloc/new/create convention, so the one

@@ -4009,6 +4009,10 @@ js_string_concat_box	f64	f64,f64
 js_string_concat_chain	ptr	ptr,i32s
 js_string_concat_lit_value_box	f64	ptr,i64,f64
 js_string_concat_parts	ptr	ptr,i32s
+js_string_concat_parts_2	ptr	ptr
+js_string_concat_parts_3	ptr	ptr
+js_string_concat_parts_4	ptr	ptr
+js_string_concat_parts_5	ptr	ptr
 js_string_concat_site_value	f64	ptr,ptr,f64
 js_string_concat_value	ptr	ptr,f64
 js_string_concat_value_box	f64	ptr,f64
