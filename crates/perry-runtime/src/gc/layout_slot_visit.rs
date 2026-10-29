@@ -108,7 +108,7 @@ pub(super) unsafe fn visit_gc_layout_slot_descriptors_inline<const DIAGNOSTICS: 
         }
         return;
     }
-    if (*header).obj_type == GC_TYPE_OBJECT
+    if crate::gc_type_is_object!((*header).obj_type)
         && (*header).gc_flags & GC_FLAG_FORWARDED == 0
         && gc_type_layout_slot_kind(GC_TYPE_OBJECT) == GcLayoutSlotKind::ObjectFields
     {
@@ -147,12 +147,12 @@ pub(super) unsafe fn visit_gc_layout_slot_descriptors_generic<const DIAGNOSTICS:
     // `PERRY_GC_VERIFY_EVACUATION` is what established the second half is
     // needed: without it the verifier aborts on a `slot_page_ever_dirty=false`
     // old→young edge through this word.
-    let shape_prototype_edge = if (*header).obj_type == GC_TYPE_OBJECT {
+    let shape_prototype_edge = if crate::gc_type_is_object!((*header).obj_type) {
         crate::object::gc_shape_prototype_edge_slot(child_slots.object_shape, full_trace_active())
     } else {
         None
     };
-    let shape_keys_edge = if (*header).obj_type == GC_TYPE_OBJECT {
+    let shape_keys_edge = if crate::gc_type_is_object!((*header).obj_type) {
         // #9726: unlike the minor-rooting gate below, full-trace descriptor
         // liveness is generation-blind. Every reachable shaped receiver must
         // note the exact id it carries before synchronous-full pruning.
@@ -197,7 +197,7 @@ pub(super) unsafe fn visit_gc_layout_slot_descriptors_generic<const DIAGNOSTICS:
                 .with_layout(HeapChildSlotReadKind::Prefix),
         );
     }
-    if (*header).obj_type == GC_TYPE_OBJECT {
+    if crate::gc_type_is_object!((*header).obj_type) {
         if let Some(slot) = crate::object::shapes::evaluation_holder_slot(
             child_slots.object_shape,
             full_trace_active(),
@@ -216,7 +216,7 @@ pub(super) unsafe fn visit_gc_layout_slot_descriptors_generic<const DIAGNOSTICS:
         // uninitialised padding into the address and hide the edge.
         let descriptor = if matches!(
             (*header).obj_type,
-            GC_TYPE_OBJECT | GC_TYPE_CLOSURE | GC_TYPE_ARRAY
+            crate::gc_object_type_pat!() | GC_TYPE_CLOSURE | GC_TYPE_ARRAY
         ) {
             pointer_slot(slot.cast())
         } else {
@@ -395,7 +395,9 @@ unsafe fn visit_gc_rewrite_slot_descriptors_with<
                 ));
             }
             // #6759 phase 1: the metadata edge (MARK path as well as rewrite).
-            visit(pointer_slot(&mut (*promise).meta as *mut _ as *mut usize));
+            visit(pointer_slot(
+                crate::object::cell_meta::promise_cell_meta_slot(promise).cast(),
+            ));
             visit(pointer_slot(
                 &mut (*promise).callback_context as *mut _ as *mut usize,
             ));
@@ -441,7 +443,9 @@ unsafe fn visit_gc_rewrite_slot_descriptors_with<
             // `trace_heap_rewrite_slots`, so visiting the slot here both MARKS
             // the meta record (keeping it, and anything reachable only through
             // it, alive) and rewrites the edge when evacuation moves it.
-            visit(pointer_slot(&mut (*error).meta as *mut _ as *mut usize));
+            visit(pointer_slot(
+                crate::object::cell_meta::error_cell_meta_slot(error).cast(),
+            ));
             // #9486: the captured-frames blob. Same shape as `stack` beside
             // it — a `StringHeader` edge, null until captured and null again
             // once `.stack` has been materialised — so it needs exactly this
@@ -451,7 +455,9 @@ unsafe fn visit_gc_rewrite_slot_descriptors_with<
         GcRewriteDescriptorKind::Map => {
             let map = user_ptr as *mut crate::map::MapHeader;
             visit(pointer_slot(std::ptr::addr_of_mut!((*map).store).cast()));
-            visit(pointer_slot(std::ptr::addr_of_mut!((*map).meta).cast()));
+            visit(pointer_slot(
+                crate::object::cell_meta::map_cell_meta_slot(map).cast(),
+            ));
         }
         GcRewriteDescriptorKind::MapStore => {
             if let Some(range) = crate::map::owned_entry_slot_range(user_ptr) {
@@ -464,7 +470,9 @@ unsafe fn visit_gc_rewrite_slot_descriptors_with<
         GcRewriteDescriptorKind::Set => {
             let set = user_ptr as *mut crate::set::SetHeader;
             visit(pointer_slot(std::ptr::addr_of_mut!((*set).store).cast()));
-            visit(pointer_slot(std::ptr::addr_of_mut!((*set).meta).cast()));
+            visit(pointer_slot(
+                crate::object::cell_meta::set_cell_meta_slot(set).cast(),
+            ));
         }
         GcRewriteDescriptorKind::Proxy => {
             let proxy = user_ptr.cast::<crate::proxy::ProxyEntry>();
