@@ -32,13 +32,13 @@ unsafe fn no_decoration(_name: &str, value: f64, _addr: usize) -> f64 {
     value
 }
 
-#[inline(always)]
+#[inline(never)]
 fn export_value(
     module: &'static str,
     property: &'static str,
     info: &'static JsFunctionInfo,
     observe_writes: bool,
-    decorate: impl FnOnce(&str, f64, usize) -> f64,
+    decorate: unsafe fn(&str, f64, usize) -> f64,
 ) -> f64 {
     if !is_native_module_callable_export(module, property) {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
@@ -96,11 +96,13 @@ fn export_value(
             v.borrow_mut().insert(callable_key, value.get_nanbox_u64());
         });
         crate::gc::runtime_write_barrier_root_nanbox(value.get_nanbox_u64());
-        decorate(
-            property,
-            value.get_nanbox_f64(),
-            crate::value::js_nanbox_get_pointer(value.get_nanbox_f64()) as usize,
-        );
+        unsafe {
+            decorate(
+                property,
+                value.get_nanbox_f64(),
+                crate::value::js_nanbox_get_pointer(value.get_nanbox_f64()) as usize,
+            )
+        };
         crate::closure::native_constructor::seal_selected(module, property, value.get_nanbox_f64());
         value
     };

@@ -6,6 +6,7 @@ pub fn emit(out: &Path) {
         export_value_symbol, CALLABLE_EXPORT_TABLE,
     };
     let mut source = String::new();
+    let mut shared = std::collections::BTreeSet::new();
     for &(module, properties) in CALLABLE_EXPORT_TABLE {
         let Some(bucket) = export_bucket(module) else {
             continue;
@@ -37,25 +38,11 @@ pub fn emit(out: &Path) {
                 "v8" => "crate::node_v8::attach_v8_constructor".to_string(),
                 _ => "no_decoration".to_string(),
             };
-            let constructor = match bucket {
-                "fs" | "events" | "stream" | "child_process" | "cluster" | "readline"
-                | "repl" | "tls" | "tty" | "vm" | "wasi" => format!("super::super::class_registry::nm_ctor_{bucket}({module:?}, {property:?}, args, len)"),
-                "net" => format!("super::super::native_module_dispatch::nm_ctor_net({module:?}, {property:?}, args, len)"),
-                _ => "None".to_string(),
-            };
-            let constructor = if constructor == "None" {
-                constructor
-            } else {
-                format!("with_arguments(args, len, |args| {{ {constructor} }})")
-            };
-            let invoke = if bucket == "worker_threads" {
-                format!(
-                    "crate::collection_iter::throw_type_error({:?})",
-                    format!("{module}.{property} is not supported")
-                )
-            } else {
-                format!("super::super::native_module_dispatch::nm_dispatch_{bucket}(&_ctx, {module:?}, {property:?})")
-            };
+            let has_constructor = matches!(
+                bucket,
+                "fs" | "events" | "stream" | "child_process" | "cluster" | "readline" | "repl"
+                    | "tls" | "tty" | "vm" | "wasi" | "net"
+            );
             let dependencies = if (bucket == "events"
                 && matches!(property, "EventEmitter" | "EventEmitterAsyncResource"))
                 || (bucket == "stream"
@@ -73,6 +60,53 @@ pub fn emit(out: &Path) {
             } else {
                 ""
             };
+            if shared.insert(bucket) {
+                let invoke = if bucket == "worker_threads" {
+                    "crate::collection_iter::throw_type_error(&format!(\"{module}.{property} is not supported\"))".to_string()
+                } else {
+                    format!("super::super::native_module_dispatch::nm_dispatch_{bucket}(&_ctx, module, property)")
+                };
+                let construct = match bucket {
+                    "fs" | "events" | "stream" | "child_process" | "cluster" | "readline"
+                    | "repl" | "tls" | "tty" | "vm" | "wasi" => format!("with_arguments(args, len, |args| {{ super::super::class_registry::nm_ctor_{bucket}(module, property, args, len) }})"),
+                    "net" => "with_arguments(args, len, |args| { super::super::native_module_dispatch::nm_ctor_net(module, property, args, len) })".to_string(),
+                    _ => String::new(),
+                };
+                // One body per module bucket; each export passes its own names.
+                writeln!(
+                    source,
+                    r#"
+#[inline(never)]
+unsafe fn dispatch_{bucket}(ns: f64, args: *const f64, len: usize, module: &str, property: &str) -> f64 {{
+    with_arguments(args, len, |args| {{
+        let _ctx = super::super::native_module_dispatch::NmCtx {{
+            obj: crate::value::js_nanbox_get_pointer(ns) as *const super::super::ObjectHeader,
+            args_ptr: args, args_len: len, assert_skip_prototype: false,
+        }};
+        {invoke}
+    }})
+}}
+"#
+                )
+                .unwrap();
+                if !construct.is_empty() {
+                    writeln!(
+                        source,
+                        r#"
+#[inline(never)]
+unsafe fn construct_{bucket}(module: &str, property: &str, args: *const f64, len: usize) -> Option<f64> {{
+    {construct}
+}}
+"#
+                    )
+                    .unwrap();
+                }
+            }
+            let construct_call = if has_constructor {
+                format!("construct_{bucket}({module:?}, {property:?}, args, len)")
+            } else {
+                "{ let _ = (args, len); None }".to_string()
+            };
             writeln!(
                 source,
                 r#"
@@ -82,25 +116,17 @@ pub extern "C" fn {symbol}(observe_writes: i32) -> f64 {{
     unsafe extern "C" fn body(callee: *const crate::closure::ClosureHeader,
         _this: crate::closure::JsThis, args: *const f64, len: usize) -> f64 {{
         let ns = crate::closure::js_closure_get_capture_f64(callee, 0);
-        with_arguments(args, len, |args| {{
-        let _ctx = super::super::native_module_dispatch::NmCtx {{
-            obj: crate::value::js_nanbox_get_pointer(ns) as *const super::super::ObjectHeader,
-            args_ptr: args, args_len: len, assert_skip_prototype: false,
-        }};
-        {invoke}
-        }})
+        dispatch_{bucket}(ns, args, len, {module:?}, {property:?})
     }}
     unsafe fn construct(args: *const f64, len: usize) -> Option<f64> {{
-        let _ = (args, len);
-        {constructor}
+        {construct_call}
     }}
     static INFO: NativeExportInfo = NativeExportInfo {{ function: {{
         let mut info = crate::closure::JsFunctionInfo::of_native_args(body, 0);
         info.flags |= crate::codegen_abi::FN_NATIVE_EXPORT | crate::codegen_abi::FN_BUILTIN;
         info
     }}, construct }};
-    export_value({raw_module:?}, {raw_property:?}, &INFO.function, observe_writes != 0,
-        |_name, value, addr| unsafe {{ {attach}({property:?}, value, addr) }})
+    export_value({raw_module:?}, {raw_property:?}, &INFO.function, observe_writes != 0, {attach})
 }}
 "#
             )
