@@ -477,8 +477,7 @@ pub fn js_async_hooks_async_wrap_providers() -> f64 {
         return f64::from_bits(cached);
     }
 
-    let obj =
-        crate::object::js_object_alloc_null_proto(0, ASYNC_WRAP_PROVIDER_CONSTANTS.len() as u32);
+    let obj = crate::realm_decl! { birth crate::object::js_object_alloc_null_proto(0, ASYNC_WRAP_PROVIDER_CONSTANTS.len() as u32); realm { "node:async_hooks.asyncWrapProviders", kind = namespace, members_source = ASYNC_WRAP_PROVIDER_CONSTANTS, integrity = frozen } };
     for (name, value) in ASYNC_WRAP_PROVIDER_CONSTANTS {
         let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
         crate::object::js_object_set_field_by_name(obj, key, *value);

@@ -54,6 +54,23 @@ fn abi_constants() -> &'static std::collections::BTreeMap<String, u64> {
     })
 }
 
+fn closing_bracket(ts: &[Token<'_>], open: usize) -> Result<usize, String> {
+    let mut depth = 0usize;
+    for (i, t) in ts.iter().enumerate().skip(open) {
+        match t.text {
+            "[" => depth += 1,
+            "]" => {
+                depth -= 1;
+                if depth == 0 {
+                    return Ok(i);
+                }
+            }
+            _ => {}
+        }
+    }
+    Err("unterminated bracket".into())
+}
+
 fn closing_paren(ts: &[Token<'_>], open: usize) -> Result<usize, String> {
     let mut depth = 0;
     for (i, token) in ts.iter().enumerate().skip(open) {
