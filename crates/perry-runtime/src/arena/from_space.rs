@@ -215,7 +215,7 @@ mod tests {
     fn cache_hit() -> Option<usize> {
         let current_bytes = synced_current_eden_block_bytes();
         let cached = SEALED_YOUNG_BYTES.with(Cell::get);
-        (cached.valid && cached.heap_generation == crate::gc::heap_generation::heap_generation())
+        (cached.state != STATE_INVALID && cached.heap_generation == crate::gc::heap_generation::heap_generation())
             .then(|| cached.sealed + current_bytes)
     }
 
