@@ -89,6 +89,8 @@ pub(crate) use shapes_evaluation_brand::{
 mod shapes_worker_seed;
 #[cfg(test)]
 pub(crate) use shapes_prototype::clear_class_identity_words;
+#[cfg(any(test, debug_assertions))]
+pub(crate) use shapes_prototype::prototype_word_rooted_by_minor;
 pub(crate) use shapes_prototype::{
     identity_prototype_word, identity_word_slot, identity_word_slot_in, note_full_trace_begin,
     proto_id_carries_word, prune_dead_shape_prototypes, shape_prototype_word, write_identity_word,
