@@ -470,7 +470,9 @@ impl LlModule {
     /// reflected function objects run shared runtime thunks and still use the
     /// copying/borrowing registry path in `string_pool`.
     pub(crate) fn can_attach_fn_source(&self, body: &str) -> bool {
-        self.function_named(body).is_some_and(is_js_body)
+        // The source planner includes method entries emitted after string
+        // preparation. Their canonical infos are rendered after all bodies.
+        !body.is_empty()
     }
 
     /// A body whose retained text was dropped (no execution reads it) keeps
@@ -495,10 +497,7 @@ impl LlModule {
         byte_len: usize,
         is_non_strict_ordinary: bool,
     ) -> bool {
-        let Some(function) = self.function_named(body) else {
-            return false;
-        };
-        if !is_js_body(function) {
+        if body.is_empty() {
             return false;
         }
         self.fn_infos
@@ -524,6 +523,7 @@ impl LlModule {
     /// may allocate; an `external` declaration for every allocated body
     /// another module defines. Runs once, after every function exists.
     pub(crate) fn emit_fn_infos(&mut self, permanent_image: bool) {
+        self.emit_function_metadata_owner();
         let exported: Vec<String> = self
             .functions
             .iter()
@@ -566,6 +566,53 @@ impl LlModule {
             )
         };
         self.globals.extend(lines);
+    }
+
+    pub(crate) fn function_metadata_owner_symbol(&self) -> String {
+        format!("__perry_function_metadata_{}", self.symbol_prefix)
+    }
+
+    fn emit_function_metadata_owner(&mut self) {
+        let owner = self.function_metadata_owner_symbol();
+        // entry_bodies is a BTreeSet union: ordinals precede link layout and
+        // never depend on hash iteration, text lengths, or reflection order.
+        let exported: Vec<_> = self
+            .functions
+            .iter()
+            .filter(|f| {
+                f.linkage.is_empty() && f.name.starts_with("__perry_wrap_") && is_js_body(f)
+            })
+            .map(|f| f.name.clone())
+            .collect();
+        let bodies: Vec<_> = self
+            .fn_infos
+            .borrow()
+            .entry_bodies(&exported)
+            .into_iter()
+            .filter(|body| self.has_function(body))
+            .collect();
+        if bodies.is_empty() {
+            // Publishing an empty descriptor cannot make any metadata visible.
+            // Omit the dead registration at the same final inventory boundary.
+            for function in &mut self.functions {
+                for block in function.blocks_mut() {
+                    block.insts_mut().retain(|inst| !matches!(inst, crate::inst::LlInst::Call { callee, .. } if callee == "js_register_function_metadata"));
+                }
+            }
+        }
+        let entries = format!("{owner}_entries");
+        let values: Vec<_> = bodies.iter().enumerate().map(|(ordinal, body)| {
+            self.note_fn_info(body, |f| f.metadata = Some((owner.clone(), ordinal as u32)));
+            format!("i32 trunc (i64 sub (i64 ptrtoint (ptr @{} to i64), i64 ptrtoint (ptr @{entries} to i64)) to i32)", crate::fn_info::info_symbol(body))
+        }).collect();
+        self.add_raw_global(format!(
+            "@{entries} = private constant [{} x i32] [{}], align 4",
+            bodies.len(),
+            values.join(", ")
+        ));
+        // One writable word per image; no per-function mutable allocation.
+        // The first two fields are immutable descriptor operands.
+        self.add_raw_global(format!("@{owner} = internal global {{ ptr, i32, i32, ptr }} {{ ptr @{entries}, i32 {}, i32 0, ptr null }}", bodies.len()));
     }
 
     /// A defined function by symbol name.

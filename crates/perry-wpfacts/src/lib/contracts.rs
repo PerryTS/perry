@@ -354,6 +354,21 @@ pub(super) fn atoms_of(g: &gen::Gen, ks: &[model::Atom]) -> Vec<String> {
     ks.iter().map(|&a| g.m.atoms[a as usize].clone()).collect()
 }
 
+fn compiled_body_of(g: &gen::Gen, f: model::FnIdx) -> Option<(String, u32, bool)> {
+    let fi = &g.m.funcs[f as usize];
+    if fi.func_id == u32::MAX {
+        return g.stand_in_fc.get(&fi.token)?.compiled_body.clone();
+    }
+    let closure = g.m.closures.contains(&f);
+    (closure || g.m.decls.contains(&f)).then(|| {
+        (
+            g.modules[fi.module as usize].0.to_owned(),
+            fi.func_id,
+            closure,
+        )
+    })
+}
+
 pub(super) fn fn_contract_of(
     g: &gen::Gen,
     templates: &[TemplateFacts],
@@ -389,10 +404,15 @@ pub(super) fn fn_contract_of(
     // effects) covers what this body does to it; the marker stands for
     // nothing, so no direct escape is published. What it reaches keeps
     // its uses. DECISIONS 148: a published method's parameter the running
-    // units describe (`Model::method_params`) the same way.
+    // units describe (`Model::method_params`) the same way. DECISIONS 224:
+    // so a function published to a known closed callee, also before any
+    // unit runs it (DECISIONS 165: its markers stand for nothing): a
+    // runner's value reaches it through the argument join, as a stand-in
+    // whose census covers what this body does to it. Unknown at a position
+    // (a runner passes what no contract describes), the marker keeps its
+    // uses.
     let described = g.m.closed_described.get(&f).or_else(|| {
-        g.m.method_params
-            .contains_key(&f)
+        (g.m.method_params.contains_key(&f) || g.m.callable_pub.contains(&f))
             .then(|| g.m.method_described.get(&f))
             .flatten()
     });
@@ -618,7 +638,9 @@ pub(super) fn fn_contract_of(
         .map(|(_, i, k)| (*i, k.clone()))
         .collect();
     units::FnContract {
+        compiled_body: compiled_body_of(g, f),
         method: g.m.published_this.contains_key(&f),
+        callable: g.m.callable_pub.contains(&f),
         this_class: this_class(g, f),
         this_use,
         this_reach,
@@ -698,7 +720,9 @@ pub(super) fn fn_named(g: &gen::Gen, f: model::FnIdx) -> units::FnContract {
     let n = fi.params.len();
     let (name, closed) = fn_contract_name(g, f);
     units::FnContract {
+        compiled_body: compiled_body_of(g, f),
         method: g.m.published_this.contains_key(&f),
+        callable: g.m.callable_pub.contains(&f),
         this_class: this_class(g, f),
         name,
         closed,
@@ -894,7 +918,36 @@ pub(super) fn describe_nodes(
                 }
                 toks.extend(g.m.marker_members(t));
             }
+            // DEC189 applies to described results/callback arguments too:
+            // an escaped concrete value beside TOP is subsumed by TOP,
+            // independently of which reached this node first. Keep every
+            // marker and actual TOP, and retain private/known-only values.
+            // A function of this unit published through its contract only
+            // (an export, a published field, a contract result: DECISIONS
+            // 147/210) is not held by unknown code: the reader calls it
+            // through that contract and any other use is its census report
+            // (DECISIONS 209). Subsumed, the reader would hold it as ⊤ and
+            // report nothing while its owner reads it as published.
+            let unknown = toks.iter().any(|&t| {
+                matches!(
+                    g.m.toks[t as usize],
+                    model::TokKind::Top | model::TokKind::BuiltinFn
+                ) || g.m.marker_is_top(t)
+            });
+            let contract_only = |t: model::Tok| match g.m.toks[t as usize] {
+                model::TokKind::Func(f, _) => {
+                    g.m.funcs[f as usize].func_id != u32::MAX
+                        && g.m.contract_fns.contains(&f)
+                        && g.m.escaped.get(&t).is_some_and(|&r| {
+                            Some(r) == g.m.pub_reason || Some(r) == g.m.field_fn_reason
+                        })
+                }
+                _ => false,
+            };
             for t in toks {
+                if unknown && g.m.top_beside(t) && !contract_only(t) {
+                    continue;
+                }
                 // An escaped marker reads as ⊤ (DECISIONS 42).
                 if matches!(
                     g.m.toks[t as usize],
@@ -1661,14 +1714,19 @@ pub(super) fn arg_contract_of(
                             vc.fns.push(fc.clone())
                         }
                         Some(_) => {}
-                        // This unit's closed function published through its
-                        // closed contract (decision 23): its markers carry
-                        // the body's uses; the callee publishes its calls.
-                        // Markers and parameters are the function's, so one
-                        // published token (another context's) covers it.
-                        None if g.m.closed_params.contains_key(&f)
-                            && g.m.contract_fns.contains(&f)
-                            && g.m.closed_pub.iter().any(|&u| g.m.tok_fn(u) == f) =>
+                        // Its closed publication (23), or a valid normal
+                        // publication of an owned callable (223). The latter
+                        // does not close its entry or erase any actual TOP.
+                        // A non-publication escape remains undescribed here.
+                        None if g.m.contract_fns.contains(&f)
+                            && (g.m.closed_params.contains_key(&f)
+                                && g.m.closed_pub.iter().any(|&u| g.m.tok_fn(u) == f)
+                                // DEC223: ordinary publication proves callable
+                                // identity, while its unclosed entry stays generic.
+                                || g.m.escaped.get(&t).is_some_and(|r| {
+                                    Some(*r) == g.m.pub_reason
+                                        || Some(*r) == g.m.field_fn_reason
+                                })) =>
                         {
                             let fc = fn_contract_of(g, templates, f, layouts_out, open_tm);
                             if !vc.fns.iter().any(|c| c.name == fc.name) {

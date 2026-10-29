@@ -592,3 +592,6 @@ mod escaped_results;
 
 #[path = "unit_mode/return_transfers.rs"]
 mod return_transfers;
+
+#[path = "unit_mode/pub_callable.rs"]
+mod pub_callable;

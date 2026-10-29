@@ -729,11 +729,11 @@ pub(crate) fn describe_chain(pcs: &[usize], max: usize) -> String {
 /// needs per-function extents, which this registry and Mach-O do not expose;
 /// on ELF the `.eh_frame_hdr` FDE that covers `ip` supplies them.
 fn symbol_for_ip(
-    names: &std::collections::BTreeMap<usize, &'static [u8]>,
+    names: &crate::builtins::BundleFunctionNames<'_>,
     ip: usize,
 ) -> Option<(usize, &'static [u8])> {
-    let (start, name) = names.range(..=ip).next_back()?;
-    if ip - *start > MAX_FUNCTION_SPAN {
+    let (start, name) = names.predecessor(ip)?;
+    if ip - start > MAX_FUNCTION_SPAN {
         return None;
     }
     // Where the unwind tables give the containing function's exact start
@@ -743,15 +743,15 @@ fn symbol_for_ip(
     // under its neighbour's name.
     #[cfg(not(windows))]
     if let Some(fn_start) = crate::eh_walker::function_start_for(ip as u64) {
-        if fn_start != *start as u64 {
+        if fn_start != start as u64 {
             return None;
         }
     }
-    Some((*start, *name))
+    Some((start, name))
 }
 
 fn name_for_ip(
-    names: &std::collections::BTreeMap<usize, &'static [u8]>,
+    names: &crate::builtins::BundleFunctionNames<'_>,
     ip: usize,
 ) -> Option<&'static [u8]> {
     symbol_for_ip(names, ip).map(|(_, name)| name)
@@ -778,8 +778,8 @@ pub(crate) fn render_frames(blob: &[u8], limit: usize) -> Option<String> {
             eprintln!(
                 "[stackdiag] resolve: registry_entries={} first={:#x} last={:#x}",
                 names.len(),
-                names.first_key_value().map(|(a, _)| *a).unwrap_or(0),
-                names.last_key_value().map(|(a, _)| *a).unwrap_or(0)
+                names.first_key_value().map(|(a, _)| a).unwrap_or(0),
+                names.last_key_value().map(|(a, _)| a).unwrap_or(0)
             );
             for pc in &pcs {
                 let hit = name_for_ip(names, pc.saturating_sub(1))
@@ -1047,10 +1047,9 @@ mod tests {
     #[test]
     fn constructing_an_error_does_not_resolve_its_captured_names() {
         unsafe {
-            crate::builtins::js_register_function_name_static(
-                unread_error_probe as *const u8,
-                b"unreadErrorProbe".as_ptr(),
-                16,
+            crate::builtins::test_publish_bundle_name(
+                unread_error_probe as *const u8 as usize,
+                b"unreadErrorProbe",
             );
         }
         let before = FRAME_RESOLUTION_ATTEMPTS.load(std::sync::atomic::Ordering::SeqCst);
@@ -1086,16 +1085,12 @@ mod tests {
     }
 
     #[test]
-    fn bundle_name_replacement_is_visible_without_a_new_entry() {
+    fn new_image_replacement_is_visible_without_a_name_snapshot() {
         const START: usize = 0x0000_7d10_0010_0000;
         const BEFORE: &[u8] = b"bundleNameBefore";
         const AFTER: &[u8] = b"bundleNameAfter";
         unsafe {
-            crate::builtins::js_register_function_name_static(
-                START as *const u8,
-                BEFORE.as_ptr(),
-                BEFORE.len() as u32,
-            );
+            crate::builtins::test_publish_bundle_name(START as *const u8 as usize, BEFORE);
         }
         let mut blob = [0u8; MAX_CAPTURED_FRAMES * PC_CHARS];
         let len = encode_pcs(&[START + 32], &mut blob);
@@ -1103,18 +1098,10 @@ mod tests {
             render_frames(&blob[..len], RENDER_LIMIT).as_deref(),
             Some("    at bundleNameBefore (<anonymous>)")
         );
-        let count = crate::builtins::with_bundle_function_names(|names| names.len());
         unsafe {
-            crate::builtins::js_register_function_name_static(
-                START as *const u8,
-                AFTER.as_ptr(),
-                AFTER.len() as u32,
-            );
+            crate::builtins::test_publish_bundle_name(START as *const u8 as usize, AFTER);
         }
-        assert_eq!(
-            crate::builtins::with_bundle_function_names(|names| names.len()),
-            count
-        );
+
         assert_eq!(
             render_frames(&blob[..len], RENDER_LIMIT).as_deref(),
             Some("    at bundleNameAfter (<anonymous>)"),
@@ -1127,8 +1114,7 @@ mod tests {
     /// the last one is how a runtime frame would acquire a JS function's name.
     #[test]
     fn containment_rejects_addresses_past_a_function() {
-        let names =
-            std::collections::BTreeMap::from([(0x1000, &b"first"[..]), (0x2000, &b"second"[..])]);
+        let names = crate::builtins::test_bundle_names(&[(0x1000, b"first"), (0x2000, b"second")]);
         assert_eq!(
             name_for_ip(&names, 0x1004).map(|n| n.to_vec()),
             Some(b"first".to_vec())
@@ -1157,27 +1143,28 @@ mod tests {
         const THUNK_NAME: &[u8] = b"get years";
         const BUNDLE_START: usize = THUNK_START - 2 * MAX_FUNCTION_SPAN;
         const BUNDLE_NAME: &[u8] = b"bundleWitness9979";
+        static OWNER: crate::codegen_abi::FunctionMetadataOwner =
+            crate::codegen_abi::FunctionMetadataOwner::native();
+        let native = crate::codegen_abi::NativeFunctionInfo::new(
+            unsafe { crate::closure::JsFunctionInfo::from_code(THUNK_START as *const u8, 0) },
+            &OWNER,
+        );
         unsafe {
-            crate::builtins::js_register_function_name_static(
-                BUNDLE_START as *const u8,
-                BUNDLE_NAME.as_ptr(),
-                BUNDLE_NAME.len() as u32,
+            crate::builtins::test_publish_bundle_name(
+                BUNDLE_START as *const u8 as usize,
+                BUNDLE_NAME,
             );
-            crate::builtins::js_register_function_name(
-                THUNK_START as *const u8,
-                THUNK_NAME.as_ptr(),
-                THUNK_NAME.len() as u32,
-            );
+            crate::builtins::register_function_name(&native.info, THUNK_NAME);
         }
         assert_eq!(
-            crate::builtins::function_name_for_ptr(THUNK_START).as_deref(),
+            crate::builtins::test_registered_name(&native.info).as_deref(),
             Some("get years"),
             "the excluded thunk must still have its reflection name"
         );
         assert_eq!(describe_ip(BUNDLE_START + 32), "js:bundleWitness9979");
         let ip = THUNK_START + 32;
         let last_bundle_start = crate::builtins::with_bundle_function_names(|names| {
-            names.last_key_value().map(|(start, _)| *start)
+            names.last_key_value().map(|(start, _)| start)
         })
         .flatten();
         assert!(

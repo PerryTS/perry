@@ -96,6 +96,8 @@ fn expr_produces_numeric_bits_by_construction(ctx: &FnCtx<'_>, expr: &Expr) -> b
 
 pub(crate) fn expr_produces_non_pointer_bits_by_construction(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
     match expr {
+        // The private sync entry starts from the constant undefined.
+        Expr::LocalGet(id) if super::resume_locals::is_sent_param(ctx, *id) => true,
         Expr::Undefined
         | Expr::Null
         | Expr::Bool(_)

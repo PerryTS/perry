@@ -160,3 +160,35 @@ fn content_hit_shares_immutable_data_without_retaining_duplicate_source() {
         1
     );
 }
+
+#[test]
+fn a_cached_program_without_a_data_cell_constructs_independent_state() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _reset = Reset::new();
+    let scope = RuntimeHandleScope::new();
+    let first = regex(&scope, "(program-only)", "g");
+    let original_program = program(&first);
+    // The split helper can populate a program before a RegExp owns a data
+    // cell. Exercise that state using the same already-compiled program.
+    REGEX_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        let entry = cache
+            .entries
+            .iter_mut()
+            .flatten()
+            .find(|entry| entry.program as usize == original_program)
+            .unwrap();
+        entry.data = std::ptr::null();
+    });
+    let second = regex(&scope, "(program-only)", "g");
+    assert_ne!(original_program, 0);
+    assert_eq!(program(&second), program(&first));
+    let first_data = first.with_const_ptr::<RegExpHeader, _>(crate::regex::regexp_data_ptr);
+    let second_data = second.with_const_ptr::<RegExpHeader, _>(crate::regex::regexp_data_ptr);
+    assert_ne!(first_data, second_data);
+    first.with_mut_ptr(|p| crate::regex::set_last_index(p, 17.0));
+    assert_eq!(
+        second.with_const_ptr(|p| crate::regex::get_last_index(p)),
+        0.0
+    );
+}

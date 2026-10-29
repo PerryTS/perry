@@ -107,6 +107,7 @@ pub(crate) struct FnInfoFacts {
     /// The one generic entry for this body's fixed-signature operation.
     pub call_entry: Option<String>,
     pub call_entry_offset_words: u8,
+    pub metadata: Option<(String, u32)>,
 }
 
 /// The rest kind of a body with a rest / `arguments` array.
@@ -363,6 +364,11 @@ fn render_definition(
             }
     });
     let flags = facts.flags
+        | if facts.metadata.is_some() {
+            crate::runtime_abi::FN_HAS_METADATA
+        } else {
+            0
+        }
         | (u32::from(facts.call_entry_offset_words) << crate::runtime_abi::FN_CALL_ENTRY_SHIFT)
         | FN_COMPILED_BODY
         | source_flags
@@ -489,6 +495,10 @@ fn render_definition(
     if let Some(entry) = facts.call_entry {
         types.push("ptr".to_string());
         fields.push(format!("ptr @{entry}"));
+    }
+    if let Some((owner, ordinal)) = facts.metadata {
+        types.push("{ ptr, i32 }".to_string());
+        fields.push(format!("{{ ptr, i32 }} {{ ptr @{owner}, i32 {ordinal} }}"));
     }
     if types.len() == 1 {
         format!("@{info} = {linkage}constant {info_type} {value}")
@@ -922,4 +932,9 @@ mod constructor_tail_tests {
         )));
         assert!(line.ends_with("{ ptr @ctor_layout, ptr @ctor_operands, i32 2, i32 0 } }"));
     }
+}
+
+/// The private scalar capture body shares the typed closure's identity.
+pub(crate) fn normalized_capture_body_symbol(typed: &str) -> String {
+    format!("{typed}.$normalized_captures")
 }
