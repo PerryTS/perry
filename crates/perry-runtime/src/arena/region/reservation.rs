@@ -342,6 +342,9 @@ pub(crate) fn contains(addr: usize, len: usize) -> bool {
     }
     classify(addr).is_some_and(|s| end <= s.end)
 }
+// Inlined into every caller: the ordinary block refill and the dedicated leaf
+// allocator each carry the same body, as the refill alone did before leaves.
+#[inline(always)]
 pub(super) unsafe fn map(kind: Kind, mapped: usize) -> *mut u8 {
     let Some(r) = initialized() else {
         return std::ptr::null_mut();
