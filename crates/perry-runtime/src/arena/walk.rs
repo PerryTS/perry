@@ -19,6 +19,9 @@ pub(crate) struct ArenaBlockSnapshot {
     pub(crate) data: usize,
     pub(crate) offset: usize,
     pub(crate) size: usize,
+    /// The block is dedicated large storage (a young leaf extent in the
+    /// general arena), a property of the block rather than of each object.
+    pub(crate) large_storage: bool,
 }
 
 /// Resumable arena object walker used by the GC cycle state machine.
@@ -384,6 +387,7 @@ pub(crate) fn arena_block_snapshots() -> Vec<ArenaBlockSnapshot> {
             data: block.data as usize,
             offset: block.offset,
             size: block.size,
+            large_storage: block.extent_kind == super::region::Kind::LargeObject,
         }));
     };
 
