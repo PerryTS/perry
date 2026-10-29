@@ -9,8 +9,7 @@ use std::fs;
 
 use crate::closure::{
     js_closure_alloc, js_closure_call0, js_closure_call1, js_closure_get_capture_f64,
-    js_closure_get_capture_ptr, js_closure_set_capture_f64, js_closure_set_capture_ptr,
-    ClosureHeader,
+    js_closure_get_capture_ptr, js_closure_set_capture_f64, ClosureHeader,
 };
 use crate::object::{js_object_alloc, js_object_set_field_by_name};
 use crate::string::js_string_from_bytes;

@@ -826,10 +826,11 @@ fn object_set_field_by_name_transition_fast_impl_value<const CHAIN_PROVEN: bool>
         let object_kind = super::shapes::shape_object_kind_of_receiver(
             (super::shapes::object_shape_stamp(obj)).0,
         )?;
-        if !object_kind.is_ordinary_layout() || (*obj).class_id == NATIVE_MODULE_CLASS_ID {
+        // A native-module namespace is declined at the edge below
+        // (`runtime_receiver_declines_key_add`), before any write.
+        if !object_kind.is_ordinary_layout() {
             return None;
         }
-
         let key_gc =
             (key as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         if (*key_gc).obj_type != crate::gc::GC_TYPE_STRING {
@@ -917,6 +918,13 @@ fn object_set_field_by_name_transition_fast_impl_value<const CHAIN_PROVEN: bool>
         let prev_shape_id = super::shapes::object_shape_stamp(obj);
         let hit = transition_cache_lookup(prev_shape_id, interned_key)?;
         if hit.0.is_null() {
+            return None;
+        }
+        // #9019: an unseeded reserved-field receiver can share its keyless
+        // shape with an ordinary receiver of the same prototype, whose
+        // learned edge names a slot below its raw fields; a seeding funnel
+        // takes that add.
+        if crate::object::runtime_receiver_declines_key_add(obj) {
             return None;
         }
 

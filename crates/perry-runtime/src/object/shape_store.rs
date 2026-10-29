@@ -375,9 +375,10 @@ pub(crate) unsafe fn try_warm_transition(
         }
         shapes::object_shape_record(obj)?
     };
-    if !record.object_kind().is_ordinary_layout()
-        || (*obj).class_id == super::NATIVE_MODULE_CLASS_ID
-    {
+    // A native-module namespace or an unseeded reserved-field receiver is
+    // declined by the transition funnel below
+    // (`runtime_receiver_declines_key_add`), before any write.
+    if !record.object_kind().is_ordinary_layout() {
         return None;
     }
     let bytes = crate::string::header_str_checked(key)?.as_bytes();
@@ -782,8 +783,10 @@ pub(crate) unsafe fn try_store_with_refresh(
     }
     let obj = addr as *mut ObjectHeader;
     let shape = shapes::object_shape_descriptor(obj)?;
+    // #9019: an unseeded reserved-field receiver's key count is not a slot;
+    // the complete [[Set]] seeds its floor before the append.
     if !shape.object_kind.is_ordinary_layout()
-        || (*obj).class_id == super::NATIVE_MODULE_CLASS_ID
+        || super::runtime_receiver_declines_key_add(obj)
         || super::overflow::has_overflow(obj)
     {
         return None;

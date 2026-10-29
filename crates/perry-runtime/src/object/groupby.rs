@@ -205,7 +205,7 @@ unsafe fn group_by_value_is_symbol(value: f64) -> bool {
 /// Move-stable coalescing identity for a Symbol key, or `None` if `value` is
 /// not a Symbol.
 ///
-/// `SymbolHeader::id` is a monotonic `u64` that an evacuation copies verbatim,
+/// `SymbolHeader::id` is a unique mixed `u64` that an evacuation copies verbatim,
 /// so it stays a valid `HashMap` key across a collection. The symbol's
 /// *address* does not: a fresh `Symbol(desc)` is a GC allocation, and keying on
 /// its address would start a second group for the same symbol the first time a
