@@ -10,10 +10,83 @@
 //! Process-global rather than thread-local: the report is about the run.
 
 use std::cell::Cell;
+#[cfg(perry_gc_instruments)]
 use std::sync::atomic::{AtomicU64, Ordering};
 
-static COPYING_MINORS: AtomicU64 = AtomicU64::new(0);
-static MOVED_OBJECTS: AtomicU64 = AtomicU64::new(0);
+/// A liveness counter. Only the instrumented runtime build (the
+/// `perry_gc_instruments` cfg, set by `scripts/build_instr_runtime.sh` and by
+/// debug-profile test builds) stores and counts. In the default release
+/// archives it is zero-sized, `add` compiles to nothing and `get` is 0, so the
+/// polls and GC events that note an event pay no locked read-modify-write for a
+/// number nothing reads (a `lock incq` on the "nothing due" budgeted-step
+/// poll was 1% of the instructions and 7% of the cycles of a regex loop).
+pub(crate) struct Counter {
+    #[cfg(perry_gc_instruments)]
+    cell: AtomicU64,
+}
+
+impl Counter {
+    pub(crate) const fn new() -> Self {
+        Self {
+            #[cfg(perry_gc_instruments)]
+            cell: AtomicU64::new(0),
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn add(&self, n: u64) {
+        #[cfg(perry_gc_instruments)]
+        self.cell.fetch_add(n, Ordering::Relaxed);
+        #[cfg(not(perry_gc_instruments))]
+        let _ = n;
+    }
+
+    #[inline(always)]
+    pub(crate) fn get(&self) -> u64 {
+        #[cfg(perry_gc_instruments)]
+        return self.cell.load(Ordering::Relaxed);
+        #[cfg(not(perry_gc_instruments))]
+        0
+    }
+
+    /// Raise the stored value to `value` if it is larger.
+    #[inline(always)]
+    pub(crate) fn raise_to(&self, value: u64) {
+        #[cfg(perry_gc_instruments)]
+        self.cell.fetch_max(value, Ordering::Relaxed);
+        #[cfg(not(perry_gc_instruments))]
+        let _ = value;
+    }
+
+    /// Store `value` when the counter is 0.
+    #[inline(always)]
+    pub(crate) fn set_if_zero(&self, value: u64) {
+        #[cfg(perry_gc_instruments)]
+        let _ = self
+            .cell
+            .compare_exchange(0, value, Ordering::Relaxed, Ordering::Relaxed);
+        #[cfg(not(perry_gc_instruments))]
+        let _ = value;
+    }
+
+    /// Return the stored value and reset it to 0.
+    #[inline(always)]
+    pub(crate) fn take(&self) -> u64 {
+        #[cfg(perry_gc_instruments)]
+        return self.cell.swap(0, Ordering::Relaxed);
+        #[cfg(not(perry_gc_instruments))]
+        0
+    }
+
+    #[cfg(test)]
+    pub(crate) fn reset(&self) {
+        #[cfg(perry_gc_instruments)]
+        self.cell.store(0, Ordering::Relaxed);
+    }
+}
+
+static COPYING_MINORS: Counter = Counter::new();
+static MOVED_OBJECTS: Counter = Counter::new();
 
 /// Called once per COMPLETED copying minor, with what it relocated.
 ///
@@ -24,24 +97,21 @@ static MOVED_OBJECTS: AtomicU64 = AtomicU64::new(0);
 /// assertion would have been pinned permanently false on exactly those probes.
 #[inline]
 pub(crate) fn note_copying_minor_moved(copied_objects: usize, promoted_objects: usize) {
-    COPYING_MINORS.fetch_add(1, Ordering::Relaxed);
-    MOVED_OBJECTS.fetch_add(
-        (copied_objects + promoted_objects) as u64,
-        Ordering::Relaxed,
-    );
+    COPYING_MINORS.add(1);
+    MOVED_OBJECTS.add((copied_objects + promoted_objects) as u64);
 }
 
 /// How many COPYING minors have completed in this process.
 pub fn copying_minor_cycles() -> u64 {
-    COPYING_MINORS.load(Ordering::Relaxed)
+    COPYING_MINORS.get()
 }
 
 /// `copied_objects + promoted_objects` summed over every copying minor.
 pub fn moved_objects_total() -> u64 {
-    MOVED_OBJECTS.load(Ordering::Relaxed)
+    MOVED_OBJECTS.get()
 }
 
-static LOOP_POLLS: AtomicU64 = AtomicU64::new(0);
+static LOOP_POLLS: Counter = Counter::new();
 
 /// Every `js_gc_loop_safepoint` that got past the compile-time/runtime opt-in.
 ///
@@ -52,17 +122,17 @@ static LOOP_POLLS: AtomicU64 = AtomicU64::new(0);
 /// polls are absent when they are not. Measured, not assumed.
 #[inline]
 pub(crate) fn note_loop_poll_reached() {
-    LOOP_POLLS.fetch_add(1, Ordering::Relaxed);
+    LOOP_POLLS.add(1);
 }
 
 /// How many loop back-edge polls this run reached.
 pub fn loop_polls_reached() -> u64 {
-    LOOP_POLLS.load(Ordering::Relaxed)
+    LOOP_POLLS.get()
 }
 
-static INCREMENTAL_CYCLE_STARTS: AtomicU64 = AtomicU64::new(0);
-static INCREMENTAL_STEPS: AtomicU64 = AtomicU64::new(0);
-static INCREMENTAL_COMPLETIONS: AtomicU64 = AtomicU64::new(0);
+static INCREMENTAL_CYCLE_STARTS: Counter = Counter::new();
+static INCREMENTAL_STEPS: Counter = Counter::new();
+static INCREMENTAL_COMPLETIONS: Counter = Counter::new();
 
 crate::perry_thread_local! {
     static THREAD_INCREMENTAL_COMPLETIONS: Cell<u64> = const { Cell::new(0) };
@@ -71,7 +141,7 @@ crate::perry_thread_local! {
 /// A budgeted (incremental) cycle was STARTED.
 #[inline]
 pub(crate) fn note_incremental_cycle_start() {
-    INCREMENTAL_CYCLE_STARTS.fetch_add(1, Ordering::Relaxed);
+    INCREMENTAL_CYCLE_STARTS.add(1);
 }
 
 /// One budgeted step advanced an active incremental cycle. This counts the
@@ -80,13 +150,13 @@ pub(crate) fn note_incremental_cycle_start() {
 /// collector charged it.
 #[inline]
 pub(crate) fn note_incremental_step() {
-    INCREMENTAL_STEPS.fetch_add(1, Ordering::Relaxed);
+    INCREMENTAL_STEPS.add(1);
 }
 
 /// A budgeted cycle reached its finisher.
 #[inline]
 pub(crate) fn note_incremental_completion() {
-    INCREMENTAL_COMPLETIONS.fetch_add(1, Ordering::Relaxed);
+    INCREMENTAL_COMPLETIONS.add(1);
     THREAD_INCREMENTAL_COMPLETIONS.with(|count| count.set(count.get().saturating_add(1)));
 }
 
@@ -99,26 +169,26 @@ pub(crate) fn incremental_completions_on_current_thread() -> u64 {
 
 /// Budgeted incremental cycles started in this process.
 pub fn incremental_cycle_starts() -> u64 {
-    INCREMENTAL_CYCLE_STARTS.load(Ordering::Relaxed)
+    INCREMENTAL_CYCLE_STARTS.get()
 }
 
 /// Budgeted incremental steps executed in this process.
 pub fn incremental_steps() -> u64 {
-    INCREMENTAL_STEPS.load(Ordering::Relaxed)
+    INCREMENTAL_STEPS.get()
 }
 
 /// Budgeted incremental cycles completed in this process.
 pub fn incremental_completions() -> u64 {
-    INCREMENTAL_COMPLETIONS.load(Ordering::Relaxed)
+    INCREMENTAL_COMPLETIONS.get()
 }
 
-static MARK_BARRIER_ARM_EVENTS: AtomicU64 = AtomicU64::new(0);
-static MARK_BARRIER_ARMED_US: AtomicU64 = AtomicU64::new(0);
+static MARK_BARRIER_ARM_EVENTS: Counter = Counter::new();
+static MARK_BARRIER_ARMED_US: Counter = Counter::new();
 /// Microseconds-since-`process_epoch` at which the currently-open armed window
 /// started, `0` when no window is open. Lock-free on purpose: this runs inside
 /// the collector, where taking a lock is a hazard nobody should have to reason
 /// about for a counter.
-static MARK_BARRIER_ARMED_SINCE_US: AtomicU64 = AtomicU64::new(0);
+static MARK_BARRIER_ARMED_SINCE_US: Counter = Counter::new();
 
 fn process_epoch_us() -> u64 {
     static EPOCH: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
@@ -138,33 +208,32 @@ fn process_epoch_us() -> u64 {
 /// program spent shading for a cycle that never completes and never collects
 /// anything (#7909) — a number that was previously not observable at all.
 pub(crate) fn note_mark_barrier_armed() {
-    MARK_BARRIER_ARM_EVENTS.fetch_add(1, Ordering::Relaxed);
+    MARK_BARRIER_ARM_EVENTS.add(1);
     // `+1` so an arm at epoch microsecond 0 stays distinguishable from "closed".
     let now = process_epoch_us().saturating_add(1);
-    let _ =
-        MARK_BARRIER_ARMED_SINCE_US.compare_exchange(0, now, Ordering::Relaxed, Ordering::Relaxed);
+    MARK_BARRIER_ARMED_SINCE_US.set_if_zero(now);
 }
 
 /// The incremental mark barrier was disarmed.
 pub(crate) fn note_mark_barrier_disarmed() {
-    let started = MARK_BARRIER_ARMED_SINCE_US.swap(0, Ordering::Relaxed);
+    let started = MARK_BARRIER_ARMED_SINCE_US.take();
     if started != 0 {
         let now = process_epoch_us().saturating_add(1);
-        MARK_BARRIER_ARMED_US.fetch_add(now.saturating_sub(started), Ordering::Relaxed);
+        MARK_BARRIER_ARMED_US.add(now.saturating_sub(started));
     }
 }
 
 /// How many times the incremental mark barrier was armed.
 pub fn mark_barrier_arm_events() -> u64 {
-    MARK_BARRIER_ARM_EVENTS.load(Ordering::Relaxed)
+    MARK_BARRIER_ARM_EVENTS.get()
 }
 
 /// Microseconds the incremental mark barrier has been armed, including a window
 /// still open at the time of the call — a starved cycle's window never closes,
 /// and that is exactly the case this number exists to report.
 pub fn mark_barrier_armed_us() -> u64 {
-    let closed = MARK_BARRIER_ARMED_US.load(Ordering::Relaxed);
-    let started = MARK_BARRIER_ARMED_SINCE_US.load(Ordering::Relaxed);
+    let closed = MARK_BARRIER_ARMED_US.get();
+    let started = MARK_BARRIER_ARMED_SINCE_US.get();
     let open = if started == 0 {
         0
     } else {
@@ -173,22 +242,22 @@ pub fn mark_barrier_armed_us() -> u64 {
     closed + open
 }
 
-static MOVING_SAFEPOINT_BLOCKED_BY_BUDGETED: AtomicU64 = AtomicU64::new(0);
+static MOVING_SAFEPOINT_BLOCKED_BY_BUDGETED: Counter = Counter::new();
 
 /// A precise safepoint was rejected because a budgeted cycle was active.
 #[inline]
 pub(crate) fn note_moving_safepoint_blocked_by_budgeted() {
-    MOVING_SAFEPOINT_BLOCKED_BY_BUDGETED.fetch_add(1, Ordering::Relaxed);
+    MOVING_SAFEPOINT_BLOCKED_BY_BUDGETED.add(1);
 }
 
 /// How many precise safepoints an active budgeted cycle rejected.
 pub fn moving_safepoints_blocked_by_budgeted() -> u64 {
-    MOVING_SAFEPOINT_BLOCKED_BY_BUDGETED.load(Ordering::Relaxed)
+    MOVING_SAFEPOINT_BLOCKED_BY_BUDGETED.get()
 }
 
-static MOVING_SAFEPOINT_BLOCKED_BY_ALLOC: AtomicU64 = AtomicU64::new(0);
-static MOVING_SAFEPOINT_BLOCKED_BY_UNSAFE_ZONE: AtomicU64 = AtomicU64::new(0);
-static MOVING_SAFEPOINT_BLOCKED_BY_ROOT_LOCK: AtomicU64 = AtomicU64::new(0);
+static MOVING_SAFEPOINT_BLOCKED_BY_ALLOC: Counter = Counter::new();
+static MOVING_SAFEPOINT_BLOCKED_BY_UNSAFE_ZONE: Counter = Counter::new();
+static MOVING_SAFEPOINT_BLOCKED_BY_ROOT_LOCK: Counter = Counter::new();
 
 /// The other three entry guards of `gc_safepoint_moving_minor`.
 ///
@@ -202,22 +271,22 @@ static MOVING_SAFEPOINT_BLOCKED_BY_ROOT_LOCK: AtomicU64 = AtomicU64::new(0);
 #[inline]
 pub(crate) fn note_moving_safepoint_blocked(in_alloc: bool, unsafe_zone: bool, root_lock: bool) {
     if in_alloc {
-        MOVING_SAFEPOINT_BLOCKED_BY_ALLOC.fetch_add(1, Ordering::Relaxed);
+        MOVING_SAFEPOINT_BLOCKED_BY_ALLOC.add(1);
     }
     if unsafe_zone {
-        MOVING_SAFEPOINT_BLOCKED_BY_UNSAFE_ZONE.fetch_add(1, Ordering::Relaxed);
+        MOVING_SAFEPOINT_BLOCKED_BY_UNSAFE_ZONE.add(1);
     }
     if root_lock {
-        MOVING_SAFEPOINT_BLOCKED_BY_ROOT_LOCK.fetch_add(1, Ordering::Relaxed);
+        MOVING_SAFEPOINT_BLOCKED_BY_ROOT_LOCK.add(1);
     }
 }
 
 /// `(in_alloc_or_suppressed, unsafe_ffi_zone, root_lock_depth)` rejection counts.
 pub fn moving_safepoints_blocked_by_other_guards() -> (u64, u64, u64) {
     (
-        MOVING_SAFEPOINT_BLOCKED_BY_ALLOC.load(Ordering::Relaxed),
-        MOVING_SAFEPOINT_BLOCKED_BY_UNSAFE_ZONE.load(Ordering::Relaxed),
-        MOVING_SAFEPOINT_BLOCKED_BY_ROOT_LOCK.load(Ordering::Relaxed),
+        MOVING_SAFEPOINT_BLOCKED_BY_ALLOC.get(),
+        MOVING_SAFEPOINT_BLOCKED_BY_UNSAFE_ZONE.get(),
+        MOVING_SAFEPOINT_BLOCKED_BY_ROOT_LOCK.get(),
     )
 }
 
@@ -242,11 +311,11 @@ pub(crate) enum BudgetedStepSkip {
     NurseryCapUndischargeable,
 }
 
-static SKIP_REENTRANT: AtomicU64 = AtomicU64::new(0);
-static SKIP_NO_TRIGGER: AtomicU64 = AtomicU64::new(0);
-static SKIP_START_BLOCKED: AtomicU64 = AtomicU64::new(0);
-static SKIP_RESUME_BLOCKED: AtomicU64 = AtomicU64::new(0);
-static SKIP_NURSERY_CAP_UNDISCHARGEABLE: AtomicU64 = AtomicU64::new(0);
+static SKIP_REENTRANT: Counter = Counter::new();
+static SKIP_NO_TRIGGER: Counter = Counter::new();
+static SKIP_START_BLOCKED: Counter = Counter::new();
+static SKIP_RESUME_BLOCKED: Counter = Counter::new();
+static SKIP_NURSERY_CAP_UNDISCHARGEABLE: Counter = Counter::new();
 
 #[inline]
 pub(crate) fn note_budgeted_step_skip(reason: BudgetedStepSkip) {
@@ -257,23 +326,23 @@ pub(crate) fn note_budgeted_step_skip(reason: BudgetedStepSkip) {
         BudgetedStepSkip::ResumeBlocked => &SKIP_RESUME_BLOCKED,
         BudgetedStepSkip::NurseryCapUndischargeable => &SKIP_NURSERY_CAP_UNDISCHARGEABLE,
     }
-    .fetch_add(1, Ordering::Relaxed);
+    .add(1);
 }
 
 /// `(reentrant, no_trigger, start_blocked, resume_blocked)`.
 pub fn budgeted_step_skips() -> (u64, u64, u64, u64) {
     (
-        SKIP_REENTRANT.load(Ordering::Relaxed),
-        SKIP_NO_TRIGGER.load(Ordering::Relaxed),
-        SKIP_START_BLOCKED.load(Ordering::Relaxed),
-        SKIP_RESUME_BLOCKED.load(Ordering::Relaxed),
+        SKIP_REENTRANT.get(),
+        SKIP_NO_TRIGGER.get(),
+        SKIP_START_BLOCKED.get(),
+        SKIP_RESUME_BLOCKED.get(),
     )
 }
 
 /// #7909: budgeted cycles declined because only the undischargeable young-gen
 /// scavenge cap was due. Each one is a stalled cycle that did NOT happen.
 pub fn budgeted_step_nursery_cap_deferrals() -> u64 {
-    SKIP_NURSERY_CAP_UNDISCHARGEABLE.load(Ordering::Relaxed)
+    SKIP_NURSERY_CAP_UNDISCHARGEABLE.get()
 }
 
 // ---------------------------------------------------------------------------
@@ -288,51 +357,45 @@ pub fn budgeted_step_nursery_cap_deferrals() -> u64 {
 // ---------------------------------------------------------------------------
 
 /// Longest single `cycle.state.step(...)` observed, microseconds.
-static STEP_MAX_US: AtomicU64 = AtomicU64::new(0);
+static STEP_MAX_US: Counter = Counter::new();
 /// Longest single ATOMIC final-remark (root re-scan + transitive drain).
 ///
 /// Deliberately a separate number from `STEP_MAX_US`: final remark is an
 /// intentionally atomic phase whose cost is bounded by the newly-reachable
 /// graph, not by the step budget. Folding it into the general maximum would let
 /// a heap-sized pause hide behind "the collector's worst step".
-static REMARK_MAX_US: AtomicU64 = AtomicU64::new(0);
-static REMARK_COUNT: AtomicU64 = AtomicU64::new(0);
+static REMARK_MAX_US: Counter = Counter::new();
+static REMARK_COUNT: Counter = Counter::new();
 /// FinalizationRegistry records scanned during weak processing.
-static WEAK_RECORDS: AtomicU64 = AtomicU64::new(0);
+static WEAK_RECORDS: Counter = Counter::new();
 /// Most records charged to a single weak-processing step.
-static WEAK_MAX_RECORDS_PER_STEP: AtomicU64 = AtomicU64::new(0);
+static WEAK_MAX_RECORDS_PER_STEP: Counter = Counter::new();
 /// Steps that ended PARTWAY THROUGH one registry's record array — the sliced
 /// path actually running. Zero means the slicing never happened.
-static WEAK_STEPS_SLICED: AtomicU64 = AtomicU64::new(0);
+static WEAK_STEPS_SLICED: Counter = Counter::new();
 /// A registry's record cursor was invalidated by mutator restructuring.
-static WEAK_REGISTRY_RESTARTS: AtomicU64 = AtomicU64::new(0);
+static WEAK_REGISTRY_RESTARTS: Counter = Counter::new();
 /// A registry hit the restart cap and was finished in one atomic pass.
-static WEAK_REGISTRY_ATOMIC_FINISHES: AtomicU64 = AtomicU64::new(0);
+static WEAK_REGISTRY_ATOMIC_FINISHES: Counter = Counter::new();
 
 #[inline]
-fn bump_max(slot: &AtomicU64, value: u64) {
-    let mut cur = slot.load(Ordering::Relaxed);
-    while value > cur {
-        match slot.compare_exchange_weak(cur, value, Ordering::Relaxed, Ordering::Relaxed) {
-            Ok(_) => return,
-            Err(observed) => cur = observed,
-        }
-    }
+fn bump_max(slot: &Counter, value: u64) {
+    slot.raise_to(value);
 }
 
 /// Record one budgeted step's wall duration.
 #[inline]
 pub(crate) fn note_budgeted_step_duration(us: u64) {
     bump_max(&STEP_MAX_US, us);
-    STEP_TOTAL_US.fetch_add(us, Ordering::Relaxed);
+    STEP_TOTAL_US.add(us);
 }
 
 /// Record one atomic final-remark's wall duration.
 #[inline]
 pub(crate) fn note_final_remark_duration(us: u64) {
     bump_max(&REMARK_MAX_US, us);
-    REMARK_COUNT.fetch_add(1, Ordering::Relaxed);
-    REMARK_TOTAL_US.fetch_add(us, Ordering::Relaxed);
+    REMARK_COUNT.add(1);
+    REMARK_TOTAL_US.add(us);
 }
 
 // ---------------------------------------------------------------------------
@@ -353,34 +416,34 @@ pub(crate) fn note_final_remark_duration(us: u64) {
 // ---------------------------------------------------------------------------
 
 /// Total microseconds spent in budgeted incremental steps.
-static STEP_TOTAL_US: AtomicU64 = AtomicU64::new(0);
+static STEP_TOTAL_US: Counter = Counter::new();
 /// Total microseconds spent in atomic final remarks.
-static REMARK_TOTAL_US: AtomicU64 = AtomicU64::new(0);
+static REMARK_TOTAL_US: Counter = Counter::new();
 /// Total microseconds spent in copying minor scavenges.
-static MINOR_TOTAL_US: AtomicU64 = AtomicU64::new(0);
+static MINOR_TOTAL_US: Counter = Counter::new();
 /// Total microseconds spent inside synchronous `js_gc_collect` calls.
-static FULL_TOTAL_US: AtomicU64 = AtomicU64::new(0);
+static FULL_TOTAL_US: Counter = Counter::new();
 
 /// Record one copying minor's pause duration.
 #[inline]
 pub(crate) fn note_copying_minor_pause_us(us: u64) {
-    MINOR_TOTAL_US.fetch_add(us, Ordering::Relaxed);
+    MINOR_TOTAL_US.add(us);
 }
 
 /// Record one synchronous full collection's wall duration.
 #[inline]
 pub(crate) fn note_full_collect_us(us: u64) {
-    FULL_TOTAL_US.fetch_add(us, Ordering::Relaxed);
+    FULL_TOTAL_US.add(us);
 }
 
 /// (budgeted-step, final-remark, copying-minor, synchronous-full) cumulative
 /// microseconds since process start.
 pub fn gc_time_totals_us() -> (u64, u64, u64, u64) {
     (
-        STEP_TOTAL_US.load(Ordering::Relaxed),
-        REMARK_TOTAL_US.load(Ordering::Relaxed),
-        MINOR_TOTAL_US.load(Ordering::Relaxed),
-        FULL_TOTAL_US.load(Ordering::Relaxed),
+        STEP_TOTAL_US.get(),
+        REMARK_TOTAL_US.get(),
+        MINOR_TOTAL_US.get(),
+        FULL_TOTAL_US.get(),
     )
 }
 
@@ -395,76 +458,76 @@ pub(crate) fn wall_us_since_epoch() -> u64 {
 #[inline]
 pub(crate) fn note_weak_step_records(records: u64, sliced: bool) {
     if records > 0 {
-        WEAK_RECORDS.fetch_add(records, Ordering::Relaxed);
+        WEAK_RECORDS.add(records);
         bump_max(&WEAK_MAX_RECORDS_PER_STEP, records);
     }
     if sliced {
-        WEAK_STEPS_SLICED.fetch_add(1, Ordering::Relaxed);
+        WEAK_STEPS_SLICED.add(1);
     }
 }
 
 #[inline]
 pub(crate) fn note_weak_registry_restart() {
-    WEAK_REGISTRY_RESTARTS.fetch_add(1, Ordering::Relaxed);
+    WEAK_REGISTRY_RESTARTS.add(1);
 }
 
 #[inline]
 pub(crate) fn note_weak_registry_atomic_finish() {
-    WEAK_REGISTRY_ATOMIC_FINISHES.fetch_add(1, Ordering::Relaxed);
+    WEAK_REGISTRY_ATOMIC_FINISHES.add(1);
 }
 
 /// Longest single budgeted step, microseconds.
 pub fn step_max_us() -> u64 {
-    STEP_MAX_US.load(Ordering::Relaxed)
+    STEP_MAX_US.get()
 }
 
 /// Longest single atomic final remark, microseconds.
 pub fn final_remark_max_us() -> u64 {
-    REMARK_MAX_US.load(Ordering::Relaxed)
+    REMARK_MAX_US.get()
 }
 
 /// Atomic final remarks performed.
 pub fn final_remark_count() -> u64 {
-    REMARK_COUNT.load(Ordering::Relaxed)
+    REMARK_COUNT.get()
 }
 
 /// FinalizationRegistry records scanned during weak processing.
 pub fn weak_records_scanned() -> u64 {
-    WEAK_RECORDS.load(Ordering::Relaxed)
+    WEAK_RECORDS.get()
 }
 
 /// Most records charged to a single weak-processing step.
 pub fn weak_max_records_per_step() -> u64 {
-    WEAK_MAX_RECORDS_PER_STEP.load(Ordering::Relaxed)
+    WEAK_MAX_RECORDS_PER_STEP.get()
 }
 
 /// Steps that ended partway through one registry's record array.
 pub fn weak_steps_sliced() -> u64 {
-    WEAK_STEPS_SLICED.load(Ordering::Relaxed)
+    WEAK_STEPS_SLICED.get()
 }
 
 /// Record cursors invalidated by mutator restructuring.
 pub fn weak_registry_restarts() -> u64 {
-    WEAK_REGISTRY_RESTARTS.load(Ordering::Relaxed)
+    WEAK_REGISTRY_RESTARTS.get()
 }
 
 /// Registries that hit the restart cap and were finished atomically.
 pub fn weak_registry_atomic_finishes() -> u64 {
-    WEAK_REGISTRY_ATOMIC_FINISHES.load(Ordering::Relaxed)
+    WEAK_REGISTRY_ATOMIC_FINISHES.get()
 }
 
 /// Reset the #7903 step-boundedness counters. Test-only: the process-wide
 /// statics would otherwise leak between in-process test cases.
 #[cfg(test)]
 pub(crate) fn reset_step_bound_counters() {
-    STEP_MAX_US.store(0, Ordering::Relaxed);
-    REMARK_MAX_US.store(0, Ordering::Relaxed);
-    REMARK_COUNT.store(0, Ordering::Relaxed);
-    WEAK_RECORDS.store(0, Ordering::Relaxed);
-    WEAK_MAX_RECORDS_PER_STEP.store(0, Ordering::Relaxed);
-    WEAK_STEPS_SLICED.store(0, Ordering::Relaxed);
-    WEAK_REGISTRY_RESTARTS.store(0, Ordering::Relaxed);
-    WEAK_REGISTRY_ATOMIC_FINISHES.store(0, Ordering::Relaxed);
+    STEP_MAX_US.reset();
+    REMARK_MAX_US.reset();
+    REMARK_COUNT.reset();
+    WEAK_RECORDS.reset();
+    WEAK_MAX_RECORDS_PER_STEP.reset();
+    WEAK_STEPS_SLICED.reset();
+    WEAK_REGISTRY_RESTARTS.reset();
+    WEAK_REGISTRY_ATOMIC_FINISHES.reset();
 }
 
 /// Times one atomic final remark and records it on drop.
@@ -542,4 +605,47 @@ fn instruments_unavailable(knob: &str) -> ! {
          instrument is linked in."
     );
     std::process::abort()
+}
+
+#[cfg(test)]
+mod counter_tests {
+    use super::Counter;
+
+    /// The default release archives carry no counter state at all: the cfg is
+    /// the single switch, and a counter that stores in a build that does not
+    /// instrument would put the locked read-modify-write back on the polls.
+    #[cfg(not(perry_gc_instruments))]
+    #[test]
+    fn counter_is_zero_sized_and_inert_without_instruments() {
+        assert_eq!(std::mem::size_of::<Counter>(), 0);
+        let c = Counter::new();
+        c.add(5);
+        c.raise_to(9);
+        c.set_if_zero(3);
+        assert_eq!(c.get(), 0);
+        assert_eq!(c.take(), 0);
+    }
+
+    /// The instrumented build (and every debug-profile test build) must really
+    /// count: tests that read `copying_minor_cycles`, `loop_polls_reached`,
+    /// `budgeted_step_skips`, ... depend on it.
+    #[cfg(perry_gc_instruments)]
+    #[test]
+    fn counter_counts_in_the_instrumented_build() {
+        let c = Counter::new();
+        c.add(2);
+        c.add(3);
+        assert_eq!(c.get(), 5);
+        c.raise_to(4);
+        assert_eq!(c.get(), 5);
+        c.raise_to(11);
+        assert_eq!(c.get(), 11);
+        assert_eq!(c.take(), 11);
+        assert_eq!(c.get(), 0);
+        c.set_if_zero(7);
+        c.set_if_zero(8);
+        assert_eq!(c.get(), 7);
+        c.reset();
+        assert_eq!(c.get(), 0);
+    }
 }
