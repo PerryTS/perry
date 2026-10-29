@@ -180,9 +180,6 @@ pub const LAYOUT_KEY_OFF_OFFSET: usize = 14;
 /// (`i64` aligned to 8 on every target).
 pub const LAYOUT_DESC_GC_HEADER_WORD_OFFSET_LP64: usize = 88;
 pub const LAYOUT_DESC_GC_HEADER_WORD_OFFSET_ILP32: usize = 72;
-/// `PerryLayoutDesc.slots_first` (u16): the byte offset of the first slot, after `gc_header_word`.
-pub const LAYOUT_DESC_SLOTS_FIRST_OFFSET_LP64: usize = 96;
-pub const LAYOUT_DESC_SLOTS_FIRST_OFFSET_ILP32: usize = 80;
 /// The descriptor is padded to 128 bytes on LP64 (112 on ILP32): the runtime indexes the descriptor
 /// sections by `(address - start) / size`, and every size but a power of two costs more
 /// instructions than the old 88 did, which startup may not pay (exact Ir).

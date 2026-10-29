@@ -380,11 +380,12 @@ unsafe fn symbol_chain_allows_add(receiver: f64, key: f64) -> bool {
             return false;
         }
         let obj = address as *const ObjectHeader;
+        // A1_UNPROVEN: both: A-tested admission, the meta read needs the B test (kind-A/B question for S0f).
         if (*obj).class_id != 0
-            || (!crate::object::header::object_meta_if_present(obj as *mut _, gc.obj_type)
+            || (!crate::object::header::MetaObj::runtime_born(obj as *mut _)
+                .meta()
                 .is_null()
-                && (*crate::object::header::object_meta_if_present(obj as *mut _, gc.obj_type))
-                    .flags
+                && (*crate::object::header::MetaObj::runtime_born(obj as *mut _).meta()).flags
                     & super::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER
                     != 0)
         {

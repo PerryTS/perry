@@ -140,7 +140,8 @@ pub(crate) unsafe fn shape_answers(addr: usize) -> bool {
     if (*obj).class_id == NATIVE_MODULE_CLASS_ID {
         return false;
     }
-    let meta = crate::object::header::object_meta_if_present(obj as *mut _, header.obj_type);
+    // A1_UNPROVEN: both: A-tested admission, the meta read needs the B test (kind-A/B question for S0f).
+    let meta = crate::object::header::MetaObj::runtime_born(obj as *mut _).meta();
     meta.is_null()
         || ((*meta).elements == 0
             && (*meta).flags

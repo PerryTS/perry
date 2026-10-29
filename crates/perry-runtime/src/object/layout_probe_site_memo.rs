@@ -72,7 +72,8 @@ unsafe fn ordinary_word(obj: *const ObjectHeader) -> Option<u32> {
     {
         return None;
     }
-    let meta = crate::object::header::object_meta_if_present(obj as *mut _, (*h).obj_type);
+    // A1_UNPROVEN: both: A-tested admission, the meta read needs the B test (kind-A/B question for S0f).
+    let meta = crate::object::header::MetaObj::runtime_born(obj as *mut _).meta();
     if !meta.is_null()
         && (*meta).flags
             & (crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER

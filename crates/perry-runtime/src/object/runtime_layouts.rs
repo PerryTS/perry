@@ -174,8 +174,7 @@ macro_rules! runtime_layout {
             index: $name::INDEX.as_ptr(),
             class_id: 0, parent_class_id: 0, methods: std::ptr::null(),
         gc_header_word: crate::object::layout_desc::layout_gc_header_word($name::SLOT_COUNT as u32),
-        slots_first: crate::object::layout_desc::layout_slots_first(),
-        _tail_pad: [0; 30],
+        _tail_pad: [0; 32],
     };
 wasm_layout!($name);
     };
@@ -327,7 +326,7 @@ pub unsafe extern "C" fn perry_alloc_runtime_record(
     desc: *const PerryLayoutDesc,
 ) -> *mut super::ObjectHeader {
     let object = super::layout_desc::perry_alloc_layout(desc);
-    let fields = super::header::object_slot_at(object, u32::from((*desc).slots_first));
+    let fields = super::header::MetaObj::runtime_born(object).slots();
     // GC_STORE_AUDIT(INIT): unpublished record; undefined words have no managed edges.
     for slot in 0..(*desc).slot_count as usize {
         *fields.add(slot) = crate::value::TAG_UNDEFINED;
@@ -656,8 +655,7 @@ pub(crate) static mut READABLE_STATE: PerryLayoutDesc = PerryLayoutDesc {
     parent_class_id: 0,
     methods: std::ptr::null(),
     gc_header_word: crate::object::layout_desc::layout_gc_header_word(6),
-    slots_first: crate::object::layout_desc::layout_slots_first(),
-    _tail_pad: [0; 30],
+    _tail_pad: [0; 32],
 };
 wasm_layout!(READABLE_STATE);
 
@@ -757,8 +755,7 @@ pub(crate) static mut WRITABLE_STATE: PerryLayoutDesc = PerryLayoutDesc {
     parent_class_id: 0,
     methods: std::ptr::null(),
     gc_header_word: crate::object::layout_desc::layout_gc_header_word(7),
-    slots_first: crate::object::layout_desc::layout_slots_first(),
-    _tail_pad: [0; 30],
+    _tail_pad: [0; 32],
 };
 wasm_layout!(WRITABLE_STATE);
 
@@ -806,8 +803,7 @@ pub(crate) static mut URL_SEARCH_PARAMS: PerryLayoutDesc = PerryLayoutDesc {
     parent_class_id: 0,
     methods: std::ptr::null(),
     gc_header_word: crate::object::layout_desc::layout_gc_header_word(2),
-    slots_first: crate::object::layout_desc::layout_slots_first(),
-    _tail_pad: [0; 30],
+    _tail_pad: [0; 32],
 };
 wasm_layout!(URL_SEARCH_PARAMS);
 
@@ -958,8 +954,7 @@ pub(crate) static mut URL_COMPONENTS: PerryLayoutDesc = PerryLayoutDesc {
     parent_class_id: 0,
     methods: std::ptr::null(),
     gc_header_word: crate::object::layout_desc::layout_gc_header_word(12),
-    slots_first: crate::object::layout_desc::layout_slots_first(),
-    _tail_pad: [0; 30],
+    _tail_pad: [0; 32],
 };
 wasm_layout!(URL_COMPONENTS);
 
@@ -1007,8 +1002,7 @@ pub(crate) static mut ITERATOR_RESULT: PerryLayoutDesc = PerryLayoutDesc {
     parent_class_id: 0,
     methods: std::ptr::null(),
     gc_header_word: crate::object::layout_desc::layout_gc_header_word(2),
-    slots_first: crate::object::layout_desc::layout_slots_first(),
-    _tail_pad: [0; 30],
+    _tail_pad: [0; 32],
 };
 wasm_layout!(ITERATOR_RESULT);
 
@@ -1056,8 +1050,7 @@ pub(crate) static mut ITERATOR_RESULT_DONE_FIRST: PerryLayoutDesc = PerryLayoutD
     parent_class_id: 0,
     methods: std::ptr::null(),
     gc_header_word: crate::object::layout_desc::layout_gc_header_word(2),
-    slots_first: crate::object::layout_desc::layout_slots_first(),
-    _tail_pad: [0; 30],
+    _tail_pad: [0; 32],
 };
 wasm_layout!(ITERATOR_RESULT_DONE_FIRST);
 
@@ -1090,8 +1083,7 @@ pub(crate) static mut TIMEOUT: PerryLayoutDesc = PerryLayoutDesc {
     parent_class_id: 0,
     methods: std::ptr::null(),
     gc_header_word: crate::object::layout_desc::layout_gc_header_word(0),
-    slots_first: crate::object::layout_desc::layout_slots_first(),
-    _tail_pad: [0; 30],
+    _tail_pad: [0; 32],
 };
 wasm_layout!(TIMEOUT);
 
@@ -1124,8 +1116,7 @@ pub(crate) static mut IMMEDIATE: PerryLayoutDesc = PerryLayoutDesc {
     parent_class_id: 0,
     methods: std::ptr::null(),
     gc_header_word: crate::object::layout_desc::layout_gc_header_word(0),
-    slots_first: crate::object::layout_desc::layout_slots_first(),
-    _tail_pad: [0; 30],
+    _tail_pad: [0; 32],
 };
 wasm_layout!(IMMEDIATE);
 
@@ -1217,8 +1208,7 @@ pub(crate) static mut REGEX_EXEC_NAMED: PerryLayoutDesc = PerryLayoutDesc {
     parent_class_id: 0,
     methods: std::ptr::null(),
     gc_header_word: crate::object::layout_desc::layout_gc_header_word(4),
-    slots_first: crate::object::layout_desc::layout_slots_first(),
-    _tail_pad: [0; 30],
+    _tail_pad: [0; 32],
 };
 wasm_layout!(REGEX_EXEC_NAMED);
 static REGEX_EXEC_INDICES_NAMED_KEYS: [PerryLayoutKey; 5] = [
@@ -1304,8 +1294,7 @@ pub(crate) static mut REGEX_EXEC_INDICES_NAMED: PerryLayoutDesc = PerryLayoutDes
     parent_class_id: 0,
     methods: std::ptr::null(),
     gc_header_word: crate::object::layout_desc::layout_gc_header_word(5),
-    slots_first: crate::object::layout_desc::layout_slots_first(),
-    _tail_pad: [0; 30],
+    _tail_pad: [0; 32],
 };
 wasm_layout!(REGEX_EXEC_INDICES_NAMED);
 static REGEX_INDICES_GROUPS_NAMED_KEYS: [PerryLayoutKey; 2] = [
@@ -1353,8 +1342,7 @@ pub(crate) static mut REGEX_INDICES_GROUPS_NAMED: PerryLayoutDesc = PerryLayoutD
     parent_class_id: 0,
     methods: std::ptr::null(),
     gc_header_word: crate::object::layout_desc::layout_gc_header_word(2),
-    slots_first: crate::object::layout_desc::layout_slots_first(),
-    _tail_pad: [0; 30],
+    _tail_pad: [0; 32],
 };
 wasm_layout!(REGEX_INDICES_GROUPS_NAMED);
 static ARRAY_NAMED_KEYS: [PerryLayoutKey; 1] = [PerryLayoutKey {
@@ -1393,8 +1381,7 @@ pub(crate) static mut ARRAY_NAMED: PerryLayoutDesc = PerryLayoutDesc {
     parent_class_id: 0,
     methods: std::ptr::null(),
     gc_header_word: crate::object::layout_desc::layout_gc_header_word(1),
-    slots_first: crate::object::layout_desc::layout_slots_first(),
-    _tail_pad: [0; 30],
+    _tail_pad: [0; 32],
 };
 wasm_layout!(ARRAY_NAMED);
 
@@ -1611,8 +1598,7 @@ pub static mut SQLITE_COLUMN_METADATA: PerryLayoutDesc = PerryLayoutDesc {
     parent_class_id: 0,
     methods: std::ptr::null(),
     gc_header_word: crate::object::layout_desc::layout_gc_header_word(5),
-    slots_first: crate::object::layout_desc::layout_slots_first(),
-    _tail_pad: [0; 30],
+    _tail_pad: [0; 32],
 };
 wasm_layout!(SQLITE_COLUMN_METADATA);
 

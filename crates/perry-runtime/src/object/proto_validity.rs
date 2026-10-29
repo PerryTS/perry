@@ -277,10 +277,11 @@ unsafe fn ensure_meta_for_mark(obj: usize, flag: u64) -> Option<*mut crate::obje
         return None;
     }
     let object = obj as *mut crate::object::ObjectHeader;
+    // A1_UNPROVEN: both: A-tested admission, the meta read needs the B test (kind-A/B question for S0f).
     // Marking is idempotent. The existing owner record already carries a
     // completed mark, so no allocation or semantic transition remains. Do
     // not reopen handles and enter object_meta_ensure for that same record.
-    let meta = crate::object::header::object_meta_if_present(object as *mut _, header.obj_type);
+    let meta = crate::object::header::MetaObj::runtime_born(object as *mut _).meta();
     if !meta.is_null() && (*meta).flags & flag != 0 {
         return Some(meta);
     }
@@ -323,7 +324,7 @@ unsafe fn ensure_meta_for_mark(obj: usize, flag: u64) -> Option<*mut crate::obje
                 crate::object::shapes::transition_object_shape_semantics(object)
             }
         });
-        let meta = crate::object::header::object_meta_if_present(object as *mut _, header.obj_type);
+        let meta = crate::object::header::MetaObj::runtime_born(object as *mut _).meta();
         if meta.is_null() {
             return None;
         }

@@ -439,8 +439,7 @@ pub(crate) static mut READABLE_STATE_PROTO: PerryLayoutDesc = PerryLayoutDesc {
     parent_class_id: 0,
     methods: std::ptr::null(),
     gc_header_word: crate::object::layout_desc::layout_gc_header_word(16),
-    slots_first: crate::object::layout_desc::layout_slots_first(),
-    _tail_pad: [0; 30],
+    _tail_pad: [0; 32],
 };
 wasm_layout!(READABLE_STATE_PROTO);
 static WRITABLE_STATE_PROTO_KEYS: [PerryLayoutKey; 16] = [
@@ -618,8 +617,7 @@ pub(crate) static mut WRITABLE_STATE_PROTO: PerryLayoutDesc = PerryLayoutDesc {
     parent_class_id: 0,
     methods: std::ptr::null(),
     gc_header_word: crate::object::layout_desc::layout_gc_header_word(16),
-    slots_first: crate::object::layout_desc::layout_slots_first(),
-    _tail_pad: [0; 30],
+    _tail_pad: [0; 32],
 };
 wasm_layout!(WRITABLE_STATE_PROTO);
 static EE_ASYNC_RESOURCE_PROTO_KEYS: [PerryLayoutKey; 6] = [
@@ -711,7 +709,6 @@ pub(crate) static mut EE_ASYNC_RESOURCE_PROTO: PerryLayoutDesc = PerryLayoutDesc
     parent_class_id: 0,
     methods: std::ptr::null(),
     gc_header_word: crate::object::layout_desc::layout_gc_header_word(6),
-    slots_first: crate::object::layout_desc::layout_slots_first(),
-    _tail_pad: [0; 30],
+    _tail_pad: [0; 32],
 };
 wasm_layout!(EE_ASYNC_RESOURCE_PROTO);

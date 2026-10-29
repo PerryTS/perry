@@ -73,8 +73,7 @@ mod tests {
         parent_class_id: PARENT,
         methods: std::ptr::null(),
         gc_header_word: crate::object::layout_desc::layout_gc_header_word(0),
-        slots_first: crate::object::layout_desc::layout_slots_first(),
-        _tail_pad: [0; 30],
+        _tail_pad: [0; 32],
     };
     wasm_layout!(LAYOUT);
 
@@ -151,8 +150,7 @@ mod evaluation_layout_tests {
         parent_class_id: 0,
         methods: std::ptr::null(),
         gc_header_word: crate::object::layout_desc::layout_gc_header_word(0),
-        slots_first: crate::object::layout_desc::layout_slots_first(),
-        _tail_pad: [0; 30],
+        _tail_pad: [0; 32],
     };
 
     static DECLARATION: ClassDeclaration = ClassDeclaration {

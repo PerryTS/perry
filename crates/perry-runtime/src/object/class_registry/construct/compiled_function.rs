@@ -410,7 +410,8 @@ pub(crate) fn ordinary_compiled_function_has_instance(
         if !crate::gc::gc_type_is_object(header.obj_type) {
             return None;
         }
-        let meta = crate::object::header::object_meta_if_present(proto as *mut _, header.obj_type);
+        // A1_UNPROVEN: both: A-tested admission, the meta read needs the B test (kind-A/B question for S0f).
+        let meta = crate::object::header::MetaObj::runtime_born(proto as *mut _).meta();
         if !meta.is_null() && (*meta).proto_serial != 0 {
             let shape_id = crate::object::shapes::object_shape_stamp(obj as *const ObjectHeader);
             if crate::object::shapes::shape_proto_id(shape_id) == Some((*meta).proto_serial) {

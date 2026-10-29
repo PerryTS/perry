@@ -38,8 +38,7 @@ static mut LAYOUT: PerryLayoutDesc = PerryLayoutDesc {
     parent_class_id: 0,
     methods: std::ptr::null(),
     gc_header_word: crate::object::layout_desc::layout_gc_header_word(1),
-    slots_first: crate::object::layout_desc::layout_slots_first(),
-    _tail_pad: [0; 30],
+    _tail_pad: [0; 32],
 };
 unsafe impl Sync for ConstructorOperand {}
 static OPERANDS: [ConstructorOperand; 1] = [ConstructorOperand {

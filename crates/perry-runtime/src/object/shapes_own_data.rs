@@ -109,7 +109,8 @@ pub(crate) unsafe fn plain_receiver_miss_is_final(object: *const ObjectHeader, k
     {
         return false;
     }
-    let meta = crate::object::header::object_meta_if_present(object as *mut _, header.obj_type);
+    // A1_UNPROVEN: both: A-tested admission, the meta read needs the B test (kind-A/B question for S0f).
+    let meta = crate::object::header::MetaObj::runtime_born(object as *mut _).meta();
     if !meta.is_null()
         && (*meta).flags
             & (crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER

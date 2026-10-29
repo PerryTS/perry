@@ -396,7 +396,8 @@ unsafe fn definition_admitted(obj_bits: u64, key_value: f64) -> Option<Admitted>
     {
         return None;
     }
-    let meta = crate::object::header::object_meta_if_present(obj as *mut _, header.obj_type);
+    // A1_UNPROVEN: both: A-tested admission, the meta read needs the B test (kind-A/B question for S0f).
+    let meta = crate::object::header::MetaObj::runtime_born(obj as *mut _).meta();
     if !meta.is_null()
         && ((*meta).elements != 0
             || (*meta).flags
