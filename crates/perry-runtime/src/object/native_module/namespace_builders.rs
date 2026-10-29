@@ -521,8 +521,8 @@ fn global_agent_listener_value(is_https: bool, once: bool) -> f64 {
         crate::fn_info!(global_agent_listener_thunk, 3; with_declared(3)),
         2,
     );
-    crate::closure::js_closure_set_capture_ptr(closure, 0, i64::from(is_https));
-    crate::closure::js_closure_set_capture_ptr(closure, 1, i64::from(once));
+    crate::closure::closure_set_capture_word(closure, 0, i64::from(is_https));
+    crate::closure::closure_set_capture_word(closure, 1, i64::from(once));
     let name = if once { "once" } else { "on" };
     set_bound_native_closure_name(closure, name);
     set_builtin_closure_length(closure as usize, 2);

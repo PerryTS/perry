@@ -107,7 +107,7 @@ fn closure_value(info: *const crate::closure::JsFunctionInfo, arity: u32) -> f64
 
 fn closure_value_with_id(info: *const crate::closure::JsFunctionInfo, arity: u32, id: i64) -> f64 {
     let closure = make_closure(info, arity, 1);
-    js_closure_set_capture_ptr(closure, 0, id);
+    crate::closure::closure_set_capture_word(closure, 0, id);
     boxed_ptr(closure)
 }
 
@@ -118,7 +118,7 @@ fn rest_closure_value_with_id(
 ) -> f64 {
     let closure = js_closure_alloc(info, 1);
     crate::object::set_builtin_closure_length(closure as usize, fixed_arity);
-    js_closure_set_capture_ptr(closure, 0, id);
+    crate::closure::closure_set_capture_word(closure, 0, id);
     boxed_ptr(closure)
 }
 

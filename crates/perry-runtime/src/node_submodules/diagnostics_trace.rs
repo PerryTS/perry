@@ -350,9 +350,9 @@ pub(crate) extern "C" fn diag_trace_callback(
     );
     js_closure_set_capture_f64(wrapped, 0, callback);
     js_closure_set_capture_f64(wrapped, 1, context);
-    js_closure_set_capture_ptr(wrapped, 2, events[2]);
-    js_closure_set_capture_ptr(wrapped, 3, events[3]);
-    js_closure_set_capture_ptr(wrapped, 4, events[4]);
+    crate::closure::closure_set_capture_word(wrapped, 2, events[2]);
+    crate::closure::closure_set_capture_word(wrapped, 3, events[3]);
+    crate::closure::closure_set_capture_word(wrapped, 4, events[4]);
 
     let wrapped_value = boxed_ptr(wrapped);
 
