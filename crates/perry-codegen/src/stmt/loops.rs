@@ -6955,8 +6955,8 @@ pub(super) struct OverflowExitLoop {
 ///
 /// The counter's exact value leaves i32 only upward, past the guard's int32
 /// bound, so the guard is false for every such value and the loop must exit.
-/// The init is computed exactly in i64 and the step with
-/// `llvm.sadd.with.overflow.i32`; when either does not fit, the flag is set
+/// The init and the step are computed exactly in i64; when either does not
+/// fit i32, the flag is set
 /// and the condition block leaves the loop before reading the counter. The
 /// counter is the loop's own `let`, so no code after the loop reads it; every
 /// value the loop reads is therefore exact.
@@ -6983,13 +6983,20 @@ fn lower_overflow_exit_for(
     };
     let counter_id = *id;
     let flag_slot = ctx.func.alloca_entry(I1);
-    if matches!(
-        start,
+    let exact_operands = match start {
         Expr::Binary {
-            op: BinaryOp::Add | BinaryOp::Mul,
-            ..
+            op: op @ (BinaryOp::Add | BinaryOp::Mul),
+            left,
+            right,
+        } if !matches!(left.as_ref(), Expr::Binary { .. })
+            && !matches!(right.as_ref(), Expr::Binary { .. }) =>
+        {
+            Some((*op, left.as_ref(), right.as_ref()))
         }
-    ) {
+        // Any other init was admitted because it fits i32 statically.
+        _ => None,
+    };
+    if let Some((op, left, right)) = exact_operands {
         // Allocate the counter's storage, then write the exact init.
         lower_stmt(
             ctx,
@@ -7001,8 +7008,22 @@ fn lower_overflow_exit_for(
                 init: Some(Expr::Integer(0)),
             },
         )?;
-        let (exact, wide_overflow) = lower_exact_i64_tree(ctx, start)?;
+        // Two int32 operands: their sum or product is exact in i64.
+        let mut wide = Vec::with_capacity(2);
+        for operand in [left, right] {
+            let v = crate::expr::lower_expr_native(
+                ctx,
+                operand,
+                crate::native_value::ExpectedNativeRep::I32,
+            )?
+            .value;
+            wide.push(ctx.block().sext(I32, &v, I64));
+        }
         let blk = ctx.block();
+        let exact = match op {
+            BinaryOp::Add => blk.add(I64, &wide[0], &wide[1]),
+            _ => blk.mul(I64, &wide[0], &wide[1]),
+        };
         // Opaque to SCEV: the init runs once per loop entry, and loop
         // strength reduction would otherwise rebuild it (`i * i`) as an
         // induction variable updated on every iteration of an enclosing loop.
@@ -7013,8 +7034,7 @@ fn lower_overflow_exit_for(
         let ge_min = blk.icmp_sge(I64, &exact_opaque, &i64::from(i32::MIN).to_string());
         let le_max = blk.icmp_sle(I64, &exact_opaque, &i64::from(i32::MAX).to_string());
         let fits = blk.and(I1, &ge_min, &le_max);
-        let not_fits = blk.xor(I1, &fits, "true");
-        let overflow = blk.or(I1, &not_fits, &wide_overflow);
+        let overflow = blk.xor(I1, &fits, "true");
         let value = blk.trunc(I64, &exact_opaque, I32);
         ctx.block().store(I1, &overflow, &flag_slot);
         store_overflow_exit_counter(ctx, counter_id, &value);
@@ -7396,48 +7416,6 @@ fn overflow_exit_step_operand(
     }
 }
 
-/// `+`/`*` tree over int32 leaves, computed exactly in i64. Returns the value
-/// and whether an i64 operation overflowed (then the exact value is not an
-/// i32 either).
-fn lower_exact_i64_tree(ctx: &mut FnCtx<'_>, e: &perry_hir::Expr) -> Result<(String, String)> {
-    use perry_hir::{BinaryOp, Expr};
-    match e {
-        Expr::Binary {
-            op: op @ (BinaryOp::Add | BinaryOp::Mul),
-            left,
-            right,
-        } => {
-            let (l, l_ovf) = lower_exact_i64_tree(ctx, left)?;
-            let (r, r_ovf) = lower_exact_i64_tree(ctx, right)?;
-            let intrinsic = match op {
-                BinaryOp::Add => "llvm.sadd.with.overflow.i64",
-                _ => "llvm.smul.with.overflow.i64",
-            };
-            let blk = ctx.block();
-            let pair = blk.fresh_reg();
-            blk.emit_raw(format!(
-                "{pair} = call {{ i64, i1 }} @{intrinsic}(i64 {l}, i64 {r})"
-            ));
-            let value = blk.fresh_reg();
-            blk.emit_raw(format!("{value} = extractvalue {{ i64, i1 }} {pair}, 0"));
-            let ovf = blk.fresh_reg();
-            blk.emit_raw(format!("{ovf} = extractvalue {{ i64, i1 }} {pair}, 1"));
-            let sub = blk.or(I1, &l_ovf, &r_ovf);
-            let any = blk.or(I1, &sub, &ovf);
-            Ok((value, any))
-        }
-        _ => {
-            let leaf = crate::expr::lower_expr_native(
-                ctx,
-                e,
-                crate::native_value::ExpectedNativeRep::I32,
-            )?
-            .value;
-            Ok((ctx.block().sext(I32, &leaf, I64), "false".to_string()))
-        }
-    }
-}
-
 /// Write an overflow-exit counter: its i32 slot and, when it also has one,
 /// its f64 slot (the parallel-shadow model, or a closure-read counter).
 fn store_overflow_exit_counter(ctx: &mut FnCtx<'_>, counter_id: u32, value: &str) {
@@ -7504,15 +7482,17 @@ fn emit_overflow_exit_step(
         store_overflow_exit_counter(ctx, counter_id, &next);
         return Ok(());
     }
+    // The exact sum in i64 (no aggregate-returning overflow intrinsic: the
+    // in-process IR reader has no struct types); LLVM folds it to `add`/`jo`.
     let blk = ctx.block();
-    let pair = blk.fresh_reg();
-    blk.emit_raw(format!(
-        "{pair} = call {{ i32, i1 }} @llvm.sadd.with.overflow.i32(i32 {current}, i32 {step_i32})"
-    ));
-    let next = blk.fresh_reg();
-    blk.emit_raw(format!("{next} = extractvalue {{ i32, i1 }} {pair}, 0"));
-    let overflow = blk.fresh_reg();
-    blk.emit_raw(format!("{overflow} = extractvalue {{ i32, i1 }} {pair}, 1"));
+    let current_wide = blk.sext(I32, &current, I64);
+    let step_wide = blk.sext(I32, &step_i32, I64);
+    let sum = blk.add(I64, &current_wide, &step_wide);
+    let le_max = blk.icmp_sle(I64, &sum, &i64::from(i32::MAX).to_string());
+    let ge_min = blk.icmp_sge(I64, &sum, &i64::from(i32::MIN).to_string());
+    let fits = blk.and(I1, &le_max, &ge_min);
+    let overflow = blk.xor(I1, &fits, "true");
+    let next = blk.trunc(I64, &sum, I32);
     blk.store(I1, &overflow, &state.flag_slot);
     store_overflow_exit_counter(ctx, counter_id, &next);
     Ok(())

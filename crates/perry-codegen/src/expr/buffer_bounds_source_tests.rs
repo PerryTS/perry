@@ -78,7 +78,7 @@ fn proven_typed_array_store_keeps_a_real_bounds_branch() {
 
 /// The sieve's loops are counter-versioned: one entry check on the actual
 /// values selects a copy with plain `add nsw` steps and no per-access branch;
-/// the checked copy keeps `sadd.with.overflow` steps and per-access branches.
+/// the checked copy keeps exact (i64) overflow-checked steps and per-access branches.
 #[test]
 fn counter_versioned_fast_copy_drops_only_what_its_entry_check_proved() {
     let ir = function_ir(
@@ -101,8 +101,8 @@ fn counter_versioned_fast_copy_drops_only_what_its_entry_check_proved() {
         "no counter-versioned fast copy:\n{ir}"
     );
     assert!(
-        ir.contains("@llvm.sadd.with.overflow.i32("),
-        "the checked copy steps with the overflow intrinsic:\n{ir}"
+        ir.contains(".cond.in_range"),
+        "the checked copy tests its overflow flag before reading the counter:\n{ir}"
     );
     // Every entry check (the block that branches to a fast copy and its
     // checked copy) tests the step against i32 AND the largest admitted index

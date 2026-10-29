@@ -451,26 +451,30 @@ pub(crate) fn upper_guard_conjuncts(cond: &Expr, counter: u32) -> Vec<(CompareOp
     out
 }
 
-/// An init the overflow-exit lowering can compute exactly: `+`/`*` over
-/// int32 leaves that are all non-negative, so the exact value is a
-/// non-negative integer (computed in i64) and any overflow is upward.
+/// An init the overflow-exit lowering can compute exactly: one `+` or `*` of
+/// two non-negative int32 leaves (`i * i`), whose exact value is a
+/// non-negative i64 — so when it is not an i32 it is above `i32::MAX`.
 pub(crate) fn is_nonneg_exit_init(
     e: &Expr,
     leaf_range: &mut dyn FnMut(&Expr) -> Option<Range>,
 ) -> bool {
-    match e {
-        Expr::Binary {
-            op: BinaryOp::Add | BinaryOp::Mul,
-            left,
-            right,
-        } => is_nonneg_exit_init(left, leaf_range) && is_nonneg_exit_init(right, leaf_range),
-        _ => leaf_range(e).is_some_and(|r| r.lo >= 0 && r.fits_i32()),
-    }
+    let Expr::Binary {
+        op: BinaryOp::Add | BinaryOp::Mul,
+        left,
+        right,
+    } = e
+    else {
+        return false;
+    };
+    [left, right].into_iter().all(|leaf| {
+        !matches!(leaf.as_ref(), Expr::Binary { .. })
+            && leaf_range(leaf).is_some_and(|r| r.lo >= 0 && r.fits_i32())
+    })
 }
 
 /// A `for` counter that steps UP under a `counter < B` / `counter <= B`
 /// conjunct with an int32 `B`, whose step is a non-negative loop-invariant
-/// int32 and whose init either fits i32 or is a non-negative `+`/`*` tree
+/// int32 and whose init either fits i32 or is one non-negative `+`/`*`
 /// ([`is_nonneg_exit_init`]). Every exact value it can take that leaves i32
 /// is above `i32::MAX >= B`, so the guard is false for it: the overflow-exit
 /// lowering (`stmt/loops.rs`) leaves the loop instead of storing it.
