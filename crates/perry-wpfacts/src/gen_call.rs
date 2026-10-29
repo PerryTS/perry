@@ -276,6 +276,7 @@ impl<'a> Gen<'a> {
         if !self.walked.insert(f) {
             return;
         }
+        self.m.note_walked(f);
         let Expr::Closure {
             params,
             body,

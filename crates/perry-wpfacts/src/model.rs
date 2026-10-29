@@ -1779,6 +1779,10 @@ pub struct Act {
     /// The set is final (the analysis after the activation pass): nothing
     /// activates, a body outside it is never walked.
     pub fixed: bool,
+    /// The bodies the analysis after the activation pass walked (by
+    /// `Model::act_key`): what can run, module bodies and static
+    /// initializers included (`ProgramFacts::active_bodies`).
+    pub walked: crate::pts::FxHashSet<(u32, u32, String)>,
     /// The negative control (`PERRY_FACTS_SABOTAGE=activation:<path>`):
     /// one activation path left out, so its refusal fixture proves wrongly.
     pub sabotage: Option<String>,
