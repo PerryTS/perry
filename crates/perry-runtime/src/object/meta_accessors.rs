@@ -4,7 +4,118 @@
 
 use super::*;
 
-pub(crate) unsafe fn object_meta_ensure_for_cell(user_ptr: usize) -> Option<*mut ObjectMeta> {
+/// Why a meta record is being created: one variant per row of the A1 design's
+/// reason table. A new call site needs a reason, and a new reason needs its
+/// excluding fact in [`MetaReason::excluded_by`] (matched without a wildcard),
+/// or it is `RuntimeBornOnly`, which debug builds check at the funnel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MetaReason {
+    Spill,
+    SpillReserve,
+    Overflow,
+    PrototypeOnReceiver,
+    PrototypeHolder,
+    BecomesPrototype,
+    EvalBrand,
+    AdoptFamilyLayout,
+    ClassEvaluationPrivateStorage,
+    CtorFnPrototype,
+    BuiltinSeal,
+    RuntimePrototypeName,
+    HttpPrototypes,
+    ReflectMetadata,
+    BoxedPrimitive,
+    SetKeyIdentity,
+    WeakStorage,
+    OwnedState,
+    NativePayload,
+    NativeThisAlias,
+    WasmWrapper,
+    RuntimeHandle,
+    ArraySubclassElements,
+    ArrayIteratorBrand,
+    ClosureProps,
+    CellExpando,
+}
+
+/// The whole-program fact (design section 2.1) that keeps a meta-less family
+/// away from a reason.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ExcludingFact {
+    /// No token of the family reaches top (escape, unmodeled builtins, vm, N-API).
+    P1,
+    /// No hard mark (defineProperty, setPrototypeOf, delete, freeze, Proxy, ...).
+    P2,
+    /// Fixed layout: every key ever stored is a slotted birth key.
+    P3,
+    /// No native parent and no `extends`.
+    P4,
+    /// The family is never used as a prototype.
+    P5,
+    /// The family is never a collection element.
+    P6,
+    /// The family is never a constructor-return override.
+    P7,
+    /// The family's class has no evaluation brand.
+    P8,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Exclusion {
+    /// Only objects the runtime allocated itself reach this reason.
+    RuntimeBornOnly,
+    Fact(ExcludingFact),
+}
+
+impl MetaReason {
+    pub(crate) const fn excluded_by(self) -> Exclusion {
+        use ExcludingFact::*;
+        use Exclusion::{Fact, RuntimeBornOnly};
+        match self {
+            MetaReason::Spill => Fact(P3),
+            MetaReason::SpillReserve => RuntimeBornOnly,
+            MetaReason::Overflow => Fact(P3),
+            MetaReason::PrototypeOnReceiver => Fact(P2),
+            MetaReason::PrototypeHolder => RuntimeBornOnly,
+            MetaReason::BecomesPrototype => Fact(P5),
+            MetaReason::EvalBrand => Fact(P8),
+            MetaReason::AdoptFamilyLayout => RuntimeBornOnly,
+            MetaReason::ClassEvaluationPrivateStorage => RuntimeBornOnly,
+            MetaReason::CtorFnPrototype => RuntimeBornOnly,
+            MetaReason::BuiltinSeal => RuntimeBornOnly,
+            MetaReason::RuntimePrototypeName => RuntimeBornOnly,
+            MetaReason::HttpPrototypes => RuntimeBornOnly,
+            MetaReason::ReflectMetadata => Fact(P1),
+            MetaReason::BoxedPrimitive => RuntimeBornOnly,
+            MetaReason::SetKeyIdentity => Fact(P6),
+            MetaReason::WeakStorage => RuntimeBornOnly,
+            MetaReason::OwnedState => Fact(P1),
+            MetaReason::NativePayload => Fact(P4),
+            MetaReason::NativeThisAlias => Fact(P4),
+            MetaReason::WasmWrapper => Fact(P1),
+            MetaReason::RuntimeHandle => RuntimeBornOnly,
+            MetaReason::ArraySubclassElements => Fact(P4),
+            MetaReason::ArrayIteratorBrand => RuntimeBornOnly,
+            MetaReason::ClosureProps => RuntimeBornOnly,
+            MetaReason::CellExpando => RuntimeBornOnly,
+        }
+    }
+}
+
+/// `reason` documents the caller and, in debug builds, checks that a
+/// `RuntimeBornOnly` reason really got a runtime-born (meta-form) object.
+#[inline(always)]
+fn debug_check_reason(obj_type: impl FnOnce() -> u8, reason: MetaReason) {
+    if cfg!(debug_assertions) && reason.excluded_by() == Exclusion::RuntimeBornOnly {
+        assert_eq!(obj_type(), crate::gc::GC_TYPE_OBJECT, "{reason:?}");
+    }
+}
+
+pub(crate) unsafe fn object_meta_ensure_for_cell(
+    user_ptr: usize,
+    reason: MetaReason,
+) -> Option<*mut ObjectMeta> {
+    let _ = reason;
     let slot = cell_meta_slot(user_ptr)?;
     if !(*slot).is_null() {
         return Some(*slot);
@@ -53,7 +164,9 @@ pub(crate) unsafe fn object_meta_ensure_for_cell(user_ptr: usize) -> Option<*mut
     Some(meta)
 }
 
-pub(crate) unsafe fn object_meta_ensure(obj: *mut ObjectHeader) -> *mut ObjectMeta {
+pub(crate) unsafe fn object_meta_ensure(obj: MetaObj, reason: MetaReason) -> *mut ObjectMeta {
+    debug_check_reason(|| object_type(obj.as_ptr()), reason);
+    let obj = obj.as_ptr();
     if !(*obj).meta.is_null() {
         return (*obj).meta;
     }
@@ -122,4 +235,22 @@ pub(crate) unsafe fn gc_object_meta_slot(user_ptr: usize) -> Option<*mut u64> {
         return None;
     }
     Some(&mut (*obj).meta as *mut _ as *mut u64)
+}
+
+/// The fail-closed abort for a meta-less family object that reached a meta
+/// reason (A1 design 2.4). It sits on the cold side of a caller's existing
+/// type dispatch; the first callers arrive with the meta-less births.
+///
+/// # Safety
+/// `obj` is the user pointer of a live ordinary object.
+#[cold]
+#[inline(never)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) unsafe fn a1_internal_error(obj: *const ObjectHeader, reason: MetaReason) -> ! {
+    let family = layout_desc::family_desc_of(obj).map_or(0, |desc| desc.family);
+    eprintln!(
+        "perry internal error A1: meta-less family {family:#x} (class {}) reached {reason:?}",
+        (*obj).class_id
+    );
+    std::process::abort();
 }

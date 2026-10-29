@@ -87,7 +87,8 @@ const fn layout_keys<const N: usize>(atoms: [LayoutAtom; N]) -> [PerryLayoutKey;
             atom: std::ptr::null(),
             slot: 0,
             attrs: 0,
-            _pad: [0; 3],
+            _pad: 0,
+            off: crate::object::layout_desc::layout_key_off(0 as u32),
         }
     }; N];
     let mut taken = [false; N];
@@ -104,7 +105,8 @@ const fn layout_keys<const N: usize>(atoms: [LayoutAtom; N]) -> [PerryLayoutKey;
             atom: atoms[i].0,
             slot,
             attrs: atoms[i].2,
-            _pad: [0; 3],
+            _pad: 0,
+            off: crate::object::layout_desc::layout_key_off(slot),
         };
         i += 1;
     }
@@ -171,7 +173,9 @@ macro_rules! runtime_layout {
             index_mask: (layout_index_size($name::SLOT_COUNT) - 1) as u32,
             index: $name::INDEX.as_ptr(),
             class_id: 0, parent_class_id: 0, methods: std::ptr::null(),
-        };
+        gc_header_word: crate::object::layout_desc::layout_gc_header_word($name::SLOT_COUNT as u32),
+        _tail_pad: [0; 32],
+    };
 wasm_layout!($name);
     };
 }
@@ -570,37 +574,43 @@ static READABLE_STATE_KEYS: [PerryLayoutKey; 6] = [
         atom: std::ptr::addr_of!(ATOM_0),
         slot: 0,
         attrs: 0,
-        _pad: [0; 3],
+        _pad: 0,
+        off: crate::object::layout_desc::layout_key_off(0 as u32),
     },
     PerryLayoutKey {
         atom: std::ptr::addr_of!(ATOM_1),
         slot: 1,
         attrs: 0,
-        _pad: [0; 3],
+        _pad: 0,
+        off: crate::object::layout_desc::layout_key_off(1 as u32),
     },
     PerryLayoutKey {
         atom: std::ptr::addr_of!(ATOM_2),
         slot: 2,
         attrs: 0,
-        _pad: [0; 3],
+        _pad: 0,
+        off: crate::object::layout_desc::layout_key_off(2 as u32),
     },
     PerryLayoutKey {
         atom: std::ptr::addr_of!(ATOM_3),
         slot: 3,
         attrs: 0,
-        _pad: [0; 3],
+        _pad: 0,
+        off: crate::object::layout_desc::layout_key_off(3 as u32),
     },
     PerryLayoutKey {
         atom: std::ptr::addr_of!(ATOM_4),
         slot: 4,
         attrs: 0,
-        _pad: [0; 3],
+        _pad: 0,
+        off: crate::object::layout_desc::layout_key_off(4 as u32),
     },
     PerryLayoutKey {
         atom: std::ptr::addr_of!(ATOM_5),
         slot: 5,
         attrs: 0,
-        _pad: [0; 3],
+        _pad: 0,
+        off: crate::object::layout_desc::layout_key_off(5 as u32),
     },
 ];
 static READABLE_STATE_INDEX: [u32; 16] = [
@@ -647,6 +657,8 @@ pub(crate) static mut READABLE_STATE: PerryLayoutDesc = PerryLayoutDesc {
     class_id: 0,
     parent_class_id: 0,
     methods: std::ptr::null(),
+    gc_header_word: crate::object::layout_desc::layout_gc_header_word(6),
+    _tail_pad: [0; 32],
 };
 wasm_layout!(READABLE_STATE);
 
@@ -655,43 +667,50 @@ static WRITABLE_STATE_KEYS: [PerryLayoutKey; 7] = [
         atom: std::ptr::addr_of!(ATOM_0),
         slot: 0,
         attrs: 0,
-        _pad: [0; 3],
+        _pad: 0,
+        off: crate::object::layout_desc::layout_key_off(0 as u32),
     },
     PerryLayoutKey {
         atom: std::ptr::addr_of!(ATOM_3),
         slot: 1,
         attrs: 0,
-        _pad: [0; 3],
+        _pad: 0,
+        off: crate::object::layout_desc::layout_key_off(1 as u32),
     },
     PerryLayoutKey {
         atom: std::ptr::addr_of!(ATOM_6),
         slot: 2,
         attrs: 0,
-        _pad: [0; 3],
+        _pad: 0,
+        off: crate::object::layout_desc::layout_key_off(2 as u32),
     },
     PerryLayoutKey {
         atom: std::ptr::addr_of!(ATOM_7),
         slot: 3,
         attrs: 0,
-        _pad: [0; 3],
+        _pad: 0,
+        off: crate::object::layout_desc::layout_key_off(3 as u32),
     },
     PerryLayoutKey {
         atom: std::ptr::addr_of!(ATOM_8),
         slot: 4,
         attrs: 0,
-        _pad: [0; 3],
+        _pad: 0,
+        off: crate::object::layout_desc::layout_key_off(4 as u32),
     },
     PerryLayoutKey {
         atom: std::ptr::addr_of!(ATOM_9),
         slot: 5,
         attrs: 0,
-        _pad: [0; 3],
+        _pad: 0,
+        off: crate::object::layout_desc::layout_key_off(5 as u32),
     },
     PerryLayoutKey {
         atom: std::ptr::addr_of!(ATOM_10),
         slot: 6,
         attrs: 0,
-        _pad: [0; 3],
+        _pad: 0,
+        off: crate::object::layout_desc::layout_key_off(6 as u32),
     },
 ];
 static WRITABLE_STATE_INDEX: [u32; 16] = [
@@ -738,6 +757,8 @@ pub(crate) static mut WRITABLE_STATE: PerryLayoutDesc = PerryLayoutDesc {
     class_id: 0,
     parent_class_id: 0,
     methods: std::ptr::null(),
+    gc_header_word: crate::object::layout_desc::layout_gc_header_word(7),
+    _tail_pad: [0; 32],
 };
 wasm_layout!(WRITABLE_STATE);
 
@@ -746,13 +767,15 @@ static URL_SEARCH_PARAMS_KEYS: [PerryLayoutKey; 2] = [
         atom: std::ptr::addr_of!(ATOM_11),
         slot: 0,
         attrs: 66,
-        _pad: [0; 3],
+        _pad: 0,
+        off: crate::object::layout_desc::layout_key_off(0 as u32),
     },
     PerryLayoutKey {
         atom: std::ptr::addr_of!(ATOM_12),
         slot: 1,
         attrs: 66,
-        _pad: [0; 3],
+        _pad: 0,
+        off: crate::object::layout_desc::layout_key_off(1 as u32),
     },
 ];
 static URL_SEARCH_PARAMS_INDEX: [u32; 4] = [0, 1, u32::MAX, u32::MAX];
@@ -782,6 +805,8 @@ pub(crate) static mut URL_SEARCH_PARAMS: PerryLayoutDesc = PerryLayoutDesc {
     class_id: 0,
     parent_class_id: 0,
     methods: std::ptr::null(),
+    gc_header_word: crate::object::layout_desc::layout_gc_header_word(2),
+    _tail_pad: [0; 32],
 };
 wasm_layout!(URL_SEARCH_PARAMS);
 
@@ -790,73 +815,85 @@ static URL_COMPONENTS_KEYS: [PerryLayoutKey; 12] = [
         atom: std::ptr::addr_of!(ATOM_13),
         slot: 0,
         attrs: 66,
-        _pad: [0; 3],
+        _pad: 0,
+        off: crate::object::layout_desc::layout_key_off(0 as u32),
     },
     PerryLayoutKey {
         atom: std::ptr::addr_of!(ATOM_14),
         slot: 1,
         attrs: 66,
-        _pad: [0; 3],
+        _pad: 0,
+        off: crate::object::layout_desc::layout_key_off(1 as u32),
     },
     PerryLayoutKey {
         atom: std::ptr::addr_of!(ATOM_15),
         slot: 2,
         attrs: 66,
-        _pad: [0; 3],
+        _pad: 0,
+        off: crate::object::layout_desc::layout_key_off(2 as u32),
     },
     PerryLayoutKey {
         atom: std::ptr::addr_of!(ATOM_16),
         slot: 3,
         attrs: 66,
-        _pad: [0; 3],
+        _pad: 0,
+        off: crate::object::layout_desc::layout_key_off(3 as u32),
     },
     PerryLayoutKey {
         atom: std::ptr::addr_of!(ATOM_17),
         slot: 4,
         attrs: 66,
-        _pad: [0; 3],
+        _pad: 0,
+        off: crate::object::layout_desc::layout_key_off(4 as u32),
     },
     PerryLayoutKey {
         atom: std::ptr::addr_of!(ATOM_18),
         slot: 5,
         attrs: 66,
-        _pad: [0; 3],
+        _pad: 0,
+        off: crate::object::layout_desc::layout_key_off(5 as u32),
     },
     PerryLayoutKey {
         atom: std::ptr::addr_of!(ATOM_19),
         slot: 6,
         attrs: 66,
-        _pad: [0; 3],
+        _pad: 0,
+        off: crate::object::layout_desc::layout_key_off(6 as u32),
     },
     PerryLayoutKey {
         atom: std::ptr::addr_of!(ATOM_20),
         slot: 7,
         attrs: 66,
-        _pad: [0; 3],
+        _pad: 0,
+        off: crate::object::layout_desc::layout_key_off(7 as u32),
     },
     PerryLayoutKey {
         atom: std::ptr::addr_of!(ATOM_21),
         slot: 8,
         attrs: 66,
-        _pad: [0; 3],
+        _pad: 0,
+        off: crate::object::layout_desc::layout_key_off(8 as u32),
     },
     PerryLayoutKey {
         atom: std::ptr::addr_of!(ATOM_22),
         slot: 9,
         attrs: 66,
-        _pad: [0; 3],
+        _pad: 0,
+        off: crate::object::layout_desc::layout_key_off(9 as u32),
     },
     PerryLayoutKey {
         atom: std::ptr::addr_of!(ATOM_23),
         slot: 10,
         attrs: 66,
-        _pad: [0; 3],
+        _pad: 0,
+        off: crate::object::layout_desc::layout_key_off(10 as u32),
     },
     PerryLayoutKey {
         atom: std::ptr::addr_of!(ATOM_24),
         slot: 11,
         attrs: 66,
-        _pad: [0; 3],
+        _pad: 0,
+        off: crate::object::layout_desc::layout_key_off(11 as u32),
     },
 ];
 static URL_COMPONENTS_INDEX: [u32; 32] = [
@@ -919,6 +956,8 @@ pub(crate) static mut URL_COMPONENTS: PerryLayoutDesc = PerryLayoutDesc {
     class_id: 0,
     parent_class_id: 0,
     methods: std::ptr::null(),
+    gc_header_word: crate::object::layout_desc::layout_gc_header_word(12),
+    _tail_pad: [0; 32],
 };
 wasm_layout!(URL_COMPONENTS);
 
@@ -927,13 +966,15 @@ static ITERATOR_RESULT_KEYS: [PerryLayoutKey; 2] = [
         atom: std::ptr::addr_of!(ATOM_25),
         slot: 0,
         attrs: 0,
-        _pad: [0; 3],
+        _pad: 0,
+        off: crate::object::layout_desc::layout_key_off(0 as u32),
     },
     PerryLayoutKey {
         atom: std::ptr::addr_of!(ATOM_26),
         slot: 1,
         attrs: 0,
-        _pad: [0; 3],
+        _pad: 0,
+        off: crate::object::layout_desc::layout_key_off(1 as u32),
     },
 ];
 static ITERATOR_RESULT_INDEX: [u32; 4] = [u32::MAX, 1, 0, u32::MAX];
@@ -963,6 +1004,8 @@ pub(crate) static mut ITERATOR_RESULT: PerryLayoutDesc = PerryLayoutDesc {
     class_id: 0,
     parent_class_id: 0,
     methods: std::ptr::null(),
+    gc_header_word: crate::object::layout_desc::layout_gc_header_word(2),
+    _tail_pad: [0; 32],
 };
 wasm_layout!(ITERATOR_RESULT);
 
@@ -971,13 +1014,15 @@ static ITERATOR_RESULT_DONE_FIRST_KEYS: [PerryLayoutKey; 2] = [
         atom: std::ptr::addr_of!(ATOM_26),
         slot: 0,
         attrs: 0,
-        _pad: [0; 3],
+        _pad: 0,
+        off: crate::object::layout_desc::layout_key_off(0 as u32),
     },
     PerryLayoutKey {
         atom: std::ptr::addr_of!(ATOM_25),
         slot: 1,
         attrs: 0,
-        _pad: [0; 3],
+        _pad: 0,
+        off: crate::object::layout_desc::layout_key_off(1 as u32),
     },
 ];
 static ITERATOR_RESULT_DONE_FIRST_INDEX: [u32; 4] = [u32::MAX, 0, 1, u32::MAX];
@@ -1007,6 +1052,8 @@ pub(crate) static mut ITERATOR_RESULT_DONE_FIRST: PerryLayoutDesc = PerryLayoutD
     class_id: 0,
     parent_class_id: 0,
     methods: std::ptr::null(),
+    gc_header_word: crate::object::layout_desc::layout_gc_header_word(2),
+    _tail_pad: [0; 32],
 };
 wasm_layout!(ITERATOR_RESULT_DONE_FIRST);
 
@@ -1038,6 +1085,8 @@ pub(crate) static mut TIMEOUT: PerryLayoutDesc = PerryLayoutDesc {
     class_id: 0,
     parent_class_id: 0,
     methods: std::ptr::null(),
+    gc_header_word: crate::object::layout_desc::layout_gc_header_word(0),
+    _tail_pad: [0; 32],
 };
 wasm_layout!(TIMEOUT);
 
@@ -1069,6 +1118,8 @@ pub(crate) static mut IMMEDIATE: PerryLayoutDesc = PerryLayoutDesc {
     class_id: 0,
     parent_class_id: 0,
     methods: std::ptr::null(),
+    gc_header_word: crate::object::layout_desc::layout_gc_header_word(0),
+    _tail_pad: [0; 32],
 };
 wasm_layout!(IMMEDIATE);
 
@@ -1105,25 +1156,29 @@ static REGEX_EXEC_NAMED_KEYS: [PerryLayoutKey; 4] = [
         atom: std::ptr::addr_of!(ATOM_SYMBOL_ITERATOR),
         slot: 0,
         attrs: 0,
-        _pad: [0; 3],
+        _pad: 0,
+        off: crate::object::layout_desc::layout_key_off(0 as u32),
     },
     PerryLayoutKey {
         atom: std::ptr::addr_of!(ATOM_27),
         slot: 1,
         attrs: 0,
-        _pad: [0; 3],
+        _pad: 0,
+        off: crate::object::layout_desc::layout_key_off(1 as u32),
     },
     PerryLayoutKey {
         atom: std::ptr::addr_of!(ATOM_28),
         slot: 2,
         attrs: 0,
-        _pad: [0; 3],
+        _pad: 0,
+        off: crate::object::layout_desc::layout_key_off(2 as u32),
     },
     PerryLayoutKey {
         atom: std::ptr::addr_of!(ATOM_29),
         slot: 3,
         attrs: 0,
-        _pad: [0; 3],
+        _pad: 0,
+        off: crate::object::layout_desc::layout_key_off(3 as u32),
     },
 ];
 static REGEX_EXEC_NAMED_INDEX: [u32; 8] = [u32::MAX, u32::MAX, u32::MAX, 1, 2, 0, 3, u32::MAX];
@@ -1155,6 +1210,8 @@ pub(crate) static mut REGEX_EXEC_NAMED: PerryLayoutDesc = PerryLayoutDesc {
     class_id: 0,
     parent_class_id: 0,
     methods: std::ptr::null(),
+    gc_header_word: crate::object::layout_desc::layout_gc_header_word(4),
+    _tail_pad: [0; 32],
 };
 wasm_layout!(REGEX_EXEC_NAMED);
 static REGEX_EXEC_INDICES_NAMED_KEYS: [PerryLayoutKey; 5] = [
@@ -1162,31 +1219,36 @@ static REGEX_EXEC_INDICES_NAMED_KEYS: [PerryLayoutKey; 5] = [
         atom: std::ptr::addr_of!(ATOM_SYMBOL_ITERATOR),
         slot: 0,
         attrs: 0,
-        _pad: [0; 3],
+        _pad: 0,
+        off: crate::object::layout_desc::layout_key_off(0 as u32),
     },
     PerryLayoutKey {
         atom: std::ptr::addr_of!(ATOM_27),
         slot: 1,
         attrs: 0,
-        _pad: [0; 3],
+        _pad: 0,
+        off: crate::object::layout_desc::layout_key_off(1 as u32),
     },
     PerryLayoutKey {
         atom: std::ptr::addr_of!(ATOM_28),
         slot: 2,
         attrs: 0,
-        _pad: [0; 3],
+        _pad: 0,
+        off: crate::object::layout_desc::layout_key_off(2 as u32),
     },
     PerryLayoutKey {
         atom: std::ptr::addr_of!(ATOM_29),
         slot: 3,
         attrs: 0,
-        _pad: [0; 3],
+        _pad: 0,
+        off: crate::object::layout_desc::layout_key_off(3 as u32),
     },
     PerryLayoutKey {
         atom: std::ptr::addr_of!(ATOM_30),
         slot: 4,
         attrs: 0,
-        _pad: [0; 3],
+        _pad: 0,
+        off: crate::object::layout_desc::layout_key_off(4 as u32),
     },
 ];
 static REGEX_EXEC_INDICES_NAMED_INDEX: [u32; 16] = [
@@ -1234,6 +1296,8 @@ pub(crate) static mut REGEX_EXEC_INDICES_NAMED: PerryLayoutDesc = PerryLayoutDes
     class_id: 0,
     parent_class_id: 0,
     methods: std::ptr::null(),
+    gc_header_word: crate::object::layout_desc::layout_gc_header_word(5),
+    _tail_pad: [0; 32],
 };
 wasm_layout!(REGEX_EXEC_INDICES_NAMED);
 static REGEX_INDICES_GROUPS_NAMED_KEYS: [PerryLayoutKey; 2] = [
@@ -1241,13 +1305,15 @@ static REGEX_INDICES_GROUPS_NAMED_KEYS: [PerryLayoutKey; 2] = [
         atom: std::ptr::addr_of!(ATOM_SYMBOL_ITERATOR),
         slot: 0,
         attrs: 0,
-        _pad: [0; 3],
+        _pad: 0,
+        off: crate::object::layout_desc::layout_key_off(0 as u32),
     },
     PerryLayoutKey {
         atom: std::ptr::addr_of!(ATOM_29),
         slot: 1,
         attrs: 0,
-        _pad: [0; 3],
+        _pad: 0,
+        off: crate::object::layout_desc::layout_key_off(1 as u32),
     },
 ];
 static REGEX_INDICES_GROUPS_NAMED_INDEX: [u32; 4] = [u32::MAX, 0, 1, u32::MAX];
@@ -1278,13 +1344,16 @@ pub(crate) static mut REGEX_INDICES_GROUPS_NAMED: PerryLayoutDesc = PerryLayoutD
     class_id: 0,
     parent_class_id: 0,
     methods: std::ptr::null(),
+    gc_header_word: crate::object::layout_desc::layout_gc_header_word(2),
+    _tail_pad: [0; 32],
 };
 wasm_layout!(REGEX_INDICES_GROUPS_NAMED);
 static ARRAY_NAMED_KEYS: [PerryLayoutKey; 1] = [PerryLayoutKey {
     atom: std::ptr::addr_of!(ATOM_SYMBOL_ITERATOR),
     slot: 0,
     attrs: 0,
-    _pad: [0; 3],
+    _pad: 0,
+    off: crate::object::layout_desc::layout_key_off(0 as u32),
 }];
 static ARRAY_NAMED_INDEX: [u32; 2] = [u32::MAX, 0];
 /// Empty array named family; absent iterator slot 0 is the hole marker.
@@ -1314,6 +1383,8 @@ pub(crate) static mut ARRAY_NAMED: PerryLayoutDesc = PerryLayoutDesc {
     class_id: 0,
     parent_class_id: 0,
     methods: std::ptr::null(),
+    gc_header_word: crate::object::layout_desc::layout_gc_header_word(1),
+    _tail_pad: [0; 32],
 };
 wasm_layout!(ARRAY_NAMED);
 
@@ -1453,31 +1524,36 @@ static SQLITE_COLUMN_KEYS: [PerryLayoutKey; 5] = [
         atom: std::ptr::addr_of!(SQLITE_ATOM_0),
         slot: 0,
         attrs: 0,
-        _pad: [0; 3],
+        _pad: 0,
+        off: crate::object::layout_desc::layout_key_off(0 as u32),
     },
     PerryLayoutKey {
         atom: std::ptr::addr_of!(SQLITE_ATOM_1),
         slot: 1,
         attrs: 0,
-        _pad: [0; 3],
+        _pad: 0,
+        off: crate::object::layout_desc::layout_key_off(1 as u32),
     },
     PerryLayoutKey {
         atom: std::ptr::addr_of!(SQLITE_ATOM_2),
         slot: 2,
         attrs: 0,
-        _pad: [0; 3],
+        _pad: 0,
+        off: crate::object::layout_desc::layout_key_off(2 as u32),
     },
     PerryLayoutKey {
         atom: std::ptr::addr_of!(SQLITE_ATOM_3),
         slot: 3,
         attrs: 0,
-        _pad: [0; 3],
+        _pad: 0,
+        off: crate::object::layout_desc::layout_key_off(3 as u32),
     },
     PerryLayoutKey {
         atom: std::ptr::addr_of!(SQLITE_ATOM_4),
         slot: 4,
         attrs: 0,
-        _pad: [0; 3],
+        _pad: 0,
+        off: crate::object::layout_desc::layout_key_off(4 as u32),
     },
 ];
 static SQLITE_COLUMN_INDEX: [u32; 16] = [
@@ -1524,6 +1600,8 @@ pub static mut SQLITE_COLUMN_METADATA: PerryLayoutDesc = PerryLayoutDesc {
     class_id: 0,
     parent_class_id: 0,
     methods: std::ptr::null(),
+    gc_header_word: crate::object::layout_desc::layout_gc_header_word(5),
+    _tail_pad: [0; 32],
 };
 wasm_layout!(SQLITE_COLUMN_METADATA);
 

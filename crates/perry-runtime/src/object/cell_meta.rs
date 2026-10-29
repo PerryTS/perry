@@ -99,7 +99,7 @@ pub(crate) unsafe fn cell_has_meta_edge(user_ptr: usize) -> bool {
 /// keeps ECMA-262 insertion order for free because that is what an object's
 /// `keys_array` already does.
 pub(crate) unsafe fn cell_expando_ensure(user_ptr: usize) -> Option<*mut ObjectHeader> {
-    let meta = object_meta_ensure_for_cell(user_ptr)?;
+    let meta = object_meta_ensure_for_cell(user_ptr, MetaReason::CellExpando)?;
     if (*meta).expando != 0 {
         return Some(
             crate::value::JSValue::from_bits((*meta).expando).as_pointer::<ObjectHeader>()
@@ -112,7 +112,7 @@ pub(crate) unsafe fn cell_expando_ensure(user_ptr: usize) -> Option<*mut ObjectH
     let owner = scope.root_raw_mut_ptr(user_ptr as *mut u8);
     let bag = js_object_alloc(0, 0);
     let user_ptr = owner.get_raw_mut_ptr::<u8>() as usize;
-    let meta = object_meta_ensure_for_cell(user_ptr)?;
+    let meta = object_meta_ensure_for_cell(user_ptr, MetaReason::CellExpando)?;
     if (*meta).expando != 0 {
         return Some(
             crate::value::JSValue::from_bits((*meta).expando).as_pointer::<ObjectHeader>()

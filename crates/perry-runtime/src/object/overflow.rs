@@ -263,7 +263,11 @@ pub(crate) unsafe fn ensure_adding(obj: *mut ObjectHeader, adding: Option<u32>) 
     super::layout_desc::diag_note_install(obj);
     let scope = crate::gc::RuntimeHandleScope::new();
     let owner = scope.root_raw_mut_ptr(obj);
-    super::object_meta_ensure(obj);
+    // A1_UNPROVEN: a user object whose keys overflow, no type test (kind-A/B question for S0b-S0e).
+    super::object_meta_ensure(
+        super::MetaObj::runtime_born(obj),
+        super::MetaReason::Overflow,
+    );
     let obj = owner.get_raw_mut_ptr::<ObjectHeader>();
     let shape = super::shapes::object_shape_descriptor(obj).unwrap();
     let prefix = shape

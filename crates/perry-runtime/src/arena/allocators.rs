@@ -576,6 +576,32 @@ pub fn arena_alloc_gc(size: usize, align: usize, obj_type: u8) -> *mut u8 {
     arena_alloc_gc_slow(size, align, obj_type, total)
 }
 
+/// [`arena_alloc_gc`] for an ordinary object of `slots` slots whose idle
+/// `GcHeader` image (`PerryLayoutDesc.gc_header_word`: type, arena flag, total
+/// size) is already known. The size comes from the slot count the caller also
+/// fills by; the image is read through the pointer on the fast arm only, so the
+/// large and slow arms pay nothing for it.
+///
+/// # Safety
+/// `word` points at the descriptor's header image.
+pub(crate) unsafe fn arena_alloc_gc_object_word(word: *const u64, slots: u32) -> *mut u8 {
+    use crate::gc::GC_TYPE_OBJECT;
+    let size = std::mem::size_of::<crate::object::ObjectHeader>() + slots as usize * 8;
+    let total = gc_padded_total_size(size, 8);
+    debug_assert_eq!(total, (*word >> 32) as usize);
+    super::alloc_sample::note(total, GC_TYPE_OBJECT);
+    if !crate::gc::is_large_object_total_size_for_type(total, GC_TYPE_OBJECT)
+        && !crate::gc::hot_arena_free_list_nonempty().get()
+    {
+        let raw = try_inline_bump(total, 8);
+        if !raw.is_null() {
+            // Read only here: the large and slow arms never need the image.
+            return init_young_header_word(raw, *word, GC_TYPE_OBJECT);
+        }
+    }
+    arena_alloc_gc_slow(size, 8, GC_TYPE_OBJECT, total)
+}
+
 /// The current live birth color is read at the allocation, never cached
 /// across a poll. Black births still seed the existing marking worklist,
 /// and kinds requiring exact starts still update the R2 region bitmap.
@@ -593,6 +619,20 @@ unsafe fn init_young_header(raw: *mut u8, total: usize, obj_type: u8) -> *mut u8
         size: total as u32,
     });
     // GC_STORE_AUDIT(POINTER_FREE): init_gc_header writes exactly8 bytes of GcHeader (type, flags, reserved, scalar size) as u64; immediately calls gc_note_black_birth then record_arena_object_start.
+    raw.cast::<u64>().write(image);
+    crate::gc::gc_note_black_birth(header);
+    record_arena_object_start(raw as usize, obj_type);
+    raw.add(GC_HEADER_SIZE)
+}
+
+/// [`init_young_header`] from an idle image (`PerryLayoutDesc.gc_header_word`):
+/// the live birth colour is ORed into the flags byte here, at the allocation.
+#[inline(always)]
+unsafe fn init_young_header_word(raw: *mut u8, idle_image: u64, obj_type: u8) -> *mut u8 {
+    use crate::gc::{GcHeader, GC_HEADER_SIZE};
+    let header = raw as *mut GcHeader;
+    let image = idle_image | (u64::from(crate::gc::gc_birth_extra_flags()) << 8);
+    // GC_STORE_AUDIT(POINTER_FREE): the same eight-byte GcHeader image as `init_young_header`.
     raw.cast::<u64>().write(image);
     crate::gc::gc_note_black_birth(header);
     record_arena_object_start(raw as usize, obj_type);

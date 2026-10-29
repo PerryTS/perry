@@ -173,7 +173,13 @@ pub(crate) fn register_this_to_handle_alias(this_arg: f64, result: f64, composit
     let scope = crate::gc::RuntimeHandleScope::new();
     let object = scope.root_raw_mut_ptr(obj_addr as *mut super::ObjectHeader);
     let result = scope.root_nanbox_f64(result);
-    object.with_mut_ptr(|obj: *mut super::ObjectHeader| unsafe { super::object_meta_ensure(obj) });
+    // A1_UNPROVEN: plain_object_addr_of(this_arg): a JS value (kind-A/B question for S0b-S0e).
+    object.with_mut_ptr(|obj: *mut super::ObjectHeader| unsafe {
+        super::object_meta_ensure(
+            super::MetaObj::runtime_born(obj),
+            super::MetaReason::NativeThisAlias,
+        )
+    });
     let record = crate::array::js_array_alloc_with_length_exact(ALIAS_SLOTS);
     let record = scope.root_raw_mut_ptr(record);
     record.with_mut_ptr(|r| {

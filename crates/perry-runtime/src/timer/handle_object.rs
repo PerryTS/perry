@@ -542,7 +542,10 @@ pub(super) fn timer_object(id: i64, kind: CallbackTimerKind) -> i64 {
     }
     let handle = scope.root_raw_mut_ptr(object);
     handle.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj| unsafe {
-        let meta = crate::object::object_meta_ensure(obj);
+        let meta = crate::object::object_meta_ensure(
+            crate::object::MetaObj::runtime_born(obj),
+            crate::object::MetaReason::RuntimeHandle,
+        );
         debug_assert!(!meta.is_null(), "a timer handle must carry its meta");
         if !meta.is_null() {
             (*meta).native_state = timer_state_word(id, kind);

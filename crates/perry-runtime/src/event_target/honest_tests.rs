@@ -126,7 +126,12 @@ fn class_hosts_do_not_acquire_instance_state() {
             unsafe { crate::object::shaped_symbols::entries(host as usize, true).is_empty() },
             "a class host must not gain an instance brand"
         );
-        let meta = unsafe { crate::object::object_meta_ensure(host) };
+        let meta = unsafe {
+            crate::object::object_meta_ensure(
+                crate::object::MetaObj::runtime_born(host),
+                crate::object::MetaReason::RuntimeHandle,
+            )
+        };
         assert_eq!(unsafe { (*meta).native_state }, 0);
     }
 }

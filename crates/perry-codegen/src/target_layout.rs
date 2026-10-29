@@ -157,6 +157,26 @@ pub fn object_header_size_bytes(_target_triple: &str) -> u64 {
     16
 }
 
+/// `PerryLayoutKey.off` of slot `slot`: the absolute byte offset from the
+/// object, which the runtime's slot readers add instead of `header + 8 * slot`.
+pub fn layout_key_off(target_triple: &str, slot: u32) -> u64 {
+    object_header_size_bytes(target_triple) + u64::from(slot) * 8
+}
+
+/// Header plus `slot_count` slots (the size of a layout birth after the `GcHeader`).
+pub fn layout_slots_end(target_triple: &str, slot_count: u32) -> u64 {
+    layout_key_off(target_triple, slot_count)
+}
+
+/// `PerryLayoutDesc.gc_header_word`: the idle `GcHeader` image of a layout
+/// birth (`GC_TYPE_OBJECT`, `GC_FLAG_ARENA`, no reserved bits, total size);
+/// the runtime ORs the live birth colour in.
+pub fn layout_gc_header_word(target_triple: &str, slot_count: u32) -> u64 {
+    const GC_FLAG_ARENA: u64 = 0x02;
+    let total = 8 + layout_slots_end(target_triple, slot_count);
+    u64::from(crate::runtime_abi::GC_TYPE_OBJECT) | (GC_FLAG_ARENA << 8) | (total << 32)
+}
+
 /// Byte offset of `ObjectHeader::meta` — the last word of the header — for
 /// the target.
 ///
@@ -647,7 +667,7 @@ mod dense_layout_tests {
 #[test]
 fn emitted_descriptor_type_has_exact_llvm_target_layout() {
     use inkwell::{context::Context, targets::TargetData};
-    for (layout, size, identity) in [("e-p:64:64-i64:64", 88, 72), ("e-p:32:32-i64:64", 72, 56)] {
+    for (layout, size, identity) in [("e-p:64:64-i64:64", 128, 72), ("e-p:32:32-i64:64", 112, 56)] {
         let context = Context::create();
         let ir = format!(
             "%Desc = type {}\n@descriptor = global %Desc zeroinitializer\n",
@@ -661,5 +681,14 @@ fn emitted_descriptor_type_has_exact_llvm_target_layout() {
         assert_eq!(data.offset_of_element(&ty, 15), Some(identity));
         assert_eq!(data.offset_of_element(&ty, 16), Some(identity + 4));
         assert_eq!(data.offset_of_element(&ty, 17), Some(identity + 8));
+        let lp64 = size == 128;
+        for (element, lp, ilp) in [(
+            18,
+            perry_abi::LAYOUT_DESC_GC_HEADER_WORD_OFFSET_LP64,
+            perry_abi::LAYOUT_DESC_GC_HEADER_WORD_OFFSET_ILP32,
+        )] {
+            let want = if lp64 { lp } else { ilp };
+            assert_eq!(data.offset_of_element(&ty, element), Some(want as u64));
+        }
     }
 }

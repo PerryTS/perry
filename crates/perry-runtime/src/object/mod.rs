@@ -747,6 +747,10 @@ mod call_method_depth;
 pub(crate) use call_method_depth::call_method_depth;
 #[cfg(test)]
 pub(crate) use call_method_depth::test_enter_catch_method;
+#[cfg(test)]
+mod a1_death_tests;
+mod header;
+pub(crate) use header::*;
 mod meta_accessors;
 use call_method_depth::CallMethodDepthGuard;
 pub(crate) use call_method_depth::{call_method_depth_check_marks, call_method_depth_unwind_to};
@@ -1723,7 +1727,8 @@ pub(crate) unsafe fn object_keys_and_live_slots(
         return None;
     }
 
-    shapes::object_shape_record(obj).map(|record| (record.keys_view(), record.live_inline_slot_count()))
+    shapes::object_shape_record(obj)
+        .map(|record| (record.keys_view(), record.live_inline_slot_count()))
 }
 
 pub(crate) mod meta_flags;

@@ -174,6 +174,17 @@ pub const LAYOUT_DESC_ID_OFFSET_LP64: usize = 72;
 pub const LAYOUT_DESC_ID_OFFSET_ILP32: usize = 56;
 pub const LAYOUT_DESC_SIZE_LP64: usize = 80;
 pub const LAYOUT_DESC_SIZE_ILP32: usize = 64;
+/// `PerryLayoutKey.off`: the key's absolute slot offset from the object (u16).
+pub const LAYOUT_KEY_OFF_OFFSET: usize = 14;
+/// Offsets of the A1 precomputes (`gc_header_word`) appended after `image_keys`
+/// (`i64` aligned to 8 on every target).
+pub const LAYOUT_DESC_GC_HEADER_WORD_OFFSET_LP64: usize = 88;
+pub const LAYOUT_DESC_GC_HEADER_WORD_OFFSET_ILP32: usize = 72;
+/// The descriptor is padded to 128 bytes on LP64 (112 on ILP32): the runtime indexes the descriptor
+/// sections by `(address - start) / size`, and every size but a power of two costs more
+/// instructions than the old 88 did, which startup may not pay (exact Ir).
+pub const LAYOUT_DESC_FULL_SIZE_LP64: usize = 128;
+pub const LAYOUT_DESC_FULL_SIZE_ILP32: usize = 112;
 
 /// Image metadata, never a closure or managed edge.
 #[repr(C)]
