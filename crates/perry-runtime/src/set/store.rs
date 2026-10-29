@@ -95,6 +95,10 @@ pub(crate) unsafe fn refresh_elements_alias(set: *mut SetHeader) {
 
 /// Values are part of the GC allocation; only native buffers need a drop.
 /// Idempotent cleanup also serves arena destruction without consulting TLS.
+/// A call from the arena's thread-exit walk and the sweep, as for Map stores:
+/// inlined, its boxed index and log drops add register pressure to every
+/// arena drop.
+#[inline(never)]
 pub(crate) unsafe fn finalize_owned_store(store: *mut u8, accounting: bool) {
     let store = &mut *store.cast::<SetStore>();
     if store.elements.is_null() {

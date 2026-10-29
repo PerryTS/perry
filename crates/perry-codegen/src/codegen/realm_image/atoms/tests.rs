@@ -108,14 +108,21 @@ fn symbol_identities_are_unique_and_disjoint_from_dynamic_births() {
     let identities = symbol_identities().unwrap();
     let ids = identities.values().copied().collect::<BTreeSet<_>>();
     assert_eq!(ids.len(), identities.len());
+    // Image ranks are below IMAGE_SYMBOL_ORDINALS; every dynamic birth ranks above.
     assert!(ids
         .iter()
-        .all(|id| id & perry_abi::IMAGE_SYMBOL_ID_BIT != 0));
+        .all(|&id| perry_abi::symbol_birth_rank(id) < perry_abi::IMAGE_SYMBOL_ORDINALS));
+    assert!(
+        perry_abi::symbol_birth_rank(perry_abi::symbol_identity(1))
+            > perry_abi::IMAGE_SYMBOL_ORDINALS
+    );
     for (index, name) in perry_abi::WELL_KNOWN_SYMBOLS.iter().enumerate() {
+        let id = identities[&format!("@@{name}")];
         assert_eq!(
-            identities[&format!("@@{name}")],
-            perry_abi::IMAGE_SYMBOL_ID_BIT | index as u64
+            id,
+            perry_abi::symbol_identity(perry_abi::IMAGE_SYMBOL_ORDINAL_BASE + index as u64)
         );
+        assert_eq!(perry_abi::symbol_birth_rank(id), index as u64);
     }
     assert_eq!(
         symbol_description("@@iterator").unwrap(),

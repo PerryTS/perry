@@ -564,34 +564,18 @@ pub fn symbol_on_object_for_test(owner: usize, sym: usize) -> Option<bool> {
 }
 
 // The counter provides uniqueness only; symbol publication has its own locks.
-const ID_MASK: u64 = crate::codegen_abi::IMAGE_SYMBOL_ID_BIT - 1;
+// Dynamic births count up from 1; image symbols own the top ordinals.
 static NEXT_SYMBOL_ID: AtomicU64 = AtomicU64::new(1);
 
 fn next_id() -> u64 {
-    // MurmurHash3-style bijective finalizer over 63 bits: it spreads sequential
-    // creation ids across the power-of-two buckets shared with string property
-    // hashes, and keeps dynamic ids out of the image half (IMAGE_SYMBOL_ID_BIT).
-    // It is computed once at birth; every key path still loads the same id.
-    let mut id = NEXT_SYMBOL_ID.fetch_add(1, Ordering::Relaxed);
-    assert!(
-        id < crate::codegen_abi::IMAGE_SYMBOL_ID_BIT,
-        "symbol identity space exhausted"
-    );
-    id ^= id >> 33;
-    id = id.wrapping_mul(0xff51afd7ed558ccd) & ID_MASK;
-    id ^= id >> 33;
-    id = id.wrapping_mul(0xc4ceb9fe1a85ec53) & ID_MASK;
-    id ^ (id >> 33)
+    // Computed once at birth; every key path still loads the same id.
+    crate::codegen_abi::symbol_identity(NEXT_SYMBOL_ID.fetch_add(1, Ordering::Relaxed))
 }
 
 /// Recover creation order for the defensive own-symbol enumeration fallback.
-/// Odd multiplication and xor-shifts are invertible modulo 2^63, so mixing loses no identity.
-fn creation_order(mut id: u64) -> u64 {
-    id ^= id >> 33;
-    id = id.wrapping_mul(0x9cb4b2f8129337db) & ID_MASK;
-    id ^= id >> 33;
-    id = id.wrapping_mul(0x4f74430c22a54005) & ID_MASK;
-    id ^ (id >> 33)
+/// The mix is invertible, so it loses no identity; image symbols rank first.
+fn creation_order(id: u64) -> u64 {
+    crate::codegen_abi::symbol_birth_rank(id)
 }
 
 pub(crate) unsafe fn str_from_header(ptr: *const StringHeader) -> Option<String> {

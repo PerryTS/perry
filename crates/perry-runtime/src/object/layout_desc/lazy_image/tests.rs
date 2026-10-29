@@ -1,5 +1,7 @@
 use super::*;
-use crate::codegen_abi::{LayoutRow, PerryLayoutImageV1, ShapeObjectKind, NATIVE_LAYOUT_ROWS};
+use crate::codegen_abi::{
+    LayoutRow, PerryLayoutImageV1, PerryProgramTableV1, ShapeObjectKind, NATIVE_LAYOUT_ROWS,
+};
 
 // Existing unit fixtures own rows below 4096; this image has a separate span.
 const FIRST: u32 = 4096;
@@ -56,12 +58,18 @@ fn lazy_row_publishes_once_per_agent_without_a_descriptor_scan() {
         std::thread::spawn(|| unsafe {
             crate::object::class_image::enter_current_thread_image();
             let facts = std::ptr::addr_of!(FACTS).cast::<PerryLayoutDesc>();
-            crate::object::class_image::bind_layout_image(PerryLayoutImageV1 {
-                static_rows: FIRST + 3,
-                family_count: FIRST - NATIVE_LAYOUT_ROWS,
+            let program = Box::leak(Box::new(PerryProgramTableV1 {
                 lazy_first: FIRST,
                 lazy_count: 3,
                 lazy_layouts: facts.cast(),
+                ..PerryProgramTableV1::EMPTY
+            }));
+            // The unit fixtures' families follow the native rows; the span
+            // follows them.
+            crate::object::class_image::bind_layout_image(PerryLayoutImageV1 {
+                static_rows: FIRST + 3,
+                family_count: FIRST - NATIVE_LAYOUT_ROWS,
+                program,
                 ..PerryLayoutImageV1::RUNTIME
             });
             crate::test_support::bootstrap_test_thread();

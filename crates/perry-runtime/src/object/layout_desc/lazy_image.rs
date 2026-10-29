@@ -3,19 +3,26 @@
 //! there is no descriptor registry, row-to-pointer table or section scan.
 use super::*;
 
+/// This agent's program table, when its image carries a lazy span.
+#[inline(always)]
+fn span() -> Option<&'static crate::codegen_abi::PerryProgramTableV1> {
+    // SAFETY: a bound image names its program's immutable table.
+    let table = unsafe { &*super::super::class_image::agent_layout_image().program };
+    (table.lazy_count != 0).then_some(table)
+}
+
 /// The descriptor for a lazy static row of this agent's executable image.
 #[inline]
 fn descriptor(word: u32) -> Option<*const PerryLayoutDesc> {
-    let image = super::super::class_image::agent_layout_image();
+    let span = span()?;
     let row = LayoutWord(word).row().0;
-    let offset = row.checked_sub(image.lazy_first)?;
-    if offset >= image.lazy_count {
+    let offset = row.checked_sub(span.lazy_first)?;
+    if offset >= span.lazy_count {
         return None;
     }
-    // The validated image header owns this contiguous array for its lifetime.
+    // The validated program table owns this contiguous array for its lifetime.
     let desc = unsafe {
-        image
-            .lazy_layouts
+        span.lazy_layouts
             .cast::<PerryLayoutDesc>()
             .add(offset as usize)
     };
@@ -28,16 +35,17 @@ pub(super) unsafe fn contains(desc: *const PerryLayoutDesc) -> bool {
     descriptor((*desc).layout_id).is_some_and(|owned| std::ptr::eq(owned, desc))
 }
 
-/// The byte range of the lazy span inside the layout section `[start, end)`,
-/// or an empty range at `end`. The startup registrar walks around it.
+/// The byte range of `span`'s descriptors inside the layout section
+/// `[start, end)`, or an empty range at `end`. The startup registrar walks
+/// around it.
 #[inline]
-pub(super) fn section_span(start: usize, end: usize) -> (usize, usize) {
-    let image = super::super::class_image::agent_layout_image();
-    if image.lazy_count == 0 {
-        return (end, end);
-    }
-    let first = image.lazy_layouts as usize;
-    let last = first + image.lazy_count as usize * std::mem::size_of::<PerryLayoutDesc>();
+pub(super) fn section_span(
+    span: &crate::codegen_abi::PerryProgramTableV1,
+    start: usize,
+    end: usize,
+) -> (usize, usize) {
+    let first = span.lazy_layouts as usize;
+    let last = first + span.lazy_count as usize * std::mem::size_of::<PerryLayoutDesc>();
     if first < start || last > end {
         return (end, end);
     }

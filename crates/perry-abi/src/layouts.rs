@@ -98,20 +98,12 @@ pub struct PerryLayoutImageV1 {
     pub static_rows: u32,
     pub family_first: u32,
     pub family_count: u32,
-    /// The program's static literal seeds as image data (WRT step 2,
-    /// [`PerryStaticSeedTableV1`]); null in the runtime's own image.
-    pub seeds: *const PerryStaticSeedTableV1,
-    /// Contiguous static rows whose descriptor facts publish on first use.
-    /// The band indexes descriptor values directly, never pointers or ids.
-    pub lazy_first: u32,
-    pub lazy_count: u32,
-    /// `lazy_count` consecutive PerryLayoutDesc records, in row order.
-    /// Runtime descriptor aliases and realm receivers name these same facts.
-    pub lazy_layouts: *const u8,
-    /// Exclusive end of compiler-assigned prototype serials, reserved before births.
-    pub prototype_serial_end: u64,
+    /// The program's table (WRT step 2, [`PerryProgramTableV1`]): its static
+    /// literal seeds and its lazy descriptor span. Never null; the runtime's own
+    /// image names an empty table.
+    pub program: *const PerryProgramTableV1,
 }
-// The seed table is immutable program data every agent reads.
+// The program table is immutable program data every agent reads.
 unsafe impl Send for PerryLayoutImageV1 {}
 unsafe impl Sync for PerryLayoutImageV1 {}
 impl PerryLayoutImageV1 {
@@ -120,39 +112,27 @@ impl PerryLayoutImageV1 {
         static_rows: NATIVE_LAYOUT_ROWS,
         family_first: NATIVE_LAYOUT_ROWS,
         family_count: 0,
-        seeds: core::ptr::null(),
-        lazy_first: 0,
-        lazy_count: 0,
-        lazy_layouts: core::ptr::null(),
-        prototype_serial_end: crate::intrinsic_serials::FIRST_DYNAMIC_PROTOTYPE_SERIAL,
+        program: &PerryProgramTableV1::EMPTY,
     };
-    pub const fn valid(self) -> bool {
-        self.abi_version == LAYOUT_WORD_ABI_VERSION
-            && self.static_rows >= NATIVE_LAYOUT_ROWS
+    /// The header's facts with its program table's span. Without a span the
+    /// class families follow the native rows; a span lies in the static rows,
+    /// apart from the families ([`PerryProgramTableV1::valid_span`]).
+    ///
+    /// # Safety
+    /// `program` is null or names a program table.
+    pub const unsafe fn valid(self) -> bool {
+        if self.abi_version != LAYOUT_WORD_ABI_VERSION || self.program.is_null() {
+            return false;
+        }
+        let table = &*self.program;
+        self.static_rows >= NATIVE_LAYOUT_ROWS
             && self.static_rows <= LAYOUT_ROW_LIMIT
-            && if self.lazy_count == 0 {
-                // No lazy span: the families follow the native rows, and the
-                // span pointer and serial end are never read.
+            && if table.lazy_count == 0 {
                 self.family_first == NATIVE_LAYOUT_ROWS
                     && self.family_count <= self.static_rows - self.family_first
             } else {
-                self.valid_lazy_span()
+                table.valid_span(self)
             }
-    }
-
-    /// The facts of an image that carries a lazy descriptor span.
-    const fn valid_lazy_span(self) -> bool {
-        self.prototype_serial_end >= crate::intrinsic_serials::FIRST_DYNAMIC_PROTOTYPE_SERIAL
-            && self.prototype_serial_end < (1 << 32)
-            && self.family_first >= NATIVE_LAYOUT_ROWS
-            && self.family_first <= self.static_rows
-            && self.family_count <= self.static_rows - self.family_first
-            && self.lazy_first <= self.static_rows
-            && self.lazy_count <= self.static_rows - self.lazy_first
-            && !self.lazy_layouts.is_null()
-            && (self.family_count == 0
-                || self.lazy_first + self.lazy_count <= self.family_first
-                || self.lazy_first >= self.family_first + self.family_count)
     }
 }
 
@@ -184,19 +164,66 @@ const _: () = assert!(core::mem::size_of::<PerryStaticSeedV1>() == 64);
 #[cfg(target_pointer_width = "32")]
 const _: () = assert!(core::mem::size_of::<PerryStaticSeedV1>() == 48);
 
-/// The program's seed table, named by [`PerryLayoutImageV1::seeds`]: `count`
-/// seeds follow the header.
+/// The program's table, named by [`PerryLayoutImageV1::program`]: `count`
+/// static seeds follow the header. The header also names the program's lazy
+/// descriptor span: contiguous static rows whose descriptor facts publish on
+/// first use. The span indexes descriptor values directly, never pointers or
+/// ids. Only the startup registrar and a row's first touch read it, so it
+/// stays out of the agent's thread-local copy of the image header.
 #[repr(C)]
-pub struct PerryStaticSeedTableV1 {
+pub struct PerryProgramTableV1 {
     pub count: u32,
+    pub lazy_count: u32,
+    pub lazy_first: u32,
     pub _pad: u32,
+    /// Exclusive end of compiler-assigned prototype serials, reserved before births.
+    pub prototype_serial_end: u64,
+    /// `lazy_count` consecutive PerryLayoutDesc records, in row order.
+    /// Runtime descriptor aliases and realm receivers name these same facts.
+    pub lazy_layouts: *const u8,
     pub seeds: [PerryStaticSeedV1; 0],
 }
-impl PerryStaticSeedTableV1 {
+// Immutable program data every agent reads.
+unsafe impl Send for PerryProgramTableV1 {}
+unsafe impl Sync for PerryProgramTableV1 {}
+impl PerryProgramTableV1 {
+    /// The table of an image without a program: no seeds, no lazy span.
+    pub const EMPTY: Self = Self {
+        count: 0,
+        lazy_count: 0,
+        lazy_first: 0,
+        _pad: 0,
+        prototype_serial_end: crate::intrinsic_serials::FIRST_DYNAMIC_PROTOTYPE_SERIAL,
+        lazy_layouts: core::ptr::null(),
+        seeds: [],
+    };
+
     /// # Safety
     /// `self` is the program's table: `count` seeds follow the header.
     pub unsafe fn seeds(&self) -> &[PerryStaticSeedV1] {
         core::slice::from_raw_parts(self.seeds.as_ptr(), self.count as usize)
+    }
+
+    /// The span's facts under `image` (rows in u64, so no sum wraps): the
+    /// span and the class families lie in the static rows and do not overlap.
+    pub const fn valid_span(&self, image: PerryLayoutImageV1) -> bool {
+        let rows = image.static_rows as u64;
+        let (first, end) = (
+            self.lazy_first as u64,
+            self.lazy_first as u64 + self.lazy_count as u64,
+        );
+        let (family, family_end) = (
+            image.family_first as u64,
+            image.family_first as u64 + image.family_count as u64,
+        );
+        self.prototype_serial_end >= crate::intrinsic_serials::FIRST_DYNAMIC_PROTOTYPE_SERIAL
+            && self.prototype_serial_end < (1 << 32)
+            && !self.lazy_layouts.is_null()
+            && first >= NATIVE_LAYOUT_ROWS as u64
+            && end <= rows
+            && family >= NATIVE_LAYOUT_ROWS as u64
+            && family_end <= rows
+            && (image.family_count == 0 || end <= family || first >= family_end)
     }
 }
 
@@ -433,17 +460,18 @@ const _: () = {
     assert!(align_of::<PerryStaticLayoutRequestV1>() == 4);
     assert!(offset_of!(PerryStaticLayoutRequestV1, layout_word) == 4);
     assert!(
-        size_of::<PerryLayoutImageV1>() == 32 + 2 * size_of::<usize>()
-            && align_of::<PerryLayoutImageV1>() == 8
+        size_of::<PerryLayoutImageV1>() == 16 + size_of::<usize>()
+            && align_of::<PerryLayoutImageV1>() == size_of::<usize>()
     );
     assert!(offset_of!(PerryLayoutImageV1, static_rows) == 4);
     assert!(offset_of!(PerryLayoutImageV1, family_first) == 8);
     assert!(offset_of!(PerryLayoutImageV1, family_count) == 12);
-    assert!(offset_of!(PerryLayoutImageV1, seeds) == 16);
-    assert!(offset_of!(PerryLayoutImageV1, lazy_first) == 16 + size_of::<usize>());
-    assert!(offset_of!(PerryLayoutImageV1, lazy_count) == 20 + size_of::<usize>());
-    assert!(offset_of!(PerryLayoutImageV1, lazy_layouts) == 24 + size_of::<usize>());
-    assert!(offset_of!(PerryLayoutImageV1, prototype_serial_end) == 24 + 2 * size_of::<usize>());
+    assert!(offset_of!(PerryLayoutImageV1, program) == 16);
+    assert!(offset_of!(PerryProgramTableV1, lazy_count) == 4);
+    assert!(offset_of!(PerryProgramTableV1, lazy_first) == 8);
+    assert!(offset_of!(PerryProgramTableV1, prototype_serial_end) == 16);
+    assert!(offset_of!(PerryProgramTableV1, lazy_layouts) == 24);
+    assert!(offset_of!(PerryProgramTableV1, seeds) == 32);
 };
 #[cfg(test)]
 mod tests {
@@ -451,37 +479,45 @@ mod tests {
 
     #[test]
     fn lazy_descriptor_span_is_checked_without_overflow() {
-        let image = PerryLayoutImageV1 {
-            static_rows: NATIVE_LAYOUT_ROWS + 4,
-            family_first: NATIVE_LAYOUT_ROWS + 3,
-            family_count: 1,
-            lazy_first: NATIVE_LAYOUT_ROWS,
-            lazy_count: 3,
-            lazy_layouts: core::ptr::without_provenance(4096),
-            ..PerryLayoutImageV1::RUNTIME
+        let facts = core::ptr::without_provenance(4096);
+        let table = |lazy_first, lazy_count, lazy_layouts| PerryProgramTableV1 {
+            lazy_first,
+            lazy_count,
+            lazy_layouts,
+            ..PerryProgramTableV1::EMPTY
         };
-        assert!(image.valid());
-        assert!(!PerryLayoutImageV1 {
-            lazy_count: 4,
-            ..image
+        let image =
+            |program: &PerryProgramTableV1, family_first, family_count| PerryLayoutImageV1 {
+                static_rows: NATIVE_LAYOUT_ROWS + 4,
+                family_first,
+                family_count,
+                program,
+                ..PerryLayoutImageV1::RUNTIME
+            };
+        let n = NATIVE_LAYOUT_ROWS;
+        let span = table(n, 3, facts);
+        unsafe {
+            assert!(PerryLayoutImageV1::RUNTIME.valid());
+            assert!(image(&span, n + 3, 1).valid());
+            // A span after the families, as the unit-test runtime places it.
+            assert!(image(&table(n + 1, 3, facts), n, 1).valid());
+            assert!(!image(&span, n + 2, 1).valid());
+            assert!(!image(&span, n + 3, 2).valid());
+            assert!(!image(&table(n, 5, facts), n + 5, 0).valid());
+            assert!(!image(&table(u32::MAX, 3, facts), n + 3, 1).valid());
+            assert!(!image(&table(n, u32::MAX, facts), n + 3, 1).valid());
+            assert!(!image(&table(n, 3, facts), u32::MAX, u32::MAX).valid());
+            assert!(!image(&table(n, 3, core::ptr::null()), n + 3, 1).valid());
+            // Without a span the families follow the native rows.
+            let empty = PerryProgramTableV1::EMPTY;
+            assert!(image(&empty, n, 4).valid());
+            assert!(!image(&empty, n + 1, 0).valid());
+            assert!(!PerryLayoutImageV1 {
+                program: core::ptr::null(),
+                ..PerryLayoutImageV1::RUNTIME
+            }
+            .valid());
         }
-        .valid());
-        assert!(!PerryLayoutImageV1 {
-            lazy_first: u32::MAX,
-            ..image
-        }
-        .valid());
-        assert!(!PerryLayoutImageV1 {
-            lazy_count: u32::MAX,
-            ..image
-        }
-        .valid());
-        assert!(!PerryLayoutImageV1 {
-            lazy_layouts: core::ptr::null(),
-            prototype_serial_end: crate::intrinsic_serials::FIRST_DYNAMIC_PROTOTYPE_SERIAL,
-            ..image
-        }
-        .valid());
     }
 
     #[test]
@@ -524,7 +560,7 @@ mod tests {
     fn catalog_is_sorted_and_image_is_bounded() {
         assert!(NATIVE_LAYOUT_DESCRIPTORS.windows(2).all(|w| w[0] < w[1]));
         assert_eq!(NATIVE_LAYOUT_ROWS, 125);
-        assert!(PerryLayoutImageV1::RUNTIME.valid());
+        assert!(unsafe { PerryLayoutImageV1::RUNTIME.valid() });
         for (i, name) in NATIVE_LAYOUT_DESCRIPTORS.iter().enumerate() {
             assert_eq!(native_layout_row(name).0, 11 + i as u32);
         }

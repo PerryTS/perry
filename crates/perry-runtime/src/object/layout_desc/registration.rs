@@ -1,42 +1,67 @@
 use super::*;
 
+/// The startup registrar of a runtime with no compiled entry (Rust tests).
+#[cfg(test)]
 pub(crate) fn register_static_layouts() {
+    // SAFETY: a bound layout image names its program's table.
+    register_static_layouts_in(unsafe { &*super::super::class_image::layout_image().program });
+}
+
+/// [`register_static_layouts`] for `program`, the bound image's table the
+/// caller already holds (`js_shape_run_static_seed`).
+#[inline(always)]
+pub(crate) fn register_static_layouts_in(program: &crate::codegen_abi::PerryProgramTableV1) {
     #[cfg(target_family = "wasm")]
     assert!(
         image_layouts().next().is_some(),
         "Wasm layout constructors did not run"
     );
-    // A lazy image span publishes at its rows' first touch, never here. It is
-    // one contiguous run of the section, so the walk goes around it: no row
-    // pays a test, and a program without the span walks exactly as before.
-    let (start, end) = layout_bounds();
-    let (lazy_start, lazy_end) = super::lazy_image::section_span(start, end);
-    let size = std::mem::size_of::<PerryLayoutDesc>();
+    // A lazy image span publishes at its rows' first touch, never here; a
+    // program with one takes the walk around it, a program without walks
+    // exactly as before.
+    if program.lazy_count != 0 {
+        return unsafe { register_around_lazy_span(program) };
+    }
     unsafe {
-        for (index, desc) in records::<PerryLayoutDesc>((start, lazy_start)).enumerate() {
+        for (index, desc) in image_layouts().enumerate() {
             if !register_static_row(index, desc) {
+                break;
+            }
+        }
+    }
+}
+
+/// The startup walk of an image with a lazy span. The span is one contiguous
+/// run of the section, so the walk goes around it and no row pays a test.
+#[cold]
+#[inline(never)]
+unsafe fn register_around_lazy_span(program: &crate::codegen_abi::PerryProgramTableV1) {
+    let (start, end) = layout_bounds();
+    let (lazy_start, lazy_end) = super::lazy_image::section_span(program, start, end);
+    let size = std::mem::size_of::<PerryLayoutDesc>();
+    for (index, desc) in records::<PerryLayoutDesc>((start, lazy_start)).enumerate() {
+        if !register_static_row(index, desc) {
+            return;
+        }
+    }
+    if lazy_end != end {
+        // Rows after the span keep their section index.
+        let after = (lazy_end - start) / size;
+        for (index, desc) in records::<PerryLayoutDesc>((lazy_end, end)).enumerate() {
+            if !register_static_row(after + index, desc) {
                 return;
             }
         }
-        if lazy_end != end {
-            // Rows after the span keep their section index.
-            let after = (lazy_end - start) / size;
-            for (index, desc) in records::<PerryLayoutDesc>((lazy_end, end)).enumerate() {
-                if !register_static_row(after + index, desc) {
-                    return;
-                }
-            }
-        }
-        #[cfg(target_family = "wasm")]
+    }
+    #[cfg(target_family = "wasm")]
+    {
+        let section = (end.saturating_sub(start)) / size;
+        for (index, item) in inventory::iter::<crate::wasm_image::Layout>
+            .into_iter()
+            .enumerate()
         {
-            let section = (end.saturating_sub(start)) / size;
-            for (index, item) in inventory::iter::<crate::wasm_image::Layout>
-                .into_iter()
-                .enumerate()
-            {
-                if !register_static_row(section + index, item.0) {
-                    return;
-                }
+            if !register_static_row(section + index, item.0) {
+                return;
             }
         }
     }
