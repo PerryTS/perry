@@ -44,7 +44,7 @@ extern "C" fn zlib_closed_getter(
 }
 
 #[inline(always)]
-#[rustfmt::skip] fn native_parent(module: &str, name: &str) -> Option<(&'static str, &'static str)> {
+fn native_parent(module: &str, name: &str) -> Option<fn() -> f64> {
     Some(match (module, name) {
         ("child_process", "ChildProcess")
         | ("cluster", "Worker")
@@ -56,41 +56,91 @@ extern "C" fn zlib_closed_getter(
         | ("inspector", "Session")
         | ("net", "Server")
         | ("worker_threads", "Worker")
-        | ("readline", "#InterfaceConstructor") => ("events", "EventEmitter"),
+        | ("readline", "#InterfaceConstructor") => {
+            || super::static_exports::js_native_export_6576656e7473_4576656e74456d6974746572(0)
+        }
         ("stream", "Readable" | "Writable")
         | ("http", "OutgoingMessage")
-        | ("http2", "Http2ServerResponse") => ("stream", "Stream"),
+        | ("http2", "Http2ServerResponse") => {
+            || super::static_exports::js_native_export_73747265616d_53747265616d(0)
+        }
         ("stream", "Duplex")
         | ("fs", "ReadStream")
         | ("http", "IncomingMessage")
-        | ("http2", "Http2ServerRequest") => ("stream", "Readable"),
-        ("stream", "Transform") | ("net", "Socket") => ("stream", "Duplex"),
-        ("stream", "PassThrough") | ("crypto", "#LazyTransform") | ("zlib", "#ZlibBase") => {
-            ("stream", "Transform")
+        | ("http2", "Http2ServerRequest") => {
+            || super::static_exports::js_native_export_73747265616d_5265616461626c65(0)
         }
-        ("fs", "WriteStream") | ("crypto", "Sign" | "Verify") => ("stream", "Writable"),
-        ("crypto", "Cipheriv" | "Decipheriv" | "#Hash" | "#Hmac") => ("crypto", crate::realm_decl! { native_key "#LazyTransform"; realm { "node:crypto.Cipheriv.<prototype>", receiver = "%NativeNamespace:crypto%", kind = prototype, instance = "node:crypto.Cipheriv.prototype.<prototype>", extends = "node:stream.Transform"; } }),
-        ("crypto", "Hash") => ("crypto", crate::realm_decl! { native_key "#Hash"; realm { "node:crypto.Hash.prototype.constructor", receiver = "%NativeNamespace:crypto%", kind = constructor, instance = "node:crypto.Hash.prototype", extends = "node:crypto.Cipheriv.<prototype>"; } }),
-        ("crypto", "Hmac") => ("crypto", crate::realm_decl! { native_key "#Hmac"; realm { "node:crypto.Hmac.prototype.constructor", receiver = "%NativeNamespace:crypto%", kind = constructor, instance = "node:crypto.Hmac.prototype", extends = "node:crypto.Cipheriv.<prototype>"; } }),
-        ("http", "ClientRequest" | "ServerResponse") => ("http", "OutgoingMessage"),
-        ("http", "Server") | ("tls", "Server") => ("net", "Server"),
-        ("https", "Agent") => ("http", "Agent"),
-        ("https", "Server") => ("tls", "Server"),
-        ("inspector/promises", "Session") => ("inspector", "Session"),
-        ("tls", "TLSSocket") | ("tty", "ReadStream" | "WriteStream") => ("net", "Socket"),
-        ("readline", "Interface" | "InterfacePromises") => ("readline", crate::realm_decl! { native_key "#Interface"; realm { "node:readline/promises.Interface.<prototype>", receiver = "%NativeNamespace:readline%", kind = prototype, instance = "node:readline/promises.Interface.prototype.<prototype>", extends = "node:readline/promises.Interface.<prototype>.<prototype>"; } }),
-        ("readline", "#Interface") => ("readline", crate::realm_decl! { native_key "#InterfaceConstructor"; realm { "node:readline/promises.Interface.<prototype>.<prototype>", receiver = "%NativeNamespace:readline%", kind = prototype, instance = "node:readline/promises.Interface.prototype.<prototype>.<prototype>", extends = "node:events.EventEmitter"; } }),
-        ("repl", "REPLServer") => ("readline", crate::realm_decl! { native_key "Interface"; realm { "node:repl.REPLServer.<prototype>", receiver = "%NativeNamespace:readline%", kind = prototype, instance = "node:repl.REPLServer.prototype.<prototype>", extends = "node:readline/promises.Interface.<prototype>"; } }),
+        ("stream", "Transform") | ("net", "Socket") => {
+            || super::static_exports::js_native_export_73747265616d_4475706c6578(0)
+        }
+        ("stream", "PassThrough") | ("crypto", "#LazyTransform") | ("zlib", "#ZlibBase") => {
+            || super::static_exports::js_native_export_73747265616d_5472616e73666f726d(0)
+        }
+        ("fs", "WriteStream") | ("crypto", "Sign" | "Verify") => {
+            || super::static_exports::js_native_export_73747265616d_5772697461626c65(0)
+        }
+        ("crypto", "Cipheriv" | "Decipheriv" | "#Hash" | "#Hmac") => {
+            || private_parent_value("crypto", crate::realm_decl! { native_key "#LazyTransform"; realm { "node:crypto.Cipheriv.<prototype>", receiver = "%NativeNamespace:crypto%", kind = prototype, instance = "node:crypto.Cipheriv.prototype.<prototype>", extends = "node:stream.Transform"; } })
+        }
+        ("crypto", "Hash") => || private_parent_value("crypto", crate::realm_decl! { native_key "#Hash"; realm { "node:crypto.Hash.prototype.constructor", receiver = "%NativeNamespace:crypto%", kind = constructor, instance = "node:crypto.Hash.prototype", extends = "node:crypto.Cipheriv.<prototype>"; } }),
+        ("crypto", "Hmac") => || private_parent_value("crypto", crate::realm_decl! { native_key "#Hmac"; realm { "node:crypto.Hmac.prototype.constructor", receiver = "%NativeNamespace:crypto%", kind = constructor, instance = "node:crypto.Hmac.prototype", extends = "node:crypto.Cipheriv.<prototype>"; } }),
+        ("http", "ClientRequest" | "ServerResponse") => {
+            || super::static_exports::js_native_export_68747470_4f7574676f696e674d657373616765(0)
+        }
+        ("http", "Server") | ("tls", "Server") => {
+            || super::static_exports::js_native_export_6e6574_536572766572(0)
+        }
+        ("https", "Agent") => || super::static_exports::js_native_export_68747470_4167656e74(0),
+        ("https", "Server") => || super::static_exports::js_native_export_746c73_536572766572(0),
+        ("inspector/promises", "Session") => {
+            || super::static_exports::js_native_export_696e73706563746f72_53657373696f6e(0)
+        }
+        ("tls", "TLSSocket") | ("tty", "ReadStream" | "WriteStream") => {
+            || super::static_exports::js_native_export_6e6574_536f636b6574(0)
+        }
+        ("readline", "Interface" | "InterfacePromises") => {
+            || private_parent_value("readline", crate::realm_decl! { native_key "#Interface"; realm { "node:readline/promises.Interface.<prototype>", receiver = "%NativeNamespace:readline%", kind = prototype, instance = "node:readline/promises.Interface.prototype.<prototype>", extends = "node:readline/promises.Interface.<prototype>.<prototype>"; } })
+        }
+        ("readline", "#Interface") => || private_parent_value("readline", crate::realm_decl! { native_key "#InterfaceConstructor"; realm { "node:readline/promises.Interface.<prototype>.<prototype>", receiver = "%NativeNamespace:readline%", kind = prototype, instance = "node:readline/promises.Interface.prototype.<prototype>.<prototype>", extends = "node:events.EventEmitter"; } }),
+        ("repl", "REPLServer") => || private_parent_value("readline", crate::realm_decl! { native_key "Interface"; realm { "node:repl.REPLServer.<prototype>", receiver = "%NativeNamespace:readline%", kind = prototype, instance = "node:repl.REPLServer.prototype.<prototype>", extends = "node:readline/promises.Interface.<prototype>"; } }),
         (
             "zlib",
             "Deflate" | "Inflate" | "Gzip" | "Gunzip" | "DeflateRaw" | "InflateRaw" | "Unzip"
             | "#Brotli",
-        ) => ("zlib", crate::realm_decl! { native_key "#Zlib"; realm { "node:zlib.Deflate.<prototype>", receiver = "%NativeNamespace:zlib%", kind = prototype, instance = "node:zlib.Deflate.prototype.<prototype>", extends = "node:zlib.Deflate.<prototype>.<prototype>"; } }),
-        ("zlib", "BrotliCompress" | "BrotliDecompress") => ("zlib", crate::realm_decl! { native_key "#Brotli"; realm { "node:zlib.BrotliCompress.<prototype>", receiver = "%NativeNamespace:zlib%", kind = prototype, instance = "node:zlib.BrotliCompress.prototype.<prototype>", extends = "node:zlib.Deflate.<prototype>"; } }),
-        ("zlib", "ZstdCompress" | "ZstdDecompress") => ("zlib", crate::realm_decl! { native_key "#Zstd"; realm { "node:zlib.ZstdCompress.<prototype>", receiver = "%NativeNamespace:zlib%", kind = prototype, instance = "node:zlib.ZstdCompress.prototype.<prototype>", extends = "node:zlib.Deflate.<prototype>.<prototype>"; } }),
-        ("zlib", "#Zlib" | "#Zstd") => ("zlib", crate::realm_decl! { native_key "#ZlibBase"; realm { "node:zlib.Deflate.<prototype>.<prototype>", receiver = "%NativeNamespace:zlib%", kind = prototype, instance = "node:zlib.Deflate.prototype.<prototype>.<prototype>", extends = "node:stream.Transform"; } }),
+        ) => || private_parent_value("zlib", crate::realm_decl! { native_key "#Zlib"; realm { "node:zlib.Deflate.<prototype>", receiver = "%NativeNamespace:zlib%", kind = prototype, instance = "node:zlib.Deflate.prototype.<prototype>", extends = "node:zlib.Deflate.<prototype>.<prototype>"; } }),
+        ("zlib", "BrotliCompress" | "BrotliDecompress") => {
+            || private_parent_value("zlib", crate::realm_decl! { native_key "#Brotli"; realm { "node:zlib.BrotliCompress.<prototype>", receiver = "%NativeNamespace:zlib%", kind = prototype, instance = "node:zlib.BrotliCompress.prototype.<prototype>", extends = "node:zlib.Deflate.<prototype>"; } })
+        }
+        ("zlib", "ZstdCompress" | "ZstdDecompress") => || private_parent_value("zlib", crate::realm_decl! { native_key "#Zstd"; realm { "node:zlib.ZstdCompress.<prototype>", receiver = "%NativeNamespace:zlib%", kind = prototype, instance = "node:zlib.ZstdCompress.prototype.<prototype>", extends = "node:zlib.Deflate.<prototype>.<prototype>"; } }),
+        ("zlib", "#Zlib" | "#Zstd") => || private_parent_value("zlib", crate::realm_decl! { native_key "#ZlibBase"; realm { "node:zlib.Deflate.<prototype>.<prototype>", receiver = "%NativeNamespace:zlib%", kind = prototype, instance = "node:zlib.Deflate.prototype.<prototype>.<prototype>", extends = "node:stream.Transform"; } }),
         _ => return None,
     })
+}
+
+#[inline(always)]
+fn private_parent_value(module: &str, name: &str) -> f64 {
+    let key = format!("{module}\0{name}");
+    if let Some(value) = minted_native_callable_export(&key) {
+        return value;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(bound_native_callable_export_value(module, name));
+    let addr = crate::value::js_nanbox_get_pointer(value.get_nanbox_f64()) as usize;
+    unsafe {
+        match module {
+            "crypto" => {
+                nm_attach_crypto(name, value.get_nanbox_f64(), addr);
+            }
+            "zlib" => {
+                nm_attach_zlib(name, value.get_nanbox_f64(), addr);
+            }
+            "readline" => {
+                nm_attach_readline(name, value.get_nanbox_f64(), addr);
+            }
+            _ => unreachable!("internal constructor declaration"),
+        }
+    }
+    value.get_nanbox_f64()
 }
 
 fn finish_prototype(constructor: f64, proto: f64) -> f64 {
@@ -208,11 +258,8 @@ pub(crate) fn link_parent(value: f64, parent: f64) -> f64 {
         let parent = crate::object::js_get_global_this_builtin_value(b"SyntaxError".as_ptr(), 11);
         return link_parent(ctor.get_nanbox_f64(), parent);
     }
-    if let Some((parent_module, parent_name)) = native_parent(module, name) {
-        let parent = scope.root_nanbox_f64(bound_native_callable_export_value(
-            parent_module,
-            parent_name,
-        ));
+    if let Some(parent_value) = native_parent(module, name) {
+        let parent = scope.root_nanbox_f64(parent_value());
         if module == "crypto" && matches!(name, "Hash" | "Hmac") {
             // Deprecated wrappers share the original constructor's prototype.
             // Store the alias once; prototype reads use the actual own field.
