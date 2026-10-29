@@ -6,7 +6,7 @@
 //! Such a body is the closed callee of that site: the facts name it, so the
 //! call boundary is not a dispatch the optimizer has to guess at, and a body
 //! that fits the guarded-specialization budget joins the pre-statepoint
-//! inliner exactly as a `$pshape` clone does. Nothing is admitted by name or
+//! inliner exactly as a proven-receiver clone does. Nothing is admitted by name or
 //! by clone pattern: the site lowering records the targets its proof closed
 //! (`note_closed_call`), `compile_method` records which bodies fit the budget
 //! (`LlFunction::closed_target_preinline`), and `apply` joins the two once
@@ -60,7 +60,7 @@ mod tests {
     fn module_with(names: &[(&str, bool)]) -> LlModule {
         let mut m = LlModule::new("x86_64-unknown-linux-gnu");
         for (n, fits) in names {
-            let f = m.define_function(n, DOUBLE, vec![(DOUBLE, "%this_arg".into())]);
+            let f = m.define_function(*n, DOUBLE, vec![(DOUBLE, "%this_arg".into())]);
             f.closed_target_preinline = *fits;
             f.create_block("entry").ret(DOUBLE, "%this_arg");
         }
