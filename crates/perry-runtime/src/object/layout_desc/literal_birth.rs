@@ -29,6 +29,8 @@ static mut SENTINEL: PerryLayoutDesc = PerryLayoutDesc {
     methods: std::ptr::null(),
     shape_id: 0,
     gc_plan: 0,
+    gc_header_word: crate::object::layout_desc::layout_gc_header_word(0),
+    _tail_pad: [0; 32],
 };
 
 #[cfg(target_os = "windows")]

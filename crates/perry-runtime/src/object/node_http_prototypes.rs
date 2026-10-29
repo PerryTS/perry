@@ -341,7 +341,10 @@ fn method_info(name: &str) -> *const crate::closure::JsFunctionInfo {
             0,
         ));
         proto.with_mut_ptr(|proto: *mut ObjectHeader| unsafe {
-            let meta = crate::object::object_meta_ensure(proto);
+            let meta = crate::object::object_meta_ensure(
+                crate::object::MetaObj::runtime_born(proto),
+                crate::object::MetaReason::HttpPrototypes,
+            );
             if !meta.is_null() {
                 (*meta).native_state = nop.get_nanbox_u64();
                 crate::gc::runtime_write_barrier_slot(

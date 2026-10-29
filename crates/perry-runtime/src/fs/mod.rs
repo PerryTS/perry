@@ -169,7 +169,10 @@ pub(crate) fn filehandle_object_fd(value: f64) -> Option<i32> {
 pub(crate) unsafe fn set_filehandle_owner_fd(obj: *mut crate::object::ObjectHeader, fd: i32) {
     let _no_move = crate::gc::GcSuppressScope::new();
     debug_assert_eq!((*obj).class_id, CLASS_ID_FS_FILEHANDLE);
-    let meta = crate::object::object_meta_ensure(obj);
+    let meta = crate::object::object_meta_ensure(
+        crate::object::MetaObj::runtime_born(obj),
+        crate::object::MetaReason::RuntimeHandle,
+    );
     (*meta).native_state = u64::from(fd as u32) + 1;
 }
 

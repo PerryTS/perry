@@ -100,7 +100,11 @@ fn register_boxed_primitive_payload(obj: *mut crate::object::ObjectHeader, paylo
     // bag and spill funnels use this same no-move scope for internal stores.
     let _no_move = crate::gc::GcSuppressScope::new();
     unsafe {
-        let meta = crate::object::object_meta_ensure(obj);
+        // A1_UNPROVEN: register_boxed_primitive_payload(obj) parameter, no type test (kind-A/B question for S0b-S0e).
+        let meta = crate::object::object_meta_ensure(
+            crate::object::MetaObj::runtime_born(obj),
+            crate::object::MetaReason::BoxedPrimitive,
+        );
         // GC_STORE_AUDIT(BARRIERED): private metadata child slot + exact barrier.
         (*meta).boxed_primitive = payload.to_bits();
         crate::gc::runtime_write_barrier_slot(

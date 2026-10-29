@@ -993,7 +993,12 @@ pub(crate) unsafe fn prototype_from_template<'s>(
     // prototype's meta record directly: its evaluation (lexical owner) and its
     // [[Prototype]], whose identity the final shape already names.
     let (meta, _) = proto.across_mut::<ObjectHeader, _>(|| {
-        proto.with_mut_ptr::<ObjectHeader, _>(|p| crate::object::object_meta_ensure(p))
+        proto.with_mut_ptr::<ObjectHeader, _>(|p| {
+            crate::object::object_meta_ensure(
+                crate::object::MetaObj::runtime_born(p),
+                crate::object::MetaReason::CtorFnPrototype,
+            )
+        })
     });
     let owner =
         class.with_const_ptr::<ObjectHeader, _>(|c| crate::value::js_nanbox_pointer(c as i64));

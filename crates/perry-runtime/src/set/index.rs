@@ -30,7 +30,10 @@ unsafe fn key_identity(addr: usize, create: bool) -> Option<u64> {
                 return None;
             }
             if create {
-                crate::object::object_meta_ensure(bag)
+                crate::object::object_meta_ensure(
+                    crate::object::MetaObj::runtime_born(bag),
+                    crate::object::MetaReason::SetKeyIdentity,
+                )
             } else {
                 (*bag).meta
             }
@@ -45,7 +48,10 @@ unsafe fn key_identity(addr: usize, create: bool) -> Option<u64> {
                 return None;
             }
             if create {
-                crate::object::object_meta_ensure(bag)
+                crate::object::object_meta_ensure(
+                    crate::object::MetaObj::runtime_born(bag),
+                    crate::object::MetaReason::SetKeyIdentity,
+                )
             } else {
                 (*bag).meta
             }
@@ -53,7 +59,10 @@ unsafe fn key_identity(addr: usize, create: bool) -> Option<u64> {
         _ => {
             let slot = crate::object::cell_meta_slot(addr)?;
             if create {
-                crate::object::object_meta_ensure_for_cell(addr)?
+                crate::object::object_meta_ensure_for_cell(
+                    addr,
+                    crate::object::MetaReason::SetKeyIdentity,
+                )?
             } else {
                 *slot
             }
@@ -355,7 +364,11 @@ pub(super) unsafe fn rebuild_index(set: *mut SetHeader) {
     // pointer. No user code runs here; normal allocation pacing resumes below.
     let meta = {
         let _no_gc = crate::gc::GcSuppressScope::new();
-        crate::object::object_meta_ensure_for_cell(set as usize).expect("Set has a meta edge")
+        crate::object::object_meta_ensure_for_cell(
+            set as usize,
+            crate::object::MetaReason::SetKeyIdentity,
+        )
+        .expect("Set has a meta edge")
     };
     let bytes = index.byte_len();
     let index_ptr = &mut *index as *mut SetIndex;

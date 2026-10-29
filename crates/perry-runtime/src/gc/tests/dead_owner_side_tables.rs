@@ -831,8 +831,11 @@ fn error_meta_edge_is_enumerated_by_the_trace_visitor() {
         let scope = crate::gc::RuntimeHandleScope::new();
         let err_h = scope.root_raw_mut_ptr(err);
 
-        crate::object::object_meta_ensure_for_cell(err as usize)
-            .expect("an error cell must be able to materialise a meta record");
+        crate::object::object_meta_ensure_for_cell(
+            err as usize,
+            crate::object::MetaReason::CellExpando,
+        )
+        .expect("an error cell must be able to materialise a meta record");
 
         let err = err_h.get_raw_mut_ptr::<crate::error::ErrorHeader>();
         let meta_slot = &mut (*err).meta as *mut _ as *mut u64;
@@ -876,8 +879,11 @@ fn object_meta_expando_edge_is_enumerated_by_the_trace_visitor() {
         let obj = crate::object::js_object_alloc(0, 0);
         let scope = crate::gc::RuntimeHandleScope::new();
         let obj_h = scope.root_raw_mut_ptr(obj);
-        let meta = crate::object::object_meta_ensure_for_cell(obj as usize)
-            .expect("an object cell must materialise a meta record");
+        let meta = crate::object::object_meta_ensure_for_cell(
+            obj as usize,
+            crate::object::MetaReason::CellExpando,
+        )
+        .expect("an object cell must materialise a meta record");
 
         let meta_header =
             (meta as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
