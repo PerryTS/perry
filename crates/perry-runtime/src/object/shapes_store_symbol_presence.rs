@@ -67,6 +67,11 @@ impl ShapeRecord {
     /// `canonical_keys::NO_NODE`.
     #[inline]
     pub(crate) fn keys_node(&self) -> u32 {
+        if self.keys == 0 {
+            // No keys array is the empty list, whose node is the trie root:
+            // the keyless family lives there (CKI S2).
+            return crate::object::canonical_keys::ROOT_NODE;
+        }
         (self.keys_node_and_element_kind >> RECORD_KEYS_NODE_SHIFT).wrapping_sub(1)
     }
 

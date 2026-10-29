@@ -446,7 +446,7 @@ unsafe fn definition_admitted(obj_bits: u64, key_value: f64) -> Option<Admitted>
     }
     let keys = super::object_keys(obj);
     if !keys.is_null() {
-        if let Some(pos) = super::keys_find_property_slot_by_bytes(keys.arr(), keys.count(), bytes)
+        if let Some(pos) = super::keys_find_property_slot_by_bytes(keys, keys.count(), bytes)
         {
             return Some(Admitted::Own(pos as u32));
         }

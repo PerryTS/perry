@@ -116,10 +116,12 @@ pub(crate) fn key_bytes_hash(name_ptr: *const u8, name_len: usize) -> u64 {
 /// index declines — a linear scan over the DENSE raw slots
 /// (`keys_array_dense_slots`, no per-element accessor) does the compare.
 pub(crate) unsafe fn keys_find_slot_by_bytes(
-    keys: *const crate::array::ArrayHeader,
+    view: super::ObjectKeys,
     key_count: u32,
     key_bytes: &[u8],
 ) -> Option<u32> {
+    let list: super::shapes::ShapeKeys = view.into();
+    let keys = list.arr();
     if super::overflow::is_table(keys) {
         return super::overflow::find_bytes(keys.cast(), key_bytes);
     }
@@ -132,7 +134,7 @@ pub(crate) unsafe fn keys_find_slot_by_bytes(
         // (1570 -> 3064 ms measured). Appends maintain the index incrementally
         // (shape_note_append), so stable-shape workloads still hit; churny
         // ones fall back to the raw dense scan below instead of thrashing.
-        match shapes::shape_slot_lookup_verdict(keys, key_bytes, h, key_count, false) {
+        match shapes::shape_slot_lookup_verdict(view, key_bytes, h, key_count, false) {
             shapes::KeysIndexVerdict::Found(slot) => return Some(slot),
             // A COMPLETE index (indexed_len == key_count) proves absence:
             // every present key is indexed, holes index as nothing, and a
@@ -225,10 +227,12 @@ pub(crate) unsafe fn keys_array_dense_slots_resolved(
 ///
 /// As [`keys_array_dense_slots_resolved`].
 pub(crate) unsafe fn keys_find_slot_by_bytes_resolved(
-    keys: *const crate::array::ArrayHeader,
+    view: super::ObjectKeys,
     key_count: u32,
     key_bytes: &[u8],
 ) -> Option<u32> {
+    let list: super::shapes::ShapeKeys = view.into();
+    let keys = list.arr();
     if super::overflow::is_table(keys) {
         return super::overflow::find_bytes(keys.cast(), key_bytes);
     }
@@ -236,7 +240,7 @@ pub(crate) unsafe fn keys_find_slot_by_bytes_resolved(
     if key_count >= KEYS_INDEX_THRESHOLD {
         // The indexed path owns its own receiver handling; hand it the
         // unresolved entry so its behaviour is bit-for-bit what it was.
-        return keys_find_slot_by_bytes(keys, key_count, key_bytes);
+        return keys_find_slot_by_bytes(view, key_count, key_bytes);
     }
     keys_find_slot_by_bytes_dense_resolved(keys, key_count, key_bytes)
 }
@@ -247,13 +251,15 @@ pub(crate) unsafe fn keys_find_slot_by_bytes_resolved(
 /// # Safety
 /// As keys_array_dense_slots_resolved; hash is key_bytes_hash(key_bytes).
 pub(crate) unsafe fn keys_find_slot_by_bytes_resolved_hashed(
-    keys: *const crate::array::ArrayHeader,
+    view: super::ObjectKeys,
     key_count: u32,
     key_bytes: &[u8],
     hash: u64,
 ) -> Option<u32> {
+    let list: super::shapes::ShapeKeys = view.into();
+    let keys = list.arr();
     if key_count >= KEYS_INDEX_THRESHOLD {
-        match shapes::shape_slot_lookup_verdict(keys, key_bytes, hash, key_count, false) {
+        match shapes::shape_slot_lookup_verdict(view, key_bytes, hash, key_count, false) {
             shapes::KeysIndexVerdict::Found(slot) => return Some(slot),
             shapes::KeysIndexVerdict::Absent => return None,
             shapes::KeysIndexVerdict::Unindexed => {}
@@ -294,10 +300,12 @@ unsafe fn keys_find_slot_by_bytes_dense_resolved(
 
 /// [`keys_find_slot_by_bytes`] for a key held as a `StringHeader`.
 pub(crate) unsafe fn keys_find_slot_by_key_ptr(
-    keys: *const crate::array::ArrayHeader,
+    view: super::ObjectKeys,
     key_count: u32,
     key: *const crate::StringHeader,
 ) -> Option<u32> {
+    let list: super::shapes::ShapeKeys = view.into();
+    let keys = list.arr();
     // Magnitude only, deliberately: the original `< 0x10000` rejected the
     // handle band and nothing else, and this helper's callers tolerate a
     // `key` that is not a valid header (the length guard below catches it).
@@ -314,7 +322,7 @@ pub(crate) unsafe fn keys_find_slot_by_key_ptr(
     let len = (*key).byte_len as usize;
     if len <= (*key).capacity as usize && len < (1 << 28) {
         let data = string_header_payload(key);
-        return keys_find_slot_by_bytes(keys, key_count, std::slice::from_raw_parts(data, len));
+        return keys_find_slot_by_bytes(view, key_count, std::slice::from_raw_parts(data, len));
     }
     let (slots, slot_len) = keys_array_dense_slots(keys);
     if slots.is_null() {
@@ -351,7 +359,7 @@ pub(crate) unsafe fn keys_index_lookup(
     if key_count < KEYS_INDEX_THRESHOLD {
         return None;
     }
-    shapes::shape_slot_lookup(keys.arr(), key_bytes, key_hash, key_count, true)
+    shapes::shape_slot_lookup(keys, key_bytes, key_hash, key_count, true)
 }
 
 #[inline]
@@ -410,14 +418,14 @@ mod tests_10595 {
         let lookup_key = crate::string::js_string_from_bytes(b"tag".as_ptr(), 3);
         unsafe {
             assert_eq!(
-                keys_find_slot_by_key_ptr(keys, 2, lookup_key),
+                keys_find_slot_by_key_ptr(crate::object::ObjectKeys::new(keys, 2), 2, lookup_key),
                 Some(1),
                 "must resolve to the most-derived slot (index 1), not the ancestor's (index 0)"
             );
             // `keys_find_slot_by_bytes` is the byte-slice twin the pointer
             // form delegates to for a valid header; pin it directly too.
             assert_eq!(
-                keys_find_slot_by_bytes(keys, 2, b"tag"),
+                keys_find_slot_by_bytes(crate::object::ObjectKeys::new(keys, 2), 2, b"tag"),
                 Some(1),
                 "byte-slice lookup must agree with the pointer-key lookup"
             );
@@ -426,7 +434,7 @@ mod tests_10595 {
             // brought in line with the other two. Pinned separately because
             // its fast arm is a separate loop, not a delegation.
             assert_eq!(
-                keys_find_slot_by_bytes_resolved(keys, 2, b"tag"),
+                keys_find_slot_by_bytes_resolved(crate::object::ObjectKeys::new(keys, 2), 2, b"tag"),
                 Some(1),
                 "the resolved lookup must agree: most-derived slot (index 1), \
                  not the ancestor's (index 0)"
@@ -447,8 +455,8 @@ mod tests_10595 {
         let lookup_x = crate::string::js_string_from_bytes(b"x".as_ptr(), 1);
         let lookup_y = crate::string::js_string_from_bytes(b"y".as_ptr(), 1);
         unsafe {
-            assert_eq!(keys_find_slot_by_key_ptr(keys, 2, lookup_x), Some(0));
-            assert_eq!(keys_find_slot_by_key_ptr(keys, 2, lookup_y), Some(1));
+            assert_eq!(keys_find_slot_by_key_ptr(crate::object::ObjectKeys::new(keys, 2), 2, lookup_x), Some(0));
+            assert_eq!(keys_find_slot_by_key_ptr(crate::object::ObjectKeys::new(keys, 2), 2, lookup_y), Some(1));
         }
     }
 
@@ -462,7 +470,7 @@ mod tests_10595 {
 
         let lookup = crate::string::js_string_from_bytes(b"tagViaGetter".as_ptr(), 12);
         unsafe {
-            assert_eq!(keys_find_slot_by_key_ptr(keys, 1, lookup), None);
+            assert_eq!(keys_find_slot_by_key_ptr(crate::object::ObjectKeys::new(keys, 1), 1, lookup), None);
         }
     }
 }
@@ -472,11 +480,13 @@ mod tests_10595 {
 // operations; the unfiltered lookup remains for layout and private storage.
 #[inline]
 pub(crate) unsafe fn keys_find_property_slot_by_bytes(
-    keys: *const crate::array::ArrayHeader,
+    view: super::ObjectKeys,
     count: u32,
     bytes: &[u8],
 ) -> Option<u32> {
-    let slot = keys_find_slot_by_bytes(keys, count, bytes)?;
+    let list: super::shapes::ShapeKeys = view.into();
+    let keys = list.arr();
+    let slot = keys_find_slot_by_bytes(view, count, bytes)?;
     if !super::key_attrs::entry_is_private(super::key_attrs::keys_entry(keys, slot)) {
         return Some(slot);
     }
@@ -493,7 +503,7 @@ pub(crate) unsafe fn keys_find_private_slot_by_bytes(
     if super::overflow::is_table(keys) {
         return keys_find_slot_in_namespace(keys, count, bytes, true);
     }
-    let slot = keys_find_slot_by_bytes(keys, count, bytes)?;
+    let slot = keys_find_slot_by_bytes(crate::object::ObjectKeys::new(keys as *mut _, count), count, bytes)?;
     if super::key_attrs::entry_is_private(super::key_attrs::keys_entry(keys, slot)) {
         return Some(slot);
     }
@@ -529,16 +539,18 @@ unsafe fn keys_find_slot_in_namespace(
 
 #[inline]
 pub(crate) unsafe fn keys_find_property_slot_by_key_ptr(
-    keys: *const crate::array::ArrayHeader,
+    view: super::ObjectKeys,
     count: u32,
     key: *const crate::StringHeader,
 ) -> Option<u32> {
-    let slot = keys_find_slot_by_key_ptr(keys, count, key)?;
+    let list: super::shapes::ShapeKeys = view.into();
+    let keys = list.arr();
+    let slot = keys_find_slot_by_key_ptr(view, count, key)?;
     if !super::key_attrs::entry_is_private(super::key_attrs::keys_entry(keys, slot)) {
         return Some(slot);
     }
     keys_find_property_slot_by_bytes(
-        keys,
+        view,
         count,
         std::slice::from_raw_parts(string_header_payload(key), (*key).byte_len as usize),
     )
@@ -550,12 +562,14 @@ pub(crate) unsafe fn keys_find_property_slot_by_key_ptr(
 /// # Safety
 /// As keys_array_dense_slots_resolved; hash is key_bytes_hash(bytes).
 pub(crate) unsafe fn keys_find_property_slot_by_bytes_resolved_hashed(
-    keys: *const crate::array::ArrayHeader,
+    view: super::ObjectKeys,
     count: u32,
     bytes: &[u8],
     hash: u64,
 ) -> Option<u32> {
-    let slot = keys_find_slot_by_bytes_resolved_hashed(keys, count, bytes, hash)?;
+    let list: super::shapes::ShapeKeys = view.into();
+    let keys = list.arr();
+    let slot = keys_find_slot_by_bytes_resolved_hashed(view, count, bytes, hash)?;
     if !super::key_attrs::entry_is_private(super::key_attrs::keys_entry(keys, slot)) {
         return Some(slot);
     }

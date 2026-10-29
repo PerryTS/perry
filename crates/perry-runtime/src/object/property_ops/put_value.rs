@@ -730,7 +730,7 @@ fn object_array_numeric_write_slots(
         if key_count > 4096 {
             return None;
         }
-        crate::object::keys_find_slot_by_key_ptr(keys, key_count, key)
+        crate::object::keys_find_slot_by_key_ptr(crate::object::ObjectKeys::new(keys, key_count), key_count, key)
             .map(|position| crate::object::key_attrs::key_storage_slot(keys, position))
     }
 

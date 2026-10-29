@@ -56,7 +56,7 @@ pub(crate) unsafe fn own_slot(obj: *const ObjectHeader, key: &[u8]) -> Option<u3
         return None;
     }
     let keys = crate::object::object_keys(obj);
-    crate::object::keys_find_slot_by_bytes_resolved(keys.arr(), keys.count(), key)
+    crate::object::keys_find_slot_by_bytes_resolved(keys, keys.count(), key)
 }
 
 /// Whether `bag` (non-null) holds a live own value under `key`.

@@ -671,7 +671,7 @@ pub(crate) struct ObjectHotTables {
     ///
     /// Iteration-order safe: the two mutating passes rewrite independent
     /// values and drop entries by a per-entry predicate.
-    pub(crate) class_keys_by_id: RefCell<crate::fast_hash::PtrHashMap<u32, (usize, u32, u32)>>,
+    pub(crate) class_keys_by_id: RefCell<crate::fast_hash::PtrHashMap<u32, (usize, u32, u32, u32)>>,
     /// Per-thread shape-transition cache for the dynamic-key write path;
     /// see the doc block above `with_transition_cache`. HEAP-allocated
     /// (`Box`) — oversized inline storage overflowed the arm64_32 ILP32
@@ -874,7 +874,7 @@ fn shape_cache_insert(
         LayoutWord(0)
     } else {
         shapes::publish_shape_result(shapes::class_birth_shape_ensure(
-            keys_array,
+            keys,
             keys.count(),
             keys.count(),
             0,

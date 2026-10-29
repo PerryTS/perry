@@ -240,7 +240,7 @@ pub(crate) unsafe fn own_accessor(obj: usize, key: &[u8]) -> Option<Accessor> {
     {
         return None;
     }
-    let pos = crate::object::keys_find_slot_by_bytes(keys.arr(), keys.count(), key)?;
+    let pos = crate::object::keys_find_slot_by_bytes(keys, keys.count(), key)?;
     if !crate::object::key_attrs::key_is_accessor_at(keys.arr(), pos) {
         return None;
     }

@@ -184,7 +184,7 @@ unsafe fn converge_key_add(
         _ => return id.0,
     };
     let Some(sibling) = super::shapes::shape_descriptor_find_with_rep(
-        d.keys as usize as *const crate::array::ArrayHeader,
+        d.keys_view(),
         d.logical_key_count,
         d.live_inline_slot_count,
         d.semantic_generation,
@@ -548,7 +548,7 @@ unsafe fn publish_key_add_rep(
     });
     let target = normalized_shape(publish_shape_result(
         super::shapes::shape_descriptor_intern_with_special(
-            d.keys as usize as *const crate::array::ArrayHeader,
+            d.keys_view(),
             d.logical_key_count,
             d.live_inline_slot_count,
             d.semantic_generation,
@@ -605,7 +605,7 @@ pub(crate) unsafe fn private_field_lanes_target(
         .unwrap_or_default();
     let target = normalized_shape(publish_shape_result(
         super::shapes::shape_descriptor_intern_with_special(
-            d.keys as usize as *const crate::array::ArrayHeader,
+            d.keys_view(),
             d.logical_key_count,
             d.live_inline_slot_count,
             d.semantic_generation,
@@ -816,7 +816,7 @@ pub(crate) fn normalized_shape(mut id: LayoutWord) -> LayoutWord {
             })
             .collect();
         let next = publish_shape_result(super::shapes::shape_descriptor_intern_with_special(
-            d.keys as usize as *const crate::array::ArrayHeader,
+            d.keys_view(),
             d.logical_key_count,
             d.live_inline_slot_count,
             d.semantic_generation,

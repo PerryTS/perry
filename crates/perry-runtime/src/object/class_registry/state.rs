@@ -115,7 +115,7 @@ pub(crate) fn class_proto_key_deleted_bytes(class_id: u32, name: &[u8]) -> bool 
         let keys = crate::object::object_keys(proto);
         let arr = keys.arr();
         !arr.is_null()
-            && crate::object::keys_find_slot_by_bytes_resolved(arr, keys.count(), name).is_some()
+            && crate::object::keys_find_slot_by_bytes_resolved(keys, keys.count(), name).is_some()
     }
 }
 

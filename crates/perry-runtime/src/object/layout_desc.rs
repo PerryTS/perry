@@ -886,7 +886,7 @@ pub(crate) unsafe fn alloc_derived_layout_object(
             recorded
         }
         _ => super::shapes::publish_shape_result(super::shapes::shape_descriptor_intern_with_rep(
-            base.keys as usize as *const crate::array::ArrayHeader,
+            base.keys_view(),
             base.logical_key_count,
             base.live_inline_slot_count,
             0,

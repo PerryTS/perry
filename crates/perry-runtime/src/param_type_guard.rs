@@ -929,7 +929,7 @@ mod tests {
                 shape_descriptor_of_receiver((object_shape_stamp(object)).0).expect("live shape");
             let rep = with_slot_rep(with_slot_rep(REP_ANY, 0, REP_F64), 1, REP_F64);
             let id = publish_shape_result(shape_descriptor_ensure_with_rep(
-                d.keys as usize as *const crate::array::ArrayHeader,
+                d.keys_view(),
                 d.logical_key_count,
                 d.live_inline_slot_count,
                 d.semantic_generation,

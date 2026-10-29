@@ -19,6 +19,10 @@ struct CopiedEntry {
 struct OwnerState {
     copied: OnceLock<Vec<CopiedEntry>>,
     overrides: Mutex<Vec<(u32, Overrides)>>,
+    /// The owner's registration index plus one (0: not registered): the
+    /// order module init published it in, a deterministic owner identity
+    /// that a ConstFn body's shape fold reads without the owners lock.
+    registration: std::sync::atomic::AtomicU32,
 }
 impl OwnerState {
     fn new(copied: Option<Vec<CopiedEntry>>) -> Self {
@@ -29,6 +33,7 @@ impl OwnerState {
         Self {
             copied: storage,
             overrides: Mutex::new(Vec::new()),
+            registration: std::sync::atomic::AtomicU32::new(0),
         }
     }
 }
@@ -54,29 +59,66 @@ fn image_info(owner: &FunctionMetadataOwner, ordinal: usize) -> Option<&JsFuncti
         (address as *const JsFunctionInfo).as_ref()
     }
 }
+/// The owner's `state` word: null, an `OwnerState` (aligned, low bit clear),
+/// or, while no payload exists, the owner's registration index plus one
+/// shifted over a set low bit. Registration therefore allocates nothing, and
+/// the index stays on the owner record (CKI S2).
+const STATE_INDEX_TAG: usize = 1;
 fn state(owner: &FunctionMetadataOwner) -> Option<&'static OwnerState> {
-    unsafe {
-        owner
-            .state
-            .load(Ordering::Acquire)
-            .cast::<OwnerState>()
-            .as_ref()
+    let word = owner.state.load(Ordering::Acquire);
+    if word as usize & STATE_INDEX_TAG != 0 {
+        return None;
     }
+    unsafe { word.cast::<OwnerState>().as_ref() }
 }
 fn install_state(owner: &FunctionMetadataOwner, value: OwnerState) -> &'static OwnerState {
     let pointer = Box::into_raw(Box::new(value));
-    match owner.state.compare_exchange(
-        std::ptr::null_mut(),
-        pointer.cast(),
-        Ordering::AcqRel,
-        Ordering::Acquire,
-    ) {
-        Ok(_) => unsafe { &*pointer },
-        Err(existing) => unsafe {
-            drop(Box::from_raw(pointer));
-            &*existing.cast::<OwnerState>()
-        },
+    let mut current = owner.state.load(Ordering::Acquire);
+    loop {
+        if !current.is_null() && current as usize & STATE_INDEX_TAG == 0 {
+            // Another caller installed the payload first.
+            unsafe { drop(Box::from_raw(pointer)) };
+            return unsafe { &*current.cast::<OwnerState>() };
+        }
+        // The payload inherits a registration index the word already holds.
+        let index = if current.is_null() { 0 } else { (current as usize >> 1) as u32 };
+        unsafe { (*pointer).registration.store(index, Ordering::Relaxed) };
+        match owner.state.compare_exchange(
+            current,
+            pointer.cast(),
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => return unsafe { &*pointer },
+            Err(seen) => current = seen,
+        }
     }
+}
+/// Record `owner`'s registration index plus one, on the owner itself.
+fn set_registration(owner: &FunctionMetadataOwner, index_plus_one: u32) {
+    let tagged = ((index_plus_one as usize) << 1 | STATE_INDEX_TAG) as *mut std::ffi::c_void;
+    let mut current = owner.state.load(Ordering::Acquire);
+    loop {
+        if !current.is_null() && current as usize & STATE_INDEX_TAG == 0 {
+            let st = unsafe { &*current.cast::<OwnerState>() };
+            st.registration.store(index_plus_one, Ordering::Release);
+            return;
+        }
+        match owner.state.compare_exchange(current, tagged, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => return,
+            Err(seen) => current = seen,
+        }
+    }
+}
+/// `owner`'s registration index plus one, or 0 before registration.
+fn registration(owner: &FunctionMetadataOwner) -> u32 {
+    let word = owner.state.load(Ordering::Acquire);
+    if word as usize & STATE_INDEX_TAG != 0 {
+        return (word as usize >> 1) as u32;
+    }
+    // SAFETY: an untagged non-null word is this owner's payload.
+    unsafe { word.cast::<OwnerState>().as_ref() }
+        .map_or(0, |st| st.registration.load(Ordering::Acquire))
 }
 
 /// Register one image's canonical owner. All entry ordinals and info ranges
@@ -122,15 +164,61 @@ pub unsafe extern "C" fn js_register_function_metadata(
     if let Ok(mut list) = owners().lock() {
         // Module init may be repeated by another agent. Compare owners only;
         // no code address participates and no per-function entry is inserted.
-        let already = list.iter().any(|item| match (item, registered) {
+        let index = match list.iter().position(|item| match (item, registered) {
             (RegisteredOwner::Image(a), RegisteredOwner::Image(b)) => std::ptr::eq(*a, b),
             (RegisteredOwner::Copied(a), RegisteredOwner::Copied(b)) => std::ptr::eq(*a, b),
             _ => false,
-        });
-        if !already {
-            list.push(registered);
-        }
+        }) {
+            Some(index) => index,
+            None => {
+                list.push(registered);
+                list.len() - 1
+            }
+        };
+        // The owner record carries its own index (CKI S2).
+        set_registration(owner, index as u32 + 1);
     }
+}
+
+/// A ConstFn body's word in the shape-identity fold (CKI S2): its owner's
+/// registration index (plus one) and its entry ordinal. Program order fixes
+/// both, so the word is the same wherever the link put the image; the info's
+/// own address never enters. An info without the metadata tail, or one whose
+/// owner is not registered, folds its ordinal alone (or 0): the fold is a
+/// bucket key, and the exact facts compare still tells such bodies apart.
+pub(crate) fn info_identity_word(info: u64) -> u64 {
+    // SAFETY: a ConstFn slot names a `JsFunctionInfo` its image keeps alive
+    // (`checked_constfn_static_entries`, the key-add admission).
+    let Some(info) = (unsafe { (info as usize as *const JsFunctionInfo).as_ref() }) else {
+        return 0;
+    };
+    let Some(FunctionMetadataIdentity { owner, ordinal }) = info.metadata_identity() else {
+        return 0;
+    };
+    // SAFETY: `metadata_identity` validated the owner pointer and ordinal.
+    let index = registration(unsafe { &*owner });
+    (u64::from(index) << 32) | u64::from(ordinal)
+}
+
+/// `count` ConstFn info words of distinct registered owners, for tests that
+/// fold bodies into shape identity: a ConstFn slot names a live info.
+#[cfg(test)]
+pub(crate) fn test_registered_infos(count: usize) -> Vec<u64> {
+    (0..count)
+        .map(|i| {
+            let owner: &'static FunctionMetadataOwner =
+                Box::leak(Box::new(FunctionMetadataOwner::native()));
+            // SAFETY: a leaked, permanent native owner.
+            unsafe { js_register_function_metadata(owner, 1) };
+            let info: &'static crate::codegen_abi::NativeFunctionInfo =
+                Box::leak(Box::new(crate::codegen_abi::NativeFunctionInfo::new(
+                    // SAFETY: a test code word; nothing calls it.
+                    unsafe { JsFunctionInfo::from_code((0x4c00_0000 + i * 64) as *const u8, 0) },
+                    owner,
+                )));
+            &info.info as *const JsFunctionInfo as usize as u64
+        })
+        .collect()
 }
 
 /// A borrowed canonical record. The info's flag licenses its owner tail.

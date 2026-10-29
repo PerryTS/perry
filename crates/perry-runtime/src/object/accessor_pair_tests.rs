@@ -58,7 +58,7 @@ fn an_ordinary_objects_accessor_lives_in_its_slot() {
             crate::object::AccessorDescriptor { get, set: 0 },
         );
         let keys = crate::object::object_keys(obj);
-        let pos = crate::object::keys_find_slot_by_bytes(keys.arr(), keys.count(), b"acc")
+        let pos = crate::object::keys_find_slot_by_bytes(keys, keys.count(), b"acc")
             .expect("the accessor claimed its key");
         assert_eq!(
             slot_accessor(obj, pos).get,

@@ -332,7 +332,7 @@ pub(super) unsafe fn family_overwrite(obj: *mut ObjectHeader, bytes: &[u8], valu
         return false;
     }
     let Some(pos) =
-        super::super::keys_find_property_slot_by_bytes(keys, record.logical_key_count(), bytes)
+        super::super::keys_find_property_slot_by_bytes(record.keys_view(), record.logical_key_count(), bytes)
     else {
         return false;
     };
@@ -383,7 +383,7 @@ pub(super) unsafe fn family_add_kind(obj: *mut ObjectHeader, bytes: &[u8]) -> Op
     let position = if keys.is_null() {
         None
     } else {
-        super::super::keys_find_property_slot_by_bytes(keys, count, bytes)
+        super::super::keys_find_property_slot_by_bytes(record.keys_view(), count, bytes)
     };
     let held_by_overflow = || {
         super::super::overflow::has_overflow(obj)

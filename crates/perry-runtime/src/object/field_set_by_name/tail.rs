@@ -1012,7 +1012,7 @@ pub(crate) fn set_field_by_name_object_tail(
         // per-index accessors via `js_array_get`); the original match below
         // still gates the hit, so this cannot widen what is accepted.
         if let Some(i) =
-            crate::object::keys_find_property_slot_by_key_ptr(keys, key_count as u32, key)
+            crate::object::keys_find_property_slot_by_key_ptr(keys_view, key_count as u32, key)
                 .map(|v| v as usize)
         {
             let key_val = crate::array::js_array_get(keys, i as u32);

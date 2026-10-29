@@ -70,6 +70,15 @@
 //! with one read (`validated_node`). An index keyed by image and heap
 //! addresses made every probe's cost a function of the link layout.
 //!
+//! ## What a list owns in the shape table lives on its node (CKI S2)
+//!
+//! A node also holds its list's shape state ([`crate::object::shapes::ListShapes`]):
+//! the FAMILY (every descriptor minted on this list) and, on the node that owns
+//! a backing (`NodeShapes::backing_owner`), the backing's slot index. Both used to
+//! be maps keyed by the keys array's address, an image address for every image
+//! list. Only owned (dictionary) arrays keep address-keyed entries, and those
+//! are heap addresses, fixed by the allocation sequence rather than the link.
+//!
 //! ## Weak, exactly like the transition cache — and that is what bounds it
 //!
 //! #6759 phase 3 made the transition cache's `next_keys` WEAK (rewritten on
@@ -145,6 +154,14 @@ pub(crate) unsafe fn adopt_image_key(
 /// list must accept one. The backing's header length is the length of the
 /// longest list on it and says nothing about this one; [`Self::len`] is the
 /// list's count.
+///
+/// **Invariant (CKI S2): a node outlives every live holder of its array.** The
+/// trie frees or rewitnesses a node only in the post-trace prune, and only
+/// when the collector reports its array dead; a holder that still reaches the
+/// array keeps it alive, so the node it carries still publishes its list. The
+/// shape mint therefore trusts a carried node (debug builds assert it), and
+/// the dead-key shape prune runs before the trie prune, so no record names a
+/// freed node.
 ///
 /// The handle also carries the list's trie NODE, its identity in this agent's
 /// table (CKI S1). The node is the list's owner: every consumer asks the node
@@ -341,7 +358,7 @@ pub(crate) const NO_NODE: u32 = u32::MAX;
 /// ShapeId exhaustion does.
 pub(crate) const NODE_ID_LIMIT: u32 = (1 << 24) - 1;
 /// The permanent empty node. Its optional backing follows the weak prune.
-const ROOT_NODE: u32 = 0;
+pub(crate) const ROOT_NODE: u32 = 0;
 
 struct Node {
     /// Weak backing array. A published node's list is its first `len`
@@ -379,9 +396,165 @@ struct Node {
     run: u32,
 }
 
+/// The shape-table half of a node's record (CKI S2), stored as the trie's
+/// second column under the same node id: the trie walk touches only the
+/// `Node` column, and only family and index operations touch this one.
+#[derive(Default)]
+struct NodeShapes {
+    /// The node whose list first published this node's backing, or `NO_NODE`
+    /// when that is this node itself. Only a tip append publishes a list on
+    /// its parent's backing, so only it names another owner: the chain shares
+    /// its first list's owner, and the backing's slot index has one home.
+    backing_owner: u32,
+    /// The descriptors of this list and, on a backing owner, its slot index.
+    list: crate::object::shapes::ListShapes,
+}
+
+impl NodeShapes {
+    fn vacant() -> Self {
+        NodeShapes {
+            backing_owner: NO_NODE,
+            list: crate::object::shapes::ListShapes::default(),
+        }
+    }
+
+    fn is_vacant(&self) -> bool {
+        self.backing_owner == NO_NODE && self.list.is_empty()
+    }
+
+    /// Back to vacant, dropping only state that holds something.
+    #[inline]
+    fn clear(&mut self) {
+        self.backing_owner = NO_NODE;
+        if !self.list.is_empty() {
+            self.list = crate::object::shapes::ListShapes::default();
+        }
+    }
+}
+
+/// The trie's shape column, in fixed pages that never move. An id is its
+/// ordinal (page, slot); growth adds a page and copies nothing, and only the
+/// pages holding an entry that owns heap memory are visited on drop.
+struct PagedColumn<T> {
+    pages: Vec<Box<[std::mem::MaybeUninit<T>; NODE_PAGE]>>,
+    /// Nodes `0..len` are initialized; every page is full but the last.
+    len: usize,
+    /// Pages that hold a node whose shape state owns heap memory: only these
+    /// need their nodes dropped (every other node is plain data).
+    heap_pages: Vec<bool>,
+}
+
+const NODE_PAGE_SHIFT: usize = 7;
+const NODE_PAGE: usize = 1 << NODE_PAGE_SHIFT;
+
+impl<T: ShapeColumnEntry> PagedColumn<T> {
+    fn with_root(root: T) -> Self {
+        let mut store = PagedColumn {
+            pages: Vec::new(),
+            len: 0,
+            heap_pages: Vec::new(),
+        };
+        store.push(root);
+        store
+    }
+
+    #[inline]
+    fn push(&mut self, node: T) {
+        let slot = self.len & (NODE_PAGE - 1);
+        if slot == 0 {
+            self.new_page();
+        }
+        let page = self.pages.last_mut().expect("a page for the new node");
+        page[slot].write(node);
+        self.len += 1;
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn new_page(&mut self) {
+        // SAFETY: an array of `MaybeUninit` needs no initialization.
+        self.pages.push(unsafe { Box::new_uninit().assume_init() });
+        self.heap_pages.push(false);
+    }
+
+    /// Node `id`'s shape state may now own heap memory.
+    #[inline]
+    fn note_heap(&mut self, id: usize) {
+        self.heap_pages[id >> NODE_PAGE_SHIFT] = true;
+    }
+
+    /// # Safety
+    /// `id < self.len`.
+    #[inline(always)]
+    unsafe fn slot(&self, id: usize) -> &T {
+        self.pages
+            .get_unchecked(id >> NODE_PAGE_SHIFT)
+            .get_unchecked(id & (NODE_PAGE - 1))
+            .assume_init_ref()
+    }
+
+    /// # Safety
+    /// `id < self.len`.
+    #[inline(always)]
+    unsafe fn slot_mut(&mut self, id: usize) -> &mut T {
+        self.pages
+            .get_unchecked_mut(id >> NODE_PAGE_SHIFT)
+            .get_unchecked_mut(id & (NODE_PAGE - 1))
+            .assume_init_mut()
+    }
+}
+
+impl<T> Drop for PagedColumn<T> {
+    fn drop(&mut self) {
+        for (page, &heap) in self.heap_pages.iter().enumerate() {
+            if !heap {
+                continue;
+            }
+            let first = page << NODE_PAGE_SHIFT;
+            for id in first..self.len.min(first + NODE_PAGE) {
+                // SAFETY: initialized and dropped exactly once.
+                unsafe { std::ptr::drop_in_place(self.pages[page][id - first].as_mut_ptr()) };
+            }
+        }
+    }
+}
+
+impl<T: ShapeColumnEntry> std::ops::Index<usize> for PagedColumn<T> {
+    type Output = T;
+    #[inline(always)]
+    fn index(&self, id: usize) -> &T {
+        assert!(id < self.len, "canonical node id out of range");
+        // SAFETY: bounded by the initialized length.
+        unsafe { self.slot(id) }
+    }
+}
+
+impl<T: ShapeColumnEntry> std::ops::IndexMut<usize> for PagedColumn<T> {
+    #[inline(always)]
+    fn index_mut(&mut self, id: usize) -> &mut T {
+        assert!(id < self.len, "canonical node id out of range");
+        // SAFETY: bounded by the initialized length.
+        unsafe { self.slot_mut(id) }
+    }
+}
+
+/// An entry the paged column can drop selectively.
+trait ShapeColumnEntry {
+    fn owns_heap(&self) -> bool;
+}
+
+impl ShapeColumnEntry for NodeShapes {
+    #[inline]
+    fn owns_heap(&self) -> bool {
+        self.list.owns_heap()
+    }
+}
+
 /// The canonical trie for one agent.
 pub(crate) struct CanonicalTable {
     nodes: Vec<Node>,
+    /// The nodes' shape-table column, indexed by the same node id.
+    shapes: PagedColumn<NodeShapes>,
     free: u32,
     /// `(parent node, appended-slot hash)` -> first candidate node.
     edges: FastKeyHashMap<(u32, u64), u32>,
@@ -412,6 +585,10 @@ impl CanonicalTable {
                 backing_slots: 0,
                 run: 0,
             }],
+            shapes: PagedColumn::with_root(NodeShapes {
+                backing_owner: ROOT_NODE,
+                list: crate::object::shapes::ListShapes::default(),
+            }),
             free: NO_NODE,
             // The key is `(node id, slot hash)`: a deterministic ordinal and
             // a content (or symbol-serial) hash, so occupancy and probe
@@ -458,12 +635,15 @@ impl CanonicalTable {
             let id = self.free;
             self.free = self.nodes[id as usize].next;
             self.nodes[id as usize] = fresh;
+            // `free_nodes` left this column entry vacant.
+            debug_assert!(self.shapes[id as usize].is_vacant());
             id
         } else {
             if self.nodes.len() >= NODE_ID_LIMIT as usize {
                 canonical_node_ids_exhausted();
             }
             self.nodes.push(fresh);
+            self.shapes.push(NodeShapes::vacant());
             (self.nodes.len() - 1) as u32
         };
         self.minted += 1;
@@ -479,6 +659,15 @@ impl CanonicalTable {
             *head = id;
         }
         id
+    }
+
+    /// `id` was just published on its parent's backing by a tip append: it
+    /// shares the parent's backing owner.
+    #[inline]
+    fn share_backing_owner(&mut self, id: u32, parent: u32) {
+        let inherited = self.shapes[parent as usize].backing_owner;
+        self.shapes[id as usize].backing_owner =
+            if inherited == NO_NODE { parent } else { inherited };
     }
 
     /// Turn a validation-only prefix into an independently owned keys list.
@@ -499,6 +688,7 @@ impl CanonicalTable {
     /// with `slots` elements of capacity.
     fn own_backing(&mut self, id: u32, slots: u32) {
         self.nodes[id as usize].backing_slots = slots;
+        self.shapes[id as usize].backing_owner = NO_NODE;
         CANON_BACKINGS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         CANON_BACKING_SLOTS.fetch_add(u64::from(slots), std::sync::atomic::Ordering::Relaxed);
     }
@@ -596,6 +786,9 @@ impl CanonicalTable {
             node.backing_slots = 0;
         }
         node.addr = addr;
+        // The shape prune ran first (`DEAD_KEY_PRUNES` order): no live
+        // descriptor names the dead list, and the index described its backing.
+        self.shapes[id as usize].clear();
         if self.last_created.2 == id {
             self.last_created = (0, 0, NO_NODE);
         }
@@ -693,6 +886,7 @@ impl CanonicalTable {
                 backing_slots: 0,
                 run: 0,
             };
+            self.shapes[id as usize].clear();
             self.free = id;
         }
     }
@@ -1371,6 +1565,7 @@ unsafe fn append_at_tip(
         } else {
             t.alloc_node(backing as usize, pnode, h, parent_len + 1, all_ptr, true)
         };
+        t.share_backing_owner(id, pnode);
         t.note_created(id, pnode);
         id
     })
@@ -1862,6 +2057,138 @@ pub(crate) fn note_latched_away(keys: crate::object::ObjectKeys) {
             t.note_reached(id);
         }
     });
+}
+
+/// Run `f` on the shape state of list `node` (CKI S2): its descriptor
+/// family. `None` when the table is torn down or `node` names no list (a free
+/// slot). The root is always a list: the keyless family lives on it even
+/// after its optional empty backing died.
+pub(crate) fn with_list_shapes<R>(
+    node: u32,
+    f: impl FnOnce(&mut crate::object::shapes::ListShapes) -> R,
+) -> Option<R> {
+    try_with_table(|t| {
+        let n = t.nodes.get(node as usize)?;
+        if node != ROOT_NODE && n.addr == 0 {
+            return None;
+        }
+        let entry = &mut t.shapes[node as usize];
+        let out = f(&mut entry.list);
+        if entry.owns_heap() {
+            t.shapes.note_heap(node as usize);
+        }
+        Some(out)
+    })
+    .flatten()
+}
+
+/// Run `f` on the shape state of the node that owns the backing of the list
+/// `(arr, count)` whose holder carries `node`: the home of that backing's
+/// slot index. `None` unless `node` still publishes exactly that list, so a
+/// stale node can never answer for another backing's slots.
+pub(crate) fn with_backing_shapes<R>(
+    arr: *const ArrayHeader,
+    count: u32,
+    node: u32,
+    f: impl FnOnce(&mut crate::object::shapes::ListShapes) -> R,
+) -> Option<R> {
+    try_with_table(|t| {
+        // A carried node is trusted (the `CanonicalKeys` invariant); the
+        // owner must still hold this very backing, which also refuses a
+        // node whose list is not `arr`'s.
+        let n = t.nodes.get(node as usize)?;
+        debug_assert!(validated_node(t, arr, count, node).is_some());
+        let _ = n;
+        let owner = match t.shapes[node as usize].backing_owner {
+            NO_NODE => node,
+            owner => owner,
+        };
+        if t.nodes.get(owner as usize)?.addr != arr as usize {
+            return None;
+        }
+        let entry = &mut t.shapes[owner as usize];
+        let out = f(&mut entry.list);
+        if entry.owns_heap() {
+            t.shapes.note_heap(owner as usize);
+        }
+        Some(out)
+    })
+    .flatten()
+}
+
+/// Every list's shape state with its backing address, in node order. The
+/// shape table's collector walk and census read families through this; `f`
+/// must not reach the trie.
+pub(crate) fn for_each_list_shapes(mut f: impl FnMut(u32, usize, &mut crate::object::shapes::ListShapes)) {
+    try_with_table(|t| {
+        for id in 0..t.nodes.len() {
+            let addr = t.nodes[id].addr;
+            if id == ROOT_NODE as usize || addr != 0 {
+                let entry = &mut t.shapes[id];
+                f(id as u32, addr, &mut entry.list);
+                if entry.owns_heap() {
+                    t.shapes.note_heap(id);
+                }
+            }
+        }
+    });
+}
+
+/// The node that publishes exactly the list `(arr, count)`, found from the
+/// list's content, or `NO_NODE` when no node publishes it (an owned array, an
+/// unlinked image cell, a shared copy of a canonical list). The shape mint
+/// asks this only for a holder that brought no node: a carried node is the
+/// answer, and its holders are expected to carry it.
+///
+/// Out of line and named, so a profile counts exactly the node-less mints.
+///
+/// # Safety
+/// `arr` is a live keys array with at least `count` slots, or null.
+#[inline(never)]
+pub(crate) unsafe fn published_node_of(arr: *const ArrayHeader, count: u32) -> u32 {
+    if arr.is_null() {
+        return if count == 0 { ROOT_NODE } else { NO_NODE };
+    }
+    let shared = crate::value::addr_class::realm::is_image_object(arr as usize)
+        || crate::value::addr_class::try_read_tracked_gc_header(arr as usize)
+            .is_some_and(|gc| (*gc.as_ptr()).gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED != 0);
+    if !shared {
+        // An owned list: it grows in place, so no node can name it.
+        return NO_NODE;
+    }
+    with_table_or(NO_NODE, |t| {
+        let (slots, available) = crate::object::keys_array_dense_slots(arr);
+        if available < count as usize {
+            return NO_NODE;
+        }
+        let mut parent = ROOT_NODE;
+        for i in 0..count {
+            let slot = Appended::Slot(JSValue::from_bits((*slots.add(i as usize)).to_bits()));
+            let entry =
+                crate::object::key_attrs::token_of_word(crate::object::key_attrs::key_word(arr, i));
+            match probe_node(t, parent, i, slot, entry, slot.edge_hash(entry)) {
+                Some(id) => parent = id,
+                None => return NO_NODE,
+            }
+        }
+        validated_node(t, arr, count, parent).unwrap_or(NO_NODE)
+    })
+}
+
+/// Does `node` publish exactly `(arr, count)`? One node read: the check a
+/// carried node passes before the shape mint takes it as the list's identity.
+#[inline]
+pub(crate) fn node_publishes(arr: *const ArrayHeader, count: u32, node: u32) -> bool {
+    if node == ROOT_NODE && count == 0 {
+        return true;
+    }
+    // A shared borrow: a read never writes the borrow flag's exclusive state.
+    CANONICAL_KEYS
+        .try_with(|t| {
+            t.try_borrow()
+                .is_ok_and(|t| validated_node(&t, arr, count, node).is_some())
+        })
+        .unwrap_or(false)
 }
 
 /// `(live nodes, nodes ever minted, nodes reaped)`. The census reads this;

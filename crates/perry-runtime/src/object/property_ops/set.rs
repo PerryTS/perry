@@ -412,7 +412,7 @@ pub(crate) fn own_set_descriptor(target: f64, key: f64) -> Option<OwnSetDescript
                         unsafe {
                             let hash = crate::object::key_bytes_hash(bytes.as_ptr(), bytes.len());
                             let verdict = crate::object::shapes::shape_slot_lookup_verdict(
-                                keys,
+                                shape.keys_view(),
                                 bytes,
                                 hash,
                                 shape.logical_key_count,
@@ -422,7 +422,7 @@ pub(crate) fn own_set_descriptor(target: f64, key: f64) -> Option<OwnSetDescript
                             // index. Rebuild before claiming absence.
                             if matches!(verdict, KeysIndexVerdict::Unindexed) {
                                 crate::object::shapes::shape_slot_lookup_verdict(
-                                    keys,
+                                    shape.keys_view(),
                                     bytes,
                                     hash,
                                     shape.logical_key_count,

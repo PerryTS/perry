@@ -1191,9 +1191,8 @@ pub(crate) unsafe fn evaluation_chain_lost_method(
         return false;
     };
     if let (Some(cell), Some(facts), Some(template)) = (template_cell, template_facts, template) {
-        let keys = template.keys as usize as *const crate::ArrayHeader;
         if let Some(slot) = crate::object::keys_find_slot_by_bytes_resolved(
-            keys,
+            template.keys_view(),
             template.logical_key_count,
             name.as_bytes(),
         ) {

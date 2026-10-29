@@ -96,7 +96,7 @@ fn expando_lookup(addr: usize, key: &str) -> Option<u64> {
         }
         let keys = super::object_keys(bag);
         let slot =
-            super::keys_find_property_slot_by_bytes(keys.arr(), keys.count(), key.as_bytes())?;
+            super::keys_find_property_slot_by_bytes(keys, keys.count(), key.as_bytes())?;
         Some(super::key_attrs::object_slot_data(bag, slot).bits())
     }
 }
@@ -109,7 +109,7 @@ fn expando_remove(addr: usize, key: &str) -> bool {
             return false;
         }
         let keys = super::object_keys(bag);
-        if super::keys_find_property_slot_by_bytes(keys.arr(), keys.count(), key.as_bytes())
+        if super::keys_find_property_slot_by_bytes(keys, keys.count(), key.as_bytes())
             .is_none()
         {
             return false;

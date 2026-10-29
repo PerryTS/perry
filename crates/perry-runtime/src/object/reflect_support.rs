@@ -226,7 +226,7 @@ pub(crate) fn obj_value_has_own_key(value: f64, key: f64) -> bool {
         // `keys_find_slot_by_key_ptr` allocates nothing (a consult-only shape
         // probe, then a raw slot compare), so unlike the loop it replaced it
         // needs no per-iteration re-rooting.
-        crate::object::keys_find_slot_by_key_ptr(keys, key_count, key_str).is_some()
+        crate::object::keys_find_slot_by_key_ptr(keys_view, key_count, key_str).is_some()
     }
 }
 

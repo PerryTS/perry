@@ -482,7 +482,7 @@ pub(crate) unsafe fn keys_find_accessor_slot_resolved(
         }
         let value = crate::JSValue::from_bits((*slots.add(i)).to_bits());
         if crate::string::js_string_key_bytes(value, &mut sso) == Some(key) {
-            return (crate::object::keys_find_slot_by_bytes_resolved(keys, count, key)
+            return (crate::object::keys_find_slot_by_bytes_resolved(crate::object::ObjectKeys::new(keys as *mut _, count), count, key)
                 == Some(i as u32))
             .then_some(i as u32);
         }
@@ -1137,7 +1137,7 @@ pub(crate) unsafe fn object_key_is_private(
     let keys = crate::object::object_keys(obj);
     !keys.is_null()
         && crate::object::keys_find_private_slot_by_bytes(keys.arr(), keys.count(), key).is_some()
-        && crate::object::keys_find_property_slot_by_bytes(keys.arr(), keys.count(), key).is_none()
+        && crate::object::keys_find_property_slot_by_bytes(keys, keys.count(), key).is_none()
 }
 
 /// Private-field presence, independent of an equally spelled public property.
@@ -1282,7 +1282,7 @@ unsafe fn object_key_entry_filtered(
     }
     #[cfg(feature = "attr-census")]
     crate::object::attr_census::note_global("read.key_entry_lookup");
-    match crate::object::keys_find_property_slot_by_bytes(keys.arr(), keys.count(), key) {
+    match crate::object::keys_find_property_slot_by_bytes(keys, keys.count(), key) {
         Some(pos) => keys_entry(keys.arr(), pos),
         None => 0,
     }
@@ -1520,7 +1520,7 @@ pub(crate) unsafe fn apply_edits(obj: *mut crate::object::ObjectHeader, edits: &
             && (if matches!(edit, AttrsEdit::Private(_)) {
                 crate::object::keys_find_private_slot_by_bytes(keys.arr(), keys.count(), key)
             } else {
-                crate::object::keys_find_property_slot_by_bytes(keys.arr(), keys.count(), key)
+                crate::object::keys_find_property_slot_by_bytes(keys, keys.count(), key)
             })
             .is_some()
         {
@@ -1561,7 +1561,7 @@ pub(crate) unsafe fn apply_edits(obj: *mut crate::object::ObjectHeader, edits: &
             let position = if matches!(edit, AttrsEdit::Private(_)) {
                 crate::object::keys_find_private_slot_by_bytes(keys.arr(), count as u32, key)
             } else {
-                crate::object::keys_find_property_slot_by_bytes(keys.arr(), count as u32, key)
+                crate::object::keys_find_property_slot_by_bytes(keys, count as u32, key)
             };
             if let Some(pos) = position {
                 if first_change.map_or(true, |f| pos < f) && changes_at(pos as usize) {

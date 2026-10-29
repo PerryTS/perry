@@ -82,7 +82,7 @@ pub fn handle_expando_get(handle: i64, name: &str) -> Option<f64> {
 unsafe fn bag_data_get(bag: *mut super::ObjectHeader, name: &str) -> Option<f64> {
     let keys = crate::object::object_keys(bag);
     let slot =
-        crate::object::keys_find_property_slot_by_bytes(keys.arr(), keys.count(), name.as_bytes())?;
+        crate::object::keys_find_property_slot_by_bytes(keys, keys.count(), name.as_bytes())?;
     Some(crate::object::key_attrs::object_slot_data_f64(bag, slot))
 }
 

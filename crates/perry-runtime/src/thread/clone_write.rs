@@ -1038,7 +1038,7 @@ impl Writer<'_> {
                     .iter()
                     .map(|name| {
                         let position = crate::object::keys_find_property_slot_by_bytes(
-                            keys.arr(),
+                            keys,
                             keys.count(),
                             name,
                         )

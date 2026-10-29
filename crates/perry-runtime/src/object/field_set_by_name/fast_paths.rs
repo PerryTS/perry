@@ -188,9 +188,9 @@ unsafe fn existing_own_data_overwrite(
                 // plan was flushed — the same miss-path cost #8936 and #8950
                 // removed from their sides of the property paths.
                 own_idx = if shape.summary & crate::object::key_attrs::SUMMARY_PRIVATE == 0 {
-                    crate::object::keys_find_slot_by_key_ptr(keys, key_count as u32, key)
+                    crate::object::keys_find_slot_by_key_ptr(keys_view, key_count as u32, key)
                 } else {
-                    crate::object::keys_find_property_slot_by_key_ptr(keys, key_count as u32, key)
+                    crate::object::keys_find_property_slot_by_key_ptr(keys_view, key_count as u32, key)
                 };
                 if let Some(i) = own_idx {
                     super::prop_plan::read_plan_record(
@@ -211,9 +211,9 @@ unsafe fn existing_own_data_overwrite(
             // The key list's own keying: content, most-derived declaration
             // first (#10595), exactly as the interned lookup resolves it.
             if shape.summary & crate::object::key_attrs::SUMMARY_PRIVATE == 0 {
-                crate::object::keys_find_slot_by_bytes(keys, key_count, bytes)
+                crate::object::keys_find_slot_by_bytes(keys_view, key_count, bytes)
             } else {
-                crate::object::keys_find_property_slot_by_bytes(keys, key_count, bytes)
+                crate::object::keys_find_property_slot_by_bytes(keys_view, key_count, bytes)
             }
         }
     };
@@ -554,7 +554,7 @@ pub(crate) fn try_readd_stable_tombstone(
             || keys_gc.gc_flags & (crate::gc::GC_FLAG_FORWARDED | crate::gc::GC_FLAG_SHAPE_SHARED)
                 != 0
             || crate::object::keys_find_property_slot_by_bytes(
-                keys,
+                shape.keys_view(),
                 shape.logical_key_count,
                 key_bytes,
             )
@@ -652,7 +652,7 @@ unsafe fn try_readd_stable_tombstone_sso_no_grow(
     // All-holes is a constructive absence proof and is the steady state of a
     // one-live-key receiver immediately after delete.
     if shape.hole_count != shape.logical_key_count
-        && crate::object::keys_find_property_slot_by_bytes(keys, shape.logical_key_count, key_bytes)
+        && crate::object::keys_find_property_slot_by_bytes(shape.keys_view(), shape.logical_key_count, key_bytes)
             .is_some()
     {
         return None;
