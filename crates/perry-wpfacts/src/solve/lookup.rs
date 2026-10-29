@@ -676,6 +676,9 @@ impl Model {
     /// The parameter/result half of `group_connect`.
     pub(crate) fn group_bind(&mut self, holder: Tok, key: Key, ft: Tok, setter: bool) {
         let f = self.tok_fn(ft);
+        if self.diagnostic.is_some() {
+            self.diagnostic_reach(f, "accessor", u32::MAX);
+        }
         if !self.sum.ready {
             self.sum
                 .deferred
