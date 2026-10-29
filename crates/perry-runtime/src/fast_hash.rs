@@ -498,3 +498,49 @@ mod tests {
         assert_eq!(m.get(&(base, "length".to_string())), Some(&0x07));
     }
 }
+
+/// The hasher state of the runtime's startup-path `ahash` maps. A randomly keyed
+/// `ahash::RandomState` in a product build; under the measurement-only
+/// `fixed-hash-seeds` feature a fixed one, so the hash values (and with them
+/// hashbrown's probe lengths) do not depend on static addresses.
+#[derive(Clone)]
+pub struct AHashState(ahash::RandomState);
+
+impl Default for AHashState {
+    #[inline]
+    fn default() -> Self {
+        #[cfg(feature = "fixed-hash-seeds")]
+        {
+            AHashState(ahash::RandomState::with_seeds(
+                0x243f_6a88_85a3_08d3,
+                0x1319_8a2e_0370_7344,
+                0xa409_3822_299f_31d0,
+                0x082e_fa98_ec4e_6c89,
+            ))
+        }
+        #[cfg(not(feature = "fixed-hash-seeds"))]
+        {
+            AHashState(ahash::RandomState::new())
+        }
+    }
+}
+
+impl BuildHasher for AHashState {
+    type Hasher = ahash::AHasher;
+
+    #[inline]
+    fn build_hasher(&self) -> ahash::AHasher {
+        self.0.build_hasher()
+    }
+
+    #[inline]
+    fn hash_one<T: std::hash::Hash>(&self, x: T) -> u64 {
+        self.0.hash_one(x)
+    }
+}
+
+/// Presence marker `scripts/a1/irdiff.sh` looks for in `libperry_runtime.a`, so
+/// it can refuse arms that were not built with the measurement feature.
+#[cfg(feature = "fixed-hash-seeds")]
+#[used]
+static FIXED_HASH_SEEDS_MARKER: [u8; 24] = *b"perry:fixed-hash-seeds\0\0";
