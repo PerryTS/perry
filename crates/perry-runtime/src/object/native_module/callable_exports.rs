@@ -135,10 +135,10 @@ pub fn bound_native_callable_export_value(module_name: &str, property_name: &str
         crate::closure::js_closure_set_capture_f64(c, 0, ns.get_nanbox_f64());
     });
     closure.with_mut_ptr(|c: *mut crate::closure::ClosureHeader| {
-        crate::closure::js_closure_set_capture_ptr(c, 1, method_bytes.as_ptr() as i64);
+        crate::closure::closure_set_capture_word(c, 1, method_bytes.as_ptr() as i64);
     });
     closure.with_mut_ptr(|c: *mut crate::closure::ClosureHeader| {
-        crate::closure::js_closure_set_capture_ptr(c, 2, method_bytes.len() as i64);
+        crate::closure::closure_set_capture_word(c, 2, method_bytes.len() as i64);
     });
     if let Some(class) = constructor_class {
         closure.with_mut_ptr(|c: *mut crate::closure::ClosureHeader| {
@@ -323,8 +323,8 @@ pub(crate) fn fs_namespace_descriptor_getter_value(property_name: &str) -> f64 {
     let property_bytes: &'static [u8] = property_name.as_bytes().to_vec().leak();
     let func_ptr = crate::fn_info!(fs_namespace_descriptor_getter_thunk, 0; with_declared(0));
     let closure = crate::closure::js_closure_alloc(func_ptr, 2);
-    crate::closure::js_closure_set_capture_ptr(closure, 0, property_bytes.as_ptr() as i64);
-    crate::closure::js_closure_set_capture_ptr(closure, 1, property_bytes.len() as i64);
+    crate::closure::closure_set_capture_word(closure, 0, property_bytes.as_ptr() as i64);
+    crate::closure::closure_set_capture_word(closure, 1, property_bytes.len() as i64);
     let name = if property_name == "promises" {
         "get".to_string()
     } else {
@@ -1109,12 +1109,12 @@ fn attach_tls_constructor_prototype(constructor_value: f64, constructor_name: &s
             continue;
         }
         let method_handle = scope.root_raw_mut_ptr(method);
-        crate::closure::js_closure_set_capture_ptr(
+        crate::closure::closure_set_capture_word(
             method_handle.get_raw_mut_ptr(),
             0,
             name.as_ptr() as i64,
         );
-        crate::closure::js_closure_set_capture_ptr(
+        crate::closure::closure_set_capture_word(
             method_handle.get_raw_mut_ptr(),
             1,
             name.len() as i64,

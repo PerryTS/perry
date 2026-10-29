@@ -59,8 +59,16 @@
 //! ## Stable node ids and stationary backing addresses
 //!
 //! Edges are keyed by NODE ID, which the collector cannot move. The backing
-//! addresses never move, so neither nodes nor the address index
-//! need a relocation scanner. Full traces prune unreachable backings.
+//! addresses never move, so nodes need no relocation scanner. Full traces
+//! prune unreachable backings.
+//!
+//! ## The node is the list's identity, carried by its holders (CKI S1)
+//!
+//! There is no `(address, count)` -> node index. A [`CanonicalKeys`] handle,
+//! an [`crate::object::ObjectKeys`] view and the shape record each carry the
+//! node of their list, and every consumer validates the node it was handed
+//! with one read (`validated_node`). An index keyed by image and heap
+//! addresses made every probe's cost a function of the link layout.
 //!
 //! ## Weak, exactly like the transition cache — and that is what bounds it
 //!
@@ -137,11 +145,26 @@ pub(crate) unsafe fn adopt_image_key(
 /// list must accept one. The backing's header length is the length of the
 /// longest list on it and says nothing about this one; [`Self::len`] is the
 /// list's count.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+///
+/// The handle also carries the list's trie NODE, its identity in this agent's
+/// table (CKI S1). The node is the list's owner: every consumer asks the node
+/// it was handed, validated by one exact read, instead of looking the list up
+/// by its address. Equality stays the list's, `(backing, count)`.
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct CanonicalKeys {
     arr: *mut ArrayHeader,
     count: u32,
+    node: u32,
 }
+
+impl PartialEq for CanonicalKeys {
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        self.arr == other.arr && self.count == other.count
+    }
+}
+
+impl Eq for CanonicalKeys {}
 
 impl CanonicalKeys {
     /// The empty list without a backing. Class globals use `empty_backing`
@@ -149,18 +172,34 @@ impl CanonicalKeys {
     pub(crate) const EMPTY: CanonicalKeys = CanonicalKeys {
         arr: std::ptr::null_mut(),
         count: 0,
+        node: ROOT_NODE,
     };
 
     #[inline]
-    fn new(arr: *mut ArrayHeader, count: u32) -> Self {
-        CanonicalKeys { arr, count }
+    fn new(arr: *mut ArrayHeader, count: u32, node: u32) -> Self {
+        CanonicalKeys { arr, count, node }
     }
 
-    /// A handle rebuilt from a list this module returned, which the caller
-    /// held rooted (by its array) across an allocation: the handle's array
-    /// may have moved, its content and count cannot have changed.
-    pub(crate) fn from_rooted(arr: *mut ArrayHeader, count: u32) -> Self {
-        CanonicalKeys { arr, count }
+    /// This handle, rebuilt from the array the caller held rooted across an
+    /// allocation: the array's spelling may have changed, the list (its
+    /// content, count and node) cannot have.
+    #[inline]
+    pub(crate) fn rooted_at(self, arr: *mut ArrayHeader) -> Self {
+        CanonicalKeys { arr, ..self }
+    }
+
+    /// A handle on an array no trie published, for a test that drives the
+    /// collector over a hand-built backing. It names no node.
+    #[cfg(test)]
+    pub(crate) fn unlinked_for_test(arr: *mut ArrayHeader, count: u32) -> Self {
+        CanonicalKeys::new(arr, count, NO_NODE)
+    }
+
+    /// The list's trie node in this agent (`NO_NODE` only for a list a
+    /// torn-down table could not record).
+    #[inline]
+    pub(crate) fn node(self) -> u32 {
+        self.node
     }
 
     /// The backing array.
@@ -174,6 +213,7 @@ impl CanonicalKeys {
         self.arr as *const ArrayHeader
     }
 
+    #[cfg(test)]
     #[inline]
     pub(crate) fn addr(self) -> usize {
         self.arr as usize
@@ -187,7 +227,7 @@ impl CanonicalKeys {
     /// This list as a receiver's keys: the backing and the list's own count.
     #[inline]
     pub(crate) fn view(self) -> crate::object::ObjectKeys {
-        crate::object::ObjectKeys::new(self.arr, self.count)
+        crate::object::ObjectKeys::with_node(self.arr, self.count, self.node)
     }
 
     /// The list's key count — a prefix of the backing, never the backing's
@@ -291,7 +331,15 @@ impl SharedLayout {
     }
 }
 
-const NO_NODE: u32 = u32::MAX;
+/// No trie node: an owned (dictionary) list, or a list whose holder never
+/// learned one. Shared with `ObjectKeys` and the shape record's packed field.
+pub(crate) const NO_NODE: u32 = u32::MAX;
+/// Node ids are below this: the shape record carries a node in 24 bits
+/// (`ShapeRecord::keys_node`), beside the element kind's byte. An encoding
+/// capacity, like the ShapeId space: ids of pruned nodes are reused, so it
+/// bounds LIVE lists per agent, and running out aborts with a message, as
+/// ShapeId exhaustion does.
+pub(crate) const NODE_ID_LIMIT: u32 = (1 << 24) - 1;
 /// The permanent empty node. Its optional backing follows the weak prune.
 const ROOT_NODE: u32 = 0;
 
@@ -335,9 +383,6 @@ struct Node {
 pub(crate) struct CanonicalTable {
     nodes: Vec<Node>,
     free: u32,
-    /// `(backing address, count)` -> published node id. Many lists share one
-    /// backing, so the address alone names a chain, not a list.
-    by_addr: FastKeyHashMap<(usize, u32), u32>,
     /// `(parent node, appended-slot hash)` -> first candidate node.
     edges: FastKeyHashMap<(u32, u64), u32>,
     /// `(backing, count, node)` of the list the last append CREATED, for the
@@ -368,10 +413,9 @@ impl CanonicalTable {
                 run: 0,
             }],
             free: NO_NODE,
-            // Both keys contain internal numeric identities, with slot text
-            // already hashed and content-validated by the trie. Use the
-            // existing composite-word fold, preserving both tuple fields.
-            by_addr: new_fast_key_hash_map(),
+            // The key is `(node id, slot hash)`: a deterministic ordinal and
+            // a content (or symbol-serial) hash, so occupancy and probe
+            // lengths are independent of where the image or heap is laid out.
             edges: new_fast_key_hash_map(),
             last_created: (0, 0, NO_NODE),
             minted: 0,
@@ -381,6 +425,13 @@ impl CanonicalTable {
             #[cfg(test)]
             allocated_slots: 0,
         }
+    }
+
+    /// Published lists in this table (the count the deleted address index
+    /// used to hold).
+    #[cfg(test)]
+    fn published_count(&self) -> usize {
+        self.nodes.iter().filter(|n| n.published && n.addr != 0).count()
     }
 
     fn alloc_node(
@@ -409,6 +460,9 @@ impl CanonicalTable {
             self.nodes[id as usize] = fresh;
             id
         } else {
+            if self.nodes.len() >= NODE_ID_LIMIT as usize {
+                canonical_node_ids_exhausted();
+            }
             self.nodes.push(fresh);
             (self.nodes.len() - 1) as u32
         };
@@ -418,7 +472,6 @@ impl CanonicalTable {
         if published {
             CANON_WORDS.fetch_add(u64::from(len), std::sync::atomic::Ordering::Relaxed);
             CANON_PUBLISHED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            self.by_addr.insert((addr, len), id);
         }
         if parent != NO_NODE {
             let head = self.edges.entry((parent, edge_hash)).or_insert(NO_NODE);
@@ -438,7 +491,6 @@ impl CanonicalTable {
         node.all_ptr = all_ptr;
         node.published = true;
         let len = node.len;
-        self.by_addr.insert((addr, len), id);
         CANON_WORDS.fetch_add(u64::from(len), std::sync::atomic::Ordering::Relaxed);
         CANON_PUBLISHED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
@@ -531,7 +583,6 @@ impl CanonicalTable {
     fn rewitness(&mut self, id: u32, addr: usize) {
         let node = &mut self.nodes[id as usize];
         if node.published {
-            self.by_addr.remove(&(node.addr, node.len));
             CANON_WORDS.fetch_sub(u64::from(node.len), std::sync::atomic::Ordering::Relaxed);
             CANON_PUBLISHED.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
             node.published = false;
@@ -565,7 +616,6 @@ impl CanonicalTable {
                 continue;
             }
             if node.published {
-                self.by_addr.remove(&(node.addr, node.len));
                 CANON_WORDS.fetch_sub(u64::from(node.len), std::sync::atomic::Ordering::Relaxed);
                 CANON_PUBLISHED.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
             }
@@ -646,6 +696,16 @@ impl CanonicalTable {
             self.free = id;
         }
     }
+}
+
+#[cold]
+#[inline(never)]
+fn canonical_node_ids_exhausted() -> ! {
+    eprintln!(
+        "perry: canonical key-list node ids exhausted ({} live lists in one agent)",
+        NODE_ID_LIMIT
+    );
+    std::process::abort()
 }
 
 crate::perry_thread_local! {
@@ -740,7 +800,7 @@ impl Appended {
                     // participate, or `{a, <hole>}` and `{a, b}` share an edge
                     // — the ORDER/tombstone-POSITION merge that L8.3.15's
                     // must-fail control exists to catch.
-                    None => v.bits() ^ 0x9E37_79B9_7F4A_7C15,
+                    None => non_string_slot_hash(v),
                 }
             }
         }
@@ -857,6 +917,34 @@ impl Appended {
     }
 }
 
+/// The edge hash of a slot that is not a string key: a symbol hashes its
+/// `SymbolHeader.id`, the symbol's own serial, under a symbol domain tag; a
+/// hole (and any other constant word) hashes its bits, which are a constant.
+///
+/// Never the symbol's ADDRESS: that is a function of where the image or the
+/// heap put it, so the edge table's occupancy, and with it every probe's
+/// cost, would move with an unrelated link-layout change, and a moved symbol
+/// would no longer reach its own edge. The exact check (`matches`) still
+/// compares the slot words, so two symbols with one description, or a serial
+/// collision, never share a list.
+///
+/// Out of line, so `Appended::slot_hash`'s string path stays small enough to
+/// inline into every walk, as it did before symbols had their own arm.
+///
+/// # Safety
+/// `v` is a live keys-array slot.
+#[inline(never)]
+unsafe fn non_string_slot_hash(v: JSValue) -> u64 {
+    const SYMBOL_EDGE_DOMAIN: u64 = 0x5359_4D42_4F4C_4544;
+    if v.is_pointer() {
+        let sym = (v.bits() & crate::value::POINTER_MASK) as *const crate::symbol::SymbolHeader;
+        if !sym.is_null() && crate::symbol::may_be_symbol_header(sym.cast()) {
+            return ((*sym).id ^ SYMBOL_EDGE_DOMAIN).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        }
+    }
+    v.bits() ^ 0x9E37_79B9_7F4A_7C15
+}
+
 #[inline]
 fn edge_hash_with_entry(hash: u64, entry: u64) -> u64 {
     if entry == 0 {
@@ -866,12 +954,24 @@ fn edge_hash_with_entry(hash: u64, entry: u64) -> u64 {
     }
 }
 
+/// The node a holder carries, validated: `Some` exactly when that node still
+/// publishes this `(backing, count)`. One read of the node and three
+/// compares, the same condition under which the address index this replaced
+/// answered; a node pruned, rewitnessed or reused for another list since the
+/// holder learned it answers `None`.
+#[inline]
+fn validated_node(t: &CanonicalTable, arr: *const ArrayHeader, count: u32, node: u32) -> Option<u32> {
+    let n = t.nodes.get(node as usize)?;
+    (n.published && n.addr == arr as usize && n.len == count).then_some(node)
+}
+
 /// The node id of a canonical handle, or `None` when a death prune dropped it.
+#[inline]
 fn node_of(t: &CanonicalTable, keys: CanonicalKeys) -> Option<u32> {
     if keys.is_empty() {
         return Some(ROOT_NODE);
     }
-    t.by_addr.get(&(keys.addr(), keys.count)).copied()
+    validated_node(t, keys.arr, keys.count, keys.node)
 }
 
 /// Probe the trie for `parent + appended`, validating the appended slot
@@ -946,7 +1046,7 @@ unsafe fn probe(
         let node = &t.nodes[id as usize];
         let hit = node
             .published
-            .then_some(CanonicalKeys::new(node.addr as *mut ArrayHeader, node.len));
+            .then_some(CanonicalKeys::new(node.addr as *mut ArrayHeader, node.len, id));
         if hit.is_some() {
             t.note_reached(id);
         }
@@ -983,7 +1083,7 @@ pub(crate) unsafe fn probe_born_layout(
         let node = &t.nodes[parent as usize];
         let hit = node
             .published
-            .then_some(CanonicalKeys::new(node.addr as *mut ArrayHeader, node.len));
+            .then_some(CanonicalKeys::new(node.addr as *mut ArrayHeader, node.len, parent));
         if hit.is_some() {
             t.note_reached(parent);
         }
@@ -1064,6 +1164,7 @@ unsafe fn extend_token(
     // re-enters this table through its scanner and its prune) and both
     // operands rooted, because a collection here moves them.
     let scope = crate::gc::RuntimeHandleScope::new();
+    let parent_handle_keys = parent;
     let parent_handle = scope.root_raw_mut_ptr(parent.as_ptr());
     let appended_handle = match appended {
         Appended::Key(key) => scope.root_string_ptr(key),
@@ -1092,7 +1193,7 @@ unsafe fn extend_token(
             (result, Appended::Slot(JSValue::from_bits(slot.to_bits())))
         }
     };
-    let parent = CanonicalKeys::new(parent, parent_len);
+    let parent = parent_handle_keys.rooted_at(parent);
 
     // A collection during the allocation may have published this exact node
     // through another path, or pruned the parent. Re-probe before writing.
@@ -1154,7 +1255,7 @@ unsafe fn extend_token(
     }
     stamp_shared(fresh);
 
-    try_with_table(|t| {
+    let node = try_with_table(|t| {
         // The parent may have been pruned while we allocated. Keep the array —
         // it is a correct list — as an orphan root: the caller still gets the
         // right content and only the edge is lost.
@@ -1167,8 +1268,10 @@ unsafe fn extend_token(
         };
         t.own_backing(id, capacity);
         t.note_created(id, pnode);
-    });
-    CanonicalKeys::new(fresh, parent_len + 1)
+        id
+    })
+    .unwrap_or(NO_NODE);
+    CanonicalKeys::new(fresh, parent_len + 1, node)
 }
 
 /// Capacity for a new backing whose first list has `len` keys: room for the
@@ -1261,7 +1364,7 @@ unsafe fn append_at_tip(
     );
     let key_array = backing;
     (*key_array).length = parent_len + 1;
-    try_with_table(|t| {
+    let node = try_with_table(|t| {
         let id = if let Some(id) = probe_node(t, pnode, parent_len, appended, entry, h) {
             t.publish(id, backing as usize, all_ptr);
             id
@@ -1269,8 +1372,10 @@ unsafe fn append_at_tip(
             t.alloc_node(backing as usize, pnode, h, parent_len + 1, all_ptr, true)
         };
         t.note_created(id, pnode);
-    });
-    Some(CanonicalKeys::new(backing, parent_len + 1))
+        id
+    })
+    .unwrap_or(NO_NODE);
+    Some(CanonicalKeys::new(backing, parent_len + 1, node))
 }
 
 /// [`extend_slot`] with an incoming interned key string — the grow path's form.
@@ -1330,9 +1435,9 @@ pub(crate) unsafe fn rebuild_with_entries(
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let src = scope.root_raw_mut_ptr(keys.arr());
-    let prefix = src.with_const_ptr(|arr: *const ArrayHeader| canonicalize(proof, arr, from));
+    let prefix = canonical_prefix(proof, keys, from);
     let list = scope.root_raw_mut_ptr(prefix.as_ptr());
-    let mut len = prefix.len();
+    let mut cur = prefix;
     for pos in from..count {
         let (slot, old) = src.with_const_ptr(|arr: *const ArrayHeader| {
             let (slots, available) = crate::object::keys_array_dense_slots(arr);
@@ -1350,17 +1455,12 @@ pub(crate) unsafe fn rebuild_with_entries(
         let entry = (old & !0xff) | u64::from(entry_at(pos, slot, old as u8));
         // `extend_slot` roots its operands across its own allocation.
         let next = list.with_mut_ptr(|arr: *mut ArrayHeader| {
-            extend_token(
-                proof,
-                CanonicalKeys::new(arr, len),
-                Appended::Slot(slot),
-                entry,
-            )
+            extend_token(proof, cur.rooted_at(arr), Appended::Slot(slot), entry)
         });
         list.set_raw_mut_ptr(next.as_ptr());
-        len = next.len();
+        cur = next;
     }
-    list.with_mut_ptr(|arr: *mut ArrayHeader| CanonicalKeys::new(arr, len))
+    list.with_mut_ptr(|arr: *mut ArrayHeader| cur.rooted_at(arr))
 }
 
 /// The canonical array for the ordered key list held in `keys[0..len]`.
@@ -1386,6 +1486,70 @@ pub(crate) unsafe fn canonicalize(
     if let Some(hit) = find_canonical(proof, keys, len) {
         return hit;
     }
+    canonicalize_miss(keys, len)
+}
+
+/// [`canonicalize`] for a receiver's keys as its shape hands them over: a
+/// list that carries its trie node is its own proof, validated by one read
+/// of the node, and returned unchanged.
+///
+/// # Safety
+/// As [`canonicalize`].
+#[inline]
+pub(crate) unsafe fn canonicalize_keys(
+    proof: &SharedLayout,
+    keys: crate::object::ObjectKeys,
+) -> CanonicalKeys {
+    canonical_prefix(proof, keys, keys.count())
+}
+
+/// The canonical list of the first `len` keys of `keys`. When `keys` carries
+/// its node and the prefix's node (its ancestor `count - len` parent links
+/// up) is published, that node is the answer: no hash and no content read.
+/// Otherwise the prefix is canonicalized from its content.
+///
+/// # Safety
+/// As [`canonicalize`]; `len <= keys.count()`.
+pub(crate) unsafe fn canonical_prefix(
+    proof: &SharedLayout,
+    keys: crate::object::ObjectKeys,
+    len: u32,
+) -> CanonicalKeys {
+    debug_assert!(len <= keys.count());
+    if !keys.is_null() && len != 0 {
+        let hit = with_table_or(None, |t| {
+            let mut id = validated_node(t, keys.arr(), keys.count(), keys.node())?;
+            let mut at = keys.count();
+            while at > len {
+                id = t.nodes[id as usize].parent;
+                let node = t.nodes.get(id as usize)?;
+                if node.addr == 0 || node.len != at - 1 {
+                    return None;
+                }
+                at -= 1;
+            }
+            let node = &t.nodes[id as usize];
+            if !node.published {
+                return None;
+            }
+            let addr = node.addr;
+            // Exactly the arrivals the content walk reports: a prefix found
+            // on another backing is reached; a list already spelled by this
+            // backing at this count is the holder's own list.
+            if addr != keys.arr() as usize {
+                t.note_reached(id);
+            }
+            Some(CanonicalKeys::new(addr as *mut ArrayHeader, len, id))
+        });
+        if let Some(hit) = hit {
+            return hit;
+        }
+    }
+    canonicalize(proof, keys.arr(), len)
+}
+
+/// The publishing half of [`canonicalize`], after its walk missed.
+unsafe fn canonicalize_miss(keys: *const ArrayHeader, len: u32) -> CanonicalKeys {
     let (slots, _) = crate::object::keys_array_dense_slots(keys);
     let all_ptr =
         (0..len).all(|i| JSValue::from_bits((*slots.add(i as usize)).to_bits()).is_string());
@@ -1450,10 +1614,6 @@ unsafe fn find_canonical(
     if len == 0 {
         return Some(empty_backing(proof));
     }
-    let already = with_table_or(false, |t| t.by_addr.contains_key(&(keys as usize, len)));
-    if already {
-        return Some(CanonicalKeys::new(keys as *mut ArrayHeader, len));
-    }
 
     // Walk without allocating. Intermediate prefixes have no observable array:
     // their weak representative is used only to compare one edge slot.
@@ -1471,9 +1631,11 @@ unsafe fn find_canonical(
         let node = &t.nodes[parent as usize];
         let hit = node
             .published
-            .then_some(CanonicalKeys::new(node.addr as *mut ArrayHeader, node.len));
-        // A declared whole list is not one receiver's growth.
-        if hit.is_some() {
+            .then_some(CanonicalKeys::new(node.addr as *mut ArrayHeader, node.len, parent));
+        // A declared whole list is not one receiver's growth. The list this
+        // very array already spells at this count is the holder's own: it
+        // arrives nowhere new.
+        if hit.is_some() && node.addr != keys as usize {
             t.note_reached(parent);
         }
         hit
@@ -1510,7 +1672,7 @@ unsafe fn publish_canonical(fresh: *mut ArrayHeader, len: u32, all_ptr: bool) ->
         }
     }
     stamp_shared(fresh);
-    with_table_or(CanonicalKeys::new(fresh, len), |t| {
+    with_table_or(CanonicalKeys::new(fresh, len, NO_NODE), |t| {
         // Allocation may have moved/pruned witnesses. Walk again with the
         // rooted source now copied into fresh; no table borrow spans a GC.
         let mut parent = ROOT_NODE;
@@ -1529,11 +1691,11 @@ unsafe fn publish_canonical(fresh: *mut ArrayHeader, len: u32, all_ptr: bool) ->
         }
         if t.nodes[parent as usize].published {
             let node = &t.nodes[parent as usize];
-            CanonicalKeys::new(node.addr as *mut ArrayHeader, node.len)
+            CanonicalKeys::new(node.addr as *mut ArrayHeader, node.len, parent)
         } else {
             t.publish(parent, fresh as usize, all_ptr);
             t.own_backing(parent, len);
-            CanonicalKeys::new(fresh, len)
+            CanonicalKeys::new(fresh, len, parent)
         }
     })
 }
@@ -1547,17 +1709,21 @@ pub(crate) unsafe fn empty_backing(_proof: &SharedLayout) -> CanonicalKeys {
         let root = &t.nodes[ROOT_NODE as usize];
         root.published.then_some(root.addr)
     }) {
-        return CanonicalKeys::new(addr as *mut ArrayHeader, 0);
+        return CanonicalKeys::new(addr as *mut ArrayHeader, 0, ROOT_NODE);
     }
     let fresh = crate::array::js_array_alloc_canonical_keys(0, true, false);
     stamp_shared(fresh);
-    with_table_or(CanonicalKeys::new(fresh, 0), |t| {
+    with_table_or(CanonicalKeys::new(fresh, 0, ROOT_NODE), |t| {
         // Allocation can collect, so resolve the root again after it.
         if !t.nodes[ROOT_NODE as usize].published {
             t.publish(ROOT_NODE, fresh as usize, true);
             t.own_backing(ROOT_NODE, 0);
         }
-        CanonicalKeys::new(t.nodes[ROOT_NODE as usize].addr as *mut ArrayHeader, 0)
+        CanonicalKeys::new(
+            t.nodes[ROOT_NODE as usize].addr as *mut ArrayHeader,
+            0,
+            ROOT_NODE,
+        )
     })
 }
 
@@ -1578,9 +1744,9 @@ pub(crate) unsafe fn rebuild_removing(
     crate::object::attr_census::note_global("keys.rebuild_removing");
     let scope = crate::gc::RuntimeHandleScope::new();
     let src = scope.root_raw_mut_ptr(keys.arr());
-    let prefix = src.with_const_ptr(|arr: *const ArrayHeader| canonicalize(proof, arr, remove));
+    let prefix = canonical_prefix(proof, keys, remove);
     let list = scope.root_raw_mut_ptr(prefix.as_ptr());
-    let mut len = prefix.len();
+    let mut cur = prefix;
     for pos in remove + 1..count {
         let (slot, entry) = src.with_const_ptr(|arr: *const ArrayHeader| {
             let (slots, available) = crate::object::keys_array_dense_slots(arr);
@@ -1597,17 +1763,12 @@ pub(crate) unsafe fn rebuild_removing(
         });
         // `extend_slot` roots its operands across its own allocation.
         let next = list.with_mut_ptr(|arr: *mut ArrayHeader| {
-            extend_token(
-                proof,
-                CanonicalKeys::new(arr, len),
-                Appended::Slot(slot),
-                entry,
-            )
+            extend_token(proof, cur.rooted_at(arr), Appended::Slot(slot), entry)
         });
         list.set_raw_mut_ptr(next.as_ptr());
-        len = next.len();
+        cur = next;
     }
-    list.with_mut_ptr(|arr: *mut ArrayHeader| CanonicalKeys::new(arr, len))
+    list.with_mut_ptr(|arr: *mut ArrayHeader| cur.rooted_at(arr))
 }
 
 /// Post-trace death prune. A node whose array did not survive is dropped,
@@ -1639,7 +1800,6 @@ pub(crate) fn prune_dead_canonical_keys(is_dead_owner: &dyn Fn(usize) -> bool) {
     try_with_table(|t| {
         if dead.contains(&ROOT_NODE) {
             let root = &mut t.nodes[ROOT_NODE as usize];
-            t.by_addr.remove(&(root.addr, 0));
             root.addr = 0;
             root.published = false;
             CANON_PUBLISHED.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
@@ -1698,7 +1858,7 @@ pub(crate) fn take_unique_run(keys: crate::object::ObjectKeys) -> u32 {
 /// arrive there is following it, so the lineage is not unique past it.
 pub(crate) fn note_latched_away(keys: crate::object::ObjectKeys) {
     try_with_table(|t| {
-        if let Some(&id) = t.by_addr.get(&(keys.arr() as usize, keys.count())) {
+        if let Some(id) = validated_node(t, keys.arr(), keys.count(), keys.node()) {
             t.note_reached(id);
         }
     });
@@ -1737,9 +1897,9 @@ pub(crate) fn canonical_storage_stats() -> (u64, u64, u64, u64) {
 pub(crate) fn canonical_trie_stats() -> (usize, usize, usize) {
     with_table_or((0, 0, 0), |t| {
         let bytes = t.nodes.capacity() * std::mem::size_of::<Node>()
-            + t.edges.capacity() * std::mem::size_of::<((u32, u64), u32)>()
-            + t.by_addr.capacity() * std::mem::size_of::<((usize, u32), u32)>();
-        (t.edges.len(), t.by_addr.len(), bytes)
+            + t.edges.capacity() * std::mem::size_of::<((u32, u64), u32)>();
+        let published = t.nodes.iter().filter(|n| n.published && n.addr != 0).count();
+        (t.edges.len(), published, bytes)
     })
 }
 
@@ -1752,6 +1912,14 @@ pub(crate) fn published_lists_for_test() -> Vec<*mut ArrayHeader> {
             .filter(|node| node.published && node.addr != 0)
             .map(|node| node.addr as *mut ArrayHeader)
             .collect()
+    })
+}
+
+/// Does the node `keys` carries publish exactly `keys` in this agent's trie?
+#[cfg(test)]
+pub(crate) fn node_publishes_for_test(keys: crate::object::ObjectKeys) -> bool {
+    with_table_or(false, |t| {
+        validated_node(t, keys.arr(), keys.count(), keys.node()).is_some()
     })
 }
 

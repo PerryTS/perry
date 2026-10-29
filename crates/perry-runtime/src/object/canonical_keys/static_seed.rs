@@ -59,7 +59,7 @@ pub(crate) unsafe fn from_static_layout(
     }
     (*fresh).length = count;
     stamp_shared(fresh);
-    Some(with_table_or(CanonicalKeys::new(fresh, count), |t| {
+    Some(with_table_or(CanonicalKeys::new(fresh, count, NO_NODE), |t| {
         let mut parent = ROOT_NODE;
         let mut missing = false;
         for (i, key) in keys.iter().enumerate() {
@@ -81,13 +81,13 @@ pub(crate) unsafe fn from_static_layout(
         }
         let node = &t.nodes[parent as usize];
         if node.published {
-            let existing = CanonicalKeys::new(node.addr as *mut ArrayHeader, count);
+            let existing = CanonicalKeys::new(node.addr as *mut ArrayHeader, count, parent);
             t.note_reached(parent);
             return existing;
         }
         t.publish(parent, fresh as usize, true);
         t.own_backing(parent, count);
-        CanonicalKeys::new(fresh, count)
+        CanonicalKeys::new(fresh, count, parent)
     }))
 }
 
@@ -154,7 +154,7 @@ pub(crate) unsafe fn link_image_list(
             return None;
         }
     }
-    Some(with_table_or(CanonicalKeys::new(cell, count), |t| {
+    Some(with_table_or(CanonicalKeys::new(cell, count, NO_NODE), |t| {
         let mut parent = ROOT_NODE;
         let mut missing = false;
         for (i, key) in keys.iter().enumerate() {
@@ -186,12 +186,12 @@ pub(crate) unsafe fn link_image_list(
         }
         let node = &t.nodes[parent as usize];
         if node.published {
-            let existing = CanonicalKeys::new(node.addr as *mut ArrayHeader, count);
+            let existing = CanonicalKeys::new(node.addr as *mut ArrayHeader, count, parent);
             t.note_reached(parent);
             return existing;
         }
         // The cell is image data: no backing was allocated for it.
         t.publish(parent, cell as usize, true);
-        CanonicalKeys::new(cell, count)
+        CanonicalKeys::new(cell, count, parent)
     }))
 }

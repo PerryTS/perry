@@ -1975,6 +1975,14 @@ pub extern "C" fn js_map_get(map: *const MapHeader, key: f64) -> f64 {
     entry::get_receiver_fallback(map, key)
 }
 
+/// `m.get(k)` that also reports the entry's value slot (0 when absent) through
+/// `slot_out`, so a following `m.set(k, v)` on the same receiver and key bits
+/// can store straight into it. See [`entry::get_with_slot`].
+#[no_mangle]
+pub extern "C" fn js_map_get_entry(map: *const MapHeader, key: f64, slot_out: *mut u64) -> f64 {
+    entry::get_with_slot(map, key, slot_out)
+}
+
 #[inline(always)]
 fn map_get_resolved(map: *const MapHeader, key: f64) -> f64 {
     unsafe {
@@ -2004,6 +2012,12 @@ unsafe fn map_read_entry_value(map: *const MapHeader, index: i32) -> f64 {
         return value;
     }
     heal_forwarded_array_value(map, slot, value)
+}
+
+crate::entry_contracts::kind_entry! {
+    js_map_get_entry__Map, Map, fn(map: *const MapHeader, key: f64, slot_out: *mut u64) -> f64 {
+        entry::get_with_slot_resolved(map, key, slot_out)
+    }
 }
 
 crate::entry_contracts::kind_entry! {
@@ -2247,6 +2261,10 @@ static KEEP_JS_MAP_SET_STRING_STRING: extern "C" fn(
 #[used(compiler)]
 static KEEP_JS_MAP_GET_STRING_KEY: extern "C" fn(*const MapHeader, *const StringHeader) -> f64 =
     js_map_get_string_key;
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_MAP_GET_ENTRY: extern "C" fn(*const MapHeader, f64, *mut u64) -> f64 =
+    js_map_get_entry;
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
 static KEEP_JS_MAP_GET_NUMBER_KEY: extern "C" fn(*const MapHeader, f64) -> f64 =

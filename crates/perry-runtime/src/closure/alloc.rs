@@ -1364,20 +1364,28 @@ pub extern "C" fn js_closure_set_capture_bits(
     }
 }
 
-/// Store a code address (a function entry, never a heap reference) into a
-/// capture slot of a fresh closure. The word is not a GC edge, so the layout
-/// stays as it is: routing it through the generic setter would let the
-/// address' low bits decide whether `layout_pointer_bearing_bits` calls it a
-/// pointer, and a function that merely lands 8-aligned would demote a
-/// pointer-free closure. Linking or code motion must not change runtime work.
-pub(crate) fn closure_set_code_word(closure: *mut ClosureHeader, index: u32, code: usize) {
+/// Store a plain word (an id, fd, index, flag, length, a static name pointer, a
+/// function entry address) into a capture slot of a fresh closure. The word is
+/// not a GC edge, so the closure layout is left as it is: the generic setters
+/// note the slot through `layout_pointer_bearing_bits`, which calls any
+/// 8-aligned word >= 0x1000 a pointer, so a word that merely lands 8-aligned
+/// (a link-placed address, a counter value) would demote a pointer-free
+/// closure to a pointer-bearing layout. Linking, code motion or counter values
+/// must not change runtime work. Real heap references keep the pointer setters.
+#[inline]
+pub fn closure_set_capture_word(closure: *mut ClosureHeader, index: u32, word: i64) {
     if closure.is_null() {
         return;
     }
     unsafe {
-        // GC_STORE_AUDIT(POINTER_FREE): a function entry address is not a heap reference; the collector never reads this word as an edge.
-        *closure_capture_slots_mut(closure).add(index as usize) = code as u64;
+        // GC_STORE_AUDIT(POINTER_FREE): the word is not a heap reference; the collector never reads it as an edge.
+        *closure_capture_slots_mut(closure).add(index as usize) = word as u64;
     }
+}
+
+/// A code address (a function entry) stored as a plain capture word.
+pub(crate) fn closure_set_code_word(closure: *mut ClosureHeader, index: u32, code: usize) {
+    closure_set_capture_word(closure, index, code as i64);
 }
 
 /// Set a capture slot which codegen has proven contains a raw variable-box

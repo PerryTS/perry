@@ -228,8 +228,8 @@ unsafe fn perf_field_getter(name: &str) -> f64 {
     let leaked: &'static [u8] = name.as_bytes().to_vec().leak();
     let func_ptr = crate::fn_info!(perf_entry_field_getter_thunk, 0; with_declared(0));
     let closure = crate::closure::js_closure_alloc(func_ptr, 2);
-    crate::closure::js_closure_set_capture_ptr(closure, 0, leaked.as_ptr() as i64);
-    crate::closure::js_closure_set_capture_ptr(closure, 1, leaked.len() as i64);
+    crate::closure::closure_set_capture_word(closure, 0, leaked.as_ptr() as i64);
+    crate::closure::closure_set_capture_word(closure, 1, leaked.len() as i64);
     crate::object::set_bound_native_closure_name(closure, &format!("get {name}"));
     crate::object::set_builtin_closure_length(closure as usize, 0);
     crate::value::js_nanbox_pointer(closure as i64)

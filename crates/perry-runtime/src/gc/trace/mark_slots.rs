@@ -108,11 +108,16 @@ unsafe fn trace_heap_rewrite_slots_impl<const REMEMBER: bool, const OLD_PARENT: 
     #[cfg(test)]
     let weak_holder =
         crate::weakref::is_weak_holder_header(header) && !mark_hoist_sabotage::forgetting_weak();
-    visit_gc_rewrite_slot_descriptors(header, |descriptor| unsafe {
-        let mut visit_slot =
-            |slot: GcMutableSlot, sticky: &mut Option<&mut StickyRememberedSet>| {
+    // The per-slot visit, expanded at each of its three call sites rather than
+    // called: the plan walk hands it two slots per object, and the call
+    // (spilled captures, a six-register prologue) cost as much as the visit.
+    macro_rules! visit_slot {
+        ($slot:expr, $sticky:expr) => {{
+            let slot: GcMutableSlot = $slot;
+            let sticky: &mut Option<&mut StickyRememberedSet> = $sticky;
+            'visit: {
                 if weak_holder && crate::weakref::is_weak_target_trace_slot(header, slot.slot) {
-                    return false;
+                    break 'visit;
                 }
                 if let Some(kind) = slot.layout_kind {
                     record_layout_child_slot_read(kind);
@@ -123,7 +128,7 @@ unsafe fn trace_heap_rewrite_slots_impl<const REMEMBER: bool, const OLD_PARENT: 
                 // payload word. A marked shared array has already discharged
                 // its trace, including any active handle observer.
                 if slot.shared_keys_already_marked(bits) {
-                    return false;
+                    break 'visit;
                 }
                 if !handles_active {
                     // Preserve the collector's observer-free specialization: the
@@ -131,7 +136,7 @@ unsafe fn trace_heap_rewrite_slots_impl<const REMEMBER: bool, const OLD_PARENT: 
                     trace_decoded_slot::<REMEMBER, false>(
                         header, slot, bits, valid_ptrs, worklist, sticky, OLD_PARENT,
                     );
-                    return false;
+                    break 'visit;
                 }
                 if !proxy_trace_active || (REMEMBER && bits & TAG_MASK == STRING_TAG) {
                     // A source string/shared word cannot invoke an observer, but
@@ -139,7 +144,7 @@ unsafe fn trace_heap_rewrite_slots_impl<const REMEMBER: bool, const OLD_PARENT: 
                     trace_decoded_slot::<REMEMBER, true>(
                         header, slot, bits, valid_ptrs, worklist, sticky, OLD_PARENT,
                     );
-                    return false;
+                    break 'visit;
                 }
                 // Foreign proxy/Fetch/pool observers retain the original ordering,
                 // post-mark reread and barrier decode; no purity is assumed.
@@ -160,7 +165,7 @@ unsafe fn trace_heap_rewrite_slots_impl<const REMEMBER: bool, const OLD_PARENT: 
                         word,
                         OLD_PARENT,
                     );
-                    return false;
+                    break 'visit;
                 }
                 if REMEMBER {
                     #[cfg(test)]
@@ -170,7 +175,7 @@ unsafe fn trace_heap_rewrite_slots_impl<const REMEMBER: bool, const OLD_PARENT: 
                             && crate::gc::barrier::remembered_child_needs_tracking(child)
                             && remembered_mark_sabotage::drop_next_entry()
                         {
-                            return false;
+                            break 'visit;
                         }
                     }
                     remember_mutable_old_to_young_slot(
@@ -179,8 +184,22 @@ unsafe fn trace_heap_rewrite_slots_impl<const REMEMBER: bool, const OLD_PARENT: 
                         slot,
                     );
                 }
-                false
-            };
+            }
+        }};
+    }
+    // An object on a family layout is walked straight from its descriptor's
+    // static plan (`static_scan`); every other object takes the generic walk.
+    if super::super::static_scan::static_scan_admissible(header) && !layout_scan_trace_active() {
+        if let Some(scan) =
+            super::super::static_scan::static_scan(header, Some(full_trace_active()))
+        {
+            super::super::static_scan::for_each_mark_slot(&scan, |slot| {
+                visit_slot!(slot, &mut sticky);
+            });
+            return;
+        }
+    }
+    visit_gc_rewrite_slot_descriptors(header, |descriptor| unsafe {
         match descriptor {
             GcMutableSlotDescriptor::PointerFreeRange(range) => {
                 if proxy_trace_active {
@@ -190,7 +209,7 @@ unsafe fn trace_heap_rewrite_slots_impl<const REMEMBER: bool, const OLD_PARENT: 
                 }
             }
             GcMutableSlotDescriptor::Slot(slot) => {
-                visit_slot(slot, &mut sticky);
+                visit_slot!(slot, &mut sticky);
             }
             GcMutableSlotDescriptor::Range { range, layout_kind } => {
                 // Start the header reads of the range's pointer children
@@ -207,7 +226,7 @@ unsafe fn trace_heap_rewrite_slots_impl<const REMEMBER: bool, const OLD_PARENT: 
                     }
                 }
                 for i in 0..range.slot_count() {
-                    visit_slot(GcMutableSlot::new(range.slot(i), layout_kind), &mut sticky);
+                    visit_slot!(GcMutableSlot::new(range.slot(i), layout_kind), &mut sticky);
                 }
             }
         }

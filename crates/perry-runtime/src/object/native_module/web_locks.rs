@@ -395,7 +395,7 @@ fn web_locks_release_callback_value(
         crate::fn_info!(worker_threads_locks_release_fulfill, 1; with_declared(1))
     };
     let closure = crate::closure::js_closure_alloc(func_ptr, 2);
-    crate::closure::js_closure_set_capture_ptr(closure, 0, id as i64);
+    crate::closure::closure_set_capture_word(closure, 0, id as i64);
     crate::closure::js_closure_set_capture_ptr(closure, 1, output_promise as i64);
     closure
 }

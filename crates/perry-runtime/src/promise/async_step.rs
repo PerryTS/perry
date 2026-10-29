@@ -1720,7 +1720,7 @@ mod tests {
                 crate::closure::js_closure_alloc(crate::fn_info!(async_step_fulfill_thunk, 1), 4);
             crate::closure::js_closure_set_capture_ptr(thunk, 0, step as i64);
             crate::closure::js_closure_set_capture_ptr(thunk, 1, captured_from as i64);
-            crate::closure::js_closure_set_capture_ptr(thunk, 2, 0);
+            crate::closure::closure_set_capture_word(thunk, 2, 0);
             crate::closure::js_closure_set_capture_f64(thunk, 3, 0.0);
 
             let original = INLINE_TRAP.with(|slot| {

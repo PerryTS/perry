@@ -144,8 +144,8 @@ fn named_closure(
     length: u32,
 ) -> f64 {
     let closure = crate::closure::js_closure_alloc(info, 2);
-    crate::closure::js_closure_set_capture_ptr(closure, 0, name.as_ptr() as i64);
-    crate::closure::js_closure_set_capture_ptr(closure, 1, name.len() as i64);
+    crate::closure::closure_set_capture_word(closure, 0, name.as_ptr() as i64);
+    crate::closure::closure_set_capture_word(closure, 1, name.len() as i64);
     let closure = scope.root_raw_mut_ptr(closure);
     closure.with_mut_ptr(|c| crate::object::set_bound_native_closure_name(c, name));
     closure

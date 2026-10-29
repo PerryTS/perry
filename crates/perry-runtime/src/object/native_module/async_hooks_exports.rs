@@ -99,12 +99,12 @@ fn attach_prototype(constructor_value: f64, methods: &[(&str, u32)]) -> f64 {
             continue;
         }
         let method_handle = scope.root_raw_mut_ptr(method);
-        crate::closure::js_closure_set_capture_ptr(
+        crate::closure::closure_set_capture_word(
             method_handle.get_raw_mut_ptr(),
             0,
             name.as_ptr() as i64,
         );
-        crate::closure::js_closure_set_capture_ptr(
+        crate::closure::closure_set_capture_word(
             method_handle.get_raw_mut_ptr(),
             1,
             name.len() as i64,

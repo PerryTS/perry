@@ -187,7 +187,7 @@ pub mod native_payload;
 pub mod native_payload_abi;
 pub mod native_payload_buffer;
 pub mod native_payload_stream_abi;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 mod native_stack;
 pub mod native_value_profile;
 pub mod navigator;

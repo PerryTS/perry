@@ -1044,6 +1044,10 @@ fn rekey_predecessor_for_delete(
     let Some(mut record) = (unsafe { table.slab_mut().remove_handle(predecessor) }) else {
         return LayoutWord(0);
     };
+    if record.logical_key_count != logical_key_count {
+        // The node names `(keys, count)`: another count is another list.
+        record.set_keys_node(crate::object::canonical_keys::NO_NODE);
+    }
     record.logical_key_count = logical_key_count;
     record.live_inline_slot_count = live_inline_slot_count;
     record.semantic_generation = semantic_generation;
@@ -1193,7 +1197,7 @@ pub(super) fn install_external_shape_id_with_constfn(
 pub(super) fn install_external_layout_with_constfn(
     identity: ShapeId,
     static_word: Option<LayoutWord>,
-    keys: *const super::ArrayHeader,
+    keys: impl Into<super::ShapeKeys>,
     logical_key_count: u32,
     live_inline_slot_count: u32,
     proto_id: u64,
@@ -1202,6 +1206,8 @@ pub(super) fn install_external_layout_with_constfn(
     infos: &[super::shapes_store::ConstFnSlotInfo],
     to_any: u32,
 ) -> bool {
+    let shape_keys: super::ShapeKeys = keys.into();
+    let keys = shape_keys.arr();
     let id = identity.0;
     let Some(mask) = super::shapes_store::constfn_mask(infos) else {
         return false;
@@ -1261,7 +1267,8 @@ pub(super) fn install_external_layout_with_constfn(
     )
     .with_proto_id(proto_id)
     .with_summary(summary)
-    .with_special_facts(rep, infos, &[]);
+    .with_special_facts(rep, infos, &[])
+    .with_keys_node(shape_keys.node_for(logical_key_count));
     record.set(super::shapes_store::RECORD_FLAG_EXTERNAL_CARRIER, true);
     for slot in 0..32 {
         if to_any & (1 << slot) != 0 {

@@ -375,7 +375,7 @@ fn index_closure(
     name: &str,
 ) -> f64 {
     let closure = crate::closure::js_closure_alloc(info, 1);
-    crate::closure::js_closure_set_capture_bits(closure, 0, index as u64);
+    crate::closure::closure_set_capture_word(closure, 0, index as i64);
     crate::object::set_bound_native_closure_name(closure, name);
     crate::object::set_builtin_closure_length(closure as usize, arity);
     crate::value::js_nanbox_pointer(closure as i64)

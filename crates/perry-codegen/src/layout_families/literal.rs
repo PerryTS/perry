@@ -259,9 +259,30 @@ mod tests {
             descriptor.contains("i64 0, ptr inttoptr (i64 0 to ptr)"),
             "literal family must retain Object.prototype"
         );
+        // The descriptor carries its static GC scan plan: the pointer-bearing
+        // slots of the family's field representation (`layout_gc_plan`).
+        let slots = fields[4]
+            .strip_prefix("i32 ")
+            .unwrap()
+            .parse::<u32>()
+            .unwrap();
+        let rep = fields[6]
+            .strip_prefix("i64 ")
+            .unwrap()
+            .parse::<i64>()
+            .unwrap() as u64;
+        let plan = crate::runtime_abi::layout_gc_plan(slots, rep);
+        assert_ne!(
+            plan & crate::runtime_abi::LAYOUT_GC_PLAN_STATIC,
+            0,
+            "a small literal family has a static GC scan plan"
+        );
         assert!(
-            descriptor.contains("ptr null, i32 0, i32 0, ptr getelementptr"),
-            "the identity cell must remain unpublished until first birth"
+            descriptor.contains(&format!(
+                "ptr null, i32 0, i32 {}, ptr getelementptr",
+                plan as i32
+            )),
+            "the identity cell must remain unpublished until first birth, and the plan is emitted"
         );
         assert!(
             descriptor.contains("i32 0, i32 0, ptr null"),

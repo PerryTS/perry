@@ -24,6 +24,7 @@ use crate::types::{DOUBLE, I1, I64};
 mod builtin_kind_guard;
 pub(crate) mod completed_object;
 mod dynamic_dispatch;
+pub(crate) use dynamic_dispatch::method_target_is_cased;
 mod fetch_chain;
 mod helpers;
 mod imported_object;

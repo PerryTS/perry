@@ -1495,6 +1495,7 @@ pub(super) fn compile_function(
         typed_element_locals: HashSet::new(),
         create_families: Default::default(),
         class_guard_window: None,
+        map_entry_fusion: Default::default(),
         i1_local_slots: HashMap::new(),
         index_used_locals: native_facts.index_used_locals(),
         strictly_i32_bounded_locals: native_facts.strictly_i32_bounded_locals(),

@@ -116,7 +116,10 @@ pub(crate) fn install_worker_shape_seed(seed: &WorkerShapeSeed) {
         let _ = super::shapes_slot_list::install_external_layout_with_constfn(
             r.id,
             r.static_word,
-            keys.arr(),
+            // The worker's own trie re-derived this list from its names, so
+            // the node is the worker's (CKI Q3): seeds carry names, never a
+            // spawner's array or node.
+            keys,
             r.logical_key_count,
             r.live_inline_slot_count,
             r.proto_id,
@@ -157,9 +160,18 @@ mod tests {
                 crate::gc::ensure_gc_initialized();
                 let before = shape_descriptor_by_id(ShapeId(id)).is_some();
                 super::install_worker_shape_seed(&seed);
+                let installed = shape_descriptor_by_id(ShapeId(id));
+                // CKI Q3: the seed carries key NAMES; the worker re-derived
+                // the list in its own trie, so the record's node is the
+                // worker's and validates there.
+                let node_ok = installed.is_some_and(|d| {
+                    d.keys_view().node() != crate::object::canonical_keys::NO_NODE
+                        && crate::object::canonical_keys::node_publishes_for_test(d.keys_view())
+                });
                 (
                     before,
-                    shape_descriptor_by_id(ShapeId(id)).map(|d| (d.rep, d.logical_key_count)),
+                    installed.map(|d| (d.rep, d.logical_key_count)),
+                    node_ok,
                 )
             })
             .join()
@@ -168,7 +180,8 @@ mod tests {
         })
         .join()
         .expect("spawner panicked");
-        let (before, after) = seed;
+        let (before, after, node_ok) = seed;
+        assert!(node_ok, "the worker's seeded record must carry the worker's own node");
         assert!(
             !before,
             "a fresh worker agent must not already hold id {id}"

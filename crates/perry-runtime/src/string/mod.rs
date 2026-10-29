@@ -204,7 +204,10 @@ pub use concat::{
     js_string_concat_chain, js_string_concat_value, js_value_add_string, js_value_concat_string,
     scan_concat_memo_roots, scan_concat_memo_roots_mut,
 };
-pub use concat_parts::{js_string_concat_lit_value_box, js_string_concat_parts};
+pub use concat_parts::{
+    js_string_concat_lit_value_box, js_string_concat_parts, js_string_concat_parts_2,
+    js_string_concat_parts_3, js_string_concat_parts_4, js_string_concat_parts_5,
+};
 pub use concat_site::{js_string_concat_site_value, CONCAT_SITE_SLOTS};
 pub(crate) use format::ascii_char_string;
 pub(crate) use format::fix_exponent_format;
@@ -878,6 +881,38 @@ pub(crate) fn string_storage_alloc_no_collect(
     let data = unsafe { raw.add(std::mem::size_of::<StringHeader>()) };
     zero_alignment_padding_tail(raw, payload_size);
     Some((ptr, data))
+}
+
+/// [`string_storage_alloc_for`] with **no collection point** (JST slice 4,
+/// design D). `Some` proves nothing on the heap moved, so a raw string or array
+/// pointer the caller read before the call is still valid. `None` is a refusal,
+/// not an event: root the operands and call [`string_storage_alloc_for`].
+///
+/// Both arms are the no-collect forms of the allocators the collecting call
+/// reaches, so a `Some` is byte-identical to what it would have returned.
+#[inline(always)]
+pub(crate) fn string_storage_alloc_for_no_collect(
+    birth: crate::gc::ProducerChildBirth,
+    capacity: u32,
+) -> Option<(*mut StringHeader, *mut u8)> {
+    match birth {
+        crate::gc::ProducerChildBirth::Young => string_storage_alloc_no_collect(capacity),
+        crate::gc::ProducerChildBirth::Old => {
+            let payload_size = std::mem::size_of::<StringHeader>() + capacity as usize;
+            let raw = crate::arena::arena_alloc_gc_old_no_collect(
+                payload_size,
+                8,
+                crate::gc::GC_TYPE_STRING,
+            );
+            if raw.is_null() {
+                return None;
+            }
+            let ptr = raw as *mut StringHeader;
+            let data = unsafe { raw.add(std::mem::size_of::<StringHeader>()) };
+            zero_alignment_padding_tail(raw, payload_size);
+            Some((ptr, data))
+        }
+    }
 }
 
 #[inline]
