@@ -204,12 +204,12 @@ fn weak_ref_to_a_dead_young_large_array_is_cleared_by_the_minor() {
         let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
         let arr = large_array();
         let p = arr as usize;
-        let mut collector = CopyingNurseryCollector::new(CopyingPointerSet::new());
+        let mut collector = CopyingNurseryCollector::new::<{ cfg!(test) }>(CopyingPointerSet::new());
         assert_eq!(collector.ptrs.classify(p).unwrap().kind, CopyingPointerKind::YoungLarge);
         assert!(crate::weakref::weak_target_should_clear_copied(ptr_bits(p), &collector.ptrs));
-        assert_eq!(collector.mark_addr(p), Some(p));
+        assert_eq!(collector.mark_addr::<{ cfg!(test) }>(p), Some(p));
         assert!(!crate::weakref::weak_target_should_clear_copied(ptr_bits(p), &collector.ptrs));
-        collector.drain();
+        collector.drain::<{ cfg!(test) }>();
         collector.clear_marks();
     })
     .join()

@@ -85,13 +85,15 @@ fn image_initializer_preserves_attributes_slots_and_unpublished_prefixes() {
                 atom: original[0].atom,
                 slot: 1,
                 attrs: crate::object::key_attrs::ENTRY_NON_WRITABLE,
-                _pad: [0; 3],
+                _pad: 0,
+                off: crate::object::layout_desc::layout_key_off(1 as u32),
             },
             PerryLayoutKey {
                 atom: original[1].atom,
                 slot: 0,
                 attrs: crate::object::key_attrs::ENTRY_NON_ENUMERABLE,
-                _pad: [0; 3],
+                _pad: 0,
+                off: crate::object::layout_desc::layout_key_off(0 as u32),
             },
         ];
         let proof = SharedLayout::shape_cache_entry();
@@ -156,7 +158,8 @@ fn non_image_keys_use_the_generic_initializer() {
             atom: &atom,
             slot: 0,
             attrs: 0,
-            _pad: [0; 3],
+            _pad: 0,
+            off: crate::object::layout_desc::layout_key_off(0 as u32),
         }];
         assert!(from_static_layout(&SharedLayout::shape_cache_entry(), &keys, false).is_none());
         let symbol = crate::object::layout_desc::StaticAtom {
@@ -170,7 +173,8 @@ fn non_image_keys_use_the_generic_initializer() {
             atom: &symbol,
             slot: 0,
             attrs: 0,
-            _pad: [0; 3],
+            _pad: 0,
+            off: crate::object::layout_desc::layout_key_off(0 as u32),
         }];
         assert!(from_static_layout(&SharedLayout::shape_cache_entry(), &symbols, false).is_none());
     }

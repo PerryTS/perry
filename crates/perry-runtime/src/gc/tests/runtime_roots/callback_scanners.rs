@@ -507,7 +507,7 @@ fn test_json_tape_lazy_get_records_its_cache_store_as_an_external_edge() {
          would have covered the slot by accident"
     );
 
-    let snapshot = crate::gc::barrier::remembered_dirty_snapshot();
+    let snapshot = crate::gc::barrier::remembered_dirty_snapshot::<{ cfg!(test) }>();
     let slot_page = crate::arena::generation_page_for_addr(cache_slot);
     assert!(
         snapshot

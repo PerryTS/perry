@@ -462,7 +462,7 @@ impl GcTestIsolationGuard {
     ///    misses exactly once per PROCESS, so WHICH libtest thread pays is a
     ///    scheduling accident.
     /// 2. Arena block reset is all-or-nothing, so
-    ///    `gc::trace::mark_block_persisting_arena_objects` force-MARKS every
+    ///    `gc::mark::mark_block_persisting_arena_objects` force-MARKS every
     ///    object in a block that holds one reachable object. A test owner that
     ///    shares its block with a freshly-bootstrapped realm is therefore NOT
     ///    dead — and the death prune *correctly* declines to drop its
@@ -500,7 +500,8 @@ impl GcTestIsolationGuard {
         reset_shadow_stack();
         reset_global_roots();
         reset_remembered_set();
-        super::super::verify::rebuild_minor_old_to_young_remembered_set().restore();
+        super::super::remembered::rebuild_minor_old_to_young_remembered_set::<{ cfg!(test) }>()
+            .restore();
         Self {
             _scanner_guard: scanner_guard,
             _lock: lock,
@@ -522,7 +523,8 @@ impl Drop for GcTestIsolationGuard {
         reset_shadow_stack();
         reset_global_roots();
         reset_remembered_set();
-        super::super::verify::rebuild_minor_old_to_young_remembered_set().restore();
+        super::super::remembered::rebuild_minor_old_to_young_remembered_set::<{ cfg!(test) }>()
+            .restore();
     }
 }
 
@@ -580,7 +582,8 @@ impl CopyingNurseryTestGuard {
         reset_shadow_stack();
         reset_global_roots();
         reset_remembered_set();
-        super::super::verify::rebuild_minor_old_to_young_remembered_set().restore();
+        super::super::remembered::rebuild_minor_old_to_young_remembered_set::<{ cfg!(test) }>()
+            .restore();
         js_gc_write_barriers_emitted(1);
         let frame = js_shadow_frame_push(slot_count);
         Self {
@@ -598,7 +601,8 @@ impl Drop for CopyingNurseryTestGuard {
         reset_shadow_stack();
         reset_global_roots();
         reset_remembered_set();
-        super::super::verify::rebuild_minor_old_to_young_remembered_set().restore();
+        super::super::remembered::rebuild_minor_old_to_young_remembered_set::<{ cfg!(test) }>()
+            .restore();
         js_gc_write_barriers_emitted(0);
     }
 }

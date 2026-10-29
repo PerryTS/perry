@@ -99,7 +99,7 @@ pub(super) unsafe fn static_scan(header: *mut GcHeader, full: Option<bool>) -> O
 impl CopyingNurseryCollector {
     /// The copying minor's walk of a [`StaticScan`].
     #[inline(always)]
-    pub(super) unsafe fn visit_static_scan(
+    pub(super) unsafe fn visit_static_scan<const DIAGNOSTICS: bool>(
         &mut self,
         scan: &StaticScan,
         header: *mut GcHeader,
@@ -107,7 +107,7 @@ impl CopyingNurseryCollector {
         remembering: ParentRemembering,
     ) {
         if let Some(slot) = scan.meta {
-            self.visit_slot_with_parent_facts(
+            self.visit_slot_with_parent_facts::<DIAGNOSTICS>(
                 GcMutableSlot::pointer(slot.cast()),
                 header,
                 weak,
@@ -115,7 +115,7 @@ impl CopyingNurseryCollector {
             );
         }
         if let Some(slot) = scan.arguments {
-            self.visit_slot_with_parent_facts(
+            self.visit_slot_with_parent_facts::<DIAGNOSTICS>(
                 GcMutableSlot::new(slot, None),
                 header,
                 weak,
@@ -126,7 +126,7 @@ impl CopyingNurseryCollector {
         while word != 0 {
             let index = word.trailing_zeros() as usize;
             word &= word - 1;
-            self.visit_slot_with_parent_facts(
+            self.visit_slot_with_parent_facts::<DIAGNOSTICS>(
                 GcMutableSlot::new(scan.payload.add(index), None),
                 header,
                 weak,
@@ -206,7 +206,7 @@ unsafe fn assert_matches_generic_walk(
         }
     }
     let mut generic = Vec::new();
-    visit_gc_rewrite_slots(header, |slot| {
+    visit_gc_rewrite_slots::<false>(header, |slot| {
         let address = slot.slot as usize;
         // A full trace emits a prototype identity once, to its first carrier;
         // the generic walk just asked for it again.

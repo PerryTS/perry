@@ -37,7 +37,7 @@ pub(super) struct CopyingMinorPhaseDiag {
 impl CopyingMinorPhaseDiag {
     #[inline]
     pub(super) fn enabled() -> Option<Self> {
-        super::gc_diag_enabled().then(Self::default)
+        super::diagnostic_hooks::enabled().then(Self::default)
     }
 
     #[inline]
@@ -146,9 +146,9 @@ pub(super) struct CopiedMinorFinalizationDiag {
 /// Finalize the side allocations whose from-space owners just died.  The
 /// clocks live here, beside the calls they price; without `PERRY_GC_DIAG` this
 /// performs the original calls without reading the clock or building strings.
-pub(super) fn finalize_dead_copied_minor_from_space_side_allocations() -> CopiedMinorFinalizationDiag
-{
-    let diag = super::gc_diag_enabled();
+pub(super) fn finalize_dead_copied_minor_from_space_side_allocations<const DIAGNOSTICS: bool>(
+) -> CopiedMinorFinalizationDiag {
+    let diag = DIAGNOSTICS && super::gc_diag_enabled();
     let total_start = diag.then(Instant::now);
     let mut out = CopiedMinorFinalizationDiag::default();
 

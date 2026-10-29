@@ -1,9 +1,11 @@
+mod preflight;
 use super::copying_parent_facts::{weak_holder_fact, ParentRemembering};
 use super::copying_phase::{
     finalize_dead_copied_minor_from_space_side_allocations, CopyingMinorPhase as Phase,
     CopyingMinorPhaseDiag as PhaseDiag,
 };
 use super::*;
+pub(super) use preflight::CopyingNurseryPreflight;
 
 /// Largest object `move_young` will relocate. See its use site for the
 /// corruption-guard rationale; it doubles as the hard ceiling every
@@ -11,144 +13,6 @@ use super::*;
 /// object the allocator admits to the nursery but this refuses to move would
 /// silently be left behind in from-space.
 pub(crate) const MAX_YOUNG_MOVE_BYTES: usize = 1 << 20; // 1 MiB, >> any real young object
-
-pub(super) struct CopyingNurseryPreflight {
-    pub(super) ptrs: *const CopyingPointerSet,
-    pub(super) fallback_reason: Option<CopiedMinorFallbackReason>,
-    pub(super) pinned_reason: CopiedMinorFallbackReason,
-    pub(super) worklist: Vec<*mut GcHeader>,
-    pub(super) seen: crate::fast_hash::PtrHashSet<usize>,
-    pub(super) ephemerons: super::ephemeron::Ephemerons,
-}
-
-impl CopyingNurseryPreflight {
-    pub(super) fn new(ptrs: &CopyingPointerSet, pinned_reason: CopiedMinorFallbackReason) -> Self {
-        Self {
-            ptrs,
-            fallback_reason: None,
-            pinned_reason,
-            worklist: Vec::new(),
-            seen: crate::fast_hash::new_ptr_hash_set(),
-            ephemerons: super::ephemeron::Ephemerons::default(),
-        }
-    }
-
-    pub(super) fn ptrs(&self) -> &CopyingPointerSet {
-        unsafe { &*self.ptrs }
-    }
-
-    pub(super) fn check_bits(&mut self, bits: u64) {
-        self.check_bits_with_reason(bits, self.pinned_reason);
-    }
-
-    pub(super) fn check_bits_with_reason(
-        &mut self,
-        bits: u64,
-        pinned_reason: CopiedMinorFallbackReason,
-    ) {
-        if self.fallback_reason.is_some() {
-            return;
-        }
-        match self.ptrs().decode_bits_for_preflight(bits) {
-            Ok(Some((_addr, ptr))) => self.check_ptr_with_reason(ptr, pinned_reason),
-            Ok(None) => {}
-            Err(reason) => self.fallback_reason = Some(reason),
-        }
-    }
-
-    pub(super) fn check_addr(&mut self, addr: usize) {
-        self.check_addr_with_reason(addr, self.pinned_reason);
-    }
-
-    pub(super) fn check_addr_with_reason(
-        &mut self,
-        addr: usize,
-        pinned_reason: CopiedMinorFallbackReason,
-    ) {
-        if self.fallback_reason.is_some() {
-            return;
-        }
-        let ptr = match self.ptrs().classify_for_preflight(addr, true) {
-            Ok(Some(ptr)) => ptr,
-            Ok(None) => return,
-            Err(reason) => {
-                self.fallback_reason = Some(reason);
-                return;
-            }
-        };
-        self.check_ptr_with_reason(ptr, pinned_reason);
-    }
-
-    pub(super) fn check_ptr_with_reason(
-        &mut self,
-        ptr: CopyingPointer,
-        pinned_reason: CopiedMinorFallbackReason,
-    ) {
-        unsafe {
-            if matches!(
-                ptr.kind,
-                CopyingPointerKind::Eden | CopyingPointerKind::FromSurvivor
-            ) && (*ptr.header).gc_flags & GC_FLAG_PINNED != 0
-            {
-                self.fallback_reason = Some(pinned_reason);
-                return;
-            }
-        }
-        if matches!(
-            ptr.kind,
-            CopyingPointerKind::Eden
-                | CopyingPointerKind::FromSurvivor
-                | CopyingPointerKind::Longlived
-                | CopyingPointerKind::Malloc
-        ) && self.seen.insert(ptr.header as usize)
-        {
-            self.worklist.push(ptr.header);
-        }
-    }
-
-    pub(super) unsafe fn drain(&mut self) {
-        let mut i = 0usize;
-        loop {
-            while i < self.worklist.len() && self.fallback_reason.is_none() {
-                let header = self.worklist[i];
-                i += 1;
-                if (*header).gc_flags & GC_FLAG_FORWARDED != 0 {
-                    continue;
-                }
-                self.scan_object_fields(header);
-            }
-            self.check_ephemerons();
-            if i == self.worklist.len() || self.fallback_reason.is_some() {
-                break;
-            }
-        }
-    }
-
-    pub(super) unsafe fn scan_object_fields(&mut self, header: *mut GcHeader) {
-        if (*header).obj_type == GC_TYPE_WEAK_STORAGE {
-            self.ephemerons
-                .add((header as *mut u8).add(GC_HEADER_SIZE).cast());
-            return;
-        }
-        let mut weak_holder: Option<bool> = None;
-        visit_gc_rewrite_slots(header, |slot| unsafe {
-            // Weak-only reachability imposes no copy constraint: the
-            // collector never evacuates through a weak edge (a weak-only
-            // young target dies in place and tombstones), so a pinned
-            // target behind one must not force the fallback path.
-            if *weak_holder.get_or_insert_with(|| weak_holder_fact(header))
-                && crate::weakref::is_weak_target_trace_slot(header, slot.slot)
-            {
-                return;
-            }
-            slot.record_layout_read();
-            self.check_bits_with_reason(
-                slot.read(),
-                CopiedMinorFallbackReason::PinnedYoungTransitive,
-            );
-        });
-    }
-}
 
 pub(super) struct CopyingNurseryCollector {
     pub(super) ptrs: CopyingPointerSet,
@@ -243,7 +107,7 @@ pub(super) fn note_survivor_count_for_presizing(count: usize) {
 }
 
 impl CopyingNurseryCollector {
-    pub(super) fn new(ptrs: CopyingPointerSet) -> Self {
+    pub(super) fn new<const DIAGNOSTICS: bool>(ptrs: CopyingPointerSet) -> Self {
         let promotion_policy = super::tenuring::PromotionPolicy::snapshot();
         let tenuring_survivals = promotion_policy.survivals();
         let estimate = PREVIOUS_SURVIVOR_ESTIMATE.load(std::sync::atomic::Ordering::Relaxed);
@@ -263,7 +127,7 @@ impl CopyingNurseryCollector {
             live_from_bytes: 0,
             promotion_policy,
             skip_remembering: false,
-            survival: crate::gc::gc_diag_enabled()
+            survival: (DIAGNOSTICS && crate::gc::gc_diag_enabled())
                 .then(|| Box::new(super::survival_diag::SurvivalDiag::new())),
             weak_slots: Vec::new(),
             weak_storage_scanned: Vec::new(),
@@ -287,8 +151,8 @@ impl CopyingNurseryCollector {
         }
     }
 
-    pub(super) fn visit_raw_addr(&mut self, addr: usize) -> Option<usize> {
-        let new_addr = self.mark_addr(addr)?;
+    pub(super) fn visit_raw_addr<const DIAGNOSTICS: bool>(&mut self, addr: usize) -> Option<usize> {
+        let new_addr = self.mark_addr::<DIAGNOSTICS>(addr)?;
         (new_addr != addr).then_some(new_addr)
     }
 
@@ -303,7 +167,7 @@ impl CopyingNurseryCollector {
     }
 
     /// Follow the forwarding chain for a raw metadata key/address the SAME
-    /// way the evacuation verifier does (`verify::try_rewrite_raw_addr`), so
+    /// way the evacuation verifier does (`rewrite::try_rewrite_raw_addr`), so
     /// the post-copy rewrite pass and the verifier never DISAGREE about a
     /// moved address (#scavenge-cause).
     ///
@@ -383,7 +247,7 @@ impl CopyingNurseryCollector {
         rewrote.then_some(current)
     }
 
-    pub(super) fn mark_addr(&mut self, addr: usize) -> Option<usize> {
+    pub(super) fn mark_addr<const DIAGNOSTICS: bool>(&mut self, addr: usize) -> Option<usize> {
         // See `memo_addr`: replaying the previous answer is exact. Only
         // successful classifications are memoized — a `None` must stay a
         // `None`, and re-deriving it costs one page-map probe.
@@ -391,7 +255,7 @@ impl CopyingNurseryCollector {
             return Some(self.memo_result);
         }
         let ptr = self.ptrs.classify_inline(addr)?;
-        Some(self.mark_classified(addr, ptr))
+        Some(self.mark_classified::<DIAGNOSTICS>(addr, ptr))
     }
 
     /// The memo's answer for `addr`, if `addr` is the last address a mark
@@ -404,17 +268,25 @@ impl CopyingNurseryCollector {
     /// [`mark_addr`](Self::mark_addr) for an address the caller has already
     /// classified: the memo, then the mark, without classifying again.
     #[inline]
-    pub(super) fn mark_classified_addr(&mut self, addr: usize, ptr: CopyingPointer) -> usize {
+    pub(super) fn mark_classified_addr<const DIAGNOSTICS: bool>(
+        &mut self,
+        addr: usize,
+        ptr: CopyingPointer,
+    ) -> usize {
         if addr == self.memo_addr {
             return self.memo_result;
         }
-        self.mark_classified(addr, ptr)
+        self.mark_classified::<DIAGNOSTICS>(addr, ptr)
     }
 
-    fn mark_classified(&mut self, addr: usize, ptr: CopyingPointer) -> usize {
+    fn mark_classified<const DIAGNOSTICS: bool>(
+        &mut self,
+        addr: usize,
+        ptr: CopyingPointer,
+    ) -> usize {
         let result = match ptr.kind {
             CopyingPointerKind::Eden | CopyingPointerKind::FromSurvivor => unsafe {
-                self.move_young(ptr)
+                self.move_young::<DIAGNOSTICS>(ptr)
             },
             CopyingPointerKind::ToSurvivor => addr,
             CopyingPointerKind::YoungLarge
@@ -424,14 +296,14 @@ impl CopyingNurseryCollector {
                 // is rewritten to the current array and the stub, unmarked,
                 // is freed with its extent.
                 let forwarded = forwarding_address(ptr.header) as usize;
-                self.mark_addr(forwarded).unwrap_or(forwarded)
+                self.mark_addr::<DIAGNOSTICS>(forwarded).unwrap_or(forwarded)
             },
             CopyingPointerKind::YoungLarge | CopyingPointerKind::Longlived | CopyingPointerKind::Malloc => {
                 unsafe {
                     let flags = (*ptr.header).gc_flags;
                     if flags & GC_FLAG_MARKED == 0 && !super::pin::pinned_counts_as_marked(flags) {
                         (*ptr.header).gc_flags = flags | GC_FLAG_MARKED;
-                        self.queue_child_scan(ptr.header);
+                        self.queue_child_scan::<DIAGNOSTICS>(ptr.header);
                         self.marked_headers.push(ptr.header);
                     }
                 }
@@ -443,7 +315,9 @@ impl CopyingNurseryCollector {
                 }
                 addr
             }
-            CopyingPointerKind::PromotedYoung => unsafe { self.mark_promoted_young(ptr) },
+            CopyingPointerKind::PromotedYoung => unsafe {
+                self.mark_promoted_young::<DIAGNOSTICS>(ptr)
+            },
         };
         self.memo_addr = addr;
         self.memo_result = result;
@@ -460,7 +334,10 @@ impl CopyingNurseryCollector {
     /// child that is NOT on a promoted block, and to record the old→young and
     /// old→malloc remembered-set edges its new generation implies), and the
     /// mark has to be cleared at the end like any other.
-    pub(super) unsafe fn mark_promoted_young(&mut self, ptr: CopyingPointer) -> usize {
+    pub(super) unsafe fn mark_promoted_young<const DIAGNOSTICS: bool>(
+        &mut self,
+        ptr: CopyingPointer,
+    ) -> usize {
         let header = ptr.header;
         let user = (header as *mut u8).add(GC_HEADER_SIZE) as usize;
         let flags = (*header).gc_flags;
@@ -468,13 +345,15 @@ impl CopyingNurseryCollector {
             // Array growth leaves a forwarding stub at the pre-grow address;
             // follow it exactly as `move_young` does.
             let forwarded = forwarding_address(header) as usize;
-            return self.mark_addr(forwarded).unwrap_or(forwarded);
+            return self
+                .mark_addr::<DIAGNOSTICS>(forwarded)
+                .unwrap_or(forwarded);
         }
         if flags & GC_FLAG_MARKED == 0 {
             (*header).gc_flags = flags | GC_FLAG_MARKED;
             let total = (*header).size as usize;
-            self.queue_child_scan(header);
-            if let Some(d) = self.survival.as_mut() {
+            self.queue_child_scan::<DIAGNOSTICS>(header);
+            if let Some(d) = self.survival.as_mut().filter(|_| DIAGNOSTICS) {
                 d.record((*header).obj_type, total, true);
             }
             self.moved_headers.push(header);
@@ -493,7 +372,10 @@ impl CopyingNurseryCollector {
         user
     }
 
-    pub(super) unsafe fn move_young(&mut self, ptr: CopyingPointer) -> usize {
+    pub(super) unsafe fn move_young<const DIAGNOSTICS: bool>(
+        &mut self,
+        ptr: CopyingPointer,
+    ) -> usize {
         crate::gc::heap_generation::debug_assert_heap_change_open();
         let header = ptr.header;
         let old_user = (header as *mut u8).add(GC_HEADER_SIZE);
@@ -505,7 +387,9 @@ impl CopyingNurseryCollector {
             // at that stub when copied-minor starts; following it is not
             // enough because the current array can still be in from-space and
             // must itself be marked, moved, and scanned.
-            return self.mark_addr(forwarded).unwrap_or(forwarded);
+            return self
+                .mark_addr::<DIAGNOSTICS>(forwarded)
+                .unwrap_or(forwarded);
         }
 
         // #7645: on a cycle that skipped the eligibility preflight, this is the
@@ -540,7 +424,7 @@ impl CopyingNurseryCollector {
         // refuses to move would silently stay in from-space across a copying
         // minor. `pointer_bearing_large_object_threshold_is_movable` pins that.
         if total < GC_HEADER_SIZE || total > MAX_YOUNG_MOVE_BYTES {
-            if crate::gc::gc_diag_enabled() {
+            if DIAGNOSTICS && crate::gc::gc_diag_enabled() {
                 eprintln!(
                     "[gc-move-guard] refusing wild young move user={:#x} obj_type={} size={}",
                     old_user as usize,
@@ -615,8 +499,8 @@ impl CopyingNurseryCollector {
         // survivor: `clear_marks` walks it, so a header missing from it carries
         // GC_FLAG_MARKED past the end of the cycle and reads as live to the
         // next full sweep. Only the worklist push is skipped.
-        self.queue_child_scan(new_header);
-        if let Some(d) = self.survival.as_mut() {
+        self.queue_child_scan::<DIAGNOSTICS>(new_header);
+        if let Some(d) = self.survival.as_mut().filter(|_| DIAGNOSTICS) {
             d.record((*new_header).obj_type, total, promote);
         }
         self.moved_headers.push(new_header);
@@ -661,7 +545,7 @@ impl CopyingNurseryCollector {
         new_user as usize
     }
 
-    pub(super) unsafe fn drain(&mut self) {
+    pub(super) unsafe fn drain<const DIAGNOSTICS: bool>(&mut self) {
         let mut i = 0usize;
         loop {
             while i < self.worklist.len() {
@@ -670,23 +554,23 @@ impl CopyingNurseryCollector {
                 }
                 let header = self.worklist[i];
                 i += 1;
-                if let Some(d) = self.survival.as_mut() {
+                if let Some(d) = self.survival.as_mut().filter(|_| DIAGNOSTICS) {
                     d.begin_drain_entry(i - 1);
                 }
                 if (*header).gc_flags & GC_FLAG_FORWARDED != 0 {
                     continue;
                 }
-                self.scan_object_fields(header);
+                self.scan_object_fields::<DIAGNOSTICS>(header);
             }
             let before = self.moved_headers.len() + self.marked_headers.len();
-            self.shade_ephemerons();
+            self.shade_ephemerons::<DIAGNOSTICS>();
             if i == self.worklist.len()
                 && before == self.moved_headers.len() + self.marked_headers.len()
             {
                 break;
             }
         }
-        if let Some(d) = self.survival.as_mut() {
+        if let Some(d) = self.survival.as_mut().filter(|_| DIAGNOSTICS) {
             d.end_drain();
         }
     }
@@ -707,14 +591,17 @@ impl CopyingNurseryCollector {
         }
     }
 
-    pub(super) unsafe fn scan_object_fields(&mut self, header: *mut GcHeader) {
+    pub(super) unsafe fn scan_object_fields<const DIAGNOSTICS: bool>(
+        &mut self,
+        header: *mut GcHeader,
+    ) {
         if (*header).obj_type == GC_TYPE_WEAK_STORAGE {
             super::ephemeron::discover(header);
             self.weak_storage_scanned.push(header);
             return; // Conditional tracing/repair is performed by the fixed point.
         }
         // The common case, written out (#11549): see `gc/copying_object_scan.rs`.
-        if self.scan_plain_object(header) {
+        if self.scan_plain_object::<DIAGNOSTICS>(header) {
             return;
         }
         let mut changed = false;
@@ -727,13 +614,15 @@ impl CopyingNurseryCollector {
         // `ParentRemembering`.
         let mut remembering: Option<ParentRemembering> = None;
         let skip_remembering = self.skip_remembering;
-        visit_gc_rewrite_slots_inline(header, |slot| unsafe {
-            slot.record_layout_read();
+        visit_gc_rewrite_slots_inline::<DIAGNOSTICS>(header, |slot| unsafe {
+            if DIAGNOSTICS {
+                slot.record_layout_read();
+            }
             let before = slot.read();
             let weak = *weak_holder.get_or_insert_with(|| weak_holder_fact(header));
             let remembering =
                 *remembering.get_or_insert_with(|| ParentRemembering::of(header, skip_remembering));
-            self.visit_slot_with_parent_facts(slot, header, weak, remembering);
+            self.visit_slot_with_parent_facts::<DIAGNOSTICS>(slot, header, weak, remembering);
             changed |= slot.read() != before;
         });
         if changed {
@@ -780,14 +669,14 @@ unsafe fn clear_marks_in(headers: &[*mut GcHeader]) {
 /// move, so when `an_untraced_promotion_indexes_the_objects_it_could_not_prove_
 /// live` fails with `cycles=0, objects=0` the first question is always which of
 /// these was on. Same short-circuit order and cost as the bool it replaced.
-fn untraced_promotion_instrument_veto() -> Option<&'static str> {
-    if gc_verify_evacuation_enabled() {
+fn untraced_promotion_instrument_veto<const DIAGNOSTICS: bool>() -> Option<&'static str> {
+    if DIAGNOSTICS && gc_verify_evacuation_enabled() {
         return Some("verify_evacuation");
     }
-    if super::fromspace_scan::fromspace_scan_enabled() {
+    if DIAGNOSTICS && super::fromspace_scan::fromspace_scan_enabled() {
         return Some("fromspace_scan");
     }
-    if crate::gc::gc_verify_mark_enabled() {
+    if DIAGNOSTICS && crate::gc::gc_verify_mark_enabled() {
         return Some("verify_mark");
     }
     if super::barrier::incremental_mark_in_progress_on_this_thread() {
@@ -801,7 +690,7 @@ fn untraced_promotion_instrument_veto() -> Option<&'static str> {
 /// this_threads_untraced_promotion`.
 #[cfg(test)]
 pub(super) fn test_untraced_promotion_instrument_veto() -> Option<&'static str> {
-    untraced_promotion_instrument_veto()
+    untraced_promotion_instrument_veto::<true>()
 }
 
 #[cfg(test)]
@@ -839,11 +728,14 @@ pub(super) struct CopiedMinorEligibility {
 }
 
 impl CopiedMinorEligibility {
-    pub(super) fn evaluate(trigger_kind: GcTriggerKind) -> Self {
-        Self::evaluate_with_stack_decision(trigger_kind, conservative_stack_scan_decision())
+    pub(super) fn evaluate<const DIAGNOSTICS: bool>(trigger_kind: GcTriggerKind) -> Self {
+        Self::evaluate_with_stack_decision::<DIAGNOSTICS>(
+            trigger_kind,
+            conservative_stack_scan_decision(),
+        )
     }
 
-    pub(super) fn evaluate_with_stack_decision(
+    pub(super) fn evaluate_with_stack_decision<const DIAGNOSTICS: bool>(
         trigger_kind: GcTriggerKind,
         stack_decision: ConservativeStackScanDecision,
     ) -> Self {
@@ -886,11 +778,11 @@ impl CopiedMinorEligibility {
             // young objects, i.e. against a half-moved heap. It is a one-shot
             // per thread (`REMEMBERED_SET_RECONSTRUCTED`), so on every later
             // cycle this is a thread-local flag read.
-            arm_and_reconstruct_remembered_set_if_unarmed();
+            arm_and_reconstruct_remembered_set_if_unarmed::<DIAGNOSTICS>();
             note_preflight_skipped();
         } else {
             note_preflight_walked();
-            if let Some(reason) = Self::mutable_root_preflight_reason(&ptrs) {
+            if let Some(reason) = Self::mutable_root_preflight_reason::<DIAGNOSTICS>(&ptrs) {
                 return Self::fallback_with_ptrs_and_legacy(
                     reason,
                     malloc_sweep_due,
@@ -898,7 +790,7 @@ impl CopiedMinorEligibility {
                     legacy_root_stats,
                 );
             }
-            if let Some(reason) = Self::dirty_slot_preflight_reason(&ptrs) {
+            if let Some(reason) = Self::dirty_slot_preflight_reason::<DIAGNOSTICS>(&ptrs) {
                 return Self::fallback_with_ptrs_and_legacy(
                     reason,
                     malloc_sweep_due,
@@ -1013,16 +905,21 @@ fn debug_assert_no_remembering_possible() {
     }
 }
 
-pub(super) fn gc_collect_minor_copying_fast_path(
+pub(super) fn gc_collect_minor_copying_fast_path<const DIAGNOSTICS: bool>(
     trace: &mut Option<GcCycleTrace>,
     start: Instant,
     trigger_kind: GcTriggerKind,
 ) -> Option<CopiedMinorFastPathOutcome> {
-    let eligibility = CopiedMinorEligibility::evaluate(trigger_kind);
-    gc_collect_minor_copying_fast_path_with_eligibility(trace, start, eligibility, trigger_kind)
+    let eligibility = CopiedMinorEligibility::evaluate::<DIAGNOSTICS>(trigger_kind);
+    gc_collect_minor_copying_fast_path_with_eligibility::<DIAGNOSTICS>(
+        trace,
+        start,
+        eligibility,
+        trigger_kind,
+    )
 }
 
-pub(super) fn run_copied_minor_attempt(
+pub(super) fn run_copied_minor_attempt<const DIAGNOSTICS: bool>(
     trace: &mut Option<GcCycleTrace>,
     start: Instant,
     eligibility: CopiedMinorEligibility,
@@ -1032,7 +929,7 @@ pub(super) fn run_copied_minor_attempt(
     let _heap_change = crate::gc::heap_generation::HeapChange::begin(
         crate::gc::heap_generation::HeapChangeKind::CopyingMinor,
     );
-    if let Some(trace) = trace.as_mut() {
+    if let Some(trace) = trace.as_mut().filter(|_| DIAGNOSTICS) {
         trace.copying_nursery = eligibility.trace_stats();
         trace.legacy_copy_only_scanner_pinned = eligibility.legacy_root_stats;
         let decision = conservative_stack_scan_decision();
@@ -1040,7 +937,7 @@ pub(super) fn run_copied_minor_attempt(
         trace.root_sources.native_stack_fallback.scanned =
             matches!(decision, ConservativeStackScanDecision::Scan);
     }
-    if crate::gc::gc_diag_enabled() {
+    if DIAGNOSTICS && crate::gc::gc_diag_enabled() {
         let reason = match eligibility.fallback_reason {
             CopiedMinorFallbackReason::None => "none",
             CopiedMinorFallbackReason::NotAttempted => "not_attempted",
@@ -1070,9 +967,17 @@ pub(super) fn run_copied_minor_attempt(
     let ptrs = eligibility
         .ptrs
         .expect("eligible copied-minor decision must carry pointer classifier");
-    let mut phase_diag = PhaseDiag::enabled();
+    let mut phase_diag = if DIAGNOSTICS {
+        PhaseDiag::enabled()
+    } else {
+        None
+    };
 
-    let phase_start = trace_phase_start(trace);
+    let phase_start = if DIAGNOSTICS {
+        trace_phase_start(trace)
+    } else {
+        None
+    };
     let from_space_bytes = crate::arena::moving_from_space_in_use_bytes();
     let young_large_bytes = crate::arena::young_large_in_use_bytes();
     let entry_survivor_bytes = crate::arena::copying_active_survivor_in_use_bytes();
@@ -1109,7 +1014,7 @@ pub(super) fn run_copied_minor_attempt(
         && young_large_bytes == 0
         && ptrs.malloc_registry_empty_at_start
         && !crate::arena::young_owned_stores_may_exist()
-        && untraced_promotion_instrument_veto().is_none();
+        && untraced_promotion_instrument_veto::<DIAGNOSTICS>().is_none();
     let speculate_first_cycle = can_speculate && super::should_attempt_first_cycle_promotion();
     let speculate_parent_probe = can_speculate
         && !super::should_promote_young_in_place()
@@ -1123,13 +1028,13 @@ pub(super) fn run_copied_minor_attempt(
     } else {
         crate::arena::InPlacePromotion::default()
     };
-    if let Some(diag) = phase_diag.as_mut() {
+    if let Some(diag) = phase_diag.as_mut().filter(|_| DIAGNOSTICS) {
         diag.record(Phase::Promotion, promotion_phase_start);
     }
     // An empty plan (nothing in use to promote) falls back to the ordinary
     // path, so the from-space reset still runs.
     let promoting_in_place = !promotion.is_empty();
-    let mut collector = CopyingNurseryCollector::new(ptrs);
+    let mut collector = CopyingNurseryCollector::new::<DIAGNOSTICS>(ptrs);
     collector.stats.eligible = true;
     collector.stats.fallback_reason = CopiedMinorFallbackReason::None;
     collector.stats.malloc_sweep_due = malloc_sweep_due;
@@ -1181,7 +1086,7 @@ pub(super) fn run_copied_minor_attempt(
     // That leaves liveness for the old-gen page index (answered by
     // `PromotionLiveness::AssumeAllLive`) and the survival ratio itself, which
     // is what `should_promote_young_untraced`'s budget bounds.
-    let instrument_veto = untraced_promotion_instrument_veto();
+    let instrument_veto = untraced_promotion_instrument_veto::<DIAGNOSTICS>();
     let untraced = promoting_in_place
         && !speculate
         && collector.ptrs.malloc_registry_empty_at_start
@@ -1209,7 +1114,7 @@ pub(super) fn run_copied_minor_attempt(
     });
     let reset_phase_start = PhaseDiag::start(&phase_diag);
     collector.stats.reset_blocks += crate::arena::copying_prepare_to_space();
-    if let Some(diag) = phase_diag.as_mut() {
+    if let Some(diag) = phase_diag.as_mut().filter(|_| DIAGNOSTICS) {
         diag.record(Phase::BlockResetFlip, reset_phase_start);
     }
 
@@ -1220,7 +1125,7 @@ pub(super) fn run_copied_minor_attempt(
         let _phase = super::pin::CopyingWalkPhaseGuard::enter("mutable_root_slots");
         visit_mutable_root_slots(|slot| unsafe {
             let bits = slot.read();
-            if let Some(trace) = trace.as_mut() {
+            if let Some(trace) = trace.as_mut().filter(|_| DIAGNOSTICS) {
                 let pointer_root = collector.ptrs.decode_bits(bits).is_some();
                 root_source_for_mutable_slot(&mut trace.root_sources, slot.kind)
                     .record_scan(bits != 0, pointer_root);
@@ -1233,10 +1138,10 @@ pub(super) fn run_copied_minor_attempt(
             }
             if let Some(new_bits) = slot
                 .pointer_word(bits)
-                .and_then(|word| collector.visit_root_word(word))
+                .and_then(|word| collector.visit_root_word::<DIAGNOSTICS>(word))
             {
                 slot.write(new_bits);
-                if let Some(trace) = trace.as_mut() {
+                if let Some(trace) = trace.as_mut().filter(|_| DIAGNOSTICS) {
                     root_source_for_mutable_slot(&mut trace.root_sources, slot.kind)
                         .record_rewrite();
                     if matches!(slot.kind, MutableRootSlotKind::ShadowStack) {
@@ -1246,7 +1151,10 @@ pub(super) fn run_copied_minor_attempt(
             }
         })
     };
-    let mut root_sources = trace.as_mut().map(|trace| &mut trace.root_sources);
+    let mut root_sources = trace
+        .as_mut()
+        .filter(|_| DIAGNOSTICS)
+        .map(|trace| &mut trace.root_sources);
     record_native_stack_walk_source(native_stack_walk, &mut root_sources);
 
     let scanners: Vec<MutableRootScannerEntry> = if untraced {
@@ -1255,7 +1163,10 @@ pub(super) fn run_copied_minor_attempt(
         MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone())
     };
     {
-        let mut root_sources = trace.as_mut().map(|trace| &mut trace.root_sources);
+        let mut root_sources = trace
+            .as_mut()
+            .filter(|_| DIAGNOSTICS)
+            .map(|trace| &mut trace.root_sources);
         if let Some(sources) = &mut root_sources {
             sources.runtime_handles.record_registered_scanners(
                 scanners
@@ -1270,7 +1181,7 @@ pub(super) fn run_copied_minor_attempt(
                     .count(),
             );
         }
-        let mut visitor = RuntimeRootVisitor::for_copying_mark(&mut collector);
+        let mut visitor = RuntimeRootVisitor::for_copying_mark::<DIAGNOSTICS>(&mut collector);
         for entry in scanners {
             let stats = match &mut root_sources {
                 Some(sources) => match entry.source {
@@ -1283,18 +1194,33 @@ pub(super) fn run_copied_minor_attempt(
                 },
                 None => None,
             };
-            let before = super::scanner_profile::snapshot_stats(stats);
+            let before = if DIAGNOSTICS {
+                super::scanner_profile::snapshot_stats(stats)
+            } else {
+                (0, 0, 0)
+            };
             let previous = visitor.set_root_source_stats(stats);
             let _phase = super::pin::CopyingWalkPhaseGuard::enter(entry.name);
-            let (_, nanos) = super::scanner_profile::record_scanner(|| {
-                (entry.scanner)(&mut visitor);
-            });
+            let (_, nanos) = if DIAGNOSTICS {
+                super::scanner_profile::record_scanner(|| {
+                    (entry.scanner)(&mut visitor);
+                })
+            } else {
+                (
+                    (|| {
+                        (entry.scanner)(&mut visitor);
+                    })(),
+                    0,
+                )
+            };
             visitor.set_root_source_stats(previous);
-            super::scanner_profile::note_stats_delta(entry.name, nanos, before, stats);
+            if DIAGNOSTICS {
+                super::scanner_profile::note_stats_delta(entry.name, nanos, before, stats)
+            };
         }
         visit_ffi_mutable_registered_roots_with_sources(&mut visitor, root_sources);
     }
-    if let Some(diag) = phase_diag.as_mut() {
+    if let Some(diag) = phase_diag.as_mut().filter(|_| DIAGNOSTICS) {
         diag.record(Phase::RootScan, root_scan_phase_start);
     }
 
@@ -1310,7 +1236,7 @@ pub(super) fn run_copied_minor_attempt(
     // arming happens. Skipping it would leave the barrier unarmed for the next
     // cycle — a missing-edge bug one collection later.
     let remembered_phase_start = PhaseDiag::start(&phase_diag);
-    let snapshot = remembered_dirty_snapshot();
+    let snapshot = remembered_dirty_snapshot::<DIAGNOSTICS>();
     // #10241: a cohort full at this safepoint asks whether a dead parent in
     // this remembered set held what this minor promotes. Only a promoting
     // minor records blocks for it to ask about.
@@ -1326,38 +1252,38 @@ pub(super) fn run_copied_minor_attempt(
     let mut remembered_slots = 0usize;
     if !untraced {
         let _phase = super::pin::CopyingWalkPhaseGuard::enter("remembered_set");
-        let remembered_stats = scan_remembered_dirty_slots_copying(
+        let remembered_stats = scan_remembered_dirty_slots_copying::<DIAGNOSTICS>(
             &snapshot,
             Some(&mut dirty_scan_covered),
             |slot, header, external, stats| unsafe {
-                if let Some(d) = collector.survival.as_mut() {
+                if let Some(d) = collector.survival.as_mut().filter(|_| DIAGNOSTICS) {
                     d.remembered_parent_type = (*header).obj_type;
                 }
                 let before = slot.read();
-                collector.visit_remembered_slot(slot, header, external);
+                collector.visit_remembered_slot::<DIAGNOSTICS>(slot, header, external);
                 if slot.read() != before {
                     stats.newly_marked += 1;
                 }
             },
         );
-        if let Some(trace) = trace.as_mut() {
+        if let Some(trace) = trace.as_mut().filter(|_| DIAGNOSTICS) {
             trace.remembered_set = remembered_stats;
         }
         remembered_entries = remembered_stats.entries_scanned;
         remembered_slots = remembered_stats.dirty_slots_scanned;
         // WRT: remembered realm-image cells are roots (`gc::image_cells`).
         let _phase = super::pin::CopyingWalkPhaseGuard::enter("image_cells");
-        unsafe { super::image_cells::visit_image_roots_copying(&mut collector) };
+        unsafe { super::image_cells::visit_image_roots_copying::<DIAGNOSTICS>(&mut collector) };
     }
-    if let Some(diag) = phase_diag.as_mut() {
+    if let Some(diag) = phase_diag.as_mut().filter(|_| DIAGNOSTICS) {
         diag.record(Phase::RememberedSetYoungLogs, remembered_phase_start);
     }
     let copy_phase_start = PhaseDiag::start(&phase_diag);
     unsafe {
         let _phase = super::pin::CopyingWalkPhaseGuard::enter("worklist_drain");
-        collector.drain();
+        collector.drain::<DIAGNOSTICS>();
     }
-    if let Some(diag) = phase_diag.as_mut() {
+    if let Some(diag) = phase_diag.as_mut().filter(|_| DIAGNOSTICS) {
         diag.record(Phase::CopyEvacuation, copy_phase_start);
     }
     let rewrite_root_scan_phase_start = PhaseDiag::start(&phase_diag);
@@ -1367,7 +1293,10 @@ pub(super) fn run_copied_minor_attempt(
         } else {
             MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone())
         };
-        let mut root_sources = trace.as_mut().map(|trace| &mut trace.root_sources);
+        let mut root_sources = trace
+            .as_mut()
+            .filter(|_| DIAGNOSTICS)
+            .map(|trace| &mut trace.root_sources);
         let mut visitor = RuntimeRootVisitor::for_copying_rewrite(&collector);
         for entry in scanners {
             let stats = match &mut root_sources {
@@ -1381,18 +1310,33 @@ pub(super) fn run_copied_minor_attempt(
                 },
                 None => None,
             };
-            let before = super::scanner_profile::snapshot_stats(stats);
+            let before = if DIAGNOSTICS {
+                super::scanner_profile::snapshot_stats(stats)
+            } else {
+                (0, 0, 0)
+            };
             let previous = visitor.set_root_source_stats(stats);
             let _phase = super::pin::CopyingWalkPhaseGuard::enter(entry.name);
-            let (_, nanos) = super::scanner_profile::record_scanner(|| {
-                (entry.scanner)(&mut visitor);
-            });
+            let (_, nanos) = if DIAGNOSTICS {
+                super::scanner_profile::record_scanner(|| {
+                    (entry.scanner)(&mut visitor);
+                })
+            } else {
+                (
+                    (|| {
+                        (entry.scanner)(&mut visitor);
+                    })(),
+                    0,
+                )
+            };
             visitor.set_root_source_stats(previous);
-            super::scanner_profile::note_stats_delta(entry.name, nanos, before, stats);
+            if DIAGNOSTICS {
+                super::scanner_profile::note_stats_delta(entry.name, nanos, before, stats)
+            };
         }
         visit_ffi_mutable_registered_roots_with_sources(&mut visitor, root_sources);
     }
-    if let Some(diag) = phase_diag.as_mut() {
+    if let Some(diag) = phase_diag.as_mut().filter(|_| DIAGNOSTICS) {
         diag.record(Phase::RootScan, rewrite_root_scan_phase_start);
     }
     // #7803 THE FIX: rebuild the promoted-object remembered set AFTER the last
@@ -1431,20 +1375,27 @@ pub(super) fn run_copied_minor_attempt(
     // moved header and require its pages to be covered already.
     let forwarding_phase_start = PhaseDiag::start(&phase_diag);
     if !collector.skip_remembering {
-        let promoted_sticky =
-            rebuild_evacuated_old_to_young_remembered_set(&collector.weak_storage_scanned);
+        let promoted_sticky = rebuild_evacuated_old_to_young_remembered_set::<DIAGNOSTICS>(
+            &collector.weak_storage_scanned,
+        );
         #[cfg(any(test, debug_assertions))]
-        rebuild_evacuated_old_to_young_remembered_set(&collector.moved_headers)
+        rebuild_evacuated_old_to_young_remembered_set::<DIAGNOSTICS>(&collector.moved_headers)
             .assert_covered_by(&collector.sticky, &promoted_sticky);
         collector.sticky.extend(promoted_sticky);
         collector.sticky.restore();
     }
-    let old_young_edges = if gc_verify_evacuation_enabled() {
-        let phase_start = trace_phase_start(trace);
+    let old_young_edges = if DIAGNOSTICS && gc_verify_evacuation_enabled() {
+        let phase_start = if DIAGNOSTICS {
+            trace_phase_start(trace)
+        } else {
+            None
+        };
         let old_young_edge_verifier = verify_old_to_young_edges_covered();
         let checked_edges = old_young_edge_verifier.checked_old_to_young_edges;
-        trace_phase_record(trace, "old_young_edge_verify", phase_start);
-        if let Some(trace) = trace.as_mut() {
+        if DIAGNOSTICS {
+            trace_phase_record(trace, "old_young_edge_verify", phase_start)
+        };
+        if let Some(trace) = trace.as_mut().filter(|_| DIAGNOSTICS) {
             trace.old_young_edge_verifier = old_young_edge_verifier;
         }
         checked_edges
@@ -1455,13 +1406,17 @@ pub(super) fn run_copied_minor_attempt(
     // native slot naming from-space, instead of many cycles later at the
     // pin-latch. Placed after every rewrite pass, before the from-space flip.
     super::roots::stack_maps_publish_rewrite_walk_stats(&native_stack_walk);
-    super::roots::stack_maps_native_slot_verify(untraced, &|addr| {
-        format!("{:?}", collector.ptrs.classify(addr).map(|ptr| ptr.kind))
-    });
-    if let Some(diag) = phase_diag.as_mut() {
+    if DIAGNOSTICS {
+        super::roots::stack_maps_native_slot_verify(untraced, &|addr| {
+            format!("{:?}", collector.ptrs.classify(addr).map(|ptr| ptr.kind))
+        })
+    };
+    if let Some(diag) = phase_diag.as_mut().filter(|_| DIAGNOSTICS) {
         diag.record(Phase::ForwardingFixups, forwarding_phase_start);
     }
-    trace_phase_record(trace, "copying_nursery", phase_start);
+    if DIAGNOSTICS {
+        trace_phase_record(trace, "copying_nursery", phase_start)
+    };
 
     // #7937: the attempt's own trace has finished, so the ratio it was missing
     // now exists. Nothing has been handed to old-gen yet, so rolling back
@@ -1481,7 +1436,7 @@ pub(super) fn run_copied_minor_attempt(
         if speculate_first_cycle {
             super::note_first_cycle_promotion(!holds_up);
         }
-        if speculate_parent_probe && crate::gc::gc_diag_enabled() {
+        if DIAGNOSTICS && speculate_parent_probe && crate::gc::gc_diag_enabled() {
             eprintln!(
                 "[gc-parent-probe] committed={} young_bytes={} live_bytes={}",
                 holds_up, from_space_bytes, collector.live_from_bytes
@@ -1527,7 +1482,11 @@ pub(super) fn run_copied_minor_attempt(
         collector.finish_ephemerons();
     }
     if crate::weakref::weak_target_holders_allocated() {
-        let phase_start = trace_phase_start(trace);
+        let phase_start = if DIAGNOSTICS {
+            trace_phase_start(trace)
+        } else {
+            None
+        };
         // Enqueue FinalizationRegistry cleanup jobs on every trigger kind —
         // see the matching WeakProcessing comment in cycle.rs (2026-07-09 GC
         // audit: delivery was gated on the Manual trigger).
@@ -1535,28 +1494,40 @@ pub(super) fn run_copied_minor_attempt(
             &collector.ptrs,
             /* enqueue_callbacks = */ true,
         );
-        trace_phase_record(trace, "weak_processing", phase_start);
+        if DIAGNOSTICS {
+            trace_phase_record(trace, "weak_processing", phase_start)
+        };
     }
 
-    if gc_verify_evacuation_enabled() {
-        let phase_start = trace_phase_start(trace);
+    if DIAGNOSTICS && gc_verify_evacuation_enabled() {
+        let phase_start = if DIAGNOSTICS {
+            trace_phase_start(trace)
+        } else {
+            None
+        };
         let valid_ptrs = build_valid_pointer_set();
         let context = begin_evacuation_verify_cycle(_trigger_kind, Some(&snapshot));
         let stats = verify_evacuated_no_stale_forwarded_refs(
             EvacuationVerifier::copying_minor(&valid_ptrs).with_context(context),
         );
         report_evacuation_success(context, stats, old_young_edges);
-        trace_phase_record(trace, "evacuation_verify", phase_start);
+        if DIAGNOSTICS {
+            trace_phase_record(trace, "evacuation_verify", phase_start)
+        };
     }
 
     // Diagnostic (PERRY_GC_VERIFY_MARK): before from-space reset frees the dead
     // young objects, check that no MARKED (survived) object references an
     // UNMARKED (about-to-be-freed) child — i.e. a live parent whose child is
     // being swept. Non-fatal; logs parent/child obj_types.
-    if crate::gc::gc_verify_mark_enabled() {
-        super::verify::verify_marked_heap_report_nonfatal("copying-minor");
+    if DIAGNOSTICS && crate::gc::gc_verify_mark_enabled() {
+        if DIAGNOSTICS {
+            super::verify::verify_marked_heap_report_nonfatal("copying-minor")
+        };
         #[cfg(any(test, perry_check_contracts))]
-        super::verify_honest::verify_honest_pointers("copying-minor");
+        if DIAGNOSTICS {
+            super::verify_honest::verify_honest_pointers("copying-minor");
+        };
         // #9261: the copied minor is the OPERATIVE cycle on every workload that
         // reaches this path, and it was the one collector with no sweep-live-
         // child probe — `verify_minor_unmarked_young_children_report` was wired
@@ -1566,25 +1537,35 @@ pub(super) fn run_copied_minor_attempt(
         // was a garbage `GcHeader` hundreds of collections later. Both probes
         // report their own subject counts, so a cycle on which they had nothing
         // to check says so rather than reading as a clean bill.
-        super::verify::verify_minor_unmarked_young_children_report("copying-minor");
-        super::verify::verify_array_pointer_slots_enumerated_report("copying-minor");
+        if DIAGNOSTICS {
+            super::verify::verify_minor_unmarked_young_children_report("copying-minor")
+        };
+        if DIAGNOSTICS {
+            super::verify::verify_array_pointer_slots_enumerated_report("copying-minor")
+        };
     }
 
     // #7035: whole-heap from-space scan. MUST run here — after the rewrite
     // pass, before from-space is reset — and it is deliberately independent of
     // the root enumeration the rewrite pass and the evacuation verifier share.
-    super::fromspace_scan::run_fromspace_scan(&snapshot);
+    if DIAGNOSTICS {
+        super::fromspace_scan::run_fromspace_scan(&snapshot)
+    };
 
     // #8220 diagnostic: scan the native (Rust) stack for stale from-space
     // pointers — raw pointers held in Rust frame locals that the precise root
     // map can't see and the conservative scan is disabled in production. MUST
     // run here, same window as fromspace_scan (after rewrite, before reset).
-    super::native_stack_scan::run_native_stack_scan();
+    if DIAGNOSTICS {
+        super::native_stack_scan::run_native_stack_scan()
+    };
 
     let finalization = if untraced {
         super::copying_phase::CopiedMinorFinalizationDiag::default()
-    } else { finalize_dead_copied_minor_from_space_side_allocations() };
-    if let Some(diag) = phase_diag.as_mut() {
+    } else {
+        finalize_dead_copied_minor_from_space_side_allocations::<DIAGNOSTICS>()
+    };
+    if let Some(diag) = phase_diag.as_mut().filter(|_| DIAGNOSTICS) {
         diag.add_nanos(Phase::DeadOwnerSideTablePruning, finalization.dead_owner_ns);
         diag.add_nanos(
             Phase::FromSpaceFinalization,
@@ -1611,7 +1592,11 @@ pub(super) fn run_copied_minor_attempt(
     };
     let large_live_bytes = young_large_bytes.saturating_sub(large_reset.reusable_bytes);
     let (reset, promotion_stats) = if promoting_in_place {
-        let phase_start = trace_phase_start(trace);
+        let phase_start = if DIAGNOSTICS {
+            trace_phase_start(trace)
+        } else {
+            None
+        };
         let promotion_phase_start = PhaseDiag::start(&phase_diag);
         super::note_promoted_young_capacity(promotion.reserved_bytes());
         let promotion_stats = crate::arena::finish_in_place_promotion(
@@ -1622,10 +1607,12 @@ pub(super) fn run_copied_minor_attempt(
                 crate::arena::PromotionLiveness::Marked
             },
         );
-        if let Some(diag) = phase_diag.as_mut() {
+        if let Some(diag) = phase_diag.as_mut().filter(|_| DIAGNOSTICS) {
             diag.record(Phase::Promotion, promotion_phase_start);
         }
-        trace_phase_record(trace, "in_place_promotion", phase_start);
+        if DIAGNOSTICS {
+            trace_phase_record(trace, "in_place_promotion", phase_start)
+        };
         (
             crate::arena::ArenaResetStats {
                 reset_blocks: 0,
@@ -1637,7 +1624,7 @@ pub(super) fn run_copied_minor_attempt(
     } else {
         let reset_phase_start = PhaseDiag::start(&phase_diag);
         let reset = crate::arena::copying_reset_from_spaces_and_flip();
-        if let Some(diag) = phase_diag.as_mut() {
+        if let Some(diag) = phase_diag.as_mut().filter(|_| DIAGNOSTICS) {
             diag.record(Phase::BlockResetFlip, reset_phase_start);
         }
         (reset, crate::arena::InPlacePromotionStats::default())
@@ -1663,23 +1650,41 @@ pub(super) fn run_copied_minor_attempt(
     collector.stats.in_place_sparse_blocks = promotion_stats.sparse_blocks;
     collector.stats.in_place_dead_blocks = promotion_stats.dead_blocks;
     collector.stats.in_place_dead_block_bytes = promotion_stats.dead_block_bytes;
-    if let Some(trace) = trace.as_mut() {
+    if let Some(trace) = trace.as_mut().filter(|_| DIAGNOSTICS) {
         trace.old_pages = crate::arena::old_page_summary();
     }
     let remembered_restore_phase_start = PhaseDiag::start(&phase_diag);
-    let clear_start = trace_phase_start(trace);
-    if !(untraced && young_large_bytes != 0) { remembered_set_clear(); }
-    trace_phase_record(trace, "remembered_set_clear", clear_start);
-    let restore_start = trace_phase_start(trace);
+    let clear_start = if DIAGNOSTICS {
+        trace_phase_start(trace)
+    } else {
+        None
+    };
+    if !(untraced && young_large_bytes != 0) {
+        remembered_set_clear();
+    }
+    if DIAGNOSTICS {
+        trace_phase_record(trace, "remembered_set_clear", clear_start)
+    };
+    let restore_start = if DIAGNOSTICS {
+        trace_phase_start(trace)
+    } else {
+        None
+    };
     collector.sticky.restore();
     if !untraced && !collector.skip_remembering {
-        restore_surviving_dirty_coverage(&snapshot, &dirty_scan_covered, "copying_minor");
+        restore_surviving_dirty_coverage::<DIAGNOSTICS>(
+            &snapshot,
+            &dirty_scan_covered,
+            "copying_minor",
+        );
         // Per minor, not at exit: the rig SIGKILLs cc. Cumulative counters, so
         // the last line before the kill is the answer.
         crate::arena::page_class_table_report();
     }
-    trace_phase_record(trace, "remembered_set_restore", restore_start);
-    if let Some(diag) = phase_diag.as_mut() {
+    if DIAGNOSTICS {
+        trace_phase_record(trace, "remembered_set_restore", restore_start)
+    };
+    if let Some(diag) = phase_diag.as_mut().filter(|_| DIAGNOSTICS) {
         diag.record(
             Phase::RememberedSetYoungLogs,
             remembered_restore_phase_start,
@@ -1687,7 +1692,7 @@ pub(super) fn run_copied_minor_attempt(
     }
     // The scan reserves from its current owner snapshot, so the exact set
     // grows at most once instead of following the previous cycle's estimate.
-    if crate::gc::gc_diag_enabled() {
+    if DIAGNOSTICS && crate::gc::gc_diag_enabled() {
         eprintln!(
             "[gc-dirty-covered] len={} capacity={}",
             dirty_scan_covered.len(),
@@ -1696,9 +1701,15 @@ pub(super) fn run_copied_minor_attempt(
     }
     {}
     let malloc_freed_bytes = if malloc_sweep_due {
-        let phase_start = trace_phase_start(trace);
+        let phase_start = if DIAGNOSTICS {
+            trace_phase_start(trace)
+        } else {
+            None
+        };
         let freed = sweep_malloc_objects();
-        trace_phase_record(trace, "malloc_sweep", phase_start);
+        if DIAGNOSTICS {
+            trace_phase_record(trace, "malloc_sweep", phase_start)
+        };
         freed
     } else {
         0
@@ -1749,7 +1760,7 @@ pub(super) fn run_copied_minor_attempt(
         .saturating_add(large_reset.reusable_bytes as u64);
     collector.stats.malloc_validation_lookups = collector.ptrs.malloc_validation_lookups();
     collector.stats.malloc_registry_rebuilds = collector.ptrs.malloc_registry_rebuilds();
-    if let Some(trace) = trace.as_mut() {
+    if let Some(trace) = trace.as_mut().filter(|_| DIAGNOSTICS) {
         trace.copying_nursery = collector.stats;
         trace.sweep = SweepTraceStats {
             dead_bytes: freed_bytes,
@@ -1881,15 +1892,25 @@ pub(super) fn run_copied_minor_attempt(
         eden_allocated_bytes >= entry_eden_budget,
     );
     }
-    if let Some(d) = collector.survival.as_ref() {
+    if let Some(d) = collector.survival.as_ref().filter(|_| DIAGNOSTICS) {
         d.report(super::survival_diag::next_minor_seq());
     }
-    crate::arena::alloc_sample::report("minor");
-    super::diag_sites::report_primitive_dispatch("minor");
-    crate::object::shapes::id_list_report();
-    report_forwarding_refusals("copying_minor");
-    let scan_us = super::scanner_profile::report_and_reset("copying_minor");
-    if crate::gc::gc_diag_enabled() {
+    if DIAGNOSTICS {
+        crate::arena::alloc_sample::report("minor")
+    };
+    super::diagnostic_hooks::site_report_primitive_dispatch("minor");
+    if DIAGNOSTICS {
+        crate::object::shapes::id_list_report()
+    };
+    if DIAGNOSTICS {
+        report_forwarding_refusals("copying_minor")
+    };
+    let scan_us = if DIAGNOSTICS {
+        super::scanner_profile::report_and_reset("copying_minor")
+    } else {
+        0
+    };
+    if DIAGNOSTICS && crate::gc::gc_diag_enabled() {
         super::tenuring::report_nursery_policy(collector.stats.eden_live_bytes);
         // This is intentionally the last diagnostic action before returning to
         // the mutator: `pause_us` prices the whole copied-minor path, including

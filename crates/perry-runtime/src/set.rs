@@ -378,7 +378,7 @@ pub(crate) unsafe fn gc_element_slot_range(
     // aarch64 Linux, where user space reaches bit 48).
     let elements_addr = (*set).elements as usize;
     if !crate::value::addr_class::is_plausible_heap_addr(elements_addr) {
-        if crate::gc::gc_diag_enabled() {
+        if crate::gc::diagnostic_hooks::enabled() {
             eprintln!(
                 "[gc-tripwire] Set elements is not a plausible heap address: {:#x} (fabricated Set?)",
                 elements_addr

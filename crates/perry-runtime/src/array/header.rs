@@ -1598,7 +1598,7 @@ pub(crate) unsafe fn array_numeric_raw_f64_push_inbounds_resolved(
     // `GC_LAYOUT_SIDE_MASK` the note could only ever CLEAR this slot's bit, so
     // skipping it leaves at worst a stale set bit over a non-pointer word —
     // which costs one extra visit and nothing else, because
-    // `gc::trace::mark_field_into_worklist` re-validates every slot word and
+    // `gc::mark::mark_field_into_worklist` re-validates every slot word and
     // rejects f64 bit patterns as out-of-range addresses.
     //
     // That leaves the #7480 element-shape invariant, which is NOT part of that

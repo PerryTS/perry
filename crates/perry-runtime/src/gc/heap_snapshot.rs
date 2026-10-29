@@ -349,7 +349,7 @@ pub(crate) fn gc_build_v8_heap_snapshot_json_with_format(format: HeapSnapshotFor
             (0, 0)
         };
         unsafe {
-            visit_gc_rewrite_slots(rec.header, |slot| {
+            visit_gc_rewrite_slots::<{ cfg!(test) }>(rec.header, |slot| {
                 let slot_ordinal = ordinal;
                 ordinal += 1;
                 let bits = slot.read();

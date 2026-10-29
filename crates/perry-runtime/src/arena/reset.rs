@@ -362,7 +362,7 @@ pub(super) fn release_idle_eden_blocks(arena: &mut Arena) -> ArenaResetStats {
         block.offset = 0;
         block.dead_cycles = 0;
     }
-    if stats.removed_blocks > 0 && crate::gc::gc_diag_enabled() {
+    if stats.removed_blocks > 0 && crate::gc::diagnostic_hooks::enabled() {
         eprintln!(
             "[gc-block-release] moving_minor removed {} idle Eden blocks ({} bytes): pooled={} bytes, deallocated={} bytes",
             stats.removed_blocks, stats.removed_bytes, stats.pooled_bytes, stats.deallocated_bytes
@@ -597,7 +597,7 @@ pub fn arena_reset_empty_blocks(block_has_live: &[bool]) -> ArenaResetStats {
                     crate::gc::ARENA_FREE_LIST_NONEMPTY.with(|c| c.set(false));
                 }
             });
-            if crate::gc::gc_diag_enabled() {
+            if crate::gc::diagnostic_hooks::enabled() {
                 eprintln!(
                     "[gc-block-release] removed {} blocks ({} bytes): pooled={} bytes, deallocated={} bytes",
                     stats.removed_blocks,
@@ -913,7 +913,7 @@ impl ArenaResetEmptyBlocksState {
             ..self.stats
         };
 
-        if crate::gc::gc_diag_enabled() && self.diag.examined > 0 {
+        if crate::gc::diagnostic_hooks::enabled() && self.diag.examined > 0 {
             let d = self.diag;
             eprintln!(
                 "[gc-general-reclaim] examined={} released={} rejected: no_snapshot={} \
@@ -1303,7 +1303,7 @@ impl OldArenaReclaimDeadBlocksState {
                 }
                 RegionReclaimSubphase::Finish => {
                     self.finish();
-                    if crate::gc::gc_diag_enabled() && self.targeted_mode {
+                    if crate::gc::diagnostic_hooks::enabled() && self.targeted_mode {
                         let d = self.diag;
                         eprintln!(
                             "[gc-old-block-reclaim] targeted={} released={} released_bytes={} \

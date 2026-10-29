@@ -315,7 +315,7 @@ fn old_parent_of_young_strings(fields: u32) -> usize {
 /// blocks, then the cohort full at the same safepoint in `shape`, then a minor
 /// over a fresh rooted population.
 fn promote_then_cohort_full_then_minor(shape: CohortShape, sabotage: Sabotage) -> SurvivalOutcome {
-    use super::super::trace::adopt_census;
+    use super::super::mark::adopt_census;
     let _guard = CopyingNurseryTestGuard::new(4);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _promote = super::super::InPlacePromotionTestGuard::untraced();

@@ -199,7 +199,15 @@ For `node:worker_threads`, a truthy `Worker` `name` must be a string; invalid
 names throw `TypeError` with `ERR_INVALID_ARG_TYPE` before transferring data.
 Falsy names use the default. `transferList` is validated even when `workerData`
 is undefined, and listed ArrayBuffers are detached after a successful clone
-whether or not the data references them. Other worker API parity gaps remain.
+whether or not the data references them.
+
+`setEnvironmentData` retains the caller's value until it is replaced or deleted
+by setting `undefined`. A new worker receives a creation-time clone of that map
+alongside `workerData`; shared references and cycles are preserved within this
+snapshot, while later parent changes remain local. Captured namespace methods
+and CommonJS imports use the same storage as named imports. If cloning either
+data source fails, construction throws before transferring any buffers.
+Other worker API parity gaps remain.
 
 ## Next Steps
 

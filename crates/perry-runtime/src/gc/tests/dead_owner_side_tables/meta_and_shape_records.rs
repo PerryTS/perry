@@ -220,7 +220,10 @@ fn test_object_meta_private_evaluation_brand_survives_copied_minor_move() {
     let (class, _) = unsafe { alloc_nursery_test_object(0) };
     unsafe {
         crate::object::js_object_mark_class(class as i64);
-        let meta = crate::object::object_meta_ensure(owner);
+        let meta = crate::object::object_meta_ensure(
+            crate::object::MetaObj::runtime_born(owner),
+            crate::object::MetaReason::RuntimeHandle,
+        );
         (*meta).private_evaluation_brand = ptr_bits(class as usize);
     }
     let old_owner = owner as usize;
@@ -597,7 +600,7 @@ fn test_forwarded_keys_capacity_cannot_disturb_the_descriptor_rewrite() {
         .expect("a table-resident descriptor exposes its keys word");
     let mut rewritten = 0usize;
     unsafe {
-        visit_gc_layout_slot_descriptors(owner_header, &mut |descriptor| {
+        visit_gc_layout_slot_descriptors::<{ cfg!(test) }>(owner_header, &mut |descriptor| {
             descriptor.visit_slots(&mut |slot| {
                 if slot.slot == descriptor_keys_slot {
                     *slot.slot = live_keys as u64;

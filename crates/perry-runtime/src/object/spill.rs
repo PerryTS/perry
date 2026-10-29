@@ -290,7 +290,10 @@ pub(crate) fn reserve_object_spill(obj_ptr: usize, field_count: u32) {
 
         let scope = crate::gc::RuntimeHandleScope::new();
         let obj_handle = scope.root_raw_mut_ptr(obj);
-        let (_, obj) = obj_handle.across_mut::<ObjectHeader, _>(|| object_meta_ensure(obj));
+        // A1_UNPROVEN: tested by the bool spill_capable_owner, no `t` in hand (kind-A/B question for S0b-S0e).
+        let (_, obj) = obj_handle.across_mut::<ObjectHeader, _>(|| {
+            object_meta_ensure(MetaObj::runtime_born(obj), MetaReason::SpillReserve)
+        });
         let meta = (*obj).meta;
         if (*meta).spill != 0 {
             return;
@@ -375,7 +378,8 @@ fn spill_set_slow(obj_ptr: usize, field_index: usize, vbits: u64) {
         // never reported (its target is live, just relocated). Re-read the
         // bits from the handle immediately before the store.
         let value_handle = scope.root_nanbox_u64(vbits);
-        object_meta_ensure(obj);
+        // A1_UNPROVEN: tested by the bool spill_capable_owner, no `t` in hand (kind-A/B question for S0b-S0e).
+        object_meta_ensure(MetaObj::runtime_born(obj), MetaReason::Spill);
         // Test-only stand-in for the collection `object_meta_ensure` (and the
         // buffer allocation below) can genuinely take. Same pattern, and same
         // reason, as `json_tape::json_tape_safepoint`: the window is one

@@ -44,6 +44,8 @@ static mut STATIC_SCAN_LAYOUT: PerryLayoutDesc = PerryLayoutDesc {
     class_id: CLASS,
     parent_class_id: 0,
     methods: std::ptr::null(),
+    gc_header_word: crate::object::layout_desc::layout_gc_header_word(FIELDS as u32),
+    _tail_pad: [0; 32],
 };
 
 static DECLARATION: ClassDeclaration = ClassDeclaration {
