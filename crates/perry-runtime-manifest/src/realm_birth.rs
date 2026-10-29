@@ -674,6 +674,25 @@ mod tests {
     use super::super::tokens;
     use super::*;
     #[test]
+    fn never_move_is_a_declared_header_fact_and_not_repeatable_from_derivation() {
+        let d = birth(
+            &tokens("js_object_alloc(0,0)").unwrap(),
+            &tokens("Example.prototype, never_move = true, members = {}").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(d.get("header").unwrap().get("reserved"), Some(&number(128)));
+        assert!(birth(
+            &tokens("js_object_alloc(0,0)").unwrap(),
+            &tokens("Example.prototype, never_move = false, members = {}").unwrap(),
+        )
+        .is_err());
+        assert!(birth(
+            &tokens("super::proto_room::alloc_builtin_prototype()").unwrap(),
+            &tokens("Example.prototype, never_move = true, members = {}").unwrap(),
+        )
+        .is_err());
+    }
+    #[test]
     fn null_births_and_runtime_objects_derive_their_storage_facts() {
         let d = birth(
             &tokens("crate::object::js_object_alloc_null_proto(0,0)").unwrap(),
