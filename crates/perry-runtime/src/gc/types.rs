@@ -25,7 +25,6 @@ impl GcHeader {
 /// the proxy target at creation; never changed by properties or revocation.
 pub(crate) const GC_OBJECT_CALLABLE: u16 = perry_abi::GC_OBJECT_CALLABLE;
 const _: () = assert!(std::mem::offset_of!(GcHeader, _reserved) == 2);
-const _: () = assert!(GC_TYPE_OBJECT == perry_abi::GC_TYPE_OBJECT);
 const _: () = assert!(GC_TYPE_PROXY == perry_abi::GC_TYPE_PROXY);
 const _: () = assert!(GC_TYPE_SYMBOL == perry_abi::GC_TYPE_SYMBOL);
 const _: () = assert!(GC_TYPE_STRING == perry_abi::GC_TYPE_STRING);
@@ -61,47 +60,11 @@ fn gc_header_size_overflow(total: usize) -> ! {
 
 // Object type constants
 pub const GC_TYPE_ARRAY: u8 = 1;
-pub const GC_TYPE_OBJECT: u8 = 2;
-/// "Is an ordinary object", either header form. S0f meaning (A): `($t) >= 0xFE`.
-/// A macro, textually the comparison it replaces, so a site compiles to the
-/// code it had before the migration.
-#[macro_export]
-macro_rules! gc_type_is_object {
-    ($t:expr) => {
-        ($t) == $crate::gc::GC_TYPE_OBJECT
-    };
-}
-/// "Might carry the meta word". S0f meaning (B): `($t) == 0xFF`.
-#[macro_export]
-macro_rules! object_has_meta_word {
-    ($t:expr) => {
-        ($t) == $crate::gc::GC_TYPE_OBJECT
-    };
-}
-/// The negation of [`gc_type_is_object!`] for a site that compared with `!=`.
-/// S0f meaning: `($t) < 0xFE`.
-#[macro_export]
-macro_rules! gc_type_is_not_object {
-    ($t:expr) => {
-        ($t) != $crate::gc::GC_TYPE_OBJECT
-    };
-}
-/// The negation of [`object_has_meta_word!`] for a site that compared with `!=`.
-/// S0f meaning: `($t) != 0xFF`.
-#[macro_export]
-macro_rules! object_lacks_meta_word {
-    ($t:expr) => {
-        ($t) != $crate::gc::GC_TYPE_OBJECT
-    };
-}
-/// The constant pattern of a `match` arm on an object type byte. S0f meaning:
-/// both object constants.
-#[macro_export]
-macro_rules! gc_object_type_pat {
-    () => {
-        $crate::gc::GC_TYPE_OBJECT
-    };
-}
+pub const GC_TYPE_OBJECT: u8 = perry_abi::GC_TYPE_OBJECT;
+// The object-type predicates (`gc_type_is_object!`, `object_has_meta_word!`,
+// `gc_type_is_not_object!`, `object_lacks_meta_word!`, `gc_object_type_pat!`)
+// have one definition, `perry_abi::object_type`, shared with codegen; the
+// crate root re-exports them (lib.rs).
 pub const GC_TYPE_STRING: u8 = 3;
 pub const GC_TYPE_CLOSURE: u8 = 4;
 const _: () = assert!(GC_TYPE_CLOSURE == crate::codegen_abi::GC_TYPE_CLOSURE);
