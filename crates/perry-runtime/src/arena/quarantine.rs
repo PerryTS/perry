@@ -1196,6 +1196,7 @@ mod tombstone_tests {
             space: HeapSpace::Survivor0,
             allocated_bytes: 0,
             large_allocated_bytes: 0,
+            young_leaf_bytes: 0,
         };
         let live_base = backing as usize;
         let live_size = SIZE;

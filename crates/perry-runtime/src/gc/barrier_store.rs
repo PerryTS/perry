@@ -321,6 +321,9 @@ pub extern "C" fn js_write_barrier_slot_validated_parent(
         bump_write_barrier_trace_counter(BarrierTraceCounter::NonPointerParentSkips);
         return;
     }
+    // Escape evidence precedes every cached exit: the cache never looks at the
+    // child, so a leaf stored into an already-dirty page would be missed.
+    super::leaf_escape::probe_store(parent_user as usize, child_addr);
     // Leaf exit for the common repeated store into one old page — see
     // `inline_slot_store_on_cached_dirty_page`.
     if super::barrier::inline_slot_store_on_cached_dirty_page(

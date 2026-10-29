@@ -261,7 +261,7 @@ pub(crate) fn young_in_use_bytes_after_retag() -> usize {
     let mut total = 0usize;
     let mut count = |blocks: &[ArenaBlock]| {
         for block in blocks {
-            if block.data.is_null() || block.offset == 0 {
+            if block.data.is_null() || block.offset == 0 || block.extent_kind == super::region::Kind::LargeObject {
                 continue;
             }
             if matches!(
@@ -281,7 +281,7 @@ pub(crate) fn young_in_use_bytes_after_retag() -> usize {
 
 fn collect_blocks(blocks: &[ArenaBlock], source: PromotionSource, out: &mut InPlacePromotion) {
     for (index, block) in blocks.iter().enumerate() {
-        if block.data.is_null() || block.offset == 0 {
+        if block.data.is_null() || block.offset == 0 || block.extent_kind == super::region::Kind::LargeObject {
             continue;
         }
         out.blocks.push(PromotedBlock {
@@ -490,6 +490,7 @@ fn stamp_and_index_block(block: &ArenaBlock, liveness: PromotionLiveness) -> (us
         block.size,
         liveness,
     );
+    let repair = describe && super::young_large::young_large_in_use_bytes() != 0;
     let mut stopped_early = false;
 
     let mut offset = 0usize;
@@ -517,6 +518,7 @@ fn stamp_and_index_block(block: &ArenaBlock, liveness: PromotionLiveness) -> (us
         unsafe {
             crate::gc::stamp_header_promoted_in_place(header);
             census.note(header, aligned);
+            if repair { crate::gc::repair_promoted_leaf_edges(header); }
         }
         objects += 1;
 

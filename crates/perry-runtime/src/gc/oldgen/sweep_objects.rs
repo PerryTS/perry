@@ -170,7 +170,7 @@ impl ArenaSweepObjectsState {
             if snapshot.data == 0 || snapshot.offset == 0 {
                 continue;
             }
-            let cleanup_reclaims_dead_block = if block_idx < self.resettable_general_n {
+            let cleanup_reclaims_dead_block = if block_idx < self.resettable_general_n && !snapshot.large_storage {
                 !crate::arena::general_block_in_recent_window(block_idx)
             } else {
                 survivors.contains(&block_idx) || block_idx >= self.old_block_start
@@ -208,7 +208,7 @@ impl ArenaSweepObjectsState {
                 );
             }
             self.freed_bytes = self.freed_bytes.saturating_add(block.bytes);
-            if block_idx < self.resettable_general_n {
+            if block_idx < self.resettable_general_n && !snapshot.large_storage {
                 self.eden_dead_bytes = self.eden_dead_bytes.saturating_add(block.bytes);
             }
             self.block_skip_blocks += 1;
@@ -338,9 +338,9 @@ impl ArenaSweepObjectsState {
         size: usize,
     ) {
         let is_old = block_idx >= self.old_block_start;
-        let general = block_idx < self.resettable_general_n;
+        let general = block_idx < self.resettable_general_n && !self.large_block(block_idx);
         let age_bump = self.do_age_bump && general;
-        let from_space = crate::arena::block_in_copying_from_space(
+        let from_space = general && crate::arena::block_in_copying_from_space(
             block_idx,
             self.resettable_general_n,
             &self.active_survivor_blocks,
@@ -546,6 +546,11 @@ impl ArenaSweepObjectsState {
 }
 
 impl ArenaSweepObjectsState {
+    #[inline(always)]
+    fn large_block(&self, block_idx: usize) -> bool {
+        self.block_snapshots.get(block_idx).is_some_and(|s| s.large_storage)
+    }
+
     unsafe fn keep_live_object(
         &mut self,
         header: *mut GcHeader,
@@ -566,7 +571,7 @@ impl ArenaSweepObjectsState {
         if block_idx < self.block_has_live.len() {
             self.block_has_live[block_idx] = true;
         }
-        if block_idx < self.resettable_general_n {
+        if block_idx < self.resettable_general_n && !self.large_block(block_idx) {
             self.eden_live_bytes = self.eden_live_bytes.saturating_add((*header).size as u64);
         }
         if count_in_live_census {
@@ -574,11 +579,13 @@ impl ArenaSweepObjectsState {
             self.arena_live_bytes = self.arena_live_bytes.saturating_add(size);
             // #7901: the from-space share of the census, so a following copied
             // minor can remove exactly what it replaces.
+            // The cheap block-index test first: only a from-space block can
+            // hold a young leaf, so old objects never pay the storage lookup.
             if crate::arena::block_in_copying_from_space(
                 block_idx,
                 self.resettable_general_n,
                 &self.active_survivor_blocks,
-            ) {
+            ) && !self.large_block(block_idx) {
                 self.arena_live_from_space_bytes =
                     self.arena_live_from_space_bytes.saturating_add(size);
             }
@@ -617,7 +624,7 @@ impl ArenaSweepObjectsState {
             // therefore excluded from live-allocation accounting.
             let count_in_live_census = self.minor_sweep || flags & GC_FLAG_MARKED != 0;
             self.keep_live_object(header, block_idx, flags, false, false, count_in_live_census);
-            if block_idx < self.resettable_general_n {
+            if block_idx < self.resettable_general_n && !self.large_block(block_idx) {
                 self.retained_forwarded_stub_objects =
                     self.retained_forwarded_stub_objects.saturating_add(1);
                 self.retained_forwarded_stub_bytes = self
@@ -653,7 +660,7 @@ impl ArenaSweepObjectsState {
         }
         let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
         self.freed_bytes = self.freed_bytes.saturating_add(total_size as u64);
-        if block_idx < self.resettable_general_n {
+        if block_idx < self.resettable_general_n && !self.large_block(block_idx) {
             self.eden_dead_bytes = self.eden_dead_bytes.saturating_add(total_size as u64);
         }
         // This existing census vector is armed only by apply_block_skip in

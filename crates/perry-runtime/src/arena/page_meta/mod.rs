@@ -1,6 +1,6 @@
 mod region_class;
 pub(crate) use region_class::{
-    classify_heap_generation, classify_heap_space_in_range, classify_region_ownership,
+    classify_heap_generation, classify_heap_space_in_range, classify_heap_storage_in_range, classify_region_ownership,
     uniform_heap_generation,
 };
 mod maintenance;
@@ -77,6 +77,7 @@ struct PageGenerationRange {
     generation: HeapGeneration,
     space: HeapSpace,
     object_starts: *mut u64,
+    large_storage: bool,
 }
 
 impl PageGenerationRange {
@@ -140,6 +141,7 @@ impl PageGenerationCache {
                 generation: HeapGeneration::Unknown,
                 space: HeapSpace::Unknown,
                 object_starts: std::ptr::null_mut(),
+                large_storage: false,
             },
             valid: false,
         }
@@ -399,6 +401,27 @@ pub(crate) fn unregister_old_block_pages(pages: &[usize]) {
     crate::gc::dirty_page_cache_invalidate();
 }
 
+/// A block's page span is already known: retire canonical chunks without
+/// constructing a page-number vector. Preserve the deferred-entry ordering
+/// and discard promoted runs without parsing the retired backing.
+pub(crate) fn unregister_old_block_range(first: usize, last: usize) {
+    if first > last {
+        return;
+    }
+    flush_deferred_old_page_registrations();
+    OLD_GEN_PAGE_META.with(|meta| meta.borrow_mut().remove_range(first, last));
+    OLD_GEN_PAGE_OBJECTS.with(|index| index.borrow_mut().remove_range(first, last));
+    if OLD_GEN_PAGE_PROMOTED_RUNS_NONEMPTY.with(Cell::get) {
+        OLD_GEN_PAGE_PROMOTED_RUNS.with(|runs| {
+            let mut runs = runs.borrow_mut();
+            for page in first..=last {
+                runs.remove(&page);
+            }
+        });
+    }
+    crate::gc::dirty_page_cache_invalidate();
+}
+
 #[inline]
 pub(crate) fn address_span_overlaps_pages(
     start: usize,
@@ -433,11 +456,19 @@ pub(crate) fn register_block_space_with_object_starts(
     space: HeapSpace,
     object_starts: *mut u64,
 ) {
+    register_block_with_kind(base, size, generation, space, object_starts,
+        super::region::kind_for(generation, size));
+}
+
+pub(crate) fn register_block_with_kind(
+    base: usize, size: usize, generation: HeapGeneration, space: HeapSpace,
+    object_starts: *mut u64, kind: super::region::Kind,
+) {
     if base == 0 || size == 0 || matches!(generation, HeapGeneration::Unknown) {
         return;
     }
     #[cfg(target_os = "linux")]
-    if super::region::reservation::set_space(base, size, space, Some(object_starts as usize)) {
+    if super::region::reservation::set_space_with_kind(base, size, space, Some(object_starts as usize), Some(kind)) {
         if matches!(generation, HeapGeneration::Old) {
             register_old_block_pages(base, size);
         }
@@ -450,6 +481,7 @@ pub(crate) fn register_block_space_with_object_starts(
         generation,
         space,
         object_starts,
+        large_storage: kind == super::region::Kind::LargeObject,
     };
     let first_key = generation_class_key_for_addr(base);
     let last_key = generation_class_key_for_addr(end - 1);
@@ -831,10 +863,10 @@ pub(crate) fn unregister_block_generation(base: usize, size: usize) {
         let was_old = generation == HeapGeneration::Old;
         super::region::reservation::set_space(base, size, HeapSpace::Unknown, Some(0));
         if was_old {
-            let pages: Vec<usize> = (generation_page_for_addr(base)
-                ..=generation_page_for_addr(base + size - 1))
-                .collect();
-            unregister_old_block_pages(&pages);
+            unregister_old_block_range(
+                generation_page_for_addr(base),
+                generation_page_for_addr(base + size - 1),
+            );
         }
         return;
     }

@@ -606,23 +606,22 @@ fn arena_alloc_gc_slow(size: usize, align: usize, obj_type: u8, total: usize) ->
     crate::test_support::bootstrap_test_thread();
     use crate::gc::{GcHeader, GC_FLAG_ARENA, GC_HEADER_SIZE};
 
-    // Large arena-backed GC objects are born directly in non-moving old
-    // generation. The threshold applies to the actual bytes a copying nursery
-    // would otherwise move: GcHeader + payload + alignment padding.
-    //
-    // It is TYPE-DEPENDENT, because the price of crossing it is: this object is
-    // also stamped `GC_FLAG_TENURED`, and a minor never sweeps old-gen — so for
-    // a POINTER-BEARING object the cost is not its own bytes, it is every
-    // object it can reach, held live through the remembered set by a container
-    // nothing refers to any more. See
-    // `gc::LARGE_POINTER_BEARING_OBJECT_THRESHOLD_BYTES` for the measurement
-    // (`shapes.ts` sat 16 bytes over the flat 16 KB line and re-marked 118 006
-    // slots per minor because of it).
-    // `&&` short-circuits, so the scope check is reached only by an allocation
-    // the size test has ALREADY called large -- never on the hot path (#10123).
+    // Size chooses storage independently of age for whole-cell pointer-free
+    // leaves. Their dedicated blocks stay young until traced by a minor.
+    // Pointer-bearing large containers retain the existing old birth contract
+    // until their complete outgoing-edge/forwarding slice is implemented.
+    // Both existing cutoffs and the scoped JSON container exception stay put.
     if crate::gc::is_large_object_total_size_for_type(total, obj_type)
         && !crate::gc::json_wide_birth_permits(total, obj_type)
     {
+        if crate::gc::gc_type_info(obj_type).is_some_and(|info| info.pointer_free
+            && info.rewrite_descriptor_kind == crate::gc::GcRewriteDescriptorKind::Leaf)
+        {
+            let raw = super::young_large::allocate(total, align);
+            let user = unsafe { init_young_header(raw, total, obj_type) };
+            crate::gc::allocation_pacing::arm_young_after_large_birth();
+            return user;
+        }
         return arena_alloc_gc_old(size, align, obj_type);
     }
 

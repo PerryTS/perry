@@ -25,24 +25,36 @@ impl ConstructionBatch {
         if !super::pointer_in_old_gen(parent as usize) {
             return;
         }
+        // A young leaf can escape through any slot, so with leaves alive each
+        // pointer slot is checked. With none, the first remembering of a page
+        // is the whole job, as before leaves existed.
+        let leaves = super::young_large_in_use_bytes() != 0;
         let mut index = 0;
         while index < len {
             let addr = slots.add(index) as usize;
             let page_end = (addr | (super::page_meta::GENERATION_PAGE_SIZE - 1)) + 1;
             let end = (index + (page_end - addr) / 8).min(len);
+            let mut barriered = false;
             while index < end {
                 let bits = *slots.add(index);
                 let tag = bits & crate::value::TAG_MASK;
                 let child = (bits & crate::value::POINTER_MASK) as usize;
-                if (tag == crate::value::POINTER_TAG || tag == crate::value::STRING_TAG)
-                    && crate::gc::remembered_child_needs_tracking(child)
-                {
-                    crate::gc::runtime_write_barrier_slot(
-                        parent as usize,
-                        slots.add(index) as usize,
-                        bits,
-                    );
-                    break;
+                if tag == crate::value::POINTER_TAG || tag == crate::value::STRING_TAG {
+                    // One page-granular remembering covers the page, but the
+                    // escape of a young leaf is per value.
+                    if !barriered && crate::gc::remembered_child_needs_tracking(child) {
+                        crate::gc::runtime_write_barrier_slot(
+                            parent as usize,
+                            slots.add(index) as usize,
+                            bits,
+                        );
+                        if !leaves {
+                            break;
+                        }
+                        barriered = true;
+                    } else if barriered {
+                        crate::gc::probe_leaf_escape_store(parent as usize, child);
+                    }
                 }
                 index += 1;
             }
