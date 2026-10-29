@@ -130,6 +130,7 @@ pub mod builtins;
 pub mod bun_compat;
 pub mod bun_ffi;
 pub mod child_process;
+pub mod clone_markers;
 pub mod closure;
 pub mod cluster;
 pub mod cluster_sched;

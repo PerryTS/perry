@@ -595,3 +595,41 @@ fn weakmap_mark_verifier_checks_only_enabled_values() {
         (*value).gc_flags &= !GC_FLAG_MARKED;
     }
 }
+
+#[test]
+fn clone_markers_follow_moving_targets() {
+    let _guard = guard(1);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    crate::clone_markers::reset_for_tests();
+    root_object(0);
+    let before = rooted(0).to_bits();
+    crate::clone_markers::mark_untransferable(rooted(0));
+    crate::clone_markers::mark_uncloneable(rooted(0));
+    let trace = collect_minor_trace(GcTriggerKind::Direct);
+    assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+    assert_ne!(rooted(0).to_bits(), before);
+    assert!(crate::clone_markers::is_untransferable(rooted(0)));
+    assert!(crate::clone_markers::is_uncloneable(rooted(0)));
+    assert_eq!(crate::clone_markers::entry_count_for_tests(), 1);
+    crate::clone_markers::reset_for_tests();
+}
+
+#[test]
+fn clone_markers_release_dead_keys_without_marking_fresh_identities() {
+    let _guard = guard(1);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    crate::clone_markers::reset_for_tests();
+    root_object(0);
+    crate::clone_markers::mark_untransferable(rooted(0));
+    assert_eq!(crate::clone_markers::entry_count_for_tests(), 1);
+    js_shadow_slot_set(0, 0);
+    let trace = collect_minor_trace(GcTriggerKind::Direct);
+    assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+    assert_eq!(crate::clone_markers::entry_count_for_tests(), 0);
+    for _ in 0..128 {
+        root_object(0);
+        assert!(!crate::clone_markers::is_untransferable(rooted(0)));
+        assert!(!crate::clone_markers::is_uncloneable(rooted(0)));
+    }
+    crate::clone_markers::reset_for_tests();
+}

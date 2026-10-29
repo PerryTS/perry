@@ -170,7 +170,7 @@ fn weakref_type_error(message: &str) -> ! {
 }
 
 #[inline]
-fn is_valid_weak_target(value: f64) -> bool {
+pub(crate) fn is_valid_weak_target(value: f64) -> bool {
     // Every pointer identity is weakly holdable except a registered Symbol.
     // Class references need their registry proof only in the immediate lane.
     let bits = value.to_bits();
