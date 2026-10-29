@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 #[derive(Default)]
 pub(crate) struct Trace {
     pub pred: BTreeMap<NodeId, (NodeId, String)>,
+    pub contract_inputs: BTreeMap<NodeId, String>,
     pub seeds: BTreeMap<NodeId, String>,
     pub bound_origins: BTreeMap<u32, CallId>,
     pub source_calls: BTreeSet<CallId>,
@@ -427,6 +428,66 @@ pub(crate) fn collect(g: &Gen) -> Vec<String> {
             quote(kind),quote(&m.tok_name(i as Tok)),opt(layout),opt(function),opt(context),bound,
             quote(m.escaped.get(&(i as Tok)).map_or("",|r|&m.reasons[*r as usize])), m.is_marker(i as Tok), m.closed_marker(i as Tok)));
     }
+
+    // PUB: read existing ownership/member maps, without settling or creating flow.
+    for (&t, &(f, index)) in &m.param_marker {
+        out.push(format!(
+            "{{\"record\":\"parameter-marker\",\"token\":{t},\"function\":{f},\"index\":{index}}}"
+        ));
+    }
+    for (t, _) in m
+        .toks
+        .iter()
+        .enumerate()
+        .filter(|(t, _)| m.is_marker(*t as Tok))
+    {
+        let t = t as Tok;
+        let home = m.arg_marker_node.get(&t).copied();
+        nodes.extend(home);
+        let param = home
+            .and_then(|n| m.param_at.get(&n))
+            .map_or("null".into(), |(f, i)| format!("[{f},{i}]"));
+        let parent = m.path_parent.get(&t).map_or("null".into(), |(p, k)| {
+            format!(
+                "[{p},{}]",
+                k.map_or("null".into(), |a| quote(&m.atoms[a as usize]))
+            )
+        });
+        let keyed = m.keyed_parent.get(&t).map_or("null".into(), |(p, k)| {
+            format!("[{p},{}]", quote(&m.atoms[*k as usize]))
+        });
+        out.push(format!("{{\"record\":\"marker-route\",\"token\":{t},\"bare\":{},\"beside\":{},\"home\":{},\"parameter\":{param},\"members\":{},\"reach\":{},\"reachBase\":{},\"keyedParent\":{keyed},\"pathParent\":{parent}}}",
+            m.bare_marker(t),m.beside_values(t),opt(home),nums(m.arg_members.get(&t).into_iter().flatten()),opt(m.marker_reach.get(&t).copied()),opt(m.arg_reach_base.get(&t).copied())));
+    }
+    for (f, fi) in m.funcs.iter().enumerate() {
+        let f = f as FnIdx;
+        out.push(format!("{{\"record\":\"parameter-contract\",\"function\":{f},\"closed\":{},\"described\":{},\"closedValues\":{},\"contract\":{},\"foreign\":{}}}",
+            m.closed_params.contains_key(&f),m.closed_described.get(&f).map_or("null".into(), |v| format!("{:?}",v)),nums(m.closed_params.get(&f).into_iter().flatten()),m.contract_fns.contains(&f),g.stand_in_fc.contains_key(&fi.token)));
+        nodes.extend(m.closed_params.get(&f).into_iter().flatten());
+    }
+    if let Some(trace) = &m.diagnostic {
+        for (&n, input) in &trace.contract_inputs {
+            nodes.insert(n);
+            out.push(format!(
+                "{{\"record\":\"contract-input\",\"node\":{n},\"description\":{}}}",
+                quote(input)
+            ));
+        }
+        for (&n, (src, why)) in &trace.pred {
+            out.push(format!(
+                "{{\"record\":\"top-predecessor\",\"node\":{n},\"source\":{src},\"reason\":{}}}",
+                quote(why)
+            ));
+        }
+    }
+    for (src, v) in m.nodes.iter().enumerate() {
+        if !v.succ.is_empty() {
+            out.push(format!(
+                "{{\"record\":\"copy-edges\",\"source\":{src},\"targets\":{}}}",
+                nums(&v.succ)
+            ));
+        }
+    }
     let roots: Vec<_> = nodes.iter().map(|&n| m.diagnostic_root(n).0).collect();
     nodes.extend(roots);
     for n in nodes {
@@ -466,4 +527,15 @@ pub(crate) fn collect(g: &Gen) -> Vec<String> {
             v.prim,nums(toks),quote(m.labels.get(n as usize).copied().unwrap_or("")),v.param,v.obs,opt(top.then_some(root)),quote(&if top&&m.explain{m.top_origin(n)}else{origin})));
     }
     out
+}
+
+/// Existing contract summary, observed only after fact derivation.
+pub(crate) fn value_brief(c: &crate::units::ValueContract) -> String {
+    format!(
+        "{{\"unknown\":{},\"prim\":{},\"functions\":{},\"arrays\":{}}}",
+        c.unknown,
+        c.prim,
+        strings(c.fns.iter().map(|f| f.name.clone())),
+        strings(c.arrays.iter().cloned())
+    )
 }

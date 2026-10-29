@@ -231,6 +231,11 @@ pub(crate) struct FnContract {
     /// holds it): a unit calling it publishes what it passes
     /// (`ProgramFacts::method_runs_out`), however it got the function.
     pub method: bool,
+    /// DECISIONS 224: a function of its unit published to a known closed
+    /// callee (DECISIONS 223): as for a method, a unit calling it publishes
+    /// what it passes (`ProgramFacts::method_args_out`), however it got the
+    /// function.
+    pub callable: bool,
     /// DECISIONS 212: the published class (its display) whose instances a
     /// method runs on, when there is one: a unit holding the method as a
     /// value (returned, read from a field, an array element or the
@@ -392,6 +397,7 @@ impl FnContract {
             self.compiled_body = None;
         }
         self.method |= o.method;
+        self.callable |= o.callable;
         if self.this_class != o.this_class {
             self.this_class = None;
         }

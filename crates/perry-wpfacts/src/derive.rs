@@ -135,6 +135,8 @@ pub enum Verdict {
 pub struct SiteFacts {
     /// Observational solve identity. Never read by a proof or digest.
     pub(crate) diagnostic_unit: Option<String>,
+    /// Observational: per function copy holding the site, its verdict.
+    pub(crate) diagnostic_copies: Vec<(String, Verdict)>,
     pub module: u32,
     pub byte_offset: u32,
     pub key: String,
@@ -745,7 +747,7 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
     // One fact per read site: records of the same site (a body walked
     // twice) unite their receivers.
     let mut first: FxHashMap<(u32, u32, u32, bool, bool), usize> = FxHashMap::default();
-    let mut groups: Vec<(usize, Vec<u32>)> = Vec::new();
+    let mut groups: Vec<(usize, Vec<u32>, Vec<FnIdx>)> = Vec::new();
     // The functions only the runtime has (a promise's resolvers). Every
     // other function token is a body: compiled here, or another unit's,
     // held by its contract (a stand-in, a foreign class's method).
@@ -753,15 +755,18 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
     for (i, s) in g.read_sites.iter().enumerate() {
         let k = (s.module, s.byte_offset, s.key, s.is_call, s.value_call);
         match first.get(&k) {
-            Some(&gi) => groups[gi].1.push(s.recv),
+            Some(&gi) => {
+                groups[gi].1.push(s.recv);
+                groups[gi].2.push(s.func);
+            }
             None => {
                 first.insert(k, groups.len());
-                groups.push((i, vec![s.recv]));
+                groups.push((i, vec![s.recv], vec![s.func]));
             }
         }
     }
-    for (i, recvs) in &groups {
-        let s = &g.read_sites[*i];
+    // The verdict of one site over the receiver nodes `recvs`.
+    let verdict_of = |s: &crate::gen::ReadSite, recvs: &[u32]| {
         let mut toks: Vec<Tok> = recvs
             .iter()
             .flat_map(|&r| m.nodes[r as usize].pts.to_sorted())
@@ -774,7 +779,7 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
             .copied()
             .find(|&r| m.nodes[r as usize].pts.to_sorted().contains(&TOP))
             .unwrap_or(s.recv);
-        let key = m.atoms[s.key as usize].clone();
+        let key = &m.atoms[s.key as usize];
         let (mut receivers, mut top, mut verdict, mut fixed_shape, mut targets) =
             judge(m, &by_id, &runtime, s, &key, &toks, prim, top_recv);
         // Design §11.4: a site whose receiver is the `this` of a method of
@@ -818,10 +823,42 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
                 }
             }
         }
+        (receivers, top, verdict, fixed_shape, targets, guard_keys)
+    };
+    for (i, recvs, funcs) in &groups {
+        let s = &g.read_sites[*i];
+        let key = m.atoms[s.key as usize].clone();
+        let (receivers, top, verdict, fixed_shape, targets, guard_keys) = verdict_of(s, recvs);
+        // Observational only (the facts dump): the verdict of each function
+        // copy holding the site (an inlined body is a copy of its own), so a
+        // dump compares a copy with the same copy of another run. Never read
+        // by a proof or a digest.
+        let diagnostic_copies = g.diagnostic.as_ref().map(|_| {
+            let mut fs: Vec<FnIdx> = funcs.clone();
+            fs.sort_unstable();
+            fs.dedup();
+            fs.into_iter()
+                .map(|f| {
+                    let rs: Vec<u32> = recvs
+                        .iter()
+                        .zip(funcs)
+                        .filter(|(_, &x)| x == f)
+                        .map(|(&r, _)| r)
+                        .collect();
+                    let fi = &m.funcs[f as usize];
+                    let path = g.modules.get(fi.module as usize).map_or("", |(p, _)| *p);
+                    (
+                        format!("{path}:{}:{}", fi.func_id, fi.name),
+                        verdict_of(s, &rs).2,
+                    )
+                })
+                .collect::<Vec<_>>()
+        });
         let mut t: Vec<String> = targets.into_values().collect();
         t.sort();
         t.dedup();
         out.push(SiteFacts {
+            diagnostic_copies: diagnostic_copies.unwrap_or_default(),
             diagnostic_unit: g
                 .diagnostic
                 .as_ref()

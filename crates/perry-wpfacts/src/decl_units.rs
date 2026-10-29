@@ -1503,6 +1503,9 @@ pub(crate) fn views<'a>(
             };
             if let Some((nm, id)) = own.filter(|(nm, id)| closed.get(*nm) == Some(id)) {
                 view.closed.insert(nm.to_string(), id);
+                if passed.contains(nm) {
+                    view.closed_passed.insert(nm.to_string());
+                }
                 if published.contains(nm) {
                     view.published.insert(nm.to_string());
                 }
