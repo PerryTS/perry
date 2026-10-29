@@ -5456,7 +5456,8 @@ fn lower_object_array_write_versioned_for(
         }
         plans
     };
-    let object_header_size = crate::target_layout::object_header_size_bytes(ctx.target_triple);
+    let object_header_size =
+        crate::target_layout::object_slot_base_bytes(ctx.target_triple, matched.form());
     // Address inline slots in bytes. #8047 makes both layouts 16 bytes, while
     // retaining this target-derived form prevents future silent truncation.
     let header_bytes = object_header_size.to_string();
@@ -9970,4 +9971,13 @@ fn lower_do_while_impl(
 
     ctx.current_block = exit_idx;
     Ok(())
+}
+
+impl ObjectArrayWriteLoop {
+    /// The header form predicted for the objects this record describes (`HeaderForm`:
+    /// every ordinary object has the meta word today). Sites take their slot base
+    /// from here, never from the type byte.
+    pub(crate) fn form(&self) -> crate::target_layout::HeaderForm {
+        crate::target_layout::HeaderForm::Meta
+    }
 }

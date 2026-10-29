@@ -878,6 +878,10 @@ unsafe fn native_module_property_by_name_impl(
     } else {
         module_name
     };
+    if crate::process::worker_restrictions::worker_process_member_hidden(module_name, property_name)
+    {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
     if matches!(module_name, "process" | "process.default") {
         if let Some(value) = crate::process::process_ipc_property(property_name) {
             return value;
@@ -1050,7 +1054,13 @@ fn native_module_export_value(module: f64, property: f64, observe_namespace_writ
             return value;
         }
     }
-    let live = native_module_constant_is_live(&module, &property);
+    let live = native_module_constant_is_live(&module, &property)
+        || (observe_namespace_writes
+            && matches!(
+                module.as_str(),
+                "process" | "process.namespace" | "process.default"
+            )
+            && property == "title");
     let key = format!("{module}\0{property}");
     let cached = (!live)
         .then(|| NATIVE_ESM_EXPORT_VALUES.with(|v| v.borrow().get(&key).copied()))
@@ -1510,6 +1520,12 @@ pub(crate) unsafe fn copy_native_module_exports(
         .copied()
         .chain(include_permission.then_some(b"permission" as &[u8]))
     {
+        if crate::process::worker_restrictions::worker_process_member_hidden(
+            &module_name,
+            std::str::from_utf8(key_bytes).unwrap_or(""),
+        ) {
+            continue;
+        }
         let scope = crate::gc::RuntimeHandleScope::new();
         let src_h = scope.root_raw_const_ptr(src);
         let key_ptr =

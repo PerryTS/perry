@@ -43,12 +43,26 @@ pub(crate) struct RuntimeState {
 }
 
 impl RuntimeState {
+    /// Builds the state where it lives. The allocation comes zero-filled and
+    /// each group initializes its fields through a pointer into it, so no
+    /// `RuntimeState` or group value ever exists on the stack: a by-value
+    /// `Box::new(RuntimeState { .. })` built each group in a stack temporary,
+    /// copied the groups into a stack `RuntimeState` and that into the box
+    /// (four `memcpy`s of 46 KB in all, plus a stack `memset` of the 16 KB
+    /// field cache). Both inline caches are empty as all-zero bits, so the
+    /// zero fill is their whole initialization.
     fn new_boxed() -> Box<Self> {
-        Box::new(RuntimeState {
-            object_hot: crate::object::ObjectHotTables::new(),
-            field_lookup: crate::object::FieldLookupCaches::new(),
-            shapes: crate::object::ShapeTable::new(),
-        })
+        let mut state = Box::<RuntimeState>::new_zeroed();
+        let slot = state.as_mut_ptr();
+        // SAFETY: `slot` is this allocation, zero-filled and otherwise
+        // unused; every `init_in` writes each field of its group that is not
+        // valid as zero, so the state is fully initialized afterwards.
+        unsafe {
+            crate::object::ObjectHotTables::init_in(&raw mut (*slot).object_hot);
+            crate::object::FieldLookupCaches::init_in(&raw mut (*slot).field_lookup);
+            crate::object::ShapeTable::init_in(&raw mut (*slot).shapes);
+            state.assume_init()
+        }
     }
 }
 

@@ -127,7 +127,11 @@ pub(crate) fn emit_layouts(
                     llvm_identifier(&key.atom),
                     key.image.slot,
                     key.image.attrs as i8,
-                    key_off(&module.target_triple, key.image.slot),
+                    key_off(
+                        &module.target_triple,
+                        crate::target_layout::HeaderForm::Meta,
+                        key.image.slot
+                    ),
                 )
             })
             .collect::<Vec<_>>()
@@ -190,7 +194,7 @@ pub(crate) fn emit_layouts(
             layout.family, layout.variant, layout.kind.code(), layout.integrity,
             layout.slot_count, layout.word as i32, crate::nanbox::i64_literal(layout.rep),
             capacity - 1, layout.class_id, layout.parent_class_id,
-            desc_tail(&module.target_triple, layout.slot_count),
+            desc_tail(&module.target_triple, crate::target_layout::HeaderForm::Meta, layout.slot_count),
         ));
         aliases.push(format!(
             "@{symbol} = alias {DESC_TY}, ptr getelementptr ([{} x {DESC_TY}], ptr @perry_lazy_layouts, i32 0, i32 {index})",

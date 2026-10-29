@@ -569,8 +569,13 @@ pub(crate) fn emit_witness(
 /// `POINTER_MASK` instead lowers to `bzhi` with an 8-bit count register on
 /// BMI2 targets, whose partial-register write makes the load wait on an
 /// unrelated earlier value: binary-trees arena +8% cycles.)
-pub(crate) fn emit_slot_ptr(ctx: &mut FnCtx<'_>, recv_box: &str, slot: u32) -> String {
-    let header = crate::target_layout::object_header_size_bytes(ctx.target_triple) as i64;
+pub(crate) fn emit_slot_ptr(
+    ctx: &mut FnCtx<'_>,
+    recv_box: &str,
+    form: crate::target_layout::HeaderForm,
+    slot: u32,
+) -> String {
+    let header = crate::target_layout::object_slot_base_bytes(ctx.target_triple, form) as i64;
     let blk = ctx.block();
     let obj_bits = blk.bitcast_double_to_i64(recv_box);
     let biased = blk.sub(
@@ -611,9 +616,9 @@ fn select_by_class(
 /// class id (case 2).
 pub(crate) fn emit_proof_slot_ptr(ctx: &mut FnCtx<'_>, recv_box: &str, p: &FieldProof) -> String {
     if p.agrees() {
-        return emit_slot_ptr(ctx, recv_box, p.slot);
+        return emit_slot_ptr(ctx, recv_box, p.form(), p.slot);
     }
-    let header = crate::target_layout::object_header_size_bytes(ctx.target_triple) as i64;
+    let header = crate::target_layout::object_slot_base_bytes(ctx.target_triple, p.form()) as i64;
     let biased = {
         let blk = ctx.block();
         let bits = blk.bitcast_double_to_i64(recv_box);
@@ -800,7 +805,7 @@ fn lower_guarded_get(
                 -(perry_abi::GC_HEADER_SIZE as i64),
             );
             let type_byte = blk.load(I8, &type_ptr);
-            let is_object = blk.icmp_eq(I8, &type_byte, &perry_abi::GC_TYPE_OBJECT.to_string());
+            let is_object = crate::target_layout::emit_gc_type_is_object(blk, I8, &type_byte);
             let hdr = super::receiver_range::emit_field_ptr(blk, &recv.biased, 0);
             let cid = blk.load(I32, &hdr);
             let mut any: Option<String> = None;
@@ -912,4 +917,13 @@ pub(crate) fn ta_field_kind(ctx: &FnCtx<'_>, ta_expr: &Expr) -> Option<u8> {
     (p.ta_stable && !p.nullable && p.kind_mask == K_OBJ)
         .then_some(p.ta_kind)
         .flatten()
+}
+
+impl FieldProof {
+    /// The header form predicted for the objects this record describes (`HeaderForm`:
+    /// every ordinary object has the meta word today). Sites take their slot base
+    /// from here, never from the type byte.
+    pub(crate) fn form(&self) -> crate::target_layout::HeaderForm {
+        crate::target_layout::HeaderForm::Meta
+    }
 }

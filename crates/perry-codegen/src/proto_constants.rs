@@ -669,7 +669,10 @@ pub(crate) fn lower_class_holder_read(
         return None;
     }
     Some((|| {
-        let header = crate::target_layout::object_header_size_bytes(ctx.target_triple) as i64;
+        let header = crate::target_layout::object_slot_base_bytes(
+            ctx.target_triple,
+            crate::target_layout::HeaderForm::Meta,
+        ) as i64;
         let recv = crate::expr::lower_expr(ctx, object)?;
         let check = ctx.new_block("cholder.layout");
         let slow = ctx.new_block("cholder.generic");
@@ -1194,7 +1197,10 @@ pub(crate) fn emit_family_run_proof(
     if classes.is_empty() {
         return None;
     }
-    let header = crate::target_layout::object_header_size_bytes(ctx.target_triple) as i64;
+    let header = crate::target_layout::object_slot_base_bytes(
+        ctx.target_triple,
+        crate::target_layout::HeaderForm::Meta,
+    ) as i64;
     let gc = crate::runtime_abi::GC_HEADER_SIZE as i64;
     let proved = ctx.new_block("crun.proved");
     let refused = ctx.new_block("crun.refused");

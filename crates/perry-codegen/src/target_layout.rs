@@ -145,7 +145,7 @@ pub(crate) fn heap_addr_lower_bound_inclusive(target_triple: &str) -> u64 {
 ///
 /// Inline object allocation, header init, and the property inline-cache fast
 /// path all use this as the field-region base
-/// (`fields = obj + object_header_size_bytes`). It MUST equal the runtime's
+/// (`fields = obj + object_slot_base_bytes(.., form)`). It MUST equal the runtime's
 /// `size_of::<ObjectHeader>()`, or inline-constructed objects and runtime-FFI
 /// field access diverge and every property read/write is corrupt. (The closure
 /// header's field offsets have the analogous problem; those are handled
@@ -153,28 +153,71 @@ pub(crate) fn heap_addr_lower_bound_inclusive(target_triple: &str) -> u64 {
 /// `offset_of!`.)
 ///
 /// The value stays an 8-BYTE MULTIPLE, which the f64 field region depends on.
-pub fn object_header_size_bytes(_target_triple: &str) -> u64 {
-    16
+pub fn object_slot_base_bytes(_target_triple: &str, form: HeaderForm) -> u64 {
+    match form {
+        HeaderForm::Meta => 16,
+    }
+}
+
+/// Which object header an object has: the form the compiler predicted for the
+/// layout (or class) a site was built from. Today every ordinary object has
+/// the meta word (`Meta`); a site takes the form from the carrier that gave it
+/// the slot (`.form()` on the layout, family, proof or class record) and never
+/// computes it. A slot base or meta offset is a `match` on this enum, so a new
+/// variant fails to compile at every site until it is handled.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HeaderForm {
+    /// `ObjectHeader` with the trailing `meta` word: slots start at +16.
+    Meta,
+}
+
+/// The form predicted for the instances of `class_name`: an ordinary class
+/// instance has the meta word. A class hierarchy shares one form (a base-class
+/// site reads subclass instances at the same offsets).
+pub fn class_instance_form(_class_name: &str) -> HeaderForm {
+    HeaderForm::Meta
 }
 
 /// `PerryLayoutKey.off` of slot `slot`: the absolute byte offset from the
 /// object, which the runtime's slot readers add instead of `header + 8 * slot`.
-pub fn layout_key_off(target_triple: &str, slot: u32) -> u64 {
-    object_header_size_bytes(target_triple) + u64::from(slot) * 8
+pub fn layout_key_off(target_triple: &str, form: HeaderForm, slot: u32) -> u64 {
+    object_slot_base_bytes(target_triple, form) + u64::from(slot) * 8
 }
 
 /// Header plus `slot_count` slots (the size of a layout birth after the `GcHeader`).
-pub fn layout_slots_end(target_triple: &str, slot_count: u32) -> u64 {
-    layout_key_off(target_triple, slot_count)
+pub fn layout_slots_end(target_triple: &str, form: HeaderForm, slot_count: u32) -> u64 {
+    layout_key_off(target_triple, form, slot_count)
 }
 
 /// `PerryLayoutDesc.gc_header_word`: the idle `GcHeader` image of a layout
 /// birth (`GC_TYPE_OBJECT`, `GC_FLAG_ARENA`, no reserved bits, total size);
 /// the runtime ORs the live birth colour in.
-pub fn layout_gc_header_word(target_triple: &str, slot_count: u32) -> u64 {
+pub fn layout_gc_header_word(target_triple: &str, form: HeaderForm, slot_count: u32) -> u64 {
     const GC_FLAG_ARENA: u64 = 0x02;
-    let total = 8 + layout_slots_end(target_triple, slot_count);
+    let total = 8 + layout_slots_end(target_triple, form, slot_count);
     u64::from(crate::runtime_abi::GC_TYPE_OBJECT) | (GC_FLAG_ARENA << 8) | (total << 32)
+}
+
+/// Kind A test on a loaded `obj_type` (or masked header word): "is an ordinary
+/// object", either header form. Emits the compare against the object type the
+/// runtime's `gc_type_is_object!` names.
+pub(crate) fn emit_gc_type_is_object(
+    blk: &mut crate::block::LlBlock,
+    ty: crate::types::LlvmType,
+    value: &str,
+) -> String {
+    blk.icmp_eq(ty, value, &crate::runtime_abi::GC_TYPE_OBJECT.to_string())
+}
+
+/// Kind B test on a loaded `obj_type`: "might this object carry the meta
+/// word" (the runtime's `object_has_meta_word!`); the object at the site has
+/// meta, or the no-branch is the answer for an object without it.
+pub(crate) fn emit_object_has_meta_word(
+    blk: &mut crate::block::LlBlock,
+    ty: crate::types::LlvmType,
+    value: &str,
+) -> String {
+    blk.icmp_eq(ty, value, &crate::runtime_abi::GC_TYPE_OBJECT.to_string())
 }
 
 /// Byte offset of `ObjectHeader::meta` — the last word of the header — for
@@ -184,9 +227,13 @@ pub fn layout_gc_header_word(target_triple: &str, slot_count: u32) -> u64 {
 /// override, the spill buffer, the Array-subclass elements store), and several
 /// inline tiers load it. Keeping the derivation in one place also keeps the
 /// object-header-size callsite census stable as tiers are added.
-pub fn object_meta_slot_offset_bytes(target_triple: &str) -> u64 {
-    let pointer_size = if target_is_ilp32(target_triple) { 4 } else { 8 };
-    object_header_size_bytes(target_triple) - pointer_size
+pub fn object_meta_slot_offset_bytes(target_triple: &str, form: HeaderForm) -> u64 {
+    match form {
+        HeaderForm::Meta => {
+            let pointer_size = if target_is_ilp32(target_triple) { 4 } else { 8 };
+            object_slot_base_bytes(target_triple, form) - pointer_size
+        }
+    }
 }
 
 /// Byte offset of `ObjectMeta::spill` (a `u64` on every target: the record is
@@ -274,22 +321,29 @@ pub(crate) const FIELD_SLOT_SIZE_BYTES: u64 = 8;
 ///
 /// The round-up is retained as a defensive invariant; #8047 makes the header
 /// 16 bytes on both pointer widths, so the total is already 8-aligned.
-pub(crate) fn inline_alloc_total_size_bytes(target_triple: &str, field_count: u32) -> u64 {
+pub(crate) fn inline_alloc_total_size_bytes(
+    target_triple: &str,
+    form: HeaderForm,
+    field_count: u32,
+) -> u64 {
     let alloc_field_count = std::cmp::max(field_count as u64, INLINE_SLOT_FLOOR);
     let payload_size =
-        object_header_size_bytes(target_triple) + alloc_field_count * FIELD_SLOT_SIZE_BYTES;
+        object_slot_base_bytes(target_triple, form) + alloc_field_count * FIELD_SLOT_SIZE_BYTES;
     (GC_HEADER_SIZE_BYTES + payload_size).next_multiple_of(FIELD_SLOT_SIZE_BYTES)
 }
 
 /// The packed `GcHeader` word an inline `new` stores. The object
 /// `_reserved` layout-state field is zero: GC tracing reads the birth
 /// ShapeId's rep, while arrays and closures retain their layout states.
-pub(crate) fn inline_alloc_gc_packed(target_triple: &str, field_count: u32) -> u64 {
-    const GC_TYPE_OBJECT: u64 = 2;
+pub(crate) fn inline_alloc_gc_packed(
+    target_triple: &str,
+    form: HeaderForm,
+    field_count: u32,
+) -> u64 {
     const GC_FLAG_ARENA: u64 = 0x02;
-    GC_TYPE_OBJECT
+    u64::from(crate::runtime_abi::GC_TYPE_OBJECT)
         | (GC_FLAG_ARENA << 8)
-        | (inline_alloc_total_size_bytes(target_triple, field_count) << 32)
+        | (inline_alloc_total_size_bytes(target_triple, form, field_count) << 32)
 }
 
 /// Slots an inline empty array birth reserves, the runtime's four-slot
@@ -350,7 +404,8 @@ mod tests {
         // The inline-`new` allocation is `GcHeader + ObjectHeader + 8 * slots`
         // and the bump allocator's offset invariant requires a multiple of 8.
         for triple in ["aarch64-apple-darwin", "arm64_32-apple-watchos"] {
-            let total = 8 + object_header_size_bytes(triple) + 8 * INLINE_SLOT_FLOOR;
+            let total =
+                8 + object_slot_base_bytes(triple, HeaderForm::Meta) + 8 * INLINE_SLOT_FLOOR;
             assert_eq!(
                 total % 8,
                 0,
@@ -461,13 +516,31 @@ mod tests {
     #[test]
     fn object_header_size_matches_pointer_width() {
         // #8047 — 64-bit targets: 2×u32 + one pointer = 16.
-        assert_eq!(object_header_size_bytes("aarch64-apple-darwin"), 16);
-        assert_eq!(object_header_size_bytes("aarch64-apple-watchos"), 16);
-        assert_eq!(object_header_size_bytes("aarch64-apple-watchos-sim"), 16);
-        assert_eq!(object_header_size_bytes("x86_64-unknown-linux-gnu"), 16);
+        assert_eq!(
+            object_slot_base_bytes("aarch64-apple-darwin", HeaderForm::Meta),
+            16
+        );
+        assert_eq!(
+            object_slot_base_bytes("aarch64-apple-watchos", HeaderForm::Meta),
+            16
+        );
+        assert_eq!(
+            object_slot_base_bytes("aarch64-apple-watchos-sim", HeaderForm::Meta),
+            16
+        );
+        assert_eq!(
+            object_slot_base_bytes("x86_64-unknown-linux-gnu", HeaderForm::Meta),
+            16
+        );
         // ILP32 stays 16 through explicit tail padding.
-        assert_eq!(object_header_size_bytes("x86_64-unknown-linux-gnux32"), 16);
-        assert_eq!(object_header_size_bytes("arm64_32-apple-watchos"), 16);
+        assert_eq!(
+            object_slot_base_bytes("x86_64-unknown-linux-gnux32", HeaderForm::Meta),
+            16
+        );
+        assert_eq!(
+            object_slot_base_bytes("arm64_32-apple-watchos", HeaderForm::Meta),
+            16
+        );
     }
 
     #[test]
@@ -565,10 +638,10 @@ mod tests {
             "x86_64-unknown-linux-gnux32",
         ] {
             assert_eq!(
-                object_header_size_bytes(triple) % 8,
+                object_slot_base_bytes(triple, HeaderForm::Meta) % 8,
                 0,
                 "{triple}: header size must be a whole number of 8-byte heap \
-                 words — `object_header_size_bytes(..) / 8` is used as a word \
+                 words — `object_slot_base_bytes(.., HeaderForm::Meta) / 8` is used as a word \
                  index and truncates silently otherwise"
             );
         }
