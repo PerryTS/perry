@@ -618,4 +618,38 @@ mod tests {
         assert_eq!(address, 0xbaddbeef);
         assert!(abi(&source.replace("from_code", "something_else")).is_err());
     }
+
+    fn bound(tail: &str) -> Result<Value, String> {
+        let abi = runtime_abi().unwrap();
+        let source = format!(
+            r#""node:net.Server", provider=bound_method, receiver="node:net.default", {tail}"#
+        );
+        let ts = tokens(&source).unwrap();
+        super::super::facts::logical(super::super::facts::parse(&ts)?, "", &abi)
+    }
+
+    #[test]
+    fn class_identity_names_the_abi_constant_and_needs_a_constructor() {
+        let d = bound("kind=constructor, class_identity=NET_SERVER").unwrap();
+        let captures = d.get("captures").unwrap().array().unwrap();
+        assert_eq!(captures.len(), 4);
+        assert_eq!(
+            captures[3].get("value").unwrap().string(),
+            Some("0x41efffe485a00000")
+        );
+        assert!(bound("class_identity=NET_SERVER").is_err());
+        assert!(bound("kind=constructor, class_identity=NOT_A_CLASS").is_err());
+    }
+
+    #[test]
+    fn constructable_false_sets_the_instance_bit_and_module_is_recorded() {
+        let d = bound(r#"constructable=false, module="net.server""#).unwrap();
+        assert_eq!(d.get("header").unwrap().get("reserved"), Some(&number(128)));
+        assert_eq!(d.get("module").unwrap().string(), Some("net.server"));
+        assert_eq!(
+            bound("").unwrap().get("header").unwrap().get("reserved"),
+            Some(&number(0))
+        );
+        assert!(bound("kind=constructor, constructable=false").is_err());
+    }
 }
