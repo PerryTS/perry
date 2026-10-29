@@ -36,11 +36,11 @@ fn large_leaf_has_dedicated_young_storage_and_no_payload_scan() {
             before
         );
         assert_eq!(crate::arena::moving_from_space_in_use_bytes(), moving);
-        let mut collector = CopyingNurseryCollector::new(CopyingPointerSet::new());
+        let mut collector = CopyingNurseryCollector::new::<{ cfg!(test) }>(CopyingPointerSet::new());
         let classified = collector.ptrs.classify(p).unwrap();
         assert_eq!(classified.kind, CopyingPointerKind::YoungLarge);
-        assert_eq!(collector.mark_addr(p), Some(p));
-        collector.drain();
+        assert_eq!(collector.mark_addr::<{ cfg!(test) }>(p), Some(p));
+        collector.drain::<{ cfg!(test) }>();
         assert!(collector.worklist.is_empty());
         assert_eq!(collector.stats.copied_bytes, 0);
         assert_eq!(
