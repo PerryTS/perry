@@ -181,7 +181,7 @@ pub unsafe extern "C" fn napi_create_function(
         ),
         1,
     );
-    crate::closure::js_closure_set_capture_ptr(closure, 0, callback_index as i64);
+    crate::closure::closure_set_capture_word(closure, 0, callback_index as i64);
     let handle = match add_handle(env, JSValue::pointer(closure.cast()).bits()) {
         Ok(handle) => handle,
         Err(status) => return status,

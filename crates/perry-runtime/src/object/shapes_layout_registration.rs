@@ -10,7 +10,7 @@ pub(crate) unsafe fn install_declared_layout(
     id: ShapeId,
     word: LayoutWord,
     family_desc_index_plus_one: u32,
-    keys: *mut ArrayHeader,
+    list: crate::object::ObjectKeys,
     key_count: u32,
     slot_count: u32,
     kind: ShapeObjectKind,
@@ -21,10 +21,12 @@ pub(crate) unsafe fn install_declared_layout(
     generation: u64,
 ) {
     let table = &crate::state::state().shapes;
+    let keys = list.arr();
     let mut record = ShapeRecord::new(keys as u64, key_count, slot_count, generation, kind, 0)
         .with_proto_id(proto_id)
         .with_summary(summary)
-        .with_special_facts(rep, &[], &[]);
+        .with_special_facts(rep, &[], &[])
+        .with_keys_node(ShapeKeys::from(list).node_for(key_count));
     record.set_integrity_flags(integrity);
     record.family_desc_index_plus_one = family_desc_index_plus_one;
     record.set(RECORD_FLAG_EXTERNAL_CARRIER, true);
@@ -84,7 +86,7 @@ mod tests {
                     id,
                     crate::codegen_abi::LayoutWord(word),
                     0,
-                    std::ptr::null_mut(),
+                    crate::object::ObjectKeys::NONE,
                     0,
                     0,
                     ShapeObjectKind::Ordinary,

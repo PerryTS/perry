@@ -175,6 +175,7 @@ mod copying_parent_facts;
 mod copying_phase;
 mod copying_pointer_set;
 mod diag_sites;
+mod static_scan;
 pub(crate) use diag_sites::primitive_dispatch as diag_primitive_dispatch;
 /// #8174: shared validation for the TARGET of a forwarding pointer.
 mod forwarding;

@@ -158,7 +158,7 @@ pub(super) unsafe fn diag_walk(obj: *const ObjectHeader, key_bits: u64, hash: u6
                     super::super::complete_layout_generation((*rn).semantic_generation),
                     (*rn).hole_count,
                     (*rn).proto_id == super::super::PROTO_ID_PER_OBJECT,
-                    (*rn).element_kind,
+                    (*rn).element_kind(),
                     !keys.is_null() && super::super::keys_prefix_is_immutable(keys),
                     (*rn).logical_key_count,
                 );

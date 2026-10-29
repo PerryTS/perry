@@ -359,7 +359,7 @@ fn batch_prune_examines_linear_edges() {
     table.free_nodes(&ids[..K]);
     let examined = table.edge_examinations;
     eprintln!("prune n={N} k={K} edge_examinations={examined}");
-    assert_eq!(table.by_addr.len(), N - K);
+    assert_eq!(table.published_count(), N - K);
     assert_eq!(table.edges.len(), N - K);
     assert_eq!(table.reaped, K as u64);
     assert!(examined > 0, "the complexity counter must observe pruning");
@@ -428,11 +428,15 @@ fn batch_prune_orphans_children_before_reusing_ids() {
     let reused_parent = table.alloc_node(7, ROOT_NODE, 50, 1, true, true);
     assert_eq!((reused_child, reused_parent), (dead_child, parent));
     assert!(!table.edges.contains_key(&(reused_parent, 20)));
-    assert_eq!(table.by_addr[&(2, 2)], child);
-    assert_eq!(table.by_addr[&(4, 2)], sibling);
+    // A live child keeps its own identity: its node still validates for
+    // exactly its `(backing, count)`, and a reused id never answers for it.
+    assert_eq!(validated_node(&table, 2 as *const ArrayHeader, 2, child), Some(child));
+    assert_eq!(validated_node(&table, 4 as *const ArrayHeader, 2, sibling), Some(sibling));
+    assert_eq!(validated_node(&table, 3 as *const ArrayHeader, 2, reused_child), None);
+    assert_eq!(validated_node(&table, 1 as *const ArrayHeader, 1, reused_parent), None);
     table.free_nodes(&[child, sibling, grandchild, reused_child, reused_parent]);
     assert!(table.edges.is_empty());
-    assert!(table.by_addr.is_empty());
+    assert_eq!(table.published_count(), 0);
 }
 
 /// A family with disjoint first edges has exactly F*N trie nodes. Only its
@@ -713,7 +717,7 @@ fn empty_root_backing_is_shared_weak_and_keeps_live_children() {
         prune_dead_canonical_keys(&|addr| addr == empty.addr());
         with_table_or((), |t| {
             assert!(!t.nodes[ROOT_NODE as usize].published);
-            assert!(!t.by_addr.contains_key(&(empty.addr(), 0)));
+            assert!(validated_node(t, empty.as_ptr(), 0, ROOT_NODE).is_none());
         });
         assert_eq!(
             extend_key(&proof, CanonicalKeys::EMPTY, key("empty_root_child")),
@@ -804,5 +808,188 @@ fn owned_list_is_published_without_copying_and_keeps_key_facts_after_gc() {
             adopted,
             "a hit keeps one identity"
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CKI S1: the trie node is the list's identity, carried by its holders.
+// ---------------------------------------------------------------------------
+
+fn slot_reads() -> u64 {
+    SLOT_READS.with(|c| c.get())
+}
+
+/// A handle carries its node; a raw spelling of the same list walks to the
+/// same node; a carried view is its own proof and reads no slot at all.
+#[test]
+fn a_carried_node_is_the_lists_identity_and_needs_no_walk() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    reset_for_test();
+    unsafe {
+        let proof = SharedLayout::shape_cache_entry();
+        let mut grown = CanonicalKeys::EMPTY;
+        for name in ["cki_a", "cki_b", "cki_c"] {
+            grown = extend_key(&proof, grown, key(name));
+        }
+        assert_ne!(grown.node(), NO_NODE);
+        assert!(node_publishes_for_test(grown.view()));
+
+        let raw = raw_list(&["cki_a", "cki_b", "cki_c"]);
+        let walked = canonicalize(&proof, raw, 3);
+        assert_eq!(walked, grown);
+        assert_eq!(walked.node(), grown.node(), "one list, one node");
+
+        let before = slot_reads();
+        let carried = canonicalize_keys(&proof, grown.view());
+        assert_eq!(slot_reads(), before, "a carried node reads no slot");
+        assert_eq!((carried, carried.node()), (grown, grown.node()));
+
+        // A raw spelling of a canonical array (no node) still reaches it.
+        let unknown = crate::object::ObjectKeys::new(grown.as_ptr(), 3);
+        let found = canonicalize_keys(&proof, unknown);
+        assert_eq!((found, found.node()), (grown, grown.node()));
+        assert!(slot_reads() > before, "a node-less view walks the edges");
+    }
+}
+
+/// The prefix of a carried list is its ancestor: the parent links answer
+/// with no hash and no slot read, and agree with the content walk.
+#[test]
+fn a_prefix_of_a_carried_list_is_its_ancestor_node() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    reset_for_test();
+    unsafe {
+        let proof = SharedLayout::shape_cache_entry();
+        let one = extend_key(&proof, CanonicalKeys::EMPTY, key("cki_p1"));
+        let two = extend_key(&proof, one, key("cki_p2"));
+        let three = extend_key(&proof, two, key("cki_p3"));
+        assert_eq!(three.as_ptr(), one.as_ptr(), "premise: one shared backing");
+        let before = slot_reads();
+        let prefix = canonical_prefix(&proof, three.view(), 2);
+        assert_eq!(slot_reads(), before);
+        assert_eq!((prefix, prefix.node()), (two, two.node()));
+        let raw = raw_list(&["cki_p1", "cki_p2", "cki_p3"]);
+        let walked = canonicalize(&proof, raw, 2);
+        assert_eq!((walked, walked.node()), (two, two.node()));
+    }
+}
+
+/// A holder whose node was freed and REUSED for another list gets `None`
+/// from the trie, never the other list: the carried node is validated
+/// against the holder's own `(backing, count)` on every use.
+#[test]
+fn a_freed_and_reused_node_never_answers_for_its_old_list() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let mut table = CanonicalTable::new();
+    let old = table.alloc_node(0x1000, ROOT_NODE, 11, 1, true, true);
+    assert_eq!(validated_node(&table, 0x1000 as *const ArrayHeader, 1, old), Some(old));
+    table.free_nodes(&[old]);
+    assert_eq!(validated_node(&table, 0x1000 as *const ArrayHeader, 1, old), None);
+    let reused = table.alloc_node(0x2000, ROOT_NODE, 12, 1, true, true);
+    assert_eq!(reused, old, "premise: the free list hands the id back");
+    assert_eq!(validated_node(&table, 0x1000 as *const ArrayHeader, 1, old), None);
+    assert_eq!(validated_node(&table, 0x2000 as *const ArrayHeader, 2, reused), None);
+    assert_eq!(validated_node(&table, 0x2000 as *const ArrayHeader, 1, reused), Some(reused));
+    // An unpublished witness does not answer either (rewitness).
+    table.rewitness(reused, 0x3000);
+    assert_eq!(validated_node(&table, 0x2000 as *const ArrayHeader, 1, reused), None);
+    assert_eq!(validated_node(&table, 0x3000 as *const ArrayHeader, 1, reused), None);
+    table.free_nodes(&[reused]);
+}
+
+/// A symbol slot's edge hash is its `SymbolHeader.id`, never its address:
+/// the same symbol header at two addresses hashes alike, so the trie's
+/// occupancy cannot move with the layout. The sabotage this exists for is
+/// hashing `v.bits()` again, which makes the two hashes differ.
+#[test]
+fn a_symbol_edge_hashes_its_serial_not_its_address() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    unsafe {
+        let sym = crate::symbol::persistent_symbol("cki-edge");
+        // The same header (magic, description, serial) at another address,
+        // as a moving collection or another link layout would place it.
+        struct Moved {
+            symbol: crate::symbol::SymbolHeader,
+        }
+        let moved = Box::leak(Box::new(Moved {
+            symbol: std::ptr::read(sym),
+        }));
+        let at = |p: *const crate::symbol::SymbolHeader| {
+            JSValue::from_bits(crate::value::POINTER_TAG | p as u64)
+        };
+        let here = Appended::Slot(at(sym)).slot_hash();
+        let there = Appended::Slot(at(&moved.symbol)).slot_hash();
+        assert_ne!(sym as usize, &moved.symbol as *const _ as usize);
+        assert_eq!(here, there, "a symbol's edge must not depend on where it lives");
+        // A hole keeps its constant word's hash.
+        let hole = JSValue::from_bits(crate::value::TAG_HOLE);
+        assert_eq!(
+            Appended::Slot(hole).slot_hash(),
+            crate::value::TAG_HOLE ^ 0x9E37_79B9_7F4A_7C15
+        );
+    }
+}
+
+/// Symbol keys are edges: two symbols with ONE description are two lists
+/// (the exact slot check, not the hash, decides), and one symbol appended
+/// twice reaches its node again.
+#[test]
+fn symbols_with_one_description_are_distinct_edges() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    reset_for_test();
+    unsafe {
+        let proof = SharedLayout::shape_cache_entry();
+        let s1 = crate::symbol::persistent_symbol("cki-same");
+        let s2 = crate::symbol::persistent_symbol("cki-same");
+        assert_ne!(s1, s2);
+        assert_ne!((*s1).id, (*s2).id);
+        let slot = |s: *mut crate::symbol::SymbolHeader| {
+            Appended::Slot(JSValue::from_bits(crate::value::POINTER_TAG | s as u64))
+        };
+        let base = extend_key(&proof, CanonicalKeys::EMPTY, key("cki_sym_base"));
+        let a = extend_slot(&proof, base, slot(s1), 0);
+        let b = extend_slot(&proof, base, slot(s2), 0);
+        assert_ne!((a.as_ptr(), a.node()), (b.as_ptr(), b.node()));
+        let again = extend_slot(&proof, base, slot(s1), 0);
+        assert_eq!((again, again.node()), (a, a.node()));
+    }
+}
+
+/// The shape is the authority: a record minted from a canonical handle
+/// carries the list's node, and a receiver's keys view hands it back. A
+/// record minted from a node-less spelling learns the node from the first
+/// holder that brings one; it never enters identity (one record either way).
+#[test]
+fn the_shape_record_carries_its_lists_node() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    reset_for_test();
+    unsafe {
+        let proof = SharedLayout::shape_cache_entry();
+        let mut list = CanonicalKeys::EMPTY;
+        for name in ["cki_rec_a", "cki_rec_b"] {
+            list = extend_key(&proof, list, key(name));
+        }
+        let word = crate::object::shapes::shape_descriptor_ensure(list, 2, 2).unwrap();
+        let record = crate::object::shapes::shape_record_for_word(word).unwrap();
+        assert_eq!(record.keys_view().node(), list.node());
+        assert!(node_publishes_for_test(record.keys_view()));
+        // The packed element kind is untouched by the node.
+        assert_eq!(record.element_kind(), 0);
+
+        let mut other = CanonicalKeys::EMPTY;
+        for name in ["cki_rec_c", "cki_rec_d", "cki_rec_e"] {
+            other = extend_key(&proof, other, key(name));
+        }
+        let raw_word =
+            crate::object::shapes::shape_descriptor_ensure(other.as_const_ptr(), 3, 3).unwrap();
+        let raw_record = crate::object::shapes::shape_record_for_word(raw_word).unwrap();
+        assert_eq!(raw_record.keys_view().node(), NO_NODE);
+        let learned = crate::object::shapes::shape_descriptor_ensure(other, 3, 3).unwrap();
+        assert_eq!(learned, raw_word, "the node is not identity");
+        assert_eq!(raw_record.keys_view().node(), other.node());
+        // A node recorded for one count never answers for another.
+        let short = crate::object::shapes::shape_descriptor_ensure(other, 2, 2).unwrap();
+        let short_record = crate::object::shapes::shape_record_for_word(short).unwrap();
+        assert_eq!(short_record.keys_view().node(), NO_NODE);
     }
 }

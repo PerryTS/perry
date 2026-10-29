@@ -1920,3 +1920,70 @@ fn no_collect_alloc_refuses_an_oversized_request() {
         assert_eq!(gc_trigger_arena_calls(), 0);
     });
 }
+
+// ---------------------------------------------------------------------------
+// JST slice 4 (design D): `arena_alloc_gc_old_no_collect`, the old-generation
+// twin. `split` drops the per-piece root/reload when this returns non-null, so
+// the guarantee is the whole point: a non-null return means no collection
+// point was reached, and a full open block is REFUSED, not served through
+// `gc_check_trigger`.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn old_no_collect_alloc_refuses_a_full_block_instead_of_collecting() {
+    run_with_fresh_arenas(|| {
+        // A fresh old arena has no open block, so the first request is refused
+        // by construction; open one through the collecting entry first.
+        assert!(!arena_alloc_gc_old_born_tenured(64, 8, GC_TYPE_STRING).is_null());
+        reset_gc_trigger_arena_probe();
+        let chunk = LARGE_OBJECT_THRESHOLD_BYTES / 4;
+        let bound = 8 * BLOCK_SIZE / chunk;
+        let mut served = 0usize;
+        let mut refused = false;
+        for _ in 0..bound {
+            if arena_alloc_gc_old_no_collect(chunk, 8, GC_TYPE_STRING).is_null() {
+                refused = true;
+                break;
+            }
+            served += 1;
+        }
+        assert!(
+            refused,
+            "the old no-collect entry must REFUSE once the open old block is full; \
+             it served {served} chunks without declining"
+        );
+        assert!(served > 0, "test premise: it must serve from an open block");
+        assert_eq!(
+            gc_trigger_arena_calls(),
+            0,
+            "the old no-collect entry reached the allocation-point GC trigger"
+        );
+        // The refusal leaves the collecting entry's decision intact.
+        assert!(!arena_alloc_gc_old_born_tenured(chunk, 8, GC_TYPE_STRING).is_null());
+    });
+}
+
+#[test]
+fn old_no_collect_alloc_births_exactly_what_the_collecting_entry_births() {
+    run_with_fresh_arenas(|| {
+        use crate::gc::{GcHeader, GC_FLAG_ARENA, GC_FLAG_TENURED, GC_HEADER_SIZE};
+        let a = arena_alloc_gc_old_born_tenured(40, 8, GC_TYPE_STRING);
+        let b = arena_alloc_gc_old_no_collect(40, 8, GC_TYPE_STRING);
+        assert!(!b.is_null());
+        unsafe {
+            let (ha, hb) = (
+                &*(a.sub(GC_HEADER_SIZE) as *const GcHeader),
+                &*(b.sub(GC_HEADER_SIZE) as *const GcHeader),
+            );
+            assert_eq!(ha.obj_type, hb.obj_type);
+            assert_eq!(ha.size, hb.size);
+            assert_eq!(ha.gc_flags, hb.gc_flags);
+            assert_ne!(hb.gc_flags & GC_FLAG_ARENA, 0);
+            assert_ne!(hb.gc_flags & GC_FLAG_TENURED, 0);
+        }
+        assert!(matches!(
+            classify_heap_generation(b as usize),
+            HeapGeneration::Old
+        ));
+    });
+}

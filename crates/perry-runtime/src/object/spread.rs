@@ -470,7 +470,7 @@ unsafe fn leading_slow(source: f64) -> f64 {
         field_rep::REP_ANY
     };
     let keys = if record.summary() == 0 {
-        ObjectKeys::new(record.keys() as usize as *mut ArrayHeader, count)
+        record.keys_view_of(count)
     } else {
         let list = key_attrs::alloc_key_list(count, true, false);
         // GC_STORE_AUDIT(INIT): unpublished default-attribute keys under suppression.
@@ -514,7 +514,7 @@ unsafe fn leading_slow(source: f64) -> f64 {
 #[optimize(size)]
 unsafe fn intern_result(keys: ObjectKeys, rep: u64) -> u32 {
     shapes::publish_shape_result(shapes::shape_descriptor_intern_with_rep(
-        keys.arr(),
+        keys,
         keys.count(),
         keys.count(),
         0,
@@ -593,7 +593,7 @@ unsafe fn birth_slow(
     };
     let proof = canonical_keys::SharedLayout::of_receiver(source.cast_mut()).unwrap();
     let keys = if prefix_count == 0 && record.summary() == 0 {
-        ObjectKeys::new(record.keys() as usize as *mut ArrayHeader, count)
+        record.keys_view_of(count)
     } else {
         let mut words = Vec::with_capacity((prefix_count + count) as usize);
         if let Some((_, r)) = prefix {
