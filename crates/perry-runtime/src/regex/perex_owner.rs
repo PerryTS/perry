@@ -81,6 +81,7 @@ unsafe fn install_cache<'a>(cell: *mut ProgramCell, words: usize) -> &'a mut [u3
         // word before it reads it, so new storage is only reset (one word),
         // not zeroed: the collector never reads a leaf's payload.
         perex::dfa::reset(storage);
+        // GC_STORE_AUDIT(BARRIERED): the cell's one traced edge; the barrier follows.
         std::ptr::addr_of_mut!((*cell).dfa).write(leaf);
         crate::gc::runtime_write_barrier_gc_slot(
             cell as usize,
