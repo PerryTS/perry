@@ -233,6 +233,7 @@ mod class_artifacts;
 pub(crate) mod class_hierarchy;
 #[cfg(test)]
 mod clone_suffix_tests;
+pub(crate) mod closed_targets;
 mod closure;
 mod closure_capture_cells;
 mod closure_captures;
@@ -650,6 +651,7 @@ fn lower_module(
     // runs it does not reach, when this module's codegen ends.
     let _region_diag = (!collect_births).then(|| crate::expr::region_guard::ModuleDiag::start(hir));
     crate::stmt::region_loop::begin_module(hir);
+    closed_targets::begin_module();
     let fp_flags = crate::block::FpFlags::new(opts.fast_math, opts.fp_contract_mode);
 
     // #5334 lever B: decide ONCE, up front, whether this module is large enough
@@ -4439,6 +4441,7 @@ fn lower_module(
     // total — otherwise functions whose scope ids exceed the init
     // function's count emit `!alias.scope !N` references with no matching
     // metadata definition (issue #71).
+    closed_targets::apply(&mut llmod);
     let total_buffer_scopes = llmod.buffer_alias_counter;
     emit_buffer_alias_metadata(&mut llmod, total_buffer_scopes);
     llmod

@@ -522,6 +522,21 @@ pub(crate) fn try_lower_instance_method_call(
             };
             ctx.block().emit_raw(switch);
             ctx.block().mark_terminated();
+            // The bodies the facts closed this site over: a direct call of
+            // one may be flattened by the early inliner
+            // (`codegen/closed_targets.rs`).
+            let closed_bodies: Vec<&str> = match &proven {
+                Some((map, _)) => {
+                    let mut t: Vec<&str> = map
+                        .iter()
+                        .map(|&(_, i)| implementors[i].1.as_str())
+                        .collect();
+                    t.sort_unstable();
+                    t.dedup();
+                    t
+                }
+                None => Vec::new(),
+            };
             let mut phi_inputs: Vec<(String, String)> = Vec::new();
             for &(i, case_idx) in &case_idxs {
                 ctx.current_block = case_idx;
@@ -552,7 +567,15 @@ pub(crate) fn try_lower_instance_method_call(
                         let recv_handle = unbox_to_i64(ctx.block(), &recv_box);
                         emit_tower_pshape_call(ctx, i, &route, &recv_handle, &case_arg_slices)
                     }
-                    None => ctx.block().call(DOUBLE, fname, &case_arg_slices),
+                    None => {
+                        if closed_bodies.contains(&fname.as_str()) {
+                            crate::codegen::closed_targets::note_closed_call(
+                                fname,
+                                closed_bodies.len(),
+                            );
+                        }
+                        ctx.block().call(DOUBLE, fname, &case_arg_slices)
+                    }
                 };
                 let after = ctx.block().label.clone();
                 if !ctx.block().is_terminated() {
