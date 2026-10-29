@@ -605,4 +605,3 @@ pub fn real_capture_count(capture_count: u32) -> u32 {
     capture_count & crate::codegen_abi::CLOSURE_CAPTURE_COUNT_MASK
 }
 
-crate::realm_decl!("registry.realm.json#*");
