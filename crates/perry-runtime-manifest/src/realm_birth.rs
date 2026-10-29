@@ -299,6 +299,11 @@ pub(super) fn birth_at(
     if expression == "super::layout_desc::perry_alloc_layout(desc)" {
         return super::module_namespace::birth(entry);
     }
+    if expression.starts_with(
+        "crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(crate::object::runtime_layouts::",
+    ) {
+        return super::layout_birth::ordinary(&expression, entry);
+    }
     if super::array::is_realm_birth(&expression) {
         return super::array::realm(&expression, entry, source);
     }
