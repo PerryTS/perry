@@ -541,21 +541,34 @@ pub(super) fn logical(
             // The receiver's physical birth: an ordinary object allocated with the
             // native-module class id (js_create_native_module_namespace).
             let gc = info::gc_constants()?;
-            let native = info::constants(include_str!(
-                "../../perry-runtime/src/object/native_module.rs"
-            ))?;
             let source = include_str!("../../perry-runtime/src/object/native_module.rs");
-            let reserved = if sealed_native_namespaces(source)?.contains(&module) {
-                gc["OBJ_FLAG_SEALED"] | gc["OBJ_FLAG_NO_EXTEND"] | gc["OBJ_FLAG_HAS_DESCRIPTORS"]
-            } else {
-                0
+            let birth = perry_abi::realm_header::ObjectBirth {
+                exotic: perry_abi::realm_header::ObjectExotic::NativeNamespace,
+                null_prototype: false,
+                layout: perry_abi::realm_header::ObjectLayout::Unmarked,
+                prototype_mark: perry_abi::realm_header::PrototypeMark::OnFirstLink,
+                descriptors: false,
+                typed_array_prototype: false,
+                integrity: if sealed_native_namespaces(source)?.contains(&module) {
+                    Integrity::Sealed
+                } else {
+                    Integrity::Extensible
+                },
             };
             declaration.insert(
                 "header".into(),
                 Value::Object(BTreeMap::from([
                     ("gc_type".into(), number(gc["GC_TYPE_OBJECT"])),
-                    ("reserved".into(), number(reserved)),
-                    ("class_id".into(), number(native["NATIVE_MODULE_CLASS_ID"])),
+                    (
+                        "reserved".into(),
+                        number(u64::from(perry_abi::realm_header::object_reserved(birth))),
+                    ),
+                    (
+                        "class_id".into(),
+                        number(u64::from(perry_abi::realm_header::object_class_id(
+                            birth.exotic,
+                        ))),
+                    ),
                 ])),
             );
             declaration.insert("prototype".into(), string("Object.prototype"));

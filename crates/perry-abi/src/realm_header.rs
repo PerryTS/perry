@@ -12,19 +12,11 @@
 //! marks, remembered sets): those never belong in a realm header.
 
 use crate::{
-    GC_LAYOUT_ALL_POINTERS, GC_LAYOUT_POINTER_FREE, GC_LAYOUT_SIDE_MASK, GC_OBJECT_CALLABLE,
-    OBJ_FLAG_FROZEN, OBJ_FLAG_HAS_DESCRIPTORS, OBJ_FLAG_NEVER_MOVE, OBJ_FLAG_NO_EXTEND,
-    OBJ_FLAG_NULL_PROTO, OBJ_FLAG_PLAIN_ORDINARY, OBJ_FLAG_SEALED,
+    GC_CLOSURE_NON_CONSTRUCTABLE, GC_LAYOUT_ALL_POINTERS, GC_LAYOUT_POINTER_FREE,
+    GC_LAYOUT_SIDE_MASK, GC_OBJECT_CALLABLE, NATIVE_MODULE_CLASS_ID, OBJ_FLAG_FROZEN,
+    OBJ_FLAG_HAS_DESCRIPTORS, OBJ_FLAG_NEVER_MOVE, OBJ_FLAG_NO_EXTEND, OBJ_FLAG_NULL_PROTO,
+    OBJ_FLAG_PLAIN_ORDINARY, OBJ_FLAG_SEALED, OBJ_FLAG_TYPED_ARRAY_PROTO,
 };
-
-/// `gc::OBJ_FLAG_TYPED_ARRAY_PROTO`: a per-kind `<TypedArray>.prototype`.
-pub const OBJ_FLAG_TYPED_ARRAY_PROTO: u16 = 0x100;
-/// `gc::GC_CLOSURE_NON_CONSTRUCTABLE`: per-instance builtin
-/// non-constructability, kind-disjoint from the object meaning of bit 7.
-pub const GC_CLOSURE_NON_CONSTRUCTABLE: u16 = 0x80;
-/// `object::native_module::NATIVE_MODULE_CLASS_ID`: the class id of a native
-/// module namespace, whose members a vtable serves.
-pub const NATIVE_MODULE_CLASS_ID: u32 = 0xFFFF_FFFE;
 
 /// The integrity level a birth leaves, as `Object.preventExtensions`,
 /// `Object.seal` and `Object.freeze` do.

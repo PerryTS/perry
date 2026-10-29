@@ -340,6 +340,14 @@ pub const OBJ_FLAG_SEALED: u16 = 0x02;
 pub const OBJ_FLAG_NO_EXTEND: u16 = 0x04;
 /// Requested on prototype holders; image holders preserve this birth fact.
 pub const OBJ_FLAG_NEVER_MOVE: u16 = 0x80;
+/// A per-kind `<TypedArray>.prototype` whose `[[Prototype]]` is the shared
+/// `%TypedArray%.prototype` intrinsic.
+pub const OBJ_FLAG_TYPED_ARRAY_PROTO: u16 = 0x100;
+/// Per-instance builtin non-constructability on a closure. Kind-disjoint from
+/// the object meaning of bit 7.
+pub const GC_CLOSURE_NON_CONSTRUCTABLE: u16 = 0x80;
+/// The class id of a native module namespace, whose members a vtable serves.
+pub const NATIVE_MODULE_CLASS_ID: u32 = 0xFFFF_FFFE;
 
 pub const GC_LAYOUT_POINTER_FREE: u16 = 0x4000;
 pub const GC_LAYOUT_SIDE_MASK: u16 = 0x8000;
