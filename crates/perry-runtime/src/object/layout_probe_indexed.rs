@@ -30,6 +30,14 @@ pub(super) unsafe fn get<const ABSENT: bool, const SITE: bool, const LAZY_HASH: 
     // The complete text path performs the hash/content comparison and
     // continues collisions. No text hash need stay live on an atom hit.
     if pos & TEXT_ENTRY != 0 {
+        // Only a key of the text's hash can be its text: another key's
+        // lookup continues this index, as `continued` does.
+        if KeyIndex::word(table, pos & POS_BITS) != site_key_hash::<LAZY_HASH>(key_bits, hash) {
+            if SITE {
+                return site_memo::collision::<ABSENT, LAZY_HASH>(dir, obj, key_bits, hash, memo);
+            }
+            return continued::<ABSENT, SITE, LAZY_HASH>(dir, obj, key_bits, hash, memo);
+        }
         return unloaded::underived::<ABSENT, LAZY_HASH>(dir, obj, key_bits, hash);
     }
     // Select the key storage before retaining its slot index. This keeps
