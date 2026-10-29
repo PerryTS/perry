@@ -25,6 +25,10 @@ impl ConstructionBatch {
         if !super::pointer_in_old_gen(parent as usize) {
             return;
         }
+        // A young leaf can escape through any slot, so with leaves alive each
+        // pointer slot is checked. With none, the first remembering of a page
+        // is the whole job, as before leaves existed.
+        let leaves = super::young_large_in_use_bytes() != 0;
         let mut index = 0;
         while index < len {
             let addr = slots.add(index) as usize;
@@ -44,6 +48,9 @@ impl ConstructionBatch {
                             slots.add(index) as usize,
                             bits,
                         );
+                        if !leaves {
+                            break;
+                        }
                         barriered = true;
                     } else if barriered {
                         crate::gc::probe_leaf_escape_store(parent as usize, child);

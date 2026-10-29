@@ -123,8 +123,7 @@ impl CopyingPointerSet {
             return None;
         };
         let header_addr = addr - GC_HEADER_SIZE;
-        if header_addr < range_base
-            || (large_storage && space == crate::arena::HeapSpace::NurseryEden && header_addr != range_base) {
+        if header_addr < range_base {
             return None;
         }
         debug_assert_eq!(
@@ -167,8 +166,18 @@ impl CopyingPointerSet {
         // spaces, so hoisting the non-survivor arms above them changes no
         // verdict — it just stops paying for an answer the arm does not use.
         let kind = match space {
-            crate::arena::HeapSpace::NurseryEden if large_storage => CopyingPointerKind::YoungLarge,
-            crate::arena::HeapSpace::NurseryEden => CopyingPointerKind::Eden,
+            crate::arena::HeapSpace::NurseryEden => {
+                if large_storage {
+                    // A young leaf extent holds one cell, header at the base;
+                    // an interior address is payload, never a reference.
+                    if header_addr != range_base {
+                        return None;
+                    }
+                    CopyingPointerKind::YoungLarge
+                } else {
+                    CopyingPointerKind::Eden
+                }
+            }
             crate::arena::HeapSpace::PromotedYoung => CopyingPointerKind::PromotedYoung,
             crate::arena::HeapSpace::Longlived => CopyingPointerKind::Longlived,
             crate::arena::HeapSpace::Old => CopyingPointerKind::Old,
