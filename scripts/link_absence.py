@@ -380,6 +380,7 @@ def main():
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--record-known-failures", action="store_true")
     parser.add_argument("--witness", action="append", help="run only named witnesses for diagnostics; CI omits this")
+    parser.add_argument("--base-perry", type=Path, help="compiler built from the base commit: hello may link no symbol it does not link and no more text")
     parser.add_argument("--negative-only", action="store_true", help="diagnostic/sabotage arm; CI always runs all positives")
     args = parser.parse_args()
     args.perry = str(Path(args.perry).resolve())
@@ -487,6 +488,21 @@ def main():
         assert "hello" in report["witnesses"], "cannot record exceptions from a broken hello"
         known_path.parent.mkdir(parents=True, exist_ok=True)
         known_path.write_text(json.dumps({"lane":"HWS2", "symbols":exceptions}, indent=2, sort_keys=True)+"\n")
+    if args.base_perry and "hello" in names and "hello" in report["witnesses"]:
+        try:
+            base_args = argparse.Namespace(perry=str(args.base_perry.resolve()), output=args.output/"base")
+            base_env = {**env, "PERRY_RUNTIME_DIR": str(args.base_perry.resolve().parent)}
+            base_binary, _, _ = compile_witness(base_args, "hello", base_env)
+            lane_syms, lane_text = symbols(args.output/"hello"/"app", nm, demangler)
+            base_syms, base_text = symbols(base_binary, nm, demangler)
+            added = sorted({s["name"] for s in lane_syms} - {s["name"] for s in base_syms})
+            report["hello_growth"] = {"base_text_bytes": base_text, "lane_text_bytes": lane_text, "new_symbols": added}
+            if added:
+                report["failures"].append(f"hello links symbols the base does not: {added[:5]}")
+            if lane_text > base_text:
+                report["failures"].append(f"hello .text grew against base: {base_text} -> {lane_text}")
+        except (AssertionError, RuntimeError, subprocess.SubprocessError) as error:
+            report["failures"].append(str(error))
     report["elapsed_seconds"] = round(time.monotonic()-started, 2)
     (args.output/"report.json").write_text(json.dumps(report, indent=2, sort_keys=True)+"\n")
     print(f"HWS elapsed={report['elapsed_seconds']}s failures={len(report['failures'])}")
