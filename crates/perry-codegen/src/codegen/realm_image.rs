@@ -31,6 +31,7 @@ use crate::types::{DOUBLE, I64, I8, VOID};
 pub(crate) mod arrays;
 pub(crate) mod atoms;
 pub(crate) mod functions;
+pub(crate) mod header;
 #[cfg(test)]
 mod key_list_tests;
 pub(crate) mod layouts;

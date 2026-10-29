@@ -39,6 +39,19 @@ impl Integrity {
         }
     }
 
+    /// The level a header word records.
+    pub const fn of_bits(word: u16) -> Integrity {
+        if word & OBJ_FLAG_FROZEN != 0 {
+            Integrity::Frozen
+        } else if word & OBJ_FLAG_SEALED != 0 {
+            Integrity::Sealed
+        } else if word & OBJ_FLAG_NO_EXTEND != 0 {
+            Integrity::NonExtensible
+        } else {
+            Integrity::Extensible
+        }
+    }
+
     /// Sealing and freezing make every own property non-configurable, so
     /// the holder carries descriptor attributes from birth.
     const fn installs_descriptors(self) -> bool {
