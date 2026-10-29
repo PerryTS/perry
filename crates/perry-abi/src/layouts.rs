@@ -128,18 +128,29 @@ impl PerryLayoutImageV1 {
     };
     pub const fn valid(self) -> bool {
         self.abi_version == LAYOUT_WORD_ABI_VERSION
-            && self.prototype_serial_end >= crate::intrinsic_serials::FIRST_DYNAMIC_PROTOTYPE_SERIAL
-            && self.prototype_serial_end < (1 << 32)
             && self.static_rows >= NATIVE_LAYOUT_ROWS
             && self.static_rows <= LAYOUT_ROW_LIMIT
+            && if self.lazy_count == 0 {
+                // No lazy span: the families follow the native rows, and the
+                // span pointer and serial end are never read.
+                self.family_first == NATIVE_LAYOUT_ROWS
+                    && self.family_count <= self.static_rows - self.family_first
+            } else {
+                self.valid_lazy_span()
+            }
+    }
+
+    /// The facts of an image that carries a lazy descriptor span.
+    const fn valid_lazy_span(self) -> bool {
+        self.prototype_serial_end >= crate::intrinsic_serials::FIRST_DYNAMIC_PROTOTYPE_SERIAL
+            && self.prototype_serial_end < (1 << 32)
             && self.family_first >= NATIVE_LAYOUT_ROWS
             && self.family_first <= self.static_rows
             && self.family_count <= self.static_rows - self.family_first
             && self.lazy_first <= self.static_rows
             && self.lazy_count <= self.static_rows - self.lazy_first
-            && (self.lazy_count == 0) == self.lazy_layouts.is_null()
-            && (self.lazy_count == 0
-                || self.family_count == 0
+            && !self.lazy_layouts.is_null()
+            && (self.family_count == 0
                 || self.lazy_first + self.lazy_count <= self.family_first
                 || self.lazy_first >= self.family_first + self.family_count)
     }

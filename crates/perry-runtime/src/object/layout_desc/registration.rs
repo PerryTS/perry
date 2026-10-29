@@ -6,14 +6,53 @@ pub(crate) fn register_static_layouts() {
         image_layouts().next().is_some(),
         "Wasm layout constructors did not run"
     );
+    // A lazy image span publishes at its rows' first touch, never here. It is
+    // one contiguous run of the section, so the walk goes around it: no row
+    // pays a test, and a program without the span walks exactly as before.
+    let (start, end) = layout_bounds();
+    let (lazy_start, lazy_end) = super::lazy_image::section_span(start, end);
+    let size = std::mem::size_of::<PerryLayoutDesc>();
     unsafe {
-        for (index, desc) in image_layouts().enumerate() {
+        for (index, desc) in records::<PerryLayoutDesc>((start, lazy_start)).enumerate() {
+            if !register_static_row(index, desc) {
+                return;
+            }
+        }
+        if lazy_end != end {
+            // Rows after the span keep their section index.
+            let after = (lazy_end - start) / size;
+            for (index, desc) in records::<PerryLayoutDesc>((lazy_end, end)).enumerate() {
+                if !register_static_row(after + index, desc) {
+                    return;
+                }
+            }
+        }
+        #[cfg(target_family = "wasm")]
+        {
+            let section = (end.saturating_sub(start)) / size;
+            for (index, item) in inventory::iter::<crate::wasm_image::Layout>
+                .into_iter()
+                .enumerate()
+            {
+                if !register_static_row(section + index, item.0) {
+                    return;
+                }
+            }
+        }
+    }
+}
+
+/// One static row at startup; false stops the walk (no ids left).
+#[inline(always)]
+unsafe fn register_static_row(index: usize, desc: *mut PerryLayoutDesc) -> bool {
+    {
+        {
             if (*desc).family == SENTINEL_FAMILY || (*desc).keys.is_null() && (*desc).key_count != 0
             {
-                continue;
+                return true;
             }
-            if (*desc).layout_id == 0 || super::lazy_image::contains(desc) {
-                continue;
+            if (*desc).layout_id == 0 {
+                return true;
             }
             // WRT step 2: a runtime layout or a module namespace draws its id
             // and installs its shape at its first birth
@@ -23,12 +62,13 @@ pub(crate) fn register_static_layouts() {
             if (*desc).variant == crate::codegen_abi::LAYOUT_VARIANT_NAMESPACE
                 || is_runtime_layout_word((*desc).layout_id)
             {
-                continue;
+                return true;
             }
             let Some(id) = layout_id_of_index(index as u32) else {
-                break;
+                return false;
             };
             let _ = register_one(desc, id);
+            true
         }
     }
 }
@@ -49,7 +89,7 @@ pub(super) fn is_runtime_layout_word(word: u32) -> bool {
 #[inline]
 pub(crate) unsafe fn layout_word_for_birth(desc: *const PerryLayoutDesc) -> Option<u32> {
     let id = registered_layout_id(load_layout_id(desc))?;
-    if (is_runtime_layout_word(id) || super::lazy_image::contains(desc))
+    if is_runtime_layout_word(id)
         && super::super::shapes::shape_record_for_word(LayoutWord(id)).is_none()
     {
         install_runtime_layout(desc)?;
@@ -60,12 +100,8 @@ pub(crate) unsafe fn layout_word_for_birth(desc: *const PerryLayoutDesc) -> Opti
 #[cold]
 #[inline(never)]
 unsafe fn install_runtime_layout(desc: *const PerryLayoutDesc) -> Option<()> {
-    let requested = if super::lazy_image::contains(desc) {
-        0
-    } else {
-        layout_id_of_index(descriptor_index(desc)?)?
-    };
-    let id = register_bound(desc, requested, &[], None);
+    let requested = layout_id_of_index(descriptor_index(desc)?)?;
+    let id = register_bound(desc, requested, &[], None, false);
     (id != 0 && super::super::shapes::shape_record_for_word(LayoutWord(id)).is_some()).then_some(())
 }
 
@@ -144,7 +180,7 @@ pub(crate) unsafe fn register_one_bound(
     requested: u32,
     bound: &[u64],
 ) -> u32 {
-    register_bound(desc, requested, bound, None)
+    register_bound(desc, requested, bound, None, false)
 }
 
 /// An ordinary function's layout, with the actual prototype serial carried
@@ -155,7 +191,12 @@ pub(crate) unsafe fn register_function_layout(
     bound: &[u64],
     proto_id: u64,
 ) -> u32 {
-    register_bound(desc, requested, bound, Some(proto_id))
+    register_bound(desc, requested, bound, Some(proto_id), false)
+}
+
+/// A lazy image row at its first touch: its identity band follows its kind.
+pub(super) unsafe fn register_lazy_row(desc: *const PerryLayoutDesc) -> u32 {
+    register_bound(desc, 0, &[], None, true)
 }
 
 pub(super) unsafe fn register_bound(
@@ -163,6 +204,7 @@ pub(super) unsafe fn register_bound(
     requested: u32,
     bound: &[u64],
     function_proto: Option<u64>,
+    lazy: bool,
 ) -> u32 {
     use std::sync::atomic::{AtomicU32, Ordering};
     let word = AtomicU32::from_ptr(std::ptr::addr_of!((*desc).shape_id).cast_mut());
@@ -187,24 +229,13 @@ pub(super) unsafe fn register_bound(
         return 0;
     }
     let d = &*desc;
-    let lazy = super::lazy_image::contains(desc);
-    let kind = declared_kind(d.kind).or_else(|| {
-        use super::super::shapes::ShapeObjectKind::*;
-        lazy.then(|| {
-            [
-                Function,
-                FunctionBoundCall,
-                FunctionBoundApply,
-                FunctionBound,
-                NativeNamespace,
-            ]
-            .into_iter()
-            .find(|kind| kind.code() == u64::from(d.kind))
-        })
-        .flatten()
-    });
-    let Some(kind) = kind else {
-        return 0;
+    let (kind, function_summary) = match declared_kind(d.kind) {
+        Some(kind) => (kind, 0),
+        None if !lazy => return 0,
+        None => match super::lazy_image::receiver_kind(desc) {
+            Some(kind) => (kind, crate::closure::shape::function_shape_summary(kind)),
+            None => return 0,
+        },
     };
     if existing.is_none() && !function && requested >= super::super::shapes::STATIC_SHAPE_ID_END {
         return 0;
@@ -362,10 +393,7 @@ pub(super) unsafe fn register_bound(
         .view()
     };
     let list = list_keys.arr();
-    let mut summary = super::super::key_attrs::keys_summary(list, key_count);
-    if kind.is_function_layout() {
-        summary |= crate::closure::shape::function_shape_summary(kind);
-    }
+    let summary = super::super::key_attrs::keys_summary(list, key_count) | function_summary;
     // A carried prototype layout is a marked prototype's: its own semantic
     // generation, shared with no other layout.
     let image = d.variant == PROTOTYPE_IMAGE_VARIANT;

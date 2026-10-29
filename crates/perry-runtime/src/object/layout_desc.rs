@@ -225,21 +225,8 @@ unsafe fn proto_family_serial(fam: *const PerryProtoFamily) -> u64 {
     let word = AtomicU64::from_ptr(std::ptr::addr_of!((*fam).serial).cast_mut());
     let current = word.load(Ordering::Acquire);
     if current != 0 {
-        let prototype = (*fam).image_prototype;
-        if !prototype.is_null() && super::shapes::identity_prototype_word(current) == 0 {
-            // Publish through the normal agent-owned identity word. A worker's
-            // already-bound prototype must never be replaced by the template.
-            super::shapes::write_identity_word(
-                current,
-                crate::value::JSValue::pointer(prototype).bits(),
-            );
-        }
         return current;
     }
-    assert!(
-        (*fam).image_prototype.is_null(),
-        "image prototype lacks its serial"
-    );
     let fresh = super::proto_validity::next_prototype_serial();
     match word.compare_exchange(0, fresh, Ordering::AcqRel, Ordering::Acquire) {
         Ok(_) => fresh,
@@ -718,12 +705,17 @@ unsafe fn registered_atom_symbol(
 pub(crate) unsafe fn atom_symbol(
     atom: *const StaticAtom,
 ) -> Option<*mut crate::symbol::SymbolHeader> {
-    if (*atom).kind == crate::codegen_abi::ATOM_KIND_IMAGE_SYMBOL {
-        return (!(*atom).string.is_null()).then_some((*atom).string.cast_mut().cast());
-    }
     well_known_atom_symbol(atom)
         .or_else(|| super::runtime_layouts::runtime_symbol_of_atom(atom))
         .or_else(|| registered_atom_symbol(atom))
+        .or_else(|| image_atom_symbol(atom))
+}
+
+/// An image symbol atom names its static `SymbolHeader` directly.
+#[cold]
+unsafe fn image_atom_symbol(atom: *const StaticAtom) -> Option<*mut crate::symbol::SymbolHeader> {
+    ((*atom).kind == crate::codegen_abi::ATOM_KIND_IMAGE_SYMBOL && !(*atom).string.is_null())
+        .then(|| (*atom).string.cast_mut().cast())
 }
 
 /// Pre-seed the agent's atom table, then register every layout. Runs once per
@@ -752,7 +744,6 @@ pub(crate) fn seed_static_atoms() {
 
 #[path = "layout_desc/lazy_image.rs"]
 mod lazy_image;
-pub(crate) use lazy_image::publish_receiver as publish_image_receiver;
 #[path = "layout_desc/registration.rs"]
 mod registration;
 use registration::binding_symbol_keys;
@@ -1933,6 +1924,8 @@ fn image_atoms() -> impl Iterator<Item = *mut StaticAtom> {
         records::<StaticAtom>(atom_bounds())
     }
 }
+// The startup registrar walks the section around its lazy span itself.
+#[cfg(any(test, target_family = "wasm"))]
 pub(super) fn image_layouts() -> impl Iterator<Item = *mut PerryLayoutDesc> {
     #[cfg(target_family = "wasm")]
     {

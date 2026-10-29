@@ -36,6 +36,8 @@ const fn row(index: u32, kind: ShapeObjectKind, proto: *const PerryProtoFamily) 
         shape_id: 0,
         gc_plan: 0,
         image_keys: std::ptr::null_mut(),
+        gc_header_word: crate::object::layout_desc::layout_gc_header_word(0),
+        _tail_pad: [0; 32],
     }
 }
 static mut FACTS: [PerryLayoutDesc; 3] = [
@@ -49,7 +51,7 @@ static mut FACTS: [PerryLayoutDesc; 3] = [
 ];
 
 #[test]
-fn live_receiver_first_touch_publishes_once_per_agent_without_a_descriptor_scan() {
+fn lazy_row_publishes_once_per_agent_without_a_descriptor_scan() {
     let run = || {
         std::thread::spawn(|| unsafe {
             crate::object::class_image::enter_current_thread_image();
@@ -73,6 +75,10 @@ fn live_receiver_first_touch_publishes_once_per_agent_without_a_descriptor_scan(
                 assert!(crate::object::shapes::shape_record_for_word(word).is_none());
                 assert!(contains(desc));
                 assert_eq!(descriptor(word.0), Some(desc));
+                // Receiver reads keep main's single-compare path; the row's
+                // first touch publishes it through the normal registrar.
+                publish_receiver(word.0);
+                publish_receiver(word.0);
                 let first = crate::object::shapes::shape_descriptor_of_receiver(word.0).unwrap();
                 let again = crate::object::shapes::shape_descriptor_of_receiver(word.0).unwrap();
                 assert_eq!(first, again);
@@ -132,9 +138,13 @@ fn image_prototype_binds_the_agent_word_and_preserves_a_worker_binding() {
             serial: 58,
             image_prototype: pointer,
         };
+        let desc = row(0, ShapeObjectKind::Ordinary, &family);
         let bits = crate::value::JSValue::pointer(pointer).bits();
         assert_eq!(crate::object::shapes::identity_prototype_word(58), 0);
+        // Registration reads the serial only; the row's publication binds.
         assert_eq!(proto_family_serial(&family), 58);
+        assert_eq!(crate::object::shapes::identity_prototype_word(58), 0);
+        bind_family_image_prototype(&desc);
         assert_eq!(crate::object::shapes::identity_prototype_word(58), bits);
         // Model a worker's already-bound realm pointer with another live
         // function; the template must not overwrite the agent's own object.
@@ -144,7 +154,7 @@ fn image_prototype_binds_the_agent_word_and_preserves_a_worker_binding() {
         );
         let worker_bits = crate::value::JSValue::pointer(worker.cast()).bits();
         crate::object::shapes::write_identity_word(58, worker_bits);
-        assert_eq!(proto_family_serial(&family), 58);
+        bind_family_image_prototype(&desc);
         assert_eq!(
             crate::object::shapes::identity_prototype_word(58),
             worker_bits
