@@ -910,7 +910,7 @@ const CORE_TYPE_INFOS: &[Option<GcTypeInfo>] = &[
         GcLayoutSlotKind::None,
         true,
         GcExternalBytePolicy::InlinePayload,
-        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        GcLargeObjectPolicy::ArenaWhenOverThreshold,
         false,
         GcMoveHookKind::None,
         GcRewriteHookKind::None,
