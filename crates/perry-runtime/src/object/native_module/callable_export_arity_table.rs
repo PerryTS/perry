@@ -380,7 +380,7 @@ fn native_callable_export_arity_reference(module: &str, prop: &str) -> Option<u3
             ("Decipheriv", realm_native_crypto_Decipheriv_metadata!(length)),
             ("DiffieHellman", realm_native_crypto_DiffieHellman_metadata!(length)),
             ("DiffieHellmanGroup", realm_native_crypto_DiffieHellmanGroup_metadata!(length)),
-            ("KeyObject", 2),
+            ("KeyObject", realm_native_crypto_KeyObject_metadata!(length)),
             ("X509Certificate", realm_native_crypto_X509Certificate_metadata!(length)),
             ("argon2", realm_native_crypto_argon2_metadata!(length)),
             ("argon2Sync", realm_native_crypto_argon2Sync_metadata!(length)),
@@ -546,7 +546,7 @@ fn native_callable_export_arity_reference(module: &str, prop: &str) -> Option<u3
         &[
             ("BlockList", 0),
             ("Server", 2),
-            ("Socket", 1),
+            ("Socket", realm_native_net_Socket_metadata!(length)),
             ("SocketAddress", 0),
             ("_createServerHandle", realm_native_net_createServerHandle_metadata!(length)),
             ("_normalizeArgs", realm_native_net_normalizeArgs_metadata!(length)),
