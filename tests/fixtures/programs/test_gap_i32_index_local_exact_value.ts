@@ -44,6 +44,15 @@ function incrementPastMax(marks: Uint8Array): number {
   return k;
 }
 
+function upToMax(n: number, marks: Uint8Array): number {
+  let c = 0;
+  for (let i = 2147483640; i <= n; i++) {
+    marks[i & 7] = 1;
+    c++;
+  }
+  return c;
+}
+
 function readSide(i: number, n: number, marks: Uint8Array): number {
   let sum = 0;
   for (let j = i * i; j <= n; j += i) sum += marks[j];
@@ -82,6 +91,7 @@ console.log("stepPastMax", stepPastMax(2147000000, 1000000, 2147483647, u8b), no
 console.log("stepPastMax small", stepPastMax(1, 5, 30, new Uint8Array(31)));
 const u8c = new Uint8Array(64);
 console.log("incrementPastMax", incrementPastMax(u8c), nonZero(u8c));
+console.log("upToMax", upToMax(2147483647, new Uint8Array(8)), upToMax(2147483645, new Uint8Array(8)));
 const ones = new Uint8Array(50001).fill(1);
 console.log("readSide", readSide(46349, 50000, ones), readSide(100, 50000, ones));
 console.log("sieve", sieve(100000), sieve(1000));

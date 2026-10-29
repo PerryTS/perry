@@ -392,6 +392,8 @@ pub(crate) fn lower_buffer_access_proof(
         return Ok(None);
     }
     let index = lower_index_i32_value(ctx, index_expr)?;
+    let index_window = crate::collectors::static_index_window(index_expr)
+        .filter(|&(lo, hi)| lo >= 0 && hi <= i64::from(i32::MAX));
     let access_mode = BufferAccessMode::UncheckedNative;
     let may_emit_inbounds =
         matches!(access_mode, BufferAccessMode::UncheckedNative) && bounds.allows_inbounds();
@@ -402,6 +404,7 @@ pub(crate) fn lower_buffer_access_proof(
         buffer_local_id,
         view: view.clone(),
         index,
+        index_window,
         access_mode,
         bounds,
         facts: access_facts_for_spec(spec, &view, None),
@@ -423,7 +426,12 @@ pub(crate) fn lower_buffer_access_proof(
 /// proves it.
 ///
 /// The check is unsigned, so a negative i32 fails it like any index at or past
-/// the length, and it is done in i64, so `index + width` cannot wrap.
+/// the length, and it is done in i64, so `index + width` cannot wrap. Two
+/// facts let it be loop-invariant where they hold, neither of them about the
+/// index's provenance: an index built only from literals and wrapping
+/// operators lies in its static window for any operand, so `window_hi` is
+/// tested in its place; and a fixed-length view of constant length is tested
+/// against that constant.
 pub(crate) fn emit_buffer_access_pointer(
     ctx: &mut FnCtx<'_>,
     proof: &BufferAccessProof,
@@ -442,13 +450,15 @@ pub(crate) fn emit_buffer_access_pointer(
     };
     let bounds_width_units = spec.bounds_width_units();
     let index_i64 = blk.zext(I32, &proof.index.value, I64);
-    let len_i64 = blk.zext(I32, &len_i32, I64);
-    let in_bounds = if bounds_width_units == 1 {
-        blk.icmp_ult(I64, &index_i64, &len_i64)
-    } else {
-        let end_i64 = blk.add(I64, &index_i64, &bounds_width_units.to_string());
-        blk.icmp_ule(I64, &end_i64, &len_i64)
+    let len_i64 = match (&proof.view.length_source, proof.view.length_fixed) {
+        (Some(crate::native_value::LengthSource::Constant(len)), true) => len.to_string(),
+        _ => blk.zext(I32, &len_i32, I64),
     };
+    let checked_end = match proof.index_window {
+        Some((_, hi)) => (hi + i64::from(bounds_width_units)).to_string(),
+        None => blk.add(I64, &index_i64, &bounds_width_units.to_string()),
+    };
+    let in_bounds = blk.icmp_ule(I64, &checked_end, &len_i64);
     let in_idx = ctx.new_block("bufacc.inbounds");
     let oob_idx = ctx.new_block("bufacc.oob");
     let in_label = ctx.block_label(in_idx);

@@ -8388,7 +8388,14 @@ pub(crate) fn classify_for_local_bound_dynamic(
         Expr::LocalGet(id) => *id,
         _ => return None,
     };
-    if !ctx.integer_locals.contains(&counter_id) {
+    // An int32 counter shares its i32 slot with the loop. Any other counter is
+    // still admissible when it can take a loop-PRIVATE i32 copy: the guard
+    // then range-checks its runtime value as well as the bound's, so the copy
+    // is exact whenever the fast loop runs, and the f64 slot stays the value
+    // everywhere else.
+    if !ctx.integer_locals.contains(&counter_id)
+        && !dynamic_bound_private_counter_is_safe(ctx, counter_id, update, body)
+    {
         return None;
     }
     if !local_bound_storage_accessible(ctx, bound_id)

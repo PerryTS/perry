@@ -178,11 +178,7 @@ fn literal_length_local_proves_typed_array_binding() {
         ),
         let_stmt(3, false, Expr::Integer(1_000)),
         let_stmt(4, true, Expr::Integer(0)),
-        Stmt::Expr(Expr::Update {
-            id: 4,
-            op: perry_hir::UpdateOp::Increment,
-            prefix: false,
-        }),
+        Stmt::Expr(Expr::LocalSet(4, Box::new(Expr::Integer(1)))),
         Stmt::Expr(call(
             7,
             vec![

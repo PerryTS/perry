@@ -747,19 +747,22 @@ mod tests {
         }
     }
 
-    /// #12658: `var r = 0; if (k) { r = n + 1; } var n = 5; n = n * 2;
-    /// return r + n;` with `var n` hoisted as its `undefined` seed.
+    /// #12658's shape: `var r = 0; if (k) { r = n; } var n = 5; n = n >> 1;
+    /// return r + n;` with `var n` hoisted as its `undefined` seed. (The issue
+    /// wrote `n + 1` and `n * 2`; those writes are not int32 without a range
+    /// for `n`, so the fixture uses writes whose only question is the read
+    /// position.)
     fn issue_body() -> Vec<Stmt> {
         vec![
             let_(R, Some(Expr::Integer(0))),
             let_(N, Some(Expr::Undefined)),
             Stmt::If {
                 condition: get(K),
-                then_branch: vec![set(R, bin(BinaryOp::Add, get(N), Expr::Integer(1)))],
+                then_branch: vec![set(R, get(N))],
                 else_branch: None,
             },
             let_(N, Some(Expr::Integer(5))),
-            set(N, bin(BinaryOp::Mul, get(N), Expr::Integer(2))),
+            set(N, bin(BinaryOp::Shr, get(N), Expr::Integer(1))),
             Stmt::Return(Some(bin(BinaryOp::Add, get(R), get(N)))),
         ]
     }

@@ -276,6 +276,11 @@ pub(crate) struct BufferAccessProof {
     pub buffer_local_id: u32,
     pub view: BufferViewSlot,
     pub index: LoweredValue,
+    /// `[lo, hi]` containing the lowered index for EVERY operand value: the
+    /// index is built only from literals and ToInt32/ToUint32-wrapping
+    /// operators (`collectors::static_index_window`), so the bounds check can
+    /// test `hi` instead of the index and does not vary inside a loop.
+    pub index_window: Option<(i64, i64)>,
     pub access_mode: BufferAccessMode,
     pub bounds: BoundsState,
     // #854: in-progress buffer-access fact bundle (Debug field); populated path
