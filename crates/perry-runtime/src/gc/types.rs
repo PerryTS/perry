@@ -1716,7 +1716,7 @@ pub unsafe fn set_forwarding_address(header: *mut GcHeader, new_user_addr: *mut 
 
 /// Per-instance builtin constructability. Kind-disjoint from byte-owner
 /// and array bit 7; copying age/layout updates preserve this bit.
-pub(crate) const GC_CLOSURE_NON_CONSTRUCTABLE: u16 = 0x80;
+pub(crate) use perry_abi::GC_CLOSURE_NON_CONSTRUCTABLE;
 
 // Object flags stored in GcHeader._reserved (u16) for Object.freeze/seal/preventExtensions
 pub use perry_abi::{OBJ_FLAG_FROZEN, OBJ_FLAG_NO_EXTEND, OBJ_FLAG_SEALED};
@@ -1770,7 +1770,7 @@ pub use perry_abi::OBJ_FLAG_HAS_DESCRIPTORS;
 // `Object.getPrototypeOf(Int8Array.prototype)` returns the cached
 // `TYPED_ARRAY_INTRINSIC_PROTO_PTR` (a single object shared across all
 // 11 typed-array kinds) when this bit is set.
-pub const OBJ_FLAG_TYPED_ARRAY_PROTO: u16 = 0x100;
+pub use perry_abi::OBJ_FLAG_TYPED_ARRAY_PROTO;
 /// Array payload is stored as canonical raw `f64` values, not NaN-boxed
 /// `JSValue` slots. This is only meaningful for `GC_TYPE_ARRAY`; object
 /// flags share the same `_reserved` word but never inspect this bit.

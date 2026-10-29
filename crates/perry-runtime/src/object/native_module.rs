@@ -414,7 +414,7 @@ pub fn scan_native_callable_export_roots_mut(visitor: &mut crate::gc::RuntimeRoo
 
 /// Special class ID for native module namespace objects
 /// This is used to identify objects that represent native module namespaces
-pub const NATIVE_MODULE_CLASS_ID: u32 = 0xFFFFFFFE;
+pub use perry_abi::NATIVE_MODULE_CLASS_ID;
 pub(crate) const WORKER_THREADS_LOCK_MANAGER_CLASS_ID: u32 = 0xFFFF_00B1;
 pub(crate) const WORKER_THREADS_LOCK_CLASS_ID: u32 = 0xFFFF_00B2;
 

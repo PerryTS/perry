@@ -429,14 +429,15 @@ pub(super) fn birth_at(
         ))?);
         info::integer(expression, &constants)
     };
-    let allocation_class = if ordinary {
+    let native = expression == "js_object_alloc(NATIVE_MODULE_CLASS_ID,1)";
+    // A native namespace class id comes from the derivation, not source text.
+    let allocation_class = if ordinary && !native {
         let args = super::tokens(&allocator["js_object_alloc(".len()..allocator.len() - 1])?;
         resolve_class(&info::text(info::split(&args, ",")[0]))?
     } else {
         0
     };
     let null = allocator.starts_with("js_object_alloc_null_proto(0,") && allocator.ends_with(')');
-    let native = expression == "js_object_alloc(NATIVE_MODULE_CLASS_ID,1)";
     let shaped = allocator.starts_with("js_object_alloc_with_shape(") && allocator.ends_with(')');
     if (!factory && !ordinary && !native && !null && !shaped)
         || !allocation.contains("crate::object::object_alloc_prototype_old(0, room)")
@@ -587,11 +588,9 @@ pub(super) fn birth_at(
         integrity,
     };
     let class_id = if native {
-        *info::constants(include_str!(
-            "../../perry-runtime/src/object/native_module.rs"
-        ))?
-        .get("NATIVE_MODULE_CLASS_ID")
-        .ok_or("missing native namespace class declaration")?
+        u64::from(perry_abi::realm_header::object_class_id(
+            ObjectExotic::NativeNamespace,
+        ))
     } else if shaped {
         let args =
             super::tokens(&allocator["js_object_alloc_with_shape(".len()..allocator.len() - 1])?;
