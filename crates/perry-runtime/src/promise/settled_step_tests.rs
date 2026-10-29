@@ -226,7 +226,7 @@ fn settled_step_notifies_producers_outside_the_job_drain() {
 // Each test starts from the same admitted state and breaks exactly one
 // condition. A declined probe must change nothing observable.
 
-const TAG_TRUE_BITS: u64 = 0x7FFC_0000_0000_0004;
+const TAG_TDZ_BITS: u64 = 0x7FFC_0000_0000_0011;
 
 fn snc_arm(step: ClosurePtr) {
     super::microtasks::CURRENT_MICROTASK_CALLBACK.with(|c| c.set(step));
@@ -240,7 +240,12 @@ impl Drop for SncReset {
 }
 
 fn admitted(value: f64, step: ClosurePtr) -> bool {
-    js_async_step_resume_now(value, step).to_bits() == TAG_TRUE_BITS
+    js_async_step_resume_now(value, step).to_bits() != TAG_TDZ_BITS
+}
+
+/// The payload an admitted probe hands back (the decline sentinel otherwise).
+fn payload(value: f64, step: ClosurePtr) -> u64 {
+    js_async_step_resume_now(value, step).to_bits()
 }
 
 fn cell_value() -> u64 {
@@ -253,10 +258,13 @@ fn snc_admits_primitive_and_native_fulfilled_and_writes_payload() {
         let _reset = SncReset;
         snc_arm(step);
         js_iter_result_set(-1.0, 1);
-        assert!(admitted(5.0, step));
-        assert_eq!(f64::from_bits(cell_value()), 5.0);
-        assert!(admitted(boxed(inner), step));
-        assert_eq!(f64::from_bits(cell_value()), 19.0);
+        assert_eq!(f64::from_bits(payload(5.0, step)), 5.0);
+        assert_eq!(f64::from_bits(payload(boxed(inner), step)), 19.0);
+        assert_eq!(
+            f64::from_bits(cell_value()),
+            -1.0,
+            "the payload travels by value, not through the iter-result cell"
+        );
         assert!(
             TASK_QUEUE.with(|q| q.borrow().is_empty()),
             "SNC never publishes"

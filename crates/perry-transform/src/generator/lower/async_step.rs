@@ -50,6 +50,8 @@ pub fn build_async_step_driver_direct(
     let is_error_param_id = alloc_local(next_local_id);
     let catch_e_id = alloc_local(next_local_id);
     let step_self_id = alloc_local(next_local_id);
+    let awaited_id = alloc_local(next_local_id);
+    let resumed_id = alloc_local(next_local_id);
 
     let step_func_id = {
         let id = *next_func_id;
@@ -222,29 +224,47 @@ pub fn build_async_step_driver_direct(
     // The admitted branch falls off the end of the loop body, so the loop's
     // ordinary back-edge safepoint poll (emitted at a non-terminated body end)
     // covers every in-place resume; the decline branch returns.
-    let continue_in_place = Stmt::If {
-        condition: Expr::AsyncStepResumeNow {
-            value: Box::new(Expr::IterResultGetValue),
-            step_closure: Box::new(Expr::LocalGet(step_self_id)),
+    // The awaited value is read from the iter-result cell once and handed on
+    // by value: to the probe, to the decline publication, and (as the probe's
+    // result) to the next resume. The probe returns the TDZ sentinel on a
+    // decline, which `AsyncStepDeclined` tests.
+    let continue_in_place = vec![
+        Stmt::Let {
+            id: awaited_id,
+            name: "__step_awaited".to_string(),
+            ty: any_ty.clone(),
+            mutable: false,
+            init: Some(Expr::IterResultGetValue),
         },
-        then_branch: vec![
-            Stmt::Expr(Expr::LocalSet(
-                value_param_id,
-                Box::new(Expr::IterResultGetValue),
-            )),
-            Stmt::Expr(Expr::LocalSet(
-                is_error_param_id,
-                Box::new(Expr::Bool(false)),
-            )),
-        ],
-        else_branch: Some(vec![Stmt::Return(Some(Expr::AsyncStepChain {
-            value: Box::new(Expr::IterResultGetValue),
-            step_closure: Box::new(Expr::LocalGet(step_self_id)),
-        }))]),
-    };
-    let resume_loop = Stmt::While {
-        condition: Expr::Bool(true),
-        body: vec![
+        Stmt::Let {
+            id: resumed_id,
+            name: "__step_resumed".to_string(),
+            ty: any_ty.clone(),
+            mutable: false,
+            init: Some(Expr::AsyncStepResumeNow {
+                value: Box::new(Expr::LocalGet(awaited_id)),
+                step_closure: Box::new(Expr::LocalGet(step_self_id)),
+            }),
+        },
+        Stmt::If {
+            condition: Expr::AsyncStepDeclined(Box::new(Expr::LocalGet(resumed_id))),
+            then_branch: vec![Stmt::Return(Some(Expr::AsyncStepChain {
+                value: Box::new(Expr::LocalGet(awaited_id)),
+                step_closure: Box::new(Expr::LocalGet(step_self_id)),
+            }))],
+            else_branch: Some(vec![
+                Stmt::Expr(Expr::LocalSet(
+                    value_param_id,
+                    Box::new(Expr::LocalGet(resumed_id)),
+                )),
+                Stmt::Expr(Expr::LocalSet(
+                    is_error_param_id,
+                    Box::new(Expr::Bool(false)),
+                )),
+            ]),
+        },
+    ];
+    let mut resume_body = vec![
             Stmt::Try {
                 body: vec![labeled_loop],
                 catch: Some(CatchClause {
@@ -274,8 +294,11 @@ pub fn build_async_step_driver_direct(
                 then_branch: resolve_arm,
                 else_branch: None,
             },
-            continue_in_place,
-        ],
+    ];
+    resume_body.extend(continue_in_place);
+    let resume_loop = Stmt::While {
+        condition: Expr::Bool(true),
+        body: resume_body,
     };
     let step_body: Vec<Stmt> = vec![
         Stmt::Let {
