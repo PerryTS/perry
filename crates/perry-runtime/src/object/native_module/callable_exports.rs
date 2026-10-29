@@ -145,6 +145,12 @@ pub fn bound_native_callable_export_value(module_name: &str, property_name: &str
             crate::closure::js_closure_set_capture_f64(c, 3, class as f64);
         });
     }
+    closure.with_mut_ptr(|c: *mut crate::closure::ClosureHeader| {
+        builtin_closure_metadata::publish_bound_export_birth(
+            c as usize,
+            !bound_export_is_non_constructable(export_module_name, property_name),
+        )
+    });
     #[cfg(test)]
     TEST_COLLECT_NATIVE_EXPORT_AFTER_ALLOC.with(|armed| {
         if armed.replace(false) {
@@ -1271,7 +1277,7 @@ unsafe fn bound_native_export_metadata(
     match (module, method.as_str()) {
         ("console", "Console") => Some(realm_native_console_Console_metadata!(length)),
         ("util", "isArray") => Some(realm_native_util_isArray_metadata!(length)),
-        ("module", "isBuiltin") => Some(1),
+        ("module", "isBuiltin") => Some(realm_native_module_isBuiltin_metadata!(length)),
         ("process", "getBuiltinModule") => Some(realm_native_process_getBuiltinModule_metadata!(length)),
         _ => native_callable_export_arity(module, method.as_str()),
     }
@@ -1311,10 +1317,18 @@ pub(crate) unsafe fn nm_attach_module(
             value,
         ) as usize);
     }
-    if matches!(property_name, "flushCompileCache" | "isBuiltin") {
-        set_builtin_closure_non_constructable(crate::value::js_nanbox_get_pointer(value) as usize);
-    }
+    // Born non-constructable (`publish_bound_export_birth`).
+    debug_assert!(
+        !bound_export_is_non_constructable("module", property_name)
+            || builtin_closure_is_non_constructable(crate::value::js_nanbox_get_pointer(value) as usize)
+    );
     value
+}
+
+/// The bound exports declared `constructable = false` (the per-instance bit;
+/// `closure/registry.rs` declares the same facts).
+fn bound_export_is_non_constructable(module: &str, property: &str) -> bool {
+    module == "module" && matches!(property, "flushCompileCache" | "isBuiltin")
 }
 
 #[allow(unused_mut)]

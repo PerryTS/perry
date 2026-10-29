@@ -245,6 +245,10 @@ pub(super) fn resolve_receivers(
 pub(super) fn method(facts: Facts, abi: &Abi) -> Result<Value, String> {
     let facts_class_identity = facts.class_identity.clone();
     let facts_module = facts.module.clone();
+    if facts.non_constructable && facts.kind.as_deref() == Some("constructor") {
+        return Err("a native constructor is constructable".into());
+    }
+    let constructable = !facts.non_constructable;
     let identity_abi;
     let abi = match &facts.class_identity {
         Some(_) => {
@@ -405,11 +409,12 @@ pub(super) fn method(facts: Facts, abi: &Abi) -> Result<Value, String> {
                 (
                     "reserved",
                     // The receiver capture is a pointer. A bound native
-                    // method carries no per-instance non-constructable bit
-                    // at birth (WRT3a3 open question 2).
+                    // method carries the per-instance non-constructable bit
+                    // only where it declares `constructable = false` (WRT3a3
+                    // open question 2).
                     number(super::derive::closure_word(ClosureBirth {
                         pointer_free_captures: false,
-                        constructable: true,
+                        constructable,
                         body_non_constructor: false,
                         integrity: Integrity::Extensible,
                     })),

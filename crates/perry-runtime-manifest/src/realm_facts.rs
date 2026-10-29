@@ -63,6 +63,9 @@ pub(super) struct Facts {
     /// The `perry_abi::native_class_ids` constant a bound native constructor
     /// captures as its class identity.
     pub class_identity: Option<String>,
+    /// `constructable = false`: a bound native export born with the
+    /// per-instance non-constructable bit.
+    pub non_constructable: bool,
     pub alias: Option<String>,
     pub get: Option<String>,
     pub set: Option<String>,
@@ -129,6 +132,7 @@ pub(super) fn parse(ts: &[Token<'_>]) -> Result<Facts, String> {
         receiver: None,
         module: None,
         class_identity: None,
+        non_constructable: false,
         alias: None,
         get: None,
         set: None,
@@ -290,6 +294,9 @@ pub(super) fn parse(ts: &[Token<'_>]) -> Result<Facts, String> {
                         .clone()
                         .ok_or("module names its native module as a literal")?,
                 )
+            }
+            "constructable" if clause.len() == 3 && clause[2].text == "false" => {
+                facts.non_constructable = true
             }
             "class_identity" if clause.len() == 3 => {
                 facts.class_identity = Some(clause[2].text.to_owned())
@@ -490,7 +497,11 @@ pub(super) fn logical(
     if facts.members.is_some() {
         return Err("object members require an owned birth expression".into());
     }
-    if facts.receiver.is_some() || facts.module.is_some() || facts.class_identity.is_some() {
+    if facts.receiver.is_some()
+        || facts.module.is_some()
+        || facts.class_identity.is_some()
+        || facts.non_constructable
+    {
         return Err("receiver, module and class_identity are bound-method birth facts".into());
     }
     if let Some(table) = facts.namespace_table {
