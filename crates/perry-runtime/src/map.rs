@@ -1529,9 +1529,10 @@ unsafe fn find_key_index_cold(map: *const MapHeader, key: f64) -> i32 {
             }
             return -1;
         }
-        if let Some(i) = find_identical_key(entries, used, key_bits) {
-            return i;
-        }
+        // No bit-identity pass here: every caller has already made one
+        // (`find_key_index_hot`, or `entry::identical_entry` before
+        // `find_entry_after_identity_miss`), and it missed. Running the scan
+        // again only repeated the whole extent on every general-path lookup.
         // A string key is decoded once and each entry rejected by tag and
         // length, instead of paying the generic comparison per entry (#10697).
         if let Some(skey) = StrKey::decode(key_bits) {
@@ -2003,7 +2004,9 @@ fn map_get_resolved(map: *const MapHeader, key: f64) -> f64 {
 #[inline(never)]
 fn map_get_resolved_fallback(map: *const MapHeader, key: f64) -> f64 {
     unsafe {
-        let index = find_key_index(map, normalize_zero(key));
+        // `map_get_resolved` reaches here only after `identical_entry`
+        // declined or missed, so the extent is not scanned again.
+        let index = entry::find_entry_after_identity_miss(map, key);
         if index >= 0 {
             return map_read_entry_value(map, index);
         }
