@@ -57,6 +57,12 @@ pub(super) struct Facts {
     pub native_key: Option<String>,
     pub builtin_constructor: bool,
     pub receiver: Option<String>,
+    /// The native module a bound constructor also serves as the namespace of
+    /// (its statics dispatch as that module).
+    pub module: Option<String>,
+    /// The `perry_abi::native_class_ids` constant a bound native constructor
+    /// captures as its class identity.
+    pub class_identity: Option<String>,
     pub alias: Option<String>,
     pub get: Option<String>,
     pub set: Option<String>,
@@ -121,6 +127,8 @@ pub(super) fn parse(ts: &[Token<'_>]) -> Result<Facts, String> {
         native_key: None,
         builtin_constructor: false,
         receiver: None,
+        module: None,
+        class_identity: None,
         alias: None,
         get: None,
         set: None,
@@ -275,6 +283,17 @@ pub(super) fn parse(ts: &[Token<'_>]) -> Result<Facts, String> {
                 member_tokens = Some(&clause[3..clause.len() - 1]);
             }
             "receiver" => facts.receiver = Some(path(&clause[2..])?),
+            "module" if clause.len() == 3 => {
+                facts.module = Some(
+                    clause[2]
+                        .string
+                        .clone()
+                        .ok_or("module names its native module as a literal")?,
+                )
+            }
+            "class_identity" if clause.len() == 3 => {
+                facts.class_identity = Some(clause[2].text.to_owned())
+            }
             "alias" => facts.alias = Some(path(&clause[2..])?),
             "get" => facts.get = Some(path(&clause[2..])?),
             "set" => facts.set = Some(path(&clause[2..])?),
@@ -471,8 +490,8 @@ pub(super) fn logical(
     if facts.members.is_some() {
         return Err("object members require an owned birth expression".into());
     }
-    if facts.receiver.is_some() {
-        return Err("receiver is only a bound-method birth fact".into());
+    if facts.receiver.is_some() || facts.module.is_some() || facts.class_identity.is_some() {
+        return Err("receiver, module and class_identity are bound-method birth facts".into());
     }
     if let Some(table) = facts.namespace_table {
         if facts

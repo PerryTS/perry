@@ -18,14 +18,24 @@ pub(super) type Abi = (info::Info, String, u64);
 pub(super) fn runtime_abi() -> Result<Abi, String> {
     abi(include_str!("../../perry-runtime/src/closure/registry.rs"))
 }
+/// The ABI of a bound native constructor that captures its class identity.
+fn constructor_abi() -> Result<Abi, String> {
+    abi_of(
+        include_str!("../../perry-runtime/src/closure/registry.rs"),
+        "BOUND_NATIVE_CONSTRUCTOR_INFO",
+    )
+}
 fn abi(source: &str) -> Result<Abi, String> {
+    abi_of(source, "BOUND_METHOD_INFO")
+}
+fn abi_of(source: &str, info_static: &str) -> Result<Abi, String> {
     let ts = tokens(source)?;
     // The exported record: `fn_info!(export static pub BOUND_METHOD_INFO = sentinel path, n)`.
     if let Some(at) = ts.windows(4).position(|w| {
         w[0].text == "export"
             && w[1].text == "static"
             && w[2].text == "pub"
-            && w[3].text == "BOUND_METHOD_INFO"
+            && w[3].text == info_static
     }) {
         let decl = &ts[at + 4..];
         if decl.first().is_none_or(|t| t.text != "=")
@@ -48,7 +58,7 @@ fn abi(source: &str) -> Result<Abi, String> {
     }
     let start = ts
         .windows(2)
-        .position(|w| w[0].text == "static" && w[1].text == "BOUND_METHOD_INFO")
+        .position(|w| w[0].text == "static" && w[1].text == info_static)
         .ok_or("missing bound-method ABI declaration")?;
     let end = start
         + ts[start..]
@@ -233,6 +243,16 @@ pub(super) fn resolve_receivers(
 }
 
 pub(super) fn method(facts: Facts, abi: &Abi) -> Result<Value, String> {
+    let facts_class_identity = facts.class_identity.clone();
+    let facts_module = facts.module.clone();
+    let identity_abi;
+    let abi = match &facts.class_identity {
+        Some(_) => {
+            identity_abi = constructor_abi()?;
+            &identity_abi
+        }
+        None => abi,
+    };
     if facts.get.is_some()
         || facts.set.is_some()
         || facts.attrs.is_some()
@@ -345,6 +365,33 @@ pub(super) fn method(facts: Facts, abi: &Abi) -> Result<Value, String> {
             ),
         ]));
     }
+    let mut captures = vec![
+        object([
+            ("kind", string("reference")),
+            ("value", string(receiver.clone())),
+        ]),
+        object([
+            ("kind", string("bytes")),
+            ("value", string(dispatch_key.clone())),
+        ]),
+        object([
+            ("kind", string("raw_word")),
+            ("value", string(format!("0x{:x}", dispatch_key.len()))),
+        ]),
+    ];
+    if let Some(identity) = &facts_class_identity {
+        if kind != "constructor" {
+            return Err("only a native constructor captures a class identity".into());
+        }
+        let ids = info::constants(include_str!("../../perry-abi/src/native_class_ids.rs"))?;
+        let id = *ids
+            .get(identity.as_str())
+            .ok_or_else(|| format!("{identity} is not a perry_abi::native_class_ids constant"))?;
+        captures.push(object([
+            ("kind", string("raw_word")),
+            ("value", string(format!("0x{:x}", (id as f64).to_bits()))),
+        ]));
+    }
     let mut declaration = object([
         ("name", string(canonical)),
         ("kind", string(kind)),
@@ -375,20 +422,7 @@ pub(super) fn method(facts: Facts, abi: &Abi) -> Result<Value, String> {
         ("body", string(body.clone())),
         ("function_info", function_info),
         ("info_symbol", string(info_symbol)),
-        (
-            "captures",
-            Value::Array(vec![
-                object([("kind", string("reference")), ("value", string(receiver))]),
-                object([
-                    ("kind", string("bytes")),
-                    ("value", string(dispatch_key.clone())),
-                ]),
-                object([
-                    ("kind", string("raw_word")),
-                    ("value", string(format!("0x{:x}", dispatch_key.len()))),
-                ]),
-            ]),
-        ),
+        ("captures", Value::Array(captures)),
         (
             "births",
             Value::Array(births.into_iter().map(string).collect()),
@@ -402,6 +436,12 @@ pub(super) fn method(facts: Facts, abi: &Abi) -> Result<Value, String> {
             "construct".into(),
             string("crate::object::js_new_function_construct"),
         );
+    }
+    if let Some(module) = facts_module {
+        let Value::Object(map) = &mut declaration else {
+            unreachable!()
+        };
+        map.insert("module".into(), string(module));
     }
     Ok(declaration)
 }
