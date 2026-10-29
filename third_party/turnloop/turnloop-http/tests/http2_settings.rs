@@ -14,6 +14,7 @@ enum Seen {
     Headers(u32),
     Data(u32, usize),
     Reset(u32, u32),
+    Push(u32, u32),
     Goaway(u32, Option<Vec<u8>>),
     Other,
 }
@@ -32,6 +33,9 @@ fn drive(to: &mut Connection, input: &mut Vec<u8>) -> Result<Vec<Seen>, &'static
                 Event::Headers { stream, .. } => Seen::Headers(stream),
                 Event::Data { stream, bytes, .. } => Seen::Data(stream, bytes.len()),
                 Event::Reset { stream, code } => Seen::Reset(stream, code),
+                Event::PushPromise {
+                    stream, promised, ..
+                } => Seen::Push(stream, promised),
                 Event::Goaway { code, debug, .. } => Seen::Goaway(code, debug.map(<[u8]>::to_vec)),
                 _ => Seen::Other,
             });
@@ -91,7 +95,6 @@ fn settings_acks_are_an_ordered_queue() {
     assert_eq!(
         seen,
         vec![Seen::Settings(vec![
-            (2, 0),
             (3, 100),
             (5, 16384),
             (6, 32768)
@@ -104,7 +107,7 @@ fn settings_acks_are_an_ordered_queue() {
             Seen::Settings(DEFAULT_ADVERTISED.to_vec()),
             Seen::Settings(vec![(3, 7)]),
             Seen::Settings(vec![(6, 65536)]),
-            Seen::SettingsAck(vec![(2, 0), (3, 100), (5, 16384), (6, 32768)]),
+            Seen::SettingsAck(vec![(3, 100), (5, 16384), (6, 32768)]),
         ]
     );
     // The client acked all three; the server pairs them with what it sent.
@@ -243,20 +246,21 @@ fn initial_settings_are_host_chosen_and_ordered() {
     .unwrap();
     assert_eq!(ordered.output(), expected);
 
-    // `new` still advertises its limits, now in ascending order for a client
-    // too: ENABLE_PUSH (2) first rather than appended.
+    // `new` still advertises its limits, in ascending order. A client leaves
+    // push enabled, as the protocol defaults it.
     let client = Connection::new(Role::Client, Limits::default()).unwrap();
     let settings = &client.output()[http2::PREFACE.len()..];
     let frame = http2::decode_frame(settings, 16384).unwrap().unwrap();
     let ids: Vec<u8> = frame.payload.chunks(6).map(|s| s[1]).collect();
-    assert_eq!(ids, [2, 3, 5, 6]);
+    assert_eq!(ids, [3, 5, 6]);
 
-    // A client that names no ENABLE_PUSH still refuses push: it defaults to on.
+    // A client that names no ENABLE_PUSH sends an empty SETTINGS and so keeps
+    // the protocol default, push on.
     let client =
         Connection::with_settings(Role::Client, Limits::default(), &Settings::new()).unwrap();
     assert_eq!(
         &client.output()[http2::PREFACE.len()..],
-        [0, 0, 6, 4, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0]
+        [0, 0, 0, 4, 0, 0, 0, 0, 0]
     );
 
     // An empty-SETTINGS server still serves a request end to end.
@@ -428,4 +432,85 @@ fn live_initial_window_change_adjusts_streams() {
     let mut wire = Vec::new();
     http2::encode_frame(0, 0, a, &[0], &mut wire).unwrap();
     assert_eq!(drive(&mut server, &mut wire), Err("FLOW_CONTROL_ERROR"));
+}
+
+fn promised_request() -> Vec<Header> {
+    vec![
+        Header::new(":method", "GET"),
+        Header::new(":scheme", "http"),
+        Header::new(":path", "/pushed"),
+        Header::new(":authority", "localhost"),
+    ]
+}
+fn ok() -> Vec<Header> {
+    vec![Header::new(":status", "200")]
+}
+
+/// A server promises a response on a client's request; the client sees the
+/// promise first, then the pushed response on the promised stream.
+#[test]
+fn a_client_receives_a_pushed_response() {
+    let (mut client, mut server) = handshake();
+    let id = client.open(&request(), true).unwrap();
+    assert_eq!(
+        drive(&mut server, &mut ship(&mut client)).unwrap(),
+        vec![Seen::Headers(id)]
+    );
+    let promised = server.push(id, &promised_request()).unwrap();
+    assert_eq!(promised, 2);
+    server.send_headers(promised, &ok(), true).unwrap();
+    server.send_headers(id, &ok(), true).unwrap();
+    assert_eq!(
+        drive(&mut client, &mut ship(&mut server)).unwrap(),
+        vec![Seen::Push(id, promised), Seen::Headers(promised), Seen::Headers(id)]
+    );
+}
+
+/// A client may decline a promise; the server sees the reset.
+#[test]
+fn a_client_can_decline_a_promise() {
+    let (mut client, mut server) = handshake();
+    let id = client.open(&request(), true).unwrap();
+    drive(&mut server, &mut ship(&mut client)).unwrap();
+    let promised = server.push(id, &promised_request()).unwrap();
+    assert_eq!(
+        drive(&mut client, &mut ship(&mut server)).unwrap(),
+        vec![Seen::Push(id, promised)]
+    );
+    client.reset(promised, 8).unwrap();
+    assert_eq!(
+        drive(&mut server, &mut ship(&mut client)).unwrap(),
+        vec![Seen::Reset(promised, 8)]
+    );
+}
+
+/// A client that sent ENABLE_PUSH = 0 cannot be promised anything.
+#[test]
+fn push_is_refused_once_the_client_disabled_it() {
+    let mut off = Settings::new();
+    off.set(Settings::ENABLE_PUSH, 0);
+    let mut client = Connection::with_settings(Role::Client, Limits::default(), &off).unwrap();
+    let mut server = Connection::new(Role::Server, Limits::default()).unwrap();
+    drive(&mut server, &mut ship(&mut client)).unwrap();
+    drive(&mut client, &mut ship(&mut server)).unwrap();
+    drive(&mut server, &mut ship(&mut client)).unwrap();
+    let id = client.open(&request(), true).unwrap();
+    drive(&mut server, &mut ship(&mut client)).unwrap();
+    assert!(server.push(id, &promised_request()).is_err());
+}
+
+/// A PING acknowledgement with no PING outstanding is an INTERNAL_ERROR.
+#[test]
+fn an_unsolicited_ping_ack_fails_the_connection() {
+    let (mut client, mut server) = handshake();
+    client.ping([7; 8]).unwrap();
+    drive(&mut server, &mut ship(&mut client)).unwrap();
+    let wire = ship(&mut server);
+    drive(&mut client, &mut wire.clone()).unwrap();
+    assert_eq!(
+        drive(&mut client, &mut wire.clone()).unwrap_err(),
+        "INTERNAL_ERROR"
+    );
+    let goaway = ship(&mut client);
+    assert_eq!(goaway[goaway.len() - 4..], 2u32.to_be_bytes());
 }
