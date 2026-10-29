@@ -218,10 +218,7 @@ pub const LAYOUT_PROTO_TAG_END: usize = 4096;
 /// runtime gives the prototype that serial when it builds it
 /// (`builtin_proto::seal_runtime_prototype`, `name_runtime_prototype`), so an
 /// object born on the layout needs no link.
-#[repr(C)]
-pub struct PerryProtoFamily {
-    pub serial: u64,
-}
+pub use crate::codegen_abi::PerryProtoFamily;
 
 /// `PerryLayoutDesc.variant` of a carried prototype layout (object model
 /// §3.6): the layout `P` is born on ([`perry_bind_family_prototype`]), a
@@ -709,14 +706,26 @@ unsafe fn registered_atom_symbol(
     Some((symbol & crate::value::POINTER_MASK) as *mut crate::symbol::SymbolHeader)
 }
 
-/// The symbol a symbol atom names (well-known, node's own, or registered),
-/// `None` for a string atom.
+/// The symbol a symbol atom names (well-known, node's own, registered or an
+/// image cell), `None` for a string atom. A string key, the common atom,
+/// leaves after one compare instead of failing each symbol kind's test.
 pub(crate) unsafe fn atom_symbol(
     atom: *const StaticAtom,
 ) -> Option<*mut crate::symbol::SymbolHeader> {
+    if (*atom).kind == crate::codegen_abi::ATOM_KIND_STRING {
+        return None;
+    }
     well_known_atom_symbol(atom)
         .or_else(|| super::runtime_layouts::runtime_symbol_of_atom(atom))
         .or_else(|| registered_atom_symbol(atom))
+        .or_else(|| image_atom_symbol(atom))
+}
+
+/// An image symbol atom names its static `SymbolHeader` directly.
+#[cold]
+unsafe fn image_atom_symbol(atom: *const StaticAtom) -> Option<*mut crate::symbol::SymbolHeader> {
+    ((*atom).kind == crate::codegen_abi::ATOM_KIND_IMAGE_SYMBOL && !(*atom).string.is_null())
+        .then(|| (*atom).string.cast_mut().cast())
 }
 
 /// Pre-seed the agent's atom table, then register every layout. Runs once per
@@ -743,6 +752,8 @@ pub(crate) fn seed_static_atoms() {
     wasm_program_image_checks::check_atoms();
 }
 
+#[path = "layout_desc/lazy_image.rs"]
+mod lazy_image;
 #[path = "layout_desc/registration.rs"]
 mod registration;
 use registration::binding_symbol_keys;
@@ -759,7 +770,9 @@ pub(crate) use registration::register_function_layout;
 pub(crate) use registration::register_namespace_layout;
 pub(crate) use registration::register_one;
 pub(crate) use registration::register_one_bound;
+#[cfg(test)]
 pub(crate) use registration::register_static_layouts;
+pub(crate) use registration::register_static_layouts_in;
 
 /// Allocate an object of a registered layout: the header, `slot_count`
 /// slots holding the hole marker, and the layout word. The caller (a static

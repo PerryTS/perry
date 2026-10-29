@@ -20,23 +20,13 @@ mod mock_options;
 #[path = "test_property.rs"]
 mod property_mock;
 #[path = "test_reporters.rs"]
-mod reporters;
+pub(super) mod reporters;
 #[path = "test_runner.rs"]
 pub(crate) mod runner;
 #[path = "test_snapshot.rs"]
 mod snapshot;
 
-// Re-exported / imported so the pre-split `test::<item>` paths keep resolving.
 use mock_options::{mock_option_times, parse_mock_fn_options};
-pub(crate) use reporters::{
-    thunk_reporter_dot, thunk_reporter_junit, thunk_reporter_lcov, thunk_reporter_spec,
-    thunk_reporter_tap,
-};
-pub(crate) use runner::{
-    thunk_test, thunk_test_after, thunk_test_after_each, thunk_test_before, thunk_test_before_each,
-    thunk_test_expect_failure, thunk_test_only, thunk_test_run, thunk_test_skip, thunk_test_suite,
-    thunk_test_suite_only, thunk_test_suite_skip, thunk_test_suite_todo, thunk_test_todo,
-};
 use snapshot::{
     assert_file_snapshot, assert_snapshot, snapshot_object_value, snapshot_set_default_serializers,
     snapshot_set_resolve_snapshot_path,
@@ -1298,27 +1288,27 @@ fn mock_object_value() -> f64 {
         set_field(
             timers,
             "enable",
-            closure_value(crate::fn_info!(#[realm("node:test.mock.timers.enable", provider = closure)] mock_timers_enable, 1; with_declared(1)), 1),
+            closure_value(crate::fn_info!(#[realm("node:test.mock.timers.enable", provider = closure)] export crate::node_submodules::test::mock_timers_enable, 1; with_declared(1)), 1),
         );
         set_field(
             timers,
             "tick",
-            closure_value(crate::fn_info!(#[realm("node:test.mock.timers.tick", provider = closure)] mock_timers_tick, 1; with_declared(1)), 1),
+            closure_value(crate::fn_info!(#[realm("node:test.mock.timers.tick", provider = closure)] export crate::node_submodules::test::mock_timers_tick, 1; with_declared(1)), 1),
         );
         set_field(
             timers,
             "runAll",
-            closure_value(crate::fn_info!(#[realm("node:test.mock.timers.runAll", provider = closure)] mock_timers_run_all, 0; with_declared(0)), 0),
+            closure_value(crate::fn_info!(#[realm("node:test.mock.timers.runAll", provider = closure)] export crate::node_submodules::test::mock_timers_run_all, 0; with_declared(0)), 0),
         );
         set_field(
             timers,
             "setTime",
             closure_value(
-                crate::fn_info!(#[realm("node:test.mock.timers.setTime", provider = closure)] mock_timers_set_time, 1; with_declared(1)),
+                crate::fn_info!(#[realm("node:test.mock.timers.setTime", provider = closure)] export crate::node_submodules::test::mock_timers_set_time, 1; with_declared(1)),
                 1,
             ),
         );
-        let reset = closure_value(crate::fn_info!(#[realm(realm_decl! { "node:test.mock.timers[\"@@dispose\"]", constructible = true; "node:test.mock.timers.reset", provider = closure; })] mock_timers_reset, 0; with_declared(0)), 0);
+        let reset = closure_value(crate::fn_info!(#[realm(realm_decl! { "node:test.mock.timers[\"@@dispose\"]", constructible = true; "node:test.mock.timers.reset", provider = closure; })] export crate::node_submodules::test::mock_timers_reset, 0; with_declared(0)), 0);
         set_field(timers, "reset", reset);
         let dispose = crate::symbol::well_known_symbol("dispose");
         if !dispose.is_null() {
@@ -1346,34 +1336,34 @@ fn mock_object_value() -> f64 {
         set_field(
             mock,
             "fn",
-            closure_value(crate::fn_info!(#[realm("node:test.mock.fn", provider = closure)] mock_fn_thunk, 3; with_declared(3)), 3),
+            closure_value(crate::fn_info!(#[realm("node:test.mock.fn", provider = closure)] export crate::node_submodules::test::mock_fn_thunk, 3; with_declared(3)), 3),
         );
         set_field(
             mock,
             "method",
-            closure_value(crate::fn_info!(#[realm("node:test.mock.method", provider = closure)] mock_method_thunk, 4; with_declared(4)), 4),
+            closure_value(crate::fn_info!(#[realm("node:test.mock.method", provider = closure)] export crate::node_submodules::test::mock_method_thunk, 4; with_declared(4)), 4),
         );
         set_field(
             mock,
             "getter",
-            closure_value(crate::fn_info!(#[realm("node:test.mock.getter", provider = closure)] mock_getter_thunk, 4; with_declared(4)), 4),
+            closure_value(crate::fn_info!(#[realm("node:test.mock.getter", provider = closure)] export crate::node_submodules::test::mock_getter_thunk, 4; with_declared(4)), 4),
         );
         set_field(
             mock,
             "setter",
-            closure_value(crate::fn_info!(#[realm("node:test.mock.setter", provider = closure)] mock_setter_thunk, 4; with_declared(4)), 4),
+            closure_value(crate::fn_info!(#[realm("node:test.mock.setter", provider = closure)] export crate::node_submodules::test::mock_setter_thunk, 4; with_declared(4)), 4),
         );
         set_field(mock, "property", property_mock::tracker_property_value());
         set_field(
             mock,
             "reset",
-            closure_value(crate::fn_info!(#[realm("node:test.mock.reset", provider = closure)] mock_reset_thunk, 0; with_declared(0)), 0),
+            closure_value(crate::fn_info!(#[realm("node:test.mock.reset", provider = closure)] export crate::node_submodules::test::mock_reset_thunk, 0; with_declared(0)), 0),
         );
         set_field(
             mock,
             "restoreAll",
             closure_value(
-                crate::fn_info!(#[realm("node:test.mock.restoreAll", provider = closure)] mock_restore_all_thunk, 0; with_declared(0)),
+                crate::fn_info!(#[realm("node:test.mock.restoreAll", provider = closure)] export crate::node_submodules::test::mock_restore_all_thunk, 0; with_declared(0)),
                 0,
             ),
         );
@@ -1619,7 +1609,7 @@ fn test_context_value(name: &str) -> f64 {
         ),
     );
     let ctx = js_object_alloc(0, 8);
-    let test_fn = closure_value(crate::fn_info!(#[realm("node:test.default", provider = closure, members = { test = ref("node:test.default"), attrs = writable | enumerable | configurable; skip, attrs = writable | enumerable | configurable; todo, attrs = writable | enumerable | configurable; only, attrs = writable | enumerable | configurable; })] thunk_test, 3; with_declared(3)), 3);
+    let test_fn = closure_value(crate::fn_info!(#[realm("node:test.default", provider = closure, members = { test = ref("node:test.default"), attrs = writable | enumerable | configurable; skip, attrs = writable | enumerable | configurable; todo, attrs = writable | enumerable | configurable; only, attrs = writable | enumerable | configurable; })] export crate::node_submodules::test::runner::thunk_test, 3; with_declared(3)), 3);
     let test_fn_ptr = raw_ptr_from_value(test_fn);
     let test_fn = if crate::value::addr_class::is_plausible_heap_addr(test_fn_ptr) {
         boxed_ptr(decorate_test_export(
@@ -1824,30 +1814,30 @@ pub(crate) fn decorate_test_export(
         [
             (
                 "skip",
-                crate::fn_info!(#[realm("node:test.describe.skip", provider = closure)] thunk_test_suite_skip, 3; with_declared(3)),
+                crate::fn_info!(#[realm("node:test.describe.skip", provider = closure)] export crate::node_submodules::test::runner::thunk_test_suite_skip, 3; with_declared(3)),
             ),
             (
                 "todo",
-                crate::fn_info!(#[realm("node:test.describe.todo", provider = closure)] thunk_test_suite_todo, 3; with_declared(3)),
+                crate::fn_info!(#[realm("node:test.describe.todo", provider = closure)] export crate::node_submodules::test::runner::thunk_test_suite_todo, 3; with_declared(3)),
             ),
             (
                 "only",
-                crate::fn_info!(#[realm("node:test.describe.only", provider = closure)] thunk_test_suite_only, 3; with_declared(3)),
+                crate::fn_info!(#[realm("node:test.describe.only", provider = closure)] export crate::node_submodules::test::runner::thunk_test_suite_only, 3; with_declared(3)),
             ),
         ]
     } else {
         [
             (
                 "skip",
-                crate::fn_info!(#[realm(realm_decl! { "node:test.default.skip", provider = closure; "node:test.skip", provider = closure_alloc; })] thunk_test_skip, 3; with_declared(3)),
+                crate::fn_info!(#[realm(realm_decl! { "node:test.default.skip", provider = closure; "node:test.skip", provider = closure_alloc; })] export crate::node_submodules::test::runner::thunk_test_skip, 3; with_declared(3)),
             ),
             (
                 "todo",
-                crate::fn_info!(#[realm(realm_decl! { "node:test.default.todo", provider = closure; "node:test.todo", provider = closure_alloc; })] thunk_test_todo, 3; with_declared(3)),
+                crate::fn_info!(#[realm(realm_decl! { "node:test.default.todo", provider = closure; "node:test.todo", provider = closure_alloc; })] export crate::node_submodules::test::runner::thunk_test_todo, 3; with_declared(3)),
             ),
             (
                 "only",
-                crate::fn_info!(#[realm(realm_decl! { "node:test.default.only", provider = closure; "node:test.only", provider = closure_alloc; })] thunk_test_only, 3; with_declared(3)),
+                crate::fn_info!(#[realm(realm_decl! { "node:test.default.only", provider = closure; "node:test.only", provider = closure_alloc; })] export crate::node_submodules::test::runner::thunk_test_only, 3; with_declared(3)),
             ),
         ]
     };

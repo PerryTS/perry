@@ -11,7 +11,7 @@
 //! * A class shape (`proto_id = CLASS | class_id`) is seeded by the per-class
 //!   mint at class registration, which precedes every instance of the class.
 //! * A literal shape (`proto_id = 0`) is seeded before any user module's
-//!   init runs, from the program's seed table (`PerryLayoutImageV1::seeds`,
+//!   init runs, from the program's seed table (`PerryProgramTableV1::seeds`,
 //!   WRT step 2): the driver emits each literal id's keys as atoms and its
 //!   canonical key list as a cell of the realm image, and each agent links
 //!   that list into its canonical keys trie and publishes the record
@@ -592,15 +592,22 @@ pub(crate) fn note_static_request(path: &str, requested: u32, got: u32) {
     if (requested != 0 || path == "finalized-constfn")
         && *CENSUS_ENABLED.get_or_init(|| std::env::var_os("PERRY_STATIC_SHAPE_CENSUS").is_some())
     {
-        let verdict = if requested == got { "hit" } else { "miss" };
-        eprintln!("perry-static-shape: {path} requested={requested:#x} got={got:#x} {verdict}");
+        print_static_request(path, requested, got);
     }
+}
+
+/// The census line, off the startup path: formatting is paid only with the knob on.
+#[cold]
+#[inline(never)]
+fn print_static_request(path: &str, requested: u32, got: u32) {
+    let verdict = if requested == got { "hit" } else { "miss" };
+    eprintln!("perry-static-shape: {path} requested={requested:#x} got={got:#x} {verdict}");
 }
 
 /// Publish the program's static literal seeds in THIS agent: `main` calls
 /// this right after `js_gc_init`, a worker before its module body, so every
 /// static literal id is published before any user code can mint those facts
-/// under a counter id. The seeds are data (`PerryLayoutImageV1::seeds`): a
+/// under a counter id. The seeds are data (`PerryProgramTableV1::seeds`): a
 /// seed whose canonical key list is an image cell is linked into the agent's
 /// trie and published without allocating; one whose keys the driver could
 /// not image is minted from its names.
@@ -610,19 +617,17 @@ pub extern "C" fn js_shape_run_static_seed() {
     // under its atoms, and a by-names mint stores the atoms the pools find.
     // Descriptors still follow the seeds and share their ids.
     super::layout_desc::seed_static_atoms();
-    install_image_seeds();
+    // SAFETY: a valid layout image names the program's table (never null).
+    let program = unsafe { &*super::class_image::layout_image().program };
+    install_image_seeds(program);
     // Object model step 0: atoms and compiler-owned layouts, after the
     // hash-band seeds (a by-facts hit keeps their ids).
-    super::layout_desc::register_static_layouts();
+    super::layout_desc::register_static_layouts_in(program);
 }
 
-fn install_image_seeds() {
-    let table = super::class_image::layout_image().seeds;
-    if table.is_null() {
-        return;
-    }
-    // SAFETY: the entry's layout image names the program's seed table.
-    let seeds = unsafe { (*table).seeds() };
+fn install_image_seeds(program: &crate::codegen_abi::PerryProgramTableV1) {
+    // SAFETY: the program's table: `count` seeds follow its header.
+    let seeds = unsafe { program.seeds() };
     #[cfg(all(feature = "wasm-image-selftest", target_family = "wasm"))]
     let before = SEED_BY_NAMES_MINTS.with(|count| count.get());
     for seed in seeds {

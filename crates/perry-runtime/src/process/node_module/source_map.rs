@@ -174,12 +174,12 @@ fn source_map_prototype() -> f64 {
             (
                 1,
                 "findEntry",
-                crate::fn_info!(#[realm("node:module.SourceMap.prototype.findEntry", spec = {length = 2}, emit = metadata(realm_source_map_method_public))] source_map_find_entry_thunk, 1; with_rest(0)),
+                crate::fn_info!(#[realm("node:module.SourceMap.prototype.findEntry", spec = {length = 2}, emit = metadata(realm_source_map_method_public))] export crate::process::node_module::source_map::source_map_find_entry_thunk, 1; with_rest(0)),
             ),
             (
                 2,
                 "findOrigin",
-                crate::fn_info!(#[realm("node:module.SourceMap.prototype.findOrigin", spec = {length = 2}, emit = metadata(realm_source_map_method_public))] source_map_find_origin_thunk, 1; with_rest(0)),
+                crate::fn_info!(#[realm("node:module.SourceMap.prototype.findOrigin", spec = {length = 2}, emit = metadata(realm_source_map_method_public))] export crate::process::node_module::source_map::source_map_find_origin_thunk, 1; with_rest(0)),
             ),
         ] {
             let value = source_map_method(name, info);
@@ -194,12 +194,12 @@ fn source_map_prototype() -> f64 {
             (
                 4,
                 "payload",
-                crate::fn_info!(#[realm("node:module.SourceMap.prototype.payload.<get>")] source_map_payload_getter, 0; with_declared(0)),
+                crate::fn_info!(#[realm("node:module.SourceMap.prototype.payload.<get>")] export crate::process::node_module::source_map::source_map_payload_getter, 0; with_declared(0)),
             ),
             (
                 3,
                 "lineLengths",
-                crate::fn_info!(#[realm("node:module.SourceMap.prototype.lineLengths.<get>")] source_map_line_lengths_getter, 0; with_declared(0)),
+                crate::fn_info!(#[realm("node:module.SourceMap.prototype.lineLengths.<get>")] export crate::process::node_module::source_map::source_map_line_lengths_getter, 0; with_declared(0)),
             ),
         ] {
             let getter = source_map_getter(name, info);

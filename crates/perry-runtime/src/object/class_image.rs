@@ -712,10 +712,21 @@ mod tests {
 }
 
 pub(crate) fn bind_layout_image(image: crate::codegen_abi::PerryLayoutImageV1) {
-    assert!(image.valid(), "invalid layout image ABI/range");
-    let bound = current().layout_image.get_or_init(|| image);
-    assert_eq!(
-        *bound, image,
+    // SAFETY: the entry's header names its program's table; `valid` tests
+    // the pointer before reading through it.
+    assert!(unsafe { image.valid() }, "invalid layout image ABI/range");
+    let table = unsafe { &*image.program };
+    if table.lazy_count != 0 {
+        super::proto_validity::reserve_image_prototype_serials(table.prototype_serial_end);
+    }
+    // The first initialization stores `image`; only a repeated one compares.
+    let mut stored = false;
+    let bound = current().layout_image.get_or_init(|| {
+        stored = true;
+        image
+    });
+    assert!(
+        stored || *bound == image,
         "repeated module initialization changed the layout image"
     );
 }

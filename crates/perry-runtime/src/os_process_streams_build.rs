@@ -101,7 +101,7 @@ pub(super) fn build_stream_object_with_write(
     let cval = JSValue::pointer(closure as *const u8);
     js_object_set_field(obj, 0, cval);
     js_object_set_field(obj, 1, JSValue::number(fd));
-    let emit = js_closure_alloc(crate::fn_info!(#[realm(realm_decl! { process.stderr.emit, provider = closure_alloc; process.stdin.emit, provider = closure_alloc; process.stdout.emit, provider = closure_alloc; })] process_stream_emit_stub, 1), 0);
+    let emit = js_closure_alloc(crate::fn_info!(#[realm(realm_decl! { process.stderr.emit, provider = closure_alloc; process.stdin.emit, provider = closure_alloc; process.stdout.emit, provider = closure_alloc; })] export crate::os::process_streams::process_stream_emit_stub, 1), 0);
     js_object_set_field(obj, 2, JSValue::pointer(emit as *const u8));
     if is_tty && fd_i != 0 {
         js_object_set_field(
@@ -118,7 +118,7 @@ pub(super) fn build_stream_object_with_write(
         // Real `on(event, cb)` so `process.stdin.on("data"/"readable", …)`
         // registers a keyboard listener instead of dropping it (#input).
         let on = stdin_native_method(
-            crate::fn_info!(#[realm(process.stdin.on, constructible = true)] process_stdin_on, 2; with_declared(2)),
+            crate::fn_info!(#[realm(process.stdin.on, constructible = true)] export crate::os::process_streams::process_stdin_on, 2; with_declared(2)),
             "on",
             2,
         );
@@ -126,13 +126,13 @@ pub(super) fn build_stream_object_with_write(
         // `once` routes through the same registry as `on`/`addListener` so a
         // one-shot listener registered on an aliased binding is not dropped either.
         let once = stdin_native_method(
-            crate::fn_info!(#[realm(process.stdin.once, constructible = true)] process_stdin_add_listener_once, 2; with_declared(2)),
+            crate::fn_info!(#[realm(process.stdin.once, constructible = true)] export crate::os::process_streams::process_stdin_add_listener_once, 2; with_declared(2)),
             "once",
             2,
         );
         js_object_set_field(obj, 4, JSValue::from_bits(once.to_bits()));
     } else {
-        let on = js_closure_alloc(crate::fn_info!(#[realm(realm_decl! { process.stderr.addListener, provider = closure_alloc; process.stderr.destroy, provider = closure_alloc; process.stderr.off, provider = closure_alloc; process.stderr.on, provider = closure_alloc; process.stderr.once, provider = closure_alloc; process.stderr.pause, provider = closure_alloc; process.stderr.removeAllListeners, provider = closure_alloc; process.stderr.removeListener, provider = closure_alloc; process.stderr.resume, provider = closure_alloc; process.stderr.unref, provider = closure_alloc; process.stdout.addListener, provider = closure_alloc; process.stdout.destroy, provider = closure_alloc; process.stdout.off, provider = closure_alloc; process.stdout.on, provider = closure_alloc; process.stdout.once, provider = closure_alloc; process.stdout.pause, provider = closure_alloc; process.stdout.removeAllListeners, provider = closure_alloc; process.stdout.removeListener, provider = closure_alloc; process.stdout.resume, provider = closure_alloc; process.stdout.unref, provider = closure_alloc; })] process_stream_on_once_stub, 1), 0);
+        let on = js_closure_alloc(crate::fn_info!(#[realm(realm_decl! { process.stderr.addListener, provider = closure_alloc; process.stderr.destroy, provider = closure_alloc; process.stderr.off, provider = closure_alloc; process.stderr.on, provider = closure_alloc; process.stderr.once, provider = closure_alloc; process.stderr.pause, provider = closure_alloc; process.stderr.removeAllListeners, provider = closure_alloc; process.stderr.removeListener, provider = closure_alloc; process.stderr.resume, provider = closure_alloc; process.stderr.unref, provider = closure_alloc; process.stdout.addListener, provider = closure_alloc; process.stdout.destroy, provider = closure_alloc; process.stdout.off, provider = closure_alloc; process.stdout.on, provider = closure_alloc; process.stdout.once, provider = closure_alloc; process.stdout.pause, provider = closure_alloc; process.stdout.removeAllListeners, provider = closure_alloc; process.stdout.removeListener, provider = closure_alloc; process.stdout.resume, provider = closure_alloc; process.stdout.unref, provider = closure_alloc; })] export crate::os::process_streams::process_stream_on_once_stub, 1), 0);
         js_object_set_field(obj, 3, JSValue::pointer(on as *const u8));
         let once = js_closure_alloc(crate::fn_info!(process_stream_on_once_stub, 1), 0);
         js_object_set_field(obj, 4, JSValue::pointer(once as *const u8));
@@ -194,7 +194,7 @@ pub(super) fn build_stream_object_with_write(
             js_object_set_field(obj, idx, JSValue::pointer(c as *const u8));
         };
         let lifecycle = if is_stdin {
-            crate::fn_info!(#[realm(realm_decl! { process.stdin.destroy, provider = closure_alloc; process.stdin.pause, provider = closure_alloc; })] process_stdin_detach_stub, 1)
+            crate::fn_info!(#[realm(realm_decl! { process.stdin.destroy, provider = closure_alloc; process.stdin.pause, provider = closure_alloc; })] export crate::os::process_streams::process_stdin_detach_stub, 1)
         } else {
             on_once
         };
@@ -204,7 +204,7 @@ pub(super) fn build_stream_object_with_write(
         // no-op stubs they silently discarded the handler.
         if is_stdin {
             let add = stdin_native_method(
-                crate::fn_info!(#[realm(process.stdin.addListener, constructible = true)] process_stdin_add_listener, 2; with_declared(2)),
+                crate::fn_info!(#[realm(process.stdin.addListener, constructible = true)] export crate::os::process_streams::process_stdin_add_listener, 2; with_declared(2)),
                 "addListener",
                 2,
             );
@@ -220,7 +220,7 @@ pub(super) fn build_stream_object_with_write(
         }
         if is_stdin {
             let remove_all = stdin_native_method(
-                crate::fn_info!(#[realm(process.stdin.removeAllListeners, constructible = true)] process_stdin_remove_all_listeners, 1; with_declared(1)),
+                crate::fn_info!(#[realm(process.stdin.removeAllListeners, constructible = true)] export crate::os::process_streams::process_stdin_remove_all_listeners, 1; with_declared(1)),
                 "removeAllListeners",
                 1,
             );
@@ -233,7 +233,7 @@ pub(super) fn build_stream_object_with_write(
         set_field_with_stub(
             start + 5,
             if is_stdin {
-                crate::fn_info!(#[realm(process.stdin.resume, provider = closure_alloc)] process_stdin_resume, 1)
+                crate::fn_info!(#[realm(process.stdin.resume, provider = closure_alloc)] export crate::os::process_streams::process_stdin_resume, 1)
             } else {
                 on_once
             },
@@ -243,29 +243,29 @@ pub(super) fn build_stream_object_with_write(
         set_field_with_stub(
             start + 6,
             if is_stdin {
-                crate::fn_info!(#[realm(process.stdin.unref, provider = closure_alloc)] process_stdin_unref_stub, 1)
+                crate::fn_info!(#[realm(process.stdin.unref, provider = closure_alloc)] export crate::os::process_streams::process_stdin_unref_stub, 1)
             } else {
                 on_once
             },
         ); // unref
         if is_stdin {
-            set_field_with_stub(start + 7, crate::fn_info!(#[realm(process.stdin.ref, provider = closure_alloc)] process_stdin_ref_stub, 1)); // ref
+            set_field_with_stub(start + 7, crate::fn_info!(#[realm(process.stdin.ref, provider = closure_alloc)] export crate::os::process_streams::process_stdin_ref_stub, 1)); // ref
             set_field_with_stub(start + 8, lifecycle); // destroy
             let se = stdin_native_method(
-                crate::fn_info!(#[realm(process.stdin.setEncoding, constructible = true)] process_stdin_set_encoding, 1; with_declared(1)),
+                crate::fn_info!(#[realm(process.stdin.setEncoding, constructible = true)] export crate::os::process_streams::process_stdin_set_encoding, 1; with_declared(1)),
                 "setEncoding",
                 1,
             );
             js_object_set_field(obj, start + 9, JSValue::from_bits(se.to_bits()));
             // field 22: Readable.read() returns buffered keyboard input.
             let read = stdin_native_method(
-                crate::fn_info!(#[realm(process.stdin.read, constructible = true)] process_stdin_read, 1; with_declared(1)),
+                crate::fn_info!(#[realm(process.stdin.read, constructible = true)] export crate::os::process_streams::process_stdin_read, 1; with_declared(1)),
                 "read",
                 1,
             );
             js_object_set_field(obj, 22, JSValue::from_bits(read.to_bits()));
             let listeners = stdin_native_method(
-                crate::fn_info!(#[realm(process.stdin.listeners, constructible = true)] process_stdin_listeners, 1; with_declared(1)),
+                crate::fn_info!(#[realm(process.stdin.listeners, constructible = true)] export crate::os::process_streams::process_stdin_listeners, 1; with_declared(1)),
                 "listeners",
                 1,
             );

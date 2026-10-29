@@ -89,7 +89,7 @@ fn old_edge_retains_large_leaf_by_identity_and_a_later_full_reclaims_it() {
     std::thread::spawn(|| unsafe {
         let _guard = CopyingNurseryTestGuard::new(1);
         let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-        let old = crate::array::js_array_alloc(20_000);
+        let old = alloc_old_test_array(20_000).0;
         js_shadow_slot_set(0, ptr_bits(old as usize));
         let p = leaf(LARGE_OBJECT_THRESHOLD_BYTES + 8);
         crate::array::js_array_set_f64_extend(old, 0, f64::from_bits(string_bits(p)));

@@ -61,6 +61,18 @@ pub(super) fn integer(expr: &str, constants: &BTreeMap<String, u64>) -> Result<u
     .map_err(|_| format!("not a constant ABI integer: {expr}"))
 }
 
+/// GC header facts: the runtime's gc/types.rs plus the shared ABI constants it
+/// re-exports (each is defined once, in perry-abi).
+pub(super) fn gc_constants() -> Result<BTreeMap<String, u64>, String> {
+    constants(concat!(
+        include_str!("../../perry-runtime/src/gc/types.rs"),
+        "\n",
+        include_str!("../../perry-abi/src/lib.rs"),
+        "\n",
+        include_str!("../../perry-abi/src/realm_cells.rs"),
+    ))
+}
+
 pub(super) fn constants(source: &str) -> Result<BTreeMap<String, u64>, String> {
     let ts = tokens(source)?;
     let mut pending = Vec::new();
@@ -243,6 +255,13 @@ pub(super) fn fn_info(ts: &[Token<'_>], constants: &BTreeMap<String, u64>) -> Re
         return Err(format!("malformed fn_info: {}", text(ts)));
     }
     let mut body = head[0];
+    // An owning site exporting its record names the body by its full path.
+    while body
+        .first()
+        .is_some_and(|t| matches!(t.text, "reference" | "export"))
+    {
+        body = &body[1..];
+    }
     let native = body.first().is_some_and(|t| t.text == "native_args");
     if body
         .first()

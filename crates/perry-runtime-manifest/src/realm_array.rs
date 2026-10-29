@@ -20,7 +20,7 @@ pub(super) fn empty(expression: &str, entry: &[Token<'_>]) -> Result<Value, Stri
     }
     let name = facts::path(clauses[0])?;
     let abi = super::abi_constants();
-    let gc = info::constants(include_str!("../../perry-runtime/src/gc/types.rs"))?;
+    let gc = info::gc_constants()?;
     Ok(object([
         ("name", string(name)),
         ("kind", string("namespace")),
@@ -63,7 +63,7 @@ pub(super) fn set(entry: &[Token<'_>]) -> Result<Value, String> {
         return Err("Set birth shape is derived from its factory".into());
     }
     let name = facts::path(clauses[0])?;
-    let gc = info::constants(include_str!("../../perry-runtime/src/gc/types.rs"))?;
+    let gc = info::gc_constants()?;
     Ok(object([
         ("name", string(name)),
         ("kind", string("namespace")),

@@ -19,10 +19,11 @@ pub extern "C" fn js_get_global_this_builtin_value(name_ptr: *const u8, name_len
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     let name_bytes = unsafe { std::slice::from_raw_parts(name_ptr, name_len) };
-    let name = match std::str::from_utf8(name_bytes) {
-        Ok(s) => s,
-        Err(_) => return f64::from_bits(crate::value::TAG_UNDEFINED),
-    };
+    // Invariant: callers pass the bytes of a Rust `&str` (codegen's interned
+    // builtin name with its `len()`, or a runtime literal/static name), so
+    // they are UTF-8 by construction.
+    debug_assert!(std::str::from_utf8(name_bytes).is_ok(), "builtin name is not UTF-8");
+    let name = unsafe { std::str::from_utf8_unchecked(name_bytes) };
     // The singleton's shape owns the installed key. Borrow its spelling for
     // an ordinary data read instead of rematerializing a weak intern after
     // every collection. This shared lookup consults the live shape; stores,

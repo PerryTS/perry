@@ -239,17 +239,17 @@ pub(crate) fn process_finalization_value() -> f64 {
     crate::realm_decl! { record obj, RECORD_Q440_0; realm { process.finalization, kind = namespace, members = { register, attrs = writable | enumerable | configurable; registerBeforeExit, attrs = writable | enumerable | configurable; unregister, attrs = writable | enumerable | configurable; }; } };
     obj.set( 0, JSValue::from_bits((module_function2(
             "register",
-            crate::fn_info!(#[realm(process.finalization.register, constructible = true)] process_finalization_register_function, 2; with_declared(2), with_length(2)),
+            crate::fn_info!(#[realm(process.finalization.register, constructible = true)] export crate::process::finalization::process_finalization_register_function, 2; with_declared(2), with_length(2)),
             2,
         )).to_bits()));
     obj.set( 1, JSValue::from_bits((module_function2(
             "registerBeforeExit",
-            crate::fn_info!(#[realm(process.finalization.registerBeforeExit, constructible = true)] process_finalization_register_before_exit_function, 2; with_declared(2), with_length(2)),
+            crate::fn_info!(#[realm(process.finalization.registerBeforeExit, constructible = true)] export crate::process::finalization::process_finalization_register_before_exit_function, 2; with_declared(2), with_length(2)),
             2,
         )).to_bits()));
     obj.set( 2, JSValue::from_bits((module_function1(
             "unregister",
-            crate::fn_info!(#[realm(process.finalization.unregister, constructible = true)] process_finalization_unregister_function, 1; with_declared(1), with_length(1)),
+            crate::fn_info!(#[realm(process.finalization.unregister, constructible = true)] export crate::process::finalization::process_finalization_unregister_function, 1; with_declared(1), with_length(1)),
             1,
         )).to_bits()));
     let value = module_object_value(obj.finish());

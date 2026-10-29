@@ -41,6 +41,19 @@ pub(in crate::gc) unsafe fn trace_heap_rewrite_slots_remembering<const DIAGNOSTI
                 remember_malloc_mark_slots::<DIAGNOSTICS>(header, sticky);
                 return;
             }
+            // A young large container this full marks is promoted at its
+            // address when the sweep ends, after the remembered-set clear
+            // would have dropped entries made then: remember its young and
+            // malloc children now, as an old parent's.
+            None if crate::arena::is_young_large_owner(user) => {
+                trace_heap_rewrite_slots_impl::<DIAGNOSTICS, true, true>(
+                    header,
+                    valid_ptrs,
+                    worklist,
+                    Some(sticky),
+                );
+                return;
+            }
             // No collector traces an image cell (marking stops at the image
             // boundary); its edges are roots in `gc::image_cells`.
             Some(crate::gc::barrier::RememberingParent::Image) | None => {}

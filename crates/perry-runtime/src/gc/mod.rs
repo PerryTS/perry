@@ -125,8 +125,6 @@ pub use barrier::*;
 /// #7630: the runtime slot-store helpers, split from `barrier.rs` (2000-line cap).
 mod barrier_store;
 pub(crate) use barrier_store::*;
-mod producer_birth;
-pub(crate) use producer_birth::{fresh_old_container_store_barrier, ProducerChildBirth};
 mod dirty_page_cache;
 // #7187 Phase B: `crate::arena`'s page-metadata module invalidates the
 // barrier's "already dirty" page cache when it un-stamps or discards a page.
@@ -173,7 +171,7 @@ pub(crate) mod prefetch;
 mod copying;
 mod leaf_escape;
 mod leaf_service;
-pub(crate) use leaf_service::repair_promoted_leaf_edges;
+pub(crate) use leaf_service::{remember_promoted_large_container, repair_promoted_leaf_edges};
 /// A store of `child_addr` into the old/malloc parent `parent_addr` that the
 /// page-granular remembering skipped: record young-leaf escape only.
 pub(crate) fn probe_leaf_escape_store(parent_addr: usize, child_addr: usize) {

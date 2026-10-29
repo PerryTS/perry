@@ -12,7 +12,8 @@ use std::ptr;
 mod index;
 #[cfg(test)]
 pub(crate) use index::{
-    test_erase_key_identity, test_key_identity, test_snapshot as test_index_snapshot,
+    test_erase_key_identity, test_index_buckets, test_key_identity,
+    test_snapshot as test_index_snapshot,
 };
 
 crate::perry_thread_local! {
@@ -621,7 +622,7 @@ static KEEP_SET_FIND_VALUE_INDEX: extern "C" fn(f64, f64) -> f64 = js_set_find_v
 
 /// Members of a set this small are found faster by reading them than by
 /// hashing into the side-table twice (set address, then value).
-const SMALL_SET_SCAN_MAX: u32 = 8;
+use crate::codegen_abi::SMALL_SET_SCAN_MAX;
 
 /// Live-extent accessor for iteration (`0..used` are the raw indices).
 #[inline(always)]
@@ -681,7 +682,7 @@ struct SetCompactionRecord {
 /// before it and truncates them.
 const SET_COMPACTION_LOG_MIN_BUDGET: usize = 4096;
 
-struct SetCompactionLog {
+pub(crate) struct SetCompactionLog {
     records: std::collections::VecDeque<SetCompactionRecord>,
     /// Sum of `records[..].removed.retained_len()`.
     retained: usize,
@@ -712,10 +713,10 @@ unsafe fn note_set_compaction(set: *mut SetHeader, removed: SetRemovedSlots) {
     let budget = std::cmp::max(SET_COMPACTION_LOG_MIN_BUDGET, (*set).capacity as usize);
     if (*(*set).store).compaction.is_none() {
         // Native records contain only indices/epochs, never managed pointers.
-        (*(*set).store).compaction = Some(SetCompactionLog {
+        (*(*set).store).compaction = Some(Box::new(SetCompactionLog {
             records: std::collections::VecDeque::new(),
             retained: 0,
-        });
+        }));
     }
     let entry = (*(*set).store).compaction.as_mut().unwrap();
     if matches!(removed, SetRemovedSlots::Prefix(_)) {

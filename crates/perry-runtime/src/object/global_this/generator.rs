@@ -104,7 +104,7 @@ pub(crate) fn generator_function_proto_of(closure_ptr: usize) -> Option<f64> {
 #[rustfmt::skip] fn build_async_function_tower() {
     let _no_move = crate::gc::GcSuppressScope::new();
     let ctor = crate::closure::js_closure_alloc(
-        crate::fn_info!(#[realm(realm_decl! { WebAssembly.Exception, kind = constructor; WebAssembly.Tag, kind = constructor; "%AsyncFunctionPrototype%.constructor", kind = constructor, extends = Function, instance = "%AsyncFunctionPrototype%", spec = {name = "AsyncFunction"}, emit = metadata(realm_async_function_name); "%AsyncGeneratorFunctionPrototype%.constructor", kind = constructor, extends = Function, instance = "%AsyncGeneratorFunctionPrototype%", spec = {name = "AsyncGeneratorFunction"}, emit = metadata(realm_async_generator_name); "%GeneratorFunctionPrototype%.constructor", kind = constructor, extends = Function, instance = "%GeneratorFunctionPrototype%", spec = {name = "GeneratorFunction"}, emit = metadata(realm_generator_name); })] global_this_builtin_noop_thunk, 1; with_declared(1)),
+        crate::fn_info!(#[realm(realm_decl! { WebAssembly.Exception, kind = constructor; WebAssembly.Tag, kind = constructor; "%AsyncFunctionPrototype%.constructor", kind = constructor, extends = Function, instance = "%AsyncFunctionPrototype%", spec = {name = "AsyncFunction"}, emit = metadata(realm_async_function_name); "%AsyncGeneratorFunctionPrototype%.constructor", kind = constructor, extends = Function, instance = "%AsyncGeneratorFunctionPrototype%", spec = {name = "AsyncGeneratorFunction"}, emit = metadata(realm_async_generator_name); "%GeneratorFunctionPrototype%.constructor", kind = constructor, extends = Function, instance = "%GeneratorFunctionPrototype%", spec = {name = "GeneratorFunction"}, emit = metadata(realm_generator_name); })] export crate::object::global_this::fetch_globals::global_this_builtin_noop_thunk, 1; with_declared(1)),
         0,
     );
     // Realm intrinsics, built once: born old and never-move (O3).
@@ -931,15 +931,15 @@ pub extern "C" fn js_generator_attach_closure_prototype(
     );
     let (next_info, return_info, throw_info) = if is_async {
         (
-            crate::fn_info!(#[realm("%AsyncGeneratorPrototype%.next")] async_generator_proto_next_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
-            crate::fn_info!(#[realm("%AsyncGeneratorPrototype%.return")] async_generator_proto_return_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
-            crate::fn_info!(#[realm("%AsyncGeneratorPrototype%.throw")] async_generator_proto_throw_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm("%AsyncGeneratorPrototype%.next")] export crate::object::global_this::generator::async_generator_proto_next_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm("%AsyncGeneratorPrototype%.return")] export crate::object::global_this::generator::async_generator_proto_return_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm("%AsyncGeneratorPrototype%.throw")] export crate::object::global_this::generator::async_generator_proto_throw_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         )
     } else {
         (
-            crate::fn_info!(#[realm("%GeneratorPrototype%.next")] generator_proto_next_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
-            crate::fn_info!(#[realm("%GeneratorPrototype%.return")] generator_proto_return_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
-            crate::fn_info!(#[realm("%GeneratorPrototype%.throw")] generator_proto_throw_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm("%GeneratorPrototype%.next")] export crate::object::global_this::generator::generator_proto_next_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm("%GeneratorPrototype%.return")] export crate::object::global_this::generator::generator_proto_return_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm("%GeneratorPrototype%.throw")] export crate::object::global_this::generator::generator_proto_throw_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         )
     };
     for (name, info, key) in [
@@ -985,13 +985,13 @@ pub extern "C" fn js_generator_attach_closure_prototype(
         (
             "asyncIterator",
             "[Symbol.asyncIterator]",
-            crate::fn_info!(#[realm("%AsyncIteratorPrototype%[\"@@asyncIterator\"]", constructible = true)] async_generator_proto_async_iterator_thunk, 1; with_declared(0)),
+            crate::fn_info!(#[realm("%AsyncIteratorPrototype%[\"@@asyncIterator\"]", constructible = true)] export crate::object::global_this::generator::async_generator_proto_async_iterator_thunk, 1; with_declared(0)),
         )
     } else {
         (
             "iterator",
             "[Symbol.iterator]",
-            crate::fn_info!(#[realm("%GeneratorPrototype%[\"@@iterator\"]", constructible = true)] generator_proto_iterator_thunk, 1; with_declared(0)),
+            crate::fn_info!(#[realm("%GeneratorPrototype%[\"@@iterator\"]", constructible = true)] export crate::object::global_this::generator::generator_proto_iterator_thunk, 1; with_declared(0)),
         )
     };
     if is_async {

@@ -92,7 +92,7 @@ fn thread_exit_finalizes_owned_payloads_in_the_pending_runtime_burst() {
                     space: HeapSpace::NurseryEden,
                     allocated_bytes: 0,
                     large_allocated_bytes: 0,
-                    young_leaf_bytes: 0,
+                    young_large_bytes: 0,
                 },
             )
         });
@@ -114,7 +114,7 @@ fn thread_exit_finalizes_owned_payloads_in_the_pending_runtime_burst() {
                 space: HeapSpace::Old,
                 allocated_bytes: 0,
                 large_allocated_bytes: 0,
-                young_leaf_bytes: 0,
+                young_large_bytes: 0,
             };
             std::mem::replace(arena, empty)
         });

@@ -618,62 +618,62 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
     for name in GLOBAL_THIS_BUILTIN_FUNCTIONS.iter().copied() {
         let (info, arity, enumerable) = match name {
             "eval" => (
-                crate::fn_info!(#[realm(eval)] global_this_eval_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(eval)] export crate::object::global_this::fetch_globals::global_this_eval_thunk, 1; with_declared(1)),
                 1,
                 false,
             ),
             "fetch" => (
-                crate::fn_info!(#[realm(fetch)] super::super::global_fetch::global_this_fetch_thunk, 2; with_rest(1)),
+                crate::fn_info!(#[realm(fetch)] export crate::object::global_fetch::global_this_fetch_thunk, 2; with_rest(1)),
                 1,
                 true,
             ),
             "structuredClone" => (
-                crate::fn_info!(#[realm(structuredClone, births = [ArrayBuffer, DOMException, Uint8Array])] global_this_structured_clone_thunk, 2; with_declared(2)),
+                crate::fn_info!(#[realm(structuredClone, births = [ArrayBuffer, DOMException, Uint8Array])] export crate::object::global_this::builtin_thunks::global_this_structured_clone_thunk, 2; with_declared(2)),
                 2,
                 true,
             ),
             "atob" => (
-                crate::fn_info!(#[realm(atob, births = [DOMException])] global_this_atob_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(atob, births = [DOMException])] export crate::object::global_this::builtin_thunks::global_this_atob_thunk, 1; with_declared(1)),
                 1,
                 true,
             ),
             "btoa" => (
-                crate::fn_info!(#[realm(btoa, births = [DOMException])] global_this_btoa_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(btoa, births = [DOMException])] export crate::object::global_this::builtin_thunks::global_this_btoa_thunk, 1; with_declared(1)),
                 1,
                 true,
             ),
             "setTimeout" => (
-                crate::fn_info!(#[realm(setTimeout)] global_this_set_timeout_thunk, 3; with_rest(2)),
+                crate::fn_info!(#[realm(setTimeout)] export crate::object::global_this::array_error::global_this_set_timeout_thunk, 3; with_rest(2)),
                 2,
                 true,
             ),
             "clearTimeout" => (
-                crate::fn_info!(#[realm(clearTimeout)] global_this_clear_timeout_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(clearTimeout)] export crate::object::global_this::array_error::global_this_clear_timeout_thunk, 1; with_declared(1)),
                 1,
                 true,
             ),
             "setInterval" => (
-                crate::fn_info!(#[realm(setInterval)] global_this_set_interval_thunk, 3; with_rest(2)),
+                crate::fn_info!(#[realm(setInterval)] export crate::object::global_this::array_error::global_this_set_interval_thunk, 3; with_rest(2)),
                 2,
                 true,
             ),
             "clearInterval" => (
-                crate::fn_info!(#[realm(clearInterval)] global_this_clear_interval_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(clearInterval)] export crate::object::global_this::array_error::global_this_clear_interval_thunk, 1; with_declared(1)),
                 1,
                 true,
             ),
             "setImmediate" => (
-                crate::fn_info!(#[realm(setImmediate)] global_this_set_immediate_thunk, 2; with_rest(1)),
+                crate::fn_info!(#[realm(setImmediate)] export crate::object::global_this::array_error::global_this_set_immediate_thunk, 2; with_rest(1)),
                 1,
                 true,
             ),
             "clearImmediate" => (
-                crate::fn_info!(#[realm(clearImmediate)] global_this_clear_immediate_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(clearImmediate)] export crate::object::global_this::array_error::global_this_clear_immediate_thunk, 1; with_declared(1)),
                 1,
                 true,
             ),
             "queueMicrotask" => (
-                crate::fn_info!(#[realm(queueMicrotask)] global_this_queue_microtask_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(queueMicrotask)] export crate::object::global_this::array_error::global_this_queue_microtask_thunk, 1; with_declared(1)),
                 1,
                 true,
             ),
@@ -681,60 +681,60 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
             // Non-enumerable (a debug/diagnostic global). The optional `force`
             // arg is accepted (arity 1) but ignored — Perry's gc is full.
             "gc" => (
-                crate::fn_info!(#[realm(gc)] global_this_gc_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(gc)] export crate::object::global_this::builtin_thunks::global_this_gc_thunk, 1; with_declared(1)),
                 1,
                 false,
             ),
             // #2905: standard global helper functions.
             "parseInt" => (
-                crate::fn_info!(#[realm(parseInt)] global_this_parse_int_thunk, 2; with_declared(2)),
+                crate::fn_info!(#[realm(parseInt)] export crate::object::global_this::builtin_thunks::global_this_parse_int_thunk, 2; with_declared(2)),
                 2,
                 false,
             ),
             "parseFloat" => (
-                crate::fn_info!(#[realm(parseFloat)] global_this_parse_float_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(parseFloat)] export crate::object::global_this::builtin_thunks::global_this_parse_float_thunk, 1; with_declared(1)),
                 1,
                 false,
             ),
             "isNaN" => (
-                crate::fn_info!(#[realm(isNaN)] global_this_is_nan_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(isNaN)] export crate::object::global_this::builtin_thunks::global_this_is_nan_thunk, 1; with_declared(1)),
                 1,
                 false,
             ),
             "isFinite" => (
-                crate::fn_info!(#[realm(isFinite)] global_this_is_finite_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(isFinite)] export crate::object::global_this::builtin_thunks::global_this_is_finite_thunk, 1; with_declared(1)),
                 1,
                 false,
             ),
             "encodeURI" => (
-                crate::fn_info!(#[realm(encodeURI)] global_this_encode_uri_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(encodeURI)] export crate::object::global_this::builtin_thunks::global_this_encode_uri_thunk, 1; with_declared(1)),
                 1,
                 false,
             ),
             "decodeURI" => (
-                crate::fn_info!(#[realm(decodeURI)] global_this_decode_uri_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(decodeURI)] export crate::object::global_this::builtin_thunks::global_this_decode_uri_thunk, 1; with_declared(1)),
                 1,
                 false,
             ),
             "encodeURIComponent" => (
-                crate::fn_info!(#[realm(encodeURIComponent)] global_this_encode_uri_component_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(encodeURIComponent)] export crate::object::global_this::builtin_thunks::global_this_encode_uri_component_thunk, 1; with_declared(1)),
                 1,
                 false,
             ),
             "decodeURIComponent" => (
-                crate::fn_info!(#[realm(decodeURIComponent)] global_this_decode_uri_component_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(decodeURIComponent)] export crate::object::global_this::builtin_thunks::global_this_decode_uri_component_thunk, 1; with_declared(1)),
                 1,
                 false,
             ),
             // #4511: legacy escape/unescape (ES Annex B).
             // #4511: legacy escape/unescape (ES Annex B).
             "escape" => (
-                crate::fn_info!(#[realm(escape)] global_this_escape_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(escape)] export crate::object::global_this::builtin_thunks::global_this_escape_thunk, 1; with_declared(1)),
                 1,
                 false,
             ),
             "unescape" => (
-                crate::fn_info!(#[realm(unescape)] global_this_unescape_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(unescape)] export crate::object::global_this::builtin_thunks::global_this_unescape_thunk, 1; with_declared(1)),
                 1,
                 false,
             ),
@@ -866,7 +866,7 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
     }
     super::super::native_module::install_global_webcrypto(singleton());
     let getter = crate::closure::js_closure_alloc(
-        crate::fn_info!(#[realm("crypto.<get>", provider = closure_alloc)] global_this_crypto_getter_thunk, 0; with_declared(0)),
+        crate::fn_info!(#[realm("crypto.<get>", provider = closure_alloc)] export crate::object::global_this::ctor_thunks::global_this_crypto_getter_thunk, 0; with_declared(0)),
         0,
     );
     let getter_bits = if getter.is_null() {
@@ -1094,7 +1094,7 @@ fn install_error_static_methods(ctor: *mut crate::closure::ClosureHeader) {
     }
     ERROR_CONSTRUCTOR_PTR.with(|c| c.set(ctor as usize));
     let closure = crate::closure::js_closure_alloc(
-        crate::fn_info!(#[realm(Error.captureStackTrace, constructible = true)] global_this_error_capture_stack_trace_thunk, 2; with_declared(2)),
+        crate::fn_info!(#[realm(Error.captureStackTrace, constructible = true)] export crate::object::global_this::builtin_thunks::global_this_error_capture_stack_trace_thunk, 2; with_declared(2)),
         0,
     );
     if closure.is_null() {
@@ -1116,14 +1116,14 @@ fn install_error_static_methods(ctor: *mut crate::closure::ClosureHeader) {
     install_error_static_fn(
         ctor,
         "isError",
-        crate::fn_info!(#[realm(Error.isError, constructible = true)] global_this_error_is_error_thunk, 1; with_declared(1)),
+        crate::fn_info!(#[realm(Error.isError, constructible = true)] export crate::object::global_this::builtin_thunks::global_this_error_is_error_thunk, 1; with_declared(1)),
     );
 
     // #2904: `Error.prepareStackTrace` — default stack-formatting hook.
     install_error_static_fn(
         ctor,
         "prepareStackTrace",
-        crate::fn_info!(#[realm(Error.prepareStackTrace, constructible = true)] global_this_error_prepare_stack_trace_thunk, 2; with_declared(2)),
+        crate::fn_info!(#[realm(Error.prepareStackTrace, constructible = true)] export crate::object::global_this::builtin_thunks::global_this_error_prepare_stack_trace_thunk, 2; with_declared(2)),
     );
 
     // #2904: `Error.stackTraceLimit` — writable number controlling captured
