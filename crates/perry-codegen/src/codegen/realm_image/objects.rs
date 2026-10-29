@@ -53,7 +53,7 @@ pub(crate) fn emit_object(
             exported: true,
             class_id: header.class_id.unwrap_or(0),
             layout_word: facts.word,
-            reserved: header.reserved,
+            reserved: super::header::object_word(cell, header)?,
             meta: has_meta.then_some(meta.as_str()),
             slots: &slots,
         },

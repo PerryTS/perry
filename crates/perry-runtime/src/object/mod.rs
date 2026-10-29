@@ -704,26 +704,26 @@ pub(crate) struct ObjectHotTables {
 }
 
 impl ObjectHotTables {
-    pub(crate) fn new() -> Self {
-        ObjectHotTables {
-            shape_inline_cache: std::cell::UnsafeCell::new(
-                [ShapeCacheEntry {
-                    shape_id: 0,
-                    runtime_shape_id: LayoutWord(0),
-                    key_count: 0,
-                    keys_array: std::ptr::null_mut(),
-                }; SHAPE_INLINE_CACHE_SIZE],
-            ),
-            shape_cache_overflow: RefCell::new(crate::fast_hash::new_ptr_hash_map()),
-            class_keys_by_id: RefCell::new(crate::fast_hash::new_ptr_hash_map()),
-            // Zero pages mapped by the first use: a thread that never takes
-            // a dynamic transition maps none of them.
-            transition_cache: crate::zeroed_cache::ZeroPages::new(),
-            array_tail_forward: crate::zeroed_cache::ZeroPages::new(),
-            array_tail_reverse: crate::zeroed_cache::ZeroPages::new(),
-            array_tail_direct: crate::zeroed_cache::ZeroPages::new(),
-            array_tail_occupied: Cell::new(false),
-        }
+    /// Initializes the tables in place. The inline shape cache is not
+    /// written: its empty entry (`shape_id` 0, `runtime_shape_id` 0,
+    /// `key_count` 0, null `keys_array`) is all-zero bits, which the slot
+    /// already holds.
+    ///
+    /// # Safety
+    ///
+    /// `slot` is valid for writes and zero-filled.
+    pub(crate) unsafe fn init_in(slot: *mut Self) {
+        (&raw mut (*slot).shape_cache_overflow)
+            .write(RefCell::new(crate::fast_hash::new_ptr_hash_map()));
+        (&raw mut (*slot).class_keys_by_id)
+            .write(RefCell::new(crate::fast_hash::new_ptr_hash_map()));
+        // Zero pages mapped by the first use: a thread that never takes
+        // a dynamic transition maps none of them.
+        (&raw mut (*slot).transition_cache).write(crate::zeroed_cache::ZeroPages::new());
+        (&raw mut (*slot).array_tail_forward).write(crate::zeroed_cache::ZeroPages::new());
+        (&raw mut (*slot).array_tail_reverse).write(crate::zeroed_cache::ZeroPages::new());
+        (&raw mut (*slot).array_tail_direct).write(crate::zeroed_cache::ZeroPages::new());
+        (&raw mut (*slot).array_tail_occupied).write(Cell::new(false));
     }
 }
 

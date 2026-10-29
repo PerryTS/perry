@@ -267,7 +267,7 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
             // one of them.
             #[cfg(test)]
             crate::object::layout_desc::register_static_layouts();
-            let arr = crate::array::js_array_alloc(0);
+            let arr = crate::realm_decl! { birth crate::array::realm_array_alloc(0, crate::array::ArrayElements::Scalars, false); realm { Array.prototype, kind = prototype, extends = Object.prototype, members = { length = 0.0, attrs = writable; constructor; slice; toString; entries; flatMap; keys; toLocaleString; toReversed; toSorted; toSpliced; with; flat; values; pop; shift; reverse; push; unshift; splice; fill; copyWithin; sort; forEach; map; filter; some; every; find; findIndex; findLast; findLastIndex; reduce; reduceRight; indexOf; lastIndexOf; includes; at; join; concat; valueOf; [Symbol.iterator] = ref(Array.prototype.values); }; } };
             // SAFETY: the fresh intrinsic, under this bootstrap's no-move scope.
             unsafe {
                 crate::array::array_prototype_property_bag_ensure(
@@ -1188,5 +1188,3 @@ unsafe fn name_first_realm_prototype(proto: *mut ObjectHeader, serial: u64) {
     crate::object::proto_validity::assign_intrinsic_prototype_serial(proto as usize, serial);
     let _ = crate::object::builtin_proto::name_runtime_prototype(proto, serial);
 }
-
-crate::realm_decl!("populate.realm.json#*");

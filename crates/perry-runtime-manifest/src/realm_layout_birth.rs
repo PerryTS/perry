@@ -1,6 +1,7 @@
 //! Prototype allocations derive their header from the runtime layout they own.
 use super::{birth, info, tokens, Token};
 use crate::realm_json::Value;
+use perry_abi::realm_header::{ObjectLayout, PrototypeMark};
 
 fn descriptor(source: &str, name: &str) -> Result<Vec<String>, String> {
     let ts = tokens(source)?;
@@ -31,9 +32,16 @@ pub(super) fn prototype(expression: &str, entry: &[Token<'_>]) -> Result<Value, 
         .strip_prefix("std::ptr::addr_of!(crate::object::runtime_layouts::")
         .and_then(|s| s.strip_suffix(')'))
         .ok_or("prototype birth requires its existing layout expression")?;
-    let source =
-        include_str!("../../perry-runtime/src/object/runtime_layouts/builtin_prototypes.rs");
-    let fields = descriptor(source, name)?;
+    let fields = descriptor(
+        include_str!("../../perry-runtime/src/object/runtime_layouts/builtin_prototypes.rs"),
+        name,
+    )
+    .or_else(|_| {
+        descriptor(
+            include_str!("../../perry-runtime/src/object/runtime_layouts/node_prototypes.rs"),
+            name,
+        )
+    })?;
     // A seventh field names the realm cells that own the layout (`realm = [..]`).
     let owned = fields.len() == 7 && fields[6].starts_with("realm=");
     if !(fields.len() == 6 || owned) || fields[1].clone().strip_prefix("kind=").is_none() {
@@ -52,28 +60,20 @@ pub(super) fn prototype(expression: &str, entry: &[Token<'_>]) -> Result<Value, 
         })?,
         entry,
     )?;
-    let gc = info::gc_constants()?;
-    let abi = super::abi_constants();
+    let kind = fields[1].clone();
+    // The layout prototype allocator owns the layout and marks the prototype
+    // at birth.
+    super::derive::restate(&mut d, |birth| {
+        birth.prototype_mark = PrototypeMark::AtBirth;
+        birth.layout = match kind.as_str() {
+            "kind=LAYOUT_KIND_UNMARKED" => ObjectLayout::Unmarked,
+            "kind=LAYOUT_KIND_CALLABLE" => ObjectLayout::Callable,
+            _ => ObjectLayout::PlainOrdinary,
+        };
+    })?;
     let Value::Object(map) = &mut d else {
         unreachable!()
     };
-    let Value::Object(header) = map.get_mut("header").unwrap() else {
-        unreachable!()
-    };
-    let current = header["reserved"]
-        .encode()
-        .parse::<u64>()
-        .map_err(|e| e.to_string())?;
-    let kind = fields[1].clone();
-    let flags = match kind.as_str() {
-        "kind=LAYOUT_KIND_UNMARKED" => 0,
-        "kind=LAYOUT_KIND_CALLABLE" => abi["GC_OBJECT_CALLABLE"],
-        _ => abi["OBJ_FLAG_PLAIN_ORDINARY"],
-    };
-    header.insert(
-        "reserved".into(),
-        Value::Number((current | gc["OBJ_FLAG_NEVER_MOVE"] | flags).to_string()),
-    );
     if kind == "kind=LAYOUT_KIND_CALLABLE" {
         if let Some(bits) = map["properties"]
             .array()
@@ -93,6 +93,39 @@ pub(super) fn prototype(expression: &str, entry: &[Token<'_>]) -> Result<Value, 
     }
     Ok(d)
 }
+/// An ordinary object born on a declared static layout
+/// (`perry_alloc_layout(addr_of!(runtime_layouts::X))`): the layout's kind
+/// decides its classification; it is not marked as a prototype at birth.
+pub(super) fn ordinary(expression: &str, entry: &[Token<'_>]) -> Result<Value, String> {
+    let name = expression
+        .strip_prefix(
+            "crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(crate::object::runtime_layouts::",
+        )
+        .and_then(|s| s.strip_suffix("))"))
+        .ok_or("invalid layout birth")?;
+    // `runtime_layout!(NAME, [kind = K,] family, variant, proto, [keys])`;
+    // an omitted kind is the plain ordinary kind 0.
+    let fields = descriptor(
+        include_str!("../../perry-runtime/src/object/runtime_layouts/stream_prototypes.rs"),
+        name,
+    )?;
+    let (kind, rest) = match fields.get(1).and_then(|f| f.strip_prefix("kind=")) {
+        Some(kind) => (kind.to_owned(), &fields[2..]),
+        None => ("0".to_owned(), &fields[1..]),
+    };
+    let layout = match kind.as_str() {
+        "0" => ObjectLayout::PlainOrdinary,
+        "LAYOUT_KIND_UNMARKED" => ObjectLayout::Unmarked,
+        _ => return Err(format!("{name}: unsupported static layout kind")),
+    };
+    if rest.get(2).map(String::as_str) != Some("crate::object::layout_desc::LAYOUT_PROTO_OBJECT") {
+        return Err(format!("{name}: unsupported static layout inheritance"));
+    }
+    let mut d = birth::birth(&tokens("js_object_alloc(0,0)")?, entry)?;
+    super::derive::restate(&mut d, |birth| birth.layout = layout)?;
+    Ok(d)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

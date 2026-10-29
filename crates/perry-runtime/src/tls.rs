@@ -822,7 +822,11 @@ pub unsafe extern "C" fn js_tls_client_check_identity_from_metadata(handle: i64)
 }
 
 pub fn js_tls_root_certificates() -> f64 {
-    cached_owned_cert_array(&ROOT_CERTS_CACHE, roots::bundled_certificates())
+    // The host's CA bundle, read at run time: the realm declares the birth
+    // (a frozen string array), never its contents.
+    cached_heap_array(&ROOT_CERTS_CACHE, || {
+        crate::realm_decl! { birth crate::array::realm_string_array(&roots::bundled_certificates().iter().map(String::as_str).collect::<Vec<_>>(), false); realm { "node:tls.rootCertificates", value = dynamic, elements = string, integrity = frozen } }
+    })
 }
 
 #[no_mangle]

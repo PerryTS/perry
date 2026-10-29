@@ -30,12 +30,14 @@ pub use ipc_hooks::{js_process_ipc_drain, js_process_ipc_has_active};
 mod node_module;
 mod permission;
 pub(crate) mod report;
+pub(crate) mod worker_restrictions;
 pub use credentials::{
     js_process_getegid, js_process_geteuid, js_process_getgid, js_process_getgroups,
     js_process_getuid, js_process_initgroups, js_process_setegid, js_process_seteuid,
     js_process_setgid, js_process_setgroups, js_process_setuid,
 };
 pub(crate) use ipc::*;
+pub use worker_restrictions::WorkerProcessState;
 
 // ── env_misc re-exports (preserve `crate::process::*` paths) ────────────────
 pub use env_misc::{
@@ -383,12 +385,23 @@ pub(crate) fn module_function2(
     crate::value::js_nanbox_pointer(closure as i64)
 }
 
+/// A static module array: the empty birth (no element, scalar layout), or a
+/// string array born with its pointer layout and filled in order.
 pub(crate) fn module_array_value(items: &[&str]) -> f64 {
-    let arr = crate::array::js_array_alloc_with_length(items.len() as u32);
-    for (i, item) in items.iter().enumerate() {
-        crate::array::js_array_set_f64(arr, i as u32, module_string_value(item));
+    if !items.is_empty() {
+        return crate::array::realm_string_array(items, false);
     }
+    let arr =
+        crate::array::realm_array_alloc(0, perry_abi::realm_header::ArrayElements::Scalars, false);
     f64::from_bits(JSValue::array_ptr(arr).bits())
+}
+
+/// `module.builtinModules`: born from `MODULE_BUILTIN_MODULES` in its order,
+/// then frozen.
+pub(crate) fn module_builtin_modules_array() -> f64 {
+    let value = crate::realm_decl! { birth crate::array::realm_string_array(MODULE_BUILTIN_MODULES, false); realm { "node:module.builtinModules", elements_source = MODULE_BUILTIN_MODULES, integrity = frozen } };
+    crate::object::js_object_freeze(value);
+    value
 }
 
 fn process_exec_argv_value() -> f64 {
@@ -398,8 +411,7 @@ fn process_exec_argv_value() -> f64 {
         std::env::remove_var("PERRY_PROCESS_EXEC_ARGV");
         serde_json::from_str(&raw).unwrap_or_default()
     });
-    let refs = values.iter().map(String::as_str).collect::<Vec<_>>();
-    module_array_value(&refs)
+    crate::realm_decl! { birth crate::array::realm_string_array(&values.iter().map(String::as_str).collect::<Vec<_>>(), false); realm { process.execArgv, value = dynamic, elements = string; "node:process.execArgv", value = dynamic, elements = string; } }
 }
 
 pub(crate) fn module_set_value(items: &[&str]) -> f64 {
