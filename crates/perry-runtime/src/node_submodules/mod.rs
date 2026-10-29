@@ -167,13 +167,9 @@ extern "C" fn thunk_vm_create_context(
 // Imports of bodies whose owning definition sits in plain source are spelled
 // out here, in plain source too: the link name is built from the written
 // tokens, which the shared export list cannot reproduce through its macros.
-static IMPORT_THUNK_DIAG_BOUNDED_CHANNEL: &JsFunctionInfo = crate::fn_info!(reference import crate::node_submodules::diagnostics_tail::thunk_diag_bounded_channel, 1; with_declared(1));
-static IMPORT_THUNK_STREAM_WEB_CTOR: &JsFunctionInfo = crate::fn_info!(reference import crate::node_submodules::thunk_stream_web_ctor, 1; with_declared(1));
 static IMPORT_THUNK_TEST: &JsFunctionInfo = crate::fn_info!(reference import crate::node_submodules::test::runner::thunk_test, 3; with_declared(3));
 static IMPORT_THUNK_TEST_ONLY: &JsFunctionInfo = crate::fn_info!(reference import crate::node_submodules::test::runner::thunk_test_only, 3; with_declared(3));
-static IMPORT_THUNK_TEST_RUN: &JsFunctionInfo = crate::fn_info!(reference import crate::node_submodules::test::runner::thunk_test_run, 1; with_declared(1));
 static IMPORT_THUNK_TEST_SKIP: &JsFunctionInfo = crate::fn_info!(reference import crate::node_submodules::test::runner::thunk_test_skip, 3; with_declared(3));
-static IMPORT_THUNK_TEST_SUITE: &JsFunctionInfo = crate::fn_info!(reference import crate::node_submodules::test::runner::thunk_test_suite, 3; with_declared(3));
 static IMPORT_THUNK_TEST_TODO: &JsFunctionInfo = crate::fn_info!(reference import crate::node_submodules::test::runner::thunk_test_todo, 3; with_declared(3));
 
 // Shared with codegen through perry-dispatch; a module here so the realm
