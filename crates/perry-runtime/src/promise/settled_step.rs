@@ -119,11 +119,14 @@ fn resume_now(value: f64, step: ClosurePtr) -> Option<f64> {
     if !crate::async_context::job_domain::admit_inline_self_next_job() {
         return None;
     }
-    bump(&MT_RUN_COUNT);
-    if primitive {
-        bump(&MT_FAST_PATH_HIT);
+    // One profile test for the three counters.
+    if mt_profile_enabled() {
+        bump(&MT_RUN_COUNT);
+        if primitive {
+            bump(&MT_FAST_PATH_HIT);
+        }
+        bump(&MT_STEP_CHAIN_REUSE_HIT);
     }
-    bump(&MT_STEP_CHAIN_REUSE_HIT);
     crate::closure::reset_throw_not_callable_counter();
     Some(payload)
 }
