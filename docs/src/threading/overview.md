@@ -193,6 +193,14 @@ Values crossing thread boundaries are serialized to a thread-safe intermediate f
 
 For numeric workloads — the most common parallelizable tasks — the threading overhead is negligible.
 
+## Node.js Worker Constructor Compatibility
+
+For `node:worker_threads`, a truthy `Worker` `name` must be a string; invalid
+names throw `TypeError` with `ERR_INVALID_ARG_TYPE` before transferring data.
+Falsy names use the default. `transferList` is validated even when `workerData`
+is undefined, and listed ArrayBuffers are detached after a successful clone
+whether or not the data references them. Other worker API parity gaps remain.
+
 ## Next Steps
 
 - [parallelMap Reference](parallel-map.md) — detailed API and performance tips

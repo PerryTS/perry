@@ -297,7 +297,7 @@ pub(super) fn install_weakref_proto_methods(
             ipm(
                 proto_obj,
                 "deref",
-                crate::fn_info!(weakref_proto_deref_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(WeakRef.prototype.deref)] weakref_proto_deref_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
         }
@@ -305,13 +305,13 @@ pub(super) fn install_weakref_proto_methods(
             ipm(
                 proto_obj,
                 "register",
-                crate::fn_info!(finreg_proto_register_thunk, 3; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(FinalizationRegistry.prototype.register)] finreg_proto_register_thunk, 3; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
                 2,
             );
             ipm(
                 proto_obj,
                 "unregister",
-                crate::fn_info!(finreg_proto_unregister_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(FinalizationRegistry.prototype.unregister)] finreg_proto_unregister_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
         }
@@ -542,5 +542,3 @@ mod tests {
         );
     }
 }
-
-crate::realm_decl!("weakref_proto_thunks.realm.json#*");

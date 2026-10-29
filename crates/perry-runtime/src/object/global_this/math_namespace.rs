@@ -7,177 +7,177 @@ use crate::object::ObjectHeader;
 const MEMBERS: &[Member] = &[
     Member::method(
         "abs",
-        crate::fn_info!(math_abs_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Math.abs)] math_abs_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         1,
     ),
     Member::method(
         "acos",
-        crate::fn_info!(math_acos_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Math.acos)] math_acos_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         1,
     ),
     Member::method(
         "acosh",
-        crate::fn_info!(math_acosh_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Math.acosh)] math_acosh_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         1,
     ),
     Member::method(
         "asin",
-        crate::fn_info!(math_asin_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Math.asin)] math_asin_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         1,
     ),
     Member::method(
         "asinh",
-        crate::fn_info!(math_asinh_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Math.asinh)] math_asinh_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         1,
     ),
     Member::method(
         "atan",
-        crate::fn_info!(math_atan_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Math.atan)] math_atan_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         1,
     ),
     Member::method(
         "atanh",
-        crate::fn_info!(math_atanh_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Math.atanh)] math_atanh_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         1,
     ),
     Member::method(
         "atan2",
-        crate::fn_info!(math_atan2_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Math.atan2)] math_atan2_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
         2,
     ),
     Member::method(
         "ceil",
-        crate::fn_info!(math_ceil_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Math.ceil)] math_ceil_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         1,
     ),
     Member::method(
         "cbrt",
-        crate::fn_info!(math_cbrt_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Math.cbrt)] math_cbrt_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         1,
     ),
     Member::method(
         "expm1",
-        crate::fn_info!(math_expm1_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Math.expm1)] math_expm1_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         1,
     ),
     Member::method(
         "clz32",
-        crate::fn_info!(math_clz32_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Math.clz32)] math_clz32_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         1,
     ),
     Member::method(
         "cos",
-        crate::fn_info!(math_cos_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Math.cos)] math_cos_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         1,
     ),
     Member::method(
         "cosh",
-        crate::fn_info!(math_cosh_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Math.cosh)] math_cosh_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         1,
     ),
     Member::method(
         "exp",
-        crate::fn_info!(math_exp_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Math.exp)] math_exp_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         1,
     ),
     Member::method(
         "floor",
-        crate::fn_info!(math_floor_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Math.floor)] math_floor_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         1,
     ),
     Member::method(
         "fround",
-        crate::fn_info!(math_fround_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Math.fround)] math_fround_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         1,
     ),
     Member::method(
         "hypot",
-        crate::fn_info!(math_hypot_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
-        2,
+        crate::fn_info!(#[realm(Math.hypot, spec = {length = 2}, emit = metadata(realm_math_hypot_metadata))] math_hypot_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+        realm_math_hypot_metadata!(length),
     ),
     Member::method(
         "imul",
-        crate::fn_info!(math_imul_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Math.imul)] math_imul_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
         2,
     ),
     Member::method(
         "log",
-        crate::fn_info!(math_log_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Math.log)] math_log_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         1,
     ),
     Member::method(
         "log1p",
-        crate::fn_info!(math_log1p_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Math.log1p)] math_log1p_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         1,
     ),
     Member::method(
         "log2",
-        crate::fn_info!(math_log2_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Math.log2)] math_log2_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         1,
     ),
     Member::method(
         "log10",
-        crate::fn_info!(math_log10_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Math.log10)] math_log10_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         1,
     ),
     Member::method(
         "max",
-        crate::fn_info!(math_max_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
-        2,
+        crate::fn_info!(#[realm(Math.max, spec = {length = 2}, emit = metadata(realm_math_max_metadata))] math_max_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+        realm_math_max_metadata!(length),
     ),
     Member::method(
         "min",
-        crate::fn_info!(math_min_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
-        2,
+        crate::fn_info!(#[realm(Math.min, spec = {length = 2}, emit = metadata(realm_math_min_metadata))] math_min_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+        realm_math_min_metadata!(length),
     ),
     Member::method(
         "pow",
-        crate::fn_info!(math_pow_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Math.pow)] math_pow_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
         2,
     ),
     Member::method(
         "random",
-        crate::fn_info!(math_random_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Math.random)] math_random_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
         0,
     ),
     Member::method(
         "round",
-        crate::fn_info!(math_round_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Math.round)] math_round_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         1,
     ),
     Member::method(
         "sign",
-        crate::fn_info!(math_sign_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Math.sign)] math_sign_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         1,
     ),
     Member::method(
         "sin",
-        crate::fn_info!(math_sin_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Math.sin)] math_sin_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         1,
     ),
     Member::method(
         "sinh",
-        crate::fn_info!(math_sinh_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Math.sinh)] math_sinh_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         1,
     ),
     Member::method(
         "sqrt",
-        crate::fn_info!(math_sqrt_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Math.sqrt)] math_sqrt_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         1,
     ),
     Member::method(
         "tan",
-        crate::fn_info!(math_tan_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Math.tan)] math_tan_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         1,
     ),
     Member::method(
         "tanh",
-        crate::fn_info!(math_tanh_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Math.tanh)] math_tanh_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         1,
     ),
     Member::method(
         "trunc",
-        crate::fn_info!(math_trunc_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Math.trunc)] math_trunc_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         1,
     ),
     Member::constant("E", std::f64::consts::E),
@@ -190,16 +190,14 @@ const MEMBERS: &[Member] = &[
     Member::constant("SQRT2", std::f64::consts::SQRT_2),
     Member::method(
         "f16round",
-        crate::fn_info!(math_f16round_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Math.f16round)] math_f16round_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         1,
     ),
     Member::tag("Math"),
 ];
-
+crate::realm_decl! { Math, provider = namespace(MEMBERS); }
 #[cold]
 #[inline(never)]
 pub(crate) fn create_math_namespace() -> *mut ObjectHeader {
     builtin_namespace::create(MEMBERS)
 }
-
-crate::realm_decl!("math_namespace.realm.json#*");

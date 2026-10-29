@@ -7,9 +7,7 @@ use std::collections::HashMap as StdHashMap;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
-use crate::closure::{
-    js_closure_alloc, js_closure_get_capture_ptr, js_closure_set_capture_ptr, ClosureHeader,
-};
+use crate::closure::{js_closure_alloc, js_closure_get_capture_ptr, ClosureHeader};
 use crate::object::{js_object_set_field, ObjectHeader};
 use crate::value::JSValue;
 

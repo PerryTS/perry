@@ -473,10 +473,10 @@ pub(crate) fn node_platform_name() -> &'static str {
 
 pub(crate) fn empty_object_value() -> f64 {
     module_object_value(unsafe {
-        crate::object::runtime_layouts::perry_build_runtime_record(
+        crate::realm_decl! { birth crate::object::runtime_layouts::perry_build_runtime_record(
             std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_PCHECKED031),
             std::ptr::NonNull::<f64>::dangling().as_ptr(),
-        )
+        ); realm { process._events, kind = namespace, members = { }; "node:process._events", kind = namespace, members = { }; } }
     })
 }
 
@@ -844,7 +844,7 @@ pub fn process_metadata_property(property: &str) -> Option<f64> {
         "config" => report::process_config_value(),
         "debugPort" => 9229.0,
         "execArgv" => process_exec_argv_value(),
-        "moduleLoadList" => module_array_value(&[]),
+        "moduleLoadList" => crate::realm_decl! { birth module_array_value(&[]); realm { process.moduleLoadList; "node:process.moduleLoadList"; } },
         "features" => report::process_features_value(),
         "finalization" => finalization::process_finalization_value(),
         "permission" => permission::process_permission_value()?,
@@ -857,7 +857,7 @@ pub fn process_metadata_property(property: &str) -> Option<f64> {
         "_eventsCount" => 0.0,
         "_exiting" => bool_value(false),
         "_maxListeners" => undefined_value(),
-        "_preload_modules" => module_array_value(&[]),
+        "_preload_modules" => crate::realm_decl! { birth module_array_value(&[]); realm { process._preload_modules; "node:process._preload_modules"; } },
         "domain" => active_domain_value(),
         _ => return None,
     })

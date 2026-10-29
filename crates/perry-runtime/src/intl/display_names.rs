@@ -386,5 +386,3 @@ pub(super) extern "C" fn constructor_thunk(
         super::rest_arg(rest, 1),
     )
 }
-
-crate::realm_decl!("display_names.realm.json#*");

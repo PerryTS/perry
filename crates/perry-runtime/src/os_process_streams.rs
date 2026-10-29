@@ -904,14 +904,14 @@ extern "C" fn process_stdin_add_listener_once(
     process_stdin_once(closure, this, event, callback)
 }
 
-/// `process.stdin.removeListener(event, cb)` / `.off(...)`.
+crate::realm_decl! { info /// `process.stdin.removeListener(event, cb)` / `.off(...)`.
 /// One info for `removeListener` and `off`: both install the same singleton
 /// function object (`off === removeListener`).
 static PROCESS_STDIN_REMOVE_LISTENER_INFO: crate::closure::JsFunctionInfo =
     crate::closure::JsFunctionInfo::of(
         process_stdin_remove_listener as crate::codegen_abi::JsBody2<crate::closure::ClosureHeader>,
     )
-    .with_declared(2);
+    .with_declared(2); realm { process.stdin.off, constructible = true; } }
 
 extern "C" fn process_stdin_remove_listener(
     _closure: *const crate::closure::ClosureHeader,
@@ -1662,7 +1662,7 @@ pub extern "C" fn js_process_stdin() -> f64 {
         let fresh = *slot == 0;
         if fresh {
             *slot = build_stream_object_with_write(
-                crate::fn_info!(process_stdin_write_noop_stub, 3),
+                crate::fn_info!(#[realm(process.stdin.write, provider = closure_alloc)] process_stdin_write_noop_stub, 3),
                 0.0,
                 f64::from_bits(crate::value::TAG_UNDEFINED),
             ) as usize;
@@ -1700,7 +1700,7 @@ pub extern "C" fn js_process_stdout() -> f64 {
         let mut slot = slot.borrow_mut();
         if *slot == 0 {
             *slot = build_stream_object_with_write(
-                crate::fn_info!(process_stdout_write_stub, 3; with_declared(3)),
+                crate::fn_info!(#[realm(process.stdout.write, provider = closure_alloc)] process_stdout_write_stub, 3; with_declared(3)),
                 1.0,
                 f64::from_bits(crate::value::TAG_TRUE),
             ) as usize;
@@ -1730,7 +1730,7 @@ pub extern "C" fn js_process_stderr() -> f64 {
         let mut slot = slot.borrow_mut();
         if *slot == 0 {
             *slot = build_stream_object_with_write(
-                crate::fn_info!(process_stderr_write_stub, 3; with_declared(3)),
+                crate::fn_info!(#[realm(process.stderr.write, provider = closure_alloc)] process_stderr_write_stub, 3; with_declared(3)),
                 2.0,
                 f64::from_bits(crate::value::TAG_TRUE),
             ) as usize;

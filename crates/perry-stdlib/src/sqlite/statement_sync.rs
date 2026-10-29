@@ -48,13 +48,13 @@ pub(crate) fn own_getter(
     }
 }
 
-macro_rules! builtin {
+#[rustfmt::skip] macro_rules! builtin {
     ($body:path, $n:tt) => {
         perry_runtime::fn_info!($body, $n; with_declared($n), with_flags(perry_runtime::closure::FN_BUILTIN))
     };
 }
 
-macro_rules! builtin_rest {
+#[rustfmt::skip] macro_rules! builtin_rest {
     ($body:path) => {
         perry_runtime::fn_info!(
             $body, 1;
@@ -534,7 +534,7 @@ unsafe fn start_statement<'a, 's>(
     }
 }
 
-macro_rules! with_statement {
+#[rustfmt::skip] macro_rules! with_statement {
     ($this:expr, $params:expr, |$stepper:ident| $body:expr) => {{
         let scope = RuntimeHandleScope::new();
         let this = scope.root_nanbox_f64($this);

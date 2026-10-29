@@ -383,6 +383,7 @@ fn string_code(index: Expr) -> Expr {
         args: vec![index],
         type_args: vec![],
         byte_offset: 0,
+        byte_end: 0,
     }
 }
 
@@ -466,6 +467,7 @@ fn string_region_rejects_rebinding_and_calls_before_any_body_effect() {
                 args: vec![],
                 type_args: vec![],
                 byte_offset: 0,
+                byte_end: 0,
             }),
         ],
         vec![Stmt::If {

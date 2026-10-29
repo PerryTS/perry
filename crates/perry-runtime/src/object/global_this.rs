@@ -224,5 +224,3 @@ pub(crate) use install_static::install_proto_method_with_key;
 
 #[cfg(test)]
 pub(crate) use global_this_webassembly::owned_wrappers as test_wasm_wrapper_state;
-
-crate::realm_decl!("global_this.realm.json#*");

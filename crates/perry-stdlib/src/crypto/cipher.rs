@@ -651,7 +651,7 @@ pub(super) static DECIPHERIV_FAMILY: perry_runtime::native_payload::NativePayloa
         install_prototype: install_decipheriv_prototype,
     };
 
-macro_rules! cipher_method {
+#[rustfmt::skip] macro_rules! cipher_method {
     ($proto:expr, $name:literal, $body:ident, $n:tt) => {
         $proto.method(
             $name,

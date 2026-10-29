@@ -1031,17 +1031,26 @@ pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
     // Same trade as the array dense arm and the string cut above: free while
     // the family prototype has never escaped to user code, wrong the moment it
     // has, so decline on the escape signal and run the real protocol.
-    if crate::set::is_registered_set(raw_ptr()) {
-        if crate::object::iterator_prototypes::set_iteration_not_pristine() {
-            return js_iterator_to_array(crate::symbol::js_get_iterator(value.get_nanbox_f64()));
+    // The copy also needs the collection's own `@@iterator` to be the
+    // intrinsic one: `plain_collection_default_iteration` declines an own
+    // `[Symbol.iterator]` write and a recorded (derived-class) prototype.
+    match crate::object::map_set_subclass::plain_collection_default_iteration(
+        value.get_nanbox_f64(),
+    ) {
+        Some(crate::object::map_set_subclass::CollectionBacking::Set(s))
+            if !crate::object::iterator_prototypes::set_iteration_not_pristine() =>
+        {
+            return crate::set::js_set_to_array(s as *const crate::set::SetHeader);
         }
-        return crate::set::js_set_to_array(raw_ptr() as *const crate::set::SetHeader);
+        Some(crate::object::map_set_subclass::CollectionBacking::Map(m))
+            if !crate::object::iterator_prototypes::map_iteration_not_pristine() =>
+        {
+            return crate::map::js_map_entries(m as *const crate::map::MapHeader);
+        }
+        _ => {}
     }
-    if crate::map::is_registered_map(raw_ptr()) {
-        if crate::object::iterator_prototypes::map_iteration_not_pristine() {
-            return js_iterator_to_array(crate::symbol::js_get_iterator(value.get_nanbox_f64()));
-        }
-        return crate::map::js_map_entries(raw_ptr() as *const crate::map::MapHeader);
+    if crate::set::is_registered_set(raw_ptr()) || crate::map::is_registered_map(raw_ptr()) {
+        return js_iterator_to_array(crate::symbol::js_get_iterator(value.get_nanbox_f64()));
     }
     // `class X extends Map | Set` instance — spread (`[...container]`,
     // `Array.from(container)`, `fn(...container)`) over the hidden backing

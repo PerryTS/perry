@@ -526,5 +526,3 @@ pub extern "C" fn js_string_replace_js(receiver: f64, search: f64, replacement: 
 pub extern "C" fn js_string_replace_all_js(receiver: f64, search: f64, replacement: f64) -> f64 {
     api::finish(string(true, receiver, search, replacement))
 }
-
-crate::realm_decl!("perex_replace.realm.json#*");

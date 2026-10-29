@@ -384,5 +384,3 @@ pub(crate) extern "C" fn thunk_diag_bounded_channel(
     });
     boxed_ptr(obj)
 }
-
-crate::realm_decl!("diagnostics_tail.realm.json#*");

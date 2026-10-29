@@ -88,7 +88,7 @@ static ASYNC_LOCAL_STORAGE_FAMILY: NativePayloadFamily = NativePayloadFamily {
     install_prototype: install_async_local_storage_prototype,
 };
 
-macro_rules! als_method {
+#[rustfmt::skip] macro_rules! als_method {
     ($proto:expr, $name:literal, $body:ident, $n:tt) => {
         $proto.method(
             $name,

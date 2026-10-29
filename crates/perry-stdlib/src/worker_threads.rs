@@ -37,6 +37,8 @@ mod worker_error;
 #[cfg(test)]
 mod worker_error_tests;
 mod worker_options;
+#[cfg(test)]
+mod worker_constructor_tests;
 use worker_error::{plain_error_message, worker_error_message};
 #[cfg(test)]
 mod worker_owner_tests;
@@ -1415,21 +1417,18 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
     worker_pump::ensure_parent_event_retire_hook();
     crate::worker_threads::async_shim::ensure_pump_registered();
 
-    let worker_id = NEXT_WORKER_ID.fetch_add(1, Ordering::Relaxed);
     let options_state = WorkerOptions::from_value(options);
     let worker_data = if is_undefined(options) {
         None
     } else {
         let data = get_object_field_from_value(options, "workerData");
-        if is_undefined(data) {
-            None
-        } else {
-            let scope = perry_runtime::gc::RuntimeHandleScope::new();
-            let data = scope.root_nanbox_f64(data);
-            let transfer = get_object_field_from_value(options, "transferList");
-            Some(clone_message(data.get_nanbox_f64(), transfer))
-        }
+        let scope = perry_runtime::gc::RuntimeHandleScope::new();
+        let data = scope.root_nanbox_f64(data);
+        let transfer = get_object_field_from_value(options, "transferList");
+        // Even undefined workerData must validate and consume the transfer list.
+        Some(clone_message(data.get_nanbox_f64(), transfer))
     };
+    let worker_id = NEXT_WORKER_ID.fetch_add(1, Ordering::Relaxed);
     let (tx, rx) = mpsc::channel::<WorkerCommand>();
     let sender = WorkerSender::new(tx);
     let published_agent = sender.agent.clone();

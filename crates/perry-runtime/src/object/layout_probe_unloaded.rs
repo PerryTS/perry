@@ -77,6 +77,11 @@ unsafe fn hole_at<const ABSENT: bool, const SITE: bool, const LAZY_HASH: bool>(
     )
 }
 
+/// Entries of [`underived`], read by the indexed lookup's tests.
+#[cfg(test)]
+pub(super) static UNDERIVED_ENTRIES: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
 /// Keep the indexed loop's text exit from retaining the record and word.
 #[inline(never)]
 pub(super) unsafe fn underived<const ABSENT: bool, const LAZY_HASH: bool>(
@@ -85,6 +90,8 @@ pub(super) unsafe fn underived<const ABSENT: bool, const LAZY_HASH: bool>(
     key_bits: u64,
     hash: u64,
 ) -> f64 {
+    #[cfg(test)]
+    UNDERIVED_ENTRIES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let word = (*obj).parent_class_id;
     probe_get_underived::<ABSENT>(
         dir,
