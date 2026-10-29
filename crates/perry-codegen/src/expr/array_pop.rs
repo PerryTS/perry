@@ -37,15 +37,17 @@ const POINTER_TAG_HI16: &str = "32765"; // 0x7FFD
 const HANDLE_BAND_TOP: &str = crate::expr::receiver_range::HANDLE_BAND_TOP_LITERAL;
 const HEAP_LIMIT: &str = "140737488355328"; // 2^47
 const GC_TYPE_ARRAY_I8: &str = "1";
-const GC_TYPE_OBJECT_I8: &str = "2";
 const GC_FLAG_FORWARDED_I8: &str = "-128"; // 0x80 as i8
 const MAX_FAST_LENGTH_I32: &str = "100000000";
 
 /// Lower `recv.pop()` for an Array-admitted receiver: the inline tier above
 /// with `js_array_pop_f64` behind it. Returns the popped element (boxed).
 pub(crate) fn lower_array_pop_inline(ctx: &mut FnCtx<'_>, recv_box: &str) -> String {
-    let meta_offset =
-        crate::target_layout::object_meta_slot_offset_bytes(ctx.target_triple).to_string();
+    let meta_offset = crate::target_layout::object_meta_slot_offset_bytes(
+        ctx.target_triple,
+        crate::target_layout::HeaderForm::Meta,
+    )
+    .to_string();
     let hdr_idx = ctx.new_block("apop.hdr");
     // An elements-backed Array subclass (`ObjectMeta.elements`, word 12) pops
     // from its store: the header gate resolves the payload and the same
@@ -111,7 +113,7 @@ pub(crate) fn lower_array_pop_inline(ctx: &mut FnCtx<'_>, recv_box: &str) -> Str
         let array_ok = blk.and(I1, &ok, &is_array);
         // A `GC_TYPE_OBJECT` receiver may be an elements-backed Array
         // subclass; anything else keeps the runtime entry.
-        let is_object = blk.icmp_eq(I8, &gc_type, GC_TYPE_OBJECT_I8);
+        let is_object = crate::target_layout::emit_object_has_meta_word(blk, I8, &gc_type);
         blk.cond_br(&array_ok, &len_label, &elem_label);
         let _ = is_object;
     }
@@ -123,7 +125,7 @@ pub(crate) fn lower_array_pop_inline(ctx: &mut FnCtx<'_>, recv_box: &str) -> Str
         let gc_type_addr = blk.sub(I64, &handle, "8");
         let gc_type_ptr = blk.inttoptr(I64, &gc_type_addr);
         let gc_type = blk.load(I8, &gc_type_ptr);
-        let is_object = blk.icmp_eq(I8, &gc_type, GC_TYPE_OBJECT_I8);
+        let is_object = crate::target_layout::emit_object_has_meta_word(blk, I8, &gc_type);
         let meta_addr = blk.add(I64, &handle, &meta_offset);
         let meta_slot = blk.inttoptr(I64, &meta_addr);
         let meta = blk.load(I64, &meta_slot);

@@ -217,7 +217,6 @@ fn arg_is_order_free(ctx: &FnCtx<'_>, e: &perry_hir::Expr) -> bool {
 }
 
 /// `GC_TYPE_OBJECT` as the `i8` an `obj_type` header byte holds.
-const GC_TYPE_OBJECT_I8: &str = "2";
 
 /// Emit the site. `recv_box` and `lowered_args` are already evaluated and
 /// re-read from their roots; `feedback_site` is the typed-feedback site id the
@@ -365,7 +364,6 @@ pub(crate) fn emit_method_site(
     use crate::expr::receiver_range::{
         emit_field_ptr, emit_fused_receiver_test, emit_handle, RECEIVER_BIAS,
     };
-    let header = crate::target_layout::object_header_size_bytes(ctx.target_triple) as i64;
     let probe_idx = ctx.new_block("msite.probe");
     let slow_idx = ctx.new_block("msite.slow");
     let merge_idx = ctx.new_block("msite.merge");
@@ -426,7 +424,7 @@ pub(crate) fn emit_method_site(
         // GcHeader precedes the cell: obj_type @-8 (i8).
         let tp = emit_field_ptr(blk, &biased, -8);
         let ty = blk.load(crate::types::I8, &tp);
-        let ordinary = blk.icmp_eq(crate::types::I8, &ty, GC_TYPE_OBJECT_I8);
+        let ordinary = crate::target_layout::emit_gc_type_is_object(blk, crate::types::I8, &ty);
         blk.cond_br(&ordinary, &on_ordinary, &slow_l);
     }
     if let (Some(idx), Some((entry, births))) = (weak_idx, weak) {
@@ -512,6 +510,8 @@ pub(crate) fn emit_method_site(
             let mut call_args: Vec<String> =
                 lowered_args.iter().take(lane.arity).cloned().collect();
             call_args.resize(lane.arity, undefined.clone());
+            let header =
+                crate::target_layout::object_slot_base_bytes(ctx.target_triple, lane.form()) as i64;
             let blk = ctx.block();
             let vp = emit_field_ptr(blk, &biased, header + 8 * i64::from(lane.slot));
             let v = blk.load(I64, &vp);
@@ -749,7 +749,7 @@ pub(crate) fn emit_method_site_lookup(
             let blk = ctx.block();
             let tp = emit_field_ptr(blk, &biased, -8);
             let ty = blk.load(crate::types::I8, &tp);
-            let ordinary = blk.icmp_eq(crate::types::I8, &ty, GC_TYPE_OBJECT_I8);
+            let ordinary = crate::target_layout::emit_gc_type_is_object(blk, crate::types::I8, &ty);
             let plain = if crate::builtin_proto::weak_families(families) {
                 let wp = emit_field_ptr(blk, &biased, 4);
                 let word = blk.load(I32, &wp);

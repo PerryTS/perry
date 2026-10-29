@@ -1084,8 +1084,11 @@ fn emit_proven_class_field_store(
             ctx.note_ptr_shape_consumed(object, "ptr_shape_set");
         }
         super::store_census::bump(ctx, super::store_census::CFIELD_SHAPE_PROVEN);
-        let header_skip =
-            crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
+        let header_skip = crate::target_layout::object_slot_base_bytes(
+            ctx.target_triple,
+            crate::target_layout::class_instance_form(class_name),
+        )
+        .to_string();
         // wpfacts F2: a field that never holds a pointer-bearing kind needs
         // no barrier (the contract build checks every stored kind).
         let field_set_barrier_needed = !expr_produces_non_pointer_bits_by_construction(ctx, value)

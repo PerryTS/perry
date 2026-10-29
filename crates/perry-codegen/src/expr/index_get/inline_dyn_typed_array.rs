@@ -130,7 +130,7 @@ pub(in crate::expr) fn lower_inline_dyn_typed_array_get_with_byte_view_param(
     let ta_w2_idx = ctx.new_block("tav.w2");
     let ta_w1_idx = ctx.new_block("tav.w1");
     let elem_kind_idx = ctx.new_block("arrlike.elem.kind");
-    let elem_meta_idx = ctx.new_block("arrlike.elem.meta");
+    let elem_meta_idx = ctx.new_block("arrlike.elem_meta");
     let elem_store_idx = ctx.new_block("arrlike.elem.store");
     let elem_bounds_idx = ctx.new_block("arrlike.elem.bounds");
     let elem_load_idx = ctx.new_block("arrlike.elem.load");
@@ -661,8 +661,11 @@ pub(in crate::expr) fn lower_inline_dyn_typed_array_get_with_byte_view_param(
     } else {
         8
     };
-    let meta_offset =
-        crate::target_layout::object_meta_slot_offset_bytes(ctx.target_triple).to_string();
+    let meta_offset = crate::target_layout::object_meta_slot_offset_bytes(
+        ctx.target_triple,
+        crate::target_layout::HeaderForm::Meta,
+    )
+    .to_string();
     let elem_meta_addr = ctx.block().add(I64, &object_raw, &meta_offset);
     let elem_meta_slot_ptr = ctx.block().inttoptr(I64, &elem_meta_addr);
     let elem_meta_loaded = ctx.block().load(

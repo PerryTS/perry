@@ -396,7 +396,8 @@ fn lower_predicted_class_field_get(
     }
 
     ctx.current_block = hit_idx;
-    let header = crate::target_layout::object_header_size_bytes(ctx.target_triple) as i64;
+    let header =
+        crate::target_layout::object_slot_base_bytes(ctx.target_triple, predicted.form()) as i64;
     let offset = header + i64::from(predicted.slot) * 8;
     let slot_ptr = memo
         .as_ref()

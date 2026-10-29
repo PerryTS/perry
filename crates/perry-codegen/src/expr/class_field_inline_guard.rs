@@ -650,3 +650,12 @@ fn expected_class_identity(
     let shape_high = blk.shl(I64, &shape_bits, "32");
     blk.or(I64, &shape_high, &class_bits)
 }
+
+impl PredictedShape {
+    /// The header form predicted for the objects this record describes (`HeaderForm`:
+    /// every ordinary object has the meta word today). Sites take their slot base
+    /// from here, never from the type byte.
+    pub(crate) fn form(&self) -> crate::target_layout::HeaderForm {
+        crate::target_layout::HeaderForm::Meta
+    }
+}

@@ -44,7 +44,7 @@ pub(crate) use records::{
 };
 
 const GC_TYPE_ARRAY: u8 = 1;
-const GC_TYPE_OBJECT: u8 = 2;
+const GC_TYPE_OBJECT: u8 = crate::runtime_abi::GC_TYPE_OBJECT;
 const GC_TYPE_CLOSURE: u8 = 4;
 /// `GC_FLAG_MARKED | GC_FLAG_PINNED`: an image cell is never white and never
 /// moves (perry-runtime `realm::IMAGE_CELL_FLAGS`).
@@ -327,9 +327,15 @@ pub(crate) fn emit_object_cell_with_fields(
     let layout_word = cell.layout_word;
     let reserved = cell.reserved;
     let slots = cell.slots;
-    let meta = cell.meta.map_or_else(|| "null".into(), user_address);
+    // The image cell's metadata edge: this record's own field, not a read of a
+    // live ObjectHeader.
+    let ObjectCell { meta, .. } = cell;
+    let meta = meta.map_or_else(|| "null".into(), user_address);
     let triple = llmod.target_triple.clone();
-    let header = crate::target_layout::object_header_size_bytes(&triple);
+    let header = crate::target_layout::object_slot_base_bytes(
+        &triple,
+        crate::target_layout::HeaderForm::Meta,
+    );
     let size = GC_HEADER_SIZE + header + 8 * slots.len() as u64;
     let ilp32 = crate::target_layout::target_is_ilp32(&triple);
     // ILP32 keeps the slot region 8-aligned with a pad word before `meta`.
