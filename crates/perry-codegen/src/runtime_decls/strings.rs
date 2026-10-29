@@ -344,6 +344,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_map_set_string_string", I64, &[I64, I64, I64]);
     module.declare_function("js_map_set_number_key", I64, &[I64, DOUBLE, DOUBLE]);
     module.declare_function("js_map_get", DOUBLE, &[I64, DOUBLE]);
+    module.declare_function("js_map_get_entry", DOUBLE, &[I64, DOUBLE, PTR]);
+    module.declare_function("js_map_get_entry__Map", DOUBLE, &[I64, DOUBLE, PTR]);
     // Kind-typed twin (`perry-runtime` `entry_contracts`): a receiver the
     // compiler constructed as a Map.
     module.declare_function("js_map_get__Map", DOUBLE, &[I64, DOUBLE]);
