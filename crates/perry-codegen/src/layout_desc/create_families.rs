@@ -929,7 +929,8 @@ pub(crate) fn emit_holder_load(
     miss_l: &str,
 ) -> String {
     use crate::expr::receiver_range::emit_field_ptr;
-    let header = crate::target_layout::object_header_size_bytes(ctx.target_triple) as i64;
+    let header =
+        crate::target_layout::object_slot_base_bytes(ctx.target_triple, read.form()) as i64;
     let ids: Vec<String> = read.states.iter().map(|s| layout_id(ctx, s)).collect();
     let chain_ids: Vec<String> = read.chain.iter().map(|(_, d)| layout_id(ctx, d)).collect();
     let mut ok = "false".to_string();
@@ -1248,7 +1249,7 @@ pub(crate) fn lower_add(
             .cond_br(&recv.is_object_pointer, &check_label, &slow_label);
 
         ctx.current_block = check_idx;
-        let header = crate::target_layout::object_header_size_bytes(ctx.target_triple);
+        let header = crate::target_layout::object_slot_base_bytes(ctx.target_triple, add.form());
         let pointer = if crate::target_layout::target_is_ilp32(ctx.target_triple) {
             4
         } else {
@@ -1926,7 +1927,7 @@ pub(crate) fn lower_assign(ctx: &mut FnCtx<'_>, site: &Site, expr: &Expr) -> Res
         // The family's slots: nothing between the re-reads and the stores
         // collects, so the object and the values are current.
         ctx.current_block = family_idx;
-        let header = crate::target_layout::object_header_size_bytes(ctx.target_triple);
+        let header = crate::target_layout::object_slot_base_bytes(ctx.target_triple, site.form());
         for (slot, arg) in args.iter().enumerate() {
             let value = group.reread(ctx, operands[slot])?;
             let barrier_needed =
@@ -1988,4 +1989,40 @@ pub(crate) fn lower_assign(ctx: &mut FnCtx<'_>, site: &Site, expr: &Expr) -> Res
             &[(&object_box, &family_end), (&generic_box, &generic_end)],
         ))
     })
+}
+
+impl Site {
+    /// The header form predicted for the objects this record describes (`HeaderForm`:
+    /// every ordinary object has the meta word today). Sites take their slot base
+    /// from here, never from the type byte.
+    pub(crate) fn form(&self) -> crate::target_layout::HeaderForm {
+        crate::target_layout::HeaderForm::Meta
+    }
+}
+
+impl Create {
+    /// The header form predicted for the objects this record describes (`HeaderForm`:
+    /// every ordinary object has the meta word today). Sites take their slot base
+    /// from here, never from the type byte.
+    pub(crate) fn form(&self) -> crate::target_layout::HeaderForm {
+        crate::target_layout::HeaderForm::Meta
+    }
+}
+
+impl Add {
+    /// The header form predicted for the objects this record describes (`HeaderForm`:
+    /// every ordinary object has the meta word today). Sites take their slot base
+    /// from here, never from the type byte.
+    pub(crate) fn form(&self) -> crate::target_layout::HeaderForm {
+        self.family.form()
+    }
+}
+
+impl HolderRead {
+    /// The header form predicted for the objects this record describes (`HeaderForm`:
+    /// every ordinary object has the meta word today). Sites take their slot base
+    /// from here, never from the type byte.
+    pub(crate) fn form(&self) -> crate::target_layout::HeaderForm {
+        crate::target_layout::HeaderForm::Meta
+    }
 }

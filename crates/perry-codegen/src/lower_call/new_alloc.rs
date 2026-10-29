@@ -540,8 +540,14 @@ fn emit_instance_alloc_inner(
             *fields_written = None;
             return ctx.block().ptrtoint(&raw, I64);
         }
-        let (handle, written) =
-            crate::expr::inline_birth::layout_with(ctx, &desc, slots, cid, fields);
+        let (handle, written) = crate::expr::inline_birth::layout_with(
+            ctx,
+            crate::target_layout::class_instance_form(class_name),
+            &desc,
+            slots,
+            cid,
+            fields,
+        );
         *fields_written = written;
         return handle;
     }
@@ -673,8 +679,11 @@ fn emit_instance_alloc_inner(
         // one this site would build; and no site may stamp a module image
         // whose object SIZE differs from its own, since the image's ShapeId
         // then names a live bound this allocation may not have.
-        let site_total =
-            crate::target_layout::inline_alloc_total_size_bytes(ctx.target_triple, field_count);
+        let site_total = crate::target_layout::inline_alloc_total_size_bytes(
+            ctx.target_triple,
+            crate::target_layout::class_instance_form(class_name),
+            field_count,
+        );
         let module_image = ctx
             .class_header_image_globals
             .get(class_name)
@@ -683,7 +692,11 @@ fn emit_instance_alloc_inner(
         let wide_birth_image = slack > 0
             && module_image
                 == Some((
-                    crate::target_layout::inline_alloc_gc_packed(ctx.target_triple, field_count),
+                    crate::target_layout::inline_alloc_gc_packed(
+                        ctx.target_triple,
+                        crate::target_layout::class_instance_form(class_name),
+                        field_count,
+                    ),
                     cid,
                 ));
         let descriptor_facts_exact = (inline_shape_descriptor_facts_exact(
@@ -763,8 +776,11 @@ fn emit_instance_alloc_inner(
             )
         } else {
             *fresh_nursery = true;
-            let total_size =
-                crate::target_layout::inline_alloc_total_size_bytes(ctx.target_triple, field_count);
+            let total_size = crate::target_layout::inline_alloc_total_size_bytes(
+                ctx.target_triple,
+                crate::target_layout::class_instance_form(class_name),
+                field_count,
+            );
             let total_size_str = total_size.to_string();
 
             // Inline bump-allocator IR.
@@ -820,8 +836,11 @@ fn emit_instance_alloc_inner(
             // site — measured +4.5 instructions per `new`. The vector image is
             // one live register (or one reload) and one `str q` per
             // allocation, the shape the pre-#8113 constant pair compiled to.
-            let gc_packed: u64 =
-                crate::target_layout::inline_alloc_gc_packed(ctx.target_triple, field_count);
+            let gc_packed: u64 = crate::target_layout::inline_alloc_gc_packed(
+                ctx.target_triple,
+                crate::target_layout::class_instance_form(class_name),
+                field_count,
+            );
             // Prefer the module-level image global — composed once at module
             // init from the SAME `inline_alloc_gc_packed` derivation — and use
             // it only when the table's packed word equals this site's own. A

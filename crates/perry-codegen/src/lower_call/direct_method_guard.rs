@@ -5,7 +5,7 @@
 //! header constants and their anti-drift tests stay there.
 
 use super::method_override::{
-    GC_OBJECT_METHOD_GUARD_MASK_I32, GC_TYPE_OBJECT, LAYOUT_TAG_NEG_I32, ORDINARY_LAYOUT_RANGE_LEN,
+    GC_OBJECT_METHOD_GUARD_MASK_I32, LAYOUT_TAG_NEG_I32, ORDINARY_LAYOUT_RANGE_LEN,
     POINTER_TAG_HI16,
 };
 use crate::expr::FnCtx;
@@ -79,7 +79,7 @@ pub(crate) fn emit_inline_direct_method_shape_guard(
         let gc_header_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-8")]);
         let gc_header = blk.load(I32, &gc_header_ptr);
         let guarded_gc_bits = blk.and(I32, &gc_header, GC_OBJECT_METHOD_GUARD_MASK_I32);
-        let gc_header_ok = blk.icmp_eq(I32, &guarded_gc_bits, GC_TYPE_OBJECT);
+        let gc_header_ok = crate::target_layout::emit_gc_type_is_object(blk, I32, &guarded_gc_bits);
 
         // ObjectHeader begins with adjacent `class_id: u32` and
         // `shape_id: u32`. Compare them as one packed word. The expected

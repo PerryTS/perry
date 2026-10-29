@@ -404,20 +404,45 @@ mod tests {
     }
 
     /// Two processes draw different keys (flood resistance): the same key
-    /// hashes differently in each. Environment normalizers that pin
-    /// getrandom make the two equal, so the check is skipped under them.
+    /// hashes differently in each. Each child runs single-threaded from an
+    /// empty environment and a fixed directory, so neither the parent's test
+    /// mode, what earlier tests set (env vars, the cwd), nor a
+    /// getrandom-pinning preload reaches it.
     #[test]
     fn process_seed_differs_between_processes() {
         let run = || {
             let out = std::process::Command::new(std::env::current_exe().unwrap())
-                .args(["--exact", "fast_hash::tests::process_seed_probe", "--nocapture"])
+                .args([
+                    "--exact",
+                    "fast_hash::tests::process_seed_probe",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env_clear()
                 .env("PERRY_SEED_PROBE", "1")
+                .current_dir("/")
+                .stdin(std::process::Stdio::null())
                 .output()
                 .unwrap();
-            String::from_utf8_lossy(&out.stdout)
-                .lines()
-                .find_map(|l| l.strip_prefix("SEED=").map(str::to_owned))
-                .expect("probe printed no seed")
+            // libtest prints `test <name> ... ` before a single-threaded test
+            // runs, so the seed can share that line: find the token anywhere.
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            stdout
+                .split_once("SEED=")
+                .map(|(_, rest)| {
+                    rest.chars()
+                        .take_while(char::is_ascii_hexdigit)
+                        .collect::<String>()
+                })
+                .filter(|seed| seed.len() == 16)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "probe printed no seed: {:?}\nstdout:\n{}\nstderr:\n{}",
+                        out.status,
+                        String::from_utf8_lossy(&out.stdout),
+                        String::from_utf8_lossy(&out.stderr)
+                    )
+                })
         };
         assert_ne!(run(), run());
     }

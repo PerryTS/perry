@@ -703,8 +703,11 @@ fn build_numeric_access(
     let inline_span = ctx.block().sub(I64, &inline_bound, &element_base);
     let object_inline_count = ctx.block().select(I1, &has_inline, I64, &inline_span, "0");
     let element_bytes = ctx.block().shl(I64, &element_base, "3");
-    let object_header_size =
-        crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
+    let object_header_size = crate::target_layout::object_slot_base_bytes(
+        ctx.target_triple,
+        crate::target_layout::HeaderForm::Meta,
+    )
+    .to_string();
     let inline_offset = ctx.block().add(I64, &object_header_size, &element_bytes);
     let object_inline_base = ctx.block().add(I64, live_raw, &inline_offset);
 
@@ -713,7 +716,7 @@ fn build_numeric_access(
     // pointer. A missing spill is valid when the admitted bound fits inline.
     let plain_setup_idx = ctx.new_block("stable_packed.setup.plain");
     let object_setup_idx = ctx.new_block("stable_packed.setup.object");
-    let meta_setup_idx = ctx.new_block("stable_packed.setup.meta");
+    let meta_setup_idx = ctx.new_block("stable_packed.setup_meta");
     let setup_merge_idx = ctx.new_block("stable_packed.setup.merge");
     let plain_setup_label = ctx.block_label(plain_setup_idx);
     let object_setup_label = ctx.block_label(object_setup_idx);
@@ -731,8 +734,11 @@ fn build_numeric_access(
     } else {
         8
     };
-    let meta_offset =
-        crate::target_layout::object_meta_slot_offset_bytes(ctx.target_triple).to_string();
+    let meta_offset = crate::target_layout::object_meta_slot_offset_bytes(
+        ctx.target_triple,
+        crate::target_layout::HeaderForm::Meta,
+    )
+    .to_string();
     let meta_addr = ctx.block().add(I64, live_raw, &meta_offset);
     let meta_slot = ctx.block().inttoptr(I64, &meta_addr);
     let meta_native = ctx
@@ -1089,8 +1095,11 @@ pub(crate) fn try_lower_index_get(
         .cond_br(&inline, &object_inline_label, &object_spill_label);
 
     ctx.current_block = object_inline_idx;
-    let object_header_size =
-        crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
+    let object_header_size = crate::target_layout::object_slot_base_bytes(
+        ctx.target_triple,
+        crate::target_layout::HeaderForm::Meta,
+    )
+    .to_string();
     let slot_bytes = ctx.block().shl(I64, &slot, "3");
     let slot_offset = ctx.block().add(I64, &slot_bytes, &object_header_size);
     let slot_addr = ctx.block().add(I64, &raw, &slot_offset);
@@ -1105,8 +1114,11 @@ pub(crate) fn try_lower_index_get(
     } else {
         8
     };
-    let meta_offset =
-        crate::target_layout::object_meta_slot_offset_bytes(ctx.target_triple).to_string();
+    let meta_offset = crate::target_layout::object_meta_slot_offset_bytes(
+        ctx.target_triple,
+        crate::target_layout::HeaderForm::Meta,
+    )
+    .to_string();
     let meta_addr = ctx.block().add(I64, &raw, &meta_offset);
     let meta_slot = ctx.block().inttoptr(I64, &meta_addr);
     let meta_native = ctx

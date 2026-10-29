@@ -3024,6 +3024,12 @@
       "name": "PENDING_PATH_INITS",
       "verdict": "not_a_gc_pointer",
       "why": "Deferred generated extern C registrar function pointers, consumed by register_pending_path_inits. These are executable-image code addresses; the functions register initializer addresses, and the queue never stores JS values or heap pointers."
+    },
+    {
+      "file": "crates/perry-runtime/src/process/worker_restrictions.rs",
+      "name": "WORKER_IPC_ENABLED",
+      "verdict": "not_a_gc_pointer",
+      "why": "Boolean bootstrap snapshot of whether this Worker environment enables IPC facade members. WorkerProcessState installs only a bool; no address or NaN-boxed value is stored."
     }
   ],
   "_FRONTIER_README": "Identity-pinned debt ratchet over new perry-ui* candidates and otherwise-unclassified core raw/Perry TLS declarations (see the census docstring, \u201cThe identity-pinned frontier\u201d). A new uncovered holder fails until it is scanned, receives a researched holders verdict, or is deliberately pinned as debt. Moving a researched false positive to holders graduates it from this list. A fixed or classified holder makes its old frontier pin stale, so the receipt must be deleted.",

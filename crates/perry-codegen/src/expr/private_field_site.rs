@@ -222,7 +222,8 @@ fn emit_site_probe(
 /// The slot address a hit block reads or writes: the payload's inline
 /// fields plus `slot * 8`.
 fn emit_slot_ptr(ctx: &mut FnCtx<'_>, hit: &SiteHit, payload: &str) -> String {
-    let header_skip = crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
+    let header_skip =
+        crate::target_layout::object_slot_base_bytes(ctx.target_triple, hit.form()).to_string();
     let blk = ctx.block();
     let slot = match hit {
         SiteHit::Static(sf) => sf.slot.to_string(),
@@ -514,4 +515,25 @@ pub(super) fn lower_set_operands(
     let mut incoming: Vec<(&str, &str)> = stored.iter().map(|l| (val, l.as_str())).collect();
     incoming.push((&miss_val, &miss_end));
     Ok(ctx.block().phi(DOUBLE, &incoming))
+}
+
+impl StaticFinal {
+    /// The header form predicted for the completed static shape.
+    fn form(&self) -> crate::target_layout::HeaderForm {
+        crate::target_layout::HeaderForm::Meta
+    }
+}
+
+impl SiteHit {
+    /// The header form predicted for the objects this record describes (`HeaderForm`:
+    /// every ordinary object has the meta word today). Sites take their slot base
+    /// from here, never from the type byte.
+    fn form(&self) -> crate::target_layout::HeaderForm {
+        match self {
+            SiteHit::Static(s) => s.form(),
+            // The runtime-published site word names its own layout; the
+            // form is the class's, whose instances all have the meta word.
+            SiteHit::Word(_) => crate::target_layout::HeaderForm::Meta,
+        }
+    }
 }
