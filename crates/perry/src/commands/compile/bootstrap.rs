@@ -263,10 +263,16 @@ pub(super) fn rerun_collect_with_class_field_types(
     // were lowered. The set is kept (it is already the program-wide union), so
     // the re-walk lowers every module against the final set and cannot grow it.
     let patched_builtins_rerun = ctx.patched_builtins_grew_after_lower;
+    // A named import of an opaque CommonJS module is exported by the module's
+    // wrap, which the first walk prepared before every importer was known.
+    let demand = named_exports::opaque_cjs_demand(ctx);
+    let demand_rerun = demand != ctx.cjs_demanded_exports;
+    ctx.cjs_demanded_exports = demand;
     if field_map.is_empty()
         && accessor_map.is_empty()
         && !ctx.solid_client_recollect
         && !patched_builtins_rerun
+        && !demand_rerun
     {
         return Ok(());
     }

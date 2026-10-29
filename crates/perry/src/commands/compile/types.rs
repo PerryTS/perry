@@ -865,6 +865,13 @@ pub struct CompilationContext {
     /// platform payload is approved through the wrapper copy that loads it,
     /// which an isolated store (pnpm) keeps outside the payload's ancestors.
     pub native_addon_wrapper_roots: BTreeSet<PathBuf>,
+    /// Names importers ask of a CommonJS module whose `module.exports` is
+    /// assigned a value its source does not spell out (a UMD `factory(…)`,
+    /// an identifier, …), keyed by the module's canonical path. The wrap
+    /// exports each as a snapshot of the `module.exports` property, as Bun
+    /// and bundlers bind them. A program-wide fact: found after the first
+    /// walk, applied by the second.
+    pub cjs_demanded_exports: BTreeMap<PathBuf, BTreeSet<String>>,
     /// #1680 (Phase 2 of #1677): build-time codegen steps declared in the
     /// host `package.json` `perry.codegen`. Each is a shell command run
     /// (in `codegen_dir`) before module collection, so a codegen library
@@ -1429,6 +1436,7 @@ impl CompilationContext {
             compile_package_dirs: BTreeSet::new(),
             checked_compile_package_native_addon_roots: HashSet::new(),
             native_addon_wrapper_roots: BTreeSet::new(),
+            cjs_demanded_exports: BTreeMap::new(),
             codegen_steps: Vec::new(),
             codegen_dir: None,
             type_checker: None,
