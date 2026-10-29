@@ -6340,6 +6340,7 @@ fn move_shape_family(table: &ShapeTable, inner: &mut ShapeTableInner, old: u64, 
 
 /// Every keys address a minor can act on, re-derived from the authoritative
 /// tables (families and slot indices whose keys array is not old).
+#[cfg(any(debug_assertions, test))]
 fn relevant_shape_keys(table: &ShapeTable, inner: &ShapeTableInner) -> Vec<u64> {
     let mut relevant: Vec<u64> = inner.families.keys().copied().collect();
     relevant.extend(inner.indices.keys().copied().map(|keys| keys as u64));

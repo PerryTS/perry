@@ -518,6 +518,15 @@ fn compute_object_cache_key_with_env(
         "entry_source_path",
         opts.app_metadata.entry_source_path.as_deref().unwrap_or(""),
     );
+    // The declared format decides the entry's tick/microtask checkpoint.
+    h.field(
+        "entry_declared_esm",
+        match opts.app_metadata.entry_declared_esm {
+            Some(true) => "esm",
+            Some(false) => "cjs",
+            None => "",
+        },
+    );
     // Provider installs are calls baked into the entry prologue (#10428):
     // adding a `require('net')` elsewhere must not reuse an entry without it.
     h.field(

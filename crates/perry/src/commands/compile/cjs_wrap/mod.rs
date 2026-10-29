@@ -89,7 +89,7 @@ use hoist_classes::{
 };
 
 // Public API consumed by `compile.rs` / `collect_modules.rs`.
-pub(super) use detect::is_commonjs;
+pub(super) use detect::{declared_module_format_is_esm, is_commonjs};
 #[cfg(test)]
 use wrap::wrap_commonjs_for_target;
 pub(super) use wrap::wrap_commonjs_with_addon_paths;

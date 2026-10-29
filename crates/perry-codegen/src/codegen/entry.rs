@@ -102,6 +102,17 @@ fn emit_annexb_global_undefined_decls(ctx: &mut FnCtx<'_>, hir: &HirModule) {
 /// (`__perry_init_strings_<prefix>`) so multiple modules in the same
 /// program don't collide on the symbol name.
 #[allow(clippy::too_many_arguments)]
+/// Node evaluates the entry as an ES module: its declared format (extension or
+/// package.json `"type"`) when it has one, else module syntax (import/export
+/// or top-level await), Node's detection. A CommonJS file the driver wrapped
+/// carries a synthetic import and export but stays CommonJS (#9412).
+pub(super) fn entry_evaluates_as_esm(hir: &HirModule, cross_module: &CrossModuleCtx) -> bool {
+    !crate::collectors::is_cjs_wrapped_module(hir)
+        && cross_module.app_metadata.entry_declared_esm.unwrap_or(
+            !hir.imports.is_empty() || !hir.exports.is_empty() || hir.has_top_level_await,
+        )
+}
+
 pub(super) fn compile_module_entry(
     llmod: &mut LlModule,
     hir: &HirModule,
@@ -1141,10 +1152,7 @@ pub(super) fn compile_module_entry(
             // Script" is the right answer there for a wrapped entry too — and
             // that predicate is mirrored in `perry-hir`'s `lower_module_fn`,
             // which runs before the wrap flag is knowable here.
-            let cjs_wrapped_entry = crate::collectors::is_cjs_wrapped_module(hir);
-            if (!hir.imports.is_empty() || !hir.exports.is_empty() || hir.has_top_level_await)
-                && !cjs_wrapped_entry
-            {
+            if entry_evaluates_as_esm(hir, cross_module) {
                 ctx.block().call_void("js_mark_entry_module_esm", &[]);
             }
             // Initialize static class fields with their declared init

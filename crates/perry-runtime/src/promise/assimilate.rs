@@ -239,12 +239,19 @@ pub(crate) fn promise_resolve_assimilating(promise: *mut Promise, value: f64) {
             // No own `then` → intrinsic `then`. Adopt via the native job so
             // the outer settles exactly two ticks later (V8 hop parity; see
             // `enqueue_native_adoption_job`).
-            OwnThen::None => {
+            OwnThen::None
+                if !super::promise_has_own_constructor(
+                    (value.get_nanbox_f64().to_bits() & crate::value::POINTER_MASK) as usize,
+                ) =>
+            {
                 let inner =
                     crate::value::js_nanbox_get_pointer(value.get_nanbox_f64()) as *mut Promise;
                 enqueue_native_adoption_job(p(), inner);
                 return;
             }
+            // An own constructor is read by the intrinsic then (its
+            // SpeciesConstructor step), so the job calls it as a thenable.
+            OwnThen::None => {}
         }
     }
 

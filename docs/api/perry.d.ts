@@ -4381,7 +4381,7 @@ declare module "zlib" {
   /** stdlib */
   export function brotliCompress(buffer: any, options?: any, callback?: any): void;
   /** stdlib */
-  export function brotliCompressSync(p0: string): Buffer;
+  export function brotliCompressSync(buffer: any, options?: any): Buffer;
   /** stdlib */
   export function brotliDecompress(buffer: any, options?: any, callback?: any): void;
   /** stdlib */
