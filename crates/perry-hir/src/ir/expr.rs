@@ -1312,6 +1312,18 @@ pub enum Expr {
         step_closure: Box<Expr>,
     },
 
+    /// Settled self-next continuation (SNC). Evaluates to a NaN-boxed bool:
+    /// true when the runtime proved that the FIFO round trip of publishing
+    /// this await and dispatching it again is unobservable, in which case the
+    /// await result has been written to the iter-result value cell and the
+    /// step continues in place; false declines (nothing changed) and the
+    /// caller takes the ordinary `AsyncStepChain` path.
+    /// Only emitted by `build_async_step_driver_direct`.
+    AsyncStepResumeNow {
+        value: Box<Expr>,
+        step_closure: Box<Expr>,
+    },
+
     /// Optimized done-case for the async-step driver: equivalent to
     /// `Promise.resolve(value)` at the position where the state machine
     /// terminates. Saves the per-call fulfilled-Promise allocation when

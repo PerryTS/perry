@@ -306,6 +306,7 @@ impl SH for Expr {
             Expr::IterResultGetValue => tag(h, 190),
             Expr::IterResultGetDone => tag(h, 191),
             Expr::AsyncStepChain { value, step_closure, } => { tag(h, 192); value.as_ref().hash(h); step_closure.as_ref().hash(h); }
+            Expr::AsyncStepResumeNow { value, step_closure, } => { tag(h, 12600); value.as_ref().hash(h); step_closure.as_ref().hash(h); }
             Expr::CryptoRandomBytes(e) => { tag(h, 193); e.as_ref().hash(h); }
             Expr::CryptoRandomUUID => tag(h, 194),
             Expr::CryptoRandomUUIDv7 => tag(h, 12042),
