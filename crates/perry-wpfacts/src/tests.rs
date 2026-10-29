@@ -10,6 +10,7 @@ mod array_record;
 mod binding_write_gap;
 mod birth_site;
 mod body_identity;
+mod callable_contract;
 mod builtin_members;
 mod callback_origin;
 mod captured;

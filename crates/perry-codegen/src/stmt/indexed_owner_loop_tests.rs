@@ -366,6 +366,7 @@ fn specialized_byte_stores_inside_transparent_hir_blocks_use_the_same_region() {
 
 fn string_code(index: Expr) -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
             object: Box::new(get(1)),
             property: "charCodeAt".into(),
@@ -375,7 +376,6 @@ fn string_code(index: Expr) -> Expr {
         args: vec![index],
         type_args: vec![],
         byte_offset: 0,
-        byte_end: 0,
     }
 }
 
@@ -455,11 +455,11 @@ fn string_region_rejects_rebinding_and_calls_before_any_body_effect() {
         vec![
             Stmt::Expr(string_code(get(3))),
             Stmt::Expr(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(get(2)),
                 args: vec![],
                 type_args: vec![],
                 byte_offset: 0,
-                byte_end: 0,
             }),
         ],
         vec![Stmt::If {

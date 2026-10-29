@@ -311,6 +311,7 @@ pub(crate) fn assert_stream_registries_available_for_tests() {
 
 /// Allocate a new stream id and store the initial state.
 pub(crate) fn alloc_stream(state: StreamState) -> usize {
+    register_stream_roots();
     let id = FS_STREAM_NEXT_ID.with(|c| {
         let mut c = c.borrow_mut();
         let id = *c;
@@ -324,6 +325,7 @@ pub(crate) fn alloc_stream(state: StreamState) -> usize {
 }
 
 fn alloc_utf8_stream(state: Utf8StreamState) -> usize {
+    register_stream_roots();
     let id = FS_UTF8_STREAM_NEXT_ID.with(|c| {
         let mut c = c.borrow_mut();
         let id = *c;
@@ -334,6 +336,15 @@ fn alloc_utf8_stream(state: Utf8StreamState) -> usize {
         r.borrow_mut().insert(id, state);
     });
     id
+}
+
+// Direct fs entry points can publish streams without materializing the fs
+// namespace. The registry must own its roots before retaining any JS values.
+fn register_stream_roots() {
+    crate::gc::gc_register_mutable_root_scanner_named_once(
+        "crate::fs::scan_fs_stream_roots_mut",
+        scan_fs_stream_roots_mut,
+    );
 }
 
 pub(crate) fn scan_fs_stream_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {

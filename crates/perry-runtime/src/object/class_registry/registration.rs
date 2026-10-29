@@ -420,9 +420,7 @@ pub(crate) fn class_accessor_function_value_bytes(
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let closure = scope.root_raw_mut_ptr(closure);
-    closure.with_mut_ptr(|closure| {
-        crate::closure::js_closure_set_capture_ptr(closure, 0, raw_ptr as i64)
-    });
+    closure.with_mut_ptr(|closure| crate::closure::closure_set_code_word(closure, 0, raw_ptr));
     // Spec `.length`: params before the first default/rest. A getter takes no
     // params (0); a setter takes exactly one formal param — but `set m(x = 42)`
     // has `.length === 0` (defaults don't count). Codegen records the setter's

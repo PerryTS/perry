@@ -578,7 +578,10 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // User function calls returning Number: skip js_number_coerce.
         // Without this, `fib(n-1) + fib(n-2)` wraps both results in
         // js_number_coerce — ~4 billion wasted runtime calls on fib(40).
-        Expr::Call { callee, .. } => {
+        Expr::Call { callee, args, .. } => {
+            if crate::stmt::numeric_callbacks::returns_number(ctx, callee, args.len()) {
+                return true;
+            }
             if let Expr::PropertyGet {
                 object, property, ..
             } = callee.as_ref()

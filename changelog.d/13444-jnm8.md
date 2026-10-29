@@ -1,0 +1,1 @@
+Preserve emitted callback identity across declaration units and admit immutable numeric captures once at guarded Number-loop entry. Private scalar returns now feed the loop proof; unknown values, mutations and mixed inputs keep the complete original loop. Known callback bodies skip redundant entry resolution.

@@ -326,7 +326,7 @@ pub extern "C" fn js_string_concat_box(l_value: f64, r_value: f64) -> f64 {
 /// regression traded for wall time, which is the wrong trade
 /// (`memory-parity-directive`).
 const CONCAT_MEMO_SIZE: usize = 512;
-const CONCAT_MEMO_MAX_BYTES: u32 = 12;
+pub(super) const CONCAT_MEMO_MAX_BYTES: u32 = 12;
 
 // Candidates per governor window.
 const MEMO_WINDOW: u32 = 4096;
@@ -378,7 +378,7 @@ per_test_global! {
 /// Count this candidate and report whether the memo path is worth walking.
 /// Closes a window every `MEMO_WINDOW` candidates.
 #[inline]
-fn concat_memo_should_probe() -> bool {
+pub(super) fn concat_memo_should_probe() -> bool {
     use std::sync::atomic::Ordering::Relaxed;
     let v = MEMO_GOV.load(Relaxed);
     let count = (v & GOV_COUNT_MASK) + 1;
@@ -409,7 +409,7 @@ fn concat_memo_should_probe() -> bool {
 }
 
 #[inline]
-fn concat_memo_note_hit() {
+pub(super) fn concat_memo_note_hit() {
     MEMO_GOV.fetch_add(1u64 << GOV_HIT_SHIFT, std::sync::atomic::Ordering::Relaxed);
 }
 
@@ -472,7 +472,7 @@ crate::perry_thread_local! {
 /// Otherwise records it and declines, so the first sighting costs nothing but
 /// a byte.
 #[inline]
-fn concat_memo_admit(slot: usize, tag: u8) -> bool {
+pub(super) fn concat_memo_admit(slot: usize, tag: u8) -> bool {
     CONCAT_MEMO_TAGS.with(|t| unsafe {
         let slot_tag = &mut (*t.get())[slot];
         if *slot_tag == tag {
@@ -561,17 +561,17 @@ fn concat_memo_lookup_parts(slot: usize, a: &[u8], b: &[u8]) -> *mut StringHeade
 /// primitives with an empty second operand — one hash/lookup definition,
 /// not two.
 #[inline]
-fn concat_memo_slot_and_tag(bytes: &[u8]) -> (usize, u8) {
+pub(super) fn concat_memo_slot_and_tag(bytes: &[u8]) -> (usize, u8) {
     concat_memo_slot_and_tag_parts(bytes, &[])
 }
 
 #[inline]
-fn concat_memo_lookup(slot: usize, bytes: &[u8]) -> *mut StringHeader {
+pub(super) fn concat_memo_lookup(slot: usize, bytes: &[u8]) -> *mut StringHeader {
     concat_memo_lookup_parts(slot, bytes, &[])
 }
 
 #[inline]
-fn concat_memo_insert(slot: usize, ptr: *mut StringHeader) {
+pub(super) fn concat_memo_insert(slot: usize, ptr: *mut StringHeader) {
     CONCAT_MEMO.with(|c| unsafe {
         // GC_STORE_AUDIT(ROOT): CONCAT_MEMO is scanned by scan_concat_memo_roots_mut.
         crate::gc::runtime_store_root_raw_mut_ptr_slot(&raw mut (*c.get())[slot], ptr);
@@ -1892,27 +1892,57 @@ pub(crate) fn format_ryu_js_into(value: f64, buf: &mut [u8; 32]) -> usize {
     len
 }
 
-/// Fast integer-to-ASCII formatting into a provided buffer.
-/// Returns the number of bytes written. Digits are written to the END
-/// of the buffer and then shifted to the front.
-#[inline]
-pub(crate) fn fast_itoa_u32(mut n: u32, buf: &mut [u8; 32]) -> usize {
-    if n == 0 {
-        buf[0] = b'0';
-        return 1;
-    }
-    // Size first, then write digits in place back-to-front. The old
-    // write-at-the-end-then-`copy_within` shape paid a libc `memmove` PLT
-    // call per conversion (runtime-length overlapping copy — it showed up
-    // as ~15% of the `"id-" + i` loop in `sample`, inlined into both
-    // concat entry points).
-    let len = n.ilog10() as usize + 1;
+/// Two decimal digits per entry, `"00".."99"`. A constant of the formatter,
+/// not a cache.
+const DIGIT_PAIRS: &[u8; 200] = b"0001020304050607080910111213141516171819\
+2021222324252627282930313233343536373839\
+4041424344454647484950515253545556575859\
+6061626364656667686970717273747576777879\
+8081828384858687888990919293949596979899";
+
+/// Decimal digit count of `n` (`0` has one).
+#[inline(always)]
+pub(crate) fn decimal_len(n: u32) -> usize {
+    (n | 1).ilog10() as usize + 1
+}
+
+/// Write the `len` decimal digits of `n` at `out..out+len`, two per step,
+/// back to front. `len` must be `decimal_len(n)`.
+///
+/// # Safety
+/// `out` is valid for `len` bytes.
+#[inline(always)]
+pub(crate) unsafe fn write_decimal(out: *mut u8, mut n: u32, len: usize) {
     let mut pos = len;
-    while n > 0 {
-        pos -= 1;
-        buf[pos] = b'0' + (n % 10) as u8;
-        n /= 10;
+    while n >= 100 {
+        let pair = (n % 100) as usize * 2;
+        n /= 100;
+        pos -= 2;
+        out.add(pos).copy_from_nonoverlapping(DIGIT_PAIRS.as_ptr().add(pair), 2);
     }
+    if n >= 10 {
+        pos -= 2;
+        let pair = n as usize * 2;
+        out.add(pos).copy_from_nonoverlapping(DIGIT_PAIRS.as_ptr().add(pair), 2);
+    } else {
+        pos -= 1;
+        *out.add(pos) = b'0' + n as u8;
+    }
+    debug_assert_eq!(pos, 0);
+}
+
+/// Fast integer-to-ASCII formatting into a provided buffer.
+/// Returns the number of bytes written.
+///
+/// The length is known first (one `ilog10`), then digits are written in place
+/// back-to-front two at a time: one divide by 100 per pair halves the serial
+/// multiply-high chain a digit-at-a-time loop pays (6-7 digit ids are the
+/// common shape).
+#[inline]
+pub(crate) fn fast_itoa_u32(n: u32, buf: &mut [u8; 32]) -> usize {
+    let len = decimal_len(n);
+    // SAFETY: `len <= 10 <= buf.len()`.
+    unsafe { write_decimal(buf.as_mut_ptr(), n, len) };
     len
 }
 

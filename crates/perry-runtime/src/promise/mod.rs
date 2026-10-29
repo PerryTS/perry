@@ -40,6 +40,8 @@ mod rejection_loop_tests;
 #[cfg(test)]
 mod resolving_function_kind_tests;
 pub mod scanners;
+mod settled_step;
+pub use settled_step::js_async_step_resume_now;
 pub mod spec_combinators;
 pub(crate) mod step_completion;
 pub mod subclass;
@@ -341,14 +343,29 @@ pub(crate) fn mt_profile_register() {
 // generators (async functions rewritten via async→generator). User-
 // visible generators (`function*`) still allocate real `{value, done}`
 // objects so `for...of` and external consumers see the spec shape.
+/// The iter-result transport is ONE thread-local record: every set/get pays a
+/// single TLS address computation. `kind` says how `value`/`value_i32` read.
+pub(crate) struct IterResultCell {
+    value: std::cell::Cell<f64>,
+    value_i32: std::cell::Cell<i32>,
+    kind: std::cell::Cell<u8>,
+    done: std::cell::Cell<bool>,
+}
+
+const ITER_KIND_VALUE: u8 = 0;
+const ITER_KIND_RAW_F64: u8 = 1;
+const ITER_KIND_RAW_I32: u8 = 2;
+const ITER_KIND_RAW_I1: u8 = 3;
+
 crate::perry_thread_local! {
-    static ITER_RESULT_VALUE: std::cell::Cell<f64> = const { std::cell::Cell::new(0.0) };
-    static ITER_RESULT_VALUE_I32: std::cell::Cell<i32> = const { std::cell::Cell::new(0) };
-    static ITER_RESULT_VALUE_I1: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    static ITER_RESULT_DONE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    static ITER_RESULT_VALUE_IS_RAW_F64: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    static ITER_RESULT_VALUE_IS_RAW_I32: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    static ITER_RESULT_VALUE_IS_RAW_I1: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static ITER_RESULT: IterResultCell = const {
+        IterResultCell {
+            value: std::cell::Cell::new(0.0),
+            value_i32: std::cell::Cell::new(0),
+            kind: std::cell::Cell::new(ITER_KIND_VALUE),
+            done: std::cell::Cell::new(false),
+        }
+    };
 }
 
 pub static MT_ITER_RESULT_SET_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -359,11 +376,11 @@ pub static MT_ITER_RESULT_SET_COUNT: AtomicU64 = AtomicU64::new(0);
 #[no_mangle]
 pub extern "C" fn js_iter_result_set(value: f64, done: i32) -> f64 {
     bump(&MT_ITER_RESULT_SET_COUNT);
-    ITER_RESULT_VALUE.with(|c| c.set(value));
-    ITER_RESULT_DONE.with(|c| c.set(done != 0));
-    ITER_RESULT_VALUE_IS_RAW_F64.with(|c| c.set(false));
-    ITER_RESULT_VALUE_IS_RAW_I32.with(|c| c.set(false));
-    ITER_RESULT_VALUE_IS_RAW_I1.with(|c| c.set(false));
+    ITER_RESULT.with(|c| {
+        c.value.set(value);
+        c.done.set(done != 0);
+        c.kind.set(ITER_KIND_VALUE);
+    });
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
@@ -372,11 +389,11 @@ pub extern "C" fn js_iter_result_set(value: f64, done: i32) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_iter_result_set_f64(value: f64, done: i32) -> f64 {
     bump(&MT_ITER_RESULT_SET_COUNT);
-    ITER_RESULT_VALUE.with(|c| c.set(value));
-    ITER_RESULT_DONE.with(|c| c.set(done != 0));
-    ITER_RESULT_VALUE_IS_RAW_F64.with(|c| c.set(true));
-    ITER_RESULT_VALUE_IS_RAW_I32.with(|c| c.set(false));
-    ITER_RESULT_VALUE_IS_RAW_I1.with(|c| c.set(false));
+    ITER_RESULT.with(|c| {
+        c.value.set(value);
+        c.done.set(done != 0);
+        c.kind.set(ITER_KIND_RAW_F64);
+    });
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
@@ -385,11 +402,11 @@ pub extern "C" fn js_iter_result_set_f64(value: f64, done: i32) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_iter_result_set_i32(value: i32, done: i32) -> f64 {
     bump(&MT_ITER_RESULT_SET_COUNT);
-    ITER_RESULT_VALUE_I32.with(|c| c.set(value));
-    ITER_RESULT_DONE.with(|c| c.set(done != 0));
-    ITER_RESULT_VALUE_IS_RAW_F64.with(|c| c.set(false));
-    ITER_RESULT_VALUE_IS_RAW_I32.with(|c| c.set(true));
-    ITER_RESULT_VALUE_IS_RAW_I1.with(|c| c.set(false));
+    ITER_RESULT.with(|c| {
+        c.value_i32.set(value);
+        c.done.set(done != 0);
+        c.kind.set(ITER_KIND_RAW_I32);
+    });
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
@@ -398,38 +415,36 @@ pub extern "C" fn js_iter_result_set_i32(value: i32, done: i32) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_iter_result_set_i1(value: i32, done: i32) -> f64 {
     bump(&MT_ITER_RESULT_SET_COUNT);
-    ITER_RESULT_VALUE_I1.with(|c| c.set(value != 0));
-    ITER_RESULT_DONE.with(|c| c.set(done != 0));
-    ITER_RESULT_VALUE_IS_RAW_F64.with(|c| c.set(false));
-    ITER_RESULT_VALUE_IS_RAW_I32.with(|c| c.set(false));
-    ITER_RESULT_VALUE_IS_RAW_I1.with(|c| c.set(true));
+    ITER_RESULT.with(|c| {
+        c.value_i32.set((value != 0) as i32);
+        c.done.set(done != 0);
+        c.kind.set(ITER_KIND_RAW_I1);
+    });
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
 /// Read the value half of the iter-result scratch slot.
 #[no_mangle]
 pub extern "C" fn js_iter_result_get_value() -> f64 {
-    if ITER_RESULT_VALUE_IS_RAW_I32.with(|c| c.get()) {
-        let value = ITER_RESULT_VALUE_I32.with(|c| c.get());
-        return f64::from_bits(crate::value::JSValue::int32(value).bits());
-    }
-    if ITER_RESULT_VALUE_IS_RAW_I1.with(|c| c.get()) {
-        let value = ITER_RESULT_VALUE_I1.with(|c| c.get());
-        return f64::from_bits(crate::value::JSValue::bool(value).bits());
-    }
-    ITER_RESULT_VALUE.with(|c| c.get())
+    ITER_RESULT.with(|c| match c.kind.get() {
+        ITER_KIND_RAW_I32 => f64::from_bits(crate::value::JSValue::int32(c.value_i32.get()).bits()),
+        ITER_KIND_RAW_I1 => {
+            f64::from_bits(crate::value::JSValue::bool(c.value_i32.get() != 0).bits())
+        }
+        _ => c.value.get(),
+    })
 }
 
 /// Read the value half for numeric consumers. Raw-f64 writes return directly;
 /// generic JSValue writes are coerced using ordinary JS number coercion.
 #[no_mangle]
 pub extern "C" fn js_iter_result_get_value_f64() -> f64 {
-    if ITER_RESULT_VALUE_IS_RAW_F64.with(|c| c.get()) {
-        ITER_RESULT_VALUE.with(|c| c.get())
-    } else if ITER_RESULT_VALUE_IS_RAW_I32.with(|c| c.get()) {
-        ITER_RESULT_VALUE_I32.with(|c| c.get()) as f64
-    } else {
-        crate::builtins::js_number_coerce(js_iter_result_get_value())
+    let (kind, value, value_i32) =
+        ITER_RESULT.with(|c| (c.kind.get(), c.value.get(), c.value_i32.get()));
+    match kind {
+        ITER_KIND_RAW_F64 => value,
+        ITER_KIND_RAW_I32 => value_i32 as f64,
+        _ => crate::builtins::js_number_coerce(js_iter_result_get_value()),
     }
 }
 
@@ -437,20 +452,12 @@ pub extern "C" fn js_iter_result_get_value_f64() -> f64 {
 /// directly; generic JSValue and other raw primitive writes use JS ToInt32.
 #[no_mangle]
 pub extern "C" fn js_iter_result_get_value_i32() -> i32 {
-    if ITER_RESULT_VALUE_IS_RAW_I32.with(|c| c.get()) {
-        return ITER_RESULT_VALUE_I32.with(|c| c.get());
-    }
-    if ITER_RESULT_VALUE_IS_RAW_I1.with(|c| c.get()) {
-        return if ITER_RESULT_VALUE_I1.with(|c| c.get()) {
-            1
-        } else {
-            0
-        };
-    }
-    let number = if ITER_RESULT_VALUE_IS_RAW_F64.with(|c| c.get()) {
-        ITER_RESULT_VALUE.with(|c| c.get())
-    } else {
-        crate::builtins::js_number_coerce(js_iter_result_get_value())
+    let (kind, value, value_i32) =
+        ITER_RESULT.with(|c| (c.kind.get(), c.value.get(), c.value_i32.get()));
+    let number = match kind {
+        ITER_KIND_RAW_I32 | ITER_KIND_RAW_I1 => return value_i32,
+        ITER_KIND_RAW_F64 => value,
+        _ => crate::builtins::js_number_coerce(js_iter_result_get_value()),
     };
     if !number.is_finite() {
         0
@@ -463,12 +470,9 @@ pub extern "C" fn js_iter_result_get_value_i32() -> i32 {
 /// generic JSValue and other raw primitive writes use ordinary JS truthiness.
 #[no_mangle]
 pub extern "C" fn js_iter_result_get_value_i1() -> i32 {
-    if ITER_RESULT_VALUE_IS_RAW_I1.with(|c| c.get()) {
-        return if ITER_RESULT_VALUE_I1.with(|c| c.get()) {
-            1
-        } else {
-            0
-        };
+    let (kind, value_i32) = ITER_RESULT.with(|c| (c.kind.get(), c.value_i32.get()));
+    if kind == ITER_KIND_RAW_I1 {
+        return (value_i32 != 0) as i32;
     }
     crate::value::js_is_truthy(js_iter_result_get_value())
 }
@@ -480,7 +484,7 @@ pub extern "C" fn js_iter_result_get_value_i1() -> i32 {
 pub extern "C" fn js_iter_result_get_done() -> f64 {
     const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
     const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
-    let d = ITER_RESULT_DONE.with(|c| c.get());
+    let d = ITER_RESULT.with(|c| c.done.get());
     f64::from_bits(if d { TAG_TRUE } else { TAG_FALSE })
 }
 
@@ -494,14 +498,11 @@ pub fn scan_iter_result_root(mark: &mut dyn FnMut(f64)) {
 }
 
 pub fn scan_iter_result_root_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    let is_raw_primitive = ITER_RESULT_VALUE_IS_RAW_F64.with(|c| c.get())
-        || ITER_RESULT_VALUE_IS_RAW_I32.with(|c| c.get())
-        || ITER_RESULT_VALUE_IS_RAW_I1.with(|c| c.get());
-    if !is_raw_primitive {
-        ITER_RESULT_VALUE.with(|c| {
-            visitor.visit_cell_f64_slot(c);
-        });
-    }
+    ITER_RESULT.with(|c| {
+        if c.kind.get() == ITER_KIND_VALUE {
+            visitor.visit_cell_f64_slot(&c.value);
+        }
+    });
 }
 
 #[cfg(feature = "keepalive-anchors")]

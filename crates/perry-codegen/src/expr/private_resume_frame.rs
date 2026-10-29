@@ -35,12 +35,16 @@ pub(crate) fn write_out_kind(ctx: &mut FnCtx<'_>) -> Result<()> {
         return Ok(());
     }
     let owner = current_closure_ptr_value(ctx, "private resume output")?;
-    let index = slot_index(ctx, 4);
-    let offset = slot_offset(ctx, &index);
-    let address = ctx.block().add(I64, &owner, &offset);
-    let ptr = ctx.block().inttoptr(I64, &address);
-    let kind = ctx.block().load(DOUBLE, &ptr);
-    let kind = ctx.block().fptosi(DOUBLE, &kind, I32);
+    let kind = if let Some(kind) = super::resume_locals::load_kind(ctx) {
+        kind
+    } else {
+        let index = slot_index(ctx, super::resume_locals::KIND_INDEX);
+        let offset = slot_offset(ctx, &index);
+        let address = ctx.block().add(I64, &owner, &offset);
+        let ptr = ctx.block().inttoptr(I64, &address);
+        let kind = ctx.block().load(DOUBLE, &ptr);
+        ctx.block().fptosi(DOUBLE, &kind, I32)
+    };
     // GC_STORE_AUDIT(POINTER_FREE): output kind is a compiler-owned i32.
     ctx.block().store(I32, &kind, "%frame_out_kind");
     let header = crate::target_layout::closure_header_size_bytes(ctx.target_triple).to_string();
@@ -478,6 +482,11 @@ pub(crate) fn parameter_value(
         block.bitcast_i64_to_double(&bits)
     } else if private && !asynchronous && params.len() == 2 && id == params[0].id {
         block.sitofp(I32, "%frame_op", DOUBLE)
+    } else if private && !asynchronous && params.len() == 2 && id == params[1].id {
+        // The sealed private callers (resume, above) pass undefined as
+        // the sent value on every step and close; no other caller reaches a
+        // private entry. The body therefore starts from that constant.
+        crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
     } else {
         format!("%arg{id}")
     }

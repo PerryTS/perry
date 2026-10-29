@@ -1364,6 +1364,22 @@ pub extern "C" fn js_closure_set_capture_bits(
     }
 }
 
+/// Store a code address (a function entry, never a heap reference) into a
+/// capture slot of a fresh closure. The word is not a GC edge, so the layout
+/// stays as it is: routing it through the generic setter would let the
+/// address' low bits decide whether `layout_pointer_bearing_bits` calls it a
+/// pointer, and a function that merely lands 8-aligned would demote a
+/// pointer-free closure. Linking or code motion must not change runtime work.
+pub(crate) fn closure_set_code_word(closure: *mut ClosureHeader, index: u32, code: usize) {
+    if closure.is_null() {
+        return;
+    }
+    unsafe {
+        // GC_STORE_AUDIT(POINTER_FREE): a function entry address is not a heap reference; the collector never reads this word as an edge.
+        *closure_capture_slots_mut(closure).add(index as usize) = code as u64;
+    }
+}
+
 /// Set a capture slot which codegen has proven contains a raw variable-box
 /// pointer. Keeping this separate from the generic setter prevents arbitrary
 /// pointer-shaped JS values from becoming false box-lifetime edges.
