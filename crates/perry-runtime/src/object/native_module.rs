@@ -33,6 +33,7 @@ mod namespace_builders;
 mod namespace_prototype;
 mod vtable_impls;
 mod web_locks;
+pub(crate) mod worker_environment;
 
 pub(crate) use callable_export_check::is_native_module_callable_export;
 pub use callable_exports::bound_native_callable_export_value;
