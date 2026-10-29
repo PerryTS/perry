@@ -1334,7 +1334,9 @@ pub(crate) unsafe fn nm_attach_module(
     // Born non-constructable (`publish_bound_export_birth`).
     debug_assert!(
         !bound_export_is_non_constructable("module", property_name)
-            || builtin_closure_is_non_constructable(crate::value::js_nanbox_get_pointer(value) as usize)
+            || builtin_closure_is_non_constructable(
+                crate::value::js_nanbox_get_pointer(value) as usize
+            )
     );
     value
 }

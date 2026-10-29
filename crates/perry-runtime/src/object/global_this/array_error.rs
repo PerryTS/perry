@@ -1213,4 +1213,3 @@ mod native_args_tests;
 
 #[cfg(test)]
 mod variadic_args_tests;
-
