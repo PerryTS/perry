@@ -826,7 +826,9 @@ pub(super) fn an_argument_contract_ascends_so_the_units_reach_a_fixpoint() {
         t.cancel();"#;
     let pf = bounded(60, move || units_of(&[("ee", EE_FIRST), ("m", m)]))
         .expect("D16: the per-unit fixpoint did not end in 60 s");
-    assert_eq!(pf.rounds, 6, "rounds {:?}", pf.round_work);
+    // DEC223 keeps callable identity described while its entry stays unknown,
+    // so the same ascending join now settles in three rounds. Bound unchanged.
+    assert_eq!(pf.rounds, 3, "rounds {:?}", pf.round_work);
 }
 
 #[test]
@@ -1375,4 +1377,65 @@ pub(super) fn a_store_effect_ascends_so_the_units_reach_a_fixpoint() {
         .find(|t| t.birth_keys == ["k"])
         .expect("the literal");
     assert!(!field(o, "k").readonly, "{}", pf.dump_text());
+}
+
+#[test]
+fn a_closed_callback_in_the_callers_scc_is_published() {
+    let src = r#"
+        function invoke(cb: any) { return cb(0); }
+        function first(x: any): any { if (x) return root(x - 1); return 1; }
+        function second(x: any): any { if (x) return root(x - 1); return 2; }
+        function root(x: any): any {
+            if (x) return first(x - 1) + second(x - 1);
+            return invoke(first) + invoke(second);
+        }
+        console.log(root(1));
+    "#;
+    let pf = units(src);
+    let calls: Vec<_> = pf
+        .sites
+        .iter()
+        .filter(|s| {
+            s.is_call
+                && s.targets
+                    .iter()
+                    .any(|t| t.contains(":first") || t.contains(":second"))
+        })
+        .collect();
+    assert!(!calls.is_empty());
+    let callback_calls: Vec<_> = pf
+        .sites
+        .iter()
+        .filter(|s| s.is_call && s.byte_offset == src.find("cb(0)").unwrap() as u32 + 1)
+        .collect();
+    assert!(!callback_calls.is_empty(), "{}", pf.dump_text());
+    assert!(
+        callback_calls
+            .iter()
+            .all(|s| matches!(s.verdict, Verdict::T0Mono | Verdict::T0Set)),
+        "{}",
+        pf.dump_text()
+    );
+    assert!(
+        callback_calls.iter().all(|s| s.targets.len() == 2),
+        "{}",
+        pf.dump_text()
+    );
+    // A later unknown holder may invoke the callee with any callback.
+    let sabotage = src.replace(
+        "console.log(root(1));",
+        "console.log(root(1)); (globalThis as any).leak = invoke;",
+    );
+    let refused = units(&sabotage);
+    let observed: Vec<_> = refused
+        .sites
+        .iter()
+        .filter(|s| s.is_call && s.byte_offset == src.find("cb(0)").unwrap() as u32 + 1)
+        .collect();
+    assert!(!observed.is_empty());
+    assert!(
+        observed.iter().all(|s| matches!(s.verdict, Verdict::No(_))),
+        "{}",
+        refused.dump_text()
+    );
 }
