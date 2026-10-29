@@ -901,9 +901,11 @@ impl Model {
     /// DECISIONS 165: a method no unit runs (`Gen::published_args`), once
     /// the solve knows it is a method of a published class
     /// (`published_this`): its parameter markers stand for no value.
+    /// DECISIONS 224: so for a function published to a known closed callee
+    /// (`callable_pub`), whose runners publish what they pass as a method's
+    /// do: a run one's described parameters hold that join beside them.
     pub(crate) fn method_described(&self, f: FnIdx) -> Option<&Vec<bool>> {
-        self.published_this
-            .contains_key(&f)
+        (self.published_this.contains_key(&f) || self.callable_pub.contains(&f))
             .then(|| self.method_described.get(&f))
             .flatten()
     }

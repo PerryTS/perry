@@ -116,6 +116,10 @@ pub const GC_TYPE_REGEXP: u8 = 20;
 /// Immutable Perex program words. All operands are integers/relative offsets;
 /// the allocation is a movable leaf reached through its RegExp owner.
 pub const GC_TYPE_REGEX_PROGRAM: u8 = 21;
+/// The lazy automaton's storage for one Perex program: plain `u32` words only
+/// `perex::dfa` reads and writes, reached through its program cell's one traced
+/// edge. Allocated old at the program's first automaton search; a leaf.
+pub const GC_TYPE_REGEX_CACHE: u8 = 41;
 pub const GC_TYPE_BOX: u8 = 22;
 const _: () = assert!(GC_TYPE_BOX == perry_abi::GC_TYPE_BOX);
 pub const GC_TYPE_I32_BOX: u8 = 23;
@@ -434,6 +438,9 @@ pub(crate) enum GcRewriteDescriptorKind {
     /// #6759 phase 1: a cell whose ONLY traced edge is its metadata record.
     /// `DateCell` was `Leaf` (pointer-free) before it gained a `meta` field.
     MetaOnly,
+    /// A Perex program cell: its one traced edge is the raw pointer to its
+    /// lazy automaton's storage (`regex::perex_owner::ProgramCell::dfa`).
+    RegexProgram,
     /// The optional NaN-boxed back-edge from a payload cell to its owner.
     NativeHandle,
     NativePodView,
@@ -894,6 +901,21 @@ const CORE_TYPE_INFOS: &[Option<GcTypeInfo>] = &[
     Some(gc_type_info_entry(
         GC_TYPE_REGEX_PROGRAM,
         "regex_program",
+        GcAllocationPolicy::Arena,
+        true,
+        GcRewriteDescriptorKind::RegexProgram,
+        GcLayoutSlotKind::None,
+        true,
+        GcExternalBytePolicy::InlinePayload,
+        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        false,
+        GcMoveHookKind::None,
+        GcRewriteHookKind::None,
+        GcFinalizeHookKind::None,
+    )),
+    Some(gc_type_info_entry(
+        GC_TYPE_REGEX_CACHE,
+        "regex_cache",
         GcAllocationPolicy::Arena,
         true,
         GcRewriteDescriptorKind::Leaf,
@@ -1498,6 +1520,7 @@ pub(crate) fn validate_gc_type_info(info: &GcTypeInfo) -> Result<(), &'static st
         | GcRewriteDescriptorKind::Scope
         | GcRewriteDescriptorKind::Buffer
         | GcRewriteDescriptorKind::MetaOnly
+        | GcRewriteDescriptorKind::RegexProgram
         | GcRewriteDescriptorKind::NativeHandle
         | GcRewriteDescriptorKind::Promise
         | GcRewriteDescriptorKind::AsyncSnapshot

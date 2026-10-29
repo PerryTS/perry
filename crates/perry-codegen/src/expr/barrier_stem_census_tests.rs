@@ -101,6 +101,7 @@ pub(super) const VERIFIED_BARRIER_STEMS: &[(&str, StemKind)] = &[
     ("idxset.recv_global", StemKind::ValueAndGenerationTested),
     ("idxset.recv_prop", StemKind::ValueAndGenerationTested),
     ("idxset.runtime_key", StemKind::ValueAndGenerationTested),
+    ("frame_slot", StemKind::ValueAndGenerationTested),
     ("family_set", StemKind::PointerTestedStore),
     ("l2i", StemKind::PointerTestedStore),
     ("l2s", StemKind::PointerTestedStore),
@@ -108,6 +109,9 @@ pub(super) const VERIFIED_BARRIER_STEMS: &[(&str, StemKind)] = &[
     ("put.pic", StemKind::PointerTestedStore),
     ("scope_set", StemKind::ValueAndGenerationTested),
 ];
+
+#[path = "barrier_frame_slot_probe.rs"]
+mod frame_slot_probe;
 
 const BARRIER_CALL: &str = "call void @js_write_barrier_slot";
 const INCREMENTAL_GLOBAL: &str = "@PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT";
@@ -1204,6 +1208,7 @@ fn append_ir() -> String {
 fn probe_ir(stem: &str) -> String {
     match stem {
         "apush" => apush_ir(),
+        "frame_slot" => frame_slot_probe::ir(),
         "append" => append_ir(),
         "family_set" | "l2s" | "l2i" => family_store_ir(),
         "class_field_set" => super::class_field_barrier_tests::ir(),
