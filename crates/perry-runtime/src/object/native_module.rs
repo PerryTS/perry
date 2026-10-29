@@ -86,7 +86,7 @@ crate::perry_thread_local! {
     /// Every minted bound export by `"<module>\0<property>"`. Read on hot
     /// paths (`new EventEmitter()` resolves its prototype through it), so it
     /// hashes with aHash, which keeps a random key without SipHash's rounds.
-    pub(crate) static NATIVE_CALLABLE_EXPORTS: RefCell<HashMap<String, u64, ahash::RandomState>> =
+    pub(crate) static NATIVE_CALLABLE_EXPORTS: RefCell<HashMap<String, u64, crate::fast_hash::AHashState>> =
         RefCell::new(HashMap::default());
     pub(crate) static NATIVE_MODULE_ACCESSOR_EXPORTS: RefCell<HashMap<String, u64>> =
         RefCell::new(HashMap::new());

@@ -16,6 +16,13 @@ workspace = true
 crate-type = ["rlib"]
 
 [features]
+# MEASUREMENT ONLY (scripts/a1/irdiff.sh builds both arms with it). The startup-path
+# `ahash` maps (`fast_hash::AHashState`) seed from fixed constants instead of
+# `RandomState::new()`, whose seed mixes in static and stack addresses, so exact-Ir
+# diffs stop depending on where the linker put `.data`. Off by default: the default
+# build constructs `ahash::RandomState::new()` exactly as before. Never ship it
+# (fixed seeds lose the flooding resistance the random keys are for).
+fixed-hash-seeds = []
 # Phase A acceptance census and fault hooks. Scalar counts only; compiled out
 # of shipped builds. Ext-net's dev dependency enables the binding witnesses.
 native-payload-test-census = []
