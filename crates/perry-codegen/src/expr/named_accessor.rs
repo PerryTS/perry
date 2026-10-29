@@ -74,7 +74,18 @@ pub(super) fn candidate(
             ctx.classes,
             &keys,
         );
-    let function = if safe_body && ctx.pshape_methods.contains_key(&key) {
+    // Outside a closed proof the guard also admits the class family layout,
+    // whose slots are boxed: a dynamic store of a non-Number there keeps the
+    // family word, so a body that reads an F64 lane without a check would
+    // read a pointer as a double. Such a body is entered only on the exact
+    // birth word, which no family-born receiver carries.
+    let lane_body_unsound = !contained
+        && !numeric.is_empty()
+        && ctx
+            .class_ids
+            .get(&class)
+            .is_some_and(|id| ctx.program_layouts.families.contains_key(id));
+    let function = if safe_body && !lane_body_unsound && ctx.pshape_methods.contains_key(&key) {
         let public = ctx.methods.get(&key)?;
         let public = if chain.len() == 1 {
             public.clone()

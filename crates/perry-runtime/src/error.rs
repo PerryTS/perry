@@ -1758,7 +1758,46 @@ pub(crate) unsafe fn throw_frozen_write(obj: *const crate::ObjectHeader, key: &s
             ));
         }
     }
+    // A function-constructed instance has no class id; node names it by its
+    // constructor (`'#<H>'` for `new H()`), read through the prototype link.
+    if let Some(name) = constructor_display_name(obj) {
+        crate::collection_iter::throw_type_error(&format!(
+            "Cannot assign to read only property '{key}' of object '#<{name}>'"
+        ));
+    }
     throw_immutable_write(0, key)
+}
+
+/// The name of the constructor `obj` inherits (`obj.__proto__.constructor.name`)
+/// when it is a user function with a non-empty name other than `Object`;
+/// `None` otherwise. Only called on a throw.
+///
+/// # Safety
+/// `obj` is a live ordinary object.
+#[cold]
+unsafe fn constructor_display_name(obj: *const crate::ObjectHeader) -> Option<String> {
+    let receiver = crate::value::js_nanbox_pointer(obj as i64);
+    let proto = crate::object::js_object_get_prototype_of(receiver);
+    let proto_bits = crate::JSValue::from_bits(proto.to_bits());
+    if !proto_bits.is_pointer() {
+        return None;
+    }
+    let get = |value: f64, name: &str| {
+        crate::value::js_get_property(value, name.as_ptr() as i64, name.len() as i64)
+    };
+    let ctor = get(proto, "constructor");
+    if !crate::JSValue::from_bits(ctor.to_bits()).is_pointer() {
+        return None;
+    }
+    let name = get(ctor, "name");
+    let name_value = crate::JSValue::from_bits(name.to_bits());
+    if !name_value.is_any_string() {
+        return None;
+    }
+    let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let bytes = crate::string::js_string_key_bytes(name_value, &mut sso)?;
+    let text = std::str::from_utf8(bytes).ok()?;
+    (!text.is_empty() && text != "Object").then(|| text.to_string())
 }
 
 // #2836/#2838/#2904: keep the codegen-emitted error FFIs alive through the
