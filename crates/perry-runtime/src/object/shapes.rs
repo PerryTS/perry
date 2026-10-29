@@ -261,9 +261,20 @@ impl ShapeDescriptor {
     /// which is the authority (the array can be a longer shared backing).
     #[inline]
     pub(crate) fn keys_view(&self) -> crate::object::ObjectKeys {
-        crate::object::ObjectKeys::new(
+        // The node is the slab record's: a descriptor lifted from the table
+        // names its record, and the trie validates the node against these
+        // keys on use, so a stale copy can only miss, never mislead.
+        let node = if self.record == 0 {
+            crate::object::canonical_keys::NO_NODE
+        } else {
+            // SAFETY: slab record addresses never move (#9706); `record` was
+            // lifted from a live record.
+            unsafe { (*(self.record as *const shapes_store::ShapeRecord)).keys_node() }
+        };
+        crate::object::ObjectKeys::with_node(
             self.keys as usize as *mut ArrayHeader,
             self.logical_key_count,
+            node,
         )
     }
 
@@ -419,7 +430,7 @@ impl ShapeRecordRef {
     /// asked before any per-key attribute lookup.
     #[inline]
     pub(crate) fn element_kind(self) -> u64 {
-        unsafe { u64::from((*self.0.as_ptr()).element_kind) }
+        unsafe { u64::from((*self.0.as_ptr()).element_kind()) }
     }
 
     /// The class family layout this record is an evaluation copy of, or 0
@@ -447,6 +458,32 @@ impl ShapeRecordRef {
     pub(crate) fn keys(self) -> u64 {
         // SAFETY: a live slab record (type docs).
         unsafe { (*self.0.as_ptr()).keys }
+    }
+
+    /// The first `count` of this record's keys: its own list (with the node
+    /// it carries) at its own count, a node-less prefix view otherwise.
+    #[inline]
+    pub(crate) fn keys_view_of(self, count: u32) -> crate::object::ObjectKeys {
+        let view = self.keys_view();
+        if view.count() == count {
+            view
+        } else {
+            crate::object::ObjectKeys::new(view.arr(), count)
+        }
+    }
+
+    /// This record's ordered keys with the trie node it carries.
+    #[inline]
+    pub(crate) fn keys_view(self) -> crate::object::ObjectKeys {
+        // SAFETY: a live slab record (type docs).
+        unsafe {
+            let record = &*self.0.as_ptr();
+            crate::object::ObjectKeys::with_node(
+                record.keys as usize as *mut ArrayHeader,
+                record.logical_key_count,
+                record.keys_node(),
+            )
+        }
     }
 
     /// A static record: an external carrier (a compiler-owned layout or
@@ -1601,7 +1638,7 @@ pub(crate) fn test_shape_id_counter() -> u32 {
 /// its exhaustion tests remain reviewable.
 #[cfg_attr(feature = "shape-mint-diag", track_caller)]
 pub(crate) fn shape_descriptor_ensure_with_generation(
-    keys: *const ArrayHeader,
+    keys: impl Into<ShapeKeys>,
     logical_key_count: u32,
     live_inline_slot_count: u32,
     semantic_generation: u64,
@@ -1609,8 +1646,9 @@ pub(crate) fn shape_descriptor_ensure_with_generation(
     proto_id: u64,
     receiver: ReceiverFacts,
 ) -> Result<LayoutWord, ShapeDescriptorError> {
+    let shape_keys: ShapeKeys = keys.into();
     shape_descriptor_ensure_with_holes(
-        keys,
+        shape_keys,
         logical_key_count,
         live_inline_slot_count,
         semantic_generation,
@@ -1666,7 +1704,7 @@ fn static_shape_id_refused_abort(requested: ShapeId, proto_id: u64) -> ! {
 #[allow(clippy::too_many_arguments)]
 #[cfg_attr(feature = "shape-mint-diag", track_caller)]
 pub(crate) fn shape_descriptor_ensure_with_holes(
-    keys: *const ArrayHeader,
+    keys: impl Into<ShapeKeys>,
     logical_key_count: u32,
     live_inline_slot_count: u32,
     semantic_generation: u64,
@@ -1676,8 +1714,9 @@ pub(crate) fn shape_descriptor_ensure_with_holes(
     receiver: ReceiverFacts,
     requested: Option<ShapeId>,
 ) -> Result<LayoutWord, ShapeDescriptorError> {
+    let shape_keys: ShapeKeys = keys.into();
     shape_descriptor_ensure_with_rep(
-        keys,
+        shape_keys,
         logical_key_count,
         live_inline_slot_count,
         semantic_generation,
@@ -1705,7 +1744,7 @@ pub(crate) fn shape_descriptor_ensure_with_holes(
 #[cfg_attr(feature = "shape-mint-diag", track_caller)]
 #[inline(always)]
 pub(crate) fn shape_descriptor_ensure_with_rep(
-    keys: *const ArrayHeader,
+    keys: impl Into<ShapeKeys>,
     logical_key_count: u32,
     live_inline_slot_count: u32,
     semantic_generation: u64,
@@ -1716,6 +1755,8 @@ pub(crate) fn shape_descriptor_ensure_with_rep(
     rep: u64,
     requested: Option<ShapeId>,
 ) -> Result<LayoutWord, ShapeDescriptorError> {
+    let shape_keys: ShapeKeys = keys.into();
+    let keys = shape_keys.arr();
     if !super::field_rep::is_valid(rep) {
         return Err(ShapeDescriptorError::InvalidFacts);
     }
@@ -1733,7 +1774,7 @@ pub(crate) fn shape_descriptor_ensure_with_rep(
             unsafe { crate::object::key_attrs::keys_summary_checked(keys, logical_key_count) }
         };
     shape_descriptor_intern_with_rep(
-        keys,
+        shape_keys,
         logical_key_count,
         live_inline_slot_count,
         semantic_generation,
@@ -1812,6 +1853,77 @@ pub(crate) fn shape_descriptor_find_with_rep(
     })
 }
 
+/// A shape's key list as the mint receives it: the keys array and the
+/// canonical trie node its holder carries (`canonical_keys::NO_NODE` for an
+/// owned list or a holder without one). The node is recorded on a minted
+/// record (`ShapeRecord::keys_node`); it never enters identity, which folds
+/// and compares the array word.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ShapeKeys {
+    arr: *const ArrayHeader,
+    /// The count the node names; a node is recorded only for that count.
+    count: u32,
+    node: u32,
+}
+
+impl ShapeKeys {
+    #[inline]
+    pub(crate) fn arr(self) -> *const ArrayHeader {
+        self.arr
+    }
+
+    /// The trie node of the list of `count` keys of this array, if the holder
+    /// carried that list's node, else `canonical_keys::NO_NODE`.
+    #[inline]
+    pub(crate) fn node_for(self, count: u32) -> u32 {
+        if self.count == count {
+            self.node
+        } else {
+            crate::object::canonical_keys::NO_NODE
+        }
+    }
+}
+
+impl From<*const ArrayHeader> for ShapeKeys {
+    #[inline]
+    fn from(arr: *const ArrayHeader) -> Self {
+        ShapeKeys {
+            arr,
+            count: u32::MAX,
+            node: crate::object::canonical_keys::NO_NODE,
+        }
+    }
+}
+
+impl From<*mut ArrayHeader> for ShapeKeys {
+    #[inline]
+    fn from(arr: *mut ArrayHeader) -> Self {
+        ShapeKeys::from(arr as *const ArrayHeader)
+    }
+}
+
+impl From<crate::object::canonical_keys::CanonicalKeys> for ShapeKeys {
+    #[inline]
+    fn from(keys: crate::object::canonical_keys::CanonicalKeys) -> Self {
+        ShapeKeys {
+            arr: keys.as_const_ptr(),
+            count: keys.len(),
+            node: keys.node(),
+        }
+    }
+}
+
+impl From<crate::object::ObjectKeys> for ShapeKeys {
+    #[inline]
+    fn from(keys: crate::object::ObjectKeys) -> Self {
+        ShapeKeys {
+            arr: keys.arr(),
+            count: keys.count(),
+            node: keys.node(),
+        }
+    }
+}
+
 /// The twin of an existing shape that differs only in `object_kind` (charter
 /// step 3: the store facts are kinds). Every other fact, the attribute summary
 /// included, is copied from `source`'s record, whose summary was derived from
@@ -1861,7 +1973,7 @@ pub(crate) fn shape_descriptor_kind_twin(
 #[allow(clippy::too_many_arguments)]
 #[cfg_attr(feature = "shape-mint-diag", track_caller)]
 pub(crate) fn shape_descriptor_intern_with_rep(
-    keys: *const ArrayHeader,
+    keys: impl Into<ShapeKeys>,
     logical_key_count: u32,
     live_inline_slot_count: u32,
     semantic_generation: u64,
@@ -1874,11 +1986,12 @@ pub(crate) fn shape_descriptor_intern_with_rep(
     requested: Option<ShapeId>,
     integrity_flags: u16,
 ) -> Result<LayoutWord, ShapeDescriptorError> {
+    let shape_keys: ShapeKeys = keys.into();
     if !super::field_rep::is_valid(rep) {
         return Err(ShapeDescriptorError::InvalidFacts);
     }
     shape_descriptor_intern_with_special(
-        keys,
+        shape_keys,
         logical_key_count,
         live_inline_slot_count,
         semantic_generation,
@@ -1899,7 +2012,7 @@ pub(crate) fn shape_descriptor_intern_with_rep(
 #[allow(clippy::too_many_arguments)]
 #[cfg_attr(feature = "shape-mint-diag", track_caller)]
 pub(crate) fn shape_descriptor_intern_with_special(
-    keys: *const ArrayHeader,
+    keys: impl Into<ShapeKeys>,
     logical_key_count: u32,
     live_inline_slot_count: u32,
     semantic_generation: u64,
@@ -1913,8 +2026,9 @@ pub(crate) fn shape_descriptor_intern_with_special(
     requested: Option<ShapeId>,
     integrity_flags: u16,
 ) -> Result<LayoutWord, ShapeDescriptorError> {
+    let shape_keys: ShapeKeys = keys.into();
     shape_descriptor_intern_with_special_mode(
-        keys,
+        shape_keys,
         logical_key_count,
         live_inline_slot_count,
         semantic_generation,
@@ -1938,7 +2052,7 @@ pub(crate) fn shape_descriptor_intern_with_special(
 #[allow(clippy::too_many_arguments)]
 #[cfg_attr(feature = "shape-mint-diag", track_caller)]
 fn shape_descriptor_intern_with_special_mode(
-    keys: *const ArrayHeader,
+    keys: impl Into<ShapeKeys>,
     logical_key_count: u32,
     live_inline_slot_count: u32,
     semantic_generation: u64,
@@ -1954,6 +2068,8 @@ fn shape_descriptor_intern_with_special_mode(
     static_constfn: bool,
     integrity_flags: u16,
 ) -> Result<LayoutWord, ShapeDescriptorError> {
+    let shape_keys: ShapeKeys = keys.into();
+    let keys = shape_keys.arr();
     let Some(mask) = shapes_store::constfn_mask(infos) else {
         return Err(ShapeDescriptorError::InvalidFacts);
     };
@@ -2029,7 +2145,8 @@ fn shape_descriptor_intern_with_special_mode(
         )
         .with_proto_id(proto_id)
         .with_summary(summary)
-        .with_special_facts(rep, infos, brands);
+        .with_special_facts(rep, infos, brands)
+        .with_keys_node(shape_keys.node_for(logical_key_count));
         record.set_integrity_flags(integrity_flags);
         return publish_static_record(request, record, facts).map(|p| p.word);
     }
@@ -2038,11 +2155,11 @@ fn shape_descriptor_intern_with_special_mode(
     if let Some(ids) = inner.by_facts.get(&facts) {
         let slab = table.slab();
         for &id in ids.as_slice() {
-            let Some(record) = slab.handle_record_ptr(id) else {
+            let Some(record_ptr) = slab.handle_record_ptr(id) else {
                 continue;
             };
             // SAFETY: live slab record, read immediately.
-            let record = unsafe { *record };
+            let record = unsafe { *record_ptr };
             // The bucket is a 64-bit fold: validate the facts on every hit.
             if record.has(RECORD_FLAG_FACTS_INDEXED)
                 && record.integrity_flags() == integrity_flags
@@ -2062,6 +2179,15 @@ fn shape_descriptor_intern_with_special_mode(
             {
                 #[cfg(any(test, feature = "shape-mint-diag"))]
                 crate::object::shape_mint_census::note_memo_hit();
+                // The record learns its list's node from the first holder
+                // that carries one: the same `(keys, count)`, so the same
+                // list. Not identity; the trie validates it on every use.
+                let node = shape_keys.node_for(logical_key_count);
+                if node != crate::object::canonical_keys::NO_NODE && record.keys_node() != node {
+                    // SAFETY: a live slab record; the packed node is not read
+                    // by identity, the collector or generated code.
+                    unsafe { (*record_ptr).set_keys_node(node) };
+                }
                 return Ok(id);
             }
         }
@@ -2070,6 +2196,7 @@ fn shape_descriptor_intern_with_special_mode(
     shape_descriptor_mint_fresh(
         facts,
         keys_id,
+        shape_keys.node_for(logical_key_count),
         logical_key_count,
         live_inline_slot_count,
         semantic_generation,
@@ -2102,6 +2229,7 @@ fn shape_descriptor_intern_with_special_mode(
 fn shape_descriptor_mint_fresh(
     facts: u64,
     keys_id: u64,
+    keys_node: u32,
     logical_key_count: u32,
     live_inline_slot_count: u32,
     semantic_generation: u64,
@@ -2164,7 +2292,8 @@ fn shape_descriptor_mint_fresh(
     )
     .with_proto_id(proto_id)
     .with_summary(summary)
-    .with_special_facts(rep, infos, brands);
+    .with_special_facts(rep, infos, brands)
+    .with_keys_node(keys_node);
     let mut record = record;
     if integrity_flags != 0 {
         record.set_integrity_flags(integrity_flags);
@@ -2228,12 +2357,13 @@ fn shape_descriptor_mint_fresh(
 
 #[cfg_attr(feature = "shape-mint-diag", track_caller)]
 pub(crate) fn shape_descriptor_ensure(
-    keys: *const ArrayHeader,
+    keys: impl Into<ShapeKeys>,
     logical_key_count: u32,
     live_inline_slot_count: u32,
 ) -> Result<LayoutWord, ShapeDescriptorError> {
+    let shape_keys: ShapeKeys = keys.into();
     shape_descriptor_ensure_with_generation(
-        keys,
+        shape_keys,
         logical_key_count,
         live_inline_slot_count,
         0,
@@ -2252,12 +2382,13 @@ pub(crate) fn shape_descriptor_ensure(
 #[cfg_attr(feature = "shape-mint-diag", track_caller)]
 pub(crate) unsafe fn shape_descriptor_ensure_for_object(
     obj: *const crate::object::ObjectHeader,
-    keys: *const ArrayHeader,
+    keys: impl Into<ShapeKeys>,
     logical_key_count: u32,
     live_inline_slot_count: u32,
 ) -> Result<LayoutWord, ShapeDescriptorError> {
+    let shape_keys: ShapeKeys = keys.into();
     shape_descriptor_ensure_with_generation(
-        keys,
+        shape_keys,
         logical_key_count,
         live_inline_slot_count,
         0,
@@ -2504,8 +2635,9 @@ pub(crate) fn publish_shape_result(result: Result<LayoutWord, ShapeDescriptorErr
 /// Compatibility mint for canonical shapes whose key and live-slot counts are
 /// identical. New object-aware paths use [`shape_descriptor_ensure`] directly.
 #[cfg_attr(feature = "shape-mint-diag", track_caller)]
-pub(crate) fn layout_for_keys_ensure(keys: *const ArrayHeader, key_count: u32) -> LayoutWord {
-    publish_shape_result(shape_descriptor_ensure(keys, key_count, key_count))
+pub(crate) fn layout_for_keys_ensure(keys: impl Into<ShapeKeys>, key_count: u32) -> LayoutWord {
+    let shape_keys: ShapeKeys = keys.into();
+    publish_shape_result(shape_descriptor_ensure(shape_keys, key_count, key_count))
 }
 
 /// One FIELD of a shape's descriptor, without lifting the whole record.
@@ -3051,13 +3183,14 @@ pub extern "C" fn js_object_layout_for_class_keys_live(
 /// is the driver's static id for these facts (design step 4), whose content
 /// includes the rep.
 pub(crate) fn class_birth_shape_ensure(
-    keys: *const ArrayHeader,
+    keys: impl Into<ShapeKeys>,
     key_count: u32,
     live: u32,
     class_id: u32,
     rep: u64,
     requested: Option<ShapeId>,
 ) -> Result<LayoutWord, ShapeDescriptorError> {
+    let shape_keys: ShapeKeys = keys.into();
     let key_lanes = if key_count >= super::field_rep::REP_SLOTS {
         u64::MAX
     } else {
@@ -3067,7 +3200,7 @@ pub(crate) fn class_birth_shape_ensure(
         return Err(ShapeDescriptorError::InvalidFacts);
     }
     shape_descriptor_ensure_with_rep(
-        keys,
+        shape_keys,
         key_count,
         live.max(key_count),
         0,
@@ -3087,7 +3220,7 @@ pub(crate) fn class_birth_shape_ensure(
 /// A seed and post-construction finalizer enter with identical facts.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn final_shape_ensure_constfn(
-    keys: *const ArrayHeader,
+    keys: impl Into<ShapeKeys>,
     key_count: u32,
     live: u32,
     class_id: u32,
@@ -3095,6 +3228,8 @@ pub(crate) fn final_shape_ensure_constfn(
     infos: &[shapes_store::ConstFnSlotInfo],
     requested: Option<ShapeId>,
 ) -> Result<LayoutWord, ShapeDescriptorError> {
+    let shape_keys: ShapeKeys = keys.into();
+    let keys = shape_keys.arr();
     let key_lanes = if key_count >= super::field_rep::REP_SLOTS {
         u64::MAX
     } else {
@@ -3107,7 +3242,7 @@ pub(crate) fn final_shape_ensure_constfn(
     // canonical keys rather than trusting a caller-supplied summary.
     let summary = unsafe { crate::object::key_attrs::keys_summary_checked(keys, key_count) };
     shape_descriptor_intern_with_special_mode(
-        keys,
+        shape_keys,
         key_count,
         live.max(key_count),
         0,
@@ -3811,15 +3946,17 @@ pub(crate) fn test_cached_transition_stamps() -> u64 {
 #[inline]
 pub(crate) unsafe fn stamp_object_shape(
     obj: *mut crate::object::ObjectHeader,
-    keys: *const ArrayHeader,
+    keys: impl Into<ShapeKeys>,
     key_count: u32,
     live_inline_slot_count: u32,
 ) -> LayoutWord {
+    let shape_keys: ShapeKeys = keys.into();
+    let keys = shape_keys.arr();
     if !shape_word_is_writable(obj) {
         return LayoutWord(0);
     }
     let Some(lineage) = object_shape_descriptor(obj) else {
-        let id = shape_descriptor_ensure_for_object(obj, keys, key_count, live_inline_slot_count)
+        let id = shape_descriptor_ensure_for_object(obj, shape_keys, key_count, live_inline_slot_count)
             .unwrap_or_else(|error| shape_descriptor_error_abort(error));
         stamp_object_shape_id_with_carrier_note(obj, id);
         debug_assert_object_shape_parity(obj);
@@ -3847,7 +3984,7 @@ pub(crate) unsafe fn stamp_object_shape(
         store_kind::mint_kind(lineage.object_kind, obj)
     };
     let id = publish_shape_result(shape_descriptor_ensure_with_rep(
-        keys,
+        shape_keys,
         key_count,
         lineage.live_inline_slot_count,
         lineage.semantic_generation,
@@ -4260,7 +4397,7 @@ pub(crate) unsafe fn publish_object_shape_from_rep(
         None => object_proto_id(obj),
     };
     let id = publish_shape_result(shape_descriptor_ensure_with_rep(
-        keys,
+        keys_view,
         key_count,
         live_inline_slot_count,
         semantic_generation,
@@ -6688,7 +6825,7 @@ pub(crate) fn publish_static_record(
 }
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn intern_static_layout(
-    keys: *const ArrayHeader,
+    keys: impl Into<ShapeKeys>,
     count: u32,
     live: u32,
     generation: u64,
@@ -6702,8 +6839,9 @@ pub(crate) fn intern_static_layout(
     request: crate::codegen_abi::PublishedShape,
     integrity: u16,
 ) -> Result<LayoutWord, ShapeDescriptorError> {
+    let shape_keys: ShapeKeys = keys.into();
     shape_descriptor_intern_with_special_mode(
-        keys,
+        shape_keys,
         count,
         live,
         generation,
