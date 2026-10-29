@@ -32,85 +32,133 @@ unsafe fn no_decoration(_name: &str, value: f64, _addr: usize) -> f64 {
     value
 }
 
+enum ExportStep {
+    Done(f64),
+    Existing(f64),
+    Fresh(f64),
+}
+
+/// Everything before decoration: cache hits, the intrinsic and the freshly
+/// published (undecorated) callable. One copy serves every export.
 #[inline(never)]
-fn export_value(
+fn export_begin(
     module: &'static str,
     property: &'static str,
     info: &'static JsFunctionInfo,
     observe_writes: bool,
-    decorate: unsafe fn(&str, f64, usize) -> f64,
-) -> f64 {
+    canonical_module: &'static str,
+    canonical_property: &'static str,
+) -> ExportStep {
     if !is_native_module_callable_export(module, property) {
-        return f64::from_bits(crate::value::TAG_UNDEFINED);
+        return ExportStep::Done(f64::from_bits(crate::value::TAG_UNDEFINED));
     }
     if observe_writes {
         if let Some(value) = native_namespace_user_value(module, property) {
-            return value;
+            return ExportStep::Done(value);
         }
     }
     let key = format!("{module}\0{property}");
     if let Some(bits) = NATIVE_ESM_EXPORT_VALUES.with(|v| v.borrow().get(&key).copied()) {
-        return f64::from_bits(bits);
+        return ExportStep::Done(f64::from_bits(bits));
     }
     // ESM aliases have separate live cells; the underlying callable is shared.
-    let property = canonical_native_callable_property(module, property);
-    let module = canonical_native_callable_module(module, property);
+    let (module, property) = (canonical_module, canonical_property);
     let callable_key = format!("{module}\0{property}");
     let existing = NATIVE_CALLABLE_EXPORTS.with(|v| v.borrow().get(&callable_key).copied());
     let scope = crate::gc::RuntimeHandleScope::new();
-    let value = if let Some(bits) = existing {
-        scope.root_nanbox_f64(f64::from_bits(bits))
-    } else if let Some(value) = intrinsic_export(module, property) {
+    if let Some(bits) = existing {
+        return ExportStep::Existing(f64::from_bits(bits));
+    }
+    if let Some(value) = intrinsic_export(module, property) {
         let value = scope.root_nanbox_f64(value);
         NATIVE_CALLABLE_EXPORTS.with(|v| {
             v.borrow_mut().insert(callable_key, value.get_nanbox_u64());
         });
         crate::gc::runtime_write_barrier_root_nanbox(value.get_nanbox_u64());
-        value
-    } else {
-        install_native_module_vtable();
-        let ns = scope.root_nanbox_f64(js_create_native_module_namespace(
-            module.as_ptr(),
-            module.len(),
-        ));
-        let closure = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(info, 3));
-        closure.with_mut_ptr(|c| {
-            crate::closure::js_closure_set_capture_f64(c, 0, ns.get_nanbox_f64());
-            crate::closure::js_closure_set_capture_ptr(c, 1, property.as_ptr() as i64);
-            crate::closure::js_closure_set_capture_ptr(c, 2, property.len() as i64);
-        });
-        let length = callable_export_arity_table::native_callable_export_arity(module, property)
-            .unwrap_or(0);
-        closure.with_mut_ptr(|c| {
-            callable_exports::set_bound_native_closure_metadata(
-                c,
-                callable_exports::native_callable_export_display_name(module, property),
-                length,
-            )
-        });
-        let value = scope.root_nanbox_f64(closure.with_mut_ptr(
-            |c: *mut crate::closure::ClosureHeader| crate::value::js_nanbox_pointer(c as i64),
-        ));
-        // Publish before decoration: constructor/prototype graphs can cycle.
-        NATIVE_CALLABLE_EXPORTS.with(|v| {
-            v.borrow_mut().insert(callable_key, value.get_nanbox_u64());
-        });
-        crate::gc::runtime_write_barrier_root_nanbox(value.get_nanbox_u64());
-        unsafe {
-            decorate(
-                property,
-                value.get_nanbox_f64(),
-                crate::value::js_nanbox_get_pointer(value.get_nanbox_f64()) as usize,
-            )
-        };
-        crate::closure::native_constructor::seal_selected(module, property, value.get_nanbox_f64());
-        value
-    };
+        return ExportStep::Existing(value.get_nanbox_f64());
+    }
+    install_native_module_vtable();
+    let ns = scope.root_nanbox_f64(js_create_native_module_namespace(
+        module.as_ptr(),
+        module.len(),
+    ));
+    let closure = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(info, 3));
+    closure.with_mut_ptr(|c| {
+        crate::closure::js_closure_set_capture_f64(c, 0, ns.get_nanbox_f64());
+        crate::closure::js_closure_set_capture_ptr(c, 1, property.as_ptr() as i64);
+        crate::closure::js_closure_set_capture_ptr(c, 2, property.len() as i64);
+    });
+    let length =
+        callable_export_arity_table::native_callable_export_arity(module, property).unwrap_or(0);
+    closure.with_mut_ptr(|c| {
+        callable_exports::set_bound_native_closure_metadata(
+            c,
+            callable_exports::native_callable_export_display_name(module, property),
+            length,
+        )
+    });
+    let value = scope.root_nanbox_f64(closure.with_mut_ptr(
+        |c: *mut crate::closure::ClosureHeader| crate::value::js_nanbox_pointer(c as i64),
+    ));
+    // Publish before decoration: constructor/prototype graphs can cycle.
+    NATIVE_CALLABLE_EXPORTS.with(|v| {
+        v.borrow_mut().insert(callable_key, value.get_nanbox_u64());
+    });
+    crate::gc::runtime_write_barrier_root_nanbox(value.get_nanbox_u64());
+    ExportStep::Fresh(value.get_nanbox_f64())
+}
+
+/// The ESM live cell of this export now names `value`.
+#[inline(never)]
+fn export_finish(module: &str, property: &str, value: f64) -> f64 {
+    let key = format!("{module}\0{property}");
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(value);
     NATIVE_ESM_EXPORT_VALUES.with(|v| {
         v.borrow_mut().insert(key, value.get_nanbox_u64());
     });
     crate::gc::runtime_write_barrier_root_nanbox(value.get_nanbox_u64());
     value.get_nanbox_f64()
+}
+
+/// Only the decoration and sealing stay in the export's own body: both are
+/// specialized by its names, so an undecorated export links none of them.
+#[inline(always)]
+fn export_value(
+    module: &'static str,
+    property: &'static str,
+    info: &'static JsFunctionInfo,
+    observe_writes: bool,
+    decorate: impl FnOnce(&str, f64, usize) -> f64,
+) -> f64 {
+    let canonical_property = canonical_native_callable_property(module, property);
+    let canonical_module = canonical_native_callable_module(module, canonical_property);
+    match export_begin(
+        module,
+        property,
+        info,
+        observe_writes,
+        canonical_module,
+        canonical_property,
+    ) {
+        ExportStep::Done(value) => value,
+        ExportStep::Existing(value) => export_finish(module, property, value),
+        ExportStep::Fresh(value) => {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let value = scope.root_nanbox_f64(value);
+            decorate(
+                canonical_property,
+                value.get_nanbox_f64(),
+                crate::value::js_nanbox_get_pointer(value.get_nanbox_f64()) as usize,
+            );
+            crate::closure::native_constructor::seal_selected(
+                canonical_module,
+                canonical_property,
+                value.get_nanbox_f64(),
+            );
+            export_finish(module, property, value.get_nanbox_f64())
+        }
+    }
 }
 
 #[inline(always)]

@@ -3,7 +3,7 @@
 use super::*;
 macro_rules! declarations {
     ($(($spec:ident, $module:literal, $key:literal,
-        [$(($getter:ident, $name:literal, $info:expr)),* $(,)?])),* $(,)?) => {
+        [$(($getter:ident, $name:literal, $($info:tt)*)),* $(,)?])),* $(,)?) => {
         $(pub(super) static $spec: SubmoduleSpec = SubmoduleSpec {
             key: $key,
             exports: &[$(&$getter::SPEC),*],
@@ -11,7 +11,7 @@ macro_rules! declarations {
         $(#[allow(non_snake_case)]
         mod $getter {
             use super::*;
-            pub(super) static SPEC: ExportSpec = ExportSpec { name: $name, info: $info };
+            pub(super) static SPEC: ExportSpec = ExportSpec { name: $name, info: $($info)* };
             #[no_mangle]
             pub extern "C" fn $getter(observe_writes: i32) -> f64 {
                 crate::object::native_module::selected_native_export_value(

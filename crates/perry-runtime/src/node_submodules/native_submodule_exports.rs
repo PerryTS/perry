@@ -158,7 +158,7 @@ macro_rules! native_submodule_exports {
 }
 macro_rules! declaration_names {
     ($(($spec:ident, $module:literal, $key:literal,
-        [$(($getter:ident, $name:literal, $info:expr)),* $(,)?])),* $(,)?) => {
+        [$(($getter:ident, $name:literal, $($info:tt)*)),* $(,)?])),* $(,)?) => {
         /// Public and internal export declarations with their linker symbols.
         pub const SUBMODULE_EXPORTS: &[(&str, &str, &[(&str, &str)])] = &[
             $(($module, $key, &[$(($name, stringify!($getter))),*])),*

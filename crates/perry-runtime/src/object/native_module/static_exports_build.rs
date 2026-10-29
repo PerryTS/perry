@@ -126,7 +126,8 @@ pub extern "C" fn {symbol}(observe_writes: i32) -> f64 {{
         info.flags |= crate::codegen_abi::FN_NATIVE_EXPORT | crate::codegen_abi::FN_BUILTIN;
         info
     }}, construct }};
-    export_value({raw_module:?}, {raw_property:?}, &INFO.function, observe_writes != 0, {attach})
+    export_value({raw_module:?}, {raw_property:?}, &INFO.function, observe_writes != 0,
+        |_name, value, addr| unsafe {{ {attach}({property:?}, value, addr) }})
 }}
 "#
             )
