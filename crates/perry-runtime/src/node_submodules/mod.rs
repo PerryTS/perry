@@ -164,9 +164,9 @@ extern "C" fn thunk_vm_create_context(
 // ----- submodule table -----
 
 // ----- per-submodule specs (devirt) -----
-// Imported export bodies are spelled out here, in plain source: the owning
-// definition's link name is built from exactly these tokens, which the shared
-// export list cannot reproduce through its macro layers.
+// Imports of bodies whose owning definition sits in plain source are spelled
+// out here, in plain source too: the link name is built from the written
+// tokens, which the shared export list cannot reproduce through its macros.
 static IMPORT_THUNK_DIAG_BOUNDED_CHANNEL: &JsFunctionInfo = crate::fn_info!(reference import crate::node_submodules::diagnostics_tail::thunk_diag_bounded_channel, 1; with_declared(1));
 static IMPORT_THUNK_STREAM_WEB_CTOR: &JsFunctionInfo = crate::fn_info!(reference import crate::node_submodules::thunk_stream_web_ctor, 1; with_declared(1));
 static IMPORT_THUNK_TEST: &JsFunctionInfo = crate::fn_info!(reference import crate::node_submodules::test::runner::thunk_test, 3; with_declared(3));
