@@ -37,8 +37,10 @@ impl NodePrototype {
             let atom = key.atom;
             if (*atom).kind == crate::codegen_abi::ATOM_KIND_STRING {
                 let s = (*atom).string;
-                let text =
-                    std::slice::from_raw_parts(crate::string::string_data(s), (*s).byte_len as usize);
+                let text = std::slice::from_raw_parts(
+                    crate::string::string_data(s),
+                    (*s).byte_len as usize,
+                );
                 if text == name {
                     return key.slot;
                 }
@@ -61,7 +63,12 @@ impl NodePrototype {
     ///
     /// # Safety
     /// `proto` is a live prototype born on this layout.
-    pub(crate) unsafe fn data(&self, proto: *mut crate::object::ObjectHeader, name: &[u8], value: f64) {
+    pub(crate) unsafe fn data(
+        &self,
+        proto: *mut crate::object::ObjectHeader,
+        name: &[u8],
+        value: f64,
+    ) {
         let slot = self.slot_of_name(name);
         crate::object::js_object_set_field(proto, slot, crate::JSValue::from_bits(value.to_bits()));
     }
@@ -115,10 +122,10 @@ impl NodePrototype {
     /// `proto` is a live prototype born on this layout, fully populated, not
     /// yet reachable by program code.
     pub(crate) unsafe fn seal(&self, proto: *mut crate::object::ObjectHeader, serial: u64) {
-        let fields = (proto as *const u8).add(std::mem::size_of::<crate::object::ObjectHeader>())
-            as *const u64;
         for key in self.keys() {
-            if *fields.add(key.slot as usize) == crate::value::TAG_HOLE {
+            if *crate::object::header::object_slot_at(proto, u32::from(key.off))
+                == crate::value::TAG_HOLE
+            {
                 let atom = key.atom;
                 let name = if (*atom).string.is_null() {
                     b"<symbol>".as_slice()
@@ -224,15 +231,16 @@ mod tests {
     fn a_compiled_store_shadows_the_sealed_event_emitter_prototype() {
         on_a_fresh_thread(|| unsafe {
             let _no_move = crate::gc::GcSuppressScope::new();
-            let proto_bits = crate::node_stream::event_emitter_prototype_value("EventEmitter")
-                .to_bits();
+            let proto_bits =
+                crate::node_stream::event_emitter_prototype_value("EventEmitter").to_bits();
             assert_eq!(proto_bits & !POINTER_MASK, POINTER_TAG);
             let ee = (proto_bits & POINTER_MASK) as usize;
             let _ = crate::object::bound_native_callable_export_value("stream", "Readable");
             let stream = super::node_prototype_of_serial(
                 crate::closure::shape::INTRINSIC_SERIAL_STREAM_PROTOTYPE,
             )
-            .expect("Stream.prototype is built with the stream module") as usize;
+            .expect("Stream.prototype is built with the stream module")
+                as usize;
             let word = |p: usize| (*(p as *const ObjectHeader)).parent_class_id;
             for p in [ee, stream] {
                 assert!(!crate::object::layout_desc::word_is_shadowed(word(p)));
@@ -260,7 +268,10 @@ mod tests {
             );
             assert_eq!(get(on_ee, "emit"), 7.0f64.to_bits());
             let p = probe(on_ee, "emit");
-            assert!(p == TAG_HOLE || p == 7.0f64.to_bits(), "probe answered {p:#x}");
+            assert!(
+                p == TAG_HOLE || p == 7.0f64.to_bits(),
+                "probe answered {p:#x}"
+            );
             set(ee, "emit", f64::from_bits(emit));
 
             // A store of a key Stream.prototype's layout lacks lands in its
@@ -270,8 +281,14 @@ mod tests {
             assert!(crate::object::layout_desc::word_is_shadowed(word(stream)));
             assert_eq!(get(on_stream, "emit"), 8.0f64.to_bits());
             let p = probe(on_stream, "emit");
-            assert!(p != emit, "the probe answered the shadowed EventEmitter.prototype.emit");
-            assert!(p == TAG_HOLE || p == 8.0f64.to_bits(), "probe answered {p:#x}");
+            assert!(
+                p != emit,
+                "the probe answered the shadowed EventEmitter.prototype.emit"
+            );
+            assert!(
+                p == TAG_HOLE || p == 8.0f64.to_bits(),
+                "probe answered {p:#x}"
+            );
         });
     }
 }

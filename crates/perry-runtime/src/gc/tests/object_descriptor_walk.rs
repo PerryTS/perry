@@ -66,7 +66,7 @@ fn direct_objects_preserve_slot_order_custody_width_and_representation_masks() {
         }
         let (obj, _) = alloc_nursery_test_object(2);
         crate::object::object_meta_ensure(
-            crate::object::MetaObj::runtime_born(obj),
+            crate::meta_obj_runtime_born!(obj),
             crate::object::MetaReason::RuntimeHandle,
         );
         let header = header_from_user_ptr(obj.cast()) as *mut GcHeader;

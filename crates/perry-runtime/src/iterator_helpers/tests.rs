@@ -91,9 +91,11 @@ unsafe fn array_numbers(value: f64) -> Vec<f64> {
         .collect()
 }
 
-/// `Iterator.from(iterable)` — the object every case below starts from.
+/// `Iterator.from(array).drop(0)` — the object every case below starts from.
+/// (`Iterator.from` returns an array's own iterator, which is not a helper.)
 unsafe fn helper_over(values: &[f64]) -> f64 {
-    let h = super::js_iterator_from(number_array(values));
+    let source = super::get_iterator_direct(super::js_iterator_from(number_array(values)));
+    let h = super::new_helper(OP_DROP, source, 0.0);
     let p = crate::value::js_nanbox_get_pointer(h);
     assert_ne!(p, 0, "`Iterator.from` must return an object");
     assert_eq!(
@@ -667,6 +669,203 @@ fn string_iterator_still_dispatches_to_its_own_family() {
         assert!(
             !JSValue::from_bits(v.bits()).is_undefined(),
             "a String iterator's first step must carry a code point"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The helpers as `%Iterator.prototype%` methods: brand and argument checks.
+// ---------------------------------------------------------------------------
+
+use super::proto_methods::Method;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+/// `Iterator.prototype[name]`.
+unsafe fn proto_method(name: &str) -> f64 {
+    let proto = crate::object::iterator_ctor::iterator_prototype_object();
+    let proto = crate::value::js_nanbox_pointer(proto as i64);
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    crate::proxy::js_reflect_get(proto, crate::js_nanbox_string(key as i64), proto)
+}
+
+/// `f.call(this, ...args)`.
+unsafe fn call_with(f: f64, this: f64, args: &[f64]) -> f64 {
+    crate::closure::native_call_value_this(
+        f,
+        crate::closure::JsThis::from_f64(this),
+        args.as_ptr(),
+        args.len(),
+    )
+}
+
+/// `String(error)` of what `f` threw; panics when it returned.
+fn thrown(f: impl FnOnce() -> f64) -> String {
+    match crate::exception::catch_js_throw(f) {
+        Ok(v) => panic!("expected a throw, got bits {:#018x}", v.to_bits()),
+        Err(e) => crate::object::property_ops::value_display_string(e),
+    }
+}
+
+static RETURNS: AtomicUsize = AtomicUsize::new(0);
+
+extern "C" fn endless_next(
+    _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    _arg: f64,
+) -> f64 {
+    unsafe { crate::iter_result::make_iter_result(JSValue::number(1.0), false) }
+}
+
+extern "C" fn counting_return(
+    _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    _arg: f64,
+) -> f64 {
+    RETURNS.fetch_add(1, Ordering::SeqCst);
+    unsafe { crate::iter_result::make_iter_result(JSValue::undefined(), true) }
+}
+
+/// `{ next() { return { value: 1, done: false } }, return() { RETURNS++ } }`.
+unsafe fn closable_iterator() -> f64 {
+    let obj = crate::object::js_object_alloc(0, 2);
+    for (name, info) in [
+        ("next", crate::fn_info!(endless_next, 1; with_declared(0))),
+        (
+            "return",
+            crate::fn_info!(counting_return, 1; with_declared(0)),
+        ),
+    ] {
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        let f = crate::closure::js_closure_alloc(info, 0);
+        crate::object::js_object_set_field_by_name(
+            obj,
+            key,
+            crate::value::js_nanbox_pointer(f as i64),
+        );
+    }
+    crate::value::js_nanbox_pointer(obj as i64)
+}
+
+fn init() {
+    crate::gc::js_gc_init();
+    crate::object::static_shapes::js_shape_run_static_seed();
+    RETURNS.store(0, Ordering::SeqCst);
+}
+
+#[test]
+fn helper_methods_are_builtin_properties_with_spec_metadata() {
+    init();
+    unsafe {
+        for name in [
+            "map", "filter", "take", "drop", "flatMap", "reduce", "toArray", "forEach", "some",
+            "every", "find",
+        ] {
+            let f = proto_method(name);
+            let m = Method::from_name(name).expect("a helper name");
+            assert!(
+                m.is_builtin(f),
+                "Iterator.prototype.{name} must be the builtin"
+            );
+            let length = crate::proxy::js_reflect_get(
+                f,
+                crate::js_nanbox_string(
+                    crate::string::js_string_from_bytes(b"length".as_ptr(), 6) as i64
+                ),
+                f,
+            );
+            let expected = if name == "toArray" { 0.0 } else { 1.0 };
+            assert_eq!(length, expected, "Iterator.prototype.{name}.length");
+        }
+    }
+}
+
+#[test]
+fn a_non_object_receiver_is_a_type_error() {
+    init();
+    unsafe {
+        let map = proto_method("map");
+        let cb = closure(crate::fn_info!(double_it, 1));
+        let message = thrown(|| call_with(map, 1.0, &[cb]));
+        assert!(message.starts_with("TypeError"), "got {message}");
+    }
+}
+
+/// The argument checks close the underlying iterator before throwing.
+#[test]
+fn argument_validation_closes_the_receiver() {
+    init();
+    unsafe {
+        let iter = closable_iterator();
+        let message = thrown(|| call_with(proto_method("map"), iter, &[42.0]));
+        assert!(message.starts_with("TypeError"), "got {message}");
+        assert_eq!(RETURNS.load(Ordering::SeqCst), 1);
+        for limit in [f64::NAN, -1.0] {
+            let message = thrown(|| call_with(proto_method("take"), iter, &[limit]));
+            assert!(message.starts_with("RangeError"), "got {message}");
+        }
+        assert_eq!(RETURNS.load(Ordering::SeqCst), 3);
+    }
+}
+
+#[test]
+fn reduce_of_an_empty_iterator_without_initial_value_is_a_type_error() {
+    init();
+    unsafe {
+        let empty = helper_over(&[]);
+        let message = thrown(|| tower(empty, "reduce", &[closure(crate::fn_info!(add, 2))]));
+        assert!(message.starts_with("TypeError"), "got {message}");
+    }
+}
+
+/// `helper.return()` closes the underlying iterator, once.
+#[test]
+fn helper_return_closes_the_underlying_iterator() {
+    init();
+    unsafe {
+        let iter = closable_iterator();
+        let cb = closure(crate::fn_info!(double_it, 1));
+        let mapped = call_with(proto_method("map"), iter, &[cb]);
+        let (v, done) = step(tower(mapped, "next", &[]));
+        assert_eq!((f64::from_bits(v.bits()), done), (2.0, false));
+        assert!(step(tower(mapped, "return", &[])).1);
+        assert!(step(tower(mapped, "return", &[])).1);
+        assert_eq!(RETURNS.load(Ordering::SeqCst), 1);
+        assert!(
+            step(tower(mapped, "next", &[])).1,
+            "a returned helper is done"
+        );
+    }
+}
+
+/// `Iterator.from({next})` is a `%WrapForValidIteratorPrototype%` wrapper,
+/// not a helper: its prototype is the wrapper one and helper methods reject it.
+#[test]
+fn iterator_from_wraps_a_plain_iterator_with_its_own_brand() {
+    crate::gc::js_gc_init();
+    crate::object::static_shapes::js_shape_run_static_seed();
+    unsafe {
+        let plain = crate::object::js_object_alloc(0, 0);
+        let w = super::js_iterator_from(crate::value::js_nanbox_pointer(plain as i64));
+        assert!(
+            super::statics::is_wrapper(w),
+            "a plain object must be wrapped"
+        );
+        let wrap_proto = crate::object::iterator_prototypes::WRAP_FOR_VALID_ITERATOR_PROTOTYPE_PTR
+            .load(std::sync::atomic::Ordering::Acquire);
+        assert_eq!(
+            crate::object::js_object_get_prototype_of(w).to_bits(),
+            crate::value::js_nanbox_pointer(wrap_proto).to_bits(),
+        );
+        assert!(
+            !super::is_helper_op(w),
+            "a wrapper has no [[UnderlyingIterators]]"
+        );
+        assert!(
+            crate::exception::catch_js_throw(|| super::helper_next(
+                crate::value::js_nanbox_get_pointer(w) as *mut ObjectHeader
+            ))
+            .is_err(),
+            "Iterator Helper.prototype.next must reject a wrapper"
         );
     }
 }

@@ -4,6 +4,7 @@
 //! It moves and dies with the object; birth needs no metadata allocation.
 
 use super::descriptors::{build_accessor_descriptor, build_data_descriptor};
+use super::header::meta_form_alloc_bytes;
 use super::*;
 use crate::codegen_abi::LayoutWord;
 
@@ -143,7 +144,7 @@ impl ArgumentsState {
 #[inline]
 unsafe fn arguments_state(obj: *const ObjectHeader) -> Option<ArgumentsState> {
     let header = crate::value::addr_class::try_read_gc_header(obj as usize)?;
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::gc_type_is_not_object!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
     {
         return None;
@@ -386,10 +387,9 @@ pub extern "C" fn js_arguments_object_alloc_mapped(
 /// `js_object_alloc_with_shape` performs, so the caller can stamp the shape
 /// the object is born with instead of publishing an empty one first.
 fn unstamped_arguments_object(slots: u32) -> *mut ObjectHeader {
-    let header_size = std::mem::size_of::<ObjectHeader>();
     let alloc_slots = std::cmp::max(slots as usize, crate::object::INLINE_SLOT_FLOOR);
     let obj = crate::arena::arena_alloc_gc(
-        header_size + alloc_slots * 8 + std::mem::size_of::<ArgumentsTail>(),
+        meta_form_alloc_bytes(alloc_slots) + std::mem::size_of::<ArgumentsTail>(),
         8,
         crate::gc::GC_TYPE_OBJECT,
     ) as *mut ObjectHeader;
@@ -407,8 +407,8 @@ fn unstamped_arguments_object(slots: u32) -> *mut ObjectHeader {
         });
         (*obj).parent_class_id = 0;
         // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record.
-        (*obj).meta = std::ptr::null_mut();
-        let fields = (obj as *mut u8).add(header_size) as *mut JSValue;
+        *crate::meta_slot_of!(crate::meta_obj_runtime_born!(obj)) = std::ptr::null_mut();
+        let fields = crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj)) as *mut JSValue;
         for i in 0..alloc_slots {
             // GC_STORE_AUDIT(INIT): freshly allocated slot, initialized pointer-free.
             std::ptr::write(fields.add(i), JSValue::undefined());
@@ -516,9 +516,7 @@ pub(crate) fn arguments_object_alloc_rooted(
     // A newborn has no observer and no collection can occur during these
     // stores. Initialize physical slots once, then publish their GC layout.
     obj.with_mut_ptr(|obj| unsafe {
-        let fields = (obj as *mut u8)
-            .add(std::mem::size_of::<ObjectHeader>())
-            .cast::<u64>();
+        let fields = crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj));
         for (i, value) in values.iter().enumerate() {
             // GC_STORE_AUDIT(INIT): rooted values; stores cannot collect.
             fields.add(i).write(value.get_nanbox_f64().to_bits());
@@ -761,15 +759,13 @@ unsafe fn born_arguments_index(obj: *const ObjectHeader, index: u32) -> f64 {
     if let Some(cell) = arguments_state(obj).and_then(|state| state.mapped_box(index)) {
         return crate::r#box::js_box_get(cell);
     }
-    *((obj as *const u8)
-        .add(std::mem::size_of::<ObjectHeader>())
+    *(crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut ObjectHeader))
         .cast::<f64>()
         .add(index as usize))
 }
 
 unsafe fn born_arguments_length_value(obj: *const ObjectHeader, len: u32) -> f64 {
-    *((obj as *const u8)
-        .add(std::mem::size_of::<ObjectHeader>())
+    *(crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut ObjectHeader))
         .cast::<f64>()
         .add(len as usize))
 }
@@ -790,8 +786,7 @@ pub(crate) unsafe fn arguments_object_born_slice<'a>(
     if !length.is_finite() || length < 0.0 || length > born_len as f64 {
         return None;
     }
-    let fields = (obj as *const u8)
-        .add(std::mem::size_of::<ObjectHeader>())
+    let fields = crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut ObjectHeader))
         .cast::<f64>();
     Some(std::slice::from_raw_parts(fields, length.floor() as usize))
 }

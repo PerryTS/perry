@@ -50,7 +50,8 @@ pub(crate) unsafe fn stamp_linked_final_shape_requested(
     if obj.is_null()
         || keys.is_null()
         || count == 0
-        || (requested.is_none() && !(*obj).meta.is_null())
+        || (requested.is_none()
+            && !crate::meta_read!(crate::meta_obj_from_kind!(obj as *mut _, proto_id)).is_null())
         || !shape_word_is_writable(obj)
     {
         return false;
@@ -107,8 +108,8 @@ pub(crate) unsafe fn stamp_linked_final_shape_requested(
     ) else {
         return false;
     };
-    if !(*obj).meta.is_null() {
-        let meta = (*obj).meta;
+    if !crate::meta_read!(crate::meta_obj_from_kind!(obj as *mut _, proto_id)).is_null() {
+        let meta = crate::meta_read!(crate::meta_obj_from_kind!(obj as *mut _, proto_id));
         (*meta).prototype = proto_bits;
         // GC_STORE_AUDIT(BARRIERED): the meta may have promoted while the
         // holder was marked. Its prototype slot must be rewritten by minors.

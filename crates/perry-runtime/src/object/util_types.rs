@@ -356,7 +356,7 @@ pub extern "C" fn js_util_types_is_native_error(value: f64) -> f64 {
         let gc_header = ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         match (*gc_header).obj_type {
             crate::gc::GC_TYPE_ERROR => true,
-            crate::gc::GC_TYPE_OBJECT => {
+            crate::gc_object_type_pat!() => {
                 let obj = ptr as *const ObjectHeader;
                 let class_id = (*obj).class_id;
                 class_id != 0 && crate::object::extends_builtin_error(class_id)

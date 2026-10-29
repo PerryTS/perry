@@ -782,6 +782,7 @@ pub(crate) fn install_builtin_constructor_statics(
                 realm_response_redirect_metadata!(length),
             );
         }
+        "Iterator" => crate::iterator_helpers::install_iterator_statics(s),
         "URL" => {
             super::web_hooks::statics(super::web_hooks::WebGroup::Url, name, s);
         }

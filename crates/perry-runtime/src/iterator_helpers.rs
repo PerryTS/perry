@@ -1,32 +1,17 @@
-//! Global `Iterator` helper objects (TC39 Iterator-helpers proposal, Node 22+;
-//! issue #2874).
+//! Iterator helper objects (ES2025 §27.1.2.1, Iterator Helpers; issue #2874).
 //!
-//! Node exposes a global `Iterator` (typeof `"function"`) with a static
-//! `Iterator.from(x)` and lazy helper methods on the iterator prototype:
-//! `.map`, `.filter`, `.take`, `.drop`, `.flatMap`, `.toArray`, `.forEach`,
-//! `.reduce`, `.some`, `.every`, `.find`. They operate LAZILY on any
-//! synchronous iterator — generators, the Map/Set/array iterator objects Perry
-//! already builds, or a bare `{ next() }` object.
+//! `map`/`filter`/`take`/`drop`/`flatMap` return lazy helper objects that
+//! inherit from `%IteratorHelperPrototype%`; the methods themselves live on
+//! `%Iterator.prototype%` ([`proto_methods`]).
 //!
 //! Representation mirrors `collection_iter_object.rs`: a regular `ObjectHeader`
-//! with a dedicated class id (`ITERATOR_HELPER_CLASS_ID`). Fields:
-//!   - field 0: source iterator (NaN-boxed; kept alive by the object scanner)
-//!   - field 1: op kind (number; see `OP_*` below)
-//!   - field 2: callback closure (NaN-boxed) for map/filter/flatMap, or the
-//!     numeric limit/count for take/drop
-//!   - field 3: mutable state — remaining count for take, drop-counter for
-//!     drop, an inner sub-iterator for flatMap (NaN-boxed pointer or 0).
-//!
-//! Each `.next()` pulls lazily from the source via [`iterator_step`], which
-//! drives the generic `.next()` protocol on ANY iterator object (stored-closure
-//! `next` field OR class-id method dispatch). Lazy chaining means `.take(2)` on
-//! an infinite generator terminates. Terminal methods (`toArray`/`forEach`/
-//! `reduce`/`some`/`every`/`find`) drain the chain.
-//!
-//! Dispatch lives in `object/native_call_method.rs` via the class-id check next
-//! to the Map/Set iterator ones.
+//! with a dedicated class id (`ITERATOR_HELPER_CLASS_ID`) and the fields
+//! below. An `OP_IDENTITY` object is an Iterator Record (GetIteratorDirect):
+//! the iterator plus the `next` read once. Every other op steps its
+//! underlying iterator through such a record, or directly through a helper
+//! whose `next` is the intrinsic one, without allocating result objects.
 
-use crate::closure::{is_closure_ptr, js_closure_call1, js_closure_call2, ClosureHeader};
+use crate::closure::{is_closure_ptr, ClosureHeader, JsThis};
 // #7564: `make_iter_result` used to be a local five-allocation copy whose
 // intermediates were all bare Rust locals. It was the copy that faulted under
 // `PERRY_GC_SCHEDULE_SEED=1 PERRY_GC_SCHEDULE_RATE=1 PERRY_GC_PROTECT_FROMSPACE=1`
@@ -38,7 +23,20 @@ use crate::object::{
     js_object_alloc, js_object_get_field, js_object_get_field_by_name, js_object_set_field,
     ObjectHeader,
 };
-use crate::value::{js_nanbox_get_pointer, js_nanbox_pointer, JSValue, TAG_TRUE, TAG_UNDEFINED};
+use crate::value::{js_nanbox_get_pointer, js_nanbox_pointer, JSValue, TAG_UNDEFINED};
+use std::cell::Cell;
+
+mod proto_methods;
+mod statics;
+pub(crate) use proto_methods::install_prototype_methods;
+pub use proto_methods::{
+    dispatch_iterator_helper_method, is_iterator_helper_method,
+    maybe_dispatch_helper_on_builtin_iterator, maybe_dispatch_helper_on_iterator,
+};
+pub use statics::js_iterator_from;
+pub(crate) use statics::{
+    install_dispose, install_iterator_statics, install_wrap_prototype_methods,
+};
 
 #[cfg(test)]
 mod tests;
@@ -66,13 +64,37 @@ mod tests;
 /// [`iterator_class_ids_are_pairwise_distinct`]: tests::iterator_class_ids_are_pairwise_distinct
 pub const ITERATOR_HELPER_CLASS_ID: u32 = 0xFFFF_000B;
 
-// Op kinds stored in field 1.
-const OP_IDENTITY: i32 = 0; // `Iterator.from(x)` — yields the source unchanged.
+// Op kinds stored in `F_OP`.
+const OP_IDENTITY: i32 = 0; // Iterator Record (GetIteratorDirect).
 const OP_MAP: i32 = 1;
 const OP_FILTER: i32 = 2;
 const OP_TAKE: i32 = 3;
 const OP_DROP: i32 = 4;
 const OP_FLATMAP: i32 = 5;
+/// An `Iterator.from` wrapper: an Iterator Record with its own prototype.
+const OP_WRAP: i32 = 6;
+const OP_CONCAT: i32 = 7;
+
+/// Identity: the iterator itself. Others: the record or helper they step.
+const F_ITERATED: u32 = 0;
+const F_OP: u32 = 1;
+/// The callback (map/filter/flatMap), the validated limit (take/drop) or
+/// concat's `[item, @@iterator method, ...]` array.
+const F_ARG: u32 = 2;
+/// Remaining count (take/drop) or the active inner record (flatMap/concat).
+const F_STATE: u32 = 3;
+/// Identity: the `next` method read once by GetIteratorDirect.
+const F_NEXT: u32 = 4;
+/// Callback counter, or concat's next item index.
+const F_COUNTER: u32 = 5;
+const F_GEN_STATE: u32 = 6;
+pub(crate) const FIELD_COUNT: u32 = 7;
+
+// `[[GeneratorState]]` of a helper (§27.1.2.1).
+const GEN_START: f64 = 0.0;
+const GEN_YIELD: f64 = 1.0;
+const GEN_RUNNING: f64 = 2.0;
+const GEN_DONE: f64 = 3.0;
 
 pub fn is_iterator_helper_addr(addr: usize) -> bool {
     if addr < 0x1000 || (addr as u64) >> 48 != 0 {
@@ -88,76 +110,93 @@ pub fn is_iterator_helper_addr(addr: usize) -> bool {
     }
 }
 
-/// Drive one `.next()` step on ANY iterator object. Returns `(value, done)`.
-/// Mirrors the dual dispatch in `array/iterator.rs::js_iterator_to_array`:
-/// prefer an OWN `next` closure FIELD (generators / bare `{next}` objects),
-/// else fall back to class-id method dispatch (array / Map / Set / helper
-/// iterators).
-///
-/// #7576: the own-vs-inherited distinction is the whole ballgame, and reading
-/// it with the INHERITING getter is what killed the entire helper surface.
-/// Every built-in iterator now inherits `.next` from its shared
-/// `%…IteratorPrototype%` singleton (`object/iterator_prototypes.rs`), and that
-/// inherited `next` is a THUNK that resolves its receiver from the call's
-/// `this` and dispatches by class id. So `js_object_get_field_by_name` found a
-/// perfectly callable closure for an array / Map / Set / String iterator, this
-/// function took the closure-call branch, and the thunk ran with whatever
-/// receiver that call supplied rather than the iterator — reporting `done` on the first step for every source kind, or
-/// throwing `Method %IteratorPrototype%.next called on incompatible receiver`.
-/// `js_iterator_to_array` already carries the own-field version of this fix
-/// (#321); this is the same fix for the helper chain.
-///
-/// The call itself binds `this` to the iterator per `IteratorNext`'s
-/// `Call(next, iterator)`. That matters for the own-field case too: a `next()`
-/// method written as `next() { return this.#impl.next(); }` gets the receiver
-/// it is entitled to instead of `undefined`.
-///
-/// #7564: the READ side of the protocol had the same defect as the WRITE side.
-/// It allocated the constant key strings on EVERY step, and held `iter_obj`,
-/// `result_obj` and the earlier keys in bare Rust locals across those
-/// allocations — plus, in the middle, a call into the user's own `next`, which
-/// can run arbitrary JS and collect anything. The keys are now interned
-/// (allocation-free after the first call per thread) or read by byte slice
-/// (`js_object_get_own_field_or_undef`, which allocates nothing at all), and
-/// every pointer is re-read from a handle after each call that can collect, so
-/// no pre-collection address is nameable.
-unsafe fn iterator_step(iter_f64: f64) -> (f64, bool) {
-    if js_nanbox_get_pointer(iter_f64) == 0 {
-        return (f64::from_bits(TAG_UNDEFINED), true);
-    }
+fn undefined() -> f64 {
+    f64::from_bits(TAG_UNDEFINED)
+}
 
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let iter_h = scope.root_nanbox_f64(iter_f64);
+/// ECMAScript "is an Object" (functions included).
+pub(crate) fn is_object(value: f64) -> bool {
+    JSValue::from_bits(value.to_bits()).is_pointer()
+}
 
-    // OWN field only — see the `#7576` note above. Allocation-free (it matches
-    // the key by byte slice), so no `across_*` is needed to reach it.
-    let next_val = JSValue::from_bits(
-        crate::object::js_object_get_own_field_or_undef(
-            iter_h.get_nanbox_f64(),
-            b"next".as_ptr(),
-            4,
-        )
-        .to_bits(),
-    );
-    let next_ptr = if next_val.is_undefined() {
-        std::ptr::null::<ClosureHeader>()
+fn is_nullish(value: f64) -> bool {
+    let v = JSValue::from_bits(value.to_bits());
+    v.is_undefined() || v.is_null()
+}
+
+fn throw_error(range: bool, message: &str) -> ! {
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = if range {
+        crate::error::js_rangeerror_new(msg)
     } else {
-        js_nanbox_get_pointer(f64::from_bits(next_val.bits())) as *const ClosureHeader
+        crate::error::js_typeerror_new(msg)
     };
-    let use_field = !next_ptr.is_null() && is_closure_ptr(next_ptr as usize);
+    crate::exception::js_throw(js_nanbox_pointer(err as i64))
+}
 
-    // The user's `next` runs here and can collect anything, so the receiver
-    // comes out of a handle rather than out of a bare local that predates the
-    // call.
-    let result_f64 = if use_field {
-        let next_h = scope.root_nanbox_f64(f64::from_bits(next_val.bits()));
-        crate::closure::native_call_value_this(
-            next_h.get_nanbox_f64(),
-            crate::closure::JsThis::from_f64(iter_h.get_nanbox_f64()),
-            std::ptr::null(),
-            0,
-        )
+pub(crate) fn type_error(message: &str) -> ! {
+    throw_error(false, message)
+}
+
+pub(crate) fn range_error(message: &str) -> ! {
+    throw_error(true, message)
+}
+
+unsafe fn field(obj: f64, index: u32) -> f64 {
+    let p = js_nanbox_get_pointer(obj) as *const ObjectHeader;
+    f64::from_bits(js_object_get_field(p, index).bits())
+}
+
+unsafe fn set_field(obj: f64, index: u32, value: f64) {
+    let p = js_nanbox_get_pointer(obj) as *mut ObjectHeader;
+    js_object_set_field(p, index, JSValue::from_bits(value.to_bits()));
+}
+
+/// `Get(obj, name)`.
+pub(crate) unsafe fn get(obj: f64, name: &'static [u8]) -> f64 {
+    let key = crate::string::intern_ascii_literal(name);
+    let key = crate::js_nanbox_string(key as i64);
+    crate::proxy::js_reflect_get(obj, key, obj)
+}
+
+/// `Call(f, this, args)`.
+unsafe fn call(f: f64, this: f64, args: &[f64]) -> f64 {
+    let ptr = if args.is_empty() {
+        std::ptr::null()
     } else {
+        args.as_ptr()
+    };
+    crate::closure::native_call_value_this(f, JsThis::from_f64(this), ptr, args.len())
+}
+
+/// `Call(callback, undefined, args)`, direct for plain closures.
+unsafe fn call_back(callback: f64, args: &[f64]) -> f64 {
+    let p = js_nanbox_get_pointer(callback) as *const ClosureHeader;
+    if !p.is_null() && is_closure_ptr(p as usize) {
+        let recv = crate::closure::plain_call_receiver();
+        match *args {
+            [a, b] => return crate::closure::js_closure_call2(p, recv, a, b),
+            [a, b, c] => return crate::closure::js_closure_call3(p, recv, a, b, c),
+            _ => {}
+        }
+    }
+    call(callback, undefined(), args)
+}
+
+fn truthy(value: f64) -> bool {
+    crate::value::js_is_truthy(value) != 0
+}
+
+/// IteratorStepValue on `(iter, next)`; `None` when done.
+///
+/// #7564: the keys are interned (allocation-free after the first call per
+/// thread) and every pointer is re-read from a handle after each call that
+/// can collect, so no pre-collection address is nameable.
+unsafe fn step_value(iter: f64, next: f64) -> Option<f64> {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let iter_h = scope.root_nanbox_f64(iter);
+    let result = if JSValue::from_bits(next.to_bits()).is_undefined() {
+        // A Perry-native iterator whose `next` is not a readable property.
         crate::object::js_native_call_method(
             iter_h.get_nanbox_f64(),
             b"next".as_ptr() as *const i8,
@@ -165,202 +204,279 @@ unsafe fn iterator_step(iter_f64: f64) -> (f64, bool) {
             std::ptr::null(),
             0,
         )
+    } else {
+        if !crate::object::value_is_callable(next) {
+            type_error("Iterator next method is not a function");
+        }
+        call(next, iter_h.get_nanbox_f64(), &[])
     };
-
-    if js_nanbox_get_pointer(result_f64) == 0 {
-        return (f64::from_bits(TAG_UNDEFINED), true);
+    if !is_object(result) {
+        type_error("Iterator result is not an object");
     }
-    // Both reads below re-take the result's address across their own intern,
-    // and `js_object_get_field_by_name` (getters, shape work) can collect
-    // between them — so the second read does not reuse the first's address.
-    let result_h = scope.root_nanbox_f64(result_f64);
+    // `js_object_get_field_by_name` (getters, shape work) can collect between
+    // the two reads, so the second read does not reuse the first's address.
+    let result_h = scope.root_nanbox_f64(result);
     let (done_key, result_now) =
         result_h.across_nanbox(|| crate::string::intern_ascii_literal(b"done"));
-    let done_val = js_object_get_field_by_name(
+    let done = js_object_get_field_by_name(
         js_nanbox_get_pointer(result_now) as *const ObjectHeader,
         done_key,
     );
-    let done = crate::value::js_is_truthy(f64::from_bits(done_val.bits())) != 0;
+    if truthy(f64::from_bits(done.bits())) {
+        return None;
+    }
     let (value_key, result_now) =
         result_h.across_nanbox(|| crate::string::intern_ascii_literal(b"value"));
-    let val = js_object_get_field_by_name(
+    let value = js_object_get_field_by_name(
         js_nanbox_get_pointer(result_now) as *const ObjectHeader,
         value_key,
     );
-    (f64::from_bits(val.bits()), done)
+    Some(f64::from_bits(value.bits()))
 }
 
-/// Get the iterator of an iterable value (array / generator / Map/Set iterator
-/// object / anything with `[Symbol.iterator]` or a `.next`). Reuses
-/// `js_get_iterator`, which already returns the value unchanged when it is
-/// itself an iterator object.
-unsafe fn get_iterator(val_f64: f64) -> f64 {
-    crate::symbol::js_get_iterator(val_f64)
-}
-
-/// Extract a closure pointer from a NaN-boxed value, or null.
-unsafe fn closure_ptr(val_f64: f64) -> *const ClosureHeader {
-    let p = js_nanbox_get_pointer(val_f64) as *const ClosureHeader;
-    if !p.is_null() && is_closure_ptr(p as usize) {
-        p
-    } else {
-        std::ptr::null()
-    }
-}
-
-unsafe fn alloc_helper(op: i32, source: f64, arg: f64) -> f64 {
+/// Allocate a helper. `iterated` and `arg` are rooted across the birth.
+unsafe fn alloc_helper(op: i32, iterated: f64, arg: f64, next: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let source = scope.root_nanbox_f64(source);
+    let iterated = scope.root_nanbox_f64(iterated);
     let arg = scope.root_nanbox_f64(arg);
-    let obj_h = scope.root_raw_mut_ptr(js_object_alloc(ITERATOR_HELPER_CLASS_ID, 4));
-    let obj = obj_h.get_raw_mut_ptr();
-    js_object_set_field(obj, 0, JSValue::from_bits(source.get_nanbox_u64()));
-    js_object_set_field(obj, 1, JSValue::number(op as f64));
-    js_object_set_field(obj, 2, JSValue::from_bits(arg.get_nanbox_u64()));
-    // Field 3: mutable state. take/drop seed it from the count; flatMap seeds
-    // the inner sub-iterator slot to 0 (none yet).
+    let next = scope.root_nanbox_f64(next);
+    let obj_h = scope.root_raw_mut_ptr(js_object_alloc(ITERATOR_HELPER_CLASS_ID, FIELD_COUNT));
+    let obj = js_nanbox_pointer(obj_h.get_raw_mut_ptr::<ObjectHeader>() as i64);
+    set_field(obj, F_ITERATED, iterated.get_nanbox_f64());
+    set_field(obj, F_OP, op as f64);
+    set_field(obj, F_ARG, arg.get_nanbox_f64());
     let state = match op {
         OP_TAKE | OP_DROP => arg.get_nanbox_f64(),
-        _ => f64::from_bits(TAG_UNDEFINED),
+        _ => undefined(),
     };
-    js_object_set_field(obj, 3, JSValue::from_bits(state.to_bits()));
-    // Helper objects have their own `%Iterator Helper Prototype%`, whose
-    // intrinsic `next` is readable as a function value. This also gives every
-    // helper the shared `%IteratorPrototype%` parent used by the other builtin
-    // iterator families.
-    crate::object::attach_iterator_prototype(obj, ITERATOR_HELPER_CLASS_ID);
+    set_field(obj, F_STATE, state);
+    set_field(obj, F_NEXT, next.get_nanbox_f64());
+    set_field(obj, F_COUNTER, 0.0);
+    set_field(obj, F_GEN_STATE, GEN_START);
+    if op == OP_WRAP {
+        crate::object::attach_wrap_for_valid_iterator_prototype(obj_h.get_raw_mut_ptr());
+    } else {
+        // `%IteratorHelperPrototype%`, whose parent is `%Iterator.prototype%`.
+        crate::object::attach_iterator_prototype(obj_h.get_raw_mut_ptr(), ITERATOR_HELPER_CLASS_ID);
+    }
     js_nanbox_pointer(obj_h.get_raw_mut_ptr::<ObjectHeader>() as i64)
 }
 
-/// `Iterator.from(x)` — wrap any iterable/iterator in an identity helper so the
-/// helper methods are available. Returns a NaN-boxed pointer.
-#[no_mangle]
-pub extern "C" fn js_iterator_from(val_f64: f64) -> f64 {
-    unsafe {
-        let source = get_iterator(val_f64);
-        // If the source is already one of our helper objects, hand it back
-        // unchanged (Node returns the iterator itself when it already inherits
-        // from Iterator.prototype).
-        let p = js_nanbox_get_pointer(source);
-        if p != 0 && is_iterator_helper_addr(p as usize) {
-            return source;
+/// A new helper of `op` over `iterated` (a record or helper).
+pub(crate) unsafe fn new_helper(op: i32, iterated: f64, arg: f64) -> f64 {
+    alloc_helper(op, iterated, arg, undefined())
+}
+
+/// GetIteratorDirect(obj) (§27.1.1.3): `next` is read once. A helper or
+/// wrapper whose `next` is the intrinsic one is stepped directly (a wrapper's
+/// `next` only forwards to its record); anything else gets an identity record.
+pub(crate) unsafe fn get_iterator_direct(obj: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_h = scope.root_nanbox_f64(obj);
+    let next = get(obj, b"next");
+    let p = js_nanbox_get_pointer(obj_h.get_nanbox_f64()) as usize;
+    let np = js_nanbox_get_pointer(next) as *const ClosureHeader;
+    if is_iterator_helper_addr(p) && !np.is_null() && is_closure_ptr(np as usize) {
+        let intrinsic = if field(obj_h.get_nanbox_f64(), F_OP) as i32 == OP_WRAP {
+            statics::wrap_next_code()
+        } else {
+            crate::object::iterator_prototypes::iterator_helper_next_code()
+        };
+        if (*np).code() == intrinsic {
+            return obj_h.get_nanbox_f64();
         }
-        alloc_helper(OP_IDENTITY, source, f64::from_bits(TAG_UNDEFINED))
+    }
+    alloc_helper(OP_IDENTITY, obj_h.get_nanbox_f64(), undefined(), next)
+}
+
+/// The iterator a record or helper closes: the wrapped one for a record (a
+/// wrapper closes through its own `return`).
+unsafe fn close_target(iterated: f64) -> f64 {
+    if field(iterated, F_OP) as i32 == OP_IDENTITY {
+        field(iterated, F_ITERATED)
+    } else {
+        iterated
     }
 }
 
-#[cfg(feature = "keepalive-anchors")]
-#[used(compiler)]
-static KEEP_ITERATOR_FROM: extern "C" fn(f64) -> f64 = js_iterator_from;
-
-/// `.next()` on a helper iterator object. Pulls lazily from the source per the
-/// op kind.
-unsafe fn helper_next(obj: *mut ObjectHeader) -> f64 {
-    // Source steps and callbacks may move every object in this chain. Keep
-    // the entry-time source/callback values, but project their current address
-    // for each use; state writes must likewise target the current helper.
+/// IteratorClose(iterated, normal completion): `return` errors propagate.
+pub(crate) unsafe fn close_normal(iterated: f64) {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let obj_h = scope.root_raw_mut_ptr(obj);
-    let obj = || obj_h.get_raw_mut_ptr::<ObjectHeader>();
-    let source = scope.root_nanbox_u64(js_object_get_field(obj(), 0).bits());
-    let op = f64::from_bits(js_object_get_field(obj(), 1).bits()) as i32;
-    let arg = scope.root_nanbox_u64(js_object_get_field(obj(), 2).bits());
+    let target = scope.root_nanbox_f64(close_target(iterated));
+    let ret = get(target.get_nanbox_f64(), b"return");
+    if is_nullish(ret) {
+        return;
+    }
+    if !crate::object::value_is_callable(ret) {
+        type_error("Iterator return method is not a function");
+    }
+    if !is_object(call(ret, target.get_nanbox_f64(), &[])) {
+        type_error("Iterator result is not an object");
+    }
+}
 
-    match op {
-        OP_IDENTITY => {
-            let (v, done) = iterator_step(source.get_nanbox_f64());
-            make_iter_result(JSValue::from_bits(v.to_bits()), done)
+/// IteratorClose(iterated, throw completion): the original error wins.
+pub(crate) unsafe fn close_quietly(iterated: f64) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let target = scope.root_nanbox_f64(close_target(iterated));
+    let _ = crate::exception::catch_js_throw(|| {
+        let ret = get(target.get_nanbox_f64(), b"return");
+        if crate::object::value_is_callable(ret) {
+            call(ret, target.get_nanbox_f64(), &[]);
         }
-        OP_MAP => {
-            let (v, done) = iterator_step(source.get_nanbox_f64());
-            if done {
-                return make_iter_result(JSValue::undefined(), true);
+    });
+}
+
+/// GetIteratorFlattenable(value, reject-primitives) as a record.
+unsafe fn get_iterator_flattenable(value: f64) -> f64 {
+    get_iterator_direct(statics::flattenable_iterator(value, false))
+}
+
+/// Step a record or helper; `None` when done. Records have no state; a
+/// helper runs as a generator (§27.1.2.1): re-entry throws, a completion or
+/// throw leaves it done, and a callback's throw closes its iterator.
+pub(crate) unsafe fn helper_step(iterated: f64) -> Option<f64> {
+    let op = field(iterated, F_OP) as i32;
+    if op == OP_IDENTITY || op == OP_WRAP {
+        return step_value(field(iterated, F_ITERATED), field(iterated, F_NEXT));
+    }
+    let state = field(iterated, F_GEN_STATE);
+    if state == GEN_RUNNING {
+        type_error("Generator is already running");
+    }
+    if state == GEN_DONE {
+        return None;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let helper = scope.root_nanbox_f64(iterated);
+    set_field(iterated, F_GEN_STATE, GEN_RUNNING);
+    let close = Cell::new(false);
+    match crate::exception::catch_js_throw(|| run_op(&helper, op, &close)) {
+        Ok(value) => {
+            let state = if value.is_some() { GEN_YIELD } else { GEN_DONE };
+            set_field(helper.get_nanbox_f64(), F_GEN_STATE, state);
+            value
+        }
+        Err(error) => {
+            let error = scope.root_nanbox_f64(error);
+            set_field(helper.get_nanbox_f64(), F_GEN_STATE, GEN_DONE);
+            if close.get() {
+                close_quietly(field(helper.get_nanbox_f64(), F_ITERATED));
             }
-            let cb = closure_ptr(arg.get_nanbox_f64());
-            let mapped = if cb.is_null() {
-                v
-            } else {
-                js_closure_call1(cb, crate::closure::plain_call_receiver(), v)
-            };
-            make_iter_result(JSValue::from_bits(mapped.to_bits()), false)
+            crate::exception::js_throw(error.get_nanbox_f64())
+        }
+    }
+}
+
+/// One step of a non-identity helper. `close` is set while an abrupt
+/// completion must close the underlying iterator (IfAbruptCloseIterator).
+unsafe fn run_op(
+    helper: &crate::gc::RuntimeHandle<'_>,
+    op: i32,
+    close: &Cell<bool>,
+) -> Option<f64> {
+    let h = || helper.get_nanbox_f64();
+    let iterated = || field(h(), F_ITERATED);
+    let next_counter = || {
+        let counter = field(h(), F_COUNTER);
+        set_field(h(), F_COUNTER, counter + 1.0);
+        counter
+    };
+    match op {
+        OP_MAP => {
+            let value = helper_step(iterated())?;
+            close.set(true);
+            let counter = next_counter();
+            Some(call_back(field(h(), F_ARG), &[value, counter]))
         }
         OP_FILTER => loop {
-            let (v, done) = iterator_step(source.get_nanbox_f64());
-            if done {
-                return make_iter_result(JSValue::undefined(), true);
-            }
-            let value_scope = crate::gc::RuntimeHandleScope::new();
-            let v = value_scope.root_nanbox_f64(v);
-            let cb = closure_ptr(arg.get_nanbox_f64());
-            let keep = if cb.is_null() {
-                true
-            } else {
-                crate::value::js_is_truthy(js_closure_call1(
-                    cb,
-                    crate::closure::plain_call_receiver(),
-                    v.get_nanbox_f64(),
-                )) != 0
-            };
-            if keep {
-                return make_iter_result(JSValue::from_bits(v.get_nanbox_u64()), false);
+            close.set(false);
+            let value = helper_step(iterated())?;
+            close.set(true);
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let value = scope.root_nanbox_f64(value);
+            let counter = next_counter();
+            if truthy(call_back(
+                field(h(), F_ARG),
+                &[value.get_nanbox_f64(), counter],
+            )) {
+                return Some(value.get_nanbox_f64());
             }
         },
         OP_TAKE => {
-            let remaining = f64::from_bits(js_object_get_field(obj(), 3).bits());
-            if !(remaining > 0.0) {
-                return make_iter_result(JSValue::undefined(), true);
+            let remaining = field(h(), F_STATE);
+            if remaining == 0.0 {
+                close_normal(iterated());
+                return None;
             }
-            js_object_set_field(obj(), 3, JSValue::number(remaining - 1.0));
-            let (v, done) = iterator_step(source.get_nanbox_f64());
-            if done {
-                return make_iter_result(JSValue::undefined(), true);
-            }
-            make_iter_result(JSValue::from_bits(v.to_bits()), false)
+            // Infinity stays Infinity.
+            set_field(h(), F_STATE, remaining - 1.0);
+            helper_step(iterated())
         }
         OP_DROP => {
-            // Drop the first N (once), then passthrough.
-            let mut to_drop = f64::from_bits(js_object_get_field(obj(), 3).bits());
-            while to_drop > 0.0 {
-                let (_v, done) = iterator_step(source.get_nanbox_f64());
-                if done {
-                    js_object_set_field(obj(), 3, JSValue::number(0.0));
-                    return make_iter_result(JSValue::undefined(), true);
+            let mut remaining = field(h(), F_STATE);
+            while remaining > 0.0 {
+                remaining -= 1.0;
+                set_field(h(), F_STATE, remaining);
+                if helper_step(iterated()).is_none() {
+                    set_field(h(), F_STATE, 0.0);
+                    return None;
                 }
-                to_drop -= 1.0;
             }
-            js_object_set_field(obj(), 3, JSValue::number(0.0));
-            let (v, done) = iterator_step(source.get_nanbox_f64());
-            make_iter_result(JSValue::from_bits(v.to_bits()), done)
+            helper_step(iterated())
         }
-        OP_FLATMAP => {
-            loop {
-                // Drain the current inner sub-iterator first.
-                let inner = f64::from_bits(js_object_get_field(obj(), 3).bits());
-                let inner_ptr = js_nanbox_get_pointer(inner);
-                if inner_ptr != 0 {
-                    let (v, done) = iterator_step(inner);
-                    if !done {
-                        return make_iter_result(JSValue::from_bits(v.to_bits()), false);
-                    }
-                    // Inner exhausted — clear and pull the next outer value.
-                    js_object_set_field(obj(), 3, JSValue::from_bits(TAG_UNDEFINED));
+        OP_FLATMAP => loop {
+            let inner = field(h(), F_STATE);
+            if is_object(inner) {
+                close.set(true);
+                if let Some(value) = helper_step(inner) {
+                    return Some(value);
                 }
-                let (v, done) = iterator_step(source.get_nanbox_f64());
-                if done {
-                    return make_iter_result(JSValue::undefined(), true);
-                }
-                let cb = closure_ptr(arg.get_nanbox_f64());
-                let produced = if cb.is_null() {
-                    v
-                } else {
-                    js_closure_call1(cb, crate::closure::plain_call_receiver(), v)
-                };
-                // Per spec each produced value must itself be iterable; wrap it.
-                let inner_iter = get_iterator(produced);
-                js_object_set_field(obj(), 3, JSValue::from_bits(inner_iter.to_bits()));
+                set_field(h(), F_STATE, undefined());
             }
-        }
-        _ => make_iter_result(JSValue::undefined(), true),
+            close.set(false);
+            let value = helper_step(iterated())?;
+            close.set(true);
+            let counter = next_counter();
+            let mapped = call_back(field(h(), F_ARG), &[value, counter]);
+            let inner = get_iterator_flattenable(mapped);
+            set_field(h(), F_STATE, inner);
+        },
+        // A step error is not closed: only the active inner iterator is open.
+        OP_CONCAT => loop {
+            let inner = field(h(), F_STATE);
+            if is_object(inner) {
+                if let Some(value) = helper_step(inner) {
+                    return Some(value);
+                }
+                set_field(h(), F_STATE, undefined());
+            }
+            let index = field(h(), F_COUNTER) as u32;
+            let list = js_nanbox_get_pointer(field(h(), F_ARG)) as *const crate::array::ArrayHeader;
+            if index * 2 >= crate::array::js_array_length(list) {
+                return None;
+            }
+            set_field(h(), F_COUNTER, (index + 1) as f64);
+            let item = crate::array::js_array_get_f64(list, index * 2);
+            let method = crate::array::js_array_get_f64(list, index * 2 + 1);
+            let iter = call(method, item, &[]);
+            if !is_object(iter) {
+                type_error("Iterator is not an object");
+            }
+            set_field(h(), F_STATE, get_iterator_direct(iter));
+        },
+        _ => None,
+    }
+}
+
+/// `%IteratorHelperPrototype%.next` (§27.1.2.1.1).
+unsafe fn helper_next(obj: *mut ObjectHeader) -> f64 {
+    if !is_helper_op(js_nanbox_pointer(obj as i64)) {
+        type_error("Method Iterator Helper.prototype.next called on incompatible receiver");
+    }
+    match helper_step(js_nanbox_pointer(obj as i64)) {
+        Some(value) => make_iter_result(JSValue::from_bits(value.to_bits()), false),
+        None => make_iter_result(JSValue::undefined(), true),
     }
 }
 
@@ -372,288 +488,70 @@ pub(crate) unsafe fn iterator_helper_next_builtin(obj: *mut ObjectHeader) -> f64
     helper_next(obj)
 }
 
-/// Drain the helper iterator fully into a `*mut ArrayHeader` (NaN-box yourself).
-unsafe fn helper_to_array(obj: *mut ObjectHeader) -> f64 {
+/// Is the helper-class object `obj` a helper (has `[[UnderlyingIterators]]`),
+/// not a record or an `Iterator.from` wrapper?
+pub(crate) unsafe fn is_helper_op(obj: f64) -> bool {
+    !matches!(field(obj, F_OP) as i32, OP_IDENTITY | OP_WRAP)
+}
+
+/// `%IteratorHelperPrototype%.return` (§27.1.2.1.2).
+pub(crate) unsafe fn helper_return(obj: *mut ObjectHeader) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let obj = scope.root_raw_mut_ptr(obj);
+    let helper = scope.root_nanbox_f64(js_nanbox_pointer(obj as i64));
+    let h = || helper.get_nanbox_f64();
+    let done = || make_iter_result(JSValue::undefined(), true);
+    let op = field(h(), F_OP) as i32;
+    let state = field(h(), F_GEN_STATE);
+    if state == GEN_RUNNING {
+        type_error("Generator is already running");
+    }
+    if state == GEN_DONE {
+        return done();
+    }
+    if state == GEN_START {
+        set_field(h(), F_GEN_STATE, GEN_DONE);
+        // concat has opened nothing yet.
+        if op != OP_CONCAT {
+            close_normal(field(h(), F_ITERATED));
+        }
+        return done();
+    }
+    // Suspended at a yield: resume with a return completion, which closes
+    // flatMap's inner iterator first, then the underlying one (concat has
+    // only its active inner iterator).
+    set_field(h(), F_GEN_STATE, GEN_RUNNING);
+    let result = crate::exception::catch_js_throw(|| {
+        let inner = field(h(), F_STATE);
+        if op == OP_CONCAT {
+            if is_object(inner) {
+                close_normal(inner);
+            }
+            return;
+        }
+        if op == OP_FLATMAP && is_object(inner) {
+            if let Err(error) = crate::exception::catch_js_throw(|| close_normal(inner)) {
+                let scope = crate::gc::RuntimeHandleScope::new();
+                let error = scope.root_nanbox_f64(error);
+                close_quietly(field(h(), F_ITERATED));
+                crate::exception::js_throw(error.get_nanbox_f64());
+            }
+        }
+        close_normal(field(h(), F_ITERATED));
+    });
+    set_field(h(), F_GEN_STATE, GEN_DONE);
+    if let Err(error) = result {
+        crate::exception::js_throw(error);
+    }
+    done()
+}
+
+/// Drain a record or helper into a new array (NaN-boxed).
+pub(crate) unsafe fn drain_to_array(iterated: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let iterated = scope.root_nanbox_f64(iterated);
     let arr = scope.root_raw_mut_ptr(crate::array::js_array_alloc(8));
-    for _ in 0..100_000_000usize {
-        let res = helper_next(obj.get_raw_mut_ptr());
-        let res_ptr = js_nanbox_get_pointer(res);
-        if res_ptr == 0 {
-            break;
-        }
-        let done = crate::value::js_is_truthy(f64::from_bits(
-            js_object_get_field(res_ptr as *mut ObjectHeader, 1).bits(),
-        )) != 0;
-        if done {
-            break;
-        }
-        let v = f64::from_bits(js_object_get_field(res_ptr as *mut ObjectHeader, 0).bits());
+    while let Some(v) = helper_step(iterated.get_nanbox_f64()) {
         arr.set_raw_mut_ptr(crate::array::js_array_push_f64(arr.get_raw_mut_ptr(), v));
     }
     js_nanbox_pointer(arr.get_raw_mut_ptr::<crate::array::ArrayHeader>() as i64)
-}
-
-/// Is `name` one of the iterator-helper method names?
-pub fn is_iterator_helper_method(name: &str) -> bool {
-    matches!(
-        name,
-        "map"
-            | "filter"
-            | "take"
-            | "drop"
-            | "flatMap"
-            | "toArray"
-            | "forEach"
-            | "reduce"
-            | "some"
-            | "every"
-            | "find"
-    )
-}
-
-/// #2874: when a method call lands on a RAW iterator object (a generator, a
-/// Map/Set/array iterator, or any `{ next() }`) for an iterator-helper method
-/// it doesn't define as an own property, Node resolves it on
-/// `Iterator.prototype`. Wrap the iterator in an identity helper and dispatch
-/// there. Returns `Some(result)` when handled, `None` to fall through.
-///
-/// `has_own` reports whether `obj` defines `method_name` as an own callable
-/// field (in which case the user's own method wins and we must NOT intercept).
-pub unsafe fn maybe_dispatch_helper_on_iterator(
-    obj: *mut ObjectHeader,
-    method_name: &str,
-    args_ptr: *const f64,
-    args_len: usize,
-    has_own_field: bool,
-) -> Option<f64> {
-    if has_own_field || !is_iterator_helper_method(method_name) {
-        return None;
-    }
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let obj = scope.root_raw_mut_ptr(obj);
-    let args = scope.root_nanbox_f64_slice(if args_ptr.is_null() {
-        &[]
-    } else {
-        std::slice::from_raw_parts(args_ptr, args_len)
-    });
-    // Only intercept genuine iterators: those exposing a callable `.next`.
-    let next_key = crate::string::intern_ascii_literal(b"next");
-    let next_val = js_object_get_field_by_name(obj.get_raw_mut_ptr(), next_key);
-    if next_val.is_undefined() {
-        return None;
-    }
-    let next_ptr = js_nanbox_get_pointer(f64::from_bits(next_val.bits())) as *const ClosureHeader;
-    if next_ptr.is_null() || !is_closure_ptr(next_ptr as usize) {
-        return None;
-    }
-    let self_f64 = js_nanbox_pointer(obj.get_raw_mut_ptr::<ObjectHeader>() as i64);
-    let wrapped = js_iterator_from(self_f64);
-    let wrapped_ptr = js_nanbox_get_pointer(wrapped) as *mut ObjectHeader;
-    let args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&args);
-    Some(dispatch_iterator_helper_method(
-        wrapped_ptr,
-        method_name,
-        args.as_ptr(),
-        args.len(),
-    ))
-}
-
-/// Dispatch an iterator-helper method on a runtime builtin iterator object.
-/// The native iterator class-id arms normally handle protocol methods such as
-/// `next` directly; helper names must instead wrap that iterator and enter the
-/// lazy helper dispatcher. Callers have already verified the builtin iterator
-/// class id before reaching this function.
-pub unsafe fn maybe_dispatch_helper_on_builtin_iterator(
-    obj: *mut ObjectHeader,
-    method_name: &str,
-    args_ptr: *const f64,
-    args_len: usize,
-) -> Option<f64> {
-    if !is_iterator_helper_method(method_name) {
-        return None;
-    }
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let args = scope.root_nanbox_f64_slice(if args_ptr.is_null() {
-        &[]
-    } else {
-        std::slice::from_raw_parts(args_ptr, args_len)
-    });
-    let source = js_nanbox_pointer(obj as i64);
-    let wrapped = js_iterator_from(source);
-    let wrapped_ptr = js_nanbox_get_pointer(wrapped) as *mut ObjectHeader;
-    let args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&args);
-    Some(dispatch_iterator_helper_method(
-        wrapped_ptr,
-        method_name,
-        args.as_ptr(),
-        args.len(),
-    ))
-}
-
-/// Dispatch a method call on a helper iterator object. `args_ptr`/`args_len`
-/// carry the NaN-boxed call arguments.
-pub unsafe fn dispatch_iterator_helper_method(
-    obj: *mut ObjectHeader,
-    method_name: &str,
-    args_ptr: *const f64,
-    args_len: usize,
-) -> f64 {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let self_h = scope.root_nanbox_f64(js_nanbox_pointer(obj as i64));
-    let obj = || js_nanbox_get_pointer(self_h.get_nanbox_f64()) as *mut ObjectHeader;
-    let arg0 = if args_len >= 1 && !args_ptr.is_null() {
-        *args_ptr
-    } else {
-        f64::from_bits(TAG_UNDEFINED)
-    };
-    let arg1 = if args_len >= 2 && !args_ptr.is_null() {
-        *args_ptr.add(1)
-    } else {
-        f64::from_bits(TAG_UNDEFINED)
-    };
-    let arg0 = scope.root_nanbox_f64(arg0);
-    let arg1 = scope.root_nanbox_f64(arg1);
-
-    match method_name {
-        // #9019: an own `next` assigned onto the helper instance wins over
-        // the builtin advance, exactly as on the Map/Set path.
-        "next" => {
-            if let Some(result) =
-                crate::object::call_overridden_iterator_next(obj(), ITERATOR_HELPER_CLASS_ID)
-            {
-                return result;
-            }
-            helper_next(obj())
-        }
-        "Symbol.iterator" | "@@iterator" => self_h.get_nanbox_f64(),
-        "return" | "throw" => make_iter_result(JSValue::undefined(), true),
-        // Lazy helpers — return a new helper wrapping `self`.
-        "map" => alloc_helper(OP_MAP, self_h.get_nanbox_f64(), arg0.get_nanbox_f64()),
-        "filter" => alloc_helper(OP_FILTER, self_h.get_nanbox_f64(), arg0.get_nanbox_f64()),
-        "flatMap" => alloc_helper(OP_FLATMAP, self_h.get_nanbox_f64(), arg0.get_nanbox_f64()),
-        "take" => {
-            let n = JSValue::from_bits(arg0.get_nanbox_u64()).to_number();
-            let count = if n.is_nan() { 0.0 } else { n.max(0.0).floor() };
-            alloc_helper(
-                OP_TAKE,
-                self_h.get_nanbox_f64(),
-                f64::from_bits(JSValue::number(count).bits()),
-            )
-        }
-        "drop" => {
-            let n = JSValue::from_bits(arg0.get_nanbox_u64()).to_number();
-            let count = if n.is_nan() { 0.0 } else { n.max(0.0).floor() };
-            alloc_helper(
-                OP_DROP,
-                self_h.get_nanbox_f64(),
-                f64::from_bits(JSValue::number(count).bits()),
-            )
-        }
-        // Terminal helpers — drain.
-        "toArray" => helper_to_array(obj()),
-        "forEach" => {
-            let mut i = 0.0f64;
-            loop {
-                let (v, done) = iterator_step(self_h.get_nanbox_f64());
-                if done {
-                    break;
-                }
-                let cb = closure_ptr(arg0.get_nanbox_f64());
-                if !cb.is_null() {
-                    js_closure_call2(
-                        cb,
-                        crate::closure::plain_call_receiver(),
-                        v,
-                        f64::from_bits(JSValue::number(i).bits()),
-                    );
-                }
-                i += 1.0;
-            }
-            f64::from_bits(TAG_UNDEFINED)
-        }
-        "reduce" => {
-            let has_init = args_len >= 2;
-            let acc = scope.root_nanbox_f64(arg1.get_nanbox_f64());
-            let mut started = has_init;
-            loop {
-                let (v, done) = iterator_step(self_h.get_nanbox_f64());
-                if done {
-                    break;
-                }
-                if !started {
-                    acc.set_nanbox_f64(v);
-                    started = true;
-                    continue;
-                }
-                let cb = closure_ptr(arg0.get_nanbox_f64());
-                if !cb.is_null() {
-                    acc.set_nanbox_f64(js_closure_call2(
-                        cb,
-                        crate::closure::plain_call_receiver(),
-                        acc.get_nanbox_f64(),
-                        v,
-                    ));
-                }
-            }
-            if !started {
-                // No init + empty iterator → TypeError in spec; return undefined
-                // (Perry avoids throwing from this internal helper).
-                return f64::from_bits(TAG_UNDEFINED);
-            }
-            acc.get_nanbox_f64()
-        }
-        "some" => loop {
-            let (v, done) = iterator_step(self_h.get_nanbox_f64());
-            if done {
-                return f64::from_bits(crate::value::TAG_FALSE);
-            }
-            let cb = closure_ptr(arg0.get_nanbox_f64());
-            if !cb.is_null()
-                && crate::value::js_is_truthy(js_closure_call1(
-                    cb,
-                    crate::closure::plain_call_receiver(),
-                    v,
-                )) != 0
-            {
-                return f64::from_bits(TAG_TRUE);
-            }
-        },
-        "every" => loop {
-            let (v, done) = iterator_step(self_h.get_nanbox_f64());
-            if done {
-                return f64::from_bits(TAG_TRUE);
-            }
-            let cb = closure_ptr(arg0.get_nanbox_f64());
-            if !cb.is_null()
-                && crate::value::js_is_truthy(js_closure_call1(
-                    cb,
-                    crate::closure::plain_call_receiver(),
-                    v,
-                )) == 0
-            {
-                return f64::from_bits(crate::value::TAG_FALSE);
-            }
-        },
-        "find" => loop {
-            let (v, done) = iterator_step(self_h.get_nanbox_f64());
-            if done {
-                return f64::from_bits(TAG_UNDEFINED);
-            }
-            let value_scope = crate::gc::RuntimeHandleScope::new();
-            let v = value_scope.root_nanbox_f64(v);
-            let cb = closure_ptr(arg0.get_nanbox_f64());
-            if !cb.is_null()
-                && crate::value::js_is_truthy(js_closure_call1(
-                    cb,
-                    crate::closure::plain_call_receiver(),
-                    v.get_nanbox_f64(),
-                )) != 0
-            {
-                return v.get_nanbox_f64();
-            }
-        },
-        _ => f64::from_bits(TAG_UNDEFINED),
-    }
 }

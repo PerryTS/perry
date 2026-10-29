@@ -55,6 +55,24 @@ compile() { # arm perry ws name dir src
       "$perry" compile --cache-dir "$OUT/tmp/cache" "$s" -o "$OUT/w/$n" > "$OUT/cg/$n.$arm.compile.log" 2>&1 )
   local rc=$?; rm -rf "$OUT/tmp/cache"; return $rc
 }
+# per-function Ir of one callgrind run: fn<TAB>ir
+fn_ir() { # outfile
+  callgrind_annotate --auto=no --threshold=100 --show=Ir --show-percs=no --inclusive=no "$1" 2>/dev/null \
+    | awk '/^ *[0-9][0-9,]* +[^ ]/ { ir=$1; gsub(",","",ir); $1=""; sub(/^ +/,""); if ($0 ~ /PROGRAM TOTALS/) next
+             sub(/ \[[^]]*\]$/,""); i=index($0,":"); if (i>0) $0=substr($0,i+1); gsub(/::h[0-9a-f]{16}/,"")
+             if ($0 ~ /^0x[0-9a-f]+$/) $0="<unresolved address>"; a[$0]+=ir }
+           END { for (f in a) printf "%s\t%d\n", f, a[f] }'
+}
+# writes $OUT/cg/$n.$arm.unstable (fn<TAB>min<TAB>max<TAB>spread): functions whose Ir differs between the
+# runs of the same arm (work that depends on stack garbage, not on the code); they are excluded from the
+# per-function +row gate and listed in summary.tsv. The witness total gate is unchanged.
+unstable() { # arm name
+  local arm=$1 n=$2 i
+  for i in 1 2 3; do fn_ir "$OUT/cg/$n.$arm.$i.out" > "$OUT/cg/$n.$arm.$i.fn"; done
+  awk -F'\t' '{ if (!($1 in mn) || $2<mn[$1]) mn[$1]=$2; if (!($1 in mx) || $2>mx[$1]) mx[$1]=$2; seen[$1]++ }
+       END { for (f in mn) if (mx[f]!=mn[f] || seen[f]!=3) printf "%s\t%d\t%d\t%d\n", f, mn[f], mx[f], mx[f]-mn[f] }' \
+    "$OUT/cg/$n.$arm.1.fn" "$OUT/cg/$n.$arm.2.fn" "$OUT/cg/$n.$arm.3.fn" | sort > "$OUT/cg/$n.$arm.unstable"
+}
 # prints "total" and writes $OUT/cg/$n.$arm.fn (fn<TAB>ir)
 measure() { # arm name dir args
   local arm=$1 n=$2 d=$3 a=$4 totals=() i
@@ -62,13 +80,10 @@ measure() { # arm name dir args
     ( cd "$d"; ulimit -v 8000000; timeout 900 env -i "${ENVV[@]}" setarch x86_64 -R valgrind --tool=callgrind --cache-sim=no --branch-sim=no --callgrind-out-file="$OUT/cg/$n.$arm.$i.out" "$OUT/w/$n" $a > /dev/null 2> "$OUT/cg/$n.$arm.$i.log" )
     totals+=("$(grep -o 'Collected : [0-9]*' "$OUT/cg/$n.$arm.$i.log" | grep -o '[0-9]*$')")
   done
+  unstable "$arm" "$n"
   if [ -z "${totals[0]}" ] || [ "${totals[0]}" != "${totals[1]}" ] || [ "${totals[0]}" != "${totals[2]}" ]; then
-    echo "NONDETERMINISTIC $n $arm: ${totals[*]}" >&2; return 1; fi
-  callgrind_annotate --auto=no --threshold=100 --show=Ir --show-percs=no --inclusive=no "$OUT/cg/$n.$arm.1.out" 2>/dev/null \
-    | awk '/^ *[0-9][0-9,]* +[^ ]/ { ir=$1; gsub(",","",ir); $1=""; sub(/^ +/,""); if ($0 ~ /PROGRAM TOTALS/) next
-             sub(/ \[[^]]*\]$/,""); i=index($0,":"); if (i>0) $0=substr($0,i+1); gsub(/::h[0-9a-f]{16}/,"")
-             if ($0 ~ /^0x[0-9a-f]+$/) $0="<unresolved address>"; a[$0]+=ir }
-           END { for (f in a) printf "%s\t%d\n", f, a[f] }' > "$OUT/cg/$n.$arm.fn"
+    echo "NONDETERMINISTIC $n $arm: ${totals[*]} (unstable functions: $(cut -f1,4 "$OUT/cg/$n.$arm.unstable" | tr '\t\n' ' ' | cut -c1-300))" >&2; return 1; fi
+  cp "$OUT/cg/$n.$arm.1.fn" "$OUT/cg/$n.$arm.fn"
   echo "${totals[0]}"
 }
 
@@ -86,11 +101,15 @@ for spec in "${W[@]}"; do
     "$OUT/cg/$n.main.fn" "$OUT/cg/$n.head.fn" | awk -F'\t' '$4!=0' | sort -t$'\t' -k4,4nr > "$OUT/$n.tsv"
   grep -v '^#' "$ALLOW" 2>/dev/null | sed '/^$/d' | sort -u > "$OUT/tmp/allow.$n"
   plus=$(awk -F'\t' '$4>0' "$OUT/$n.tsv" | wc -l)
-  bad=$(awk -F'\t' 'NR==FNR { ok[$0]; next } $4>0 && !($1 in ok)' "$OUT/tmp/allow.$n" "$OUT/$n.tsv" | wc -l)
+  cat "$OUT/cg/$n.main.unstable" "$OUT/cg/$n.head.unstable" | cut -f1 | sort -u > "$OUT/tmp/unst.$n"
+  # a +row is checked unless it is allowed or unstable; FILENAME (not NR==FNR) so an empty list does not pass vacuously
+  bad=$(awk -F'\t' 'FILENAME==ARGV[1] || FILENAME==ARGV[2] { ok[$0]; next } $4>0 && !($1 in ok)' "$OUT/tmp/allow.$n" "$OUT/tmp/unst.$n" "$OUT/$n.tsv" | wc -l)
+  for a in main head; do awk -F'\t' -v w="$n" -v a="$a" '{ printf "unstable\t%s\t%s\t%s\tspread=%d\n", w, a, $1, $4 }' "$OUT/cg/$n.$a.unstable" >> "$OUT/unstable.tsv"; done
   printf "%s\t%s\t%s\t%d\t%d\n" "$n" "$tm" "$th" $((th-tm)) "$plus" >> "$OUT/summary.tsv"
   [ "$th" -gt "$tm" ] && { echo "TOTAL ABOVE MAIN: $n (+$((th-tm)))"; fail=1; }
   [ "$bad" -gt 0 ] && { echo "UNEXPLAINED +Ir in $n: $bad functions (see $OUT/$n.tsv)"; fail=1; }
 done
+[ -f "$OUT/unstable.tsv" ] && cat "$OUT/unstable.tsv" >> "$OUT/summary.tsv"
 cat "$OUT/summary.tsv"
 echo "IRDIFF-DONE fail=$fail"
 exit $fail
