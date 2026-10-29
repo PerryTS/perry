@@ -266,7 +266,7 @@ fn wide_object_index_resolves_exact_bytes_inside_a_hash_collision() {
             })
             .collect();
         let mut index = super::ParsedObjectIndex {
-            hash_state: ahash::RandomState::new(),
+            hash_state: crate::fast_hash::ProcessSeeded::default(),
             primary: crate::fast_hash::new_ptr_hash_map(),
             collisions: Vec::new(),
         };

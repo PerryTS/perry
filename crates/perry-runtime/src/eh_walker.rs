@@ -761,7 +761,7 @@ struct WalkerImage {
 
 pub(crate) struct Walker {
     images: Vec<WalkerImage>,
-    sites: ahash::AHashMap<u64, Site>,
+    sites: std::collections::HashMap<u64, Site, crate::fast_hash::ProcessSeeded>,
     /// `image_generation()` when `images` was enumerated.
     generation: ImageGeneration,
 }
@@ -863,7 +863,7 @@ impl Walker {
         }
         Some(Walker {
             images,
-            sites: ahash::AHashMap::new(),
+            sites: Default::default(),
             generation,
         })
     }

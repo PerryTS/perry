@@ -93,11 +93,11 @@ pub type StaticMethodTable = PtrHashMap<u32, StaticNameMap<(usize, u32, bool, us
 /// Outer map fast-hashed, inner map a [`StaticNameMap`] — see above.
 pub type StaticAccessorTable = PtrHashMap<u32, StaticNameMap<super::class_registry::AccessorDecl>>;
 /// A class's static members by name. The names come from program source, so
-/// the map keeps a randomly keyed, flood-resistant hasher: `ahash::RandomState`,
+/// the map keeps a randomly keyed, flood-resistant hasher: [`crate::fast_hash::ProcessSeeded`] (ahash),
 /// the runtime's hasher for untrusted string keys (as in `json::parser`), in
 /// place of std's slower SipHash. A static call that misses its site guard
 /// probes this map once per class on the parent chain.
-pub type StaticNameMap<V> = HashMap<Vec<u8>, V, ahash::RandomState>;
+pub type StaticNameMap<V> = HashMap<Vec<u8>, V, crate::fast_hash::ProcessSeeded>;
 /// `(class_id, is_static, property_name) -> source-order token` for declared
 /// string-keyed methods and accessors. The token is the member function's HIR
 /// id, which is allocated while walking the class body and therefore orders
