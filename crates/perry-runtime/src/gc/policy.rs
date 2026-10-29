@@ -2406,6 +2406,18 @@ pub(super) fn note_copying_minor_young_survival(survival_permille: u64) {
     GC_LAST_FULL_OLD_IN_USE_BYTES.with(|bytes| bytes.set(bytes.get().max(survived)));
 }
 
+/// The growth multiplier the live-proportional pacing bands carry: 1, or
+/// `MAJOR_PACING_RETAINING_GROWTH_MULTIPLIER` while the last copying minor
+/// measured a retaining heap. One definition for the arms that scale a band by
+/// the last full's live bytes.
+pub(super) fn major_pacing_live_growth_multiplier() -> usize {
+    if GC_MAJOR_PACING_RETAINING.with(|c| c.get()) {
+        MAJOR_PACING_RETAINING_GROWTH_MULTIPLIER
+    } else {
+        1
+    }
+}
+
 /// Whether the last copying minor measured a retaining heap. Trace/test
 /// observability — a gate that cannot see this cannot prove which arm paced a
 /// given run.
