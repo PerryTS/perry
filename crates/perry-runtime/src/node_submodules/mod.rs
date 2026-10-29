@@ -1120,9 +1120,12 @@ fn find_export(submod: &SubmoduleSpec, name: &str) -> Option<&'static ExportSpec
 /// the export ordinal are the identity; no address of the spec or of its
 /// names enters, so lookups do the same work wherever the link put them.
 /// An empty record is all zero bits, so the thread-local array is `.tbss`
-/// (zeroed at thread start) rather than an init image copied per thread.
+/// (zeroed at thread start) rather than an init image copied per thread. The
+/// exports box is thin on purpose: `None` of a boxed slice leaves its length
+/// word undefined, and an initializer with undefined bytes is emitted as
+/// `.tdata`.
 struct SubmodSlots {
-    exports: Option<Box<[*mut ClosureHeader]>>,
+    exports: Option<Box<Vec<*mut ClosureHeader>>>,
     namespace: *mut ObjectHeader,
     default_object: *mut ObjectHeader,
 }
@@ -1428,9 +1431,10 @@ fn ensure_export_singleton(
         allocated
     };
     SUBMOD_SINGLETONS.with(|m| {
-        m.borrow_mut()[bucket].exports.get_or_insert_with(|| {
-            vec![std::ptr::null_mut(); submod.exports.len()].into_boxed_slice()
-        })[ordinal] = allocated;
+        m.borrow_mut()[bucket]
+            .exports
+            .get_or_insert_with(|| Box::new(vec![std::ptr::null_mut(); submod.exports.len()]))
+            [ordinal] = allocated;
     });
     ANY_SINGLETON_ALLOCATED.store(1, Ordering::Release);
     allocated
@@ -1672,7 +1676,10 @@ pub fn scan_node_submodule_singleton_roots_mut(visitor: &mut crate::gc::RuntimeR
     }
     SUBMOD_SINGLETONS.with(|m| {
         for slots in m.borrow_mut().iter_mut() {
-            for closure_ptr in slots.exports.iter_mut().flatten().filter(|p| !p.is_null()) {
+            for closure_ptr in slots.exports.iter_mut().flat_map(|e| e.iter_mut()) {
+                if closure_ptr.is_null() {
+                    continue;
+                }
                 visitor.visit_raw_mut_ptr_slot(closure_ptr);
             }
             for obj_ptr in [&mut slots.namespace, &mut slots.default_object] {
@@ -1733,7 +1740,7 @@ pub(crate) fn test_seed_node_submodule_roots(
     SUBMOD_SINGLETONS.with(|m| {
         let mut m = m.borrow_mut();
         *m = [EMPTY_SUBMOD_SLOTS; SUBMOD_COUNT];
-        m[0].exports = Some(vec![closure].into_boxed_slice());
+        m[0].exports = Some(Box::new(vec![closure]));
         m[0].namespace = namespace;
     });
     DIAG_NOOP_CLOSURE.with(|slot| {
