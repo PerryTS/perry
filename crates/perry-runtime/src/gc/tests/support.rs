@@ -824,6 +824,27 @@ pub(super) fn young_leaf() -> usize {
     crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32) as usize
 }
 
+/// A large container is born young (young large storage). A fixture whose
+/// subject is an OLD large parent promotes it first: one minor with the cell
+/// as a global root flips it old at its unchanged address, as a surviving
+/// program object is. Call it before allocating young cells the fixture
+/// keeps unrooted.
+pub(super) unsafe fn promote_young_large<T>(p: *mut T) -> *mut T {
+    let addr = p as usize;
+    assert!(
+        crate::arena::is_large_storage(addr) && crate::arena::pointer_in_nursery(addr),
+        "fixture: a young large cell"
+    );
+    let mut slot = Box::new(ptr_bits(addr));
+    let root: *mut u64 = &mut *slot;
+    register_global_root(root);
+    let _ = collect_minor_trace(GcTriggerKind::Direct);
+    GLOBAL_ROOTS.with(|roots| roots.borrow_mut().retain(|&r| r != root));
+    assert_eq!((*slot & POINTER_MASK) as usize, addr, "promoted at its address");
+    assert!(crate::arena::pointer_in_old_gen(addr));
+    p
+}
+
 pub(super) fn ptr_bits(addr: usize) -> u64 {
     POINTER_TAG | (addr as u64 & POINTER_MASK)
 }
@@ -1080,7 +1101,7 @@ pub(super) fn alloc_tracked_test_symbol() -> *mut crate::symbol::SymbolHeader {
     ptr as *mut crate::symbol::SymbolHeader
 }
 
-pub(super) unsafe fn alloc_old_test_array(
+pub(crate) unsafe fn alloc_old_test_array(
     length: u32,
 ) -> (*mut crate::array::ArrayHeader, *mut u64) {
     let payload = std::mem::size_of::<crate::array::ArrayHeader>() + length as usize * 8;

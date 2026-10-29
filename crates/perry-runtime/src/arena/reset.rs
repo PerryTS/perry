@@ -23,15 +23,19 @@ pub fn arena_reset_all_blocks_to_zero() {
             block.clear_object_starts();
             block.offset = 0;
         }
-        arena.set_current(0);
+        if !arena.blocks.iter().any(ArenaBlock::bump_target) {
+            arena.install_fresh_block(BLOCK_SIZE);
+        }
+        let first = arena.blocks.iter().position(ArenaBlock::bump_target).unwrap_or(0);
+        arena.set_current(first);
         // Free list is now invalid (all entries point into reset blocks).
         crate::gc::ARENA_FREE_LIST.with(|fl| fl.borrow_mut().clear());
         crate::gc::ARENA_FREE_LIST_NONEMPTY.with(|c| c.set(false));
-        // Resync inline state to block 0 (offset 0, full size).
+        // Resync inline state to the bump block (offset 0, full size).
         INLINE_STATE.with(|s| {
             let inline = &mut *s.get();
             if !inline.data.is_null() {
-                let block = &arena.blocks[0];
+                let block = &arena.blocks[arena.current];
                 inline.data = block.data;
                 inline.offset = 0;
                 inline.size = super::inline::allocation_limit(0, block.size);
@@ -61,7 +65,7 @@ fn poison_fromspace_enabled() -> bool {
 /// in yet, which would be a layout change of its own.
 fn poison_region_in_place(arena: &mut Arena) {
     for block in arena.blocks.iter_mut() {
-        if block.data.is_null() || block.offset == 0 {
+        if !block.bump_target() || block.offset == 0 {
             continue;
         }
         // SAFETY: `[data, data+offset)` is this block's allocated span, owned
@@ -123,7 +127,10 @@ fn reset_region_to_zero(arena: &mut Arena, dead_cycles: DeadCycles) -> (usize, u
     if arena.generation == HeapGeneration::Old {
         old_gen_in_use_bytes_sub(reusable_bytes);
     }
-    arena.set_current(0);
+    // Slot 0 may hold a dedicated large extent; `point_eden_at_first_mapped_block`
+    // still covers an all-tombstone prefix.
+    let first = arena.blocks.iter().position(ArenaBlock::bump_target).unwrap_or(0);
+    arena.set_current(first);
     (reset_blocks, reusable_bytes)
 }
 
@@ -369,11 +376,16 @@ pub(super) fn release_idle_eden_blocks(arena: &mut Arena) -> ArenaResetStats {
 /// tombstoned; allocating there would map a fresh block while empty ones sit
 /// behind it.
 pub(super) fn point_eden_at_first_mapped_block(arena: &mut Arena) {
-    if !arena.blocks[arena.current].data.is_null() {
+    if arena.blocks[arena.current].bump_target() {
         return;
     }
-    if let Some(first) = arena.blocks.iter().position(|block| !block.data.is_null()) {
-        arena.set_current(first);
+    match arena.blocks.iter().position(ArenaBlock::bump_target) {
+        Some(first) => arena.set_current(first),
+        // Only large extents remain mapped: never bump inside one.
+        None if arena.blocks.iter().any(|block| !block.data.is_null()) => {
+            arena.install_fresh_block(BLOCK_SIZE)
+        }
+        None => {}
     }
 }
 

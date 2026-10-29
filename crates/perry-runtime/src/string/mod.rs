@@ -763,32 +763,6 @@ pub(crate) fn string_storage_alloc(capacity: u32) -> (*mut StringHeader, *mut u8
     (ptr, data)
 }
 
-/// [`string_storage_alloc`] for a child of a producer's fresh container, born
-/// where [`crate::gc::ProducerChildBirth`] says. `Old` takes the old-generation
-/// birth a large string takes: old pages, `GC_FLAG_TENURED`, and the live
-/// allocate-black color.
-#[inline]
-pub(crate) fn string_storage_alloc_for(
-    birth: crate::gc::ProducerChildBirth,
-    capacity: u32,
-) -> (*mut StringHeader, *mut u8) {
-    match birth {
-        crate::gc::ProducerChildBirth::Young => string_storage_alloc(capacity),
-        crate::gc::ProducerChildBirth::Old => {
-            let payload_size = std::mem::size_of::<StringHeader>() + capacity as usize;
-            let raw = crate::arena::arena_alloc_gc_old_born_tenured(
-                payload_size,
-                8,
-                crate::gc::GC_TYPE_STRING,
-            );
-            let ptr = raw as *mut StringHeader;
-            let data = string_data(ptr).cast_mut();
-            zero_alignment_padding_tail(raw, payload_size);
-            (ptr, data)
-        }
-    }
-}
-
 /// JSON results at or above this size use individually tracked storage.
 pub(crate) const JSON_MALLOC_OUTPUT_THRESHOLD: u32 = 512 * 1024;
 
@@ -886,38 +860,6 @@ pub(crate) fn string_storage_alloc_no_collect(
     let data = unsafe { raw.add(std::mem::size_of::<StringHeader>()) };
     zero_alignment_padding_tail(raw, payload_size);
     Some((ptr, data))
-}
-
-/// [`string_storage_alloc_for`] with **no collection point** (JST slice 4,
-/// design D). `Some` proves nothing on the heap moved, so a raw string or array
-/// pointer the caller read before the call is still valid. `None` is a refusal,
-/// not an event: root the operands and call [`string_storage_alloc_for`].
-///
-/// Both arms are the no-collect forms of the allocators the collecting call
-/// reaches, so a `Some` is byte-identical to what it would have returned.
-#[inline(always)]
-pub(crate) fn string_storage_alloc_for_no_collect(
-    birth: crate::gc::ProducerChildBirth,
-    capacity: u32,
-) -> Option<(*mut StringHeader, *mut u8)> {
-    match birth {
-        crate::gc::ProducerChildBirth::Young => string_storage_alloc_no_collect(capacity),
-        crate::gc::ProducerChildBirth::Old => {
-            let payload_size = std::mem::size_of::<StringHeader>() + capacity as usize;
-            let raw = crate::arena::arena_alloc_gc_old_no_collect(
-                payload_size,
-                8,
-                crate::gc::GC_TYPE_STRING,
-            );
-            if raw.is_null() {
-                return None;
-            }
-            let ptr = raw as *mut StringHeader;
-            let data = unsafe { raw.add(std::mem::size_of::<StringHeader>()) };
-            zero_alignment_padding_tail(raw, payload_size);
-            Some((ptr, data))
-        }
-    }
 }
 
 #[inline]

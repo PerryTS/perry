@@ -289,6 +289,15 @@ impl CopyingNurseryCollector {
                 self.move_young::<DIAGNOSTICS>(ptr)
             },
             CopyingPointerKind::ToSurvivor => addr,
+            CopyingPointerKind::YoungLarge
+                if unsafe { (*ptr.header).gc_flags } & GC_FLAG_FORWARDED != 0 =>
+            unsafe {
+                // A young large array that grew: as for an Eden stub, the slot
+                // is rewritten to the current array and the stub, unmarked,
+                // is freed with its extent.
+                let forwarded = forwarding_address(ptr.header) as usize;
+                self.mark_addr::<DIAGNOSTICS>(forwarded).unwrap_or(forwarded)
+            },
             CopyingPointerKind::YoungLarge | CopyingPointerKind::Longlived | CopyingPointerKind::Malloc => {
                 unsafe {
                     let flags = (*ptr.header).gc_flags;
@@ -1570,9 +1579,17 @@ pub(super) fn run_copied_minor_attempt<const DIAGNOSTICS: bool>(
     // walk reads `GC_FLAG_MARKED` to decide which objects to index — and it
     // takes the place of, never runs alongside, the from-space reset: the
     // blocks the reset would recycle are the blocks this keeps.
+    // A promoted young large container keeps its address; its young and
+    // malloc children are remembered into the sticky set the rebuild below
+    // restores after the remembered-set clear.
     let large_reset = if untraced {
         crate::arena::ArenaResetStats::default()
-    } else { crate::arena::finish_copied_young_large() };
+    } else {
+        let sticky = &mut collector.sticky;
+        crate::arena::finish_copied_young_large(|header| unsafe {
+            super::leaf_service::remember_promoted_large_container_into::<DIAGNOSTICS>(sticky, header)
+        })
+    };
     let large_live_bytes = young_large_bytes.saturating_sub(large_reset.reusable_bytes);
     let (reset, promotion_stats) = if promoting_in_place {
         let phase_start = if DIAGNOSTICS {

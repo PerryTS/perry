@@ -340,7 +340,7 @@ fn weakmap_index_survives_explicit_full_gc_with_forced_movement() {
 }
 
 #[test]
-fn born_old_weak_storage_recovers_unarmed_weak_slot_coverage() {
+fn young_large_weak_storage_keeps_moved_keys_through_promotion() {
     let _guard = guard(3);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _schedule =
@@ -358,7 +358,10 @@ fn born_old_weak_storage_recovers_unarmed_weak_slot_coverage() {
     crate::weakref::test_support::reserve_weak_storage_for_tests(rooted(0), 8192);
     let owner = (rooted(0).to_bits() & POINTER_MASK) as *const crate::ObjectHeader;
     let table = unsafe { crate::weakref::storage::owned_storage(owner) };
-    assert!(crate::arena::pointer_in_old_gen(table as usize));
+    assert!(
+        crate::arena::pointer_in_nursery(table as usize) && crate::arena::is_large_storage(table as usize),
+        "a large weak table is young large storage"
+    );
     root_object(1);
     root_object(2);
     let old_key = rooted(1).to_bits();
@@ -366,31 +369,18 @@ fn born_old_weak_storage_recovers_unarmed_weak_slot_coverage() {
         (old_key & POINTER_MASK) as usize
     ));
     js_weakmap_set(rooted(0), rooted(1), rooted(2));
-    let slot_page = unsafe { crate::arena::generation_page_for_addr((*table).entries() as usize) };
-    assert!(
-        !crate::gc::barrier_arming::barrier_remembering_armed(),
-        "the fixture must remain inside the unarmed window"
-    );
-    assert_eq!(remembered_dirty_page_count(), 0);
-    assert!(
-        !old_page_dirty_for(slot_page),
-        "the unarmed barrier must actually skip coverage"
-    );
-    // Taking the first snapshot itself arms and reconstructs the barrier.
-    // Assert the skipped weak entry's exact page was recovered before copy.
-    let _ = remembered_dirty_snapshot::<{ cfg!(test) }>();
-    assert!(old_page_dirty_for(slot_page));
-    assert_eq!(
-        crate::gc::barrier_arming::remembered_reconstruct_census().reconstructs,
-        1
-    );
+    assert_eq!(remembered_dirty_page_count(), 0, "a young table owes no coverage");
     let trace = collect_minor_trace(GcTriggerKind::Direct);
     assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
-    assert_ne!(
-        old_key,
-        rooted(1).to_bits(),
-        "the live weak key must actually move"
+    assert_ne!(old_key, rooted(1).to_bits(), "the live weak key must actually move");
+    assert!(crate::arena::pointer_in_old_gen(table as usize), "the table is promoted at its address");
+    assert_eq!(
+        js_weakmap_get(rooted(0), rooted(1)).to_bits(),
+        rooted(2).to_bits()
     );
+    // The promoted table's entry is remembered: the next minor still finds
+    // the key wherever it goes.
+    let _ = collect_minor_trace(GcTriggerKind::Direct);
     assert_eq!(
         js_weakmap_get(rooted(0), rooted(1)).to_bits(),
         rooted(2).to_bits()
