@@ -367,7 +367,7 @@ impl<'scope> GcProgram<'scope> {
             .filter(|&n| n <= u32::MAX as usize - crate::gc::GC_HEADER_SIZE - 7)
             .ok_or(BuildError::SizeLimit)?;
         let cell = crate::exception::catch_js_throw(|| {
-            crate::arena::arena_alloc_gc_owned_payload(
+            crate::arena::arena_alloc_gc(
                 size,
                 std::mem::align_of::<ProgramCell>(),
                 crate::gc::GC_TYPE_REGEX_PROGRAM,

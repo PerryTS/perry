@@ -199,21 +199,3 @@ fn only_the_exact_extent_base_is_a_leaf_header() {
     .unwrap();
 }
 
-#[test]
-fn engine_owned_payload_is_born_old_only_when_it_would_be_a_young_leaf() {
-    std::thread::spawn(|| unsafe {
-        let _guard = CopyingNurseryTestGuard::new(1);
-        let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-        let big = crate::arena::arena_alloc_gc_owned_payload(
-            LARGE_OBJECT_THRESHOLD_BYTES + 8,
-            8,
-            GC_TYPE_REGEX_PROGRAM,
-        ) as usize;
-        assert_eq!(crate::arena::classify_heap_generation(big), HeapGeneration::Old);
-        assert_ne!(flags(big) & GC_FLAG_TENURED, 0);
-        let small = crate::arena::arena_alloc_gc_owned_payload(64, 8, GC_TYPE_REGEX_PROGRAM) as usize;
-        assert_eq!(crate::arena::classify_heap_generation(small), HeapGeneration::Nursery);
-    })
-    .join()
-    .unwrap();
-}
