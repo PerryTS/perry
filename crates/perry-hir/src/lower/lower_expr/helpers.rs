@@ -416,6 +416,7 @@ pub(crate) fn native_module_binding_value(ctx: &LoweringContext, name: &str) -> 
                 args: vec![Expr::String(source.clone()), Expr::String(imported.clone())],
                 type_args: vec![],
                 byte_offset: 0,
+                byte_end: 0,
             };
         }
     }

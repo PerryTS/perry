@@ -664,6 +664,7 @@ fn lower_call_inner(
                         args,
                         type_args: Vec::new(),
                         byte_offset: call.span.lo.0,
+                        byte_end: 0,
                     });
                 }
                 // Nested 3-level Member dispatch: process.hrtime.bigint(),
