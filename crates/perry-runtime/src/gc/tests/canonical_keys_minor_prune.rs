@@ -68,7 +68,7 @@ fn stationary_backing_rewrites_young_keys_through_remembered_slots() {
         crate::array::note_array_slot(keys_array, 0, crate::JSValue::string_ptr(key).bits());
         (*keys_array).length = 1;
     }
-    let keys = CanonicalKeys::from_rooted(keys_array, 1);
+    let keys = CanonicalKeys::unlinked_for_test(keys_array, 1);
     let root = scope.root_raw_mut_ptr(keys.as_ptr());
     let mut before = crate::array::js_array_get(keys.as_ptr(), 0).as_string_ptr();
     for _ in 0..4 {
@@ -138,7 +138,7 @@ fn defrag_moves_backing(remove_pin: bool) -> bool {
     canonical_keys::reset_for_test();
     let capacity = (crate::arena::BLOCK_SIZE / std::mem::size_of::<f64>() + 1) as u32;
     let backing = crate::array::js_array_alloc_canonical_keys(capacity, true, false);
-    let keys = CanonicalKeys::from_rooted(backing, 0);
+    let keys = CanonicalKeys::unlinked_for_test(backing, 0);
     unsafe {
         let header = header_from_user_ptr(keys.as_ptr().cast());
         assert_ne!((*header).gc_flags & GC_FLAG_SHAPE_SHARED, 0);

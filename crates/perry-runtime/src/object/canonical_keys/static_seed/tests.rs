@@ -46,6 +46,10 @@ fn image_and_generic_initializers_share_identity_in_both_orders() {
                 from_static_layout(&proof, keys, false).unwrap()
             };
             assert_eq!(first, second);
+            // One list, one node, whichever initializer ran first: the
+            // node is the identity holders carry (CKI S1).
+            assert_eq!(first.node(), second.node());
+            assert!(node_publishes_for_test(first.view()));
             let before = with_table_or((0, 0), |t| (t.minted, t.allocated_slots));
             assert_eq!(from_static_layout(&proof, keys, false), Some(first));
             assert_eq!(
@@ -63,6 +67,7 @@ fn image_and_generic_initializers_share_identity_in_both_orders() {
                 dynamic = extend_key(&proof, dynamic, string);
             }
             assert_eq!(dynamic, first);
+            assert_eq!(dynamic.node(), first.node());
         }
     }
 }
