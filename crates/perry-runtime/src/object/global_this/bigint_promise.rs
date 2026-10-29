@@ -947,17 +947,17 @@ pub(crate) fn promise_static_function_info(
 ) -> Option<(*const crate::closure::JsFunctionInfo, u32)> {
     use crate::fn_info;
     Some(match name {
-        "resolve" => (fn_info!(#[realm(Promise.resolve)] promise_resolve_static, 1; with_declared(1)), 1),
-        "reject" => (fn_info!(#[realm(Promise.reject)] promise_reject_static, 1; with_declared(1)), 1),
-        "all" => (fn_info!(#[realm(Promise.all)] promise_all_static, 1; with_declared(1)), 1),
-        "race" => (fn_info!(#[realm(Promise.race)] promise_race_static, 1; with_declared(1)), 1),
-        "allSettled" => (fn_info!(#[realm(Promise.allSettled)] promise_all_settled_static, 1; with_declared(1)), 1),
-        "any" => (fn_info!(#[realm(Promise.any)] promise_any_static, 1; with_declared(1)), 1),
+        "resolve" => (fn_info!(#[realm(Promise.resolve)] export crate::object::global_this::bigint_promise::promise_resolve_static, 1; with_declared(1)), 1),
+        "reject" => (fn_info!(#[realm(Promise.reject)] export crate::object::global_this::bigint_promise::promise_reject_static, 1; with_declared(1)), 1),
+        "all" => (fn_info!(#[realm(Promise.all)] export crate::object::global_this::bigint_promise::promise_all_static, 1; with_declared(1)), 1),
+        "race" => (fn_info!(#[realm(Promise.race)] export crate::object::global_this::bigint_promise::promise_race_static, 1; with_declared(1)), 1),
+        "allSettled" => (fn_info!(#[realm(Promise.allSettled)] export crate::object::global_this::bigint_promise::promise_all_settled_static, 1; with_declared(1)), 1),
+        "any" => (fn_info!(#[realm(Promise.any)] export crate::object::global_this::bigint_promise::promise_any_static, 1; with_declared(1)), 1),
         "withResolvers" => (
-            fn_info!(#[realm(Promise.withResolvers)] promise_with_resolvers_static, 0; with_declared(0)),
+            fn_info!(#[realm(Promise.withResolvers)] export crate::object::global_this::bigint_promise::promise_with_resolvers_static, 0; with_declared(0)),
             0,
         ),
-        "try" => (fn_info!(#[realm(Promise.try)] promise_try_static, 2; with_rest(1)), 1),
+        "try" => (fn_info!(#[realm(Promise.try)] export crate::object::global_this::bigint_promise::promise_try_static, 2; with_rest(1)), 1),
         _ => return None,
     })
 }

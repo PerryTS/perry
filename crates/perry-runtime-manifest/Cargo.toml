@@ -9,5 +9,6 @@ description = "The runtime surface lists both the Perry compiler and the perry-r
 workspace = true
 
 [dependencies]
+perry-abi.workspace = true
 perry-dispatch.workspace = true
 

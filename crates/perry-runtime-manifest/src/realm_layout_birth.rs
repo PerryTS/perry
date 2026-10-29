@@ -34,7 +34,9 @@ pub(super) fn prototype(expression: &str, entry: &[Token<'_>]) -> Result<Value, 
     let source =
         include_str!("../../perry-runtime/src/object/runtime_layouts/builtin_prototypes.rs");
     let fields = descriptor(source, name)?;
-    if fields.len() != 6 || fields[1].clone().strip_prefix("kind=").is_none() {
+    // A seventh field names the realm cells that own the layout (`realm = [..]`).
+    let owned = fields.len() == 7 && fields[6].starts_with("realm=");
+    if !(fields.len() == 6 || owned) || fields[1].clone().strip_prefix("kind=").is_none() {
         return Err("prototype layout must declare its kind".into());
     }
     let null = fields[4] == "crate::object::layout_desc::LAYOUT_PROTO_NULL";
@@ -50,7 +52,7 @@ pub(super) fn prototype(expression: &str, entry: &[Token<'_>]) -> Result<Value, 
         })?,
         entry,
     )?;
-    let gc = info::constants(include_str!("../../perry-runtime/src/gc/types.rs"))?;
+    let gc = info::gc_constants()?;
     let abi = super::abi_constants();
     let Value::Object(map) = &mut d else {
         unreachable!()

@@ -44,16 +44,11 @@
 use crate::array::ArrayHeader;
 use crate::value::{POINTER_MASK, POINTER_TAG, TAG_MASK, TAG_UNDEFINED};
 
-/// The getter closure word.
-pub(crate) const PAIR_GET: usize = 0;
-/// The setter closure word.
-pub(crate) const PAIR_SET: usize = 1;
-/// The class getter's compiled entry word.
-pub(crate) const PAIR_RAW_GET: usize = 2;
-/// The class setter's compiled entry word.
-pub(crate) const PAIR_RAW_SET: usize = 3;
-/// Words in a pair.
-pub(crate) const PAIR_LEN: usize = 4;
+pub(crate) use perry_abi::{
+    ACCESSOR_PAIR_GET as PAIR_GET, ACCESSOR_PAIR_LEN as PAIR_LEN,
+    ACCESSOR_PAIR_RAW_GET as PAIR_RAW_GET, ACCESSOR_PAIR_RAW_SET as PAIR_RAW_SET,
+    ACCESSOR_PAIR_SET as PAIR_SET,
+};
 
 /// The functions of one accessor property.
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]

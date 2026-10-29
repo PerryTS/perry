@@ -94,22 +94,8 @@ const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 /// Placed at offset 0 so `js_is_symbol` can cheaply detect symbols.
 pub const SYMBOL_MAGIC: u32 = crate::codegen_abi::SYMBOL_HEADER_MAGIC; // "SYMB"
 
-/// Symbol object header. Allocated in the arena (or native storage for registered
-/// symbols that need to outlive GC cycles).
-#[repr(C)]
-pub struct SymbolHeader {
-    /// Magic number for type discrimination. Always SYMBOL_MAGIC.
-    pub magic: u32,
-    /// Whether this symbol is in the global registry (Symbol.for). Registered
-    /// symbols have their description used as the registry key.
-    /// Bit 0 is Symbol.for membership; bit 1 is persistent native storage.
-    pub registered: u32,
-    /// Description string pointer, or null for `Symbol()` with no argument.
-    pub description: *mut StringHeader,
-    /// Unique, move-stable mixed creation id. Two symbols with the same description
-    /// still compare as different unless created via Symbol.for.
-    pub id: u64,
-}
+/// The shared symbol payload; descriptions name the runtime string header.
+pub type SymbolHeader = crate::codegen_abi::SymbolHeader<StringHeader>;
 
 /// Box-leaked symbols obey the same p-8 header contract as GC cells. The
 /// prefix is not registered with the collector: identity and lifetime remain
@@ -578,27 +564,33 @@ pub fn symbol_on_object_for_test(owner: usize, sym: usize) -> Option<bool> {
 }
 
 // The counter provides uniqueness only; symbol publication has its own locks.
+const ID_MASK: u64 = crate::codegen_abi::IMAGE_SYMBOL_ID_BIT - 1;
 static NEXT_SYMBOL_ID: AtomicU64 = AtomicU64::new(1);
 
 fn next_id() -> u64 {
-    // MurmurHash3's bijective 64-bit finalizer spreads sequential creation ids
-    // across the power-of-two buckets shared with string property hashes.
+    // MurmurHash3-style bijective finalizer over 63 bits: it spreads sequential
+    // creation ids across the power-of-two buckets shared with string property
+    // hashes, and keeps dynamic ids out of the image half (IMAGE_SYMBOL_ID_BIT).
     // It is computed once at birth; every key path still loads the same id.
     let mut id = NEXT_SYMBOL_ID.fetch_add(1, Ordering::Relaxed);
+    assert!(
+        id < crate::codegen_abi::IMAGE_SYMBOL_ID_BIT,
+        "symbol identity space exhausted"
+    );
     id ^= id >> 33;
-    id = id.wrapping_mul(0xff51afd7ed558ccd);
+    id = id.wrapping_mul(0xff51afd7ed558ccd) & ID_MASK;
     id ^= id >> 33;
-    id = id.wrapping_mul(0xc4ceb9fe1a85ec53);
+    id = id.wrapping_mul(0xc4ceb9fe1a85ec53) & ID_MASK;
     id ^ (id >> 33)
 }
 
 /// Recover creation order for the defensive own-symbol enumeration fallback.
-/// Odd multiplication and xor-shifts are invertible, so mixing loses no identity.
+/// Odd multiplication and xor-shifts are invertible modulo 2^63, so mixing loses no identity.
 fn creation_order(mut id: u64) -> u64 {
     id ^= id >> 33;
-    id = id.wrapping_mul(0x9cb4b2f8129337db);
+    id = id.wrapping_mul(0x9cb4b2f8129337db) & ID_MASK;
     id ^= id >> 33;
-    id = id.wrapping_mul(0x4f74430c22a54005);
+    id = id.wrapping_mul(0x4f74430c22a54005) & ID_MASK;
     id ^ (id >> 33)
 }
 

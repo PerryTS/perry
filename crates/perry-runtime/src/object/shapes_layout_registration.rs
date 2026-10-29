@@ -6,6 +6,16 @@ pub(crate) fn allocate_declared_layout_id(proto_id: u64) -> ShapeId {
     alloc_shape_id(proto_id).unwrap_or_else(|_| shape_id_exhausted_abort())
 }
 
+/// Lazy image rows use the same identity band as an equivalent heap birth.
+pub(crate) fn allocate_declared_layout_for_kind(proto_id: u64, kind: ShapeObjectKind) -> ShapeId {
+    (if kind.is_exotic() {
+        alloc_exotic_shape_id(proto_id)
+    } else {
+        alloc_shape_id(proto_id)
+    })
+    .unwrap_or_else(|_| shape_id_exhausted_abort())
+}
+
 pub(crate) unsafe fn install_declared_layout(
     id: ShapeId,
     word: LayoutWord,

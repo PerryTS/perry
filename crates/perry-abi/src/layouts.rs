@@ -11,7 +11,7 @@ pub const LAYOUT_ORDINARY_END: u32 = 0x9000_0000;
 pub const LAYOUT_SHADOWED_BASE: u32 = 0xc000_0000;
 pub const LAYOUT_SHADOWED_END: u32 = 0xd000_0000;
 pub const LAYOUT_PROBE_INDEX_MASK: u32 = 0xb3ff_ffff;
-pub const LAYOUT_WORD_ABI_VERSION: u32 = 3;
+pub const LAYOUT_WORD_ABI_VERSION: u32 = 4;
 pub const LAYOUT_KIND_PLAIN: u32 = 0;
 pub const LAYOUT_KIND_WORD: u32 = 1;
 pub const LAYOUT_KIND_NULL: u32 = 2;
@@ -101,6 +101,15 @@ pub struct PerryLayoutImageV1 {
     /// The program's static literal seeds as image data (WRT step 2,
     /// [`PerryStaticSeedTableV1`]); null in the runtime's own image.
     pub seeds: *const PerryStaticSeedTableV1,
+    /// Contiguous static rows whose descriptor facts publish on first use.
+    /// The band indexes descriptor values directly, never pointers or ids.
+    pub lazy_first: u32,
+    pub lazy_count: u32,
+    /// `lazy_count` consecutive PerryLayoutDesc records, in row order.
+    /// Runtime descriptor aliases and realm receivers name these same facts.
+    pub lazy_layouts: *const u8,
+    /// Exclusive end of compiler-assigned prototype serials, reserved before births.
+    pub prototype_serial_end: u64,
 }
 // The seed table is immutable program data every agent reads.
 unsafe impl Send for PerryLayoutImageV1 {}
@@ -112,13 +121,27 @@ impl PerryLayoutImageV1 {
         family_first: NATIVE_LAYOUT_ROWS,
         family_count: 0,
         seeds: core::ptr::null(),
+        lazy_first: 0,
+        lazy_count: 0,
+        lazy_layouts: core::ptr::null(),
+        prototype_serial_end: crate::intrinsic_serials::FIRST_DYNAMIC_PROTOTYPE_SERIAL,
     };
     pub const fn valid(self) -> bool {
         self.abi_version == LAYOUT_WORD_ABI_VERSION
+            && self.prototype_serial_end >= crate::intrinsic_serials::FIRST_DYNAMIC_PROTOTYPE_SERIAL
+            && self.prototype_serial_end < (1 << 32)
             && self.static_rows >= NATIVE_LAYOUT_ROWS
             && self.static_rows <= LAYOUT_ROW_LIMIT
-            && self.family_first == NATIVE_LAYOUT_ROWS
+            && self.family_first >= NATIVE_LAYOUT_ROWS
+            && self.family_first <= self.static_rows
             && self.family_count <= self.static_rows - self.family_first
+            && self.lazy_first <= self.static_rows
+            && self.lazy_count <= self.static_rows - self.lazy_first
+            && (self.lazy_count == 0) == self.lazy_layouts.is_null()
+            && (self.lazy_count == 0
+                || self.family_count == 0
+                || self.lazy_first + self.lazy_count <= self.family_first
+                || self.lazy_first >= self.family_first + self.family_count)
     }
 }
 
@@ -399,16 +422,57 @@ const _: () = {
     assert!(align_of::<PerryStaticLayoutRequestV1>() == 4);
     assert!(offset_of!(PerryStaticLayoutRequestV1, layout_word) == 4);
     assert!(
-        size_of::<PerryLayoutImageV1>() == 16 + size_of::<usize>()
-            && align_of::<PerryLayoutImageV1>() == size_of::<usize>()
+        size_of::<PerryLayoutImageV1>() == 32 + 2 * size_of::<usize>()
+            && align_of::<PerryLayoutImageV1>() == 8
     );
     assert!(offset_of!(PerryLayoutImageV1, static_rows) == 4);
     assert!(offset_of!(PerryLayoutImageV1, family_first) == 8);
     assert!(offset_of!(PerryLayoutImageV1, family_count) == 12);
+    assert!(offset_of!(PerryLayoutImageV1, seeds) == 16);
+    assert!(offset_of!(PerryLayoutImageV1, lazy_first) == 16 + size_of::<usize>());
+    assert!(offset_of!(PerryLayoutImageV1, lazy_count) == 20 + size_of::<usize>());
+    assert!(offset_of!(PerryLayoutImageV1, lazy_layouts) == 24 + size_of::<usize>());
+    assert!(offset_of!(PerryLayoutImageV1, prototype_serial_end) == 24 + 2 * size_of::<usize>());
 };
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lazy_descriptor_span_is_checked_without_overflow() {
+        let image = PerryLayoutImageV1 {
+            static_rows: NATIVE_LAYOUT_ROWS + 4,
+            family_first: NATIVE_LAYOUT_ROWS + 3,
+            family_count: 1,
+            lazy_first: NATIVE_LAYOUT_ROWS,
+            lazy_count: 3,
+            lazy_layouts: core::ptr::without_provenance(4096),
+            ..PerryLayoutImageV1::RUNTIME
+        };
+        assert!(image.valid());
+        assert!(!PerryLayoutImageV1 {
+            lazy_count: 4,
+            ..image
+        }
+        .valid());
+        assert!(!PerryLayoutImageV1 {
+            lazy_first: u32::MAX,
+            ..image
+        }
+        .valid());
+        assert!(!PerryLayoutImageV1 {
+            lazy_count: u32::MAX,
+            ..image
+        }
+        .valid());
+        assert!(!PerryLayoutImageV1 {
+            lazy_layouts: core::ptr::null(),
+            prototype_serial_end: crate::intrinsic_serials::FIRST_DYNAMIC_PROTOTYPE_SERIAL,
+            ..image
+        }
+        .valid());
+    }
+
     #[test]
     fn word_encoding_and_receiver_admission() {
         for band in 0..3 {
@@ -498,3 +562,18 @@ pub mod dynamic_layout_ffi {
         ) -> u32;
     }
 }
+
+/// A layout's prototype identity. Runtime-created prototypes leave the image
+/// pointer null; image families name their immutable template address directly.
+/// The pointer is raw so Mach-O can carry it in an ordinary chained fixup.
+#[repr(C)]
+pub struct PerryProtoFamily {
+    pub serial: u64,
+    pub image_prototype: *const u8,
+}
+
+const _: () = {
+    assert!(core::mem::offset_of!(PerryProtoFamily, serial) == 0);
+    assert!(core::mem::offset_of!(PerryProtoFamily, image_prototype) == 8);
+    assert!(core::mem::size_of::<PerryProtoFamily>() == 16);
+};

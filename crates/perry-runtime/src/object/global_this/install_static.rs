@@ -440,117 +440,117 @@ pub(crate) fn install_builtin_constructor_statics(
         "Object" => {
             s.method(
                 "keys",
-                crate::fn_info!(#[realm(Object.keys)] object_keys_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(Object.keys)] export crate::object::global_this::bigint_promise::object_keys_thunk, 1; with_declared(1)),
                 1,
             );
             s.method(
                 "values",
-                crate::fn_info!(#[realm(Object.values)] object_values_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(Object.values)] export crate::object::global_this::bigint_promise::object_values_thunk, 1; with_declared(1)),
                 1,
             );
             s.method(
                 "entries",
-                crate::fn_info!(#[realm(Object.entries)] object_entries_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(Object.entries)] export crate::object::global_this::bigint_promise::object_entries_thunk, 1; with_declared(1)),
                 1,
             );
             s.method(
                 "freeze",
-                crate::fn_info!(#[realm(Object.freeze)] object_freeze_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(Object.freeze)] export crate::object::global_this::bigint_promise::object_freeze_thunk, 1; with_declared(1)),
                 1,
             );
             s.method(
                 "create",
-                crate::fn_info!(#[realm(Object.create)] object_create_thunk, 2; with_declared(2)),
+                crate::fn_info!(#[realm(Object.create)] export crate::object::global_this::bigint_promise::object_create_thunk, 2; with_declared(2)),
                 2,
             );
             s.method(
                 "seal",
-                crate::fn_info!(#[realm(Object.seal)] object_seal_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(Object.seal)] export crate::object::global_this::bigint_promise::object_seal_thunk, 1; with_declared(1)),
                 1,
             );
             s.method(
                 "isSealed",
-                crate::fn_info!(#[realm(Object.isSealed)] object_is_sealed_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(Object.isSealed)] export crate::object::global_this::bigint_promise::object_is_sealed_thunk, 1; with_declared(1)),
                 1,
             );
             s.method(
                 "isFrozen",
-                crate::fn_info!(#[realm(Object.isFrozen)] object_is_frozen_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(Object.isFrozen)] export crate::object::global_this::bigint_promise::object_is_frozen_thunk, 1; with_declared(1)),
                 1,
             );
             s.method(
                 "isExtensible",
-                crate::fn_info!(#[realm(Object.isExtensible)] object_is_extensible_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(Object.isExtensible)] export crate::object::global_this::bigint_promise::object_is_extensible_thunk, 1; with_declared(1)),
                 1,
             );
             s.method(
                 "preventExtensions",
-                crate::fn_info!(#[realm(Object.preventExtensions)] object_prevent_extensions_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(Object.preventExtensions)] export crate::object::global_this::bigint_promise::object_prevent_extensions_thunk, 1; with_declared(1)),
                 1,
             );
             s.method(
                 "is",
-                crate::fn_info!(#[realm(Object.is)] object_is_thunk, 2; with_declared(2)),
+                crate::fn_info!(#[realm(Object.is)] export crate::object::global_this::bigint_promise::object_is_thunk, 2; with_declared(2)),
                 2,
             );
             s.method(
                 "setPrototypeOf",
-                crate::fn_info!(#[realm(Object.setPrototypeOf)] object_set_prototype_of_thunk, 2; with_declared(2)),
+                crate::fn_info!(#[realm(Object.setPrototypeOf)] export crate::object::global_this::bigint_promise::object_set_prototype_of_thunk, 2; with_declared(2)),
                 2,
             );
             s.method(
                 "getOwnPropertySymbols",
-                crate::fn_info!(#[realm(Object.getOwnPropertySymbols)] object_get_own_property_symbols_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(Object.getOwnPropertySymbols)] export crate::object::global_this::bigint_promise::object_get_own_property_symbols_thunk, 1; with_declared(1)),
                 1,
             );
             s.method(
                 "getOwnPropertyDescriptors",
-                crate::fn_info!(#[realm(Object.getOwnPropertyDescriptors)] object_get_own_property_descriptors_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(Object.getOwnPropertyDescriptors)] export crate::object::global_this::bigint_promise::object_get_own_property_descriptors_thunk, 1; with_declared(1)),
                 1,
             );
             s.method(
                 "defineProperties",
-                crate::fn_info!(#[realm(Object.defineProperties)] object_define_properties_thunk, 2; with_declared(2)),
+                crate::fn_info!(#[realm(Object.defineProperties)] export crate::object::global_this::bigint_promise::object_define_properties_thunk, 2; with_declared(2)),
                 2,
             );
             s.method(
                 "groupBy",
-                crate::fn_info!(#[realm(Object.groupBy)] object_group_by_thunk, 2; with_declared(2)),
+                crate::fn_info!(#[realm(Object.groupBy)] export crate::object::global_this::bigint_promise::object_group_by_thunk, 2; with_declared(2)),
                 2,
             );
             s.method(
                 "getPrototypeOf",
-                crate::fn_info!(#[realm(Object.getPrototypeOf)] object_get_prototype_of_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(Object.getPrototypeOf)] export crate::object::global_this::bigint_promise::object_get_prototype_of_thunk, 1; with_declared(1)),
                 1,
             );
             s.method(
                 "getOwnPropertyNames",
-                crate::fn_info!(#[realm(Object.getOwnPropertyNames)] object_get_own_property_names_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(Object.getOwnPropertyNames)] export crate::object::global_this::bigint_promise::object_get_own_property_names_thunk, 1; with_declared(1)),
                 1,
             );
             s.method(
                 "getOwnPropertyDescriptor",
-                crate::fn_info!(#[realm(Object.getOwnPropertyDescriptor)] object_get_own_property_descriptor_thunk, 2; with_declared(2)),
+                crate::fn_info!(#[realm(Object.getOwnPropertyDescriptor)] export crate::object::global_this::bigint_promise::object_get_own_property_descriptor_thunk, 2; with_declared(2)),
                 2,
             );
             s.method(
                 "defineProperty",
-                crate::fn_info!(#[realm(Object.defineProperty)] object_define_property_thunk, 3; with_declared(3)),
+                crate::fn_info!(#[realm(Object.defineProperty)] export crate::object::global_this::bigint_promise::object_define_property_thunk, 3; with_declared(3)),
                 3,
             );
             s.method(
                 "fromEntries",
-                crate::fn_info!(#[realm(Object.fromEntries)] object_from_entries_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(Object.fromEntries)] export crate::object::global_this::bigint_promise::object_from_entries_thunk, 1; with_declared(1)),
                 1,
             );
             s.method(
                 "assign",
-                crate::fn_info!(#[realm(Object.assign, spec = {length = 2}, emit = metadata(realm_object_assign_metadata))] object_assign_thunk, 2; with_rest(1)),
+                crate::fn_info!(#[realm(Object.assign, spec = {length = 2}, emit = metadata(realm_object_assign_metadata))] export crate::object::global_this::bigint_promise::object_assign_thunk, 2; with_rest(1)),
                 realm_object_assign_metadata!(length),
             );
             s.method(
                 "hasOwn",
-                crate::fn_info!(#[realm(Object.hasOwn)] object_hasown_thunk, 2; with_declared(2)),
+                crate::fn_info!(#[realm(Object.hasOwn)] export crate::object::global_this::bigint_promise::object_hasown_thunk, 2; with_declared(2)),
                 2,
             );
             // `Object` is a function, so reading a non-static member resolves up
@@ -564,47 +564,47 @@ pub(crate) fn install_builtin_constructor_statics(
             // are reachable on the constructor by inheritance.
             s.method(
                 "hasOwnProperty",
-                crate::fn_info!(#[realm(Object.hasOwnProperty)] object_prototype_has_own_property_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(Object.hasOwnProperty)] export crate::object::global_this::array_error::object_prototype_has_own_property_thunk, 1; with_declared(1)),
                 1,
             );
             s.method(
                 "isPrototypeOf",
-                crate::fn_info!(#[realm(Object.isPrototypeOf)] object_prototype_is_prototype_of_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(Object.isPrototypeOf)] export crate::object::global_this::array_error::object_prototype_is_prototype_of_thunk, 1; with_declared(1)),
                 1,
             );
             s.method(
                 "propertyIsEnumerable",
-                crate::fn_info!(#[realm(Object.propertyIsEnumerable)] object_prototype_property_is_enumerable_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(Object.propertyIsEnumerable)] export crate::object::global_this::array_error::object_prototype_property_is_enumerable_thunk, 1; with_declared(1)),
                 1,
             );
             s.method(
                 "toString",
-                crate::fn_info!(#[realm(Object.toString)] object_prototype_to_string_thunk, 0; with_declared(0)),
+                crate::fn_info!(#[realm(Object.toString)] export crate::object::global_this::array_error::object_prototype_to_string_thunk, 0; with_declared(0)),
                 0,
             );
             s.method(
                 "toLocaleString",
-                crate::fn_info!(#[realm(Object.toLocaleString)] object_prototype_to_locale_string_thunk, 0; with_declared(0)),
+                crate::fn_info!(#[realm(Object.toLocaleString)] export crate::object::global_this::array_error::object_prototype_to_locale_string_thunk, 0; with_declared(0)),
                 0,
             );
             s.method(
                 "valueOf",
-                crate::fn_info!(#[realm(Object.valueOf)] object_prototype_value_of_thunk, 0; with_declared(0)),
+                crate::fn_info!(#[realm(Object.valueOf)] export crate::object::global_this::array_error::object_prototype_value_of_thunk, 0; with_declared(0)),
                 0,
             );
         }
         "Array" => {
             s.method(
                 "isArray",
-                crate::fn_info!(#[realm(Array.isArray)] array_is_array_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(Array.isArray)] export crate::object::global_this::bigint_promise::array_is_array_thunk, 1; with_declared(1)),
                 1,
             );
             s.method(
                 "from",
-                crate::fn_info!(#[realm(Array.from, spec = {length = 1}, emit = metadata(realm_array_from_metadata))] array_from_thunk, 3; with_declared(3)),
+                crate::fn_info!(#[realm(Array.from, spec = {length = 1}, emit = metadata(realm_array_from_metadata))] export crate::object::global_this::bigint_promise::array_from_thunk, 3; with_declared(3)),
                 realm_array_from_metadata!(length),
             );
-            #[rustfmt::skip] s.method("of", crate::fn_info!(#[realm(Array.of)] array_of_thunk, 1; with_rest(0)), 0);
+            #[rustfmt::skip] s.method("of", crate::fn_info!(#[realm(Array.of)] export crate::object::global_this::bigint_promise::array_of_thunk, 1; with_rest(0)), 0);
         }
         "Promise" => {
             for static_name in [
@@ -627,13 +627,13 @@ pub(crate) fn install_builtin_constructor_statics(
         "Map" => install_constructor_static(
             ctor,
             "groupBy",
-            crate::fn_info!(#[realm(Map.groupBy)] map_group_by_thunk, 2; with_declared(2)),
+            crate::fn_info!(#[realm(Map.groupBy)] export crate::object::global_this::bigint_promise::map_group_by_thunk, 2; with_declared(2)),
             2,
         ),
         "RegExp" => install_constructor_static(
             ctor,
             "escape",
-            crate::fn_info!(#[realm(RegExp.escape)] regexp_escape_thunk, 1; with_declared(1)),
+            crate::fn_info!(#[realm(RegExp.escape)] export crate::object::global_this::bigint_promise::regexp_escape_thunk, 1; with_declared(1)),
             1,
         ),
         "Date" => {
@@ -645,22 +645,22 @@ pub(crate) fn install_builtin_constructor_statics(
         "Number" => {
             s.method(
                 "isNaN",
-                crate::fn_info!(#[realm(Number.isNaN)] number_is_nan_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(Number.isNaN)] export crate::object::global_this::bigint_promise::number_is_nan_thunk, 1; with_declared(1)),
                 1,
             );
             s.method(
                 "isFinite",
-                crate::fn_info!(#[realm(Number.isFinite)] number_is_finite_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(Number.isFinite)] export crate::object::global_this::bigint_promise::number_is_finite_thunk, 1; with_declared(1)),
                 1,
             );
             s.method(
                 "isInteger",
-                crate::fn_info!(#[realm(Number.isInteger)] number_is_integer_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(Number.isInteger)] export crate::object::global_this::bigint_promise::number_is_integer_thunk, 1; with_declared(1)),
                 1,
             );
             s.method(
                 "isSafeInteger",
-                crate::fn_info!(#[realm(Number.isSafeInteger)] number_is_safe_integer_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(Number.isSafeInteger)] export crate::object::global_this::bigint_promise::number_is_safe_integer_thunk, 1; with_declared(1)),
                 1,
             );
             s.method(
@@ -685,24 +685,24 @@ pub(crate) fn install_builtin_constructor_statics(
             // BigInt.asIntN(bits, bigint) / asUintN(bits, bigint) — spec length 2.
             s.method(
                 "asIntN",
-                crate::fn_info!(#[realm(BigInt.asIntN)] bigint_as_int_n_thunk, 2; with_declared(2)),
+                crate::fn_info!(#[realm(BigInt.asIntN)] export crate::object::global_this::bigint_promise::bigint_as_int_n_thunk, 2; with_declared(2)),
                 2,
             );
             s.method(
                 "asUintN",
-                crate::fn_info!(#[realm(BigInt.asUintN)] bigint_as_uint_n_thunk, 2; with_declared(2)),
+                crate::fn_info!(#[realm(BigInt.asUintN)] export crate::object::global_this::bigint_promise::bigint_as_uint_n_thunk, 2; with_declared(2)),
                 2,
             );
         }
         "Symbol" => {
             s.method(
                 "for",
-                crate::fn_info!(#[realm(Symbol.for)] symbol_for_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(Symbol.for)] export crate::object::global_this::bigint_promise::symbol_for_thunk, 1; with_declared(1)),
                 1,
             );
             s.method(
                 "keyFor",
-                crate::fn_info!(#[realm(Symbol.keyFor)] symbol_key_for_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(Symbol.keyFor)] export crate::object::global_this::bigint_promise::symbol_key_for_thunk, 1; with_declared(1)),
                 1,
             );
             for name in ["iterator", "asyncIterator"] {
@@ -722,26 +722,26 @@ pub(crate) fn install_builtin_constructor_statics(
             // function) is left on its intrinsic path for now.
             s.method(
                 "fromCharCode",
-                crate::fn_info!(#[realm(String.fromCharCode, spec = {length = 1}, emit = metadata(realm_string_fromcharcode_metadata))] string_from_char_code_static, 1; with_rest(0)),
+                crate::fn_info!(#[realm(String.fromCharCode, spec = {length = 1}, emit = metadata(realm_string_fromcharcode_metadata))] export crate::object::global_this::bigint_promise::string_from_char_code_static, 1; with_rest(0)),
                 realm_string_fromcharcode_metadata!(length),
             );
             s.method(
                 "fromCodePoint",
-                crate::fn_info!(#[realm(String.fromCodePoint, spec = {length = 1}, emit = metadata(realm_string_fromcodepoint_metadata))] string_from_code_point_static, 1; with_rest(0)),
+                crate::fn_info!(#[realm(String.fromCodePoint, spec = {length = 1}, emit = metadata(realm_string_fromcodepoint_metadata))] export crate::object::global_this::bigint_promise::string_from_code_point_static, 1; with_rest(0)),
                 realm_string_fromcodepoint_metadata!(length),
             );
             // #4627: `String.raw` (tag function) — 1 fixed param (template
             // object) + rest substitutions; spec `.length` 1.
             s.method(
                 "raw",
-                crate::fn_info!(#[realm(String.raw)] string_raw_static, 2; with_rest(1)),
+                crate::fn_info!(#[realm(String.raw)] export crate::object::global_this::bigint_promise::string_raw_static, 2; with_rest(1)),
                 1,
             );
         }
         "ArrayBuffer" => {
             s.method(
                 "isView",
-                crate::fn_info!(#[realm(ArrayBuffer.isView)] array_buffer_is_view_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(ArrayBuffer.isView)] export crate::object::global_this::typed_array::array_buffer_is_view_thunk, 1; with_declared(1)),
                 1,
             );
         }
@@ -751,34 +751,34 @@ pub(crate) fn install_builtin_constructor_statics(
             // and reflection see.
             s.method(
                 "abort",
-                crate::fn_info!(#[realm(AbortSignal.abort)] abort_signal_abort_thunk, 1; with_declared(0)),
+                crate::fn_info!(#[realm(AbortSignal.abort)] export crate::object::global_this::install_static::abort_signal_abort_thunk, 1; with_declared(0)),
                 0,
             );
             s.method(
                 "timeout",
-                crate::fn_info!(#[realm(AbortSignal.timeout)] abort_signal_timeout_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(AbortSignal.timeout)] export crate::object::global_this::install_static::abort_signal_timeout_thunk, 1; with_declared(1)),
                 1,
             );
             s.method(
                 "any",
-                crate::fn_info!(#[realm(AbortSignal.any)] abort_signal_any_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(AbortSignal.any)] export crate::object::global_this::install_static::abort_signal_any_thunk, 1; with_declared(1)),
                 1,
             );
         }
         "Response" => {
             s.method(
                 "error",
-                crate::fn_info!(#[realm(Response.error)] global_this_response_error_thunk, 0; with_declared(0)),
+                crate::fn_info!(#[realm(Response.error)] export crate::object::global_this::fetch_globals::global_this_response_error_thunk, 0; with_declared(0)),
                 0,
             );
             s.method(
                 "json",
-                crate::fn_info!(#[realm(Response.json, spec = {length = 1}, emit = metadata(realm_response_json_metadata))] global_this_response_json_thunk, 2; with_declared(2)),
+                crate::fn_info!(#[realm(Response.json, spec = {length = 1}, emit = metadata(realm_response_json_metadata))] export crate::object::global_this::fetch_globals::global_this_response_json_thunk, 2; with_declared(2)),
                 realm_response_json_metadata!(length),
             );
             s.method(
                 "redirect",
-                crate::fn_info!(#[realm(Response.redirect, spec = {length = 1}, emit = metadata(realm_response_redirect_metadata))] global_this_response_redirect_thunk, 2; with_declared(2)),
+                crate::fn_info!(#[realm(Response.redirect, spec = {length = 1}, emit = metadata(realm_response_redirect_metadata))] export crate::object::global_this::fetch_globals::global_this_response_redirect_thunk, 2; with_declared(2)),
                 realm_response_redirect_metadata!(length),
             );
         }
@@ -791,7 +791,7 @@ pub(crate) fn install_builtin_constructor_statics(
         "Proxy" => {
             s.method(
                 "revocable",
-                crate::fn_info!(#[realm(Proxy.revocable)] proxy_revocable_thunk, 2; with_declared(2)),
+                crate::fn_info!(#[realm(Proxy.revocable)] export crate::object::global_this::builtin_thunks::proxy_revocable_thunk, 2; with_declared(2)),
                 2,
             );
         }
@@ -808,12 +808,12 @@ pub(crate) fn install_builtin_constructor_statics(
         "Uint8Array" => {
             s.method(
                 "fromBase64",
-                crate::fn_info!(#[realm(Uint8Array.fromBase64, spec = {length = 1}, emit = metadata(realm_uint8array_frombase64_metadata))] uint8array_from_base64_thunk, 2; with_declared(2)),
+                crate::fn_info!(#[realm(Uint8Array.fromBase64, spec = {length = 1}, emit = metadata(realm_uint8array_frombase64_metadata))] export crate::object::global_this::install_static::uint8array_from_base64_thunk, 2; with_declared(2)),
                 realm_uint8array_frombase64_metadata!(length),
             );
             s.method(
                 "fromHex",
-                crate::fn_info!(#[realm(Uint8Array.fromHex)] uint8array_from_hex_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(Uint8Array.fromHex)] export crate::object::global_this::install_static::uint8array_from_hex_thunk, 1; with_declared(1)),
                 1,
             );
         }
@@ -982,67 +982,67 @@ pub(crate) fn install_atomics_namespace_members(ns_obj: *mut ObjectHeader) {
     for (name, info, arity) in [
         (
             "load",
-            crate::fn_info!(#[realm(Atomics.load)] crate::atomics::js_atomics_load, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm(Atomics.load)] export crate::atomics::js_atomics_load, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
             2,
         ),
         (
             "isLockFree",
-            crate::fn_info!(#[realm(Atomics.isLockFree)] crate::atomics::js_atomics_is_lock_free, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm(Atomics.isLockFree)] export crate::atomics::js_atomics_is_lock_free, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
             1,
         ),
         (
             "store",
-            crate::fn_info!(#[realm(Atomics.store)] crate::atomics::js_atomics_store, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm(Atomics.store)] export crate::atomics::js_atomics_store, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN)),
             3,
         ),
         (
             "add",
-            crate::fn_info!(#[realm(Atomics.add)] crate::atomics::js_atomics_add, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm(Atomics.add)] export crate::atomics::js_atomics_add, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN)),
             3,
         ),
         (
             "sub",
-            crate::fn_info!(#[realm(Atomics.sub)] crate::atomics::js_atomics_sub, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm(Atomics.sub)] export crate::atomics::js_atomics_sub, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN)),
             3,
         ),
         (
             "and",
-            crate::fn_info!(#[realm(Atomics.and)] crate::atomics::js_atomics_and, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm(Atomics.and)] export crate::atomics::js_atomics_and, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN)),
             3,
         ),
         (
             "or",
-            crate::fn_info!(#[realm(Atomics.or)] crate::atomics::js_atomics_or, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm(Atomics.or)] export crate::atomics::js_atomics_or, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN)),
             3,
         ),
         (
             "xor",
-            crate::fn_info!(#[realm(Atomics.xor)] crate::atomics::js_atomics_xor, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm(Atomics.xor)] export crate::atomics::js_atomics_xor, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN)),
             3,
         ),
         (
             "exchange",
-            crate::fn_info!(#[realm(Atomics.exchange)] crate::atomics::js_atomics_exchange, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm(Atomics.exchange)] export crate::atomics::js_atomics_exchange, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN)),
             3,
         ),
         (
             "compareExchange",
-            crate::fn_info!(#[realm(Atomics.compareExchange)] crate::atomics::js_atomics_compare_exchange, 4; with_declared(4), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm(Atomics.compareExchange)] export crate::atomics::js_atomics_compare_exchange, 4; with_declared(4), with_flags(crate::closure::FN_BUILTIN)),
             4,
         ),
         (
             "notify",
-            crate::fn_info!(#[realm(Atomics.notify)] crate::atomics::js_atomics_notify, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm(Atomics.notify)] export crate::atomics::js_atomics_notify, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN)),
             3,
         ),
         (
             "wait",
-            crate::fn_info!(#[realm(Atomics.wait)] crate::atomics::js_atomics_wait, 4; with_declared(4), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm(Atomics.wait)] export crate::atomics::js_atomics_wait, 4; with_declared(4), with_flags(crate::closure::FN_BUILTIN)),
             4,
         ),
         (
             "waitAsync",
-            crate::fn_info!(#[realm(Atomics.waitAsync)] crate::atomics::js_atomics_wait_async, 4; with_declared(4), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm(Atomics.waitAsync)] export crate::atomics::js_atomics_wait_async, 4; with_declared(4), with_flags(crate::closure::FN_BUILTIN)),
             4,
         ),
     ] {
@@ -1075,22 +1075,22 @@ pub(crate) fn install_noop_proto_methods(proto_obj: *mut ObjectHeader, methods: 
                 fn_info!(object_prototype_property_is_enumerable_thunk, 1; with_flags(FN_BUILTIN))
             }
             "valueOf" => {
-                fn_info!(#[realm(realm_decl! { AggregateError.prototype.valueOf; Array.prototype.valueOf; ArrayBuffer.prototype.valueOf; AsyncDisposableStack.prototype.valueOf; Blob.prototype.valueOf; Crypto.prototype.valueOf; CryptoKey.prototype.valueOf; DataView.prototype.valueOf; DisposableStack.prototype.valueOf; Error.prototype.valueOf; EvalError.prototype.valueOf; File.prototype.valueOf; FinalizationRegistry.prototype.valueOf; FormData.prototype.valueOf; Headers.prototype.valueOf; Map.prototype.valueOf; Promise.prototype.valueOf; RangeError.prototype.valueOf; ReferenceError.prototype.valueOf; RegExp.prototype.valueOf; Request.prototype.valueOf; Response.prototype.valueOf; Set.prototype.valueOf; SharedArrayBuffer.prototype.valueOf; SubtleCrypto.prototype.valueOf; SyntaxError.prototype.valueOf; TextDecoder.prototype.valueOf; TextEncoder.prototype.valueOf; TypeError.prototype.valueOf; URIError.prototype.valueOf; URLSearchParams.prototype.valueOf; WeakMap.prototype.valueOf; WeakRef.prototype.valueOf; WeakSet.prototype.valueOf; WebSocket.prototype.valueOf; })] object_prototype_value_of_thunk, 0; with_flags(FN_BUILTIN))
+                fn_info!(#[realm(realm_decl! { AggregateError.prototype.valueOf; Array.prototype.valueOf; ArrayBuffer.prototype.valueOf; AsyncDisposableStack.prototype.valueOf; Blob.prototype.valueOf; Crypto.prototype.valueOf; CryptoKey.prototype.valueOf; DataView.prototype.valueOf; DisposableStack.prototype.valueOf; Error.prototype.valueOf; EvalError.prototype.valueOf; File.prototype.valueOf; FinalizationRegistry.prototype.valueOf; FormData.prototype.valueOf; Headers.prototype.valueOf; Map.prototype.valueOf; Promise.prototype.valueOf; RangeError.prototype.valueOf; ReferenceError.prototype.valueOf; RegExp.prototype.valueOf; Request.prototype.valueOf; Response.prototype.valueOf; Set.prototype.valueOf; SharedArrayBuffer.prototype.valueOf; SubtleCrypto.prototype.valueOf; SyntaxError.prototype.valueOf; TextDecoder.prototype.valueOf; TextEncoder.prototype.valueOf; TypeError.prototype.valueOf; URIError.prototype.valueOf; URLSearchParams.prototype.valueOf; WeakMap.prototype.valueOf; WeakRef.prototype.valueOf; WeakSet.prototype.valueOf; WebSocket.prototype.valueOf; })] export crate::object::global_this::array_error::object_prototype_value_of_thunk, 0; with_flags(FN_BUILTIN))
             }
             // Annex B accessor methods get real thunks (reflective `.call`).
             "__defineGetter__" => {
-                fn_info!(#[realm(Object.prototype.__defineGetter__)] object_prototype_define_getter_thunk, 2; with_flags(FN_BUILTIN))
+                fn_info!(#[realm(Object.prototype.__defineGetter__)] export crate::object::global_this::array_error::object_prototype_define_getter_thunk, 2; with_flags(FN_BUILTIN))
             }
             "__defineSetter__" => {
-                fn_info!(#[realm(Object.prototype.__defineSetter__)] object_prototype_define_setter_thunk, 2; with_flags(FN_BUILTIN))
+                fn_info!(#[realm(Object.prototype.__defineSetter__)] export crate::object::global_this::array_error::object_prototype_define_setter_thunk, 2; with_flags(FN_BUILTIN))
             }
             "__lookupGetter__" => {
-                fn_info!(#[realm(Object.prototype.__lookupGetter__)] object_prototype_lookup_getter_thunk, 1; with_flags(FN_BUILTIN))
+                fn_info!(#[realm(Object.prototype.__lookupGetter__)] export crate::object::global_this::array_error::object_prototype_lookup_getter_thunk, 1; with_flags(FN_BUILTIN))
             }
             "__lookupSetter__" => {
-                fn_info!(#[realm(Object.prototype.__lookupSetter__)] object_prototype_lookup_setter_thunk, 1; with_flags(FN_BUILTIN))
+                fn_info!(#[realm(Object.prototype.__lookupSetter__)] export crate::object::global_this::array_error::object_prototype_lookup_setter_thunk, 1; with_flags(FN_BUILTIN))
             }
-            _ => fn_info!(#[realm(realm_decl! { FormData.prototype.delete; FormData.prototype.forEach; FormData.prototype.get; FormData.prototype.getAll; FormData.prototype.has; Headers.prototype.delete; Headers.prototype.forEach; Headers.prototype.get; Headers.prototype.has; AggregateError.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); Array.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); Array.prototype.toSpliced, spec = {length = 2}, emit = metadata(realm_noop_tospliced_2_metadata); ArrayBuffer.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); AsyncDisposableStack.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); Blob.prototype.arrayBuffer, spec = {length = 0}, emit = metadata(realm_noop_arraybuffer_0_metadata); Blob.prototype.bytes, spec = {length = 0}, emit = metadata(realm_noop_bytes_0_metadata); Blob.prototype.slice, spec = {length = 0}, emit = metadata(realm_noop_slice_0_metadata); Blob.prototype.stream, spec = {length = 0}, emit = metadata(realm_noop_stream_0_metadata); Blob.prototype.text, spec = {length = 0}, emit = metadata(realm_noop_text_0_metadata); Blob.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); Boolean.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); Crypto.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); CryptoKey.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); DataView.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); Date.prototype.toDateString, spec = {length = 0}, emit = metadata(realm_noop_todatestring_0_metadata); Date.prototype.toTimeString, spec = {length = 0}, emit = metadata(realm_noop_totimestring_0_metadata); DisposableStack.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); Error.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); EvalError.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); File.prototype.arrayBuffer, spec = {length = 0}, emit = metadata(realm_noop_arraybuffer_0_metadata); File.prototype.bytes, spec = {length = 0}, emit = metadata(realm_noop_bytes_0_metadata); File.prototype.slice, spec = {length = 0}, emit = metadata(realm_noop_slice_0_metadata); File.prototype.stream, spec = {length = 0}, emit = metadata(realm_noop_stream_0_metadata); File.prototype.text, spec = {length = 0}, emit = metadata(realm_noop_text_0_metadata); File.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); FinalizationRegistry.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); FormData.prototype.append, spec = {length = 2}, emit = metadata(realm_noop_append_2_metadata); FormData.prototype.entries, spec = {length = 0}, emit = metadata(realm_noop_entries_0_metadata); FormData.prototype.keys, spec = {length = 0}, emit = metadata(realm_noop_keys_0_metadata); FormData.prototype.set, spec = {length = 2}, emit = metadata(realm_noop_set_2_metadata); FormData.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); FormData.prototype.values, spec = {length = 0}, emit = metadata(realm_noop_values_0_metadata); Headers.prototype.append, spec = {length = 2}, emit = metadata(realm_noop_append_2_metadata); Headers.prototype.getSetCookie, spec = {length = 0}, emit = metadata(realm_noop_getsetcookie_0_metadata); Headers.prototype.keys, spec = {length = 0}, emit = metadata(realm_noop_keys_0_metadata); Headers.prototype.set, spec = {length = 2}, emit = metadata(realm_noop_set_2_metadata); Headers.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); Headers.prototype.values, spec = {length = 0}, emit = metadata(realm_noop_values_0_metadata); Promise.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); RangeError.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); ReferenceError.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); RegExp.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); Request.prototype.arrayBuffer, spec = {length = 0}, emit = metadata(realm_noop_arraybuffer_0_metadata); Request.prototype.blob, spec = {length = 0}, emit = metadata(realm_noop_blob_0_metadata); Request.prototype.bytes, spec = {length = 0}, emit = metadata(realm_noop_bytes_0_metadata); Request.prototype.clone, spec = {length = 0}, emit = metadata(realm_noop_clone_0_metadata); Request.prototype.formData, spec = {length = 0}, emit = metadata(realm_noop_formdata_0_metadata); Request.prototype.json, spec = {length = 0}, emit = metadata(realm_noop_json_0_metadata); Request.prototype.text, spec = {length = 0}, emit = metadata(realm_noop_text_0_metadata); Request.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); Response.prototype.arrayBuffer, spec = {length = 0}, emit = metadata(realm_noop_arraybuffer_0_metadata); Response.prototype.blob, spec = {length = 0}, emit = metadata(realm_noop_blob_0_metadata); Response.prototype.bytes, spec = {length = 0}, emit = metadata(realm_noop_bytes_0_metadata); Response.prototype.clone, spec = {length = 0}, emit = metadata(realm_noop_clone_0_metadata); Response.prototype.formData, spec = {length = 0}, emit = metadata(realm_noop_formdata_0_metadata); Response.prototype.json, spec = {length = 0}, emit = metadata(realm_noop_json_0_metadata); Response.prototype.text, spec = {length = 0}, emit = metadata(realm_noop_text_0_metadata); Response.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); SharedArrayBuffer.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); String.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); SubtleCrypto.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); Symbol.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); SyntaxError.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); TextDecoder.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); TextEncoder.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); TypeError.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); URIError.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); URLSearchParams.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); WeakRef.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); WebSocket.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); })] global_this_builtin_noop_thunk, 1; with_flags(FN_BUILTIN)),
+            _ => fn_info!(#[realm(realm_decl! { FormData.prototype.delete; FormData.prototype.forEach; FormData.prototype.get; FormData.prototype.getAll; FormData.prototype.has; Headers.prototype.delete; Headers.prototype.forEach; Headers.prototype.get; Headers.prototype.has; AggregateError.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); Array.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); Array.prototype.toSpliced, spec = {length = 2}, emit = metadata(realm_noop_tospliced_2_metadata); ArrayBuffer.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); AsyncDisposableStack.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); Blob.prototype.arrayBuffer, spec = {length = 0}, emit = metadata(realm_noop_arraybuffer_0_metadata); Blob.prototype.bytes, spec = {length = 0}, emit = metadata(realm_noop_bytes_0_metadata); Blob.prototype.slice, spec = {length = 0}, emit = metadata(realm_noop_slice_0_metadata); Blob.prototype.stream, spec = {length = 0}, emit = metadata(realm_noop_stream_0_metadata); Blob.prototype.text, spec = {length = 0}, emit = metadata(realm_noop_text_0_metadata); Blob.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); Boolean.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); Crypto.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); CryptoKey.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); DataView.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); Date.prototype.toDateString, spec = {length = 0}, emit = metadata(realm_noop_todatestring_0_metadata); Date.prototype.toTimeString, spec = {length = 0}, emit = metadata(realm_noop_totimestring_0_metadata); DisposableStack.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); Error.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); EvalError.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); File.prototype.arrayBuffer, spec = {length = 0}, emit = metadata(realm_noop_arraybuffer_0_metadata); File.prototype.bytes, spec = {length = 0}, emit = metadata(realm_noop_bytes_0_metadata); File.prototype.slice, spec = {length = 0}, emit = metadata(realm_noop_slice_0_metadata); File.prototype.stream, spec = {length = 0}, emit = metadata(realm_noop_stream_0_metadata); File.prototype.text, spec = {length = 0}, emit = metadata(realm_noop_text_0_metadata); File.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); FinalizationRegistry.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); FormData.prototype.append, spec = {length = 2}, emit = metadata(realm_noop_append_2_metadata); FormData.prototype.entries, spec = {length = 0}, emit = metadata(realm_noop_entries_0_metadata); FormData.prototype.keys, spec = {length = 0}, emit = metadata(realm_noop_keys_0_metadata); FormData.prototype.set, spec = {length = 2}, emit = metadata(realm_noop_set_2_metadata); FormData.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); FormData.prototype.values, spec = {length = 0}, emit = metadata(realm_noop_values_0_metadata); Headers.prototype.append, spec = {length = 2}, emit = metadata(realm_noop_append_2_metadata); Headers.prototype.getSetCookie, spec = {length = 0}, emit = metadata(realm_noop_getsetcookie_0_metadata); Headers.prototype.keys, spec = {length = 0}, emit = metadata(realm_noop_keys_0_metadata); Headers.prototype.set, spec = {length = 2}, emit = metadata(realm_noop_set_2_metadata); Headers.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); Headers.prototype.values, spec = {length = 0}, emit = metadata(realm_noop_values_0_metadata); Promise.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); RangeError.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); ReferenceError.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); RegExp.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); Request.prototype.arrayBuffer, spec = {length = 0}, emit = metadata(realm_noop_arraybuffer_0_metadata); Request.prototype.blob, spec = {length = 0}, emit = metadata(realm_noop_blob_0_metadata); Request.prototype.bytes, spec = {length = 0}, emit = metadata(realm_noop_bytes_0_metadata); Request.prototype.clone, spec = {length = 0}, emit = metadata(realm_noop_clone_0_metadata); Request.prototype.formData, spec = {length = 0}, emit = metadata(realm_noop_formdata_0_metadata); Request.prototype.json, spec = {length = 0}, emit = metadata(realm_noop_json_0_metadata); Request.prototype.text, spec = {length = 0}, emit = metadata(realm_noop_text_0_metadata); Request.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); Response.prototype.arrayBuffer, spec = {length = 0}, emit = metadata(realm_noop_arraybuffer_0_metadata); Response.prototype.blob, spec = {length = 0}, emit = metadata(realm_noop_blob_0_metadata); Response.prototype.bytes, spec = {length = 0}, emit = metadata(realm_noop_bytes_0_metadata); Response.prototype.clone, spec = {length = 0}, emit = metadata(realm_noop_clone_0_metadata); Response.prototype.formData, spec = {length = 0}, emit = metadata(realm_noop_formdata_0_metadata); Response.prototype.json, spec = {length = 0}, emit = metadata(realm_noop_json_0_metadata); Response.prototype.text, spec = {length = 0}, emit = metadata(realm_noop_text_0_metadata); Response.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); SharedArrayBuffer.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); String.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); SubtleCrypto.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); Symbol.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); SyntaxError.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); TextDecoder.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); TextEncoder.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); TypeError.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); URIError.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); URLSearchParams.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); WeakRef.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); WebSocket.prototype.toLocaleString, spec = {length = 0}, emit = metadata(realm_noop_tolocalestring_0_metadata); })] export crate::object::global_this::fetch_globals::global_this_builtin_noop_thunk, 1; with_flags(FN_BUILTIN)),
         };
         install_proto_method(proto_obj, name, info, arity);
     }
@@ -1156,7 +1156,7 @@ pub(crate) fn install_builtin_species_accessor(ctor: *mut crate::closure::Closur
         return;
     }
     let getter = crate::closure::js_closure_alloc(
-        crate::fn_info!(#[realm(realm_decl! { "%TypedArray%[\"@@species\"].<get>", constructible = true; "ArrayBuffer[\"@@species\"].<get>", constructible = true; "Array[\"@@species\"].<get>", constructible = true; "Map[\"@@species\"].<get>", constructible = true; "Promise[\"@@species\"].<get>", constructible = true; "RegExp[\"@@species\"].<get>", constructible = true; "Set[\"@@species\"].<get>", constructible = true; "SharedArrayBuffer[\"@@species\"].<get>", constructible = true; })] builtin_species_getter_thunk, 0; with_declared(0)),
+        crate::fn_info!(#[realm(realm_decl! { "%TypedArray%[\"@@species\"].<get>", constructible = true; "ArrayBuffer[\"@@species\"].<get>", constructible = true; "Array[\"@@species\"].<get>", constructible = true; "Map[\"@@species\"].<get>", constructible = true; "Promise[\"@@species\"].<get>", constructible = true; "RegExp[\"@@species\"].<get>", constructible = true; "Set[\"@@species\"].<get>", constructible = true; "SharedArrayBuffer[\"@@species\"].<get>", constructible = true; })] export crate::object::global_this::install_static::builtin_species_getter_thunk, 0; with_declared(0)),
         0,
     );
     if getter.is_null() {
@@ -1186,12 +1186,12 @@ pub(super) fn web_url_statics(name: &str, s: &mut ConstructorStatics) {
         "URL" => {
             s.method(
                 "canParse",
-                crate::fn_info!(#[realm(URL.canParse)] url_can_parse_thunk, 2; with_declared(1)),
+                crate::fn_info!(#[realm(URL.canParse)] export crate::object::global_this::install_static::url_can_parse_thunk, 2; with_declared(1)),
                 1,
             );
             s.method(
                 "parse",
-                crate::fn_info!(#[realm(URL.parse)] url_parse_thunk, 2; with_declared(1)),
+                crate::fn_info!(#[realm(URL.parse)] export crate::object::global_this::install_static::url_parse_thunk, 2; with_declared(1)),
                 1,
             );
         }
@@ -1205,7 +1205,7 @@ pub(super) fn web_webcrypto_statics(name: &str, s: &mut ConstructorStatics) {
         "SubtleCrypto" => {
             s.method_with_attrs(
                 "supports",
-                crate::fn_info!(#[realm(SubtleCrypto.supports, spec = {length = 2}, emit = metadata(realm_subtlecrypto_supports_metadata))] subtle_crypto_supports_thunk, 1; with_rest(0)),
+                crate::fn_info!(#[realm(SubtleCrypto.supports, spec = {length = 2}, emit = metadata(realm_subtlecrypto_supports_metadata))] export crate::object::global_this::install_static::subtle_crypto_supports_thunk, 1; with_rest(0)),
                 realm_subtlecrypto_supports_metadata!(length),
                 super::super::PropertyAttrs::new(true, true, true),
             );

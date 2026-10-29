@@ -118,7 +118,7 @@ pub const GC_TYPE_TEMPORAL: u8 = 18;
 /// tables and exotic kind as later tranches migrate). Reachable ONLY via
 /// its owner's header slot, so ordinary tracing gives it exactly the
 /// owner's lifetime; movable, and holds one traced NaN-box slot.
-pub const GC_TYPE_OBJECT_META: u8 = 19;
+pub use crate::codegen_abi::GC_TYPE_OBJECT_META;
 /// Native `RegExpHeader`. RegExp used to share `GC_TYPE_OBJECT`, forcing every
 /// ObjectHeader consumer to inspect unrelated payload words for a magic value.
 /// A distinct GC kind is the authoritative, header-external discriminator.
@@ -1694,14 +1694,11 @@ pub unsafe fn set_forwarding_address(header: *mut GcHeader, new_user_addr: *mut 
 pub(crate) const GC_CLOSURE_NON_CONSTRUCTABLE: u16 = 0x80;
 
 // Object flags stored in GcHeader._reserved (u16) for Object.freeze/seal/preventExtensions
-pub const OBJ_FLAG_FROZEN: u16 = 0x01;
-pub const OBJ_FLAG_SEALED: u16 = 0x02;
-pub const OBJ_FLAG_NO_EXTEND: u16 = 0x04;
+pub use perry_abi::{OBJ_FLAG_FROZEN, OBJ_FLAG_NO_EXTEND, OBJ_FLAG_SEALED};
 // #1175: object was created with a null prototype (Object.create(null) /
 // querystring.parse). `Object.getPrototypeOf` returns null for these.
 // Bit 6; bits 3..4 are survival age, bit 5 is callability, and 14..15
 // are layout state. See the complete map below before allocating a bit.
-pub const OBJ_FLAG_NULL_PROTO: u16 = 0x40;
 /// I1 (`gc::never_move`): this `GC_TYPE_OBJECT` never moves once it is in
 /// the old generation. The copying minor promotes it at its next survival,
 /// and old-page defragmentation and idle compaction never select it. A
@@ -1710,7 +1707,8 @@ pub const OBJ_FLAG_NULL_PROTO: u16 = 0x40;
 /// plain address with no root, registry or rewrite. Bit 7 is free for
 /// objects (`OBJ_FLAG_RESERVED_BIT_MAP_SEE_DOC`); arrays and byte owners give
 /// it other meanings, so every reader checks `obj_type` first. Set-only.
-pub(crate) const OBJ_FLAG_NEVER_MOVE: u16 = 0x80;
+pub(crate) use perry_abi::OBJ_FLAG_NEVER_MOVE;
+pub use perry_abi::OBJ_FLAG_NULL_PROTO;
 /// I1 companion (`gc::never_move::note_memo_named`): a site memo stores
 /// this object's address. If a class relink displaces it from a class
 /// identity, the retirement pins it, so the memo keeps reading this object.
@@ -1741,7 +1739,7 @@ pub const OBJ_FLAG_STABLE_TOMBSTONES: u16 = 0x400;
 // `GC_TYPE_OBJECT`. Set-only (clearing a descriptor leaves it set; the slow
 // path is always correct). #7480 reuses bit 11 for `GC_TYPE_ARRAY` as
 // `GC_ARRAY_ELEMENT_SHAPE`; the two are disjoint by `obj_type`.
-pub const OBJ_FLAG_HAS_DESCRIPTORS: u16 = 0x800;
+pub use perry_abi::OBJ_FLAG_HAS_DESCRIPTORS;
 // #2145: this object is a per-kind `<TypedArrayCtor>.prototype` whose
 // `[[Prototype]]` is the shared `%TypedArray%.prototype` intrinsic.
 // `Object.getPrototypeOf(Int8Array.prototype)` returns the cached
@@ -1793,7 +1791,7 @@ pub(crate) const GC_ARRAY_ARGUMENTS_OBJECT: u16 = 0x200;
 /// pins that. The readers that only use the bit to DECLINE an object fast path
 /// (`proxy/put_value.rs`, `field_set_by_name*`, `delete_rest.rs`,
 /// `read_stub.rs`, `then_probe.rs`) are type-guarded as well.
-pub(crate) const GC_ARRAY_KEY_ATTRS: u16 = 0x100;
+pub(crate) use perry_abi::GC_ARRAY_KEY_ATTRS;
 /// #8098: this `GC_TYPE_OBJECT` allocation is an ORDINARY plain object. It has
 /// no class, but it also carries none of the per-object `[[Set]]` semantics a
 /// class-less receiver may otherwise have — a `URL`'s `pathname`/`search`/…

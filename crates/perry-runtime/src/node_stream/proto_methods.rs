@@ -277,7 +277,7 @@ pub(crate) fn build_stream_prototype(constructor: f64, kind: StreamProto) -> f64
             );
             symbol(
                 std::ptr::addr_of!(layouts::NP_ATOM_SYMBOL_ASYNC_DISPOSE),
-                crate::fn_info!(#[realm(realm_decl! { "node:stream.Readable.prototype[\"@@asyncDispose\"]", provider = closure, receiver = undefined; "node:stream.Writable.prototype[\"@@asyncDispose\"]", provider = closure, receiver = undefined; })] ns_async_dispose, 0; with_declared(0)),
+                crate::fn_info!(#[realm(realm_decl! { "node:stream.Readable.prototype[\"@@asyncDispose\"]", provider = closure, receiver = undefined; "node:stream.Writable.prototype[\"@@asyncDispose\"]", provider = closure, receiver = undefined; })] export crate::node_stream::ns_async_dispose, 0; with_declared(0)),
             );
             symbol(
                 std::ptr::addr_of!(layouts::NP_ATOM_SYMBOL_ASYNC_ITERATOR),
@@ -486,68 +486,18 @@ pub(crate) fn chain_reaches_stream_prototype(value: f64, name: &str) -> bool {
 // stream machinery answers a stream without a user hook natively.
 // ─────────────────────────────────────────────────────────────────
 
-crate::realm_decl! { info static NS_BASE_READ_INFO: crate::closure::JsFunctionInfo =
-    crate::closure::JsFunctionInfo::of(ns_base_read1 as crate::codegen_abi::JsBody1<ClosureHeader>)
-        .with_declared(1)
-        .with_flags(crate::closure::FN_BUILTIN); realm { "node:stream.Readable.prototype._read", provider = closure, receiver = undefined; } }
-crate::realm_decl! { info static NS_BASE_WRITE_INFO: crate::closure::JsFunctionInfo = crate::closure::JsFunctionInfo::of(
-    ns_base_write3 as crate::codegen_abi::JsBody3<ClosureHeader>,
-)
-.with_declared(3)
-.with_flags(crate::closure::FN_BUILTIN); realm { "node:stream.Duplex.prototype._write", provider = closure, receiver = undefined; "node:stream.Writable.prototype._write", provider = closure, receiver = undefined; } }
-crate::realm_decl! { info static NS_BASE_DESTROY_INFO: crate::closure::JsFunctionInfo = crate::closure::JsFunctionInfo::of(
-    ns_base_destroy2 as crate::codegen_abi::JsBody2<ClosureHeader>,
-)
-.with_declared(2)
-.with_flags(crate::closure::FN_BUILTIN); realm { "node:stream.Readable.prototype._destroy", provider = closure, receiver = undefined; "node:stream.Writable.prototype._destroy", provider = closure, receiver = undefined; } }
-crate::realm_decl! { info static NS_UNDESTROY_INFO: crate::closure::JsFunctionInfo =
-    crate::closure::JsFunctionInfo::of(ns_undestroy0 as crate::codegen_abi::JsBody0<ClosureHeader>)
-        .with_declared(0)
-        .with_flags(crate::closure::FN_BUILTIN); realm { "node:stream.Readable.prototype._undestroy", provider = closure, receiver = undefined; "node:stream.Writable.prototype._undestroy", provider = closure, receiver = undefined; } }
-crate::realm_decl! { info static NS_CANNOT_PIPE_INFO: crate::closure::JsFunctionInfo = crate::closure::JsFunctionInfo::of(
-    ns_cannot_pipe0 as crate::codegen_abi::JsBody0<ClosureHeader>,
-)
-.with_declared(0)
-.with_flags(crate::closure::FN_BUILTIN); realm { "node:stream.Writable.prototype.pipe", provider = closure, receiver = undefined; } }
-crate::realm_decl! { info static NS_REJECTION_DESTROY_INFO: crate::closure::JsFunctionInfo =
-    crate::closure::JsFunctionInfo::of(
-        ns_rejection_destroy1 as crate::codegen_abi::JsBody1<ClosureHeader>,
-    )
-    .with_declared(1)
-    .with_flags(crate::closure::FN_BUILTIN); realm { "node:stream.Readable.prototype[\"@runtime:nodejs.rejection\"]", provider = closure, receiver = undefined; "node:stream.Writable.prototype[\"@runtime:nodejs.rejection\"]", provider = closure, receiver = undefined; } }
-crate::realm_decl! { info static NS_TO_ASYNC_STREAMABLE_INFO: crate::closure::JsFunctionInfo =
-    crate::closure::JsFunctionInfo::of(
-        ns_to_async_streamable0 as crate::codegen_abi::JsBody0<ClosureHeader>,
-    )
-    .with_declared(0)
-    .with_flags(crate::closure::FN_BUILTIN); realm { "node:stream.Readable.prototype[\"@runtime:Stream.toAsyncStreamable\"]", provider = closure, receiver = undefined; } }
-crate::realm_decl! { info static NS_TRANSFORM3_INFO: crate::closure::JsFunctionInfo =
-    crate::closure::JsFunctionInfo::of(ns_transform3 as crate::codegen_abi::JsBody3<ClosureHeader>)
-        .with_declared(3)
-        .with_flags(crate::closure::FN_BUILTIN); realm { "node:stream.Transform.prototype._transform", provider = closure, receiver = undefined; } }
-crate::realm_decl! { info static NS_TRANSFORM_WRITE_INFO: crate::closure::JsFunctionInfo =
-    crate::closure::JsFunctionInfo::of(
-        ns_transform_write3 as crate::codegen_abi::JsBody3<ClosureHeader>,
-    )
-    .with_declared(3)
-    .with_flags(crate::closure::FN_BUILTIN); realm { "node:stream.Transform.prototype._write", provider = closure, receiver = undefined; } }
-crate::realm_decl! { info static NS_TRANSFORM_READ_INFO: crate::closure::JsFunctionInfo = crate::closure::JsFunctionInfo::of(
-    ns_transform_read0 as crate::codegen_abi::JsBody0<ClosureHeader>,
-)
-.with_declared(0)
-.with_flags(crate::closure::FN_BUILTIN); realm { "node:stream.Transform.prototype._read", provider = closure, receiver = undefined; } }
-crate::realm_decl! { info static NS_PASSTHROUGH_TRANSFORM_INFO: crate::closure::JsFunctionInfo =
-    crate::closure::JsFunctionInfo::of(
-        ns_passthrough_transform3 as crate::codegen_abi::JsBody3<ClosureHeader>,
-    )
-    .with_declared(3)
-    .with_flags(crate::closure::FN_BUILTIN); realm { "node:stream.PassThrough.prototype._transform", provider = closure, receiver = undefined; } }
-crate::realm_decl! { info static NS_TRANSFORM_FINAL_INFO: crate::closure::JsFunctionInfo =
-    crate::closure::JsFunctionInfo::of(
-        ns_transform_final1 as crate::codegen_abi::JsBody1<ClosureHeader>,
-    )
-    .with_declared(1)
-    .with_flags(crate::closure::FN_BUILTIN); realm { "node:stream.Transform.prototype._final", provider = closure, receiver = undefined; } }
+crate::realm_decl! { info crate::fn_info!(export static NS_BASE_READ_INFO = crate::node_stream::proto_methods::ns_base_read1, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)); realm { "node:stream.Readable.prototype._read", provider = closure, receiver = undefined; } }
+crate::realm_decl! { info crate::fn_info!(export static NS_BASE_WRITE_INFO = crate::node_stream::proto_methods::ns_base_write3, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN)); realm { "node:stream.Duplex.prototype._write", provider = closure, receiver = undefined; "node:stream.Writable.prototype._write", provider = closure, receiver = undefined; } }
+crate::realm_decl! { info crate::fn_info!(export static NS_BASE_DESTROY_INFO = crate::node_stream::proto_methods::ns_base_destroy2, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)); realm { "node:stream.Readable.prototype._destroy", provider = closure, receiver = undefined; "node:stream.Writable.prototype._destroy", provider = closure, receiver = undefined; } }
+crate::realm_decl! { info crate::fn_info!(export static NS_UNDESTROY_INFO = crate::node_stream::proto_methods::ns_undestroy0, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)); realm { "node:stream.Readable.prototype._undestroy", provider = closure, receiver = undefined; "node:stream.Writable.prototype._undestroy", provider = closure, receiver = undefined; } }
+crate::realm_decl! { info crate::fn_info!(export static NS_CANNOT_PIPE_INFO = crate::node_stream::proto_methods::ns_cannot_pipe0, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)); realm { "node:stream.Writable.prototype.pipe", provider = closure, receiver = undefined; } }
+crate::realm_decl! { info crate::fn_info!(export static NS_REJECTION_DESTROY_INFO = crate::node_stream::proto_methods::ns_rejection_destroy1, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)); realm { "node:stream.Readable.prototype[\"@runtime:nodejs.rejection\"]", provider = closure, receiver = undefined; "node:stream.Writable.prototype[\"@runtime:nodejs.rejection\"]", provider = closure, receiver = undefined; } }
+crate::realm_decl! { info crate::fn_info!(export static NS_TO_ASYNC_STREAMABLE_INFO = crate::node_stream::proto_methods::ns_to_async_streamable0, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)); realm { "node:stream.Readable.prototype[\"@runtime:Stream.toAsyncStreamable\"]", provider = closure, receiver = undefined; } }
+crate::realm_decl! { info crate::fn_info!(export static NS_TRANSFORM3_INFO = crate::node_stream::proto_methods::ns_transform3, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN)); realm { "node:stream.Transform.prototype._transform", provider = closure, receiver = undefined; } }
+crate::realm_decl! { info crate::fn_info!(export static NS_TRANSFORM_WRITE_INFO = crate::node_stream::proto_methods::ns_transform_write3, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN)); realm { "node:stream.Transform.prototype._write", provider = closure, receiver = undefined; } }
+crate::realm_decl! { info crate::fn_info!(export static NS_TRANSFORM_READ_INFO = crate::node_stream::proto_methods::ns_transform_read0, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)); realm { "node:stream.Transform.prototype._read", provider = closure, receiver = undefined; } }
+crate::realm_decl! { info crate::fn_info!(export static NS_PASSTHROUGH_TRANSFORM_INFO = crate::node_stream::proto_methods::ns_passthrough_transform3, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN)); realm { "node:stream.PassThrough.prototype._transform", provider = closure, receiver = undefined; } }
+crate::realm_decl! { info crate::fn_info!(export static NS_TRANSFORM_FINAL_INFO = crate::node_stream::proto_methods::ns_transform_final1, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)); realm { "node:stream.Transform.prototype._final", provider = closure, receiver = undefined; } }
 
 /// Call `callback(arg)` with an undefined receiver, when it is callable.
 fn call_callback(callback: f64, args: &[f64]) {
@@ -998,11 +948,11 @@ extern "C" fn stream_property_set(
 fn install_prop(layout: &layouts::NodePrototype, proto: *mut ObjectHeader, name: &str, prop: Prop) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let proto = scope.root_raw_mut_ptr(proto);
-    let get = scope.root_raw_mut_ptr(js_closure_alloc(crate::fn_info!(#[realm(realm_decl! { "node:stream.Duplex.prototype.destroyed.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Duplex.prototype.writable.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Duplex.prototype.writableBuffer.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Duplex.prototype.writableCorked.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Duplex.prototype.writableEnded.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Duplex.prototype.writableFinished.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Duplex.prototype.writableHighWaterMark.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Duplex.prototype.writableLength.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Duplex.prototype.writableNeedDrain.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Duplex.prototype.writableObjectMode.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Readable.prototype.closed.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Readable.prototype.destroyed.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Readable.prototype.errored.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Readable.prototype.readable.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Readable.prototype.readableAborted.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Readable.prototype.readableBuffer.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Readable.prototype.readableDidRead.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Readable.prototype.readableEncoding.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Readable.prototype.readableEnded.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Readable.prototype.readableFlowing.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Readable.prototype.readableHighWaterMark.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Readable.prototype.readableLength.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Readable.prototype.readableObjectMode.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Writable.prototype.closed.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Writable.prototype.destroyed.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Writable.prototype.errored.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Writable.prototype.writable.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Writable.prototype.writableAborted.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Writable.prototype.writableBuffer.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Writable.prototype.writableCorked.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Writable.prototype.writableEnded.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Writable.prototype.writableFinished.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Writable.prototype.writableHighWaterMark.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Writable.prototype.writableLength.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Writable.prototype.writableNeedDrain.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Writable.prototype.writableObjectMode.<get>", provider = closure, capture = enum_property(Prop); })] stream_property_get, 0), 1));
+    let get = scope.root_raw_mut_ptr(js_closure_alloc(crate::fn_info!(#[realm(realm_decl! { "node:stream.Duplex.prototype.destroyed.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Duplex.prototype.writable.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Duplex.prototype.writableBuffer.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Duplex.prototype.writableCorked.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Duplex.prototype.writableEnded.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Duplex.prototype.writableFinished.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Duplex.prototype.writableHighWaterMark.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Duplex.prototype.writableLength.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Duplex.prototype.writableNeedDrain.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Duplex.prototype.writableObjectMode.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Readable.prototype.closed.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Readable.prototype.destroyed.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Readable.prototype.errored.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Readable.prototype.readable.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Readable.prototype.readableAborted.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Readable.prototype.readableBuffer.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Readable.prototype.readableDidRead.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Readable.prototype.readableEncoding.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Readable.prototype.readableEnded.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Readable.prototype.readableFlowing.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Readable.prototype.readableHighWaterMark.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Readable.prototype.readableLength.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Readable.prototype.readableObjectMode.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Writable.prototype.closed.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Writable.prototype.destroyed.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Writable.prototype.errored.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Writable.prototype.writable.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Writable.prototype.writableAborted.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Writable.prototype.writableBuffer.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Writable.prototype.writableCorked.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Writable.prototype.writableEnded.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Writable.prototype.writableFinished.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Writable.prototype.writableHighWaterMark.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Writable.prototype.writableLength.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Writable.prototype.writableNeedDrain.<get>", provider = closure, capture = enum_property(Prop); "node:stream.Writable.prototype.writableObjectMode.<get>", provider = closure, capture = enum_property(Prop); })] export crate::node_stream::proto_methods::stream_property_get, 0), 1));
     get.with_mut_ptr::<ClosureHeader, _>(|c| js_closure_set_capture_f64(c, 0, prop as u8 as f64));
     let set_bits = if prop.settable().is_some() {
         let set =
-            scope.root_raw_mut_ptr(js_closure_alloc(crate::fn_info!(#[realm(realm_decl! { "node:stream.Duplex.prototype.destroyed.<set>", provider = closure, capture = enum_property(Prop); "node:stream.Duplex.prototype.writable.<set>", provider = closure, capture = enum_property(Prop); "node:stream.Readable.prototype.destroyed.<set>", provider = closure, capture = enum_property(Prop); "node:stream.Readable.prototype.readable.<set>", provider = closure, capture = enum_property(Prop); "node:stream.Readable.prototype.readableFlowing.<set>", provider = closure, capture = enum_property(Prop); "node:stream.Writable.prototype.destroyed.<set>", provider = closure, capture = enum_property(Prop); "node:stream.Writable.prototype.writable.<set>", provider = closure, capture = enum_property(Prop); })] stream_property_set, 1), 1));
+            scope.root_raw_mut_ptr(js_closure_alloc(crate::fn_info!(#[realm(realm_decl! { "node:stream.Duplex.prototype.destroyed.<set>", provider = closure, capture = enum_property(Prop); "node:stream.Duplex.prototype.writable.<set>", provider = closure, capture = enum_property(Prop); "node:stream.Readable.prototype.destroyed.<set>", provider = closure, capture = enum_property(Prop); "node:stream.Readable.prototype.readable.<set>", provider = closure, capture = enum_property(Prop); "node:stream.Readable.prototype.readableFlowing.<set>", provider = closure, capture = enum_property(Prop); "node:stream.Writable.prototype.destroyed.<set>", provider = closure, capture = enum_property(Prop); "node:stream.Writable.prototype.writable.<set>", provider = closure, capture = enum_property(Prop); })] export crate::node_stream::proto_methods::stream_property_set, 1), 1));
         set.with_mut_ptr::<ClosureHeader, _>(|c| {
             js_closure_set_capture_f64(c, 0, prop as u8 as f64)
         });
@@ -1059,11 +1009,7 @@ pub(crate) fn build_legacy_stream_prototype(constructor: f64) -> f64 {
     proto.with_mut_ptr::<ObjectHeader, _>(|proto| crate::value::js_nanbox_pointer(proto as i64))
 }
 
-crate::realm_decl! { info static NS_LEGACY_PIPE_INFO: crate::closure::JsFunctionInfo = crate::closure::JsFunctionInfo::of(
-    ns_legacy_pipe2 as crate::codegen_abi::JsBody2<ClosureHeader>,
-)
-.with_declared(2)
-.with_flags(crate::closure::FN_BUILTIN); realm { "node:stream.Stream.prototype.pipe", provider = closure, receiver = undefined; } }
+crate::realm_decl! { info crate::fn_info!(export static NS_LEGACY_PIPE_INFO = crate::node_stream::proto_methods::ns_legacy_pipe2, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)); realm { "node:stream.Stream.prototype.pipe", provider = closure, receiver = undefined; } }
 
 /// The legacy pipe's shared record: `[source, dest, ondata, ondrain, onend,
 /// onclose, onerror, cleanup, didOnEnd]`.

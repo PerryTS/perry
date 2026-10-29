@@ -398,7 +398,7 @@ pub(super) fn birth_at(
         }
     }
     members.births.remove(&name);
-    let gc = info::constants(include_str!("../../perry-runtime/src/gc/types.rs"))?;
+    let gc = info::gc_constants()?;
     let mut reserved = if native {
         0
     } else {
@@ -498,6 +498,11 @@ pub(super) fn birth_at(
     if prototype.is_empty() {
         map.remove("prototype");
     }
+    // js_create_native_module_namespace stores the requested module name in
+    // slot 0. A global namespace (not a node: path) is requested by its name.
+    if native && !name.starts_with("node:") {
+        map.insert("native_namespace".into(), string(&name));
+    }
     if kind == "exotic" {
         map.insert(
             "value".into(),
@@ -515,7 +520,7 @@ pub(super) fn mark_inherited_objects(declarations: &mut [Value]) -> Result<(), S
         .filter_map(|d| d.get("prototype").and_then(Value::string))
         .map(str::to_owned)
         .collect::<BTreeSet<_>>();
-    let gc = info::constants(include_str!("../../perry-runtime/src/gc/types.rs"))?;
+    let gc = info::gc_constants()?;
     for declaration in declarations {
         let name = declaration
             .get("name")

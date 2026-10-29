@@ -349,4 +349,7 @@ macro_rules! realm_decl {
     (info_expr $expression:expr; realm { $($facts:tt)* }) => {
         $expression
     };
+    (info $info:item realm { $($facts:tt)* }) => {
+        $info
+    };
 }

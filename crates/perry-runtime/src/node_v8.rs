@@ -668,7 +668,7 @@ pub(crate) unsafe fn attach_v8_constructor(
         crate::object::js_function_prototype_value_for_read(constructor.get_nanbox_f64());
     let prototype = scope.root_nanbox_f64(prototype);
     let method = crate::closure::js_closure_alloc_singleton(crate::fn_info!(#[realm("node:v8.GCProfiler.prototype[\"@@dispose\"]", constructible = true)] 
-        unwind gc_profiler_dispose_body,
+        export unwind crate::node_v8::gc_profiler_dispose_body,
         0
     ));
     let method = scope.root_raw_mut_ptr(method);

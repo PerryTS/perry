@@ -240,13 +240,13 @@ fn worker_threads_locks_proto_value() -> f64 {
     let proto = crate::realm_decl! { birth crate::object::js_object_alloc(0, 0); realm { "node:worker_threads.locks.<prototype>", members = { request, attrs = writable | enumerable | configurable; query, attrs = writable | enumerable | configurable; }; } };
     let request = web_locks_make_function(
         "request",
-        crate::fn_info!(#[realm("node:worker_threads.locks.<prototype>.request", constructible = true, spec = {length = 2}, emit = metadata(realm_node_worker_threads_locks_prototype_request_metadata))] worker_threads_locks_request, 3; with_declared(3)),
+        crate::fn_info!(#[realm("node:worker_threads.locks.<prototype>.request", constructible = true, spec = {length = 2}, emit = metadata(realm_node_worker_threads_locks_prototype_request_metadata))] export crate::object::native_module::web_locks::worker_threads_locks_request, 3; with_declared(3)),
         realm_node_worker_threads_locks_prototype_request_metadata!(length),
     );
     web_locks_set_field(proto, "request", request);
     let query = web_locks_make_function(
         "query",
-        crate::fn_info!(#[realm("node:worker_threads.locks.<prototype>.query", constructible = true)] worker_threads_locks_query, 0; with_declared(0)),
+        crate::fn_info!(#[realm("node:worker_threads.locks.<prototype>.query", constructible = true)] export crate::object::native_module::web_locks::worker_threads_locks_query, 0; with_declared(0)),
         0,
     );
     web_locks_set_field(proto, "query", query);

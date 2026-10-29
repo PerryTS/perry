@@ -27,7 +27,6 @@ use crate::closure::{
     js_closure_alloc, js_closure_call0, js_closure_call1, js_closure_call2,
     js_closure_get_capture_ptr, js_closure_set_capture_ptr, ClosureHeader, JsFunctionInfo,
 };
-use crate::codegen_abi::{JsBody1, JsBody2, JsBody3};
 use crate::feature_hooks::Hook;
 use crate::object::{
     js_object_alloc, js_object_get_field_by_name_f64, js_object_set_field_by_name, ObjectHeader,
@@ -46,7 +45,7 @@ pub(crate) use diagnostics_tail::*;
 /// info (the declared arity, or the rest parameter of a variadic export).
 struct ExportSpec {
     name: &'static str,
-    info: JsFunctionInfo,
+    info: &'static JsFunctionInfo,
 }
 
 /// One entry per submodule. `exports` lists every named export the
@@ -109,48 +108,23 @@ use hono_jsx::{
 };
 
 pub(crate) use consumers::{consume_array_buffer, consume_bytes, consume_json, consume_text};
-use consumers::{
-    thunk_consumers_arrayBuffer, thunk_consumers_blob, thunk_consumers_buffer,
-    thunk_consumers_bytes, thunk_consumers_json, thunk_consumers_text,
-};
 // Re-export at the `node_submodules` root so perry-stdlib's
 // `perry_runtime::node_submodules::js_register_stream_consumer_callbacks`
 // call site keeps resolving after the consumers split.
 pub use consumers::js_register_stream_consumer_callbacks;
 pub(crate) use fs_promises::js_readline_promises_readline_new;
-use fs_promises::{
-    thunk_fs_promises_access, thunk_fs_promises_appendFile, thunk_fs_promises_chmod,
-    thunk_fs_promises_chown, thunk_fs_promises_constants, thunk_fs_promises_copyFile,
-    thunk_fs_promises_cp, thunk_fs_promises_glob, thunk_fs_promises_lchmod,
-    thunk_fs_promises_lchown, thunk_fs_promises_link, thunk_fs_promises_lstat,
-    thunk_fs_promises_lutimes, thunk_fs_promises_mkdir, thunk_fs_promises_mkdtemp,
-    thunk_fs_promises_mkdtempDisposable, thunk_fs_promises_open, thunk_fs_promises_opendir,
-    thunk_fs_promises_readFile, thunk_fs_promises_readdir, thunk_fs_promises_readlink,
-    thunk_fs_promises_realpath, thunk_fs_promises_rename, thunk_fs_promises_rm,
-    thunk_fs_promises_rmdir, thunk_fs_promises_stat, thunk_fs_promises_statfs,
-    thunk_fs_promises_symlink, thunk_fs_promises_truncate, thunk_fs_promises_unlink,
-    thunk_fs_promises_utimes, thunk_fs_promises_watch, thunk_fs_promises_writeFile,
-    thunk_readline_Interface, thunk_readline_Readline, thunk_readline_createInterface,
-};
+use fs_promises::thunk_fs_promises_constants;
 use registry_backed::native_namespace_as_default;
 pub(crate) use registry_backed::{
     registry_backed_module_callable, registry_backed_module_export, stream_promises_export_callable,
 };
-use stream_promises::{thunk_streamP_finished, thunk_streamP_pipeline, value_from_ptr};
-use test::{
-    thunk_reporter_dot, thunk_reporter_junit, thunk_reporter_lcov, thunk_reporter_spec,
-    thunk_reporter_tap, thunk_test, thunk_test_after, thunk_test_after_each, thunk_test_before,
-    thunk_test_before_each, thunk_test_expect_failure, thunk_test_only, thunk_test_run,
-    thunk_test_skip, thunk_test_suite, thunk_test_todo,
-};
+use stream_promises::value_from_ptr;
+#[cfg(test)]
+use stream_promises::{thunk_streamP_finished, thunk_streamP_pipeline};
 use timers::{
-    timers_ns_clear_immediate, timers_ns_clear_interval, timers_ns_clear_timeout,
-    timers_ns_set_immediate, timers_ns_set_interval, timers_ns_set_timeout,
     timers_promises_scheduler, timers_promises_scheduler_wait, timers_promises_scheduler_yield,
-    timers_promises_set_immediate, timers_promises_set_interval, timers_promises_set_timeout,
 };
 pub(crate) use trace_events::{flush_trace_events_output, init_trace_events_runtime};
-use trace_events::{thunk_trace_events_createTracing, thunk_trace_events_getEnabledCategories};
 
 // node:sys is a deprecated alias for node:util. Known util-backed
 // exports are rebound to util's callable singletons below so identity
@@ -194,8 +168,7 @@ static SUBMOD_VM: SubmoduleSpec = SubmoduleSpec {
     key: "vm",
     exports: &[ExportSpec {
         name: "createContext",
-        info: JsFunctionInfo::of(thunk_vm_create_context as JsBody2<ClosureHeader>)
-            .with_declared(2),
+        info: unsafe { &*crate::fn_info!(thunk_vm_create_context, 2;with_declared(2)) },
     }],
 };
 
@@ -206,31 +179,27 @@ static SUBMOD_TIMERS: SubmoduleSpec = SubmoduleSpec {
     exports: &[
         ExportSpec {
             name: "setTimeout",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(timers_ns_set_timeout as JsBody3<ClosureHeader>).with_rest(2); realm { "node:timers.default.setTimeout", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::timers::timers_ns_set_timeout, 3;with_rest(2)); realm { "node:timers.default.setTimeout", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "setInterval",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(timers_ns_set_interval as JsBody3<ClosureHeader>).with_rest(2); realm { "node:timers.default.setInterval", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::timers::timers_ns_set_interval, 3;with_rest(2)); realm { "node:timers.default.setInterval", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "setImmediate",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(timers_ns_set_immediate as JsBody2<ClosureHeader>)
-                .with_rest(1); realm { "node:timers.default.setImmediate", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::timers::timers_ns_set_immediate, 2;with_rest(1)); realm { "node:timers.default.setImmediate", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "clearTimeout",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(timers_ns_clear_timeout as JsBody1<ClosureHeader>)
-                .with_declared(1); realm { "node:timers.default.clearTimeout", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::timers::timers_ns_clear_timeout, 1;with_declared(1)); realm { "node:timers.default.clearTimeout", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "clearInterval",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(timers_ns_clear_interval as JsBody1<ClosureHeader>)
-                .with_declared(1); realm { "node:timers.default.clearInterval", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::timers::timers_ns_clear_interval, 1;with_declared(1)); realm { "node:timers.default.clearInterval", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "clearImmediate",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(timers_ns_clear_immediate as JsBody1<ClosureHeader>)
-                .with_declared(1); realm { "node:timers.default.clearImmediate", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::timers::timers_ns_clear_immediate, 1;with_declared(1)); realm { "node:timers.default.clearImmediate", provider = closure_alloc; } },
         },
     ],
 };
@@ -240,23 +209,19 @@ static SUBMOD_TIMERS_PROMISES: SubmoduleSpec = SubmoduleSpec {
     exports: &[
         ExportSpec {
             name: "setTimeout",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(timers_promises_set_timeout as JsBody3<ClosureHeader>)
-                .with_declared(3); realm { "node:timers/promises.setTimeout", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::timers::timers_promises_set_timeout, 3;with_declared(3)); realm { "node:timers/promises.setTimeout", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "setImmediate",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(timers_promises_set_immediate as JsBody2<ClosureHeader>)
-                .with_declared(2); realm { "node:timers/promises.setImmediate", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::timers::timers_promises_set_immediate, 2;with_declared(2)); realm { "node:timers/promises.setImmediate", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "setInterval",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(timers_promises_set_interval as JsBody3<ClosureHeader>)
-                .with_declared(3); realm { "node:timers/promises.setInterval", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::timers::timers_promises_set_interval, 3;with_declared(3)); realm { "node:timers/promises.setInterval", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "scheduler",
-            info: JsFunctionInfo::of(timers_promises_scheduler as JsBody1<ClosureHeader>)
-                .with_declared(1),
+            info: unsafe { &*crate::fn_info!(timers_promises_scheduler, 1;with_declared(1)) },
         },
     ],
 };
@@ -266,168 +231,135 @@ static SUBMOD_FS_PROMISES: SubmoduleSpec = SubmoduleSpec {
     exports: &[
         ExportSpec {
             name: "readFile",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_fs_promises_readFile as JsBody2<ClosureHeader>)
-                .with_declared(2); realm { "node:fs/promises.readFile", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::fs_promises::thunk_fs_promises_readFile, 2;with_declared(2)); realm { "node:fs/promises.readFile", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "open",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_fs_promises_open as JsBody3<ClosureHeader>)
-                .with_declared(3); realm { "node:fs/promises.open", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::fs_promises::thunk_fs_promises_open, 3;with_declared(3)); realm { "node:fs/promises.open", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "writeFile",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_fs_promises_writeFile as JsBody3<ClosureHeader>)
-                .with_declared(3); realm { "node:fs/promises.writeFile", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::fs_promises::thunk_fs_promises_writeFile, 3;with_declared(3)); realm { "node:fs/promises.writeFile", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "appendFile",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_fs_promises_appendFile as JsBody3<ClosureHeader>)
-                .with_declared(3); realm { "node:fs/promises.appendFile", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::fs_promises::thunk_fs_promises_appendFile, 3;with_declared(3)); realm { "node:fs/promises.appendFile", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "chmod",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_fs_promises_chmod as JsBody2<ClosureHeader>)
-                .with_declared(2); realm { "node:fs/promises.chmod", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::fs_promises::thunk_fs_promises_chmod, 2;with_declared(2)); realm { "node:fs/promises.chmod", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "chown",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_fs_promises_chown as JsBody3<ClosureHeader>)
-                .with_declared(3); realm { "node:fs/promises.chown", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::fs_promises::thunk_fs_promises_chown, 3;with_declared(3)); realm { "node:fs/promises.chown", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "lchown",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_fs_promises_lchown as JsBody3<ClosureHeader>)
-                .with_declared(3); realm { "node:fs/promises.lchown", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::fs_promises::thunk_fs_promises_lchown, 3;with_declared(3)); realm { "node:fs/promises.lchown", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "lchmod",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_fs_promises_lchmod as JsBody2<ClosureHeader>)
-                .with_declared(2); realm { "node:fs/promises.lchmod", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::fs_promises::thunk_fs_promises_lchmod, 2;with_declared(2)); realm { "node:fs/promises.lchmod", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "mkdir",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_fs_promises_mkdir as JsBody2<ClosureHeader>)
-                .with_declared(2); realm { "node:fs/promises.mkdir", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::fs_promises::thunk_fs_promises_mkdir, 2;with_declared(2)); realm { "node:fs/promises.mkdir", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "readdir",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_fs_promises_readdir as JsBody2<ClosureHeader>)
-                .with_declared(2); realm { "node:fs/promises.readdir", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::fs_promises::thunk_fs_promises_readdir, 2;with_declared(2)); realm { "node:fs/promises.readdir", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "stat",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_fs_promises_stat as JsBody2<ClosureHeader>)
-                .with_declared(2); realm { "node:fs/promises.stat", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::fs_promises::thunk_fs_promises_stat, 2;with_declared(2)); realm { "node:fs/promises.stat", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "statfs",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_fs_promises_statfs as JsBody2<ClosureHeader>)
-                .with_declared(2); realm { "node:fs/promises.statfs", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::fs_promises::thunk_fs_promises_statfs, 2;with_declared(2)); realm { "node:fs/promises.statfs", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "lstat",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_fs_promises_lstat as JsBody2<ClosureHeader>)
-                .with_declared(2); realm { "node:fs/promises.lstat", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::fs_promises::thunk_fs_promises_lstat, 2;with_declared(2)); realm { "node:fs/promises.lstat", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "rm",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_fs_promises_rm as JsBody2<ClosureHeader>)
-                .with_declared(2); realm { "node:fs/promises.rm", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::fs_promises::thunk_fs_promises_rm, 2;with_declared(2)); realm { "node:fs/promises.rm", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "rmdir",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_fs_promises_rmdir as JsBody2<ClosureHeader>)
-                .with_declared(2); realm { "node:fs/promises.rmdir", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::fs_promises::thunk_fs_promises_rmdir, 2;with_declared(2)); realm { "node:fs/promises.rmdir", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "unlink",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_fs_promises_unlink as JsBody1<ClosureHeader>)
-                .with_declared(1); realm { "node:fs/promises.unlink", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::fs_promises::thunk_fs_promises_unlink, 1;with_declared(1)); realm { "node:fs/promises.unlink", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "rename",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_fs_promises_rename as JsBody2<ClosureHeader>)
-                .with_declared(2); realm { "node:fs/promises.rename", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::fs_promises::thunk_fs_promises_rename, 2;with_declared(2)); realm { "node:fs/promises.rename", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "copyFile",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_fs_promises_copyFile as JsBody3<ClosureHeader>)
-                .with_declared(3); realm { "node:fs/promises.copyFile", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::fs_promises::thunk_fs_promises_copyFile, 3;with_declared(3)); realm { "node:fs/promises.copyFile", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "cp",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_fs_promises_cp as JsBody3<ClosureHeader>)
-                .with_declared(3); realm { "node:fs/promises.cp", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::fs_promises::thunk_fs_promises_cp, 3;with_declared(3)); realm { "node:fs/promises.cp", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "truncate",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_fs_promises_truncate as JsBody2<ClosureHeader>)
-                .with_declared(2); realm { "node:fs/promises.truncate", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::fs_promises::thunk_fs_promises_truncate, 2;with_declared(2)); realm { "node:fs/promises.truncate", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "utimes",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_fs_promises_utimes as JsBody3<ClosureHeader>)
-                .with_declared(3); realm { "node:fs/promises.utimes", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::fs_promises::thunk_fs_promises_utimes, 3;with_declared(3)); realm { "node:fs/promises.utimes", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "lutimes",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_fs_promises_lutimes as JsBody3<ClosureHeader>)
-                .with_declared(3); realm { "node:fs/promises.lutimes", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::fs_promises::thunk_fs_promises_lutimes, 3;with_declared(3)); realm { "node:fs/promises.lutimes", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "link",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_fs_promises_link as JsBody2<ClosureHeader>)
-                .with_declared(2); realm { "node:fs/promises.link", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::fs_promises::thunk_fs_promises_link, 2;with_declared(2)); realm { "node:fs/promises.link", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "symlink",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_fs_promises_symlink as JsBody3<ClosureHeader>)
-                .with_declared(3); realm { "node:fs/promises.symlink", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::fs_promises::thunk_fs_promises_symlink, 3;with_declared(3)); realm { "node:fs/promises.symlink", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "readlink",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_fs_promises_readlink as JsBody2<ClosureHeader>)
-                .with_declared(2); realm { "node:fs/promises.readlink", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::fs_promises::thunk_fs_promises_readlink, 2;with_declared(2)); realm { "node:fs/promises.readlink", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "realpath",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_fs_promises_realpath as JsBody2<ClosureHeader>)
-                .with_declared(2); realm { "node:fs/promises.realpath", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::fs_promises::thunk_fs_promises_realpath, 2;with_declared(2)); realm { "node:fs/promises.realpath", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "mkdtemp",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_fs_promises_mkdtemp as JsBody2<ClosureHeader>)
-                .with_declared(2); realm { "node:fs/promises.mkdtemp", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::fs_promises::thunk_fs_promises_mkdtemp, 2;with_declared(2)); realm { "node:fs/promises.mkdtemp", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "mkdtempDisposable",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_fs_promises_mkdtempDisposable as JsBody2<ClosureHeader>)
-                .with_declared(2); realm { "node:fs/promises.mkdtempDisposable", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::fs_promises::thunk_fs_promises_mkdtempDisposable, 2;with_declared(2)); realm { "node:fs/promises.mkdtempDisposable", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "opendir",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_fs_promises_opendir as JsBody1<ClosureHeader>)
-                .with_declared(1); realm { "node:fs/promises.opendir", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::fs_promises::thunk_fs_promises_opendir, 1;with_declared(1)); realm { "node:fs/promises.opendir", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "glob",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_fs_promises_glob as JsBody2<ClosureHeader>)
-                .with_declared(2); realm { "node:fs/promises.glob", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::fs_promises::thunk_fs_promises_glob, 2;with_declared(2)); realm { "node:fs/promises.glob", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "watch",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_fs_promises_watch as JsBody2<ClosureHeader>)
-                .with_declared(2); realm { "node:fs/promises.watch", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::fs_promises::thunk_fs_promises_watch, 2;with_declared(2)); realm { "node:fs/promises.watch", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "access",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_fs_promises_access as JsBody2<ClosureHeader>)
-                .with_declared(2); realm { "node:fs/promises.access", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::fs_promises::thunk_fs_promises_access, 2;with_declared(2)); realm { "node:fs/promises.access", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "constants",
-            info: JsFunctionInfo::of(thunk_fs_promises_constants as JsBody1<ClosureHeader>)
-                .with_declared(1),
+            info: unsafe { &*crate::fn_info!(thunk_fs_promises_constants, 1;with_declared(1)) },
         },
     ],
 };
@@ -437,18 +369,15 @@ static SUBMOD_READLINE_PROMISES: SubmoduleSpec = SubmoduleSpec {
     exports: &[
         ExportSpec {
             name: "createInterface",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_readline_createInterface as JsBody1<ClosureHeader>)
-                .with_declared(1); realm { "node:readline/promises.createInterface", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::fs_promises::thunk_readline_createInterface, 1;with_declared(1)); realm { "node:readline/promises.createInterface", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "Interface",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_readline_Interface as JsBody1<ClosureHeader>)
-                .with_declared(1); realm { "node:readline/promises.Interface", kind = constructor, provider = closure, extends = "node:readline/promises.Interface.<prototype>", attrs = {prototype = writable}; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::fs_promises::thunk_readline_Interface, 1;with_declared(1)); realm { "node:readline/promises.Interface", kind = constructor, provider = closure, extends = "node:readline/promises.Interface.<prototype>", attrs = {prototype = writable}; } },
         },
         ExportSpec {
             name: "Readline",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_readline_Readline as JsBody2<ClosureHeader>)
-                .with_declared(2); realm { "node:readline/promises.Readline", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::fs_promises::thunk_readline_Readline, 2;with_declared(2)); realm { "node:readline/promises.Readline", provider = closure_alloc; } },
         },
     ],
 };
@@ -458,12 +387,11 @@ static SUBMOD_STREAM_PROMISES: SubmoduleSpec = SubmoduleSpec {
     exports: &[
         ExportSpec {
             name: "pipeline",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_streamP_pipeline as JsBody3<ClosureHeader>).with_rest(2); realm { "node:stream/promises.pipeline", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::stream_promises::thunk_streamP_pipeline, 3;with_rest(2)); realm { "node:stream/promises.pipeline", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "finished",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_streamP_finished as JsBody2<ClosureHeader>)
-                .with_declared(2); realm { "node:stream/promises.finished", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::stream_promises::thunk_streamP_finished, 2;with_declared(2)); realm { "node:stream/promises.finished", provider = closure_alloc; } },
         },
     ],
 };
@@ -473,33 +401,27 @@ static SUBMOD_STREAM_CONSUMERS: SubmoduleSpec = SubmoduleSpec {
     exports: &[
         ExportSpec {
             name: "text",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_consumers_text as JsBody1<ClosureHeader>)
-                .with_declared(1); realm { "node:stream/consumers.text", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::consumers::thunk_consumers_text, 1;with_declared(1)); realm { "node:stream/consumers.text", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "json",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_consumers_json as JsBody1<ClosureHeader>)
-                .with_declared(1); realm { "node:stream/consumers.json", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::consumers::thunk_consumers_json, 1;with_declared(1)); realm { "node:stream/consumers.json", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "buffer",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_consumers_buffer as JsBody1<ClosureHeader>)
-                .with_declared(1); realm { "node:stream/consumers.buffer", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::consumers::thunk_consumers_buffer, 1;with_declared(1)); realm { "node:stream/consumers.buffer", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "arrayBuffer",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_consumers_arrayBuffer as JsBody1<ClosureHeader>)
-                .with_declared(1); realm { "node:stream/consumers.arrayBuffer", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::consumers::thunk_consumers_arrayBuffer, 1;with_declared(1)); realm { "node:stream/consumers.arrayBuffer", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "bytes",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_consumers_bytes as JsBody1<ClosureHeader>)
-                .with_declared(1); realm { "node:stream/consumers.bytes", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::consumers::thunk_consumers_bytes, 1;with_declared(1)); realm { "node:stream/consumers.bytes", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "blob",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_consumers_blob as JsBody1<ClosureHeader>)
-                .with_declared(1); realm { "node:stream/consumers.blob", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::consumers::thunk_consumers_blob, 1;with_declared(1)); realm { "node:stream/consumers.blob", provider = closure_alloc; } },
         },
     ],
 };
@@ -509,88 +431,71 @@ static SUBMOD_STREAM_WEB: SubmoduleSpec = SubmoduleSpec {
     exports: &[
         ExportSpec {
             name: "ReadableStream",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_stream_web_ctor as JsBody1<ClosureHeader>)
-                .with_declared(1); realm { "node:stream/web.ByteLengthQueuingStrategy", provider = closure_alloc; "node:stream/web.CountQueuingStrategy", provider = closure_alloc; "node:stream/web.ReadableByteStreamController", provider = closure_alloc; "node:stream/web.ReadableStreamBYOBReader", provider = closure_alloc; "node:stream/web.ReadableStreamBYOBRequest", provider = closure_alloc; "node:stream/web.ReadableStreamDefaultController", provider = closure_alloc; "node:stream/web.ReadableStreamDefaultReader", provider = closure_alloc; "node:stream/web.TransformStreamDefaultController", provider = closure_alloc; "node:stream/web.WritableStreamDefaultController", provider = closure_alloc; "node:stream/web.WritableStreamDefaultWriter", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::thunk_stream_web_ctor, 1;with_declared(1)); realm { "node:stream/web.ByteLengthQueuingStrategy", provider = closure_alloc; "node:stream/web.CountQueuingStrategy", provider = closure_alloc; "node:stream/web.ReadableByteStreamController", provider = closure_alloc; "node:stream/web.ReadableStreamBYOBReader", provider = closure_alloc; "node:stream/web.ReadableStreamBYOBRequest", provider = closure_alloc; "node:stream/web.ReadableStreamDefaultController", provider = closure_alloc; "node:stream/web.ReadableStreamDefaultReader", provider = closure_alloc; "node:stream/web.TransformStreamDefaultController", provider = closure_alloc; "node:stream/web.WritableStreamDefaultController", provider = closure_alloc; "node:stream/web.WritableStreamDefaultWriter", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "ReadableStreamDefaultReader",
-            info: JsFunctionInfo::of(thunk_stream_web_ctor as JsBody1<ClosureHeader>)
-                .with_declared(1),
+            info: crate::fn_info!(reference import crate::node_submodules::thunk_stream_web_ctor, 1;with_declared(1)),
         },
         ExportSpec {
             name: "ReadableStreamBYOBReader",
-            info: JsFunctionInfo::of(thunk_stream_web_ctor as JsBody1<ClosureHeader>)
-                .with_declared(1),
+            info: crate::fn_info!(reference import crate::node_submodules::thunk_stream_web_ctor, 1;with_declared(1)),
         },
         ExportSpec {
             name: "ReadableStreamDefaultController",
-            info: JsFunctionInfo::of(thunk_stream_web_ctor as JsBody1<ClosureHeader>)
-                .with_declared(1),
+            info: crate::fn_info!(reference import crate::node_submodules::thunk_stream_web_ctor, 1;with_declared(1)),
         },
         ExportSpec {
             name: "ReadableByteStreamController",
-            info: JsFunctionInfo::of(thunk_stream_web_ctor as JsBody1<ClosureHeader>)
-                .with_declared(1),
+            info: crate::fn_info!(reference import crate::node_submodules::thunk_stream_web_ctor, 1;with_declared(1)),
         },
         ExportSpec {
             name: "ReadableStreamBYOBRequest",
-            info: JsFunctionInfo::of(thunk_stream_web_ctor as JsBody1<ClosureHeader>)
-                .with_declared(1),
+            info: crate::fn_info!(reference import crate::node_submodules::thunk_stream_web_ctor, 1;with_declared(1)),
         },
         ExportSpec {
             name: "WritableStream",
-            info: JsFunctionInfo::of(thunk_stream_web_ctor as JsBody1<ClosureHeader>)
-                .with_declared(1),
+            info: crate::fn_info!(reference import crate::node_submodules::thunk_stream_web_ctor, 1;with_declared(1)),
         },
         ExportSpec {
             name: "WritableStreamDefaultWriter",
-            info: JsFunctionInfo::of(thunk_stream_web_ctor as JsBody1<ClosureHeader>)
-                .with_declared(1),
+            info: crate::fn_info!(reference import crate::node_submodules::thunk_stream_web_ctor, 1;with_declared(1)),
         },
         ExportSpec {
             name: "WritableStreamDefaultController",
-            info: JsFunctionInfo::of(thunk_stream_web_ctor as JsBody1<ClosureHeader>)
-                .with_declared(1),
+            info: crate::fn_info!(reference import crate::node_submodules::thunk_stream_web_ctor, 1;with_declared(1)),
         },
         ExportSpec {
             name: "TransformStream",
-            info: JsFunctionInfo::of(thunk_stream_web_ctor as JsBody1<ClosureHeader>)
-                .with_declared(1),
+            info: crate::fn_info!(reference import crate::node_submodules::thunk_stream_web_ctor, 1;with_declared(1)),
         },
         ExportSpec {
             name: "TransformStreamDefaultController",
-            info: JsFunctionInfo::of(thunk_stream_web_ctor as JsBody1<ClosureHeader>)
-                .with_declared(1),
+            info: crate::fn_info!(reference import crate::node_submodules::thunk_stream_web_ctor, 1;with_declared(1)),
         },
         ExportSpec {
             name: "ByteLengthQueuingStrategy",
-            info: JsFunctionInfo::of(thunk_stream_web_ctor as JsBody1<ClosureHeader>)
-                .with_declared(1),
+            info: crate::fn_info!(reference import crate::node_submodules::thunk_stream_web_ctor, 1;with_declared(1)),
         },
         ExportSpec {
             name: "CountQueuingStrategy",
-            info: JsFunctionInfo::of(thunk_stream_web_ctor as JsBody1<ClosureHeader>)
-                .with_declared(1),
+            info: crate::fn_info!(reference import crate::node_submodules::thunk_stream_web_ctor, 1;with_declared(1)),
         },
         ExportSpec {
             name: "TextEncoderStream",
-            info: JsFunctionInfo::of(thunk_stream_web_ctor as JsBody1<ClosureHeader>)
-                .with_declared(1),
+            info: crate::fn_info!(reference import crate::node_submodules::thunk_stream_web_ctor, 1;with_declared(1)),
         },
         ExportSpec {
             name: "TextDecoderStream",
-            info: JsFunctionInfo::of(thunk_stream_web_ctor as JsBody1<ClosureHeader>)
-                .with_declared(1),
+            info: crate::fn_info!(reference import crate::node_submodules::thunk_stream_web_ctor, 1;with_declared(1)),
         },
         ExportSpec {
             name: "CompressionStream",
-            info: JsFunctionInfo::of(thunk_stream_web_ctor as JsBody1<ClosureHeader>)
-                .with_declared(1),
+            info: crate::fn_info!(reference import crate::node_submodules::thunk_stream_web_ctor, 1;with_declared(1)),
         },
         ExportSpec {
             name: "DecompressionStream",
-            info: JsFunctionInfo::of(thunk_stream_web_ctor as JsBody1<ClosureHeader>)
-                .with_declared(1),
+            info: crate::fn_info!(reference import crate::node_submodules::thunk_stream_web_ctor, 1;with_declared(1)),
         },
     ],
 };
@@ -600,20 +505,19 @@ static SUBMOD_HONO_JSX_SERVER: SubmoduleSpec = SubmoduleSpec {
     exports: &[
         ExportSpec {
             name: "jsx",
-            info: JsFunctionInfo::of(thunk_hono_jsx as JsBody2<ClosureHeader>).with_declared(2),
+            info: unsafe { &*crate::fn_info!(thunk_hono_jsx, 2;with_declared(2)) },
         },
         ExportSpec {
             name: "jsxs",
-            info: JsFunctionInfo::of(thunk_hono_jsxs as JsBody2<ClosureHeader>).with_declared(2),
+            info: unsafe { &*crate::fn_info!(thunk_hono_jsxs, 2;with_declared(2)) },
         },
         ExportSpec {
             name: "Fragment",
-            info: JsFunctionInfo::of(thunk_hono_fragment as JsBody1<ClosureHeader>)
-                .with_declared(1),
+            info: unsafe { &*crate::fn_info!(thunk_hono_fragment, 1;with_declared(1)) },
         },
         ExportSpec {
             name: "JSXNode",
-            info: JsFunctionInfo::of(thunk_hono_jsxnode as JsBody1<ClosureHeader>).with_declared(1),
+            info: unsafe { &*crate::fn_info!(thunk_hono_jsxnode, 1;with_declared(1)) },
         },
     ],
 };
@@ -623,15 +527,13 @@ static SUBMOD_HONO_JSX_STREAMING: SubmoduleSpec = SubmoduleSpec {
     exports: &[
         ExportSpec {
             name: "renderToReadableStream",
-            info: JsFunctionInfo::of(
-                thunk_hono_render_to_readable_stream as JsBody2<ClosureHeader>,
-            )
-            .with_declared(2),
+            info: unsafe {
+                &*crate::fn_info!(thunk_hono_render_to_readable_stream, 2;with_declared(2))
+            },
         },
         ExportSpec {
             name: "Suspense",
-            info: JsFunctionInfo::of(thunk_hono_suspense as JsBody1<ClosureHeader>)
-                .with_declared(1),
+            info: unsafe { &*crate::fn_info!(thunk_hono_suspense, 1;with_declared(1)) },
         },
     ],
 };
@@ -641,34 +543,31 @@ static SUBMOD_SYS: SubmoduleSpec = SubmoduleSpec {
     exports: &[
         ExportSpec {
             name: "format",
-            info: JsFunctionInfo::of(thunk_sys_format as JsBody1<ClosureHeader>).with_declared(1),
+            info: unsafe { &*crate::fn_info!(thunk_sys_format, 1;with_declared(1)) },
         },
         ExportSpec {
             name: "inspect",
-            info: JsFunctionInfo::of(thunk_sys_inspect as JsBody1<ClosureHeader>).with_declared(1),
+            info: unsafe { &*crate::fn_info!(thunk_sys_inspect, 1;with_declared(1)) },
         },
         ExportSpec {
             name: "debuglog",
-            info: JsFunctionInfo::of(thunk_sys_debuglog as JsBody1<ClosureHeader>).with_declared(1),
+            info: unsafe { &*crate::fn_info!(thunk_sys_debuglog, 1;with_declared(1)) },
         },
         ExportSpec {
             name: "deprecate",
-            info: JsFunctionInfo::of(thunk_sys_deprecate as JsBody1<ClosureHeader>)
-                .with_declared(1),
+            info: unsafe { &*crate::fn_info!(thunk_sys_deprecate, 1;with_declared(1)) },
         },
         ExportSpec {
             name: "promisify",
-            info: JsFunctionInfo::of(thunk_sys_promisify as JsBody1<ClosureHeader>)
-                .with_declared(1),
+            info: unsafe { &*crate::fn_info!(thunk_sys_promisify, 1;with_declared(1)) },
         },
         ExportSpec {
             name: "callbackify",
-            info: JsFunctionInfo::of(thunk_sys_callbackify as JsBody1<ClosureHeader>)
-                .with_declared(1),
+            info: unsafe { &*crate::fn_info!(thunk_sys_callbackify, 1;with_declared(1)) },
         },
         ExportSpec {
             name: "isArray",
-            info: JsFunctionInfo::of(thunk_sys_isArray as JsBody1<ClosureHeader>).with_declared(1),
+            info: unsafe { &*crate::fn_info!(thunk_sys_isArray, 1;with_declared(1)) },
         },
     ],
 };
@@ -678,41 +577,35 @@ static SUBMOD_DIAGNOSTICS_CHANNEL: SubmoduleSpec = SubmoduleSpec {
     exports: &[
         ExportSpec {
             name: "tracingChannel",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_diag_tracing_channel as JsBody1<ClosureHeader>)
-                .with_declared(1); realm { "node:diagnostics_channel.tracingChannel", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::diagnostics::thunk_diag_tracing_channel, 1;with_declared(1)); realm { "node:diagnostics_channel.tracingChannel", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "boundedChannel",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_diag_bounded_channel as JsBody1<ClosureHeader>)
-                .with_declared(1); realm { "node:diagnostics_channel.BoundedChannel", provider = closure_alloc; "node:diagnostics_channel.boundedChannel", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::diagnostics_tail::thunk_diag_bounded_channel, 1;with_declared(1)); realm { "node:diagnostics_channel.BoundedChannel", provider = closure_alloc; "node:diagnostics_channel.boundedChannel", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "channel",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_diag_channel as JsBody1<ClosureHeader>).with_declared(1); realm { "node:diagnostics_channel.channel", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::diagnostics::thunk_diag_channel, 1;with_declared(1)); realm { "node:diagnostics_channel.channel", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "subscribe",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_diag_subscribe as JsBody2<ClosureHeader>)
-                .with_declared(2); realm { "node:diagnostics_channel.subscribe", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::diagnostics::thunk_diag_subscribe, 2;with_declared(2)); realm { "node:diagnostics_channel.subscribe", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "unsubscribe",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_diag_unsubscribe as JsBody2<ClosureHeader>)
-                .with_declared(2); realm { "node:diagnostics_channel.unsubscribe", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::diagnostics::thunk_diag_unsubscribe, 2;with_declared(2)); realm { "node:diagnostics_channel.unsubscribe", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "hasSubscribers",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_diag_has_subscribers as JsBody1<ClosureHeader>)
-                .with_declared(1); realm { "node:diagnostics_channel.hasSubscribers", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::diagnostics::thunk_diag_has_subscribers, 1;with_declared(1)); realm { "node:diagnostics_channel.hasSubscribers", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "Channel",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_diag_noop as JsBody1<ClosureHeader>).with_declared(1); realm { "node:diagnostics_channel.Channel", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::diagnostics::thunk_diag_noop, 1;with_declared(1)); realm { "node:diagnostics_channel.Channel", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "BoundedChannel",
-            info: JsFunctionInfo::of(thunk_diag_bounded_channel as JsBody1<ClosureHeader>)
-                .with_declared(1),
+            info: crate::fn_info!(reference import crate::node_submodules::diagnostics_tail::thunk_diag_bounded_channel, 1;with_declared(1)),
         },
     ],
 };
@@ -722,15 +615,11 @@ static SUBMOD_TRACE_EVENTS: SubmoduleSpec = SubmoduleSpec {
     exports: &[
         ExportSpec {
             name: "createTracing",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_trace_events_createTracing as JsBody1<ClosureHeader>)
-                .with_declared(1); realm { "node:trace_events.default.createTracing"; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::trace_events::thunk_trace_events_createTracing, 1;with_declared(1)); realm { "node:trace_events.default.createTracing"; } },
         },
         ExportSpec {
             name: "getEnabledCategories",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(
-                thunk_trace_events_getEnabledCategories as JsBody1<ClosureHeader>,
-            )
-            .with_rest(0); realm { "node:trace_events.default.getEnabledCategories"; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::trace_events::thunk_trace_events_getEnabledCategories, 1;with_rest(0)); realm { "node:trace_events.default.getEnabledCategories"; } },
         },
     ],
 };
@@ -740,57 +629,55 @@ static SUBMOD_TEST: SubmoduleSpec = SubmoduleSpec {
     exports: &[
         ExportSpec {
             name: "default",
-            info: JsFunctionInfo::of(thunk_test as JsBody3<ClosureHeader>).with_declared(3),
+            info: crate::fn_info!(reference import crate::node_submodules::test::runner::thunk_test, 3; with_declared(3)),
         },
         ExportSpec {
             name: "test",
-            info: JsFunctionInfo::of(thunk_test as JsBody3<ClosureHeader>).with_declared(3),
+            info: crate::fn_info!(reference import crate::node_submodules::test::runner::thunk_test, 3; with_declared(3)),
         },
         ExportSpec {
             name: "skip",
-            info: JsFunctionInfo::of(thunk_test_skip as JsBody3<ClosureHeader>).with_declared(3),
+            info: crate::fn_info!(reference import crate::node_submodules::test::runner::thunk_test_skip, 3; with_declared(3)),
         },
         ExportSpec {
             name: "todo",
-            info: JsFunctionInfo::of(thunk_test_todo as JsBody3<ClosureHeader>).with_declared(3),
+            info: crate::fn_info!(reference import crate::node_submodules::test::runner::thunk_test_todo, 3; with_declared(3)),
         },
         ExportSpec {
             name: "only",
-            info: JsFunctionInfo::of(thunk_test_only as JsBody3<ClosureHeader>).with_declared(3),
+            info: crate::fn_info!(reference import crate::node_submodules::test::runner::thunk_test_only, 3; with_declared(3)),
         },
         ExportSpec {
             name: "suite",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_test_suite as JsBody3<ClosureHeader>).with_declared(3); realm { "node:test.describe", provider = closure, members = { skip, attrs = writable | enumerable | configurable; todo, attrs = writable | enumerable | configurable; only, attrs = writable | enumerable | configurable; }; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::test::runner::thunk_test_suite, 3;with_declared(3)); realm { "node:test.describe", provider = closure, members = { skip, attrs = writable | enumerable | configurable; todo, attrs = writable | enumerable | configurable; only, attrs = writable | enumerable | configurable; }; } },
         },
         ExportSpec {
             name: "describe",
-            info: JsFunctionInfo::of(thunk_test_suite as JsBody3<ClosureHeader>).with_declared(3),
+            info: crate::fn_info!(reference import crate::node_submodules::test::runner::thunk_test_suite, 3;with_declared(3)),
         },
         ExportSpec {
             name: "it",
-            info: JsFunctionInfo::of(thunk_test as JsBody3<ClosureHeader>).with_declared(3),
+            info: crate::fn_info!(reference import crate::node_submodules::test::runner::thunk_test, 3; with_declared(3)),
         },
         ExportSpec {
             name: "before",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_test_before as JsBody1<ClosureHeader>).with_declared(1); realm { "node:test.before", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::test::runner::thunk_test_before, 1;with_declared(1)); realm { "node:test.before", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "after",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_test_after as JsBody1<ClosureHeader>).with_declared(1); realm { "node:test.after", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::test::runner::thunk_test_after, 1;with_declared(1)); realm { "node:test.after", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "beforeEach",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_test_before_each as JsBody1<ClosureHeader>)
-                .with_declared(1); realm { "node:test.beforeEach", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::test::runner::thunk_test_before_each, 1;with_declared(1)); realm { "node:test.beforeEach", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "afterEach",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_test_after_each as JsBody1<ClosureHeader>)
-                .with_declared(1); realm { "node:test.afterEach", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::test::runner::thunk_test_after_each, 1;with_declared(1)); realm { "node:test.afterEach", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "run",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_test_run as JsBody1<ClosureHeader>).with_declared(1); realm { "node:test.run", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::test::runner::thunk_test_run, 1;with_declared(1)); realm { "node:test.run", provider = closure_alloc; } },
         },
         // #9202: `expectFailure` is a current Node `node:test` named export.
         // It has to be listed here — `find_export` is what
@@ -800,17 +687,16 @@ static SUBMOD_TEST: SubmoduleSpec = SubmoduleSpec {
         // of a function.
         ExportSpec {
             name: "expectFailure",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_test_expect_failure as JsBody1<ClosureHeader>)
-                .with_declared(1); realm { "node:test.expectFailure", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::test::runner::thunk_test_expect_failure, 1;with_declared(1)); realm { "node:test.expectFailure", provider = closure_alloc; } },
         },
         // Object-valued exports are handled by `special_export_value`.
         ExportSpec {
             name: "mock",
-            info: JsFunctionInfo::of(thunk_test_run as JsBody1<ClosureHeader>).with_declared(1),
+            info: crate::fn_info!(reference import crate::node_submodules::test::runner::thunk_test_run, 1;with_declared(1)),
         },
         ExportSpec {
             name: "snapshot",
-            info: JsFunctionInfo::of(thunk_test_run as JsBody1<ClosureHeader>).with_declared(1),
+            info: crate::fn_info!(reference import crate::node_submodules::test::runner::thunk_test_run, 1;with_declared(1)),
         },
     ],
 };
@@ -820,26 +706,23 @@ static SUBMOD_TEST_REPORTERS: SubmoduleSpec = SubmoduleSpec {
     exports: &[
         ExportSpec {
             name: "spec",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_reporter_spec as JsBody1<ClosureHeader>)
-                .with_declared(1); realm { "node:test/reporters.default.spec", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::test::reporters::thunk_reporter_spec, 1;with_declared(1)); realm { "node:test/reporters.default.spec", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "tap",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_reporter_tap as JsBody1<ClosureHeader>).with_declared(1); realm { "node:test/reporters.default.tap", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::test::reporters::thunk_reporter_tap, 1;with_declared(1)); realm { "node:test/reporters.default.tap", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "dot",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_reporter_dot as JsBody1<ClosureHeader>).with_declared(1); realm { "node:test/reporters.default.dot", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::test::reporters::thunk_reporter_dot, 1;with_declared(1)); realm { "node:test/reporters.default.dot", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "junit",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_reporter_junit as JsBody1<ClosureHeader>)
-                .with_declared(1); realm { "node:test/reporters.default.junit", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::test::reporters::thunk_reporter_junit, 1;with_declared(1)); realm { "node:test/reporters.default.junit", provider = closure_alloc; } },
         },
         ExportSpec {
             name: "lcov",
-            info: crate::realm_decl! { info_expr JsFunctionInfo::of(thunk_reporter_lcov as JsBody1<ClosureHeader>)
-                .with_declared(1); realm { "node:test/reporters.default.lcov", provider = closure_alloc; } },
+            info: crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::test::reporters::thunk_reporter_lcov, 1;with_declared(1)); realm { "node:test/reporters.default.lcov", provider = closure_alloc; } },
         },
     ],
 };
@@ -1195,7 +1078,7 @@ fn timers_promises_scheduler_value() -> f64 {
         let obj = crate::realm_decl! { birth js_object_alloc(0, 2); realm { "node:timers/promises.scheduler", kind = namespace, members = { wait, attrs = writable | enumerable | configurable; yield, attrs = writable | enumerable | configurable; }; } };
 
         let wait = js_closure_alloc(
-            crate::fn_info!(#[realm("node:timers/promises.scheduler.wait", provider = closure_alloc)] timers_promises_scheduler_wait, 2; with_declared(2)),
+            crate::fn_info!(#[realm("node:timers/promises.scheduler.wait", provider = closure_alloc)] export crate::node_submodules::timers::timers_promises_scheduler_wait, 2; with_declared(2)),
             0,
         );
 
@@ -1206,7 +1089,7 @@ fn timers_promises_scheduler_value() -> f64 {
         );
 
         let yield_fn = js_closure_alloc(
-            crate::fn_info!(#[realm("node:timers/promises.scheduler.yield", provider = closure_alloc)] timers_promises_scheduler_yield, 0; with_declared(0)),
+            crate::fn_info!(#[realm("node:timers/promises.scheduler.yield", provider = closure_alloc)] export crate::node_submodules::timers::timers_promises_scheduler_yield, 0; with_declared(0)),
             0,
         );
 
@@ -1328,7 +1211,7 @@ fn ensure_export_singleton(
     if let Some(cached) = EXPORT_SINGLETONS.with(|m| m.borrow().get(&key).copied()) {
         return cached;
     }
-    let allocated = js_closure_alloc(&export.info, 0);
+    let allocated = js_closure_alloc(export.info, 0);
     if submod.key == "timers_promises" && export.name == "scheduler" {
         let wait = js_closure_alloc(
             crate::fn_info!(timers_promises_scheduler_wait, 2; with_declared(2)),
@@ -1381,7 +1264,7 @@ fn ensure_export_singleton(
         );
         crate::object::set_builtin_closure_length(
             allocated_handle.get_raw_mut_ptr::<ClosureHeader>() as usize,
-            crate::closure::info_arity(&export.info).unwrap_or(0),
+            crate::closure::info_arity(export.info).unwrap_or(0),
         );
         crate::object::set_builtin_closure_non_constructable(
             allocated_handle.get_raw_mut_ptr::<ClosureHeader>() as usize,

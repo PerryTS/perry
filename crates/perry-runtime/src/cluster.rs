@@ -674,37 +674,19 @@ fn cluster_root_scanner(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
 mod infos {
     use super::*;
     use crate::closure::{ClosureHeader, JsFunctionInfo};
-    use crate::codegen_abi::{JsBody0, JsBody1, JsBody2, JsBody4};
+    use crate::codegen_abi::{JsBody0, JsBody1, JsBody2};
     pub(super) static CLUSTER_INTERNAL_ONLINE: JsFunctionInfo =
         JsFunctionInfo::of(cluster_internal_online as JsBody0<ClosureHeader>).with_declared(0);
     pub(super) static CLUSTER_INTERNAL_DISCONNECT: JsFunctionInfo =
         JsFunctionInfo::of(cluster_internal_disconnect as JsBody0<ClosureHeader>).with_declared(0);
     pub(super) static CLUSTER_INTERNAL_EXIT: JsFunctionInfo =
         JsFunctionInfo::of(cluster_internal_exit as JsBody2<ClosureHeader>).with_declared(2);
-    crate::realm_decl! { info pub(super) static CLUSTER_WORKER_SEND: JsFunctionInfo =
-        JsFunctionInfo::of(cluster_worker_send as JsBody4<ClosureHeader>)
-            .with_declared(4)
-            .with_length(0); realm { "node:cluster.Worker.prototype.send", constructible = true; } }
-    crate::realm_decl! { info pub(super) static CLUSTER_WORKER_KILL: JsFunctionInfo =
-        JsFunctionInfo::of(cluster_worker_kill as JsBody1<ClosureHeader>)
-            .with_declared(1)
-            .with_length(0); realm { "node:cluster.Worker.prototype.kill", constructible = true; } }
-    crate::realm_decl! { info pub(super) static CLUSTER_WORKER_DESTROY: JsFunctionInfo =
-        JsFunctionInfo::of(cluster_worker_destroy as JsBody1<ClosureHeader>)
-            .with_declared(1)
-            .with_length(1); realm { "node:cluster.Worker.prototype.destroy", constructible = true; } }
-    crate::realm_decl! { info pub(super) static CLUSTER_WORKER_DISCONNECT: JsFunctionInfo =
-        JsFunctionInfo::of(cluster_worker_disconnect as JsBody0<ClosureHeader>)
-            .with_declared(0)
-            .with_length(0); realm { "node:cluster.Worker.prototype.disconnect", constructible = true; } }
-    crate::realm_decl! { info pub(super) static CLUSTER_WORKER_IS_CONNECTED: JsFunctionInfo =
-        JsFunctionInfo::of(cluster_worker_is_connected as JsBody0<ClosureHeader>)
-            .with_declared(0)
-            .with_length(0); realm { "node:cluster.Worker.prototype.isConnected", constructible = true; } }
-    crate::realm_decl! { info pub(super) static CLUSTER_WORKER_IS_DEAD: JsFunctionInfo =
-        JsFunctionInfo::of(cluster_worker_is_dead as JsBody0<ClosureHeader>)
-            .with_declared(0)
-            .with_length(0); realm { "node:cluster.Worker.prototype.isDead", constructible = true; } }
+    crate::realm_decl! { info crate::fn_info!(export static pub(super) CLUSTER_WORKER_SEND = crate::cluster::cluster_worker_send, 4; with_declared(4), with_length(0)); realm { "node:cluster.Worker.prototype.send", constructible = true; } }
+    crate::realm_decl! { info crate::fn_info!(export static pub(super) CLUSTER_WORKER_KILL = crate::cluster::cluster_worker_kill, 1; with_declared(1), with_length(0)); realm { "node:cluster.Worker.prototype.kill", constructible = true; } }
+    crate::realm_decl! { info crate::fn_info!(export static pub(super) CLUSTER_WORKER_DESTROY = crate::cluster::cluster_worker_destroy, 1; with_declared(1), with_length(1)); realm { "node:cluster.Worker.prototype.destroy", constructible = true; } }
+    crate::realm_decl! { info crate::fn_info!(export static pub(super) CLUSTER_WORKER_DISCONNECT = crate::cluster::cluster_worker_disconnect, 0; with_declared(0), with_length(0)); realm { "node:cluster.Worker.prototype.disconnect", constructible = true; } }
+    crate::realm_decl! { info crate::fn_info!(export static pub(super) CLUSTER_WORKER_IS_CONNECTED = crate::cluster::cluster_worker_is_connected, 0; with_declared(0), with_length(0)); realm { "node:cluster.Worker.prototype.isConnected", constructible = true; } }
+    crate::realm_decl! { info crate::fn_info!(export static pub(super) CLUSTER_WORKER_IS_DEAD = crate::cluster::cluster_worker_is_dead, 0; with_declared(0), with_length(0)); realm { "node:cluster.Worker.prototype.isDead", constructible = true; } }
     pub(super) static CLUSTER_SETUP_EMIT_THUNK: JsFunctionInfo =
         JsFunctionInfo::of(cluster_setup_emit_thunk as JsBody0<ClosureHeader>)
             .with_declared(0)

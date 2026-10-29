@@ -420,6 +420,27 @@ pub(super) fn constant(ts: &[Token<'_>]) -> Result<Value, String> {
     }
 }
 
+/// The modules js_create_native_module_namespace seals after the birth:
+/// `if module_name == "m" { crate::object::js_object_seal(value); }`.
+fn sealed_native_namespaces(source: &str) -> Result<Vec<&str>, String> {
+    let body = source
+        .split_once("pub extern \"C\" fn js_create_native_module_namespace(")
+        .ok_or("missing native namespace birth")?
+        .1;
+    let body = body.split_once("\n}\n").map_or(body, |(b, _)| b);
+    let mut sealed = Vec::new();
+    for (i, _) in body.match_indices("crate::object::js_object_seal(value)") {
+        let head = &body[..i];
+        let cond = head
+            .rsplit_once("if module_name == \"")
+            .ok_or("unconditioned seal")?
+            .1;
+        let module = cond.split_once('"').ok_or("malformed seal condition")?.0;
+        sealed.push(module);
+    }
+    Ok(sealed)
+}
+
 pub(super) fn logical(
     mut facts: Facts,
     source: &str,
@@ -486,6 +507,28 @@ pub(super) fn logical(
             .strip_prefix("%NativeNamespace:")
             .and_then(|s| s.strip_suffix('%'))
         {
+            // The receiver's physical birth: an ordinary object allocated with the
+            // native-module class id (js_create_native_module_namespace).
+            let gc = info::gc_constants()?;
+            let native = info::constants(include_str!(
+                "../../perry-runtime/src/object/native_module.rs"
+            ))?;
+            let source = include_str!("../../perry-runtime/src/object/native_module.rs");
+            let reserved = if sealed_native_namespaces(source)?.contains(&module) {
+                gc["OBJ_FLAG_SEALED"] | gc["OBJ_FLAG_NO_EXTEND"] | gc["OBJ_FLAG_HAS_DESCRIPTORS"]
+            } else {
+                0
+            };
+            declaration.insert(
+                "header".into(),
+                Value::Object(BTreeMap::from([
+                    ("gc_type".into(), number(gc["GC_TYPE_OBJECT"])),
+                    ("reserved".into(), number(reserved)),
+                    ("class_id".into(), number(native["NATIVE_MODULE_CLASS_ID"])),
+                ])),
+            );
+            declaration.insert("prototype".into(), string("Object.prototype"));
+            births.insert("Object.prototype".into());
             (module, "exotic")
         } else {
             return Err("native provider needs node: or %NativeNamespace: path".into());
@@ -742,7 +785,7 @@ pub(super) fn callable(
         128
     };
     let reserved = if facts.frozen {
-        let gc = info::constants(include_str!("../../perry-runtime/src/gc/types.rs"))?;
+        let gc = info::gc_constants()?;
         reserved | gc["OBJ_FLAG_FROZEN"] | gc["OBJ_FLAG_SEALED"] | gc["OBJ_FLAG_NO_EXTEND"]
     } else {
         reserved

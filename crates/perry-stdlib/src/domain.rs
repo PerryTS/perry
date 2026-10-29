@@ -566,16 +566,16 @@ extern "C" fn domain_intercept_wrapper(
                 $n)
         };
     }
-    method!("_errorHandler", perry_runtime::fn_info!(#[realm("node:domain.Domain.prototype._errorHandler")] domain_error_handler_thunk, 2; with_declared(2), with_flags(perry_runtime::closure::FN_BUILTIN)), 2);
-    method!("enter", perry_runtime::fn_info!(#[realm("node:domain.Domain.prototype.enter")] domain_enter_thunk, 0; with_declared(0), with_flags(perry_runtime::closure::FN_BUILTIN)), 0);
-    method!("exit", perry_runtime::fn_info!(#[realm("node:domain.Domain.prototype.exit")] domain_exit_thunk, 0; with_declared(0), with_flags(perry_runtime::closure::FN_BUILTIN)), 0);
-    method!("add", perry_runtime::fn_info!(#[realm("node:domain.Domain.prototype.add")] domain_add_thunk, 1; with_declared(1), with_flags(perry_runtime::closure::FN_BUILTIN)), 1);
-    method!("remove", perry_runtime::fn_info!(#[realm("node:domain.Domain.prototype.remove")] domain_remove_thunk, 1; with_declared(1), with_flags(perry_runtime::closure::FN_BUILTIN)), 1);
+    method!("_errorHandler", perry_runtime::fn_info!(#[realm("node:domain.Domain.prototype._errorHandler")] export crate::domain::domain_error_handler_thunk, 2; with_declared(2), with_flags(perry_runtime::closure::FN_BUILTIN)), 2);
+    method!("enter", perry_runtime::fn_info!(#[realm("node:domain.Domain.prototype.enter")] export crate::domain::domain_enter_thunk, 0; with_declared(0), with_flags(perry_runtime::closure::FN_BUILTIN)), 0);
+    method!("exit", perry_runtime::fn_info!(#[realm("node:domain.Domain.prototype.exit")] export crate::domain::domain_exit_thunk, 0; with_declared(0), with_flags(perry_runtime::closure::FN_BUILTIN)), 0);
+    method!("add", perry_runtime::fn_info!(#[realm("node:domain.Domain.prototype.add")] export crate::domain::domain_add_thunk, 1; with_declared(1), with_flags(perry_runtime::closure::FN_BUILTIN)), 1);
+    method!("remove", perry_runtime::fn_info!(#[realm("node:domain.Domain.prototype.remove")] export crate::domain::domain_remove_thunk, 1; with_declared(1), with_flags(perry_runtime::closure::FN_BUILTIN)), 1);
     proto.method("run", perry_runtime::fn_info!(#[realm("node:domain.Domain.prototype.run")] 
-        domain_run_thunk, 2; with_rest(1), with_declared(1), with_flags(perry_runtime::closure::FN_BUILTIN)
+        export crate::domain::domain_run_thunk, 2; with_rest(1), with_declared(1), with_flags(perry_runtime::closure::FN_BUILTIN)
     ), 1);
-    method!("intercept", perry_runtime::fn_info!(#[realm("node:domain.Domain.prototype.intercept")] domain_intercept_thunk, 1; with_declared(1), with_flags(perry_runtime::closure::FN_BUILTIN)), 1);
-    method!("bind", perry_runtime::fn_info!(#[realm("node:domain.Domain.prototype.bind")] domain_bind_thunk, 1; with_declared(1), with_flags(perry_runtime::closure::FN_BUILTIN)), 1);
+    method!("intercept", perry_runtime::fn_info!(#[realm("node:domain.Domain.prototype.intercept")] export crate::domain::domain_intercept_thunk, 1; with_declared(1), with_flags(perry_runtime::closure::FN_BUILTIN)), 1);
+    method!("bind", perry_runtime::fn_info!(#[realm("node:domain.Domain.prototype.bind")] export crate::domain::domain_bind_thunk, 1; with_declared(1), with_flags(perry_runtime::closure::FN_BUILTIN)), 1);
 }
 
 extern "C" fn domain_error_handler_thunk(

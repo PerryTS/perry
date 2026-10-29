@@ -1,6 +1,10 @@
 //! Build-time realm facts. This module contains no runtime symbols or addresses.
 use serde::{Deserialize, Serialize};
 
+#[path = "realm_layout_facts.rs"]
+mod realm_layout_facts;
+pub use realm_layout_facts::*;
+
 pub use perry_runtime_manifest::realm_source::REALM_MANIFEST_VERSION;
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -99,6 +103,24 @@ pub struct ConstructorFacts {
     pub instance_identity: Option<String>,
 }
 
+/// Internal storage that reflection cannot describe. The source producer
+/// resolves these values from the owning birth's declarations, never a dump.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RealmStorageFacts {
+    Set { entries: Vec<RealmValue> },
+    RuntimeLayout(RuntimeLayoutFacts),
+}
+
+impl RealmStorageFacts {
+    pub fn values(&self) -> &[RealmValue] {
+        match self {
+            Self::Set { entries } => entries,
+            Self::RuntimeLayout(_) => &[],
+        }
+    }
+}
+
 /// A declaration belongs to the source that owns the body or object birth.
 /// Names are symbolic paths, never addresses. Symbol keys use `@@iterator`
 /// etc.; accessors declare their two independently callable entries.
@@ -157,6 +179,8 @@ pub struct RealmDeclaration {
     pub native_namespace: Option<String>,
     #[serde(default)]
     pub constructor: Option<ConstructorFacts>,
+    #[serde(default)]
+    pub storage: Option<RealmStorageFacts>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -190,6 +214,12 @@ impl RealmManifest {
         for d in &self.declarations {
             if d.name.is_empty() || !names.insert(d.name.as_str()) {
                 return Err(format!("duplicate/empty realm declaration: {}", d.name));
+            }
+            if let Some(RealmStorageFacts::RuntimeLayout(layout)) = &d.storage {
+                layout.validate()?;
+                if d.header.is_some() || !d.properties.is_empty() || d.value.is_some() {
+                    return Err(format!("runtime layout {} is not a realm receiver", d.name));
+                }
             }
             if d.attributes.is_some_and(|a| a & !7 != 0) {
                 return Err(format!("invalid property attributes: {}", d.name));
@@ -230,6 +260,23 @@ impl RealmManifest {
             }
         }
         for d in &self.declarations {
+            if let Some(RealmStorageFacts::RuntimeLayout(layout)) = &d.storage {
+                for owner in &layout.owners {
+                    let birth = self
+                        .declarations
+                        .iter()
+                        .find(|entry| &entry.name == owner)
+                        .ok_or_else(|| {
+                            format!("{} names undeclared layout owner {owner}", d.name)
+                        })?;
+                    if !birth.births.contains(&d.name) {
+                        return Err(format!(
+                            "layout owner {owner} lacks birth edge to {}",
+                            d.name
+                        ));
+                    }
+                }
+            }
             let references = d.properties.iter().flat_map(|p| {
                 p.get.iter().chain(p.set.iter()).chain(match &p.value {
                     Some(RealmValue::Reference(name)) => Some(name),
@@ -247,6 +294,17 @@ impl RealmManifest {
                 .chain(d.prototype.iter())
                 .chain(references)
                 .chain(captures)
+                .chain(
+                    d.storage
+                        .iter()
+                        .flat_map(|storage| storage.values())
+                        .filter_map(|value| match value {
+                            RealmValue::Reference(name) | RealmValue::RawReference(name) => {
+                                Some(name)
+                            }
+                            _ => None,
+                        }),
+                )
             {
                 if !names.contains(edge.as_str()) {
                     return Err(format!(

@@ -212,10 +212,7 @@ pub const LAYOUT_PROTO_TAG_END: usize = 4096;
 /// runtime gives the prototype that serial when it builds it
 /// (`builtin_proto::seal_runtime_prototype`, `name_runtime_prototype`), so an
 /// object born on the layout needs no link.
-#[repr(C)]
-pub struct PerryProtoFamily {
-    pub serial: u64,
-}
+pub use crate::codegen_abi::PerryProtoFamily;
 
 /// `PerryLayoutDesc.variant` of a carried prototype layout (object model
 /// §3.6): the layout `P` is born on ([`perry_bind_family_prototype`]), a
@@ -228,8 +225,21 @@ unsafe fn proto_family_serial(fam: *const PerryProtoFamily) -> u64 {
     let word = AtomicU64::from_ptr(std::ptr::addr_of!((*fam).serial).cast_mut());
     let current = word.load(Ordering::Acquire);
     if current != 0 {
+        let prototype = (*fam).image_prototype;
+        if !prototype.is_null() && super::shapes::identity_prototype_word(current) == 0 {
+            // Publish through the normal agent-owned identity word. A worker's
+            // already-bound prototype must never be replaced by the template.
+            super::shapes::write_identity_word(
+                current,
+                crate::value::JSValue::pointer(prototype).bits(),
+            );
+        }
         return current;
     }
+    assert!(
+        (*fam).image_prototype.is_null(),
+        "image prototype lacks its serial"
+    );
     let fresh = super::proto_validity::next_prototype_serial();
     match word.compare_exchange(0, fresh, Ordering::AcqRel, Ordering::Acquire) {
         Ok(_) => fresh,
@@ -708,6 +718,9 @@ unsafe fn registered_atom_symbol(
 pub(crate) unsafe fn atom_symbol(
     atom: *const StaticAtom,
 ) -> Option<*mut crate::symbol::SymbolHeader> {
+    if (*atom).kind == crate::codegen_abi::ATOM_KIND_IMAGE_SYMBOL {
+        return (!(*atom).string.is_null()).then_some((*atom).string.cast_mut().cast());
+    }
     well_known_atom_symbol(atom)
         .or_else(|| super::runtime_layouts::runtime_symbol_of_atom(atom))
         .or_else(|| registered_atom_symbol(atom))
@@ -737,6 +750,9 @@ pub(crate) fn seed_static_atoms() {
     wasm_program_image_checks::check_atoms();
 }
 
+#[path = "layout_desc/lazy_image.rs"]
+mod lazy_image;
+pub(crate) use lazy_image::publish_receiver as publish_image_receiver;
 #[path = "layout_desc/registration.rs"]
 mod registration;
 use registration::binding_symbol_keys;

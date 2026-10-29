@@ -97,12 +97,23 @@ pub(crate) unsafe fn mark_born_prototype(obj: *mut crate::object::ObjectHeader) 
 /// creation (`assign_intrinsic_prototype_serial`) so a receiver kind's base
 /// shape can name its prototype before that object exists
 /// (`closure::shape::INTRINSIC_SERIAL_*`).
-pub(crate) const FIRST_DYNAMIC_PROTOTYPE_SERIAL: u64 = 64;
+pub(crate) use perry_abi::intrinsic_serials::FIRST_DYNAMIC_PROTOTYPE_SERIAL;
 
 /// Next prototype serial. 0 means "none assigned"; `1..64` are intrinsic; a
 /// `u64` counter cannot be exhausted by any real program.
 static PROTOTYPE_SERIAL_NEXT: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(FIRST_DYNAMIC_PROTOTYPE_SERIAL);
+
+/// Reserve the image's serial interval before any dynamic prototype can be
+/// born. The existing allocator remains the one authority for later serials.
+pub(crate) fn reserve_image_prototype_serials(end: u64) {
+    if end > FIRST_DYNAMIC_PROTOTYPE_SERIAL {
+        PROTOTYPE_SERIAL_NEXT.fetch_max(end, Ordering::Relaxed);
+    }
+    // Image prototypes already carry their mark in metadata. Mutations must
+    // enter the same notification path as heap-born marked prototypes.
+    ANY_PROTOTYPE_MARKED.store(true, Ordering::Relaxed);
+}
 
 /// Give a shared evaluation holder an identity without declaring it a
 /// prototype or invalidating prototype-chain caches. The existing identity

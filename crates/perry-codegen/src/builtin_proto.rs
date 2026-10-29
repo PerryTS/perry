@@ -27,30 +27,7 @@
 use crate::block::LlBlock;
 use crate::types::{I1, I32, I64};
 
-/// The runtime's `BuiltinProto` discriminants (the agent slot offset). A runtime
-/// test pins the two lists together (`builtin_proto_tests.rs`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(u8)]
-// The full mirror, including families no lowering names yet.
-#[allow(dead_code)]
-pub(crate) enum BuiltinProto {
-    Object = 0,
-    Function = 1,
-    Array = 2,
-    String = 3,
-    Number = 4,
-    Boolean = 5,
-    Symbol = 6,
-    BigInt = 7,
-    Map = 8,
-    Set = 9,
-    Date = 10,
-    RegExp = 11,
-    Promise = 12,
-    Error = 13,
-    WeakMap = 14,
-    WeakSet = 15,
-}
+pub(crate) use perry_abi::BuiltinProto;
 
 /// `i1`: true when `family`'s intrinsic prototype (or `%Object.prototype%`)
 /// was modified, i.e. the direct builtin call is NOT proven: the shadow bit of

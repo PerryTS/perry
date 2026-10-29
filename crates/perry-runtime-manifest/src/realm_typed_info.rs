@@ -58,8 +58,47 @@ pub(super) fn named(
     constants: &BTreeMap<String, u64>,
 ) -> Result<info::Info, String> {
     let all = tokens(source)?;
+    if let Some(ts) = exported_initializer(&all, name)? {
+        return info::fn_info(ts, constants);
+    }
     let ts = initializer(&all, name)?;
     expression(source, ts, constants)
+}
+
+/// `fn_info!(export static [vis] NAME = body, n; builders)`: the declaration
+/// tokens after `=` up to the macro's closing parenthesis.
+fn exported_initializer<'a, 's>(
+    ts: &'a [Token<'s>],
+    name: &str,
+) -> Result<Option<&'a [Token<'s>]>, String> {
+    let mut found = None;
+    for (i, t) in ts.iter().enumerate() {
+        if t.text != "export" || ts.get(i + 1).is_none_or(|t| t.text != "static") {
+            continue;
+        }
+        let mut at = i + 2;
+        if ts.get(at).is_some_and(|t| t.text == "pub") {
+            at += 1;
+            if ts.get(at).is_some_and(|t| t.text == "(") {
+                at = super::closing_paren(ts, at)? + 1;
+            }
+        }
+        if ts.get(at).is_none_or(|t| t.text != name) || ts.get(at + 1).is_none_or(|t| t.text != "=")
+        {
+            continue;
+        }
+        let open = (2..i)
+            .rev()
+            .find(|&j| ts[j].text == "(" && ts[j - 1].text == "!" && ts[j - 2].text == "fn_info")
+            .ok_or("exported info static outside fn_info!")?;
+        let close = super::closing_paren(ts, open)?;
+        if found.replace(&ts[at + 2..close]).is_some() {
+            return Err(format!(
+                "info binding {name} must name one local static/const"
+            ));
+        }
+    }
+    Ok(found)
 }
 
 pub(super) fn expression(
@@ -73,6 +112,17 @@ pub(super) fn expression(
         .ok_or("info initializer has no constructor")?;
     let end = super::closing_paren(ts, open)?;
     let constructor = info::text(&ts[..open]);
+    if constructor.rsplit("::").next() == Some("fn_info!") {
+        // The owning record itself: its tokens are the fn_info! declaration.
+        let mut inner = &ts[open + 1..end];
+        while inner
+            .first()
+            .is_some_and(|t| matches!(t.text, "reference" | "import"))
+        {
+            inner = &inner[1..];
+        }
+        return info::fn_info(inner, constants);
+    }
     let args = info::split(&ts[open + 1..end], ",");
     let mut signature = if constructor.ends_with("!") {
         wrapper(&tokens(source)?, constructor.trim_end_matches('!'))?;

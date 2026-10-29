@@ -89,7 +89,7 @@ fn rows(source: &str) -> Result<Vec<(String, i32, i32)>, String> {
 fn expand(name: &str, styles: &str) -> Result<Vec<Value>, String> {
     let rows = rows(styles)?;
     let abi = super::abi_constants();
-    let gc = info::constants(include_str!("../../perry-runtime/src/gc/types.rs"))?;
+    let gc = info::gc_constants()?;
     let mut declarations = Vec::new();
     let mut properties = Vec::new();
     let mut keys = Vec::new();
