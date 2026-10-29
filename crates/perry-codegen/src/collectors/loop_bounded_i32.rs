@@ -377,7 +377,7 @@ fn collect_const_ints(stmts: &[Stmt], st: &mut State) {
 /// `Update`. `collect_localset_ids_in_stmts` deliberately skips `Update`
 /// (it preserves integer-ness, which is what that collector asks about);
 /// here a `++` is exactly what must disqualify a "constant" bound.
-fn collect_written_locals(stmts: &[Stmt], out: &mut HashSet<u32>) {
+pub(crate) fn collect_written_locals(stmts: &[Stmt], out: &mut HashSet<u32>) {
     fn in_expr(e: &Expr, out: &mut HashSet<u32>) {
         match e {
             Expr::LocalSet(id, _) | Expr::Update { id, .. } => {

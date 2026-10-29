@@ -22,6 +22,7 @@ mod escape_arrays;
 mod escape_check;
 mod escape_news;
 mod escape_objects;
+mod exact_i32_range;
 mod hir_facts;
 mod hoisted_callback_calls;
 mod hot_callees;

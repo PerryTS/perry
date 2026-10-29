@@ -476,6 +476,7 @@ pub(crate) fn collect_integer_locals_with_seeds(
     // full rescans of the function body per disqualification.
     let mut localset_written: HashSet<u32> = HashSet::new();
     collect_localset_ids_in_stmts(stmts, &mut localset_written);
+    let known = super::exact_i32_range::KnownRanges::collect(stmts);
 
     let mut judge = ProvenanceJudge {
         candidates: &candidates,
@@ -490,6 +491,7 @@ pub(crate) fn collect_integer_locals_with_seeds(
         dependents: HashMap::new(),
         disqualified: HashSet::new(),
         closure_written: HashSet::new(),
+        known: &known,
     };
     judge.walk_stmts(stmts);
 
@@ -563,6 +565,8 @@ struct ProvenanceJudge<'a> {
     disqualified: HashSet<u32>,
     /// Ids `LocalSet` anywhere inside a closure body in these stmts.
     closure_written: HashSet<u32>,
+    /// Constant and loop-induction ranges the exact-range proofs start from.
+    known: &'a super::exact_i32_range::KnownRanges,
 }
 
 impl ProvenanceJudge<'_> {
@@ -583,6 +587,7 @@ impl ProvenanceJudge<'_> {
             self.arg_dependent_clamp_fn_ids,
             self.numeric_locals,
             self.not_bigint,
+            self.known,
             &mut deps,
         ) {
             for dep in deps {
@@ -591,6 +596,54 @@ impl ProvenanceJudge<'_> {
         } else {
             self.disqualified.insert(id);
         }
+    }
+
+    /// Judge a `for` loop's update as the guarded step of its counter
+    /// (`exact_i32_range::for_step_fits`). Returns `false` — and judges
+    /// nothing — when the update is not such a step or the step is not
+    /// proven, leaving the ordinary write judgment to the caller.
+    fn judge_for_step(&mut self, condition: Option<&Expr>, update: &Expr, body: &[Stmt]) -> bool {
+        let mut deps = HashSet::new();
+        let candidates = self.candidates;
+        let known = self.known;
+        let proven = {
+            let mut range_of = |e: &Expr| {
+                let mut sub_deps = HashSet::new();
+                let r = exact_range_deps(e, candidates, known, &mut sub_deps, &|sub, d| {
+                    int32_producing_deps(
+                        sub,
+                        candidates,
+                        self.flat_const_ids,
+                        self.flat_row_alias_ids,
+                        self.clamp_fn_ids,
+                        self.arg_dependent_clamp_fn_ids,
+                        self.numeric_locals,
+                        self.not_bigint,
+                        known,
+                        d,
+                    )
+                });
+                if r.is_some() {
+                    deps.extend(sub_deps);
+                }
+                r
+            };
+            super::exact_i32_range::for_step_fits(condition, update, body, &mut range_of)
+        };
+        let Some(counter) = proven else {
+            return false;
+        };
+        if !candidates.contains(&counter) {
+            return false;
+        }
+        for dep in deps {
+            if dep != counter {
+                self.dependents.entry(dep).or_default().push(counter);
+            }
+        }
+        // The step's operand subexpressions may write other locals.
+        perry_hir::walker::walk_expr_children(update, &mut |child| self.walk_expr(child));
+        true
     }
 
     fn walk_stmts(&mut self, stmts: &[Stmt]) {
@@ -649,7 +702,9 @@ impl ProvenanceJudge<'_> {
                         self.walk_expr(cond);
                     }
                     if let Some(upd) = update {
-                        self.walk_expr(upd);
+                        if !self.judge_for_step(condition.as_ref(), upd, body) {
+                            self.walk_expr(upd);
+                        }
                     }
                     self.walk_stmts(body);
                 }
@@ -693,6 +748,15 @@ impl ProvenanceJudge<'_> {
                     self.judge_obligation(*id, value);
                 }
                 self.walk_expr(value);
+            }
+            // `x++` / `x--` is the write `x = x ± 1`, whose exact result
+            // leaves i32 at the range's edge. Outside a guarded `for` step
+            // (`judge_for_step`) it is proven only by a loop-induction
+            // interval, which bounds every step the local takes.
+            Expr::Update { id, .. } => {
+                if self.candidates.contains(id) && !self.known.intervals.contains_key(id) {
+                    self.disqualified.insert(*id);
+                }
             }
             Expr::Closure { body, .. } => {
                 collect_localset_ids_in_stmts(body, &mut self.closure_written);
@@ -738,6 +802,7 @@ fn int32_producing_deps(
     arg_dependent_clamp_fn_ids: &HashSet<u32>,
     numeric_locals: &HashSet<u32>,
     not_bigint: &super::not_bigint_locals::NotBigIntFacts,
+    known: &super::exact_i32_range::KnownRanges,
     deps: &mut HashSet<u32>,
 ) -> bool {
     let recurse = |sub: &Expr, deps: &mut HashSet<u32>| {
@@ -750,6 +815,7 @@ fn int32_producing_deps(
             arg_dependent_clamp_fn_ids,
             numeric_locals,
             not_bigint,
+            known,
             deps,
         )
     };
@@ -762,16 +828,16 @@ fn int32_producing_deps(
             deps.insert(*id);
             true
         }
-        Expr::Binary { op, right, .. }
-            if matches!(op, BinaryOp::BitOr | BinaryOp::UShr)
-                && matches!(right.as_ref(), Expr::Integer(0)) =>
-        {
-            true
-        }
-        Expr::Binary { op, left, right }
-            if matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul) =>
-        {
-            recurse(left, deps) && recurse(right, deps)
+        Expr::Binary {
+            op: BinaryOp::BitOr,
+            right,
+            ..
+        } if matches!(right.as_ref(), Expr::Integer(0)) => true,
+        // `+`/`-`/`*` of int32 values is an integer but not necessarily an
+        // int32: only an exact result proven inside i32 may be written into an
+        // i32 slot (`collectors/exact_i32_range.rs`).
+        Expr::Binary { op, .. } if matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul) => {
+            exact_range_deps(e, candidates, known, deps, &recurse).is_some_and(|r| r.fits_i32())
         }
         Expr::Call { callee, args, .. } => {
             if let Expr::FuncRef(fid) = callee.as_ref() {
@@ -811,9 +877,13 @@ fn int32_producing_deps(
                 proven
             })
         }
+        // `x >>> k` is a Uint32 shifted right by `k`: inside i32 for a literal
+        // `k` in `1..32`. `x >>> 0` (and an unknown count) spans the whole
+        // Uint32 range, which an i32 slot does not hold — those values are
+        // `unsigned_i32_locals`' to carry.
         Expr::Binary {
             op: BinaryOp::UShr, ..
-        } => true,
+        } => super::exact_i32_range::wrapped_operator_range(e).is_some_and(|r| r.fits_i32()),
         Expr::LocalGet(id) if candidates.contains(id) => {
             deps.insert(*id);
             true
@@ -831,6 +901,41 @@ fn int32_producing_deps(
         },
         _ => false,
     }
+}
+
+/// [`super::exact_i32_range::exact_range`] over the candidate set: a candidate
+/// local contributes its known range (recording the dependency), and any other
+/// operand must pass the strict int32 judgment `recurse`, contributing its
+/// wrapped-operator range or the whole i32 range.
+fn exact_range_deps(
+    e: &Expr,
+    candidates: &HashSet<u32>,
+    known: &super::exact_i32_range::KnownRanges,
+    deps: &mut HashSet<u32>,
+    recurse: &dyn Fn(&Expr, &mut HashSet<u32>) -> bool,
+) -> Option<super::exact_i32_range::Range> {
+    use super::exact_i32_range::{exact_range, wrapped_operator_range, Range};
+    let found = std::cell::RefCell::new(HashSet::new());
+    let range = exact_range(
+        e,
+        &mut |id| {
+            candidates.contains(&id).then(|| {
+                found.borrow_mut().insert(id);
+                known.local(id)
+            })
+        },
+        &mut |sub| {
+            let mut sub_deps = HashSet::new();
+            recurse(sub, &mut sub_deps).then(|| {
+                found.borrow_mut().extend(sub_deps);
+                wrapped_operator_range(sub).unwrap_or(Range::I32)
+            })
+        },
+    );
+    if range.is_some() {
+        deps.extend(found.into_inner());
+    }
+    range
 }
 
 /// Walk all `Stmt::Let { id, init: Some(e), .. }` and add `id` to
