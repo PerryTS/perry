@@ -1208,20 +1208,23 @@ pub(crate) struct ShapeTable {
 }
 
 impl ShapeTable {
-    pub(crate) fn new() -> Self {
-        let table = ShapeTable {
-            slab: std::cell::UnsafeCell::new(ShapeSlab::new_agent()),
-            inner: RefCell::new(ShapeTableInner {
-                owned_indices: crate::fast_hash::new_ptr_hash_map(),
-                by_facts: crate::fast_hash::new_ptr_hash_map(),
-                owned_families: crate::fast_hash::new_ptr_hash_map(),
-                keyless_family: IdList::default(),
-                young_keys: crate::gc::young_log::YoungLog::new(),
-            }),
-        };
+    /// Builds the agent's table in place and seeds it there.
+    ///
+    /// # Safety
+    ///
+    /// `slot` is valid for writes and holds no live value.
+    pub(crate) unsafe fn init_in(slot: *mut Self) {
+        (&raw mut (*slot).slab).write(std::cell::UnsafeCell::new(ShapeSlab::new_agent()));
+        (&raw mut (*slot).inner).write(RefCell::new(ShapeTableInner {
+            owned_indices: crate::fast_hash::new_ptr_hash_map(),
+            by_facts: crate::fast_hash::new_ptr_hash_map(),
+            owned_families: crate::fast_hash::new_ptr_hash_map(),
+            keyless_family: IdList::default(),
+            young_keys: crate::gc::young_log::YoungLog::new(),
+        }));
+        let table = &*slot;
         table.seed_function_shapes();
         table.seed_native_birth_layouts();
-        table
     }
 
     #[cold]

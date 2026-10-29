@@ -38,6 +38,7 @@ ENVV=(PATH=/usr/lib/llvm-22/bin:/root/.cargo/bin:/usr/bin:/bin HOME="$HOME" LANG
 # name|dir|source|args  (args are run as given; dir is the cwd of both compile and run)
 W=("hello|$SAMPLES|01-hello/main.ts|Perry"
    "commander_help|$SC/p/pk|commander/parse_argv.ts|--help"
+   "commander|$SC/p/pk|commander/parse_argv.ts|"
    "fastify_inject|$SC/p/pk|fastify/inject.ts|"
    "awfy_richards|$SC/p/awfy|harness.js|Richards 1 0"
    "binary_trees|$NSB|benches/23-binary-trees.ts|")

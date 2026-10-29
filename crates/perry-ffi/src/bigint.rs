@@ -20,9 +20,14 @@
 //! constructors, arithmetic ops, string-radix parsing) wait until
 //! a real wrapper demands them.
 
-use crate::BigIntHeader;
+use crate::{BigIntHeader, JsValue};
 
 extern "C" {
+    /// NaN-box a `BigIntHeader` pointer. The runtime owns the BigInt tag,
+    /// so a wrapper cannot build this value from `JsValue`'s own
+    /// constructors: `from_object_ptr` yields a plain object, and a caller
+    /// then sees `typeof v === "object"` where it expects `"bigint"`.
+    fn js_nanbox_bigint(ptr: i64) -> f64;
     /// Parse a decimal-string representation into a fresh
     /// `BigIntHeader` allocated in the runtime arena. Negative
     /// values are encoded in two's complement across all
@@ -41,6 +46,22 @@ pub fn alloc_bigint_from_str(decimal: &str) -> *mut BigIntHeader {
     // SAFETY: `js_bigint_from_string` accepts any (`*const u8`, `u32`)
     // pair — it borrows the slice for the duration of the call.
     unsafe { js_bigint_from_string(decimal.as_ptr(), decimal.len() as u32) }
+}
+
+/// A `JsValue` carrying a runtime-allocated BigInt, so JS sees a value whose
+/// `typeof` is `"bigint"`.
+///
+/// ```ignore
+/// // an INTEGER column read under better-sqlite3's safeIntegers():
+/// let v = perry_ffi::bigint_value(perry_ffi::alloc_bigint_from_str("9007199254740993"));
+/// ```
+pub fn bigint_value(ptr: *mut BigIntHeader) -> JsValue {
+    if ptr.is_null() {
+        return JsValue::NULL;
+    }
+    // SAFETY: a plain tag-and-pointer pack of a pointer the runtime
+    // allocated; it borrows nothing beyond the call.
+    JsValue::from_bits(unsafe { js_nanbox_bigint(ptr as i64) }.to_bits())
 }
 
 /// Read all little-endian two's-complement limbs out of a runtime-

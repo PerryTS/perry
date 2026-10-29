@@ -30,6 +30,12 @@ pub(super) unsafe fn vt_get_own_field(
     if let Some(value) = native_namespace_prop_override_get(&module_name, property_name) {
         return Some(JSValue::from_bits(value.to_bits()));
     }
+    if crate::process::worker_restrictions::worker_process_member_hidden(
+        &module_name,
+        property_name,
+    ) {
+        return Some(JSValue::undefined());
+    }
     if matches!(
         module_name.as_str(),
         "process" | "process.namespace" | "process.default"
@@ -132,6 +138,12 @@ pub(crate) unsafe fn vt_own_keys_array(
     ) && crate::process::process_permission_enabled();
     let out = crate::array::js_array_alloc(keys.len() as u32 + include_permission as u32);
     for key_bytes in keys {
+        if crate::process::worker_restrictions::worker_process_member_hidden(
+            &module_name,
+            std::str::from_utf8(key_bytes).unwrap_or(""),
+        ) {
+            continue;
+        }
         let key_str =
             crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
         crate::array::js_array_push(out, JSValue::string_ptr(key_str));

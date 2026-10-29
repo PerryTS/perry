@@ -211,6 +211,34 @@ pub(super) fn pointer_constant(source: &str, name: &str) -> Result<u64, String> 
     info::integer(&info::text(&ts[start + 5..end]), &info::constants(source)?)
 }
 
+/// The identity of a `runtime_symbol_atom!` symbol: `@runtime:` and the
+/// description the atom declares.
+fn runtime_symbol(atom: &str) -> Result<String, String> {
+    let ts = tokens(include_str!(
+        "../../perry-runtime/src/object/runtime_layouts/node_prototypes.rs"
+    ))?;
+    let mut found = None;
+    for i in 0..ts.len().saturating_sub(5) {
+        if ts[i].text == "runtime_symbol_atom"
+            && ts[i + 1].text == "!"
+            && ts[i + 2].text == "("
+            && ts[i + 3].text == atom
+            && ts[i + 4].text == ","
+        {
+            let description = ts[i + 5]
+                .string
+                .clone()
+                .ok_or_else(|| format!("runtime symbol {atom} has no literal description"))?;
+            if found.replace(description).is_some() {
+                return Err(format!("runtime symbol {atom} is declared twice"));
+            }
+        }
+    }
+    found
+        .map(|description| format!("@runtime:{description}"))
+        .ok_or_else(|| format!("missing runtime symbol atom {atom}"))
+}
+
 pub(super) fn bindings(
     source: &str,
     key: &str,
@@ -235,6 +263,9 @@ pub(super) fn bindings(
                 },
                 super::facts::path(&ts[2..ts.len() - 1])?,
             )
+        } else if ts.len() == 4 && ts[0].text == "symbol" && ts[1].text == "(" && ts[3].text == ")"
+        {
+            ("symbol", runtime_symbol(ts[2].text)?)
         } else {
             let word = if ts.len() == 4
                 && ts[0].text == "pointer_constant"

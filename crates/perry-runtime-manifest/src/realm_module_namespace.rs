@@ -2,6 +2,7 @@
 //! the runtime's namespace-layout birth. Source contains export bindings only.
 use super::{birth, facts, info, Token};
 use crate::realm_json::Value;
+use perry_abi::realm_header::{Integrity, ObjectBirth, ObjectExotic, ObjectLayout, PrototypeMark};
 use std::collections::BTreeSet;
 fn string(value: impl Into<String>) -> Value {
     Value::String(value.into())
@@ -78,8 +79,21 @@ pub(super) fn birth(entry: &[Token<'_>]) -> Result<Value, String> {
         return Err("namespace layout factory no longer stamps its module class".into());
     }
     let constants = info::constants(source)?;
-    let gc = info::gc_constants()?;
     let abi = super::abi_constants();
+    let class_id = *constants
+        .get("MODULE_NAMESPACE_CLASS_ID")
+        .ok_or("missing module namespace class declaration")?;
+    // A module namespace object: null prototype, the namespace layout,
+    // non-extensible, its exports non-configurable.
+    let birth = ObjectBirth {
+        exotic: ObjectExotic::Ordinary,
+        null_prototype: true,
+        layout: ObjectLayout::PlainOrdinary,
+        prototype_mark: PrototypeMark::OnFirstLink,
+        descriptors: super::derive::descriptors(&members.properties),
+        typed_array_prototype: false,
+        integrity: Integrity::NonExtensible,
+    };
     Ok(object([
         ("name", string(&name)),
         ("kind", string("namespace")),
@@ -96,26 +110,7 @@ pub(super) fn birth(entry: &[Token<'_>]) -> Result<Value, String> {
         ),
         (
             "header",
-            object([
-                ("gc_type", number(abi["GC_TYPE_OBJECT"])),
-                (
-                    "class_id",
-                    number(
-                        *constants
-                            .get("MODULE_NAMESPACE_CLASS_ID")
-                            .ok_or("missing module namespace class declaration")?,
-                    ),
-                ),
-                (
-                    "reserved",
-                    number(
-                        abi["OBJ_FLAG_PLAIN_ORDINARY"]
-                            | gc["OBJ_FLAG_HAS_DESCRIPTORS"]
-                            | gc["OBJ_FLAG_NULL_PROTO"]
-                            | gc["OBJ_FLAG_NO_EXTEND"],
-                    ),
-                ),
-            ]),
+            super::derive::object_header(abi["GC_TYPE_OBJECT"], class_id, birth),
         ),
     ]))
 }

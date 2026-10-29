@@ -343,6 +343,7 @@ pub(crate) fn process_pending_h2_events() -> i32 {
                 session_handle,
                 callback,
                 settings,
+                duration,
             } => {
                 // `settings_value` allocates the JS settings object and can
                 // collect; keep the callback in the scanned stack across it.
@@ -351,7 +352,7 @@ pub(crate) fn process_pending_h2_events() -> i32 {
                 let settings_arg = settings_value(&settings);
                 let callback =
                     super::H2_ACTIVE_CALLBACKS.with(|a| a.borrow_mut().pop().unwrap_or(0));
-                call2(callback, err, settings_arg);
+                call3(callback, err, settings_arg, duration);
                 if let Some(session) = get_handle_mut::<Http2SessionHandle>(session_handle) {
                     session.pending_callbacks.retain(|cb| *cb != callback);
                     session.pending_settings_ack = false;
@@ -364,6 +365,7 @@ pub(crate) fn process_pending_h2_events() -> i32 {
                 session_handle,
                 callback,
                 payload,
+                duration,
             } => {
                 // `buffer_value_from_bytes` allocates; same custody dance as
                 // the settings callback above.
@@ -372,7 +374,7 @@ pub(crate) fn process_pending_h2_events() -> i32 {
                 let payload_arg = buffer_value_from_bytes(&payload);
                 let callback =
                     super::H2_ACTIVE_CALLBACKS.with(|a| a.borrow_mut().pop().unwrap_or(0));
-                call3(callback, err, 0.0, payload_arg);
+                call3(callback, err, duration, payload_arg);
                 if let Some(session) = get_handle_mut::<Http2SessionHandle>(session_handle) {
                     session.pending_callbacks.retain(|cb| *cb != callback);
                 }
@@ -453,6 +455,8 @@ mod tests {
             listeners: HashMap::new(),
             close_callbacks: Vec::new(),
             pending_callbacks: Vec::new(),
+            ping_sent: Default::default(),
+            settings_sent: Default::default(),
             timeout_callback: 0,
             turnloop_conn: 0,
         }

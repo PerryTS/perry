@@ -2,6 +2,7 @@
 //! The expression remains runtime code; its allocation family supplies the ABI.
 use super::{facts, info, Token};
 use crate::realm_json::Value;
+use perry_abi::realm_header::{Integrity, ObjectBirth, ObjectExotic, ObjectLayout, PrototypeMark};
 use std::collections::{BTreeMap, BTreeSet};
 
 fn string(s: impl Into<String>) -> Value {
@@ -191,6 +192,77 @@ pub(super) fn members_with_defaults(
 }
 
 /// Numeric-key/string-value rows are already the runtime's human constants.
+/// The members of an object birth that writes the rows of `table` (a
+/// `&[("key", value)]` const beside the birth) in their order. A value is a
+/// realm constant, optionally wrapped in one variant of the table's value
+/// type (`Code(-1.0)`, `Name("Z_ERRNO")`). Every row is a plain data
+/// property; integrity is applied after.
+fn table_members(owner: &str, source: &str, table: &str) -> Result<Members, String> {
+    let ts = super::tokens(source)?;
+    let starts = ts
+        .windows(2)
+        .enumerate()
+        .filter(|(_, w)| w[0].text == "const" && w[1].text == table)
+        .map(|(i, _)| i)
+        .collect::<Vec<_>>();
+    let [start] = starts[..] else {
+        return Err(format!(
+            "{owner}: members_source {table} must be one const beside the birth"
+        ));
+    };
+    let equals = start
+        + ts[start..]
+            .iter()
+            .position(|t| t.text == "=")
+            .ok_or("missing member table values")?;
+    let open = equals + 2;
+    if ts[equals + 1].text != "&" || ts[open].text != "[" {
+        return Err("member table must be a slice".into());
+    }
+    let end = super::closing_bracket(&ts, open)?;
+    let mut rows = Vec::new();
+    for row in info::split(&ts[open + 1..end], ",") {
+        if row.first().is_none_or(|t| t.text != "(") || row.last().is_none_or(|t| t.text != ")") {
+            return Err(format!("{owner}: invalid member table row"));
+        }
+        let args = info::split(&row[1..row.len() - 1], ",");
+        let [key, value] = args[..] else {
+            return Err(format!("{owner}: a member row is (key, value)"));
+        };
+        let key = key
+            .first()
+            .and_then(|t| t.string.clone())
+            .filter(|_| key.len() == 1)
+            .ok_or_else(|| format!("{owner}: a member key is a string literal"))?;
+        // `Variant(literal)` or `Type::Variant(literal)`.
+        let value = match value.iter().position(|t| t.text == "(") {
+            Some(open) if value.last().is_some_and(|t| t.text == ")") => {
+                &value[open + 1..value.len() - 1]
+            }
+            _ => value,
+        };
+        let value = facts::constant(value)?;
+        let value = match value.get("kind").and_then(Value::string) {
+            Some("string") => value.get("value").unwrap().encode(),
+            Some("number_bits") => {
+                let bits = u64::from_str_radix(value.get("value").unwrap().string().unwrap(), 16)
+                    .map_err(|e| e.to_string())?;
+                format!("{:?}", f64::from_bits(bits))
+            }
+            _ => {
+                return Err(format!(
+                    "{owner}: member table values are numbers or strings"
+                ))
+            }
+        };
+        rows.push(format!(
+            "{}={value},attrs=writable|enumerable|configurable",
+            string(key).encode()
+        ));
+    }
+    members(owner, &super::tokens(&rows.join(";"))?)
+}
+
 fn pair_members(owner: &str, source: &str, table: &str) -> Result<Members, String> {
     let ts = super::tokens(source)?;
     let start = ts
@@ -233,6 +305,32 @@ fn pair_members(owner: &str, source: &str, table: &str) -> Result<Members, Strin
         ));
     }
     members(owner, &super::tokens(&rows.join(";"))?)
+}
+
+/// The attributes an integrity level leaves on own properties: sealing makes
+/// each non-configurable, freezing also makes data properties non-writable.
+/// Members are declared with the attributes they are born with.
+pub(super) fn apply_integrity(properties: &mut [Value], integrity: Integrity) {
+    let clear = match integrity {
+        Integrity::Extensible | Integrity::NonExtensible => return,
+        Integrity::Sealed => 4,
+        Integrity::Frozen => 4 | 1,
+    };
+    for property in properties {
+        let Value::Object(map) = property else {
+            continue;
+        };
+        let data = map.contains_key("value");
+        let Some(attrs) = map
+            .get("attributes")
+            .map(Value::encode)
+            .and_then(|a| a.parse::<u64>().ok())
+        else {
+            continue;
+        };
+        let clear = if data { clear } else { clear & 4 };
+        map.insert("attributes".into(), number(attrs & !clear));
+    }
 }
 
 fn sort_properties(properties: &mut [Value]) {
@@ -298,6 +396,14 @@ pub(super) fn birth_at(
     if expression == "super::layout_desc::perry_alloc_layout(desc)" {
         return super::module_namespace::birth(entry);
     }
+    if expression.starts_with(
+        "crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(crate::object::runtime_layouts::",
+    ) {
+        return super::layout_birth::ordinary(&expression, entry);
+    }
+    if super::array::is_realm_birth(&expression) {
+        return super::array::realm(&expression, entry, source);
+    }
     if expression == "module_array_value(&[])" {
         return super::array::empty(&expression, entry);
     }
@@ -323,14 +429,15 @@ pub(super) fn birth_at(
         ))?);
         info::integer(expression, &constants)
     };
-    let allocation_class = if ordinary {
+    let native = expression == "js_object_alloc(NATIVE_MODULE_CLASS_ID,1)";
+    // A native namespace class id comes from the derivation, not source text.
+    let allocation_class = if ordinary && !native {
         let args = super::tokens(&allocator["js_object_alloc(".len()..allocator.len() - 1])?;
         resolve_class(&info::text(info::split(&args, ",")[0]))?
     } else {
         0
     };
     let null = allocator.starts_with("js_object_alloc_null_proto(0,") && allocator.ends_with(')');
-    let native = expression == "js_object_alloc(NATIVE_MODULE_CLASS_ID,1)";
     let shaped = allocator.starts_with("js_object_alloc_with_shape(") && allocator.ends_with(')');
     if (!factory && !ordinary && !native && !null && !shaped)
         || !allocation.contains("crate::object::object_alloc_prototype_old(0, room)")
@@ -348,6 +455,9 @@ pub(super) fn birth_at(
     let mut extra = Vec::new();
     let mut declared = None;
     let mut never_move = false;
+    let mut integrity = Integrity::Extensible;
+    let mut native_namespace = None;
+    let mut module = None;
     let mut seen = BTreeSet::new();
     for clause in &clauses[1..] {
         if clause.len() < 3 || clause[1].text != "=" || !seen.insert(clause[0].text) {
@@ -377,6 +487,29 @@ pub(super) fn birth_at(
                 declared = Some(pair_members(&name, source, clause[4].text)?);
             }
             "never_move" if clause.len() == 3 && clause[2].text == "true" => never_move = true,
+            "native_namespace" | "module" if clause.len() == 3 && native => {
+                let literal = clause[2]
+                    .string
+                    .clone()
+                    .ok_or("a native namespace names its module as a literal")?;
+                if clause[0].text == "module" {
+                    module = Some(literal);
+                } else {
+                    native_namespace = Some(literal);
+                }
+            }
+            "members_source" if clause.len() == 3 && !native => {
+                if declared.is_some() {
+                    return Err("members and members_source are one fact".into());
+                }
+                declared = Some(table_members(&name, source, clause[2].text)?);
+            }
+            "integrity" if clause.len() == 3 => {
+                integrity = super::derive::integrity(clause[2].text)?;
+                if integrity == Integrity::Extensible {
+                    return Err("omit the default integrity".into());
+                }
+            }
             "births" if clause[2].text == "[" && clause.last().unwrap().text == "]" => {
                 for path in info::split(&clause[3..clause.len() - 1], ",") {
                     extra.push(facts::path(path)?);
@@ -389,6 +522,10 @@ pub(super) fn birth_at(
         return Err("object birth kind must be prototype, namespace or exotic".into());
     }
     let mut members = declared.ok_or("object birth needs its members")?;
+    if native && integrity != Integrity::Extensible {
+        return Err("a native namespace keeps its integrity behind the vtable".into());
+    }
+    apply_integrity(&mut members.properties, integrity);
     if !prototype.is_empty() {
         members.births.insert(prototype.clone());
     }
@@ -398,36 +535,12 @@ pub(super) fn birth_at(
         }
     }
     members.births.remove(&name);
-    let gc = info::gc_constants()?;
-    let mut reserved = if native {
-        0
-    } else {
-        (if factory {
-            gc["OBJ_FLAG_NEVER_MOVE"]
-        } else {
-            0
-        }) | if members.descriptors {
-            gc["OBJ_FLAG_HAS_DESCRIPTORS"]
-        } else {
-            0
-        }
-    };
-    if shaped {
-        reserved |=
-            info::constants(include_str!("../../perry-abi/src/lib.rs"))?["OBJ_FLAG_PLAIN_ORDINARY"];
+    let derived_mark =
+        factory || (kind == "namespace" && super::namespace::sealed_namespace(&name)?);
+    if never_move && factory {
+        return Err("omit derived never_move".into());
     }
-    if null {
-        reserved |= gc["OBJ_FLAG_NULL_PROTO"];
-    }
-    if never_move {
-        if reserved & gc["OBJ_FLAG_NEVER_MOVE"] != 0 {
-            return Err("omit derived never_move".into());
-        }
-        reserved |= gc["OBJ_FLAG_NEVER_MOVE"];
-    }
-    if kind == "namespace" && super::namespace::sealed_namespace(&name)? {
-        reserved |= gc["OBJ_FLAG_NEVER_MOVE"];
-    }
+    let mut typed_array_prototype = false;
     if factory {
         if let Some(owner) = name.strip_suffix(".prototype") {
             let families = super::families::read(include_str!(
@@ -449,16 +562,35 @@ pub(super) fn birth_at(
                             .into(),
                     );
                 }
-                reserved |= gc["OBJ_FLAG_TYPED_ARRAY_PROTO"];
+                typed_array_prototype = true;
             }
         }
     }
+    let object_birth = ObjectBirth {
+        exotic: if native {
+            ObjectExotic::NativeNamespace
+        } else {
+            ObjectExotic::Ordinary
+        },
+        null_prototype: null,
+        layout: if shaped {
+            ObjectLayout::PlainOrdinary
+        } else {
+            ObjectLayout::Unmarked
+        },
+        prototype_mark: if derived_mark || never_move {
+            PrototypeMark::AtBirth
+        } else {
+            PrototypeMark::OnFirstLink
+        },
+        descriptors: members.descriptors,
+        typed_array_prototype,
+        integrity,
+    };
     let class_id = if native {
-        *info::constants(include_str!(
-            "../../perry-runtime/src/object/native_module.rs"
-        ))?
-        .get("NATIVE_MODULE_CLASS_ID")
-        .ok_or("missing native namespace class declaration")?
+        u64::from(perry_abi::realm_header::object_class_id(
+            ObjectExotic::NativeNamespace,
+        ))
     } else if shaped {
         let args =
             super::tokens(&allocator["js_object_alloc_with_shape(".len()..allocator.len() - 1])?;
@@ -485,11 +617,11 @@ pub(super) fn birth_at(
         ),
         (
             "header",
-            object([
-                ("gc_type", number(super::abi_constants()["GC_TYPE_OBJECT"])),
-                ("class_id", number(class_id)),
-                ("reserved", number(reserved)),
-            ]),
+            super::derive::object_header(
+                super::abi_constants()["GC_TYPE_OBJECT"],
+                class_id,
+                object_birth,
+            ),
         ),
     ]);
     let Value::Object(map) = &mut declaration else {
@@ -498,10 +630,21 @@ pub(super) fn birth_at(
     if prototype.is_empty() {
         map.remove("prototype");
     }
-    // js_create_native_module_namespace stores the requested module name in
-    // slot 0. A global namespace (not a node: path) is requested by its name.
-    if native && !name.starts_with("node:") {
+    // The module its vtable serves (declared), and the module whose namespace
+    // it is. js_create_native_module_namespace stores the requested module
+    // name in slot 0: a global namespace (not a node: path) is requested by
+    // its name.
+    if let Some(namespace) = native_namespace {
+        map.insert("native_namespace".into(), string(namespace));
+        map.insert(
+            "exotic_vtable".into(),
+            string("crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL"),
+        );
+    } else if native && !name.starts_with("node:") {
         map.insert("native_namespace".into(), string(&name));
+    }
+    if let Some(module) = module {
+        map.insert("module".into(), string(module));
     }
     if kind == "exotic" {
         map.insert(
@@ -510,44 +653,6 @@ pub(super) fn birth_at(
         );
     }
     Ok(declaration)
-}
-
-/// Ordinary objects that are used as prototypes are marked by proto_validity.
-/// The realm inheritance edges therefore imply their immovability flag.
-pub(super) fn mark_inherited_objects(declarations: &mut [Value]) -> Result<(), String> {
-    let parents = declarations
-        .iter()
-        .filter_map(|d| d.get("prototype").and_then(Value::string))
-        .map(str::to_owned)
-        .collect::<BTreeSet<_>>();
-    let gc = info::gc_constants()?;
-    for declaration in declarations {
-        let name = declaration
-            .get("name")
-            .and_then(Value::string)
-            .ok_or("missing realm name")?;
-        if !parents.contains(name) {
-            continue;
-        }
-        let Some(header) = declaration.get("header") else {
-            continue;
-        };
-        if header.get("gc_type") != Some(&number(2)) || header.get("class_id") != Some(&number(0)) {
-            continue;
-        }
-        let Value::Object(map) = declaration else {
-            unreachable!()
-        };
-        let Value::Object(header) = map.get_mut("header").unwrap() else {
-            unreachable!()
-        };
-        let word = header["reserved"]
-            .encode()
-            .parse::<u64>()
-            .map_err(|e| e.to_string())?;
-        header.insert("reserved".into(), number(word | gc["OBJ_FLAG_NEVER_MOVE"]));
-    }
-    Ok(())
 }
 
 pub(super) fn extend_callable(
@@ -741,7 +846,7 @@ mod tests {
         )
         .unwrap();
         let mut declarations = [ordinary, child, native, leaf];
-        mark_inherited_objects(&mut declarations).unwrap();
+        super::super::derive::finish(&mut declarations).unwrap();
         let words = declarations
             .iter()
             .map(|d| d.get("header").unwrap().get("reserved").unwrap().encode())

@@ -16,7 +16,9 @@
 mod dispatch_ext;
 
 use perry_ffi::{
-    alloc_string, build_object_shape, drop_handle, get_handle, js_array_alloc, js_array_push,
+    alloc_bigint_from_str, alloc_string, bigint_value, build_object_shape, drop_handle,
+    get_handle,
+    js_array_alloc, js_array_push,
     js_object_alloc_with_shape, js_object_set_field, read_string, register_handle, ArrayHeader,
     ErrorKind, Handle, JsString, JsValue, ObjectHeader, StringHeader,
 };
@@ -57,6 +59,13 @@ pub struct SqliteStmtHandle {
     /// `this.stmt.raw().all(...params)` to get raw rows for its own
     /// `mapResultRow(fields, row, joinsNotNullableMap)` mapping.
     pub raw_mode: AtomicBool,
+    /// Per-statement "safe integers" flag — `stmt.safeIntegers([toggle])`
+    /// flips this. When true, an INTEGER column comes back as a JS BigInt
+    /// instead of a number, which is the only way to carry a value outside
+    /// the double-safe range without losing bits. ActiveRecord's SQLite
+    /// adapter turns it on for a statement whose declared column type
+    /// matches /bigint/i (`_maybeEnableReadBigInts`).
+    pub safe_integers: AtomicBool,
 }
 
 unsafe fn read_str(ptr: *const StringHeader) -> Option<String> {
@@ -65,11 +74,20 @@ unsafe fn read_str(ptr: *const StringHeader) -> Option<String> {
 }
 
 /// Convert a SQLite column value to a perry-ffi `JsValue`.
-fn sqlite_value_to_jsvalue(value: &SqliteValue) -> JsValue {
+/// `safe_integers` reports an INTEGER column as a BigInt.
+///
+/// `from_number` loses bits above 2^53, so a statement that opted into safe
+/// integers must not take that path for any integer, not only a large one:
+/// better-sqlite3 returns BigInt for every INTEGER column once the flag is
+/// set, and a caller that tests `typeof v === "bigint"` has to see it
+/// uniformly.
+fn sqlite_value_to_jsvalue_with(value: &SqliteValue, safe_integers: bool) -> JsValue {
     match value {
         SqliteValue::Null => JsValue::NULL,
         SqliteValue::Integer(n) => {
-            if *n >= i32::MIN as i64 && *n <= i32::MAX as i64 {
+            if safe_integers {
+                bigint_value(alloc_bigint_from_str(&n.to_string()))
+            } else if *n >= i32::MIN as i64 && *n <= i32::MAX as i64 {
                 JsValue::from_int32(*n as i32)
             } else {
                 JsValue::from_number(*n as f64)
@@ -221,6 +239,7 @@ pub unsafe extern "C" fn js_sqlite_prepare(
                     sql,
                     db_handle,
                     raw_mode: AtomicBool::new(false),
+                    safe_integers: AtomicBool::new(false),
                 });
             }
         }
@@ -256,6 +275,123 @@ pub unsafe extern "C" fn js_sqlite_stmt_raw(stmt_handle: Handle) -> Handle {
     }
     stmt_handle
 }
+
+/// `stmt.safeIntegers([toggle])` — read INTEGER columns as BigInt. Returns
+/// the same statement handle so the call chains, as `stmt.raw()` does.
+///
+/// # Safety
+///
+/// `stmt_handle` must be a registry id; a foreign or dead one is ignored.
+#[no_mangle]
+pub unsafe extern "C" fn js_sqlite_stmt_safe_integers(stmt_handle: Handle, toggle: f64) -> Handle {
+    // better-sqlite3 defaults the argument to true: `safeIntegers()` with no
+    // argument turns the mode ON, so an absent argument is not "off".
+    let toggle = JsValue::from_bits(toggle.to_bits());
+    let on = toggle.is_undefined() || toggle.to_bool();
+    if let Some(stmt) = get_handle::<SqliteStmtHandle>(stmt_handle) {
+        stmt.safe_integers.store(on, Ordering::Relaxed);
+    }
+    stmt_handle
+}
+
+/// `stmt.columns()` — one record per result column, with better-sqlite3's
+/// five keys: `name`, `column`, `table`, `database`, `type`.
+///
+/// `name` is the column's name in the result set and `type` its declared
+/// type; the other three name where the value came from and are null for a
+/// column that is an expression rather than a table column, which is what
+/// better-sqlite3 reports too. ActiveRecord's SQLite adapter reads `type` to
+/// decide whether to turn on safe integers.
+///
+/// # Safety
+///
+/// `stmt_handle` must be a registry id; a foreign or dead one yields an
+/// empty array.
+#[no_mangle]
+pub unsafe extern "C" fn js_sqlite_stmt_columns(stmt_handle: Handle) -> *mut ArrayHeader {
+    require_statement_database_open(stmt_handle);
+    let mut result = js_array_alloc(0);
+    let Some(stmt) = get_handle::<SqliteStmtHandle>(stmt_handle) else {
+        return result;
+    };
+    let Some(db) = get_handle::<SqliteDbHandle>(stmt.db_handle) else {
+        return result;
+    };
+    let Ok(conn) = db.conn.lock() else {
+        return result;
+    };
+    // The handle stores only the SQL, so the shape comes from a fresh
+    // prepare — the same way `reader` and `readonly` are answered.
+    let Ok(prepared) = conn.prepare(&stmt.sql) else {
+        return result;
+    };
+
+    // `columns()` carries the declared type, `columns_with_metadata()` the
+    // origin names; they are indexed alike, so zip them by position.
+    let decl_types: Vec<Option<String>> = prepared
+        .columns()
+        .iter()
+        .map(|c| c.decl_type().map(str::to_string))
+        .collect();
+    let origins: Vec<(String, Option<String>, Option<String>, Option<String>)> = prepared
+        .columns_with_metadata()
+        .iter()
+        .map(|c| {
+            (
+                c.name().to_string(),
+                c.database_name().map(str::to_string),
+                c.table_name().map(str::to_string),
+                c.origin_name().map(str::to_string),
+            )
+        })
+        .collect();
+
+    let (packed_keys, shape_id) = build_object_shape(&COLUMN_KEYS);
+    for (idx, (name, database, table, column)) in origins.iter().enumerate() {
+        let obj = js_object_alloc_with_shape(
+            shape_id,
+            COLUMN_KEYS.len() as u32,
+            packed_keys.as_ptr(),
+            packed_keys.len() as u32,
+        );
+        let decl_type = decl_types.get(idx).cloned().flatten();
+        // Slot order matches COLUMN_KEYS.
+        for (field, value) in [
+            Some(name.as_str()),
+            column.as_deref(),
+            table.as_deref(),
+            database.as_deref(),
+            decl_type.as_deref(),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, v)| (i as u32, v))
+        {
+            js_object_set_field(
+                obj,
+                field,
+                match value {
+                    // better-sqlite3 reports an absent origin as null, not
+                    // as undefined or an empty string.
+                    None => JsValue::NULL,
+                    Some(text) => JsValue::from_string_ptr(alloc_string(text).as_raw()),
+                },
+            );
+        }
+        result = js_array_push(result, JsValue::from_object_ptr(obj));
+    }
+    result
+}
+
+/// The keys of a `Statement#columns()` record, in better-sqlite3's own
+/// insertion order — `Object.keys()` on the result observes it, and node
+/// reports `["name","column","table","database","type"]`.
+///
+/// Deliberately NOT the runtime's `SQLITE_COLUMN_METADATA` layout, which
+/// perry-stdlib's same-named function uses: that one serves `node:sqlite`,
+/// whose documented key order is alphabetical. The two APIs agree on the
+/// five names and differ on their order, so each keeps its own.
+const COLUMN_KEYS: [&str; 5] = ["name", "column", "table", "database", "type"];
 
 /// Build better-sqlite3's `RunResult` — `{ changes, lastInsertRowid }`.
 unsafe fn run_result(changes: f64, last_id: i64) -> *mut ObjectHeader {
@@ -349,6 +485,7 @@ pub unsafe extern "C" fn js_sqlite_stmt_get(
 
     if let Some(stmt) = get_handle::<SqliteStmtHandle>(stmt_handle) {
         let raw = stmt.raw_mode.load(Ordering::Relaxed);
+        let safe_ints = stmt.safe_integers.load(Ordering::Relaxed);
         if let Some(db) = get_handle::<SqliteDbHandle>(stmt.db_handle) {
             if let Ok(conn) = db.conn.lock() {
                 let param_refs: Vec<&dyn rusqlite::ToSql> =
@@ -370,7 +507,7 @@ pub unsafe extern "C" fn js_sqlite_stmt_get(
                                     let value: SqliteValue =
                                         row.get(idx).unwrap_or(SqliteValue::Null);
                                     row_arr =
-                                        js_array_push(row_arr, sqlite_value_to_jsvalue(&value));
+                                        js_array_push(row_arr, sqlite_value_to_jsvalue_with(&value, safe_ints));
                                 }
                                 return f64::from_bits(JsValue::from_object_ptr(row_arr).bits());
                             }
@@ -386,7 +523,7 @@ pub unsafe extern "C" fn js_sqlite_stmt_get(
                                 js_object_set_field(
                                     obj,
                                     idx as u32,
-                                    sqlite_value_to_jsvalue(&value),
+                                    sqlite_value_to_jsvalue_with(&value, safe_ints),
                                 );
                             }
                             return f64::from_bits(JsValue::from_object_ptr(obj).bits());
@@ -416,6 +553,7 @@ pub unsafe extern "C" fn js_sqlite_stmt_all(
 
     if let Some(stmt) = get_handle::<SqliteStmtHandle>(stmt_handle) {
         let raw = stmt.raw_mode.load(Ordering::Relaxed);
+        let safe_ints = stmt.safe_integers.load(Ordering::Relaxed);
         if let Some(db) = get_handle::<SqliteDbHandle>(stmt.db_handle) {
             if let Ok(conn) = db.conn.lock() {
                 let param_refs: Vec<&dyn rusqlite::ToSql> =
@@ -448,7 +586,7 @@ pub unsafe extern "C" fn js_sqlite_stmt_all(
                                     let value: SqliteValue =
                                         row.get(idx).unwrap_or(SqliteValue::Null);
                                     row_arr =
-                                        js_array_push(row_arr, sqlite_value_to_jsvalue(&value));
+                                        js_array_push(row_arr, sqlite_value_to_jsvalue_with(&value, safe_ints));
                                 }
                                 result_array =
                                     js_array_push(result_array, JsValue::from_object_ptr(row_arr));
@@ -466,7 +604,7 @@ pub unsafe extern "C" fn js_sqlite_stmt_all(
                                     js_object_set_field(
                                         obj,
                                         idx as u32,
-                                        sqlite_value_to_jsvalue(&value),
+                                        sqlite_value_to_jsvalue_with(&value, safe_ints),
                                     );
                                 }
                                 result_array =

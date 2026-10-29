@@ -184,6 +184,8 @@ pub unsafe extern "C" fn js_node_http2_connect(
         listeners,
         close_callbacks: Vec::new(),
         pending_callbacks: Vec::new(),
+        ping_sent: Default::default(),
+        settings_sent: Default::default(),
         timeout_callback: 0,
         turnloop_conn: 0,
     });
@@ -491,6 +493,8 @@ mod tests {
             listeners: HashMap::new(),
             close_callbacks: Vec::new(),
             pending_callbacks: Vec::new(),
+            ping_sent: Default::default(),
+            settings_sent: Default::default(),
             timeout_callback: 0,
             turnloop_conn,
         }

@@ -34,7 +34,7 @@ extern "C" {
 
 /// The methods the typed table and the method dispatch above serve. A read of
 /// one of these names yields the bound method rather than `undefined`.
-const STMT_METHODS: &[&str] = &["run", "get", "all", "raw"];
+const STMT_METHODS: &[&str] = &["run", "get", "all", "raw", "columns", "safeIntegers"];
 const DB_METHODS: &[&str] = &["prepare", "exec", "close"];
 
 /// Idempotent; called from `js_sqlite_open`, so it runs before any method call
@@ -109,6 +109,14 @@ unsafe fn call(handle: Handle, name: &str, args: &[f64]) -> Option<f64> {
                 crate::js_sqlite_stmt_raw(handle);
                 bits(JsValue::from_handle(handle as u64))
             }
+            // Both return the statement, so they chain like `raw()`.
+            "safeIntegers" => {
+                crate::js_sqlite_stmt_safe_integers(handle, arg(args, 0));
+                bits(JsValue::from_handle(handle as u64))
+            }
+            "columns" => bits(JsValue::from_object_ptr(crate::js_sqlite_stmt_columns(
+                handle,
+            ))),
             "run" | "get" | "all" => {
                 let scope = TransientRootScope::enter();
                 // Short strings become heap strings first (the parameter

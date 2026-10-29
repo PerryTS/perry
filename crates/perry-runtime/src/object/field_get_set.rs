@@ -268,10 +268,14 @@ pub(crate) struct FieldLookupCaches {
 }
 
 impl FieldLookupCaches {
-    pub(crate) fn new() -> Self {
-        FieldLookupCaches {
-            field_cache: std::cell::UnsafeCell::new([(0usize, 0u32, 0u32); FIELD_CACHE_SIZE]),
-        }
+    /// Initializes the caches in place: an empty entry is `(0, 0, 0)`, so a
+    /// zero-filled slot already holds the empty cache and nothing is written.
+    ///
+    /// # Safety
+    ///
+    /// `slot` is valid for writes and zero-filled.
+    pub(crate) unsafe fn init_in(slot: *mut Self) {
+        let _ = slot;
     }
 }
 

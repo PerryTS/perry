@@ -1599,9 +1599,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             );
                             let recv_box = lower_expr(ctx, object)?;
                             let field_idx_str = field_index.to_string();
-                            let header_skip =
-                                crate::target_layout::object_header_size_bytes(ctx.target_triple)
-                                    .to_string();
+                            let header_skip = crate::target_layout::object_slot_base_bytes(
+                                ctx.target_triple,
+                                crate::target_layout::class_instance_form(&class_name),
+                            )
+                            .to_string();
                             let numeric = fact.numeric_fields.contains(property);
                             let blk = ctx.block();
                             let obj_bits = blk.bitcast_double_to_i64(&recv_box);

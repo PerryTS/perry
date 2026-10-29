@@ -1912,15 +1912,6 @@ pub(crate) unsafe fn nm_get_own_descriptor(
             _ => {}
         }
     }
-    if module_name == "vm.constants" {
-        let value = js_object_get_field_by_name(obj, key_str);
-        return Some(build_data_descriptor(
-            f64::from_bits(value.bits()),
-            false,
-            true,
-            false,
-        ));
-    }
     let value = js_object_get_field_by_name(obj, key_str);
     if matches!(
         module_name.as_str(),

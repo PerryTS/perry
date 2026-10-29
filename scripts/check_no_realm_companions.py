@@ -1,22 +1,14 @@
 #!/usr/bin/env python3
 """Ratchet on checked-in realm snapshots in crate source trees.
 
-Only the companions listed in ALLOWED may exist, each with at most the listed
-number of declarations. A listed file may shrink or disappear; no other
-companion may appear and no listed one may grow.
+Realm facts are declared at their birth: no companion may exist (ALLOWED is
+empty). The mechanism stays so a reintroduced companion fails by name.
 """
 import argparse
 import json
 from pathlib import Path
 
-ALLOWED = {
-    "crates/perry-runtime/src/closure/registry.realm.json": 8,
-    "crates/perry-runtime/src/navigator.realm.json": 1,
-    "crates/perry-runtime/src/object/global_this/array_error.realm.json": 1,
-    "crates/perry-runtime/src/object/global_this/populate.realm.json": 26,
-    "crates/perry-runtime/src/object/native_module.realm.json": 6,
-    "crates/perry-runtime/src/object/native_module/constructor_shapes.realm.json": 2,
-}
+ALLOWED = {}
 
 
 def companions(root):

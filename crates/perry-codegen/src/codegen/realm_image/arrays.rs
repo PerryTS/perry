@@ -183,7 +183,7 @@ pub(crate) fn emit_array(
         &ArrayCell {
             exported: true,
             shared: false,
-            reserved: header.reserved,
+            reserved: super::header::array_word(cell, header, &parts.elements)?,
             length: parts.length,
             capacity: parts.length,
             // The decomposition proved every indexed slot is present and
@@ -277,7 +277,9 @@ mod tests {
                 }
             }
             assert!(arrays >= 60);
-            assert!(frozen >= 2);
+            // module.builtinModules; tls.rootCertificates is a provider birth
+            // (host contents), not a static image array.
+            assert!(frozen >= 1);
             let context = inkwell::context::Context::create();
             let parsed =
                 crate::inprocess::parse_ir_text(&context, &module.to_ir(), "realm_arrays").unwrap();
