@@ -1076,3 +1076,62 @@ fn cold_integrity_preserves_packed_facts_and_existing_weak_relationships() {
     assert_eq!(record.created_birth_shape(), LayoutWord(0x8000_3456));
     unsafe { record.release_extras() };
 }
+
+#[test]
+fn empty_body_mask_proves_absence_and_nonempty_masks_keep_exact_identity() {
+    use crate::object::field_rep::{with_slot_rep, REP_SPECIAL};
+    for brands in [&[][..], &[7][..]] {
+        let record = ShapeRecord::new(0x40, 32, 32, 0, ShapeObjectKind::Ordinary, 0)
+            .with_special_facts(0, &[], brands);
+        assert_eq!(record.special_constfn_mask(), 0);
+        assert!(record.constfn_infos().is_empty());
+        assert!(record.facts_match_proto_with_special(
+            0x40,
+            32,
+            32,
+            0,
+            ShapeObjectKind::Ordinary,
+            0,
+            0,
+            0,
+            0,
+            &[],
+            brands,
+        ));
+        unsafe { record.release_extras() };
+    }
+    for slot in 0..32 {
+        let infos = [ConstFnSlotInfo { slot, info: 0x1000 }];
+        let other = [ConstFnSlotInfo { slot, info: 0x2000 }];
+        let rep = with_slot_rep(0, slot as u32, REP_SPECIAL);
+        let record = ShapeRecord::new(0x40, 32, 32, 0, ShapeObjectKind::Ordinary, 0)
+            .with_special_facts(rep, &infos, &[]);
+        assert_ne!(record.special_constfn_mask(), 0);
+        assert!(!record.constfn_infos().is_empty());
+        let matches = |bodies: &[ConstFnSlotInfo]| {
+            record.facts_match_proto_with_special(
+                0x40,
+                32,
+                32,
+                0,
+                ShapeObjectKind::Ordinary,
+                0,
+                0,
+                0,
+                rep,
+                bodies,
+                &[],
+            )
+        };
+        assert!(matches(&infos));
+        assert!(
+            !matches(&[]),
+            "stored nonempty mask refuses an empty request"
+        );
+        assert!(
+            !matches(&other),
+            "nonempty masks still compare exact body identity"
+        );
+        unsafe { record.release_extras() };
+    }
+}

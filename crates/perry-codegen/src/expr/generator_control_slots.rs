@@ -14,6 +14,10 @@ pub(super) fn is_fixed(ctx: &FnCtx<'_>, id: u32) -> bool {
 }
 
 pub(super) fn address(ctx: &mut FnCtx<'_>, id: u32) -> Result<String> {
+    // A resume-local control lives in its entry alloca for the whole resume.
+    if let Some(local) = super::resume_locals::ptr(ctx, id) {
+        return Ok(local);
+    }
     // The private operation parameter stays in its ordinary DOUBLE alloca.
     // Its explicit transform control id and protocol ABI prove the scalar.
     if let Some(slot) = ctx.locals.get(&id).cloned() {
@@ -29,6 +33,9 @@ pub(super) fn address(ctx: &mut FnCtx<'_>, id: u32) -> Result<String> {
 }
 
 pub(super) fn load_i32(ctx: &mut FnCtx<'_>, id: u32, addr: &str) -> String {
+    if super::resume_locals::managed(ctx, id) {
+        return ctx.block().load(I32, addr);
+    }
     if !is_fixed(ctx, id) {
         return load_async_i32_control_cell(ctx, addr);
     }
@@ -42,6 +49,10 @@ pub(super) fn load_i32(ctx: &mut FnCtx<'_>, id: u32, addr: &str) -> String {
 }
 
 pub(super) fn load_i1(ctx: &mut FnCtx<'_>, id: u32, addr: &str) -> String {
+    if super::resume_locals::managed(ctx, id) {
+        let value = ctx.block().load(I32, addr);
+        return ctx.block().icmp_ne(I32, &value, "0");
+    }
     if !is_fixed(ctx, id) {
         return load_async_i1_control_cell(ctx, addr);
     }
@@ -51,6 +62,12 @@ pub(super) fn load_i1(ctx: &mut FnCtx<'_>, id: u32, addr: &str) -> String {
 }
 
 pub(super) fn store_i32(ctx: &mut FnCtx<'_>, id: u32, addr: &str, value: &str) -> Result<()> {
+    if super::resume_locals::managed(ctx, id) {
+        ctx.block().store(I32, value, addr);
+        super::resume_locals::mirror(ctx, id, value);
+        super::resume_locals::note_store(ctx, id, value);
+        return Ok(());
+    }
     if !is_fixed(ctx, id) {
         store_async_i32_control_cell(ctx, addr, value);
         return Ok(());
@@ -69,6 +86,11 @@ pub(super) fn store_i32(ctx: &mut FnCtx<'_>, id: u32, addr: &str, value: &str) -
 }
 
 pub(super) fn store_i1(ctx: &mut FnCtx<'_>, id: u32, addr: &str, value: &str) -> Result<()> {
+    if super::resume_locals::managed(ctx, id) {
+        let wide = ctx.block().zext(I1, value, I32);
+        ctx.block().store(I32, &wide, addr);
+        return Ok(());
+    }
     if !is_fixed(ctx, id) {
         store_async_i1_control_cell(ctx, addr, value);
         return Ok(());

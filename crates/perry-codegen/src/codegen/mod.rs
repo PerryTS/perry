@@ -755,6 +755,7 @@ fn lower_module(
         .unwrap_or(&module_prefix);
     let mut strings = StringPool::with_prefix(module_prefix.clone());
     strings.set_thread_literal_callback_prefix(thread_literal_callback_prefix.clone());
+    strings.set_image_literals(opts.output_type != "dylib" && opts.output_type != "staticlib");
     strings.tdz_binding_names = tdz_names::collect(hir);
     // #5247: install per-module source-location context for the dynamic
     // call-dispatch throw path, but only under `--debug-symbols` (which sets

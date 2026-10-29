@@ -154,7 +154,10 @@ fn emit_public_typed_closure_trampoline(
     let arg_names: Vec<String> = params.iter().map(|p| format!("%arg{}", p.id)).collect();
     let llvm_params = crate::expr::body_call::js_body_params(arg_names.iter().cloned());
     let capture_header = crate::target_layout::closure_header_size_bytes(&llmod.target_triple);
+    let preinline =
+        raw_captures && super::closure_captures::fits_preinline_budget(llmod, &typed_name);
     let wf = llmod.define_function(&public_name, DOUBLE, llvm_params);
+    wf.pre_statepoint_inline = preinline;
     let _ = wf.create_block("entry");
 
     let (entry_values, guards) = {
@@ -603,6 +606,7 @@ pub(super) fn compile_closure(
     let buffer_alias_base = llmod.buffer_alias_counter;
     let closure_function_index = llmod.function_count();
     let lf = llmod.define_function(&llvm_name, DOUBLE, llvm_params);
+    lf.private_resume_entry = private_resume_frame || private_async_resume_frame;
     // #7908: closures live outside `hir.functions`, so they do not pass
     // through `codegen/function.rs`, which applies this same collector result
     // to ordinary functions. Without propagating the bit here, bounded
@@ -1300,6 +1304,7 @@ pub(super) fn compile_closure(
         fixed_generator_state,
         private_resume_frame,
         private_async_resume_frame,
+        resume_locals: None,
         versioned_loop_deopt_context,
         trusted_box_capture_ptrs,
         ready_cell_roots: crate::stmt::binding_cell::ReadyCellRoots::with_entry_cells(
@@ -1574,6 +1579,7 @@ pub(super) fn compile_closure(
     // #10812: throw a catchable RangeError before the native stack runs out.
     crate::expr::numeric_order::parameters_ready(&mut ctx, params);
     crate::expr::stack_guard::emit_stack_guard(&mut ctx);
+    crate::expr::resume_locals::enter(&mut ctx, params, body)?;
     if is_async {
         stmt::lower_async_rejecting_stmts(&mut ctx, body)
             .with_context(|| format!("lowering async closure body func_id={}", func_id))?;
@@ -1591,6 +1597,7 @@ pub(super) fn compile_closure(
             let boxed = crate::expr::nanbox_pointer_inline_pub(ctx.block(), &handle);
             ctx.block().ret(DOUBLE, &boxed);
         } else {
+            crate::expr::resume_locals::write_back(&mut ctx)?;
             ctx.block().ret(DOUBLE, &undef);
         }
     }

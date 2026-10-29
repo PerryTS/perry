@@ -538,27 +538,33 @@ impl<'a> Gen<'a> {
             }
             let mut nodes = Vec::with_capacity(n);
             for i in 0..n {
-                // A described position holds undefined when a call passes
-                // fewer arguments: its contract's kinds carry it (DECISIONS 77).
+                // No contract yet is no caller input (decision 13), not a
+                // call with omitted arguments. A present caller contract with
+                // a missing position does contribute undefined (77).
                 let node = match ac.and_then(|a| a.params.get(i)) {
                     Some(vc) => self.stand_in_value(0, &format!("{nm}:arg{i}"), vc),
                     None => {
                         let node = self.m.node_named("arg", || format!("arg{i}({nm})"));
-                        self.m.add_prim(node, prim::UNDEF);
+                        // Constructor initialization keeps its existing
+                        // conservative envelope; DEC223 forwards ordinary calls.
+                        if ac.is_some() || self.m.funcs[fx as usize].ctor_of.is_some() {
+                            self.m.add_prim(node, prim::UNDEF);
+                        }
                         node
                     }
                 };
                 nodes.push(node);
             }
             self.m.closed_params.insert(fx, nodes);
-            // A closed local (decision 23) no other unit can name: published
+            // A closed function passed as an argument (decisions 19/23),
+            // including an own function inside its caller SCC: published
             // where it is created, as a contract function through its closed
             // contract (markers on its parameters, not an escape), so a
             // passing call's argument contract can describe it. DECISIONS
             // 195: only one passed by name as an argument can reach another
             // unit; any other is called here alone, its parameters hold its
             // callers' values (as in the whole program) and carry no markers.
-            if nm.contains('#') && view.closed_passed.contains(nm) {
+            if view.closed_passed.contains(nm) {
                 local.push(fx);
             }
         }
@@ -988,6 +994,18 @@ impl<'a> Gen<'a> {
                 changed |= self.fields_leave(t, r);
             }
         }
+        // DEC223: a concrete owned callback handed to a known closed callee
+        // is published through the normal value-contract check. This names
+        // its callable identity; it does not close its own entry. The check
+        // retains unknown captures/effects and refuses an undescribed escape.
+        for t in self.closed_arg_functions() {
+            changed |= self.check_toks(vec![t], r).1;
+            // DECISIONS 224: its runners publish their arguments.
+            let f = self.m.tok_fn(t);
+            if self.m.contract_fns.contains(&f) {
+                self.m.callable_pub.insert(f);
+            }
+        }
         changed |= self.nested_fields(r);
         // A literal of this unit passed to another unit's closed function
         // (decision 13) is described by the argument contract as a value
@@ -1195,6 +1213,36 @@ impl<'a> Gen<'a> {
             }
         }
         (true, changed)
+    }
+
+    /// Owned callable values actually reaching parameters of a known closed
+    /// stand-in. Token/member IDs stay in this solve; no source-name guess or
+    /// new caller envelope is involved (DEC223). DECISIONS 224: a stand-in of
+    /// a function published to a known closed callee has known callers too
+    /// (each running unit publishes what it passes): what reaches its
+    /// parameters is published the same way.
+    fn closed_arg_functions(&self) -> Vec<Tok> {
+        let mut out: Vec<Tok> = self
+            .stand_in_fns
+            .iter()
+            .filter(|((_, holder), &(_, t))| {
+                holder.is_none()
+                    && self
+                        .stand_in_fc
+                        .get(&t)
+                        .is_some_and(|fc| fc.closed.is_some() || fc.callable)
+            })
+            .flat_map(|(_, &(_, t))| self.m.funcs[self.m.tok_fn(t) as usize].params.iter())
+            .flat_map(|&p| self.m.nodes[p as usize].pts.to_sorted())
+            .flat_map(|t| self.m.marker_members(t))
+            .filter(|&t| {
+                matches!(self.m.toks[t as usize], TokKind::Func(f, _)
+                if self.m.funcs[f as usize].func_id != u32::MAX)
+            })
+            .collect();
+        out.sort_unstable();
+        out.dedup();
+        out
     }
 
     /// This unit's literal objects its calls pass to other units' closed

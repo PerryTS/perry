@@ -801,6 +801,29 @@ fn string_literal_concat_operand_is_re_derived_below_the_allocating_sibling() {
     // are unambiguous rather than "whichever matched first".
     let f = init_ir(&ir);
     let handle = "load double, ptr @concat_reload_ts_.str.";
+    // JST slice 3: an ASCII source-literal prefix reaches the runtime as its
+    // rodata address and lengths (`js_string_concat_lit_value_box`), a
+    // link-time constant. There is no register holding the literal to go
+    // stale across the sibling's collection point, so the invariant below
+    // holds by construction; assert that form directly.
+    if f.contains("call double @js_string_concat_lit_value_box(") {
+        assert_eq!(
+            f.matches("call double @js_string_concat_lit_value_box(")
+                .count(),
+            1,
+            "exactly one fused string+value concat in @main:\n{f}"
+        );
+        assert_eq!(object_allocation_count(f), 1, "{f}");
+        assert!(
+            f.contains(
+                "@js_string_concat_lit_value_box(i64 ptrtoint (ptr getelementptr (i8, ptr getelementptr (i8, ptr @perry_image_literal_"
+            ),
+            "the literal must travel as a constant image address, never a \
+             register that a collection could leave stale:\n{f}"
+        );
+        assert_no_temp_rooting(f, "a constant operand needs no slot");
+        return;
+    }
     assert_eq!(
         f.matches("call double @js_string_concat_value_box(")
             .count(),

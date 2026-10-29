@@ -848,10 +848,14 @@ impl<'a> Gen<'a> {
     /// defining unit already runs it for any caller with ⊤ arguments and
     /// checks its result; an escape here sinks the result (its layouts
     /// still get their census reports), so it is no report of its own.
+    /// DECISIONS 224: a function published to a known closed callee is not
+    /// open: its owner runs it with what its runners pass beside the
+    /// markers (`FnContract::callable`), so unknown code holding it is this
+    /// unit's report, which breaks it (its parameters are then ⊤).
     pub(crate) fn open_fn(&self, t: Tok) -> bool {
         self.stand_in_fc
             .get(&t)
-            .is_some_and(|c| c.closed.is_none() && c.lexical_this)
+            .is_some_and(|c| c.closed.is_none() && !c.callable && c.lexical_this)
     }
 
     /// A stand-in of another unit's function whose contract uses no

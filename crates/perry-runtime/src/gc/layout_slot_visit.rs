@@ -611,6 +611,14 @@ unsafe fn visit_gc_rewrite_slot_descriptors_with<const INLINE_LAYOUT: bool>(
                 visit(pointer_slot(slot.cast()));
             }
         }
+        GcRewriteDescriptorKind::RegexProgram => {
+            // The program cell's only traced edge: its lazy automaton's
+            // storage, a pointer-free leaf, or null before the first search.
+            #[cfg(feature = "regex-engine")]
+            if let Some(slot) = crate::regex::perex_owner::cell_dfa_slot(user_ptr as usize) {
+                visit(pointer_slot(slot));
+            }
+        }
         GcRewriteDescriptorKind::Buffer => {
             #[cfg(test)]
             let trace_link = !crate::buffer::bytes::b4_sabotage("view_edge");

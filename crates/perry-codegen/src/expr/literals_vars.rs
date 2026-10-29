@@ -508,6 +508,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     demote_extracted_string_binding(ctx, *id, &value);
                     return Ok(value);
                 }
+                if let Some(value) = super::resume_locals::read_value(ctx, *id) {
+                    return Ok(value);
+                }
                 let closure_ptr = super::current_closure_ptr_value(ctx, "captured local")?;
                 let bits = load_closure_capture_bits_inline(ctx, &closure_ptr, capture_idx);
                 let value = ctx.block().bitcast_i64_to_double(&bits);
@@ -964,6 +967,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     }
                     return Ok(if *prefix { new } else { old });
                 }
+                anyhow::ensure!(
+                    !super::resume_locals::managed(ctx, *id),
+                    "resume-local control updated outside its native contract"
+                );
                 let closure_ptr = super::current_closure_ptr_value(ctx, "captured local update")?;
                 let old_bits = if ctx.fixed_generator_state {
                     load_closure_capture_bits_inline(ctx, &closure_ptr, capture_idx)
@@ -1434,6 +1441,9 @@ pub(crate) fn bind_lowered_value_to_local(
                 }
             }
         } else {
+            if super::resume_locals::write_value(ctx, id, v) {
+                return Ok(());
+            }
             let closure_ptr = super::current_closure_ptr_value(ctx, "captured local set")?;
             let v_bits = ctx.block().bitcast_double_to_i64(v);
             if ctx.fixed_generator_state {

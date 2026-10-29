@@ -1558,6 +1558,12 @@ pub struct Model {
     /// Published functions with a contract (design §11.2): their results
     /// are checked after the solve instead of escaping.
     pub contract_fns: crate::pts::FxHashSet<FnIdx>,
+    /// DECISIONS 224: contract functions of this unit published to a known
+    /// closed callee (DECISIONS 223, `Gen::closed_arg_functions`). Their
+    /// contract asks every unit that runs them to publish what it passes
+    /// (`FnContract::callable`), as a published method's does (DECISIONS
+    /// 148/165): their parameter markers stand beside that join.
+    pub callable_pub: crate::pts::FxHashSet<FnIdx>,
     /// Closed functions (decision 13): per parameter the node holding what
     /// the other units' calls pass (`Gen::closed_params`), instead of ⊤.
     pub closed_params: FxHashMap<FnIdx, Vec<NodeId>>,

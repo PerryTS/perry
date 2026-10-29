@@ -899,6 +899,7 @@ pub(super) fn compile_module_entry(
             fixed_generator_state: false,
             private_resume_frame: false,
             private_async_resume_frame: false,
+            resume_locals: None,
             versioned_loop_deopt_context: None,
             trusted_box_capture_ptrs: HashMap::new(),
             ready_cell_roots: Default::default(),

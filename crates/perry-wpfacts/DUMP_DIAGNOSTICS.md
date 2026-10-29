@@ -69,3 +69,30 @@ context, compare raw function declarations structurally, and follow the
 recorded bind origins and bound prefixes. Signature compatibility is a check,
 not a proof of execution or an input to Perry. Cast/any/non-null syntax flags
 and any builtin fixture signatures belong exclusively in that offline tool.
+
+
+## Publication route observations (PUB)
+
+The same dump capture also observes existing publication state:
+
+- `parameter-marker` names the owning function and parameter index.
+- `marker-route` reports existing bare/beside state, members, reach/path parents
+  and an existing argument home node. It never creates a member or settles it.
+- `parameter-contract` reports existing closedness, described positions,
+  incoming value nodes, contract-function membership and foreign stand-in state.
+- `contract-input` labels a stand-in value node with its existing input summary.
+- `copy-edges` reports existing successor edges; `top-predecessor` reports the
+  retained first-arrival path. Empty reason text is allowed without explain.
+- `copy-verdict` reports, per site, the verdict of each function copy holding it
+  (an inlined body is a copy of its own), keyed by module path, HIR id and name,
+  so a dump compares one copy with the same copy of another run.
+- `argument-output` and `value-output` report selected output summary fields
+  after derivation. These are intentionally partial views of a contract; an
+  omitted field is not proof that the contract lacks that kind of value.
+
+All IDs remain local to the emitting unit. Authoritative function declaration
+keys and source module/span identify owners across units. These observations
+never change contracts, verdicts, digests, solve work or code generation, and
+with capture disabled their state is absent. An inter-unit OFF/ON fixture
+asserts unchanged bindings, proofs, broken set, rounds, digests and work, and
+requires nonempty publication-route records.

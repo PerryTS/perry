@@ -98,7 +98,9 @@ impl<'a> Gen<'a> {
     /// the join over every unit) is called only by this unit's code: its
     /// parameter markers stand for no value of another unit (as a closed
     /// function's with no callers, decision 13), so what this unit passes
-    /// is what its parameters hold (`Model::beside_values`). The join only
+    /// is what its parameters hold (`Model::beside_values`). DECISIONS 224:
+    /// a function published to a known closed callee (DECISIONS 223) reads
+    /// it the same way (`Model::method_described`). The join only
     /// grows, and a newly run method solves the owner again (`units::run`).
     /// A unit over the bound may run any; a call through an escaped method
     /// is a census report that breaks it. An accessor runs on a get or a
@@ -282,6 +284,10 @@ impl<'a> Gen<'a> {
         c: &'a crate::units::ValueContract,
     ) -> NodeId {
         let n = self.m.node_named("value", || format!("value({local})"));
+        if let Some(trace) = &mut self.m.diagnostic {
+            trace.contract_inputs.insert(n, format!("local={local};module={mi};unknown={};prim={};fns={:?};layouts={:?};arrays={:?}", c.unknown,c.prim,c.fns.iter().map(|f| &f.name).collect::<Vec<_>>(),c.layouts.iter().map(|l| &l.display).collect::<Vec<_>>(),c.arrays));
+        }
+
         let broken = |g: &Self, d: &str| g.unit_in.is_some_and(|u| u.broken(d));
         for cc in &c.layouts {
             if broken(self, &cc.display) {

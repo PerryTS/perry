@@ -155,6 +155,10 @@ fn perex_host_search_preserves_all_captures_and_work_across_growth_and_gc() {
         ("(.)", "", "😀".as_bytes(), &[Some((0, 1)), Some((0, 1))]),
     ];
     for &(pattern, flags, bytes, expected) in cases {
+        // An empty lookahead keeps the program out of the automaton, so the
+        // evaluator's pauses, growth and relocation are what this exercises.
+        let pattern = format!("{pattern}(?=)");
+        let pattern = pattern.as_str();
         let mut remaining = None;
         for quantum in [1, 17, 100_000] {
             let scope = RuntimeHandleScope::new();
@@ -225,11 +229,12 @@ fn perex_host_running_search_survives_reentrant_receiver_recompile() {
     let _force = ForcedEvacuationTestGuard::on();
     register_runtime_handle_root_scanner_for_tests();
     let scope = RuntimeHandleScope::new();
-    let receiver =
-        scope.root_raw_mut_ptr(crate::regex::test_alloc_nursery_regexp_for_move("(a+)", ""));
+    let receiver = scope.root_raw_mut_ptr(crate::regex::test_alloc_nursery_regexp_for_move(
+        "(a+)(?=)", "",
+    ));
     {
         let initial_scope = RuntimeHandleScope::new();
-        let initial = compile(&initial_scope, "(a+)", "").into_storage();
+        let initial = compile(&initial_scope, "(a+)(?=)", "").into_storage();
         unsafe {
             crate::regex::test_install_program(&receiver, &initial);
         }
