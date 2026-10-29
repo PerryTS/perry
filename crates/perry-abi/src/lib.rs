@@ -596,7 +596,7 @@ pub const FN_ARGUMENTS_RESTRICTED: u32 = 1 << 19;
 pub const FN_ARGUMENTS_MAPPED: u32 = 1 << 20;
 /// A builtin export body whose three captures carry its module/member identity.
 /// Invocation uses `code`; this flag only licenses the export metadata layout.
-pub const FN_NATIVE_EXPORT: u32 = 1 << 25;
+pub const FN_NATIVE_EXPORT: u32 = 1 << 26;
 /// Any rest kind.
 pub const FN_REST_MASK: u32 =
     FN_REST_USER | FN_REST_SYNTHETIC_ARGUMENTS | FN_REST_USER_AND_ARGUMENTS | FN_REST_NATIVE_ARGS;
