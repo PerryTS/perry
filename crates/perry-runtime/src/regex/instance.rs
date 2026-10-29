@@ -205,6 +205,14 @@ pub(crate) fn birth_layout(value: f64) -> Option<*mut RegExpHeader> {
         .then_some(receiver)
 }
 
+/// Whether `value` carries the RegExp brand. The birth layout proves it with
+/// one header word (its first own key is `[[RegExpMatcher]]`); any other layout
+/// asks the private slot.
+#[inline(always)]
+pub(crate) fn is_branded(value: f64) -> bool {
+    birth_layout(value).is_some() || crate::regex::regexp_data_of(value).is_some()
+}
+
 /// The birth layout's inline slot `index` of a receiver [`builtin`] admitted.
 #[inline(always)]
 unsafe fn slot(receiver: *mut RegExpHeader, index: usize) -> *mut u64 {
