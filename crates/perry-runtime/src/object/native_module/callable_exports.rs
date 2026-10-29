@@ -962,16 +962,34 @@ fn util_inspect_colors() -> f64 {
 }
 
 pub(crate) fn zlib_codes_object() -> f64 {
-    const ZLIB_RETURN_CODES: &[(&str, i32)] = &[
-        ("Z_OK", 0),
-        ("Z_STREAM_END", 1),
-        ("Z_NEED_DICT", 2),
-        ("Z_ERRNO", -1),
-        ("Z_STREAM_ERROR", -2),
-        ("Z_DATA_ERROR", -3),
-        ("Z_MEM_ERROR", -4),
-        ("Z_BUF_ERROR", -5),
-        ("Z_VERSION_ERROR", -6),
+    /// A `zlib.codes` member: a return code by its name, or a code's name.
+    #[derive(Clone, Copy)]
+    enum ZlibCode {
+        Code(f64),
+        Name(&'static str),
+    }
+    /// `zlib.codes` in Node's order: each code's name by its value for the
+    /// index keys (which enumerate first), each return code by name, then
+    /// the names of the negative codes. The birth writes these rows in order.
+    const ZLIB_CODES: &[(&str, ZlibCode)] = &[
+        ("0", ZlibCode::Name("Z_OK")),
+        ("1", ZlibCode::Name("Z_STREAM_END")),
+        ("2", ZlibCode::Name("Z_NEED_DICT")),
+        ("Z_OK", ZlibCode::Code(0.0)),
+        ("Z_STREAM_END", ZlibCode::Code(1.0)),
+        ("Z_NEED_DICT", ZlibCode::Code(2.0)),
+        ("Z_ERRNO", ZlibCode::Code(-1.0)),
+        ("Z_STREAM_ERROR", ZlibCode::Code(-2.0)),
+        ("Z_DATA_ERROR", ZlibCode::Code(-3.0)),
+        ("Z_MEM_ERROR", ZlibCode::Code(-4.0)),
+        ("Z_BUF_ERROR", ZlibCode::Code(-5.0)),
+        ("Z_VERSION_ERROR", ZlibCode::Code(-6.0)),
+        ("-1", ZlibCode::Name("Z_ERRNO")),
+        ("-2", ZlibCode::Name("Z_STREAM_ERROR")),
+        ("-3", ZlibCode::Name("Z_DATA_ERROR")),
+        ("-4", ZlibCode::Name("Z_MEM_ERROR")),
+        ("-5", ZlibCode::Name("Z_BUF_ERROR")),
+        ("-6", ZlibCode::Name("Z_VERSION_ERROR")),
     ];
 
     ZLIB_CODES_OBJECT.with(|slot| {
@@ -981,19 +999,15 @@ pub(crate) fn zlib_codes_object() -> f64 {
         }
 
         let scope = crate::gc::RuntimeHandleScope::new();
-        let obj = scope.root_nanbox_f64(native_object_value(js_object_alloc(0, 0)));
+        let obj = scope.root_nanbox_f64(native_object_value(crate::realm_decl! { birth js_object_alloc(0, 0); realm { "node:zlib.codes", kind = namespace, members_source = ZLIB_CODES, integrity = frozen } }));
         let current_object =
             || crate::value::js_nanbox_get_pointer(obj.get_nanbox_f64()) as *mut ObjectHeader;
-        for (name, value) in ZLIB_RETURN_CODES.iter().take(3) {
-            let name_value = native_string_value(name);
-            native_set_field(current_object(), &value.to_string(), name_value);
-        }
-        for (name, value) in ZLIB_RETURN_CODES {
-            native_set_field(current_object(), name, *value as f64);
-        }
-        for (name, value) in ZLIB_RETURN_CODES.iter().skip(3) {
-            let name_value = native_string_value(name);
-            native_set_field(current_object(), &value.to_string(), name_value);
+        for &(key, value) in ZLIB_CODES {
+            let value = match value {
+                ZlibCode::Code(code) => code,
+                ZlibCode::Name(name) => native_string_value(name),
+            };
+            native_set_field(current_object(), key, value);
         }
 
         // Freeze actual properties, not only the namespace's descriptor view.

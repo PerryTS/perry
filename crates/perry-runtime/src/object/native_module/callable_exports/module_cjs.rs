@@ -153,6 +153,14 @@ pub(crate) fn module_builtin_modules_value() -> f64 {
     })
 }
 
+/// `module.constants.compileCacheStatus`, in Node's order.
+const MODULE_COMPILE_CACHE_STATUS: &[(&str, f64)] = &[
+    ("FAILED", 0.0),
+    ("ENABLED", 1.0),
+    ("ALREADY_ENABLED", 2.0),
+    ("DISABLED", 3.0),
+];
+
 pub(crate) fn module_constants_value() -> f64 {
     MODULE_CONSTANTS_VALUE.with(|slot| {
         let bits = slot.get();
@@ -160,19 +168,10 @@ pub(crate) fn module_constants_value() -> f64 {
             return f64::from_bits(bits);
         }
         let scope = crate::gc::RuntimeHandleScope::new();
-        let constants = scope.root_nanbox_f64(native_object_value(
-            crate::object::js_object_alloc_null_proto(0, 1),
-        ));
+        let constants = scope.root_nanbox_f64(native_object_value(crate::realm_decl! { birth crate::object::js_object_alloc_null_proto(0, 1); realm { "node:module.constants", kind = namespace, members = { compileCacheStatus = ref("node:module.constants.compileCacheStatus"), attrs = writable | enumerable | configurable; }, integrity = frozen } }));
         store_module_cjs_root(slot, constants.get_nanbox_f64());
-        let status = scope.root_nanbox_f64(native_object_value(
-            crate::object::js_object_alloc_null_proto(0, 4),
-        ));
-        for (name, value) in [
-            ("FAILED", 0.0),
-            ("ENABLED", 1.0),
-            ("ALREADY_ENABLED", 2.0),
-            ("DISABLED", 3.0),
-        ] {
+        let status = scope.root_nanbox_f64(native_object_value(crate::realm_decl! { birth crate::object::js_object_alloc_null_proto(0, MODULE_COMPILE_CACHE_STATUS.len() as u32); realm { "node:module.constants.compileCacheStatus", kind = namespace, members_source = MODULE_COMPILE_CACHE_STATUS, integrity = frozen } }));
+        for &(name, value) in MODULE_COMPILE_CACHE_STATUS {
             native_set_field(
                 crate::value::js_nanbox_get_pointer(status.get_nanbox_f64()) as *mut ObjectHeader,
                 name,

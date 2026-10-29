@@ -192,6 +192,77 @@ pub(super) fn members_with_defaults(
 }
 
 /// Numeric-key/string-value rows are already the runtime's human constants.
+/// The members of an object birth that writes the rows of `table` (a
+/// `&[("key", value)]` const beside the birth) in their order. A value is a
+/// realm constant, optionally wrapped in one variant of the table's value
+/// type (`Code(-1.0)`, `Name("Z_ERRNO")`). Every row is a plain data
+/// property; integrity is applied after.
+fn table_members(owner: &str, source: &str, table: &str) -> Result<Members, String> {
+    let ts = super::tokens(source)?;
+    let starts = ts
+        .windows(2)
+        .enumerate()
+        .filter(|(_, w)| w[0].text == "const" && w[1].text == table)
+        .map(|(i, _)| i)
+        .collect::<Vec<_>>();
+    let [start] = starts[..] else {
+        return Err(format!(
+            "{owner}: members_source {table} must be one const beside the birth"
+        ));
+    };
+    let equals = start
+        + ts[start..]
+            .iter()
+            .position(|t| t.text == "=")
+            .ok_or("missing member table values")?;
+    let open = equals + 2;
+    if ts[equals + 1].text != "&" || ts[open].text != "[" {
+        return Err("member table must be a slice".into());
+    }
+    let end = super::closing_bracket(&ts, open)?;
+    let mut rows = Vec::new();
+    for row in info::split(&ts[open + 1..end], ",") {
+        if row.first().is_none_or(|t| t.text != "(") || row.last().is_none_or(|t| t.text != ")") {
+            return Err(format!("{owner}: invalid member table row"));
+        }
+        let args = info::split(&row[1..row.len() - 1], ",");
+        let [key, value] = args[..] else {
+            return Err(format!("{owner}: a member row is (key, value)"));
+        };
+        let key = key
+            .first()
+            .and_then(|t| t.string.clone())
+            .filter(|_| key.len() == 1)
+            .ok_or_else(|| format!("{owner}: a member key is a string literal"))?;
+        // `Variant(literal)` or `Type::Variant(literal)`.
+        let value = match value.iter().position(|t| t.text == "(") {
+            Some(open) if value.last().is_some_and(|t| t.text == ")") => {
+                &value[open + 1..value.len() - 1]
+            }
+            _ => value,
+        };
+        let value = facts::constant(value)?;
+        let value = match value.get("kind").and_then(Value::string) {
+            Some("string") => value.get("value").unwrap().encode(),
+            Some("number_bits") => {
+                let bits = u64::from_str_radix(value.get("value").unwrap().string().unwrap(), 16)
+                    .map_err(|e| e.to_string())?;
+                format!("{:?}", f64::from_bits(bits))
+            }
+            _ => {
+                return Err(format!(
+                    "{owner}: member table values are numbers or strings"
+                ))
+            }
+        };
+        rows.push(format!(
+            "{}={value},attrs=writable|enumerable|configurable",
+            string(key).encode()
+        ));
+    }
+    members(owner, &super::tokens(&rows.join(";"))?)
+}
+
 fn pair_members(owner: &str, source: &str, table: &str) -> Result<Members, String> {
     let ts = super::tokens(source)?;
     let start = ts
@@ -413,6 +484,12 @@ pub(super) fn birth_at(
                 declared = Some(pair_members(&name, source, clause[4].text)?);
             }
             "never_move" if clause.len() == 3 && clause[2].text == "true" => never_move = true,
+            "members_source" if clause.len() == 3 && !native => {
+                if declared.is_some() {
+                    return Err("members and members_source are one fact".into());
+                }
+                declared = Some(table_members(&name, source, clause[2].text)?);
+            }
             "integrity" if clause.len() == 3 => {
                 integrity = super::derive::integrity(clause[2].text)?;
                 if integrity == Integrity::Extensible {
