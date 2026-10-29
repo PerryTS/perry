@@ -97,22 +97,8 @@ pub(crate) unsafe fn http_methods_array() -> f64 {
         "UNLOCK",
         "UNSUBSCRIBE",
     ];
-    let arr = crate::array::js_array_alloc_with_length_longlived(METHODS.len() as u32);
-    let elements_ptr =
-        crate::array::array_elements_ptr(arr as *const crate::array::ArrayHeader) as *mut f64;
-    for (i, m) in METHODS.iter().enumerate() {
-        let bytes = m.as_bytes();
-        let str_ptr =
-            crate::string::js_string_from_bytes_longlived(bytes.as_ptr(), bytes.len() as u32);
-        let nanboxed = f64::from_bits(
-            crate::value::STRING_TAG | (str_ptr as u64 & crate::value::POINTER_MASK),
-        );
-        *elements_ptr.add(i) = nanboxed;
-        crate::array::note_array_slot_layout_only(arr, i, nanboxed.to_bits());
-    }
-    // The list is fresh and every slot holds a method name.
-    crate::array::ek_birth_prefix(arr, METHODS.len() as u32);
-    let value = crate::value::js_nanbox_pointer(arr as i64);
+    // Born in the longlived arena with its pointer layout, filled in order.
+    let value = crate::realm_decl! { birth crate::array::realm_string_array(METHODS, true); realm { "node:http.METHODS", elements_source = METHODS } };
     // GC_STORE_AUDIT(ROOT): HTTP_METHODS_CACHE is a mutable root visited by scan_object_cache_roots_mut.
     crate::object::HTTP_METHODS_CACHE.with_slot(|slot| {
         crate::gc::runtime_store_root_atomic_nanbox_u64(slot, value.to_bits(), Ordering::Relaxed);

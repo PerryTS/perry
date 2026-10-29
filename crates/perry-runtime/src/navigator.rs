@@ -11,7 +11,7 @@
 //! machine; the rest match Node's defaults. The major version mirrors the Node
 //! target Perry reports through `process.version` (currently 22).
 
-use crate::array::{js_array_alloc, js_array_push_f64};
+use crate::array::js_array_push_f64;
 use crate::object::{js_object_alloc_with_shape, js_object_set_field};
 use crate::string::js_string_from_bytes;
 use crate::value::{js_nanbox_pointer, js_nanbox_string, JSValue};
@@ -146,7 +146,7 @@ pub(crate) fn navigator_object_with_constructor(constructor: f64) -> f64 {
     // language / languages
     let language = navigator_language();
     obj.with_mut_ptr(|obj| js_object_set_field(obj, 1, nb_str(&language)));
-    let langs = scope.root_raw_mut_ptr(js_array_alloc(1));
+    let langs = scope.root_raw_mut_ptr(crate::realm_decl! { birth crate::array::realm_array_alloc(1, perry_abi::realm_header::ArrayElements::Pointers, false); realm { navigator.languages, value = dynamic, elements = string } });
     let lang = nb_str(&language);
     let pushed = langs.with_mut_ptr(|arr| js_array_push_f64(arr, f64::from_bits(lang.bits())));
     langs.set_raw_mut_ptr(pushed);

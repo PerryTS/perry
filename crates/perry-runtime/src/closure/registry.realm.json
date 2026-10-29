@@ -403,53 +403,6 @@
         ]
       },
       {
-        "name": "node:module.Module.wrapper",
-        "kind": "namespace",
-        "properties": [
-          {
-            "key": "0",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "string",
-              "value": "(function (exports, require, module, __filename, __dirname) { "
-            }
-          },
-          {
-            "key": "1",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "string",
-              "value": "\n});"
-            }
-          },
-          {
-            "key": "length",
-            "symbol": false,
-            "attributes": 1,
-            "value": {
-              "kind": "number_bits",
-              "value": "4000000000000000"
-            }
-          }
-        ],
-        "own_key_order": [
-          "0",
-          "1",
-          "length"
-        ],
-        "own_symbol_order": [],
-        "header": {
-          "gc_type": 1,
-          "reserved": 0
-        },
-        "prototype": "Array.prototype",
-        "births": [
-          "Array.prototype"
-        ]
-      },
-      {
         "name": "node:module.flushCompileCache",
         "kind": "method",
         "properties": [
