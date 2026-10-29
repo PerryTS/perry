@@ -47,6 +47,7 @@ pub(crate) use policy::note_young_leaf_born_old;
 /// The one writer of `GC_SAFEPOINT_PENDING` — it also keeps the poll's global
 /// arming shadow in step. See `gc/poll_arm.rs`.
 pub(crate) use policy::set_safepoint_pending;
+#[cfg(test)]
 pub(crate) use policy::young_generation_holds_a_nursery;
 pub use policy::*;
 mod progress;
