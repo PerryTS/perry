@@ -20,6 +20,7 @@ const KIND_GETTER: u8 = 1;
 const KIND_SETTER: u8 = 2;
 const FLAG_SYNTHETIC_ARGUMENTS: u8 = 1;
 const FLAG_REST: u8 = 2;
+const FLAG_NAME_UTF8: u8 = perry_abi::layouts::CLASS_MEMBER_NAME_UTF8;
 
 /// One class's declaration constant: the global definitions to add to the
 /// module and the symbol to register for `cid`.
@@ -33,6 +34,9 @@ struct Member {
     order: u32,
     /// `ptr @bytes` or `ptr null`.
     name: String,
+    /// [`FLAG_NAME_UTF8`] when the name bytes are valid UTF-8 (no lone
+    /// surrogate), else 0.
+    name_flag: u8,
     name_len: usize,
     code: String,
     entry: String,
@@ -58,13 +62,18 @@ pub(super) fn class_declaration_globals(
         let method_symbol =
             |name: &str| crate::symbol_names::method(&module_prefix, &class.name, &name);
         let named = |name: &str| {
-            strings
-                .lookup(name)
-                .map(|e| (format!("ptr @{}", e.bytes_global), e.byte_len))
+            strings.lookup(name).map(|e| {
+                let utf8 = std::str::from_utf8(&e.bytes).is_ok();
+                (
+                    format!("ptr @{}", e.bytes_global),
+                    e.byte_len,
+                    if utf8 { FLAG_NAME_UTF8 } else { 0 },
+                )
+            })
         };
         let mut members: Vec<Member> = Vec::new();
         for method in &class.methods {
-            let Some((name, name_len)) = named(&method.name) else {
+            let Some((name, name_len, name_flag)) = named(&method.name) else {
                 continue;
             };
             let code = method_symbol(&method.name);
@@ -83,6 +92,7 @@ pub(super) fn class_declaration_globals(
                 order: method.id,
                 name,
                 name_len,
+                name_flag,
                 entry: format!("ptr {}", info_ref(&format!("{code}__eclo"))),
                 code: format!("ptr @{code}"),
                 param_count: method.params.len(),
@@ -99,13 +109,14 @@ pub(super) fn class_declaration_globals(
             if class.static_accessor_fn_ids.contains(&getter.id) {
                 continue;
             }
-            let Some((name, name_len)) = named(prop) else {
+            let Some((name, name_len, name_flag)) = named(prop) else {
                 continue;
             };
             members.push(Member {
                 order: getter.id,
                 name,
                 name_len,
+                name_flag,
                 code: format!("ptr @{}", method_symbol(&format!("__get_{}", getter.name))),
                 entry: "ptr null".to_string(),
                 param_count: 0,
@@ -118,13 +129,14 @@ pub(super) fn class_declaration_globals(
             if class.static_accessor_fn_ids.contains(&setter.id) {
                 continue;
             }
-            let Some((name, name_len)) = named(prop) else {
+            let Some((name, name_len, name_flag)) = named(prop) else {
                 continue;
             };
             members.push(Member {
                 order: setter.id,
                 name,
                 name_len,
+                name_flag,
                 code: format!("ptr @{}", method_symbol(&format!("__set_{}", setter.name))),
                 entry: "ptr null".to_string(),
                 param_count: 1,
@@ -144,6 +156,7 @@ pub(super) fn class_declaration_globals(
                 order: f.id,
                 name: "ptr null".to_string(),
                 name_len: 0,
+                name_flag: 0,
                 code: format!("ptr @{}", method_symbol(&f.name)),
                 entry: if kind == KIND_METHOD
                     && super::helpers::body_has_fixed_generator_state(&f.body)
@@ -213,7 +226,7 @@ pub(super) fn class_declaration_globals(
                     m.order,
                     m.param_count,
                     m.kind,
-                    m.flags,
+                    m.flags | m.name_flag,
                     m.set_length,
                 )
             })
