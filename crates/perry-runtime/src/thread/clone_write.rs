@@ -77,6 +77,9 @@ pub unsafe fn serialize_message(
     #[cfg(perry_gc_instruments)]
     let _timer = super::clone_timing::CloneTimer::new("serialize");
     for (index, &buffer) in transfer.iter().enumerate() {
+        if crate::clone_markers::is_untransferable(crate::value::js_nanbox_pointer(buffer as i64)) {
+            return Err("An ArrayBuffer is marked as untransferable.".to_string());
+        }
         if !crate::buffer::is_registered_buffer(buffer)
             || !crate::buffer::is_array_buffer(buffer)
             || crate::shared_sab::is_shared_sab(buffer)
@@ -774,6 +777,12 @@ impl Writer<'_> {
     #[optimize(size)]
     unsafe fn object_value(&mut self, bits: u64, addr: usize) -> SerializedValue {
         let value = f64::from_bits(bits);
+        if self.mode == CloneMode::Message
+            && crate::builtins::boxed_primitive_payload(value).is_none()
+            && crate::clone_markers::is_uncloneable(value)
+        {
+            return self.unsupported("object");
+        }
         if fs_thread_codec().is_some_and(|codec| (codec.is_filehandle)(value)) {
             return match self.mode {
                 CloneMode::Thread => SerializedValue::DetachedFileHandle,
@@ -1402,6 +1411,11 @@ impl Writer<'_> {
 
     #[optimize(size)]
     unsafe fn error(&mut self, bits: u64, addr: usize) -> SerializedValue {
+        if self.mode == CloneMode::Message
+            && crate::clone_markers::is_uncloneable(f64::from_bits(bits))
+        {
+            return self.unsupported("object");
+        }
         let err = addr as *const crate::error::ErrorHeader;
         if crate::event_target_hook_slots::is_dom_exception_error(err) {
             return self.unsupported("DOMException");

@@ -4275,14 +4275,6 @@
     },
     {
       "file": "crates/perry-stdlib/src/worker_threads.rs",
-      "name": "UNCLONEABLE_OBJECTS"
-    },
-    {
-      "file": "crates/perry-stdlib/src/worker_threads.rs",
-      "name": "UNTRANSFERABLE_OBJECTS"
-    },
-    {
-      "file": "crates/perry-stdlib/src/worker_threads.rs",
       "name": "WORKER_GC_REGISTERED"
     },
     {
