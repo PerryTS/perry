@@ -873,8 +873,6 @@ const VM_MODULE_NAMESPACE_KEYS: &[&[u8]] = &[
     b"SyntheticModule",
 ];
 
-const VM_CONSTANTS_KEYS: &[&[u8]] = &[b"USE_MAIN_CONTEXT_DEFAULT_LOADER", b"DONT_CONTEXTIFY"];
-
 const PERF_HOOKS_DEFAULT_KEYS: &[&[u8]] = &[
     b"Performance",
     b"PerformanceEntry",
@@ -1596,7 +1594,6 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         } else {
             VM_NAMESPACE_KEYS
         }),
-        "vm.constants" => Some(VM_CONSTANTS_KEYS),
         "timers/promises" => Some(&[b"setTimeout", b"setImmediate", b"setInterval", b"scheduler"]),
         "readline/promises" => Some(&[b"Interface", b"Readline", b"createInterface"]),
         "wasi" => Some(&[b"WASI", b"default"]),

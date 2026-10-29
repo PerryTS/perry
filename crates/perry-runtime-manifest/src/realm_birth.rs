@@ -236,6 +236,32 @@ fn pair_members(owner: &str, source: &str, table: &str) -> Result<Members, Strin
     members(owner, &super::tokens(&rows.join(";"))?)
 }
 
+/// The attributes an integrity level leaves on own properties: sealing makes
+/// each non-configurable, freezing also makes data properties non-writable.
+/// Members are declared with the attributes they are born with.
+pub(super) fn apply_integrity(properties: &mut [Value], integrity: Integrity) {
+    let clear = match integrity {
+        Integrity::Extensible | Integrity::NonExtensible => return,
+        Integrity::Sealed => 4,
+        Integrity::Frozen => 4 | 1,
+    };
+    for property in properties {
+        let Value::Object(map) = property else {
+            continue;
+        };
+        let data = map.contains_key("value");
+        let Some(attrs) = map
+            .get("attributes")
+            .map(Value::encode)
+            .and_then(|a| a.parse::<u64>().ok())
+        else {
+            continue;
+        };
+        let clear = if data { clear } else { clear & 4 };
+        map.insert("attributes".into(), number(attrs & !clear));
+    }
+}
+
 fn sort_properties(properties: &mut [Value]) {
     properties.sort_by_key(|p| {
         let symbol = p.get("symbol") == Some(&Value::Bool(true));
@@ -357,6 +383,7 @@ pub(super) fn birth_at(
     let mut extra = Vec::new();
     let mut declared = None;
     let mut never_move = false;
+    let mut integrity = Integrity::Extensible;
     let mut seen = BTreeSet::new();
     for clause in &clauses[1..] {
         if clause.len() < 3 || clause[1].text != "=" || !seen.insert(clause[0].text) {
@@ -386,6 +413,12 @@ pub(super) fn birth_at(
                 declared = Some(pair_members(&name, source, clause[4].text)?);
             }
             "never_move" if clause.len() == 3 && clause[2].text == "true" => never_move = true,
+            "integrity" if clause.len() == 3 => {
+                integrity = super::derive::integrity(clause[2].text)?;
+                if integrity == Integrity::Extensible {
+                    return Err("omit the default integrity".into());
+                }
+            }
             "births" if clause[2].text == "[" && clause.last().unwrap().text == "]" => {
                 for path in info::split(&clause[3..clause.len() - 1], ",") {
                     extra.push(facts::path(path)?);
@@ -398,6 +431,10 @@ pub(super) fn birth_at(
         return Err("object birth kind must be prototype, namespace or exotic".into());
     }
     let mut members = declared.ok_or("object birth needs its members")?;
+    if native && integrity != Integrity::Extensible {
+        return Err("a native namespace keeps its integrity behind the vtable".into());
+    }
+    apply_integrity(&mut members.properties, integrity);
     if !prototype.is_empty() {
         members.births.insert(prototype.clone());
     }
@@ -457,7 +494,7 @@ pub(super) fn birth_at(
         },
         descriptors: members.descriptors,
         typed_array_prototype,
-        integrity: Integrity::Extensible,
+        integrity,
     };
     let class_id = if native {
         *info::constants(include_str!(
