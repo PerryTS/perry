@@ -420,7 +420,10 @@ fn test_transient_runtime_handle_array_push_gc() {
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     register_runtime_handle_root_scanner_for_tests();
 
-    let arr = crate::array::js_array_alloc_with_length(200_000);
+    // An old source: its growth target is born old through the collecting
+    // allocation, the GC point this test holds custody across. (A young
+    // source grows without collecting.)
+    let arr = unsafe { promote_young_large(crate::array::js_array_alloc_with_length(200_000)) };
     let value = crate::string::js_string_from_bytes(b"array-payload".as_ptr(), 13);
     let value_bits = string_bits(value as usize);
 

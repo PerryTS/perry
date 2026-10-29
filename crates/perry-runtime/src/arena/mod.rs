@@ -132,7 +132,6 @@ pub use allocators::{
 pub(crate) use allocators::{
     arena_alloc_gc_collecting_holder, arena_alloc_gc_large_young_no_collect,
     arena_alloc_gc_no_collect, arena_alloc_gc_old_born_tenured,
-    arena_alloc_gc_old_no_collect,
     arena_alloc_gc_old_excluding_pages, arena_alloc_gc_promoted, arena_alloc_gc_survivor,
 };
 

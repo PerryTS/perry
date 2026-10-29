@@ -170,35 +170,6 @@ fn growth_past_the_cutoff_forwards_into_young_large_storage() {
 }
 
 #[test]
-fn split_pieces_of_a_large_result_are_born_young() {
-    std::thread::spawn(|| unsafe {
-        let _guard = CopyingNurseryTestGuard::new(1);
-        let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-        let text = vec!["piece-of-text"; LARGE_CAPACITY as usize].join(",");
-        let s = crate::string::js_string_from_bytes(text.as_ptr(), text.len() as u32);
-        let comma = crate::string::js_string_from_bytes(b",".as_ptr(), 1);
-        let parts = crate::string::js_string_split(s, comma);
-        let p = parts as usize;
-        assert_eq!((*parts).length, LARGE_CAPACITY);
-        assert_eq!(crate::arena::classify_heap_generation(p), HeapGeneration::Nursery);
-        assert!(crate::arena::is_large_storage(p));
-        let piece = slot_value(parts, 123);
-        assert_eq!(
-            crate::arena::classify_heap_generation(piece),
-            HeapGeneration::Nursery,
-            "the producer derives the children's age from the young result"
-        );
-        // Dropped: the result and every piece die at one minor.
-        let trace = collect_minor_trace(GcTriggerKind::Direct);
-        assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
-        assert_eq!(crate::arena::classify_heap_space(p), HeapSpace::Unknown);
-        assert_eq!(trace.copying_nursery.promoted_bytes, 0, "no piece is promoted");
-    })
-    .join()
-    .unwrap();
-}
-
-#[test]
 fn full_collection_promotes_a_young_container_and_remembers_its_young_child() {
     std::thread::spawn(|| unsafe {
         let _guard = CopyingNurseryTestGuard::new(1);

@@ -386,57 +386,6 @@ pub(crate) fn arena_alloc_gc_old_born_tenured(size: usize, align: usize, obj_typ
     arena_alloc_gc_old(size, align, obj_type)
 }
 
-/// [`arena_alloc_gc_old_born_tenured`] minus its collection point (JST slice 4,
-/// design D): serve the request from a swept same-size hole or from the old
-/// block that is already open, or return null.
-///
-/// The collection points of the collecting form are exactly two: the
-/// `gc_check_trigger` call and the fresh-block reservation, both inside
-/// `arena_cell_alloc` after `try_alloc_current` has refused. Neither is
-/// reachable from this body: the hole probe (`old_free_take_exact`) only
-/// unlinks a listed hole, `try_alloc_current` is a bump inside the open block
-/// ("Never collects"), and the header stamping and deferred page registration
-/// touch only the new object's own header and page lists. So `non-null` PROVES
-/// that nothing on the heap moved or was freed, and every raw pointer the
-/// caller read before the call (its source string, its result array) is still
-/// valid. A null is a refusal, not an event: the caller roots what it holds
-/// and re-issues through [`arena_alloc_gc_old_born_tenured`], which then takes
-/// the same collection decision the unconditional call would have taken.
-///
-/// Written out rather than sharing a body with `arena_alloc_gc_old_registered`
-/// for the same reason `arena_alloc_gc_no_collect` is: that body is inlined
-/// into every old-generation birth.
-#[inline(always)]
-pub(crate) fn arena_alloc_gc_old_no_collect(size: usize, align: usize, obj_type: u8) -> *mut u8 {
-    use crate::gc::{GcHeader, GC_FLAG_ARENA, GC_FLAG_TENURED, GC_HEADER_SIZE};
-
-    let pad = align.max(8);
-    let total = (GC_HEADER_SIZE + size + pad - 1) & !(pad - 1);
-    let user = if let Some(user_ptr) = crate::gc::old_free_take_exact(total, None) {
-        OLD_ARENA.with(|a| unsafe { (&mut *a.get()).note_allocation(total, total >= 16 * 1024) });
-        (user_ptr - GC_HEADER_SIZE) as *mut u8
-    } else {
-        let Some(raw) = OLD_ARENA
-            .with(|a| unsafe { crate::arena::arena_cell_try_alloc_current(a.get(), total, align) })
-        else {
-            return std::ptr::null_mut();
-        };
-        raw
-    };
-    super::alloc_sample::note(total, obj_type);
-    unsafe {
-        let header = user as *mut GcHeader;
-        (*header).obj_type = obj_type;
-        (*header).gc_flags = GC_FLAG_ARENA | GC_FLAG_TENURED | crate::gc::gc_birth_extra_flags();
-        crate::gc::gc_note_black_birth(header);
-        (*header)._reserved = 0;
-        (*header).size = crate::gc::gc_header_size_word(total);
-    }
-    record_arena_object_start(user as usize, obj_type);
-    defer_old_object_page_registration(user as usize, total);
-    unsafe { user.add(GC_HEADER_SIZE) }
-}
-
 /// #7624: registration stays EAGER here, unlike `arena_alloc_gc_old`. This is
 /// old-page defrag's relocation allocator (`gc/oldgen.rs`'s
 /// `evacuate_selected_old_pages_collecting`), which runs from INSIDE
@@ -633,9 +582,9 @@ fn arena_alloc_gc_slow(size: usize, align: usize, obj_type: u8, total: usize) ->
 
     // Size chooses storage independently of age. A leaf or a container the
     // young large space admits gets a dedicated block that stays young until
-    // a minor traces it; a container's children are then born young too
-    // (`ProducerChildBirth` reads the container's actual generation). Both
-    // existing cutoffs and the scoped JSON container exception stay put.
+    // a minor traces it, so a producer filling it births its children young
+    // too. Both existing cutoffs and the scoped JSON container exception stay
+    // put.
     if crate::gc::is_large_object_total_size_for_type(total, obj_type)
         && !crate::gc::json_wide_birth_permits(total, obj_type)
     {
