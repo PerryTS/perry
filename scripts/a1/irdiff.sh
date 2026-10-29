@@ -16,10 +16,8 @@
 # environment, the fixed-inputs preload (clock, entropy, /proc/self/maps normalization), ASLR off,
 # --cache-sim=no --branch-sim=no. IRDIFF_PRELOAD overrides the preload path.
 # IRDIFF_ONLY="hello commander_help" limits the run to those witnesses.
-# Both arms must be built with the runtime feature `fixed-hash-seeds` (scripts/a1/build-arm.sh does):
-# the startup-path ahash maps otherwise seed from static addresses and the per-function counts
-# move with the linker's layout. irdiff refuses an arm whose libperry_runtime.a lacks the marker
-# (IRDIFF_ALLOW_RANDOM_SEEDS=1 overrides, for an A/B of the artifact itself).
+# The startup-path ahash maps seed from one per-process key block with no address mixed in
+# (fast_hash::AHashState); the fixed-inputs preload pins the entropy, so counts are layout-independent.
 # Each perry binary sits next to its runtime libs (PERRY_RUNTIME_DIR = dirname of the resolved
 # binary). Workspace roots: IRDIFF_WS_MAIN / IRDIFF_WS_HEAD (defaults /root/A1S0/main-src and
 # /root/A1S0/src). Witness roots: IRDIFF_SCORE (/root/hwp-move/score), IRDIFF_SAMPLES (/root/STU/samples),
@@ -32,11 +30,6 @@ ALLOW=${pos[3]:-/dev/null}
 SC=${IRDIFF_SCORE:-/root/hwp-move/score}; SAMPLES=${IRDIFF_SAMPLES:-/root/STU/samples}; NSB=${IRDIFF_NSB:-/root/NSB/jsc}
 WS_MAIN=${IRDIFF_WS_MAIN:-/root/A1S0/main-src}; WS_HEAD=${IRDIFF_WS_HEAD:-/root/A1S0/src}
 mkdir -p "$OUT/w" "$OUT/cg" "$OUT/tmp"; OUT=$(readlink -f "$OUT")
-for arm_perry in "$MAIN" "$HEAD"; do
-  if [ -z "${IRDIFF_ALLOW_RANDOM_SEEDS:-}" ] && ! grep -aq 'perry:fixed-hash-seeds' "$(dirname "$arm_perry")/libperry_runtime.a"; then
-    echo "irdiff: $arm_perry was not built with --features perry-runtime/fixed-hash-seeds (see scripts/a1/build-arm.sh)" >&2; exit 2
-  fi
-done
 PRELOAD=${IRDIFF_PRELOAD:-/root/JST/jst-cg/measurement/jst-fixed-inputs.so}
 [ -f "$PRELOAD" ] || { echo "missing measurement preload $PRELOAD" >&2; exit 2; }
 # minimal environment of both the compile and the run (same for both arms)

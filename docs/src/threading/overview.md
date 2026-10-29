@@ -207,6 +207,12 @@ alongside `workerData`; shared references and cycles are preserved within this
 snapshot, while later parent changes remain local. Captured namespace methods
 and CommonJS imports use the same storage as named imports. If cloning either
 data source fails, construction throws before transferring any buffers.
+Clone and transfer marks are private, thread-local identity metadata, not object
+properties. Primitive marks are ignored. Clone marks reject ordinary objects and
+Errors in both global `structuredClone` and worker messages; builtin clone kinds
+such as arrays, Maps, Sets and buffers retain their own serialization behavior.
+Marked transfer buffers are rejected without detachment. The marker table does
+not keep its targets alive.
 Other worker API parity gaps remain.
 
 ## Next Steps
