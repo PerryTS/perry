@@ -768,6 +768,9 @@ fn drive(to: &mut http2::Connection, input: &mut Vec<u8>) -> Result<Vec<String>,
                 http2::Event::Goaway { code, .. } => format!("Goaway code={code}"),
                 http2::Event::Ping { ack, .. } => format!("Ping ack={ack}"),
                 http2::Event::WindowUpdate { stream } => format!("WindowUpdate s={stream}"),
+                http2::Event::PushPromise { stream, promised, .. } => {
+                    format!("PushPromise s={stream} p={promised}")
+                }
             });
         }
         input.drain(..consumed);
