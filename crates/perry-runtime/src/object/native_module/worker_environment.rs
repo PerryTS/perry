@@ -1,16 +1,16 @@
 use super::super::native_module_dispatch::NmCtx;
-use super::*;
+use crate::feature_hooks::Hook;
 
-static GET: AtomicPtr<()> = AtomicPtr::new(null_mut());
-static SET: AtomicPtr<()> = AtomicPtr::new(null_mut());
+static GET: Hook<extern "C" fn(f64) -> f64> = Hook::empty();
+static SET: Hook<extern "C" fn(f64, f64) -> f64> = Hook::empty();
 
 #[no_mangle]
 pub extern "C" fn js_register_worker_threads_environment_data(
     get: extern "C" fn(f64) -> f64,
     set: extern "C" fn(f64, f64) -> f64,
 ) {
-    GET.store(get as *mut (), Ordering::Release);
-    SET.store(set as *mut (), Ordering::Release);
+    GET.set(get);
+    SET.set(set);
 }
 
 pub(crate) unsafe fn dispatch(ctx: &NmCtx, module: &str, method: &str) -> f64 {
@@ -23,20 +23,52 @@ pub(crate) unsafe fn dispatch(ctx: &NmCtx, module: &str, method: &str) -> f64 {
     };
     match method {
         "getEnvironmentData" => {
-            let ptr = GET.load(Ordering::Acquire);
-            if !ptr.is_null() {
-                let get: extern "C" fn(f64) -> f64 = std::mem::transmute(ptr);
+            if let Some(get) = GET.peek() {
                 return get(arg(0));
             }
         }
         "setEnvironmentData" => {
-            let ptr = SET.load(Ordering::Acquire);
-            if !ptr.is_null() {
-                let set: extern "C" fn(f64, f64) -> f64 = std::mem::transmute(ptr);
+            if let Some(set) = SET.peek() {
                 return set(arg(0), arg(1));
             }
         }
         _ => {}
     }
     crate::collection_iter::throw_type_error(&format!("{module}.{method} is not supported"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    extern "C" fn get(key: f64) -> f64 {
+        key
+    }
+    extern "C" fn set(_key: f64, value: f64) -> f64 {
+        value
+    }
+
+    #[test]
+    fn registered_hooks_preserve_arguments_and_missing_values() {
+        js_register_worker_threads_environment_data(get, set);
+        let args = [42.0, 7.0];
+        let mut ctx = NmCtx {
+            obj: std::ptr::null(),
+            args_ptr: args.as_ptr(),
+            args_len: args.len(),
+            assert_skip_prototype: false,
+        };
+        unsafe {
+            assert_eq!(dispatch(&ctx, "worker_threads", "getEnvironmentData"), 42.0);
+            assert_eq!(dispatch(&ctx, "worker_threads", "setEnvironmentData"), 7.0);
+            ctx.args_ptr = std::ptr::null();
+            ctx.args_len = 0;
+            for method in ["getEnvironmentData", "setEnvironmentData"] {
+                assert_eq!(
+                    dispatch(&ctx, "worker_threads", method).to_bits(),
+                    crate::value::TAG_UNDEFINED
+                );
+            }
+        }
+    }
 }
