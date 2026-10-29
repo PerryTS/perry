@@ -317,6 +317,7 @@ fn throw_exit_code_range_error(n: f64) -> ! {
 /// Node's behavior — atexit handlers and other shutdown logic are skipped.
 #[no_mangle]
 pub extern "C" fn js_process_abort() {
+    crate::process::worker_restrictions::ensure_worker_operation_allowed("abort");
     #[cfg(unix)]
     unsafe {
         libc::abort();
@@ -373,11 +374,13 @@ pub extern "C" fn js_process_raw_debug() -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_process_debug_process() -> f64 {
+    crate::process::worker_restrictions::ensure_worker_operation_allowed("_debugProcess");
     undefined_value()
 }
 
 #[no_mangle]
 pub extern "C" fn js_process_debug_end() -> f64 {
+    crate::process::worker_restrictions::ensure_worker_operation_allowed("_debugEnd");
     undefined_value()
 }
 

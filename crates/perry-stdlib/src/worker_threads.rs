@@ -1357,6 +1357,8 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
     crate::worker_threads::async_shim::ensure_pump_registered();
 
     let options_state = WorkerOptions::from_value(options);
+    let process_state =
+        perry_runtime::process::WorkerProcessState::capture(options_state.env.as_deref());
     let payload = environment_data::prepare(options);
     let worker_id = NEXT_WORKER_ID.fetch_add(1, Ordering::Relaxed);
     let (tx, rx) = mpsc::channel::<WorkerCommand>();
@@ -1456,6 +1458,7 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
             CURRENT_WORKER_ID.with(|id| id.set(worker_id));
             CURRENT_PARENT_AGENT.with(|agent| agent.set(parent_agent));
             environment_data::install(payload);
+            process_state.install();
             CURRENT_THREAD_NAME
                 .with(|slot| *slot.borrow_mut() = thread_options.thread_name.clone());
             CURRENT_RESOURCE_LIMITS.with(|slot| slot.set(thread_options.resource_limits));
