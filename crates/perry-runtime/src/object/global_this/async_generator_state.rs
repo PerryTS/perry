@@ -190,7 +190,7 @@ pub(crate) fn async_generator_record(value: f64) -> Option<*const ClosureHeader>
     let addr = value.as_pointer::<u8>() as usize;
     unsafe {
         let header = crate::value::addr_class::try_read_gc_header(addr)?;
-        if !crate::gc_type_is_object!(header.obj_type) {
+        if crate::gc_type_is_not_object!(header.obj_type) {
             return None;
         }
         async_generator_record_of_object(addr as *const ObjectHeader)

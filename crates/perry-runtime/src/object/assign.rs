@@ -219,7 +219,7 @@ unsafe fn positional_assign_target_is_safe(
         | crate::gc::OBJ_FLAG_SEALED
         | crate::gc::OBJ_FLAG_NO_EXTEND
         | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
-    if !crate::gc_type_is_object!(header.obj_type)
+    if crate::gc_type_is_not_object!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || header._reserved & BLOCKING != 0
         || target_shape.object_kind != super::shapes::ShapeObjectKind::Ordinary
@@ -297,7 +297,7 @@ unsafe fn positional_prototype_shape_keys(
         };
         // A hop with an overflow holds keys and attributes its layout does
         // not list (object model step 4): no positional proof.
-        if !crate::gc_type_is_object!(header.obj_type)
+        if crate::gc_type_is_not_object!(header.obj_type)
             || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
             || header._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0
             || super::overflow::has_overflow(addr as *const ObjectHeader)
@@ -381,7 +381,7 @@ unsafe fn positional_source_plan(src: *const ObjectHeader) -> PositionalPlan {
     let Some(header) = crate::value::addr_class::try_read_gc_header(src_raw) else {
         return PositionalPlan::Refused;
     };
-    if !crate::object_has_meta_word!(header.obj_type)
+    if crate::object_lacks_meta_word!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || header._reserved
             & (crate::gc::OBJ_FLAG_HAS_DESCRIPTORS | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES)

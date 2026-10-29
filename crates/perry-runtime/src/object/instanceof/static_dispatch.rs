@@ -936,7 +936,7 @@ fn native_instanceof(
         // else in that word — an array's `length`, a closure's function
         // pointer, a Map's `size` — so `[1, 2] instanceof C` was true whenever
         // the length equalled (or chained to) `C`'s class id.
-        if !crate::gc_type_is_object!(gc_type) {
+        if crate::gc_type_is_not_object!(gc_type) {
             return false_val;
         }
 

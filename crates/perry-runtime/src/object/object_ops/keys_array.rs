@@ -568,14 +568,14 @@ unsafe fn define_append_transition_eligible(
         | crate::gc::OBJ_FLAG_NO_EXTEND
         | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
         | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES;
-    if !crate::gc_type_is_object!(gc.obj_type)
+    if crate::gc_type_is_not_object!(gc.obj_type)
         || gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || gc._reserved & BLOCKING != 0
         || !crate::object::object_is_regular(obj)
     {
         #[cfg(feature = "shape-mint-diag")]
         crate::object::shape_mint_census::note_define_outcome(
-            if !crate::gc_type_is_object!(gc.obj_type) {
+            if crate::gc_type_is_not_object!(gc.obj_type) {
                 "ineligible: not GC_TYPE_OBJECT"
             } else if gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
                 "ineligible: forwarded"

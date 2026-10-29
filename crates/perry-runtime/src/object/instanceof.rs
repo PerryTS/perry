@@ -753,7 +753,7 @@ fn subclass_of_builtin_reaches(value: f64, class_id: u32) -> bool {
     }
     let gc_header =
         unsafe { (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader };
-    if !crate::gc_type_is_object!(unsafe { (*gc_header).obj_type }) {
+    if crate::gc_type_is_not_object!(unsafe { (*gc_header).obj_type }) {
         return false;
     }
     // Builtin native brands below still answer cells with no physical chain.

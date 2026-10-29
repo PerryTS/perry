@@ -1528,7 +1528,7 @@ fn js_object_get_own_property_names_shape(obj_value: f64) -> f64 {
         {
             let gc =
                 (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-            if !crate::gc_type_is_object!((*gc).obj_type) {
+            if crate::gc_type_is_not_object!((*gc).obj_type) {
                 let empty = crate::array::js_array_alloc(0);
                 return f64::from_bits((empty as u64) | 0x7FFD_0000_0000_0000);
             }

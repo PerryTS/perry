@@ -1208,7 +1208,9 @@ pub(crate) unsafe fn prototype_image(
         } else {
             super::key_attrs::object_slot_data(obj, pos).bits()
         };
-        let slot_addr = super::header::object_slot_at(image, u32::from(key.off)) as usize;
+        let slot_addr = super::header::MetaObj::runtime_born(image)
+            .slots()
+            .add(key.slot as usize) as usize;
         crate::gc::runtime_store_object_jsvalue_slot(
             image as usize,
             slot_addr,
@@ -1245,7 +1247,7 @@ unsafe fn image_matches(d: &PerryLayoutDesc, built: f64, bound: &[u64]) -> bool 
     let Some(header) = crate::value::addr_class::try_read_gc_header(p) else {
         return false;
     };
-    if !crate::object_has_meta_word!(header.obj_type)
+    if crate::object_lacks_meta_word!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || header._reserved & super::shapes::INTEGRITY_FLAGS != 0
     {
@@ -1342,7 +1344,7 @@ unsafe fn family_birth(d: &PerryLayoutDesc, proto: f64) -> Option<*mut ObjectHea
         return None;
     }
     let header = crate::value::addr_class::try_read_gc_header(p)?;
-    if !crate::object_has_meta_word!(header.obj_type)
+    if crate::object_lacks_meta_word!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
     {
         return None;

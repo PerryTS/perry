@@ -321,7 +321,7 @@ pub(crate) fn fixed_generator_state(value: f64) -> Option<*const crate::closure:
     let addr = value.as_pointer::<u8>() as usize;
     unsafe {
         let header = crate::value::addr_class::try_read_gc_header(addr)?;
-        if !crate::gc_type_is_object!(header.obj_type) {
+        if crate::gc_type_is_not_object!(header.obj_type) {
             return None;
         }
         fixed_generator_state_of_object(addr as *const ObjectHeader)
@@ -538,7 +538,7 @@ pub(crate) fn generator_observe_record_prototype(value: f64) {
         let Some(header) = crate::value::addr_class::try_read_gc_header(addr) else {
             return;
         };
-        if !crate::gc_type_is_object!(header.obj_type)
+        if crate::gc_type_is_not_object!(header.obj_type)
             || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return;

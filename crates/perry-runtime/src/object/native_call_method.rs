@@ -125,7 +125,7 @@ unsafe fn class_receiver_fast_guard(object: f64, method_bytes: &[u8]) -> Option<
     // resolution uses, so the fast path cannot classify a receiver differently
     // from the code it is short-circuiting.
     let (ptr, gc_type) = gc_pointer_and_type_from_value(object)?;
-    if !crate::gc_type_is_object!(gc_type) || ptr as usize != obj_addr {
+    if crate::gc_type_is_not_object!(gc_type) || ptr as usize != obj_addr {
         return None;
     }
     // `meta_capable_object` rather than a bare header read: it is the
@@ -2220,7 +2220,7 @@ pub(crate) unsafe fn native_call_method_tower(
             return r;
         }
 
-        if !crate::gc_type_is_object!(gc_type) {
+        if crate::gc_type_is_not_object!(gc_type) {
             // An exotic receiver (an Error instance, gc type ERROR) of a class
             // whose methods live on its prototype chain rather than in a
             // class-id method table: a class expression or a function-nested

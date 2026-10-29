@@ -273,7 +273,7 @@ unsafe fn ensure_meta_for_mark(obj: usize, flag: u64) -> Option<*mut crate::obje
         return None;
     }
     let header = crate::value::addr_class::try_read_gc_header(obj)?;
-    if !crate::object_has_meta_word!(header.obj_type) {
+    if crate::object_lacks_meta_word!(header.obj_type) {
         return None;
     }
     let object = obj as *mut crate::object::ObjectHeader;

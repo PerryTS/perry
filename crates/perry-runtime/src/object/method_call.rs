@@ -220,7 +220,7 @@ unsafe fn prepare(recv: f64, method_id: i64) -> f64 {
             h.obj_type
         }
     });
-    let cell = matches!(kind, Some(t) if !crate::gc_type_is_object!(t)
+    let cell = matches!(kind, Some(t) if crate::gc_type_is_not_object!(t)
         && t != crate::gc::GC_TYPE_CLOSURE && t != crate::gc::GC_TYPE_PROXY && t != u8::MAX);
     let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     let Some(name_ref) = crate::string::perry_string_ref_from_dispatch_id(method_id, &mut scratch)
@@ -427,7 +427,7 @@ unsafe fn plain_ordinary(addr: usize) -> bool {
     let Some(header) = crate::value::addr_class::try_read_gc_header(addr) else {
         return false;
     };
-    if !crate::object_has_meta_word!(header.obj_type)
+    if crate::object_lacks_meta_word!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || header._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0
     {

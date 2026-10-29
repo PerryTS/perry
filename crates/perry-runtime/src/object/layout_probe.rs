@@ -1387,7 +1387,7 @@ pub(crate) unsafe fn probe_accessor_word(
     }
     let dir = super::ordinary_dir_addr();
     let header = crate::gc::header_from_trusted_user_ptr(obj.cast());
-    if !crate::gc_type_is_object!((*header).obj_type) {
+    if crate::gc_type_is_not_object!((*header).obj_type) {
         return None;
     }
     let mut cur = obj;

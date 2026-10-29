@@ -49,7 +49,7 @@ pub(crate) unsafe fn try_delete_last_added_key_at(
 unsafe fn admitted_receiver(obj: *mut ObjectHeader) -> Option<super::shapes::ShapeRecordRef> {
     let addr = obj as usize;
     let header = crate::value::addr_class::try_read_gc_header(addr)?;
-    if !crate::object_has_meta_word!(header.obj_type)
+    if crate::object_lacks_meta_word!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || header._reserved
             & (crate::gc::OBJ_FLAG_HAS_DESCRIPTORS

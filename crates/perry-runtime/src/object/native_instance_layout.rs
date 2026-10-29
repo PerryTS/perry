@@ -119,7 +119,7 @@ pub(crate) unsafe fn derived_layout(proto: u64) -> Option<*const PerryLayoutDesc
         }
         let obj = value.as_pointer::<ObjectHeader>();
         let header = crate::value::addr_class::try_read_gc_header(obj as usize)?;
-        if !crate::object_has_meta_word!(header.obj_type)
+        if crate::object_lacks_meta_word!(header.obj_type)
             || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return None;

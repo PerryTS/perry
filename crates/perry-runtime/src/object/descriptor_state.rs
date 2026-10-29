@@ -493,7 +493,7 @@ pub(crate) unsafe fn holder_word_blocks_store(mut bits: u64, name: &[u8]) -> Opt
             } else {
                 crate::value::addr_class::tracked_header_of_bits(bits)?.as_ref()
             };
-        if !crate::gc_type_is_object!(header.obj_type)
+        if crate::gc_type_is_not_object!(header.obj_type)
             || header._reserved
                 & (crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO | crate::gc::OBJ_FLAG_FROZEN)
                 != 0
@@ -717,7 +717,7 @@ pub(crate) unsafe fn plain_custom_prototype_may_intercept(obj_addr: usize, key: 
         // A non-object prototype (function, array, …) may carry semantics this
         // walk does not model; a frozen one makes every inherited data property
         // non-writable whether or not a per-key entry records it.
-        if !crate::gc_type_is_object!(header.obj_type)
+        if crate::gc_type_is_not_object!(header.obj_type)
             || header._reserved
                 & (crate::gc::OBJ_FLAG_FROZEN | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO)
                 != 0

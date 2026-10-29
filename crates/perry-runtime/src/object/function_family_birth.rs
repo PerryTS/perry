@@ -238,7 +238,7 @@ unsafe fn try_symbol_store(
     let Some(gc) = crate::value::addr_class::try_read_gc_header(address) else {
         return false;
     };
-    if !crate::gc_type_is_object!(gc.obj_type)
+    if crate::gc_type_is_not_object!(gc.obj_type)
         || gc._reserved
             & (crate::gc::OBJ_FLAG_FROZEN
                 | crate::gc::OBJ_FLAG_SEALED
@@ -333,7 +333,7 @@ unsafe fn function_layout_admits_store(
     // only an ordinary object carries the holder metadata.
     let address = (prototype_bits & crate::value::POINTER_MASK) as usize;
     if crate::value::addr_class::try_read_gc_header(address)
-        .is_none_or(|gc| !crate::object_has_meta_word!(gc.obj_type))
+        .is_none_or(|gc| crate::object_lacks_meta_word!(gc.obj_type))
     {
         return false;
     }
@@ -376,7 +376,7 @@ unsafe fn symbol_chain_allows_add(receiver: f64, key: f64) -> bool {
         let Some(gc) = crate::value::addr_class::try_read_gc_header(address) else {
             return false;
         };
-        if !crate::object_has_meta_word!(gc.obj_type) {
+        if crate::object_lacks_meta_word!(gc.obj_type) {
             return false;
         }
         let obj = address as *const ObjectHeader;

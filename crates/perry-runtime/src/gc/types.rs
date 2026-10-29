@@ -78,6 +78,22 @@ macro_rules! object_has_meta_word {
         ($t) == $crate::gc::GC_TYPE_OBJECT
     };
 }
+/// The negation of [`gc_type_is_object!`] for a site that compared with `!=`.
+/// S0f meaning: `($t) < 0xFE`.
+#[macro_export]
+macro_rules! gc_type_is_not_object {
+    ($t:expr) => {
+        ($t) != $crate::gc::GC_TYPE_OBJECT
+    };
+}
+/// The negation of [`object_has_meta_word!`] for a site that compared with `!=`.
+/// S0f meaning: `($t) != 0xFF`.
+#[macro_export]
+macro_rules! object_lacks_meta_word {
+    ($t:expr) => {
+        ($t) != $crate::gc::GC_TYPE_OBJECT
+    };
+}
 /// The constant pattern of a `match` arm on an object type byte. S0f meaning:
 /// both object constants.
 #[macro_export]

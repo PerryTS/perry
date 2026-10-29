@@ -238,7 +238,7 @@ unsafe fn own_property_slot(
         return None;
     }
     let obj_gc = (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    if !crate::gc_type_is_object!((*obj_gc).obj_type) {
+    if crate::gc_type_is_not_object!((*obj_gc).obj_type) {
         return None;
     }
     let keys_view = crate::object::object_keys(obj);
@@ -490,7 +490,7 @@ pub(crate) unsafe fn ordinary_object_prototype_property_value(
         return None;
     }
     let gc = gc_header_for(obj);
-    if !crate::gc_type_is_object!((*gc).obj_type) {
+    if crate::gc_type_is_not_object!((*gc).obj_type) {
         return None;
     }
     // #10827: this asked only whether the RECEIVER was born without a

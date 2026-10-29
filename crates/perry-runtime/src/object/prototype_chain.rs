@@ -762,7 +762,7 @@ unsafe fn class_link_prototype(obj_ptr: usize) -> usize {
     let Some(header) = crate::value::addr_class::try_read_gc_header(obj_ptr) else {
         return 0;
     };
-    if !crate::gc_type_is_object!(header.obj_type) {
+    if crate::gc_type_is_not_object!(header.obj_type) {
         return 0;
     }
     let class_id = (*(obj_ptr as *const crate::ObjectHeader)).class_id;
@@ -915,7 +915,7 @@ pub(crate) unsafe fn default_object_prototype_for_owner(obj_ptr: usize) -> Optio
     if (*gc)._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 {
         return None;
     }
-    if !crate::gc_type_is_object!((*gc).obj_type)
+    if crate::gc_type_is_not_object!((*gc).obj_type)
         || ((*obj).class_id != 0 && !super::shapes::object_is_plain_record(obj))
     {
         return None;

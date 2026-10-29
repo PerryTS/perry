@@ -37,7 +37,7 @@ pub unsafe extern "C" fn js_class_accessor_shape_guard(
     let Some(header) = crate::value::addr_class::try_read_gc_header_known_plausible(addr) else {
         return 0;
     };
-    if !crate::gc_type_is_object!(header.obj_type)
+    if crate::gc_type_is_not_object!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
     {
         return 0;

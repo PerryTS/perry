@@ -130,7 +130,7 @@ pub(crate) unsafe fn shape_answers(addr: usize) -> bool {
         return false;
     };
     // A function object is a GC_TYPE_CLOSURE cell, never GC_TYPE_OBJECT.
-    if !crate::object_has_meta_word!(header.obj_type)
+    if crate::object_lacks_meta_word!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || header._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0
     {

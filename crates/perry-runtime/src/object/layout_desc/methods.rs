@@ -73,7 +73,7 @@ pub unsafe extern "C" fn perry_probe_family_method(
         return 0;
     }
     let h = crate::gc::header_from_trusted_user_ptr(obj.cast());
-    if !crate::gc_type_is_object!((*h).obj_type)
+    if crate::gc_type_is_not_object!((*h).obj_type)
         || (*h).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || word_is_shadowed((*obj).parent_class_id)
     {

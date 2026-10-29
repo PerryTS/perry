@@ -688,7 +688,7 @@ fn object_array_numeric_write_slots(
         }
         let addr = (bits & POINTER_MASK) as usize;
         let gc = crate::value::addr_class::try_read_gc_header(addr)?;
-        if !crate::gc_type_is_object!(gc.obj_type)
+        if crate::gc_type_is_not_object!(gc.obj_type)
             || gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
             || gc._reserved & BLOCKING_FLAGS != 0
         {

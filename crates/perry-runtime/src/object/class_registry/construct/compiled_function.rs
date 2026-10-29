@@ -407,7 +407,7 @@ pub(crate) fn ordinary_compiled_function_has_instance(
         }
         let obj = (bits & crate::value::POINTER_MASK) as usize;
         let header = crate::value::addr_class::try_read_gc_header(obj)?;
-        if !crate::object_has_meta_word!(header.obj_type) {
+        if crate::object_lacks_meta_word!(header.obj_type) {
             return None;
         }
         let meta =

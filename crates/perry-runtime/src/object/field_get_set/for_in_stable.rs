@@ -44,7 +44,7 @@ fn stable_miss<T>(reason: &'static str) -> Option<T> {
 
 unsafe fn prototype_signature(prototype_addr: usize) -> Option<PrototypeSignature> {
     let header = crate::value::addr_class::try_read_gc_header(prototype_addr)?;
-    if !crate::gc_type_is_object!(header.obj_type)
+    if crate::gc_type_is_not_object!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
     {
         return None;
@@ -137,7 +137,7 @@ fn stable_single_own_for_in_keys(value: f64) -> Option<*mut ArrayHeader> {
     else {
         return stable_miss("invalid_header");
     };
-    if !crate::object_has_meta_word!(receiver_gc.obj_type)
+    if crate::object_lacks_meta_word!(receiver_gc.obj_type)
         || receiver_gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
     {
         return stable_miss("receiver_kind");

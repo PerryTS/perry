@@ -30,7 +30,7 @@ pub(super) unsafe fn validated_class_entry(
     }
     let object = value.as_pointer::<ObjectHeader>();
     let header = crate::value::addr_class::try_read_gc_header(object as usize)?;
-    if !crate::gc_type_is_object!(header.obj_type)
+    if crate::gc_type_is_not_object!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || crate::object::shapes::object_shape_stamp(object).0 as u64 != shape
         || (*object).class_id != (*site.add(1)).load(Ordering::Relaxed) as u32

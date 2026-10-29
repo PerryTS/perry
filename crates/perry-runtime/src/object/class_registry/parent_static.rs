@@ -566,7 +566,7 @@ pub extern "C" fn js_object_mark_class(obj: i64) {
             let Some(header) = crate::value::addr_class::try_read_gc_header(obj as usize) else {
                 return;
             };
-            if !crate::gc_type_is_object!(header.obj_type)
+            if crate::gc_type_is_not_object!(header.obj_type)
                 || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
             {
                 return;
