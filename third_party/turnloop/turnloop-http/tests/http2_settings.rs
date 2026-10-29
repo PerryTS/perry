@@ -274,7 +274,6 @@ fn settings_it_cannot_honour_are_refused() {
     let (_, mut server) = handshake();
     for (id, value) in [
         (Settings::ENABLE_PUSH, 1),
-        (Settings::HEADER_TABLE_SIZE, 8192),
         (Settings::INITIAL_WINDOW_SIZE, 0x8000_0000),
         (Settings::MAX_FRAME_SIZE, 16383),
         (Settings::MAX_FRAME_SIZE, 0x0100_0000),
@@ -290,6 +289,18 @@ fn settings_it_cannot_honour_are_refused() {
     }
     assert!(server.output().is_empty());
     assert_eq!(server.pending_settings(), 0);
+}
+
+/// The HPACK decoder honours any advertised HEADER_TABLE_SIZE, so a larger
+/// table is accepted and sent, not refused.
+#[test]
+fn a_larger_header_table_is_advertised() {
+    let (_, mut server) = handshake();
+    let mut big = Settings::new();
+    big.set(Settings::HEADER_TABLE_SIZE, 8192);
+    assert!(server.settings(&big).is_ok());
+    assert_eq!(server.pending_settings(), 1);
+    assert!(Connection::with_settings(Role::Server, Limits::default(), &big).is_ok());
 }
 
 /// Item 6. A live change applies to the running connection: a loosening at

@@ -20,7 +20,7 @@
 //!
 //! | setting | the core's coupling |
 //! |---|---|
-//! | HEADER_TABLE_SIZE | `hpack::Decoder::new(4096, …)` — a larger table would be advertised and then not honoured, and the peer's next header block would fail to decode |
+//! | HEADER_TABLE_SIZE | the decoder admits the peer's table-size updates up to the advertised value, so any value is honoured |
 //! | INITIAL_WINDOW_SIZE | each `Stream`'s `recv_window` is **hard-coded to 65535**; advertising more invites DATA the core answers with FLOW_CONTROL_ERROR |
 //! | MAX_CONCURRENT_STREAMS | `Limits::streams` is both the advertisement and the size of the stream table; advertising more produces `REFUSED_STREAM` from inside `receive`, which is a connection error |
 //! | MAX_FRAME_SIZE | `decode_frame(input, limits.frame_size)` rejects anything larger as FRAME_SIZE_ERROR |
@@ -66,9 +66,6 @@ pub(crate) fn clamp_to_core(
     advertised: &Http2SettingsState,
 ) -> Http2SettingsState {
     let mut out = requested.clone();
-    out.header_table_size = requested
-        .header_table_size
-        .min(advertised.header_table_size);
     out.initial_window_size = advertised.initial_window_size;
     out.max_concurrent_streams = requested
         .max_concurrent_streams
@@ -90,17 +87,15 @@ fn settings_payload(role_is_client: bool, settings: &Http2SettingsState) -> Vec<
         payload.extend_from_slice(&id.to_be_bytes());
         payload.extend_from_slice(&value.to_be_bytes());
     };
-    put(HEADER_TABLE_SIZE, settings.header_table_size);
-    if role_is_client {
+    for (id, value) in settings.named() {
         // Only a client may set ENABLE_PUSH to a non-zero value, and RFC 9113
-        // §6.5.2 makes a server that raises it a connection error on the
-        // client's side. Perry never pushes, so the value is always zero.
+        // section 6.5.2 makes a server that raises it a connection error on
+        // the client's side. Perry never pushes, so the value is always zero.
+        put(id, if id == ENABLE_PUSH { 0 } else { value });
+    }
+    if role_is_client && !settings.names(ENABLE_PUSH) {
         put(ENABLE_PUSH, 0);
     }
-    put(MAX_CONCURRENT_STREAMS, settings.max_concurrent_streams);
-    put(INITIAL_WINDOW_SIZE, settings.initial_window_size);
-    put(MAX_FRAME_SIZE, settings.max_frame_size);
-    put(MAX_HEADER_LIST_SIZE, settings.max_header_list_size);
     payload
 }
 
@@ -272,6 +267,7 @@ mod tests {
             max_header_size: 32_768,
             max_header_list_size: 32_768,
             enable_connect_protocol: false,
+            given: 0,
         }
     }
 
@@ -296,12 +292,10 @@ mod tests {
         let mut requested = advertised();
         requested.max_concurrent_streams = 10_000;
         requested.max_frame_size = 1 << 20;
-        requested.header_table_size = 65_536;
         requested.initial_window_size = 1 << 20;
         let out = clamp_to_core(&requested, &advertised());
         assert_eq!(out.max_concurrent_streams, 128);
         assert_eq!(out.max_frame_size, 16_384);
-        assert_eq!(out.header_table_size, 4_096);
         assert_eq!(out.initial_window_size, 65_535);
     }
 
