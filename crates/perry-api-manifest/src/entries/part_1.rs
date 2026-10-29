@@ -42,6 +42,10 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
     method("better-sqlite3", "pluck", true, None),
     method("better-sqlite3", "columns", true, None),
     method("better-sqlite3", "transaction", true, None),
+    // `safeIntegers` joins them: the native table now lowers it, and this
+    // row keeps the dispatch/manifest consistency gate green. `columns` was
+    // already listed above.
+    method("better-sqlite3", "safeIntegers", true, None),
     // bun:ffi (#6562). `FFIType` and `suffix` are
     // constants; symbol-table call stubs live on the object `dlopen`
     // returns, so the module surface itself is small. The later-stage

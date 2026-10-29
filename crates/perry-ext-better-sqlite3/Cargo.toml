@@ -19,7 +19,16 @@ perry-ffi.workspace = true
 # unresolved at the final link step on hosts that don't ship
 # libsqlite3 in the default search path (or where the system one
 # is too old).
-rusqlite = { version = "0.39", features = ["bundled"] }
+# `column_decltype` gives `Statement::columns()` (each column's declared
+# type) and `column_metadata` gives `columns_with_metadata()` (the origin
+# database/table/column names). Together they are exactly the five keys
+# better-sqlite3's `Statement#columns()` reports; without them that method
+# cannot be answered faithfully and callers read `undefined`.
+rusqlite = { version = "0.39", features = [
+    "bundled",
+    "column_decltype",
+    "column_metadata",
+] }
 
 [dev-dependencies]
 perry-ffi = { workspace = true, features = ["runtime-link"] }

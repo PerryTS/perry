@@ -124,7 +124,7 @@ pub use closure::{
 pub use transient_roots::{TransientRootScope, TransientRootedAddr, TransientRootedNanbox};
 
 mod bigint;
-pub use bigint::{alloc_bigint_from_str, read_bigint_limbs};
+pub use bigint::{alloc_bigint_from_str, bigint_value, read_bigint_limbs};
 
 mod buffer;
 pub mod bytes;
