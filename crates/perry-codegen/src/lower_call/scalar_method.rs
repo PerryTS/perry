@@ -692,7 +692,11 @@ fn emit_materialized_scalar_receiver_direct_field_store(
     value: &str,
 ) {
     let field_idx_str = field_index.to_string();
-    let header_skip = crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
+    let header_skip = crate::target_layout::object_slot_base_bytes(
+        ctx.target_triple,
+        crate::target_layout::class_instance_form(class_name),
+    )
+    .to_string();
     let field_ptr = {
         let blk = ctx.block();
         let obj_ptr = blk.inttoptr(I64, obj_handle);

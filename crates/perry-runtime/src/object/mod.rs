@@ -1670,7 +1670,7 @@ pub struct ObjectHeader {
     /// objects (the common case). MUST stay the LAST field: codegen reads
     /// the earlier header fields at fixed offsets (0/4), and the
     /// field-slot region begins at `size_of::<ObjectHeader>()`, mirrored
-    /// by `perry-codegen/src/target_layout.rs::object_header_size_bytes`.
+    /// by `perry-codegen/src/target_layout.rs::object_slot_base_bytes`.
     /// See [`ObjectMeta`].
     pub meta: *mut ObjectMeta,
 }

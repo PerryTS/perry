@@ -47,9 +47,7 @@ pub(super) fn lower_typeof_object_inline(
     let closure = ctx
         .block()
         .icmp_eq(I32, &kind, &crate::runtime_abi::GC_TYPE_CLOSURE.to_string());
-    let object = ctx
-        .block()
-        .icmp_eq(I32, &kind, &crate::runtime_abi::GC_TYPE_OBJECT.to_string());
+    let object = crate::target_layout::emit_gc_type_is_object(ctx.block(), I32, &kind);
     let proxy = ctx
         .block()
         .icmp_eq(I32, &kind, &crate::runtime_abi::GC_TYPE_PROXY.to_string());

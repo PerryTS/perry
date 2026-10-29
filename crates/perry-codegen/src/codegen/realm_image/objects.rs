@@ -20,7 +20,7 @@ pub(crate) fn emit_object(
     let header = cell
         .header
         .as_ref()
-        .filter(|h| h.gc_type == GC_TYPE_OBJECT)
+        .filter(|h| perry_abi::gc_type_is_object!(h.gc_type))
         .ok_or_else(|| format!("realm {} is not an object cell", cell.name))?;
     if header.class_id == Some(0xffff_fffe) && cell.native_namespace.is_none() {
         return Err(format!(
@@ -82,7 +82,7 @@ mod tests {
                 if !cell
                     .header
                     .as_ref()
-                    .is_some_and(|h| h.gc_type == GC_TYPE_OBJECT)
+                    .is_some_and(|h| perry_abi::gc_type_is_object!(h.gc_type))
                 {
                     module.add_raw_global(format!(
                         "@{} = external global i8",
@@ -98,7 +98,7 @@ mod tests {
                 .filter(|c| {
                     c.header
                         .as_ref()
-                        .is_some_and(|h| h.gc_type == GC_TYPE_OBJECT)
+                        .is_some_and(|h| perry_abi::gc_type_is_object!(h.gc_type))
                 })
             {
                 emit_object(

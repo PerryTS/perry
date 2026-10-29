@@ -717,7 +717,6 @@ const FIELD_WRITEBACK_BLOCKING_FLAGS_I16: &str = "2055";
 const POINTER_TAG_HI16: &str = "32765"; // 0x7FFD
 const HANDLE_BAND_TOP: &str = crate::expr::receiver_range::HANDLE_BAND_TOP_LITERAL;
 const HANDLE_MASK_48: &str = "281474976710655"; // 0x0000_FFFF_FFFF_FFFF
-const GC_TYPE_OBJECT_I8: &str = "2";
 
 /// `Expr::ArrayPush`. When `field_writeback` names a class field (the
 /// `perry-transform::field_push_local_bind` expansion of `this.f.push(v)`),
@@ -817,7 +816,7 @@ fn emit_field_push_writeback(
         // GcHeader precedes the object: obj_type @-8 (i8), _reserved @-6 (i16).
         let gtype_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-8")]);
         let gtype = blk.load(I8, &gtype_ptr);
-        let is_object = blk.icmp_eq(I8, &gtype, GC_TYPE_OBJECT_I8);
+        let is_object = crate::target_layout::emit_object_has_meta_word(blk, I8, &gtype);
         let res_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-6")]);
         let reserved = blk.load(I16, &res_ptr);
         let blocking = blk.and(I16, &reserved, FIELD_WRITEBACK_BLOCKING_FLAGS_I16);
@@ -1118,9 +1117,11 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
             // branches both update the slot via the existing
             // boxed/captured/local fall-through below.
             if let Some(home) = PushReceiverHome::resolve(ctx, *array_id) {
-                let apush_meta_offset =
-                    crate::target_layout::object_meta_slot_offset_bytes(ctx.target_triple)
-                        .to_string();
+                let apush_meta_offset = crate::target_layout::object_meta_slot_offset_bytes(
+                    ctx.target_triple,
+                    crate::target_layout::HeaderForm::Meta,
+                )
+                .to_string();
                 let blk = ctx.block();
                 let arr_handle = unbox_to_i64(blk, &arr_box);
 

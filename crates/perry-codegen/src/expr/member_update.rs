@@ -545,7 +545,13 @@ fn emit_numeric_slot_update(
     // the handle is derived only on the cold arm that needs it.
     let field_ptr = match wpf {
         Some(w) => super::wpfacts_access::emit_proof_slot_ptr(ctx, &recv_box, &w.proof),
-        None => super::wpfacts_access::emit_slot_ptr(ctx, &recv_box, field_index),
+        // No proof: a ptr-shape class receiver, whose instances have the meta word.
+        None => super::wpfacts_access::emit_slot_ptr(
+            ctx,
+            &recv_box,
+            crate::target_layout::HeaderForm::Meta,
+            field_index,
+        ),
     };
     let (old, new) = {
         let blk = ctx.block();

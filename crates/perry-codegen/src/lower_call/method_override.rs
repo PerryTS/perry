@@ -20,18 +20,17 @@ use super::direct_method_guard::{
 };
 
 pub(super) const POINTER_TAG_HI16: &str = "32765"; // 0x7FFD
-pub(super) const GC_TYPE_OBJECT: &str = "2";
-// The first four bytes before an ObjectHeader are, in little-endian order,
-// `gtype: u8`, `flags: u8`, and `reserved: u16`.  One masked i32 load can
-// therefore prove the three fields the direct-method contract consumes:
-//
-//   gtype == GC_TYPE_OBJECT
-//   flags & GC_FLAG_FORWARDED == 0
-//   reserved & OBJ_FLAG_HAS_DESCRIPTORS == 0
-//
-// Mask: 0x0800_0000 (descriptor bit) | 0x0000_8000 (forwarded bit) |
-// 0x0000_00ff (the complete gtype byte). The exact class/ShapeId comparison
-// rejects the numeric-proof sibling.
+                                                   // The first four bytes before an ObjectHeader are, in little-endian order,
+                                                   // `gtype: u8`, `flags: u8`, and `reserved: u16`.  One masked i32 load can
+                                                   // therefore prove the three fields the direct-method contract consumes:
+                                                   //
+                                                   //   gtype == GC_TYPE_OBJECT
+                                                   //   flags & GC_FLAG_FORWARDED == 0
+                                                   //   reserved & OBJ_FLAG_HAS_DESCRIPTORS == 0
+                                                   //
+                                                   // Mask: 0x0800_0000 (descriptor bit) | 0x0000_8000 (forwarded bit) |
+                                                   // 0x0000_00ff (the complete gtype byte). The exact class/ShapeId comparison
+                                                   // rejects the numeric-proof sibling.
 pub(super) const GC_OBJECT_METHOD_GUARD_MASK_I32: &str = "134250751"; // 0x0800_80ff
                                                                       // The learned-word arms test only the kind and the forwarding bit. Every
                                                                       // descriptor install on a `GC_TYPE_OBJECT` changes its ShapeId (RULE 1,
@@ -299,7 +298,7 @@ fn emit_direct_method_probe(ctx: &mut FnCtx<'_>, recv_box: &str, packed: bool) -
         let gc_header_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-8")]);
         let gc_header = blk.load(I32, &gc_header_ptr);
         let guarded_gc_bits = blk.and(I32, &gc_header, GC_OBJECT_METHOD_GUARD_MASK_I32);
-        let gc_header_ok = blk.icmp_eq(I32, &guarded_gc_bits, GC_TYPE_OBJECT);
+        let gc_header_ok = crate::target_layout::emit_gc_type_is_object(blk, I32, &guarded_gc_bits);
         blk.cond_br(&gc_header_ok, &read_label, &merge_label);
         blk.label.clone()
     };
@@ -429,7 +428,7 @@ fn emit_inline_exact_argument_shape_guard(
         let gc_header_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-8")]);
         let gc_header = blk.load(I32, &gc_header_ptr);
         let guarded_gc_bits = blk.and(I32, &gc_header, GC_OBJECT_METHOD_GUARD_MASK_I32);
-        let gc_header_ok = blk.icmp_eq(I32, &guarded_gc_bits, GC_TYPE_OBJECT);
+        let gc_header_ok = crate::target_layout::emit_gc_type_is_object(blk, I32, &guarded_gc_bits);
 
         let class_shape = blk.load(I64, &obj_ptr);
         let expected_shape_i64 = blk.zext(I32, expected_shape_id, I64);

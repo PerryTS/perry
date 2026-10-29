@@ -136,7 +136,10 @@ pub(super) fn emit_class_artifacts(c: ClassArtifactsCtx<'_>) -> Result<()> {
                     method,
                     method_names,
                     receiver,
-                    crate::target_layout::object_header_size_bytes(target_triple),
+                    crate::target_layout::object_slot_base_bytes(
+                        target_triple,
+                        crate::target_layout::class_instance_form(&class.name),
+                    ),
                 )
                 .with_context(|| {
                     format!(
