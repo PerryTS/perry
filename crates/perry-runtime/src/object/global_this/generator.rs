@@ -101,21 +101,21 @@ pub(crate) fn generator_function_proto_of(closure_ptr: usize) -> Option<f64> {
 /// Build the hidden `%AsyncFunction%` constructor and its ordinary,
 /// non-callable `.prototype` object. The parent links are attached separately
 /// once the global `Function` constructor has been populated.
-fn build_async_function_tower() {
+#[rustfmt::skip] fn build_async_function_tower() {
     let _no_move = crate::gc::GcSuppressScope::new();
     let ctor = crate::closure::js_closure_alloc(
-        crate::fn_info!(global_this_builtin_noop_thunk, 1; with_declared(1)),
+        crate::fn_info!(#[realm(realm_decl! { WebAssembly.Exception, kind = constructor; WebAssembly.Tag, kind = constructor; "%AsyncFunctionPrototype%.constructor", kind = constructor, extends = Function, instance = "%AsyncFunctionPrototype%", spec = {name = "AsyncFunction"}, emit = metadata(realm_async_function_name); "%AsyncGeneratorFunctionPrototype%.constructor", kind = constructor, extends = Function, instance = "%AsyncGeneratorFunctionPrototype%", spec = {name = "AsyncGeneratorFunction"}, emit = metadata(realm_async_generator_name); "%GeneratorFunctionPrototype%.constructor", kind = constructor, extends = Function, instance = "%GeneratorFunctionPrototype%", spec = {name = "GeneratorFunction"}, emit = metadata(realm_generator_name); })] export crate::object::global_this::fetch_globals::global_this_builtin_noop_thunk, 1; with_declared(1)),
         0,
     );
     // Realm intrinsics, built once: born old and never-move (O3).
-    let proto = crate::object::object_alloc_prototype_old(0, 0);
+    let proto = crate::realm_decl! { birth crate::object::object_alloc_prototype_old(0, 0); realm { "%AsyncFunctionPrototype%", extends = Function.prototype, members = { constructor, attrs = configurable; [Symbol.toStringTag] = "AsyncFunction"; }; } };
     if ctor.is_null() || proto.is_null() {
         return;
     }
     let configurable = super::super::PropertyAttrs::new(false, false, true);
     let fixed = super::super::PropertyAttrs::new(false, false, false);
 
-    super::super::native_module::set_bound_native_closure_name(ctor, "AsyncFunction");
+    super::super::native_module::set_bound_native_closure_name(ctor, realm_async_function_name!(name));
     super::super::native_module::set_builtin_closure_length(ctor as usize, 1);
     super::super::set_builtin_property_attrs(ctor as usize, "name".to_string(), configurable);
     super::super::set_builtin_property_attrs(ctor as usize, "length".to_string(), configurable);
@@ -837,7 +837,7 @@ pub extern "C" fn js_generator_attach_closure_prototype(
 ///   .next / .return / .throw                (Phase 1: noop-backed for descriptor tests)
 ///   [Symbol.toStringTag] = "Generator"
 /// ```
-fn build_generator_tower(
+#[rustfmt::skip] fn build_generator_tower(
     is_async: bool,
     ctor_slot: &crate::object::RealmAtomicI64,
     proto_slot: &crate::object::RealmAtomicI64,
@@ -870,12 +870,12 @@ fn build_generator_tower(
     // at that holder, so births do not need its lazy Object parent.
     let (ctor_name, ctor_tag, inst_tag) = if is_async {
         (
-            "AsyncGeneratorFunction",
+            realm_async_generator_name!(name),
             "AsyncGeneratorFunction",
             "AsyncGenerator",
         )
     } else {
-        ("GeneratorFunction", "GeneratorFunction", "Generator")
+        (realm_generator_name!(name), "GeneratorFunction", "Generator")
     };
     let ctor = crate::closure::js_closure_alloc(
         crate::fn_info!(global_this_builtin_noop_thunk, 1; with_declared(1)),
@@ -886,9 +886,9 @@ fn build_generator_tower(
     // Use the ordinary intrinsic installer with only the room these fixed
     // holders need. Old allocations cannot return spare capacity at fit time;
     // the installed keys and final shape still own the live inline bound.
-    let proto = super::proto_room::alloc_builtin_prototype_with_room(3);
+    let proto = crate::realm_decl! { birth super::proto_room::alloc_builtin_prototype_with_room(3); realm { "%AsyncGeneratorFunctionPrototype%", extends = Function.prototype, members = { constructor, attrs = configurable; prototype = ref("%AsyncGeneratorPrototype%"), attrs = configurable; [Symbol.toStringTag] = "AsyncGeneratorFunction"; }; "%GeneratorFunctionPrototype%", extends = Function.prototype, members = { constructor, attrs = configurable; prototype = ref("%GeneratorPrototype%"), attrs = configurable; [Symbol.toStringTag] = "GeneratorFunction"; }; } };
     let gen_proto =
-        super::proto_room::alloc_builtin_prototype_with_room(if is_async { 5 } else { 6 });
+        crate::realm_decl! { birth super::proto_room::alloc_builtin_prototype_with_room(if is_async { 5 } else { 6 }); realm { "%AsyncGeneratorPrototype%", extends = "%AsyncIteratorPrototype%", members = { constructor = ref("%AsyncGeneratorFunctionPrototype%"), attrs = configurable; next; return; throw; [Symbol.toStringTag] = "AsyncGenerator"; }, births = [Promise]; "%GeneratorPrototype%", members = { constructor = ref("%GeneratorFunctionPrototype%"), attrs = configurable; next; return; throw; [Symbol.iterator]; [Symbol.toStringTag] = "Generator"; }; } };
     if ctor.is_null() || proto.is_null() || gen_proto.is_null() {
         return;
     }
@@ -931,15 +931,15 @@ fn build_generator_tower(
     );
     let (next_info, return_info, throw_info) = if is_async {
         (
-            crate::fn_info!(async_generator_proto_next_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
-            crate::fn_info!(async_generator_proto_return_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
-            crate::fn_info!(async_generator_proto_throw_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm("%AsyncGeneratorPrototype%.next")] export crate::object::global_this::generator::async_generator_proto_next_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm("%AsyncGeneratorPrototype%.return")] export crate::object::global_this::generator::async_generator_proto_return_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm("%AsyncGeneratorPrototype%.throw")] export crate::object::global_this::generator::async_generator_proto_throw_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         )
     } else {
         (
-            crate::fn_info!(generator_proto_next_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
-            crate::fn_info!(generator_proto_return_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
-            crate::fn_info!(generator_proto_throw_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm("%GeneratorPrototype%.next")] export crate::object::global_this::generator::generator_proto_next_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm("%GeneratorPrototype%.return")] export crate::object::global_this::generator::generator_proto_return_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm("%GeneratorPrototype%.throw")] export crate::object::global_this::generator::generator_proto_throw_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         )
     };
     for (name, info, key) in [
@@ -985,13 +985,13 @@ fn build_generator_tower(
         (
             "asyncIterator",
             "[Symbol.asyncIterator]",
-            crate::fn_info!(async_generator_proto_async_iterator_thunk, 1; with_declared(0)),
+            crate::fn_info!(#[realm("%AsyncIteratorPrototype%[\"@@asyncIterator\"]", constructible = true)] export crate::object::global_this::generator::async_generator_proto_async_iterator_thunk, 1; with_declared(0)),
         )
     } else {
         (
             "iterator",
             "[Symbol.iterator]",
-            crate::fn_info!(generator_proto_iterator_thunk, 1; with_declared(0)),
+            crate::fn_info!(#[realm("%GeneratorPrototype%[\"@@iterator\"]", constructible = true)] export crate::object::global_this::generator::generator_proto_iterator_thunk, 1; with_declared(0)),
         )
     };
     if is_async {
@@ -999,7 +999,7 @@ fn build_generator_tower(
         // `%AsyncIteratorPrototype%`; reflection reaches that parent with two
         // `Object.getPrototypeOf` calls from an async generator function's
         // `.prototype`.
-        let async_iterator_proto = crate::object::object_alloc_prototype_old(0, 0);
+        let async_iterator_proto = crate::realm_decl! { birth crate::object::object_alloc_prototype_old(0, 0); realm { "%AsyncIteratorPrototype%", members = { [Symbol.asyncIterator]; }, births = [Promise]; } };
         install_proto_symbol_self_method(async_iterator_proto, symbol_name, display_name, thunk);
         let parent_bits = crate::value::js_nanbox_pointer(async_iterator_proto as i64).to_bits();
         super::super::prototype_chain::object_set_static_prototype(gen_proto as usize, parent_bits);
@@ -1057,5 +1057,3 @@ pub(crate) fn ensure_generator_intrinsics() {
 #[cfg(test)]
 #[path = "generator_shape_tests.rs"]
 mod generator_shape_tests;
-
-crate::realm_decl!("generator.realm.json#*");

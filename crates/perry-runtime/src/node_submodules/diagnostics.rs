@@ -696,7 +696,7 @@ pub(crate) fn get_field_value(obj: *mut ObjectHeader, name: &str) -> f64 {
 /// body's declared arity.
 pub(crate) fn method_closure(info: *const crate::closure::JsFunctionInfo, id: i64) -> f64 {
     let c = js_closure_alloc(info, 1);
-    js_closure_set_capture_ptr(c, 0, id);
+    crate::closure::closure_set_capture_word(c, 0, id);
     boxed_ptr(c)
 }
 
@@ -1310,7 +1310,7 @@ pub(crate) fn run_stores_method_closure(id: i64) -> f64 {
         crate::fn_info!(diag_channel_run_stores, 1; with_rest_kind(0, crate::closure::FN_REST_SYNTHETIC_ARGUMENTS)),
         1,
     );
-    js_closure_set_capture_ptr(c, 0, id);
+    crate::closure::closure_set_capture_word(c, 0, id);
     boxed_ptr(c)
 }
 
@@ -1325,7 +1325,7 @@ pub(crate) fn trace_callback_method_closure(id: i64) -> f64 {
         crate::fn_info!(diag_trace_callback, 1; with_rest_kind(0, crate::closure::FN_REST_SYNTHETIC_ARGUMENTS)),
         1,
     );
-    js_closure_set_capture_ptr(c, 0, id);
+    crate::closure::closure_set_capture_word(c, 0, id);
     boxed_ptr(c)
 }
 
@@ -1391,7 +1391,7 @@ pub(crate) extern "C" fn diag_channel_run_stores(
     // handle).
     let cb_args_arr = unsafe { build_arg_array(&cb_args) };
     let next = js_closure_alloc(crate::fn_info!(store_next_thunk, 0; with_declared(0)), 5);
-    js_closure_set_capture_ptr(next, 0, id);
+    crate::closure::closure_set_capture_word(next, 0, id);
     js_closure_set_capture_ptr(next, 1, data.to_bits() as i64);
     js_closure_set_capture_ptr(next, 2, fn_value.to_bits() as i64);
     js_closure_set_capture_ptr(next, 3, this_arg.to_bits() as i64);
@@ -1598,5 +1598,3 @@ pub(crate) use diagnostics_trace::{
     call_fn_value, channel_from_object_property, diag_trace_callback, diag_trace_promise,
     diag_trace_subscribe, diag_trace_sync, diag_trace_unsubscribe, tracing_event_name,
 };
-
-crate::realm_decl!("diagnostics.realm.json#*");

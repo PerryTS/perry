@@ -233,7 +233,8 @@ pub(crate) fn pin_instance_constructing_class(inst: *mut ObjectHeader, classobj_
             let object = scope.root_raw_mut_ptr(inst);
             let value = scope.root_nanbox_f64(classobj_value);
             let (meta, _) =
-                object.across_mut::<ObjectHeader, _>(|| crate::object::object_meta_ensure(inst));
+                // A1_UNPROVEN: tested by the layout word (is_family_object), not the type byte (kind-A/B question for S0b-S0e).
+                object.across_mut::<ObjectHeader, _>(|| crate::object::object_meta_ensure(crate::object::MetaObj::runtime_born(inst), crate::object::MetaReason::EvalBrand));
             (*meta).private_evaluation_brand = value.get_nanbox_f64().to_bits();
             crate::gc::runtime_write_barrier_slot(
                 meta as usize,

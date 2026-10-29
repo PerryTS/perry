@@ -383,12 +383,23 @@ pub(crate) fn module_function2(
     crate::value::js_nanbox_pointer(closure as i64)
 }
 
+/// A static module array: the empty birth (no element, scalar layout), or a
+/// string array born with its pointer layout and filled in order.
 pub(crate) fn module_array_value(items: &[&str]) -> f64 {
-    let arr = crate::array::js_array_alloc_with_length(items.len() as u32);
-    for (i, item) in items.iter().enumerate() {
-        crate::array::js_array_set_f64(arr, i as u32, module_string_value(item));
+    if !items.is_empty() {
+        return crate::array::realm_string_array(items, false);
     }
+    let arr =
+        crate::array::realm_array_alloc(0, perry_abi::realm_header::ArrayElements::Scalars, false);
     f64::from_bits(JSValue::array_ptr(arr).bits())
+}
+
+/// `module.builtinModules`: born from `MODULE_BUILTIN_MODULES` in its order,
+/// then frozen.
+pub(crate) fn module_builtin_modules_array() -> f64 {
+    let value = crate::realm_decl! { birth crate::array::realm_string_array(MODULE_BUILTIN_MODULES, false); realm { "node:module.builtinModules", elements_source = MODULE_BUILTIN_MODULES, integrity = frozen } };
+    crate::object::js_object_freeze(value);
+    value
 }
 
 fn process_exec_argv_value() -> f64 {
@@ -398,8 +409,7 @@ fn process_exec_argv_value() -> f64 {
         std::env::remove_var("PERRY_PROCESS_EXEC_ARGV");
         serde_json::from_str(&raw).unwrap_or_default()
     });
-    let refs = values.iter().map(String::as_str).collect::<Vec<_>>();
-    module_array_value(&refs)
+    crate::realm_decl! { birth crate::array::realm_string_array(&values.iter().map(String::as_str).collect::<Vec<_>>(), false); realm { process.execArgv, value = dynamic, elements = string; "node:process.execArgv", value = dynamic, elements = string; } }
 }
 
 pub(crate) fn module_set_value(items: &[&str]) -> f64 {
@@ -473,10 +483,10 @@ pub(crate) fn node_platform_name() -> &'static str {
 
 pub(crate) fn empty_object_value() -> f64 {
     module_object_value(unsafe {
-        crate::object::runtime_layouts::perry_build_runtime_record(
+        crate::realm_decl! { birth crate::object::runtime_layouts::perry_build_runtime_record(
             std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_PCHECKED031),
             std::ptr::NonNull::<f64>::dangling().as_ptr(),
-        )
+        ); realm { process._events, kind = namespace, members = { }; "node:process._events", kind = namespace, members = { }; } }
     })
 }
 
@@ -844,7 +854,7 @@ pub fn process_metadata_property(property: &str) -> Option<f64> {
         "config" => report::process_config_value(),
         "debugPort" => 9229.0,
         "execArgv" => process_exec_argv_value(),
-        "moduleLoadList" => module_array_value(&[]),
+        "moduleLoadList" => crate::realm_decl! { birth module_array_value(&[]); realm { process.moduleLoadList; "node:process.moduleLoadList"; } },
         "features" => report::process_features_value(),
         "finalization" => finalization::process_finalization_value(),
         "permission" => permission::process_permission_value()?,
@@ -857,7 +867,7 @@ pub fn process_metadata_property(property: &str) -> Option<f64> {
         "_eventsCount" => 0.0,
         "_exiting" => bool_value(false),
         "_maxListeners" => undefined_value(),
-        "_preload_modules" => module_array_value(&[]),
+        "_preload_modules" => crate::realm_decl! { birth module_array_value(&[]); realm { process._preload_modules; "node:process._preload_modules"; } },
         "domain" => active_domain_value(),
         _ => return None,
     })

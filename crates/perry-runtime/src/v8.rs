@@ -13,8 +13,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{LazyLock, Mutex};
 
 use crate::closure::{
-    js_closure_alloc, js_closure_call1, js_closure_call2, js_closure_get_capture_ptr,
-    js_closure_set_capture_ptr, ClosureHeader,
+    js_closure_alloc, js_closure_call1, js_closure_call2, js_closure_get_capture_ptr, ClosureHeader,
 };
 use crate::object::{js_object_get_field_by_name, ObjectHeader};
 use crate::promise::Promise;
@@ -185,7 +184,7 @@ fn make_stop_function(index: usize) -> f64 {
         crate::fn_info!(promise_hook_stop_trampoline, 0; with_declared(0)),
         1,
     );
-    js_closure_set_capture_ptr(closure, 0, index as i64);
+    crate::closure::closure_set_capture_word(closure, 0, index as i64);
     f64::from_bits(JSValue::pointer(closure as *const u8).bits())
 }
 

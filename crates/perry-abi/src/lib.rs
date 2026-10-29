@@ -8,9 +8,22 @@
 
 pub mod function_metadata;
 pub use function_metadata::*;
+extern crate alloc;
+
 pub mod accessor_guards;
+mod builtin_proto;
+pub use builtin_proto::{BuiltinProto, FunctionProtoKind};
+pub mod intrinsic_serials;
+pub mod object_meta_flags;
+mod shape_kind;
+pub use shape_kind::ShapeObjectKind;
+mod set_cells;
+pub use set_cells::*;
+mod realm_cells;
+pub use realm_cells::*;
 pub mod layouts;
 pub use layouts::*;
+pub mod realm_header;
 
 /// `object::shapes::SHAPE_ID_BASE`: the first ShapeId.
 pub const SHAPE_ID_BASE: u32 = 0x8000_0000;
@@ -48,6 +61,33 @@ pub const ARRAY_HEADER_SIZE: usize = 24;
 /// §3.2). A descriptor emits it only for such keys; the layout then carries
 /// the "may have holes" summary bit and every other layout keeps its cost.
 pub const LAYOUT_KEY_OPTIONAL: u8 = 0x80;
+/// `PerryLayoutDesc.gc_plan` bit 31: the descriptor carries a static GC scan
+/// plan. Bits 0..=30 are the slots that may hold a heap pointer (a lane whose
+/// representation is `Any`); every other slot is a raw number and is never
+/// scanned. A descriptor with more than [`LAYOUT_GC_PLAN_MAX_SLOTS`] slots, or
+/// with a `SPECIAL` representation lane (whose collectability is a runtime
+/// fact of the shape), carries 0: the collectors use the generic walk.
+pub const LAYOUT_GC_PLAN_STATIC: u32 = 1 << 31;
+pub const LAYOUT_GC_PLAN_MAX_SLOTS: u32 = 31;
+/// The static GC scan plan of a family layout of `slot_count` inline slots and
+/// field representation word `rep` (two bits per slot: 0 `Any`, 1 `F64`,
+/// 2 deprecated `F64`, 3 `SPECIAL`). Codegen emits it; the runtime reads it.
+pub const fn layout_gc_plan(slot_count: u32, rep: u64) -> u32 {
+    if slot_count > LAYOUT_GC_PLAN_MAX_SLOTS {
+        return 0;
+    }
+    let mut mask = 0u32;
+    let mut slot = 0;
+    while slot < slot_count {
+        match (rep >> (2 * slot)) & 0b11 {
+            0 => mask |= 1 << slot,
+            3 => return 0,
+            _ => {}
+        }
+        slot += 1;
+    }
+    LAYOUT_GC_PLAN_STATIC | mask
+}
 /// `PerryLayoutKey.attrs` attribute bits (the runtime's `key_attrs` entry
 /// bits, pinned there): `[[Writable]]`, `[[Enumerable]]`, `[[Configurable]]`
 /// false, an accessor, and which halves it has.
@@ -89,6 +129,10 @@ pub const ATOM_KIND_REGISTERED_SYMBOL: u8 = 3;
 /// the prototype's bind (`perry_bind_family_prototype`) hands the layout's
 /// such keys in key order, and the layout registers there.
 pub const ATOM_KIND_BINDING_SYMBOL: u8 = 4;
+/// The atom's pointer directly names an immutable realm symbol cell. The
+/// pointer field carries a SymbolHeader rather than a StringHeader for this
+/// kind; no symbol creation or registry lookup is needed to link its keys.
+pub const ATOM_KIND_IMAGE_SYMBOL: u8 = 5;
 /// `PerryLayoutDesc.variant` of a carried prototype layout (object model
 /// §3.6): a marked prototype's, registered under its own semantic generation.
 pub const LAYOUT_VARIANT_PROTOTYPE_IMAGE: u16 = 1;
@@ -283,6 +327,28 @@ pub const GC_OBJECT_CALLABLE: u16 = 0x0020;
 /// Heap-birth facts shared by runtime allocation and realm-cell emission.
 /// These are existing meanings in GcHeader::_reserved, never image markers.
 pub const OBJ_FLAG_PLAIN_ORDINARY: u16 = 0x0200;
+/// An object has a null [[Prototype]].
+pub const OBJ_FLAG_NULL_PROTO: u16 = 0x40;
+/// At least one own property carries non-default descriptor attributes.
+pub const OBJ_FLAG_HAS_DESCRIPTORS: u16 = 0x800;
+/// An array has one front-reserve pointer to its key-attribute array.
+pub const GC_ARRAY_KEY_ATTRS: u16 = 0x100;
+
+/// Integrity bits in every object/array GC header, shared with image births.
+pub const OBJ_FLAG_FROZEN: u16 = 0x01;
+pub const OBJ_FLAG_SEALED: u16 = 0x02;
+pub const OBJ_FLAG_NO_EXTEND: u16 = 0x04;
+/// Requested on prototype holders; image holders preserve this birth fact.
+pub const OBJ_FLAG_NEVER_MOVE: u16 = 0x80;
+/// A per-kind `<TypedArray>.prototype` whose `[[Prototype]]` is the shared
+/// `%TypedArray%.prototype` intrinsic.
+pub const OBJ_FLAG_TYPED_ARRAY_PROTO: u16 = 0x100;
+/// Per-instance builtin non-constructability on a closure. Kind-disjoint from
+/// the object meaning of bit 7.
+pub const GC_CLOSURE_NON_CONSTRUCTABLE: u16 = 0x80;
+/// The class id of a native module namespace, whose members a vtable serves.
+pub const NATIVE_MODULE_CLASS_ID: u32 = 0xFFFF_FFFE;
+
 pub const GC_LAYOUT_POINTER_FREE: u16 = 0x4000;
 pub const GC_LAYOUT_SIDE_MASK: u16 = 0x8000;
 pub const GC_LAYOUT_ALL_POINTERS: u16 = 0x2000;
@@ -1181,3 +1247,5 @@ pub const fn canonical_key_attribute_word(
         | (entries as u64) << 16
         | (accessors as u64) << 32
 }
+
+mod fn_info;

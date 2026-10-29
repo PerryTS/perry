@@ -254,7 +254,7 @@ pub(super) const THROWER_FROZEN_FLAGS: u16 =
 
 pub(super) fn thrower_closure_value() -> f64 {
     let closure = crate::closure::js_closure_alloc_singleton(
-        crate::fn_info!(arguments_throw_type_error, 0; with_declared(0)),
+        crate::fn_info!(#[realm("Function.prototype.arguments.<get>", integrity = frozen, spec = {name = ""}, emit = metadata(realm_thrower_public))] export crate::object::arguments::arguments_throw_type_error, 0; with_declared(0)),
     );
     // #10509: configure the per-thread singleton once, not per strict call.
     // The frozen bits are the last step below and live in the closure's own
@@ -269,7 +269,7 @@ pub(super) fn thrower_closure_value() -> f64 {
     {
         return crate::value::js_nanbox_pointer(closure as i64);
     }
-    super::native_module::set_bound_native_closure_name(closure, "");
+    super::native_module::set_bound_native_closure_name(closure, realm_thrower_public!(name));
     super::native_module::set_builtin_closure_length(closure as usize, 0);
     super::native_module::set_builtin_closure_non_constructable(closure as usize);
     let frozen = PropertyAttrs::new(false, false, false);
@@ -317,17 +317,16 @@ fn arguments_keys(len: u32, restricted_callee: bool) -> *mut ArrayHeader {
     let proof = super::canonical_keys::SharedLayout::shape_cache_entry();
     let scope = crate::gc::RuntimeHandleScope::new();
     let list = scope.root_raw_mut_ptr::<ArrayHeader>(std::ptr::null_mut());
-    let mut count = 0u32;
+    let mut cur = super::canonical_keys::CanonicalKeys::EMPTY;
     let mut append = |name: &str, entry: u8| {
         let key = intern_key(name);
         // SAFETY: the parent is rooted in `list`; the key is live and
         // `extend_key_with_entry` roots both across its allocation.
         let next = list.with_mut_ptr(|arr: *mut ArrayHeader| unsafe {
-            let parent = super::canonical_keys::CanonicalKeys::from_rooted(arr, count);
-            super::canonical_keys::extend_key_with_entry(&proof, parent, key, entry)
+            super::canonical_keys::extend_key_with_entry(&proof, cur.rooted_at(arr), key, entry)
         });
         list.set_raw_mut_ptr(next.as_ptr());
-        count = next.len();
+        cur = next;
     };
     for i in 0..len {
         append(&i.to_string(), 0);
@@ -1359,5 +1358,3 @@ unsafe fn write_ordinary_own_value(
         }
     }
 }
-
-crate::realm_decl!("arguments.realm.json#*");

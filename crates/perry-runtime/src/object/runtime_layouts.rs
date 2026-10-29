@@ -87,7 +87,8 @@ const fn layout_keys<const N: usize>(atoms: [LayoutAtom; N]) -> [PerryLayoutKey;
             atom: std::ptr::null(),
             slot: 0,
             attrs: 0,
-            _pad: [0; 3],
+            _pad: 0,
+            off: crate::object::layout_desc::layout_key_off(0 as u32),
         }
     }; N];
     let mut taken = [false; N];
@@ -104,7 +105,8 @@ const fn layout_keys<const N: usize>(atoms: [LayoutAtom; N]) -> [PerryLayoutKey;
             atom: atoms[i].0,
             slot,
             attrs: atoms[i].2,
-            _pad: [0; 3],
+            _pad: 0,
+            off: crate::object::layout_desc::layout_key_off(slot),
         };
         i += 1;
     }
@@ -136,6 +138,16 @@ const fn layout_index<const N: usize>(atoms: &[LayoutAtom]) -> [u32; N] {
 // its position). Padding and probing data are computed, including the
 // one-bucket empty layout; the index holds key positions.
 macro_rules! runtime_layout {
+    // Realm ownership is build-time birth data. The runtime consumes the
+    // same descriptor declaration; no owner table is emitted into programs.
+    ($name:ident, kind = $kind:expr, $family:expr, $variant:expr, $proto:expr,
+        [$($keys:tt)*], realm = [$($owner:literal),* $(,)?]) => {
+        runtime_layout!($name, kind = $kind, $family, $variant, $proto, [$($keys)*]);
+    };
+    ($name:ident, $family:expr, $variant:expr, $proto:expr,
+        [$($keys:tt)*], realm = [$($owner:literal),* $(,)?]) => {
+        runtime_layout!($name, $family, $variant, $proto, [$($keys)*]);
+    };
     (@attrs) => { 0 };
     (@attrs $attrs:expr) => { $attrs };
     (@slot) => { None };
@@ -148,10 +160,10 @@ macro_rules! runtime_layout {
         #[allow(non_snake_case)]
         pub mod $name {
             use super::*;
-            const ATOMS: &[LayoutAtom] = &[$((std::ptr::addr_of!($atom), $atom::HASH, runtime_layout!(@attrs $($attrs)?), runtime_layout!(@slot $($slot)?))),*];
+            const ATOMS: &[LayoutAtom] = &[$((std::ptr::addr_of!($atom), $atom.hash, runtime_layout!(@attrs $($attrs)?), runtime_layout!(@slot $($slot)?))),*];
             pub const SLOT_COUNT: usize = ATOMS.len();
             pub(super) static KEYS: [PerryLayoutKey; SLOT_COUNT] =
-                layout_keys([$((std::ptr::addr_of!($atom), $atom::HASH, runtime_layout!(@attrs $($attrs)?), runtime_layout!(@slot $($slot)?))),*]);
+                layout_keys([$((std::ptr::addr_of!($atom), $atom.hash, runtime_layout!(@attrs $($attrs)?), runtime_layout!(@slot $($slot)?))),*]);
             pub(super) static INDEX: [u32; layout_index_size(SLOT_COUNT)] = layout_index(ATOMS);
         }
         #[used(linker)]
@@ -162,7 +174,7 @@ macro_rules! runtime_layout {
         /// Declared layout of a checked runtime record.
         pub static mut $name: PerryLayoutDesc = PerryLayoutDesc {
         image_keys: crate::object::image_keys::image_key_list!($name::KEYS),
-            shape_id: 0, _layout_pad: 0,
+            shape_id: 0, gc_plan: 0,
             family: $family, variant: $variant, kind: $kind, integrity: 0,
             slot_count: $name::SLOT_COUNT as u32,
             layout_id: crate::object::runtime_layouts::runtime_layout_word(stringify!($name)),
@@ -171,7 +183,9 @@ macro_rules! runtime_layout {
             index_mask: (layout_index_size($name::SLOT_COUNT) - 1) as u32,
             index: $name::INDEX.as_ptr(),
             class_id: 0, parent_class_id: 0, methods: std::ptr::null(),
-        };
+        gc_header_word: crate::object::layout_desc::layout_gc_header_word($name::SLOT_COUNT as u32),
+        _tail_pad: [0; 32],
+    };
 wasm_layout!($name);
     };
 }
@@ -182,7 +196,7 @@ wasm_layout!($name);
 macro_rules! runtime_prototype_family {
     ($($name:ident = $serial:ident),* $(,)?) => {$(
         pub(crate) static mut $name: crate::object::layout_desc::PerryProtoFamily =
-            crate::object::layout_desc::PerryProtoFamily { serial: crate::closure::shape::$serial };
+            crate::object::layout_desc::PerryProtoFamily { serial: crate::closure::shape::$serial, image_prototype: std::ptr::null() };
     )*};
 }
 runtime_prototype_family!(
@@ -257,7 +271,7 @@ mod spawn_sync_result {
         SPAWN_SYNC_ATOM_PID,
         SPAWN_SYNC_ATOM_STDOUT,
         SPAWN_SYNC_ATOM_STDERR,
-    ]);
+    ], realm = ["node:child_process.spawnSync"]);
     /// The slots of [`SPAWN_SYNC_RESULT`].
     pub(crate) mod spawn_sync_slot {
         pub(crate) const ERROR: u32 = 0;
@@ -565,512 +579,85 @@ pub(crate) fn test_image_string() -> *const StringHeader {
     &IMAGE_0.string
 }
 
-static READABLE_STATE_KEYS: [PerryLayoutKey; 6] = [
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_0),
-        slot: 0,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_1),
-        slot: 1,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_2),
-        slot: 2,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_3),
-        slot: 3,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_4),
-        slot: 4,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_5),
-        slot: 5,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-];
-static READABLE_STATE_INDEX: [u32; 16] = [
-    u32::MAX,
-    2,
-    u32::MAX,
-    u32::MAX,
-    u32::MAX,
-    3,
-    u32::MAX,
-    5,
-    u32::MAX,
+runtime_layout!(
+    READABLE_STATE,
+    0x52540001,
     0,
-    u32::MAX,
-    1,
-    u32::MAX,
-    u32::MAX,
-    4,
-    u32::MAX,
-];
-#[used(linker)]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
-#[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
-    link_section = "perry_layouts"
-)]
-pub(crate) static mut READABLE_STATE: PerryLayoutDesc = PerryLayoutDesc {
-    image_keys: crate::object::image_keys::image_key_list!(READABLE_STATE_KEYS),
-    shape_id: 0,
-    _layout_pad: 0,
-    family: 0x52540001,
-    variant: 0,
-    kind: 0,
-    integrity: 0,
-    slot_count: 6,
-    layout_id: crate::codegen_abi::native_layout_word("READABLE_STATE", 1),
-    rep: 0,
-    proto: &raw const READABLE_STATE_PROTO_FAMILY,
-    keys: READABLE_STATE_KEYS.as_ptr(),
-    key_count: 6,
-    index_mask: 15,
-    index: READABLE_STATE_INDEX.as_ptr(),
-    class_id: 0,
-    parent_class_id: 0,
-    methods: std::ptr::null(),
-};
-wasm_layout!(READABLE_STATE);
+    &raw const READABLE_STATE_PROTO_FAMILY,
+    [ATOM_0, ATOM_1, ATOM_2, ATOM_3, ATOM_4, ATOM_5],
+    realm = [
+        "node:stream.Readable",
+        "node:stream.Duplex",
+        "node:stream.Transform",
+        "node:stream.PassThrough"
+    ]
+);
 
-static WRITABLE_STATE_KEYS: [PerryLayoutKey; 7] = [
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_0),
-        slot: 0,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_3),
-        slot: 1,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_6),
-        slot: 2,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_7),
-        slot: 3,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_8),
-        slot: 4,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_9),
-        slot: 5,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_10),
-        slot: 6,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-];
-static WRITABLE_STATE_INDEX: [u32; 16] = [
-    6,
-    u32::MAX,
-    u32::MAX,
-    4,
-    u32::MAX,
-    1,
-    u32::MAX,
-    u32::MAX,
-    u32::MAX,
+runtime_layout!(
+    WRITABLE_STATE,
+    0x52540002,
     0,
-    u32::MAX,
-    u32::MAX,
-    u32::MAX,
-    2,
-    5,
-    3,
-];
-#[used(linker)]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
-#[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
-    link_section = "perry_layouts"
-)]
-pub(crate) static mut WRITABLE_STATE: PerryLayoutDesc = PerryLayoutDesc {
-    image_keys: crate::object::image_keys::image_key_list!(WRITABLE_STATE_KEYS),
-    shape_id: 0,
-    _layout_pad: 0,
-    family: 0x52540002,
-    variant: 0,
-    kind: 0,
-    integrity: 0,
-    slot_count: 7,
-    layout_id: crate::codegen_abi::native_layout_word("WRITABLE_STATE", 1),
-    rep: 0,
-    proto: &raw const WRITABLE_STATE_PROTO_FAMILY,
-    keys: WRITABLE_STATE_KEYS.as_ptr(),
-    key_count: 7,
-    index_mask: 15,
-    index: WRITABLE_STATE_INDEX.as_ptr(),
-    class_id: 0,
-    parent_class_id: 0,
-    methods: std::ptr::null(),
-};
-wasm_layout!(WRITABLE_STATE);
+    &raw const WRITABLE_STATE_PROTO_FAMILY,
+    [ATOM_0, ATOM_3, ATOM_6, ATOM_7, ATOM_8, ATOM_9, ATOM_10],
+    realm = [
+        "node:stream.Writable",
+        "node:stream.Duplex",
+        "node:stream.Transform",
+        "node:stream.PassThrough"
+    ]
+);
 
-static URL_SEARCH_PARAMS_KEYS: [PerryLayoutKey; 2] = [
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_11),
-        slot: 0,
-        attrs: 66,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_12),
-        slot: 1,
-        attrs: 66,
-        _pad: [0; 3],
-    },
-];
-static URL_SEARCH_PARAMS_INDEX: [u32; 4] = [0, 1, u32::MAX, u32::MAX];
-#[used(linker)]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
-#[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
-    link_section = "perry_layouts"
-)]
-pub(crate) static mut URL_SEARCH_PARAMS: PerryLayoutDesc = PerryLayoutDesc {
-    image_keys: crate::object::image_keys::image_key_list!(URL_SEARCH_PARAMS_KEYS),
-    shape_id: 0,
-    _layout_pad: 0,
-    family: 0x52540003,
-    variant: 0,
-    kind: 0,
-    integrity: 0,
-    slot_count: 2,
-    layout_id: crate::codegen_abi::native_layout_word("URL_SEARCH_PARAMS", 1),
-    rep: 0,
-    proto: &raw const URL_SEARCH_PARAMS_PROTO_FAMILY,
-    keys: URL_SEARCH_PARAMS_KEYS.as_ptr(),
-    key_count: 2,
-    index_mask: 3,
-    index: URL_SEARCH_PARAMS_INDEX.as_ptr(),
-    class_id: 0,
-    parent_class_id: 0,
-    methods: std::ptr::null(),
-};
-wasm_layout!(URL_SEARCH_PARAMS);
+runtime_layout!(URL_SEARCH_PARAMS, 0x52540003, 0, &raw const URL_SEARCH_PARAMS_PROTO_FAMILY, [ATOM_11 => 66, ATOM_12 => 66], realm = ["URLSearchParams"]);
 
-static URL_COMPONENTS_KEYS: [PerryLayoutKey; 12] = [
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_13),
-        slot: 0,
-        attrs: 66,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_14),
-        slot: 1,
-        attrs: 66,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_15),
-        slot: 2,
-        attrs: 66,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_16),
-        slot: 3,
-        attrs: 66,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_17),
-        slot: 4,
-        attrs: 66,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_18),
-        slot: 5,
-        attrs: 66,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_19),
-        slot: 6,
-        attrs: 66,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_20),
-        slot: 7,
-        attrs: 66,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_21),
-        slot: 8,
-        attrs: 66,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_22),
-        slot: 9,
-        attrs: 66,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_23),
-        slot: 10,
-        attrs: 66,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_24),
-        slot: 11,
-        attrs: 66,
-        _pad: [0; 3],
-    },
-];
-static URL_COMPONENTS_INDEX: [u32; 32] = [
-    3,
-    6,
-    u32::MAX,
-    9,
-    7,
-    u32::MAX,
-    u32::MAX,
-    u32::MAX,
-    1,
-    5,
-    u32::MAX,
-    u32::MAX,
-    10,
-    u32::MAX,
-    u32::MAX,
-    u32::MAX,
-    u32::MAX,
-    u32::MAX,
-    2,
-    8,
-    u32::MAX,
-    4,
-    u32::MAX,
-    11,
-    u32::MAX,
-    u32::MAX,
-    u32::MAX,
-    u32::MAX,
-    u32::MAX,
-    u32::MAX,
-    u32::MAX,
+runtime_layout!(URL_COMPONENTS, 0x52540004, 0, &raw const URL_PROTO_FAMILY, [ATOM_13 => 66, ATOM_14 => 66, ATOM_15 => 66, ATOM_16 => 66, ATOM_17 => 66, ATOM_18 => 66, ATOM_19 => 66, ATOM_20 => 66, ATOM_21 => 66, ATOM_22 => 66, ATOM_23 => 66, ATOM_24 => 66], realm = ["URL"]);
+
+runtime_layout!(
+    ITERATOR_RESULT,
+    0x52540005,
     0,
-];
-#[used(linker)]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
-#[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
-    link_section = "perry_layouts"
-)]
-pub(crate) static mut URL_COMPONENTS: PerryLayoutDesc = PerryLayoutDesc {
-    image_keys: crate::object::image_keys::image_key_list!(URL_COMPONENTS_KEYS),
-    shape_id: 0,
-    _layout_pad: 0,
-    family: 0x52540004,
-    variant: 0,
-    kind: 0,
-    integrity: 0,
-    slot_count: 12,
-    layout_id: crate::codegen_abi::native_layout_word("URL_COMPONENTS", 1),
-    rep: 0,
-    proto: &raw const URL_PROTO_FAMILY,
-    keys: URL_COMPONENTS_KEYS.as_ptr(),
-    key_count: 12,
-    index_mask: 31,
-    index: URL_COMPONENTS_INDEX.as_ptr(),
-    class_id: 0,
-    parent_class_id: 0,
-    methods: std::ptr::null(),
-};
-wasm_layout!(URL_COMPONENTS);
+    crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
+    [ATOM_25, ATOM_26],
+    realm = [
+        "%ArrayIteratorPrototype%.next",
+        "%StringIteratorPrototype%.next",
+        "%MapIteratorPrototype%.next",
+        "%SetIteratorPrototype%.next",
+        "%GeneratorPrototype%.next",
+        "%AsyncGeneratorPrototype%.next"
+    ]
+);
 
-static ITERATOR_RESULT_KEYS: [PerryLayoutKey; 2] = [
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_25),
-        slot: 0,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_26),
-        slot: 1,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-];
-static ITERATOR_RESULT_INDEX: [u32; 4] = [u32::MAX, 1, 0, u32::MAX];
-#[used(linker)]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
-#[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
-    link_section = "perry_layouts"
-)]
-pub(crate) static mut ITERATOR_RESULT: PerryLayoutDesc = PerryLayoutDesc {
-    image_keys: crate::object::image_keys::image_key_list!(ITERATOR_RESULT_KEYS),
-    shape_id: 0,
-    _layout_pad: 0,
-    family: 0x52540005,
-    variant: 0,
-    kind: 0,
-    integrity: 0,
-    slot_count: 2,
-    layout_id: crate::codegen_abi::native_layout_word("ITERATOR_RESULT", 0),
-    rep: 0,
-    proto: crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
-    keys: ITERATOR_RESULT_KEYS.as_ptr(),
-    key_count: 2,
-    index_mask: 3,
-    index: ITERATOR_RESULT_INDEX.as_ptr(),
-    class_id: 0,
-    parent_class_id: 0,
-    methods: std::ptr::null(),
-};
-wasm_layout!(ITERATOR_RESULT);
+runtime_layout!(
+    ITERATOR_RESULT_DONE_FIRST,
+    0x52540006,
+    0,
+    crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
+    [ATOM_26, ATOM_25],
+    realm = ["ReadableStream", "node:sqlite", "node:better-sqlite3"]
+);
 
-static ITERATOR_RESULT_DONE_FIRST_KEYS: [PerryLayoutKey; 2] = [
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_26),
-        slot: 0,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_25),
-        slot: 1,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-];
-static ITERATOR_RESULT_DONE_FIRST_INDEX: [u32; 4] = [u32::MAX, 0, 1, u32::MAX];
-#[used(linker)]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
-#[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
-    link_section = "perry_layouts"
-)]
-pub(crate) static mut ITERATOR_RESULT_DONE_FIRST: PerryLayoutDesc = PerryLayoutDesc {
-    image_keys: crate::object::image_keys::image_key_list!(ITERATOR_RESULT_DONE_FIRST_KEYS),
-    shape_id: 0,
-    _layout_pad: 0,
-    family: 0x52540006,
-    variant: 0,
-    kind: 0,
-    integrity: 0,
-    slot_count: 2,
-    layout_id: crate::codegen_abi::native_layout_word("ITERATOR_RESULT_DONE_FIRST", 0),
-    rep: 0,
-    proto: crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
-    keys: ITERATOR_RESULT_DONE_FIRST_KEYS.as_ptr(),
-    key_count: 2,
-    index_mask: 3,
-    index: ITERATOR_RESULT_DONE_FIRST_INDEX.as_ptr(),
-    class_id: 0,
-    parent_class_id: 0,
-    methods: std::ptr::null(),
-};
-wasm_layout!(ITERATOR_RESULT_DONE_FIRST);
+runtime_layout!(
+    TIMEOUT,
+    0x52540007,
+    0,
+    &raw const TIMEOUT_PROTO_FAMILY,
+    [],
+    realm = [
+        "setTimeout",
+        "setInterval",
+        "node:timers.setTimeout",
+        "node:timers.setInterval"
+    ]
+);
 
-static TIMEOUT_KEYS: [PerryLayoutKey; 0] = [];
-static TIMEOUT_INDEX: [u32; 2] = [u32::MAX, u32::MAX];
-#[used(linker)]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
-#[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
-    link_section = "perry_layouts"
-)]
-pub(crate) static mut TIMEOUT: PerryLayoutDesc = PerryLayoutDesc {
-    image_keys: crate::object::image_keys::image_key_list!(TIMEOUT_KEYS),
-    shape_id: 0,
-    _layout_pad: 0,
-    family: 0x52540007,
-    variant: 0,
-    kind: 0,
-    integrity: 0,
-    slot_count: 0,
-    layout_id: crate::codegen_abi::native_layout_word("TIMEOUT", 1),
-    rep: 0,
-    proto: &raw const TIMEOUT_PROTO_FAMILY,
-    keys: TIMEOUT_KEYS.as_ptr(),
-    key_count: 0,
-    index_mask: 1,
-    index: TIMEOUT_INDEX.as_ptr(),
-    class_id: 0,
-    parent_class_id: 0,
-    methods: std::ptr::null(),
-};
-wasm_layout!(TIMEOUT);
-
-static IMMEDIATE_KEYS: [PerryLayoutKey; 0] = [];
-static IMMEDIATE_INDEX: [u32; 2] = [u32::MAX, u32::MAX];
-#[used(linker)]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
-#[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
-    link_section = "perry_layouts"
-)]
-pub(crate) static mut IMMEDIATE: PerryLayoutDesc = PerryLayoutDesc {
-    image_keys: crate::object::image_keys::image_key_list!(IMMEDIATE_KEYS),
-    shape_id: 0,
-    _layout_pad: 0,
-    family: 0x52540008,
-    variant: 0,
-    kind: 0,
-    integrity: 0,
-    slot_count: 0,
-    layout_id: crate::codegen_abi::native_layout_word("IMMEDIATE", 1),
-    rep: 0,
-    proto: &raw const IMMEDIATE_PROTO_FAMILY,
-    keys: IMMEDIATE_KEYS.as_ptr(),
-    key_count: 0,
-    index_mask: 1,
-    index: IMMEDIATE_INDEX.as_ptr(),
-    class_id: 0,
-    parent_class_id: 0,
-    methods: std::ptr::null(),
-};
-wasm_layout!(IMMEDIATE);
+runtime_layout!(
+    IMMEDIATE,
+    0x52540008,
+    0,
+    &raw const IMMEDIATE_PROTO_FAMILY,
+    [],
+    realm = ["setImmediate", "node:timers.setImmediate"]
+);
 
 pub(crate) const URL_CLASS_ID: u32 = 0xFFFF0063;
 
@@ -1100,222 +687,43 @@ static ATOM_SYMBOL_ITERATOR: StaticAtom = StaticAtom {
     index: crate::codegen_abi::WELL_KNOWN_SYMBOL_ITERATOR,
 };
 wasm_atom!(ATOM_SYMBOL_ITERATOR);
-static REGEX_EXEC_NAMED_KEYS: [PerryLayoutKey; 4] = [
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_SYMBOL_ITERATOR),
-        slot: 0,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_27),
-        slot: 1,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_28),
-        slot: 2,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_29),
-        slot: 3,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-];
-static REGEX_EXEC_NAMED_INDEX: [u32; 8] = [u32::MAX, u32::MAX, u32::MAX, 1, 2, 0, 3, u32::MAX];
-/// A `RegExp.prototype.exec` result array's named layout (`ArrayHeader.named`):
-/// `index`, `input`, `groups`.
-#[used(linker)]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
-#[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
-    link_section = "perry_layouts"
-)]
-pub(crate) static mut REGEX_EXEC_NAMED: PerryLayoutDesc = PerryLayoutDesc {
-    image_keys: crate::object::image_keys::image_key_list!(REGEX_EXEC_NAMED_KEYS),
-    shape_id: 0,
-    _layout_pad: 0,
-    family: 0x52540009,
-    variant: 0,
-    kind: 0,
-    integrity: 0,
-    slot_count: 4,
-    layout_id: crate::codegen_abi::native_layout_word("REGEX_EXEC_NAMED", 0),
-    rep: 0,
-    proto: crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
-    keys: REGEX_EXEC_NAMED_KEYS.as_ptr(),
-    key_count: 4,
-    index_mask: 7,
-    index: REGEX_EXEC_NAMED_INDEX.as_ptr(),
-    class_id: 0,
-    parent_class_id: 0,
-    methods: std::ptr::null(),
-};
-wasm_layout!(REGEX_EXEC_NAMED);
-static REGEX_EXEC_INDICES_NAMED_KEYS: [PerryLayoutKey; 5] = [
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_SYMBOL_ITERATOR),
-        slot: 0,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_27),
-        slot: 1,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_28),
-        slot: 2,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_29),
-        slot: 3,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_30),
-        slot: 4,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-];
-static REGEX_EXEC_INDICES_NAMED_INDEX: [u32; 16] = [
-    u32::MAX,
-    u32::MAX,
-    4,
-    u32::MAX,
-    u32::MAX,
+// A `RegExp.prototype.exec` result array's named layout (`ArrayHeader.named`):
+// `index`, `input`, `groups`.
+runtime_layout!(
+    REGEX_EXEC_NAMED,
+    0x52540009,
     0,
-    u32::MAX,
-    u32::MAX,
-    u32::MAX,
-    u32::MAX,
-    u32::MAX,
-    1,
-    2,
-    3,
-    u32::MAX,
-    u32::MAX,
-];
-/// A `d`-flag exec result's named layout: `index`, `input`, `groups`, `indices`.
-#[used(linker)]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
-#[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
-    link_section = "perry_layouts"
-)]
-pub(crate) static mut REGEX_EXEC_INDICES_NAMED: PerryLayoutDesc = PerryLayoutDesc {
-    image_keys: crate::object::image_keys::image_key_list!(REGEX_EXEC_INDICES_NAMED_KEYS),
-    shape_id: 0,
-    _layout_pad: 0,
-    family: 0x5254000A,
-    variant: 0,
-    kind: 0,
-    integrity: 0,
-    slot_count: 5,
-    layout_id: crate::codegen_abi::native_layout_word("REGEX_EXEC_INDICES_NAMED", 0),
-    rep: 0,
-    proto: crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
-    keys: REGEX_EXEC_INDICES_NAMED_KEYS.as_ptr(),
-    key_count: 5,
-    index_mask: 15,
-    index: REGEX_EXEC_INDICES_NAMED_INDEX.as_ptr(),
-    class_id: 0,
-    parent_class_id: 0,
-    methods: std::ptr::null(),
-};
-wasm_layout!(REGEX_EXEC_INDICES_NAMED);
-static REGEX_INDICES_GROUPS_NAMED_KEYS: [PerryLayoutKey; 2] = [
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_SYMBOL_ITERATOR),
-        slot: 0,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(ATOM_29),
-        slot: 1,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-];
-static REGEX_INDICES_GROUPS_NAMED_INDEX: [u32; 4] = [u32::MAX, 0, 1, u32::MAX];
-/// A `d`-flag `indices` array's named layout: `groups`.
-#[used(linker)]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
-#[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
-    link_section = "perry_layouts"
-)]
-pub(crate) static mut REGEX_INDICES_GROUPS_NAMED: PerryLayoutDesc = PerryLayoutDesc {
-    image_keys: crate::object::image_keys::image_key_list!(REGEX_INDICES_GROUPS_NAMED_KEYS),
-    shape_id: 0,
-    _layout_pad: 0,
-    family: 0x5254000B,
-    variant: 0,
-    kind: 0,
-    integrity: 0,
-    slot_count: 2,
-    layout_id: crate::codegen_abi::native_layout_word("REGEX_INDICES_GROUPS_NAMED", 0),
-    rep: 0,
-    proto: crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
-    keys: REGEX_INDICES_GROUPS_NAMED_KEYS.as_ptr(),
-    key_count: 2,
-    index_mask: 3,
-    index: REGEX_INDICES_GROUPS_NAMED_INDEX.as_ptr(),
-    class_id: 0,
-    parent_class_id: 0,
-    methods: std::ptr::null(),
-};
-wasm_layout!(REGEX_INDICES_GROUPS_NAMED);
-static ARRAY_NAMED_KEYS: [PerryLayoutKey; 1] = [PerryLayoutKey {
-    atom: std::ptr::addr_of!(ATOM_SYMBOL_ITERATOR),
-    slot: 0,
-    attrs: 0,
-    _pad: [0; 3],
-}];
-static ARRAY_NAMED_INDEX: [u32; 2] = [u32::MAX, 0];
-/// Empty array named family; absent iterator slot 0 is the hole marker.
-#[used(linker)]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
-#[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
-    link_section = "perry_layouts"
-)]
-pub(crate) static mut ARRAY_NAMED: PerryLayoutDesc = PerryLayoutDesc {
-    image_keys: crate::object::image_keys::image_key_list!(ARRAY_NAMED_KEYS),
-    shape_id: 0,
-    _layout_pad: 0,
-    family: 0x5254000D,
-    variant: 0,
-    kind: 0,
-    integrity: 0,
-    slot_count: 1,
-    layout_id: crate::codegen_abi::native_layout_word("ARRAY_NAMED", 0),
-    rep: 0,
-    proto: crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
-    keys: ARRAY_NAMED_KEYS.as_ptr(),
-    key_count: 1,
-    index_mask: 1,
-    index: ARRAY_NAMED_INDEX.as_ptr(),
-    class_id: 0,
-    parent_class_id: 0,
-    methods: std::ptr::null(),
-};
-wasm_layout!(ARRAY_NAMED);
+    crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
+    [ATOM_SYMBOL_ITERATOR, ATOM_27, ATOM_28, ATOM_29],
+    realm = ["RegExp"]
+);
+// A `d`-flag exec result's named layout: `index`, `input`, `groups`, `indices`.
+runtime_layout!(
+    REGEX_EXEC_INDICES_NAMED,
+    0x5254000A,
+    0,
+    crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
+    [ATOM_SYMBOL_ITERATOR, ATOM_27, ATOM_28, ATOM_29, ATOM_30],
+    realm = ["RegExp"]
+);
+// A `d`-flag `indices` array's named layout: `groups`.
+runtime_layout!(
+    REGEX_INDICES_GROUPS_NAMED,
+    0x5254000B,
+    0,
+    crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
+    [ATOM_SYMBOL_ITERATOR, ATOM_29],
+    realm = ["RegExp"]
+);
+// Empty array named family; absent iterator slot 0 is the hole marker.
+runtime_layout!(
+    ARRAY_NAMED,
+    0x5254000D,
+    0,
+    crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
+    [ATOM_SYMBOL_ITERATOR],
+    realm = ["Array"]
+);
 
 // Fixed legacy SQLite column metadata; the five data properties are all present.
 #[used(linker)]
@@ -1448,84 +856,20 @@ static SQLITE_ATOM_4: StaticAtom = StaticAtom {
     index: 0,
 };
 wasm_atom!(SQLITE_ATOM_4);
-static SQLITE_COLUMN_KEYS: [PerryLayoutKey; 5] = [
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(SQLITE_ATOM_0),
-        slot: 0,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(SQLITE_ATOM_1),
-        slot: 1,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(SQLITE_ATOM_2),
-        slot: 2,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(SQLITE_ATOM_3),
-        slot: 3,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-    PerryLayoutKey {
-        atom: std::ptr::addr_of!(SQLITE_ATOM_4),
-        slot: 4,
-        attrs: 0,
-        _pad: [0; 3],
-    },
-];
-static SQLITE_COLUMN_INDEX: [u32; 16] = [
-    u32::MAX,
-    u32::MAX,
-    u32::MAX,
-    u32::MAX,
-    u32::MAX,
-    u32::MAX,
-    2,
+runtime_layout!(
+    SQLITE_COLUMN_METADATA,
+    0x53514c01,
     0,
-    1,
-    u32::MAX,
-    u32::MAX,
-    u32::MAX,
-    u32::MAX,
-    4,
-    u32::MAX,
-    3,
-];
-#[used(linker)]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
-#[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
-    link_section = "perry_layouts"
-)]
-pub static mut SQLITE_COLUMN_METADATA: PerryLayoutDesc = PerryLayoutDesc {
-    image_keys: crate::object::image_keys::image_key_list!(SQLITE_COLUMN_KEYS),
-    shape_id: 0,
-    _layout_pad: 0,
-    family: 0x53514c01,
-    variant: 0,
-    kind: 0,
-    integrity: 0,
-    slot_count: 5,
-    layout_id: crate::codegen_abi::native_layout_word("SQLITE_COLUMN_METADATA", 0),
-    rep: 0,
-    proto: crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
-    keys: SQLITE_COLUMN_KEYS.as_ptr(),
-    key_count: 5,
-    index_mask: 15,
-    index: SQLITE_COLUMN_INDEX.as_ptr(),
-    class_id: 0,
-    parent_class_id: 0,
-    methods: std::ptr::null(),
-};
-wasm_layout!(SQLITE_COLUMN_METADATA);
+    crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
+    [
+        SQLITE_ATOM_0,
+        SQLITE_ATOM_1,
+        SQLITE_ATOM_2,
+        SQLITE_ATOM_3,
+        SQLITE_ATOM_4
+    ],
+    realm = ["node:better-sqlite3"]
+);
 
 #[cfg(test)]
 #[path = "runtime_layouts/slot_order_tests.rs"]
@@ -1926,4 +1270,13 @@ const fn runtime_layout_word(name: &str) -> u32 {
         return 0x8000008a;
     }
     panic!("runtime descriptor absent from native catalog");
+}
+
+#[cfg(test)]
+#[path = "runtime_layouts/source_equivalence_tests.rs"]
+mod source_equivalence_tests;
+
+#[cfg(test)]
+mod realm_manifest_layout_facts {
+    include!(concat!(env!("OUT_DIR"), "/realm_layout_facts_test.rs"));
 }

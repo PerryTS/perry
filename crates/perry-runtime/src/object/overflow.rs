@@ -263,7 +263,11 @@ pub(crate) unsafe fn ensure_adding(obj: *mut ObjectHeader, adding: Option<u32>) 
     super::layout_desc::diag_note_install(obj);
     let scope = crate::gc::RuntimeHandleScope::new();
     let owner = scope.root_raw_mut_ptr(obj);
-    super::object_meta_ensure(obj);
+    // A1_UNPROVEN: a user object whose keys overflow, no type test (kind-A/B question for S0b-S0e).
+    super::object_meta_ensure(
+        super::MetaObj::runtime_born(obj),
+        super::MetaReason::Overflow,
+    );
     let obj = owner.get_raw_mut_ptr::<ObjectHeader>();
     let shape = super::shapes::object_shape_descriptor(obj).unwrap();
     let prefix = shape
@@ -674,7 +678,7 @@ pub(crate) unsafe fn delete(obj: *mut ObjectHeader, key: &[u8]) -> bool {
         if let Some(record) = super::shapes::object_shape_record(obj) {
             let keys = record.keys() as usize as *const ArrayHeader;
             if let Some(slot) =
-                super::keys_find_property_slot_by_bytes(keys, record.logical_key_count(), key)
+                super::keys_find_property_slot_by_bytes(record.keys_view(), record.logical_key_count(), key)
             {
                 // A hole is an absent property, including allocator-owned
                 // placeholders before a derived constructor's super call.
@@ -914,7 +918,7 @@ pub(crate) unsafe fn store_routed(
     // an overflow entry shadows (`install` sets the bit).
     let record = super::shapes::object_shape_record(obj).unwrap();
     let fixed = super::keys_find_property_slot_by_key_ptr(
-        record.keys() as usize as *const ArrayHeader,
+        record.keys_view(),
         record.logical_key_count(),
         atom,
     );

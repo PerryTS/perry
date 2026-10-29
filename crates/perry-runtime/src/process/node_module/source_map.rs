@@ -85,10 +85,10 @@ pub extern "C" fn js_module_source_map_new(payload: f64, options: f64) -> f64 {
     obj.with_mut_ptr(|obj: *mut crate::object::ObjectHeader| module_object_value(obj))
 }
 
-fn source_map_method(name: &str, info: *const crate::closure::JsFunctionInfo) -> f64 {
+#[rustfmt::skip] fn source_map_method(name: &str, info: *const crate::closure::JsFunctionInfo) -> f64 {
     let closure = js_closure_alloc(info, 0);
     crate::object::set_bound_native_closure_name(closure, name);
-    crate::object::set_builtin_closure_length(closure as usize, 2);
+    crate::object::set_builtin_closure_length(closure as usize, realm_source_map_method_public!(length));
     crate::object::set_builtin_closure_non_constructable(closure as usize);
     crate::value::js_nanbox_pointer(closure as i64)
 }
@@ -159,9 +159,9 @@ fn source_map_prototype() -> f64 {
         // immediately: allocating closures below can run a moving GC.
 
         let proto = unsafe {
-            crate::object::runtime_layouts::perry_alloc_runtime_record(std::ptr::addr_of!(
+            crate::realm_decl! { birth crate::object::runtime_layouts::perry_alloc_runtime_record(std::ptr::addr_of!(
                 crate::object::runtime_layouts::RECORD_Q443_0
-            ))
+            )); realm { "node:module.SourceMap.prototype", members = { constructor; findEntry; findOrigin; lineLengths = accessor(get = "node:module.SourceMap.prototype.lineLengths.<get>"); payload = accessor(get = "node:module.SourceMap.prototype.payload.<get>"); }; } }
         };
         let value = module_object_value(proto);
         slot.set(value.to_bits());
@@ -174,12 +174,12 @@ fn source_map_prototype() -> f64 {
             (
                 1,
                 "findEntry",
-                crate::fn_info!(source_map_find_entry_thunk, 1; with_rest(0)),
+                crate::fn_info!(#[realm("node:module.SourceMap.prototype.findEntry", spec = {length = 2}, emit = metadata(realm_source_map_method_public))] export crate::process::node_module::source_map::source_map_find_entry_thunk, 1; with_rest(0)),
             ),
             (
                 2,
                 "findOrigin",
-                crate::fn_info!(source_map_find_origin_thunk, 1; with_rest(0)),
+                crate::fn_info!(#[realm("node:module.SourceMap.prototype.findOrigin", spec = {length = 2}, emit = metadata(realm_source_map_method_public))] export crate::process::node_module::source_map::source_map_find_origin_thunk, 1; with_rest(0)),
             ),
         ] {
             let value = source_map_method(name, info);
@@ -194,12 +194,12 @@ fn source_map_prototype() -> f64 {
             (
                 4,
                 "payload",
-                crate::fn_info!(source_map_payload_getter, 0; with_declared(0)),
+                crate::fn_info!(#[realm("node:module.SourceMap.prototype.payload.<get>")] export crate::process::node_module::source_map::source_map_payload_getter, 0; with_declared(0)),
             ),
             (
                 3,
                 "lineLengths",
-                crate::fn_info!(source_map_line_lengths_getter, 0; with_declared(0)),
+                crate::fn_info!(#[realm("node:module.SourceMap.prototype.lineLengths.<get>")] export crate::process::node_module::source_map::source_map_line_lengths_getter, 0; with_declared(0)),
             ),
         ] {
             let getter = source_map_getter(name, info);
@@ -801,5 +801,3 @@ pub extern "C" fn js_module_find_source_map(filename: f64) -> f64 {
     crate::gc::runtime_write_barrier_root_nanbox(map.to_bits());
     map
 }
-
-crate::realm_decl!("source_map.realm.json#*");

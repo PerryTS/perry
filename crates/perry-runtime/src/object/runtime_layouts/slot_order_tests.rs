@@ -344,25 +344,28 @@ fn static_layout_slot_order_rejects_slots_that_are_not_a_permutation() {
             atom: std::ptr::addr_of!(FIRST),
             slot: 2,
             attrs: 0,
-            _pad: [0; 3],
+            _pad: 0,
+            off: crate::object::layout_desc::layout_key_off(2 as u32),
         },
         PerryLayoutKey {
             atom: std::ptr::addr_of!(SECOND),
             slot: 0,
             attrs: 0,
-            _pad: [0; 3],
+            _pad: 0,
+            off: crate::object::layout_desc::layout_key_off(0 as u32),
         },
         PerryLayoutKey {
             atom: std::ptr::addr_of!(THIRD),
             slot: 4,
             attrs: 0,
-            _pad: [0; 3],
+            _pad: 0,
+            off: crate::object::layout_desc::layout_key_off(4 as u32),
         },
     ];
     let mut desc = PerryLayoutDesc {
         image_keys: std::ptr::null_mut(),
         shape_id: 0,
-        _layout_pad: 0,
+        gc_plan: 0,
         family: 0x7f000005,
         variant: 0,
         kind: 0,
@@ -378,6 +381,8 @@ fn static_layout_slot_order_rejects_slots_that_are_not_a_permutation() {
         class_id: 0,
         parent_class_id: 0,
         methods: std::ptr::null(),
+        gc_header_word: crate::object::layout_desc::layout_gc_header_word(5),
+        _tail_pad: [0; 32],
     };
     unsafe {
         desc.keys = std::ptr::addr_of!(KEYS).cast();

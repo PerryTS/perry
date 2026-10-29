@@ -512,7 +512,8 @@ pub(crate) fn ensure_record(stream: f64) -> bool {
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj = scope.root_raw_mut_ptr(obj);
     let meta =
-        obj.with_mut_ptr::<ObjectHeader, _>(|o| unsafe { crate::object::object_meta_ensure(o) });
+        // A1_UNPROVEN: object_ptr_from_value(stream): a JS value, no type test (kind-A/B question for S0b-S0e).
+        obj.with_mut_ptr::<ObjectHeader, _>(|o| unsafe { crate::object::object_meta_ensure(crate::object::MetaObj::runtime_born(o), crate::object::MetaReason::RuntimeHandle) });
     if meta.is_null() {
         return false;
     }

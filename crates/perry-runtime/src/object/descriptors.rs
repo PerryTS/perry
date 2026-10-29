@@ -1059,7 +1059,7 @@ unsafe fn ordinary_own_property(obj: *mut ObjectHeader, name: &[u8]) -> Option<O
     // attributes, and that same position supplies either the data value
     // or the accessor pair. Reflection never performs an inherited Get.
     let keys = super::object_keys(obj);
-    let Some(slot) = super::keys_find_property_slot_by_bytes(keys.arr(), keys.count(), name) else {
+    let Some(slot) = super::keys_find_property_slot_by_bytes(keys, keys.count(), name) else {
         return None;
     };
     let entry = super::key_attrs::keys_entry(keys.arr(), slot);
@@ -1911,15 +1911,6 @@ pub(crate) unsafe fn nm_get_own_descriptor(
             }
             _ => {}
         }
-    }
-    if module_name == "vm.constants" {
-        let value = js_object_get_field_by_name(obj, key_str);
-        return Some(build_data_descriptor(
-            f64::from_bits(value.bits()),
-            false,
-            true,
-            false,
-        ));
     }
     let value = js_object_get_field_by_name(obj, key_str);
     if matches!(

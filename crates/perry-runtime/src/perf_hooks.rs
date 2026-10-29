@@ -1898,5 +1898,3 @@ mod sso_tests_1781 {
         }
     }
 }
-
-crate::realm_decl!("perf_hooks.realm.json#*");

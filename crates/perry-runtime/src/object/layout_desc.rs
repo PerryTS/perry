@@ -212,10 +212,7 @@ pub const LAYOUT_PROTO_TAG_END: usize = 4096;
 /// runtime gives the prototype that serial when it builds it
 /// (`builtin_proto::seal_runtime_prototype`, `name_runtime_prototype`), so an
 /// object born on the layout needs no link.
-#[repr(C)]
-pub struct PerryProtoFamily {
-    pub serial: u64,
-}
+pub use crate::codegen_abi::PerryProtoFamily;
 
 /// `PerryLayoutDesc.variant` of a carried prototype layout (object model
 /// §3.6): the layout `P` is born on ([`perry_bind_family_prototype`]), a
@@ -268,7 +265,37 @@ pub struct PerryLayoutKey {
     pub atom: *const StaticAtom,
     pub slot: u32,
     pub attrs: u8,
-    pub _pad: [u8; 3],
+    pub _pad: u8,
+    /// The slot's absolute byte offset from the object (`16 + 8 * slot` today),
+    /// so a reader adds it to the object instead of composing a slot base.
+    pub off: u16,
+}
+
+/// `PerryLayoutKey.off` of slot `slot`; the same value codegen emits
+/// (`target_layout::layout_key_off`).
+pub const fn layout_key_off(slot: u32) -> u16 {
+    let off = std::mem::size_of::<ObjectHeader>() as u32 + slot * 8;
+    assert!(off <= u16::MAX as u32);
+    off as u16
+}
+
+/// `PerryLayoutDesc.slots_end` (and `alloc_bytes`) of a layout of `slot_count` slots.
+pub const fn layout_slots_end(slot_count: u32) -> u32 {
+    std::mem::size_of::<ObjectHeader>() as u32 + slot_count * 8
+}
+
+/// `PerryLayoutDesc.gc_header_word`: the idle `GcHeader` image of a layout
+/// birth. The live birth colour is ORed in at allocation.
+pub const fn layout_gc_header_word(slot_count: u32) -> u64 {
+    // SAFETY: GcHeader is eight initialized bytes with no padding.
+    unsafe {
+        std::mem::transmute::<crate::gc::GcHeader, u64>(crate::gc::GcHeader {
+            obj_type: crate::gc::GC_TYPE_OBJECT,
+            gc_flags: crate::gc::GC_FLAG_ARENA,
+            _reserved: 0,
+            size: crate::gc::GC_HEADER_SIZE as u32 + layout_slots_end(slot_count),
+        })
+    }
 }
 
 // Atom records and key sequences point only to immutable image data.
@@ -305,11 +332,31 @@ pub struct PerryLayoutDesc {
     /// Immutable layout-owned method index, or null.
     pub methods: *const methods::PerryFamilyMethods,
     pub shape_id: u32,
-    pub _layout_pad: u32,
+    /// The static GC scan plan ([`crate::codegen_abi::layout_gc_plan`]): bit 31
+    /// set and the slots that may hold a heap pointer in bits 0..=30, or 0 for
+    /// the generic walk. Immutable image data emitted by codegen; the
+    /// collectors read it for an object on this descriptor's own layout.
+    pub gc_plan: u32,
     /// Immutable descriptor-owned canonical key-list cell; null for bindings
     /// whose keys are local to an evaluation, and on the wasm fallback arm.
     pub image_keys: *mut crate::array::ArrayHeader,
+    /// A1 precompute, emitted by codegen under the asserts below. It has a reader in
+    /// the birth: the idle `GcHeader` image ([`layout_gc_header_word`]).
+    pub gc_header_word: u64,
+    /// Keeps the size at 128 bytes (112 on ILP32), see `LAYOUT_DESC_FULL_SIZE_LP64`.
+    pub _tail_pad: [u8; 32],
 }
+
+const _: () = assert!(
+    std::mem::offset_of!(PerryLayoutDesc, gc_header_word)
+        == if cfg!(target_pointer_width = "64") {
+            crate::codegen_abi::LAYOUT_DESC_GC_HEADER_WORD_OFFSET_LP64
+        } else {
+            crate::codegen_abi::LAYOUT_DESC_GC_HEADER_WORD_OFFSET_ILP32
+        }
+);
+const _: () =
+    assert!(std::mem::offset_of!(PerryLayoutKey, off) == crate::codegen_abi::LAYOUT_KEY_OFF_OFFSET);
 
 const _: () = assert!(
     std::mem::offset_of!(PerryLayoutDesc, image_keys)
@@ -322,9 +369,9 @@ const _: () = assert!(
 const _: () = assert!(
     std::mem::size_of::<PerryLayoutDesc>()
         == if cfg!(target_pointer_width = "32") {
-            72
+            crate::codegen_abi::LAYOUT_DESC_FULL_SIZE_ILP32
         } else {
-            88
+            crate::codegen_abi::LAYOUT_DESC_FULL_SIZE_LP64
         }
 );
 const _: () = assert!(
@@ -437,7 +484,7 @@ section_sentinel!(
     PerryLayoutDesc {
         image_keys: std::ptr::null_mut(),
         shape_id: 0,
-        _layout_pad: 0,
+        gc_plan: 0,
         family: SENTINEL_FAMILY,
         variant: 0,
         kind: 0,
@@ -453,6 +500,8 @@ section_sentinel!(
         class_id: 0,
         parent_class_id: 0,
         methods: std::ptr::null(),
+        gc_header_word: crate::object::layout_desc::layout_gc_header_word(0),
+        _tail_pad: [0; 32],
     },
     "perry_layouts",
     "__DATA,__perry_layouts",
@@ -651,14 +700,26 @@ unsafe fn registered_atom_symbol(
     Some((symbol & crate::value::POINTER_MASK) as *mut crate::symbol::SymbolHeader)
 }
 
-/// The symbol a symbol atom names (well-known, node's own, or registered),
-/// `None` for a string atom.
+/// The symbol a symbol atom names (well-known, node's own, registered or an
+/// image cell), `None` for a string atom. A string key, the common atom,
+/// leaves after one compare instead of failing each symbol kind's test.
 pub(crate) unsafe fn atom_symbol(
     atom: *const StaticAtom,
 ) -> Option<*mut crate::symbol::SymbolHeader> {
+    if (*atom).kind == crate::codegen_abi::ATOM_KIND_STRING {
+        return None;
+    }
     well_known_atom_symbol(atom)
         .or_else(|| super::runtime_layouts::runtime_symbol_of_atom(atom))
         .or_else(|| registered_atom_symbol(atom))
+        .or_else(|| image_atom_symbol(atom))
+}
+
+/// An image symbol atom names its static `SymbolHeader` directly.
+#[cold]
+unsafe fn image_atom_symbol(atom: *const StaticAtom) -> Option<*mut crate::symbol::SymbolHeader> {
+    ((*atom).kind == crate::codegen_abi::ATOM_KIND_IMAGE_SYMBOL && !(*atom).string.is_null())
+        .then(|| (*atom).string.cast_mut().cast())
 }
 
 /// Pre-seed the agent's atom table, then register every layout. Runs once per
@@ -685,6 +746,8 @@ pub(crate) fn seed_static_atoms() {
     wasm_program_image_checks::check_atoms();
 }
 
+#[path = "layout_desc/lazy_image.rs"]
+mod lazy_image;
 #[path = "layout_desc/registration.rs"]
 mod registration;
 use registration::binding_symbol_keys;
@@ -701,7 +764,9 @@ pub(crate) use registration::register_function_layout;
 pub(crate) use registration::register_namespace_layout;
 pub(crate) use registration::register_one;
 pub(crate) use registration::register_one_bound;
+#[cfg(test)]
 pub(crate) use registration::register_static_layouts;
+pub(crate) use registration::register_static_layouts_in;
 
 /// Allocate an object of a registered layout: the header, `slot_count`
 /// slots holding the hole marker, and the layout word. The caller (a static
@@ -743,7 +808,16 @@ pub(crate) unsafe fn alloc_family_layout_copy(
 /// Allocate an object of the registered layout `id` of `d` (see
 /// [`perry_alloc_layout`]). Can collect.
 unsafe fn alloc_layout_object(d: &PerryLayoutDesc, id: LayoutWord) -> *mut ObjectHeader {
-    alloc_layout_object_sized(d, id, d.slot_count as usize)
+    // The descriptor carries the header image (with the size) and where the slots start.
+    let obj = crate::arena::arena_alloc_gc_object_word(&d.gc_header_word, d.slot_count)
+        .cast::<ObjectHeader>();
+    finish_layout_object(
+        obj,
+        d,
+        id,
+        std::mem::size_of::<ObjectHeader>() as u32,
+        d.slot_count,
+    )
 }
 
 /// Function births alone retain the ordinary inline floor. Keep their
@@ -769,10 +843,29 @@ unsafe fn alloc_layout_object_sized(
     physical_slots: usize,
 ) -> *mut ObjectHeader {
     // A birth writes only holes; constructor stores check the live chain.
-    let word = id;
     let size = std::mem::size_of::<ObjectHeader>() + physical_slots * 8;
     let obj =
         crate::arena::arena_alloc_gc(size, 8, crate::gc::GC_TYPE_OBJECT).cast::<ObjectHeader>();
+    finish_layout_object(
+        obj,
+        d,
+        id,
+        std::mem::size_of::<ObjectHeader>() as u32,
+        physical_slots as u32,
+    )
+}
+
+/// Header, holes and shape facts of a layout birth whose slot region is
+/// `slots_first` (a byte offset from the object) and `slots` long.
+#[inline(always)]
+unsafe fn finish_layout_object(
+    obj: *mut ObjectHeader,
+    d: &PerryLayoutDesc,
+    id: LayoutWord,
+    slots_first: u32,
+    slots: u32,
+) -> *mut ObjectHeader {
+    let word = id;
     // GC_STORE_AUDIT(INIT): unpublished header and hole-only declared slots.
     std::ptr::write(
         obj,
@@ -784,11 +877,8 @@ unsafe fn alloc_layout_object_sized(
             _slot_alignment_padding: 0,
         },
     );
-    let fields = obj
-        .cast::<u8>()
-        .add(std::mem::size_of::<ObjectHeader>())
-        .cast::<u64>();
-    for i in 0..physical_slots {
+    let fields = obj.cast::<u8>().add(slots_first as usize).cast::<u64>();
+    for i in 0..slots as usize {
         // GC_STORE_AUDIT(POINTER_FREE): All three stores write the immediate TAG_HOLE to physical object slots. They introduce no pointer/child edge; allocation or rooted object custody surrounds the fill and shape publication follows.
         *fields.add(i) = crate::value::TAG_HOLE;
     }
@@ -882,7 +972,7 @@ pub(crate) unsafe fn alloc_derived_layout_object(
             recorded
         }
         _ => super::shapes::publish_shape_result(super::shapes::shape_descriptor_intern_with_rep(
-            base.keys as usize as *const crate::array::ArrayHeader,
+            base.keys_view(),
             base.logical_key_count,
             base.live_inline_slot_count,
             0,
@@ -1101,7 +1191,12 @@ pub(crate) unsafe fn prototype_image(
     // Born a marked prototype (the layout is a marked one's): its meta
     // record carries the mark and the family's serial, so the binding's mark
     // finds it done and makes no transition.
-    let meta = image.with_mut_ptr(|p: *mut ObjectHeader| super::object_meta_ensure(p));
+    let meta = image.with_mut_ptr(|p: *mut ObjectHeader| {
+        super::object_meta_ensure(
+            super::MetaObj::runtime_born(p),
+            super::MetaReason::BecomesPrototype,
+        )
+    });
     if meta.is_null() {
         return None;
     }
@@ -1536,7 +1631,8 @@ pub(crate) unsafe fn adopt_family_layout(obj: *mut ObjectHeader) -> *mut ObjectH
     // fact, re-linked below once the object is on the layout.
     if brand.get_nanbox_u64() != 0 {
         let (meta, current) =
-            object.across_mut::<ObjectHeader, _>(|| super::object_meta_ensure(obj));
+            // A1_UNPROVEN: adopt_family_layout(obj) parameter, no type test (kind-A/B question for S0b-S0e).
+            object.across_mut::<ObjectHeader, _>(|| super::object_meta_ensure(super::MetaObj::runtime_born(obj), super::MetaReason::AdoptFamilyLayout));
         (*meta).private_evaluation_brand = brand.get_nanbox_u64();
         crate::gc::runtime_write_barrier_slot(
             meta as usize,
@@ -1690,6 +1786,35 @@ pub(crate) unsafe fn family_desc_of(obj: *const ObjectHeader) -> Option<&'static
         .family_desc_index_plus_one()
         .checked_sub(1)?;
     literal_birth::family_at(index).map(|desc| &*desc)
+}
+
+/// The static GC scan plan of `obj`: the slots that may hold a heap pointer,
+/// read from the descriptor of the family layout `obj` is born on
+/// ([`PerryLayoutDesc::gc_plan`]), or `None` when the collectors must walk it
+/// generically.
+///
+/// The plan applies only to an object on its family's OWN layout word: not an
+/// evaluation copy (it names a different prototype and holder) and not a
+/// shadowed word (the object carries own overflow). `record` is the shape
+/// record of that word, which the caller already resolved. A family record is
+/// a static record (`install_declared_layout` marks it an external carrier),
+/// so the shape table roots its keys array and no prune retires it; that is
+/// what lets a plan walk skip the per-object keys edge and carrier notes.
+///
+/// # Safety
+/// `obj` is a live object and `record` is the record of its layout word.
+#[inline(always)]
+pub(crate) unsafe fn static_gc_scan_mask(
+    obj: *const ObjectHeader,
+    record: super::shapes::ShapeRecordRef,
+) -> Option<u32> {
+    let index = record.family_desc_index_plus_one().checked_sub(1)?;
+    let desc = literal_birth::family_at(index)?;
+    let plan = (*desc).gc_plan;
+    (plan & crate::codegen_abi::LAYOUT_GC_PLAN_STATIC != 0
+        && (*desc).layout_id == (*obj).parent_class_id
+        && record.is_static_record())
+    .then_some(plan & !crate::codegen_abi::LAYOUT_GC_PLAN_STATIC)
 }
 
 /// Is `obj` a class family object: on its family layout, or on a class

@@ -41,9 +41,8 @@ static SYMBOL_ACCESSOR_IDS: [std::sync::atomic::AtomicU64; SYMBOL_ACCESSOR_ID_WO
     [const { std::sync::atomic::AtomicU64::new(0) }; SYMBOL_ACCESSOR_ID_WORDS];
 const SYMBOL_ACCESSOR_ID_WORDS: usize = 4;
 
-/// `(word, mask)` for a symbol's id. Ids are a monotonic counter, so the low
-/// bits discriminate perfectly until the filter saturates at 256 distinct
-/// accessor symbols.
+/// `(word, mask)` for a symbol's move-stable mixed id. Collisions are
+/// conservative: a set bit always takes the full inherited-accessor walk.
 ///
 /// # Safety
 /// `sym_key` must be a live `SymbolHeader` address (a non-zero

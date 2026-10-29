@@ -102,7 +102,7 @@ runtime_layout!(
 static mut CLASS_HOLEY: PerryLayoutDesc = PerryLayoutDesc {
     image_keys: crate::object::image_keys::image_key_list!(HOLEY::KEYS),
     shape_id: 0,
-    _layout_pad: 0,
+    gc_plan: 0,
     family: 0x41574203,
     variant: 0,
     kind: 0,
@@ -118,6 +118,8 @@ static mut CLASS_HOLEY: PerryLayoutDesc = PerryLayoutDesc {
     class_id: 60895,
     parent_class_id: 0,
     methods: std::ptr::null(),
+    gc_header_word: crate::object::layout_desc::layout_gc_header_word(HOLEY::SLOT_COUNT as u32),
+    _tail_pad: [0; 32],
 };
 
 runtime_layout!(
@@ -139,7 +141,7 @@ runtime_layout!(
 static mut LITERAL_FAMILY: PerryLayoutDesc = PerryLayoutDesc {
     image_keys: crate::object::image_keys::image_key_list!(LITERAL_OPTIONAL::KEYS),
     shape_id: 0,
-    _layout_pad: 0,
+    gc_plan: 0,
     family: 0x7f000016,
     variant: 0,
     kind: 0,
@@ -155,6 +157,10 @@ static mut LITERAL_FAMILY: PerryLayoutDesc = PerryLayoutDesc {
     class_id: 0,
     parent_class_id: 0,
     methods: std::ptr::null(),
+    gc_header_word: crate::object::layout_desc::layout_gc_header_word(
+        LITERAL_OPTIONAL::SLOT_COUNT as u32,
+    ),
+    _tail_pad: [0; 32],
 };
 
 const TRUE: u64 = crate::value::TAG_TRUE;
@@ -824,7 +830,7 @@ mod first_birth {
     static mut LITERAL: PerryLayoutDesc = PerryLayoutDesc {
         image_keys: crate::object::image_keys::image_key_list!(KEYS),
         shape_id: 0,
-        _layout_pad: 0,
+        gc_plan: 0,
         family: 0x7f000015,
         variant: 0,
         kind: 0,
@@ -840,6 +846,8 @@ mod first_birth {
         class_id: 0,
         parent_class_id: 0,
         methods: std::ptr::null(),
+        gc_header_word: crate::object::layout_desc::layout_gc_header_word(2),
+        _tail_pad: [0; 32],
     };
 
     #[test]

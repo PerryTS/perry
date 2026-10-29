@@ -166,4 +166,4 @@ runtime_layout!(SERVER_RESPONSE, 0x53490007, 0, &raw const SERVER_RESPONSE_PROTO
     HI_ATOM_U_MAX_REQUESTS_PER_SOCKET @ response_slot::MAX_REQUESTS_PER_SOCKET => OPT,
     NP_ATOM_STATUS_MESSAGE @ response_slot::STATUS_MESSAGE => OPT,
     NP_ATOM_STATUS_CODE @ response_slot::STATUS_CODE => OPT,
-]);
+], realm = ["node:http.ServerResponse"]);

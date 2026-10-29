@@ -1,5 +1,12 @@
 use super::*;
 
+// The realm image and worker population name the same owning function-info
+// static. Its export is derived by fn_info! and the manifest producer.
+pub(crate) const ARRAY_CONSTRUCTOR_INFO: *const crate::closure::JsFunctionInfo = crate::fn_info!(
+    #[realm(Array, kind = constructor, provider = builtin_constructor, members = { isArray; from; of; prototype; [Symbol.species] = accessor(get = "Array[\"@@species\"].<get>"); }, spec = {length = 1}, emit = metadata(realm_function_metadata), births = ["%ArrayIteratorPrototype%"])]
+    export crate::object::global_this::builtin_thunks::global_this_array_thunk, 1; with_rest(0)
+);
+
 pub(crate) extern "C" fn global_this_array_thunk(
     _closure: *const crate::closure::ClosureHeader,
     _this: crate::closure::JsThis,
@@ -794,5 +801,3 @@ mod tests {
         assert_eq!(crate::builtins::js_number_coerce(result), 5.0);
     }
 }
-
-crate::realm_decl!("builtin_thunks.realm.json#*");

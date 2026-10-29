@@ -69,6 +69,10 @@ macro_rules! js_body_fn_ty {
 /// js_closure_alloc(fn_info!(my_method, 1; with_length(0), with_flags(FN_BUILTIN)), 0);
 /// ```
 ///
+/// `fn_info!(export body, n; ...)` gives the owning static a stable linker
+/// name derived from its fully qualified body path and ABI builders. Only the owning site
+/// exports; callers that allocate the same body repeatedly reuse its pointer.
+///
 /// Each expansion is its own `static`: define one per body where the same
 /// body is allocated from several places. A body declared `extern
 /// "C-unwind"` takes `fn_info!(unwind body, n; ...)`; one declared C-unwind
@@ -78,57 +82,22 @@ macro_rules! js_body_fn_ty {
 /// `fn_info!(native_args body, declared; ...)`.
 #[macro_export]
 macro_rules! fn_info {
-    (@ty 0) => { $crate::codegen_abi::JsBody0<$crate::closure::ClosureHeader> };
-    (@ty 1) => { $crate::codegen_abi::JsBody1<$crate::closure::ClosureHeader> };
-    (@ty 2) => { $crate::codegen_abi::JsBody2<$crate::closure::ClosureHeader> };
-    (@ty 3) => { $crate::codegen_abi::JsBody3<$crate::closure::ClosureHeader> };
-    (@ty 4) => { $crate::codegen_abi::JsBody4<$crate::closure::ClosureHeader> };
-    (@ty 5) => { $crate::codegen_abi::JsBody5<$crate::closure::ClosureHeader> };
-    (@ty 6) => { $crate::codegen_abi::JsBody6<$crate::closure::ClosureHeader> };
-    (@ty 7) => { $crate::codegen_abi::JsBody7<$crate::closure::ClosureHeader> };
-    (@ty 8) => { $crate::codegen_abi::JsBody8<$crate::closure::ClosureHeader> };
-    (@ty 9) => { $crate::codegen_abi::JsBody9<$crate::closure::ClosureHeader> };
-    (@ty 10) => { $crate::codegen_abi::JsBody10<$crate::closure::ClosureHeader> };
-    (@ty 11) => { $crate::codegen_abi::JsBody11<$crate::closure::ClosureHeader> };
-    (@ty 12) => { $crate::codegen_abi::JsBody12<$crate::closure::ClosureHeader> };
-    (@ty 13) => { $crate::codegen_abi::JsBody13<$crate::closure::ClosureHeader> };
-    (@ty 14) => { $crate::codegen_abi::JsBody14<$crate::closure::ClosureHeader> };
-    (@ty 15) => { $crate::codegen_abi::JsBody15<$crate::closure::ClosureHeader> };
-    (@ty 16) => { $crate::codegen_abi::JsBody16<$crate::closure::ClosureHeader> };
-    (@ty 17) => { $crate::codegen_abi::JsBody17<$crate::closure::ClosureHeader> };
-    (@ty 18) => { $crate::codegen_abi::JsBody18<$crate::closure::ClosureHeader> };
-    (@ty 19) => { $crate::codegen_abi::JsBody19<$crate::closure::ClosureHeader> };
-    (@ty 20) => { $crate::codegen_abi::JsBody20<$crate::closure::ClosureHeader> };
-    (@ty 21) => { $crate::codegen_abi::JsBody21<$crate::closure::ClosureHeader> };
-    (@ty 22) => { $crate::codegen_abi::JsBody22<$crate::closure::ClosureHeader> };
-    (@ty 23) => { $crate::codegen_abi::JsBody23<$crate::closure::ClosureHeader> };
-    (@ty 24) => { $crate::codegen_abi::JsBody24<$crate::closure::ClosureHeader> };
-    (@ty 25) => { $crate::codegen_abi::JsBody25<$crate::closure::ClosureHeader> };
-    (@ty 26) => { $crate::codegen_abi::JsBody26<$crate::closure::ClosureHeader> };
-    (@ty 27) => { $crate::codegen_abi::JsBody27<$crate::closure::ClosureHeader> };
-    (@ty 28) => { $crate::codegen_abi::JsBody28<$crate::closure::ClosureHeader> };
-    (@ty 29) => { $crate::codegen_abi::JsBody29<$crate::closure::ClosureHeader> };
-    (@ty 30) => { $crate::codegen_abi::JsBody30<$crate::closure::ClosureHeader> };
-    (@ty 31) => { $crate::codegen_abi::JsBody31<$crate::closure::ClosureHeader> };
-    (@ty 32) => { $crate::codegen_abi::JsBody32<$crate::closure::ClosureHeader> };
-    (@uty 0) => { $crate::codegen_abi::JsBodyUnwind0<$crate::closure::ClosureHeader> };
-    (@uty 1) => { $crate::codegen_abi::JsBodyUnwind1<$crate::closure::ClosureHeader> };
-    (@uty 2) => { $crate::codegen_abi::JsBodyUnwind2<$crate::closure::ClosureHeader> };
-    (@uty 3) => { $crate::codegen_abi::JsBodyUnwind3<$crate::closure::ClosureHeader> };
-    (@uty 4) => { $crate::codegen_abi::JsBodyUnwind4<$crate::closure::ClosureHeader> };
-    (@uty 5) => { $crate::codegen_abi::JsBodyUnwind5<$crate::closure::ClosureHeader> };
-    (@uty 6) => { $crate::codegen_abi::JsBodyUnwind6<$crate::closure::ClosureHeader> };
-    (@uty 7) => { $crate::codegen_abi::JsBodyUnwind7<$crate::closure::ClosureHeader> };
-    (@uty 8) => { $crate::codegen_abi::JsBodyUnwind8<$crate::closure::ClosureHeader> };
-    (@uty 9) => { $crate::codegen_abi::JsBodyUnwind9<$crate::closure::ClosureHeader> };
-    (@uty 10) => { $crate::codegen_abi::JsBodyUnwind10<$crate::closure::ClosureHeader> };
-    (@uty 11) => { $crate::codegen_abi::JsBodyUnwind11<$crate::closure::ClosureHeader> };
-    (@uty 12) => { $crate::codegen_abi::JsBodyUnwind12<$crate::closure::ClosureHeader> };
-    (@uty 13) => { $crate::codegen_abi::JsBodyUnwind13<$crate::closure::ClosureHeader> };
-    (@uty 14) => { $crate::codegen_abi::JsBodyUnwind14<$crate::closure::ClosureHeader> };
-    (@uty 15) => { $crate::codegen_abi::JsBodyUnwind15<$crate::closure::ClosureHeader> };
-    (@uty 16) => { $crate::codegen_abi::JsBodyUnwind16<$crate::closure::ClosureHeader> };
-    ($(#[realm($facts:literal)])? native_args $body:path, $declared:tt $(; $($m:ident($($a:expr),*)),* $(,)?)?) => {{
+    // Runtime and native provider crates use the same exported record emitter.
+    (#[realm($($facts:tt)*)] export $body:path, $n:tt; $($m:ident($($a:tt)*)),*; bind $binding:ident, $metadata:ident) => {
+        $crate::realm_fn_info_bind!($binding, $metadata, $crate::fn_info!(export $body, $n; $($m($($a)*)),*); $($facts)*);
+    };
+    ($(#[realm($($facts:tt)*)])? export $($rest:tt)*) => {
+        $crate::codegen_abi::fn_info! { owned for $crate::closure::ClosureHeader; export $($rest)* }
+    };
+    ($(#[realm($($facts:tt)*)])? reference $($rest:tt)*) => {
+        $crate::codegen_abi::fn_info! { owned for $crate::closure::ClosureHeader; reference $($rest)* }
+    };
+    (import $($rest:tt)*) => {
+        $crate::codegen_abi::fn_info! { for $crate::closure::ClosureHeader; import $($rest)* }
+    };
+    (@ty $n:tt) => { $crate::codegen_abi::fn_info!(@ty $crate::closure::ClosureHeader, $n) };
+    (@uty $n:tt) => { $crate::codegen_abi::fn_info!(@uty $crate::closure::ClosureHeader, $n) };
+    ($(#[realm($($facts:tt)*)])? native_args $body:path, $declared:tt $(; $($m:ident($($a:expr),*)),* $(,)?)?) => {{
         static OWNER: $crate::codegen_abi::FunctionMetadataOwner = $crate::codegen_abi::FunctionMetadataOwner::native();
         static INFO: $crate::codegen_abi::NativeFunctionInfo = $crate::codegen_abi::NativeFunctionInfo::new(
             $crate::closure::JsFunctionInfo::of_native_args(
@@ -138,27 +107,28 @@ macro_rules! fn_info {
                 $($(.$m($($a),*))*)?, &OWNER);
         &INFO.info as *const $crate::closure::JsFunctionInfo
     }};
-    ($(#[realm($facts:literal)])? unwind_in_tests $body:path, $n:tt $(; $($m:ident($($a:expr),*)),* $(,)?)?) => {{
+    ($(#[realm($($facts:tt)*)])? unwind_in_tests $body:path, $n:tt $(; $($m:ident($($a:expr),*)),* $(,)?)?) => {{
         #[cfg(panic = "abort")]
         let info = $crate::fn_info!($body, $n $(; $($m($($a),*)),*)?);
         #[cfg(not(panic = "abort"))]
         let info = $crate::fn_info!(unwind $body, $n $(; $($m($($a),*)),*)?);
         info
     }};
-    ($(#[realm($facts:literal)])? unwind $body:path, $n:tt $(; $($m:ident($($a:expr),*)),* $(,)?)?) => {{
+    ($(#[realm($($facts:tt)*)])? unwind $body:path, $n:tt $(; $($m:ident($($a:expr),*)),* $(,)?)?) => {{
         static OWNER: $crate::codegen_abi::FunctionMetadataOwner = $crate::codegen_abi::FunctionMetadataOwner::native();
         static INFO: $crate::codegen_abi::NativeFunctionInfo = $crate::codegen_abi::NativeFunctionInfo::new(
             $crate::closure::JsFunctionInfo::of($body as $crate::fn_info!(@uty $n))
                 $($(.$m($($a),*))*)?, &OWNER);
         &INFO.info as *const $crate::closure::JsFunctionInfo
     }};
-    ($(#[realm($facts:literal)])? $body:path, $n:tt $(; $($m:ident($($a:expr),*)),* $(,)?)?) => {{
+    ($(#[realm($($facts:tt)*)])? $body:path, $n:tt $(; $($m:ident($($a:expr),*)),* $(,)?)?) => {{
         static OWNER: $crate::codegen_abi::FunctionMetadataOwner = $crate::codegen_abi::FunctionMetadataOwner::native();
         static INFO: $crate::codegen_abi::NativeFunctionInfo = $crate::codegen_abi::NativeFunctionInfo::new(
             $crate::closure::JsFunctionInfo::of($body as $crate::fn_info!(@ty $n))
                 $($(.$m($($a),*))*)?, &OWNER);
         &INFO.info as *const $crate::closure::JsFunctionInfo
     }};
+    (#[realm($($facts:tt)*)] $body:path, $n:tt; $($m:ident($($a:expr),*)),*; bind $binding:ident, $metadata:ident) => { $crate::realm_fn_info_bind!($binding, $metadata, $crate::fn_info!($body, $n; $($m($($a),*)),*); $($facts)*); };
 }
 
 /// Reinterpret a validated, non-sentinel body code pointer as a callable
@@ -405,8 +375,92 @@ pub(crate) extern "C" fn native_noop0(
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
-/// Source-owned realm facts; this marker emits no runtime code or data.
+/// Source-owned realm facts; an owned body-info item passes through unchanged.
 #[macro_export]
 macro_rules! realm_decl {
-    ($facts:literal) => {};
+    (@native_compare $property:expr; $key:literal) => { $property == $key };
+    (@native_compare $property:expr; $first:literal | $($key:literal)|+) => { matches!($property, $first | $($key)|+) };
+    (native_nonconstructors($module:expr, $property:expr); $($($owner:literal)|+ => [$($key:literal)|+]),* $(,)?) => { match $module { $($($owner)|+ => $crate::realm_decl!(@native_compare $property; $($key)|+),)* _ => false, } }; (info $info:item realm { $($facts:tt)* }) => { $info }; (info_expr $info:expr; realm { $($facts:tt)* }) => { $info }; (native_key $key:literal; realm { $($facts:tt)* }) => { $key }; (module_provider $provider:item realm { $($facts:tt)* }) => { $provider }; (record $builder:ident, $layout:ident; realm { $($facts:tt)* }) => { $crate::object::runtime_layouts::runtime_record!($builder, $layout); }; (birth $birth:expr; realm { $($facts:tt)* }) => { $birth }; (object $name:literal, $object:ident; $($members:tt)*) => { $crate::realm_native_object!($object; $($members)*); }; ($($facts:tt)*) => {};
+}
+
+/// Bind ABI metadata and a local macro projecting public spec overrides at their
+/// original use sites. The macro stores no runtime record or lookup table.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! realm_fn_info_bind {
+    ($binding:ident, $metadata:ident, $info:expr; $path:literal, spec = { name = $name:expr, length = $length:expr }, emit = metadata $(, $($facts:tt)*)?) => {
+        macro_rules! $metadata {
+            (name) => {
+                $name
+            };
+            (length) => {
+                $length
+            };
+        }
+        let $binding = $info;
+    };
+    ($binding:ident, $metadata:ident, $info:expr; $($path:ident).+, spec = { name = $name:expr, length = $length:expr }, emit = metadata $(, $($facts:tt)*)?) => {
+        macro_rules! $metadata {
+            (name) => {
+                $name
+            };
+            (length) => {
+                $length
+            };
+        }
+        let $binding = $info;
+    };
+    ($binding:ident, $metadata:ident, $info:expr; $path:literal, spec = { name = $value:expr }, emit = metadata $(, $($facts:tt)*)?) => {
+        macro_rules! $metadata {
+            (name) => {
+                $value
+            };
+        }
+        let $binding = $info;
+    };
+    ($binding:ident, $metadata:ident, $info:expr; $path:literal, spec = { length = $value:expr }, emit = metadata $(, $($facts:tt)*)?) => {
+        macro_rules! $metadata {
+            (length) => {
+                $value
+            };
+        }
+        let $binding = $info;
+    };
+    ($binding:ident, $metadata:ident, $info:expr; $($path:ident).+, spec = { name = $value:expr }, emit = metadata $(, $($facts:tt)*)?) => {
+        macro_rules! $metadata {
+            (name) => {
+                $value
+            };
+        }
+        let $binding = $info;
+    };
+    ($binding:ident, $metadata:ident, $info:expr; $($path:ident).+, spec = { length = $value:expr }, emit = metadata $(, $($facts:tt)*)?) => {
+        macro_rules! $metadata {
+            (length) => {
+                $value
+            };
+        }
+        let $binding = $info;
+    };
+}
+
+/// Literal native object births declared once for runtime and realm production.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! realm_native_object {
+    ($object:ident; $($key:literal => $kind:ident($value:literal);)*) => {
+        let $object = $crate::object::js_object_alloc(0, 0);
+        $(
+            $crate::object::native_module::callable_exports::native_set_field(
+                $object, $key, $crate::realm_native_object!(@value $kind $value),
+            );
+        )*
+    };
+    (@value string $value:literal) => {
+        $crate::object::native_module::callable_exports::native_string_value($value)
+    };
+    (@value boolean $value:literal) => {
+        $crate::object::native_module::callable_exports::native_bool_value($value)
+    };
+    (@value number $value:literal) => { $value };
 }

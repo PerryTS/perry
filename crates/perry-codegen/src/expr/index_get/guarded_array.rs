@@ -221,7 +221,11 @@ pub(in crate::expr) fn emit_array_guard_word(
 
 /// `(word & MASK) == EXPECT` and a null named layout: an ordinary array, not
 /// forwarded, no element descriptors.
-fn emit_array_guard_word_ok(blk: &mut crate::block::LlBlock, word: &str, handle: &str) -> String {
+pub(in crate::expr) fn emit_array_guard_word_ok(
+    blk: &mut crate::block::LlBlock,
+    word: &str,
+    handle: &str,
+) -> String {
     let masked = blk.and(I32, word, ARRAY_READ_GUARD_MASK_I32);
     let word_ok = blk.icmp_eq(I32, &masked, ARRAY_READ_GUARD_EXPECT_I32);
     emit_and_no_named_layout(blk, &word_ok, handle)

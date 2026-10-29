@@ -294,39 +294,39 @@ extern "C" fn temporal_now_zoned_date_time_iso_thunk(
 /// Build the `Temporal.Now` namespace object (a plain object of method thunks).
 #[cfg(feature = "temporal")]
 fn build_temporal_now_namespace() -> f64 {
-    let now_obj = js_object_alloc(0, 0);
+    let now_obj = crate::realm_decl! { birth js_object_alloc(0, 0); realm { Temporal.Now, kind = namespace, members = { instant; timeZoneId; plainDateTimeISO; plainDateISO; plainTimeISO; zonedDateTimeISO; [Symbol.toStringTag] = "Temporal.Now"; }, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError]; } };
     if now_obj.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     for (name, info, len) in [
         (
             "instant",
-            crate::fn_info!(temporal_now_instant_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm(Temporal.Now.instant, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] export crate::object::global_this::math_temporal::temporal_now_instant_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
             0u32,
         ),
         (
             "timeZoneId",
-            crate::fn_info!(temporal_now_timezone_id_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm(Temporal.Now.timeZoneId, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] export crate::object::global_this::math_temporal::temporal_now_timezone_id_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
             0,
         ),
         (
             "plainDateTimeISO",
-            crate::fn_info!(temporal_now_plain_date_time_iso_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm(Temporal.Now.plainDateTimeISO, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] export crate::object::global_this::math_temporal::temporal_now_plain_date_time_iso_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
             0,
         ),
         (
             "plainDateISO",
-            crate::fn_info!(temporal_now_plain_date_iso_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm(Temporal.Now.plainDateISO, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] export crate::object::global_this::math_temporal::temporal_now_plain_date_iso_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
             0,
         ),
         (
             "plainTimeISO",
-            crate::fn_info!(temporal_now_plain_time_iso_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm(Temporal.Now.plainTimeISO, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] export crate::object::global_this::math_temporal::temporal_now_plain_time_iso_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
             0,
         ),
         (
             "zonedDateTimeISO",
-            crate::fn_info!(temporal_now_zoned_date_time_iso_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm(Temporal.Now.zonedDateTimeISO, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] export crate::object::global_this::math_temporal::temporal_now_zoned_date_time_iso_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
             0,
         ),
     ] {
@@ -485,7 +485,7 @@ fn install_temporal_prototype(
     if ctor.is_null() {
         return;
     }
-    let proto = js_object_alloc(0, 0);
+    let proto = crate::realm_decl! { birth js_object_alloc(0, 0); realm { Temporal.Duration.prototype, members = { years = accessor(get = "Temporal.Duration.prototype.years.<get>"); months = accessor(get = "Temporal.Duration.prototype.months.<get>"); weeks = accessor(get = "Temporal.Duration.prototype.weeks.<get>"); days = accessor(get = "Temporal.Duration.prototype.days.<get>"); hours = accessor(get = "Temporal.Duration.prototype.hours.<get>"); minutes = accessor(get = "Temporal.Duration.prototype.minutes.<get>"); seconds = accessor(get = "Temporal.Duration.prototype.seconds.<get>"); milliseconds = accessor(get = "Temporal.Duration.prototype.milliseconds.<get>"); microseconds = accessor(get = "Temporal.Duration.prototype.microseconds.<get>"); nanoseconds = accessor(get = "Temporal.Duration.prototype.nanoseconds.<get>"); sign = accessor(get = "Temporal.Duration.prototype.sign.<get>"); blank = accessor(get = "Temporal.Duration.prototype.blank.<get>"); with; negated; abs; add; subtract; round; total; toString; toJSON; toLocaleString; valueOf; constructor; [Symbol.toStringTag] = "Temporal.Duration"; }, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError]; Temporal.Instant.prototype, members = { epochMilliseconds = accessor(get = "Temporal.Instant.prototype.epochMilliseconds.<get>"); epochNanoseconds = accessor(get = "Temporal.Instant.prototype.epochNanoseconds.<get>"); add; subtract; until; since; round; equals; toZonedDateTimeISO; toString; toJSON; toLocaleString; valueOf; constructor; [Symbol.toStringTag] = "Temporal.Instant"; }, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError]; Temporal.PlainDate.prototype, members = { calendarId = accessor(get = "Temporal.PlainDate.prototype.calendarId.<get>"); era = accessor(get = "Temporal.PlainDate.prototype.era.<get>"); eraYear = accessor(get = "Temporal.PlainDate.prototype.eraYear.<get>"); year = accessor(get = "Temporal.PlainDate.prototype.year.<get>"); month = accessor(get = "Temporal.PlainDate.prototype.month.<get>"); monthCode = accessor(get = "Temporal.PlainDate.prototype.monthCode.<get>"); day = accessor(get = "Temporal.PlainDate.prototype.day.<get>"); dayOfWeek = accessor(get = "Temporal.PlainDate.prototype.dayOfWeek.<get>"); dayOfYear = accessor(get = "Temporal.PlainDate.prototype.dayOfYear.<get>"); weekOfYear = accessor(get = "Temporal.PlainDate.prototype.weekOfYear.<get>"); yearOfWeek = accessor(get = "Temporal.PlainDate.prototype.yearOfWeek.<get>"); daysInWeek = accessor(get = "Temporal.PlainDate.prototype.daysInWeek.<get>"); daysInMonth = accessor(get = "Temporal.PlainDate.prototype.daysInMonth.<get>"); daysInYear = accessor(get = "Temporal.PlainDate.prototype.daysInYear.<get>"); monthsInYear = accessor(get = "Temporal.PlainDate.prototype.monthsInYear.<get>"); inLeapYear = accessor(get = "Temporal.PlainDate.prototype.inLeapYear.<get>"); toPlainYearMonth; toPlainMonthDay; add; subtract; with; withCalendar; until; since; equals; toPlainDateTime; toZonedDateTime; toString; toLocaleString; toJSON; valueOf; constructor; [Symbol.toStringTag] = "Temporal.PlainDate"; }, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError]; Temporal.PlainDateTime.prototype, members = { calendarId = accessor(get = "Temporal.PlainDateTime.prototype.calendarId.<get>"); era = accessor(get = "Temporal.PlainDateTime.prototype.era.<get>"); eraYear = accessor(get = "Temporal.PlainDateTime.prototype.eraYear.<get>"); year = accessor(get = "Temporal.PlainDateTime.prototype.year.<get>"); month = accessor(get = "Temporal.PlainDateTime.prototype.month.<get>"); monthCode = accessor(get = "Temporal.PlainDateTime.prototype.monthCode.<get>"); day = accessor(get = "Temporal.PlainDateTime.prototype.day.<get>"); dayOfWeek = accessor(get = "Temporal.PlainDateTime.prototype.dayOfWeek.<get>"); dayOfYear = accessor(get = "Temporal.PlainDateTime.prototype.dayOfYear.<get>"); weekOfYear = accessor(get = "Temporal.PlainDateTime.prototype.weekOfYear.<get>"); yearOfWeek = accessor(get = "Temporal.PlainDateTime.prototype.yearOfWeek.<get>"); daysInWeek = accessor(get = "Temporal.PlainDateTime.prototype.daysInWeek.<get>"); daysInMonth = accessor(get = "Temporal.PlainDateTime.prototype.daysInMonth.<get>"); daysInYear = accessor(get = "Temporal.PlainDateTime.prototype.daysInYear.<get>"); monthsInYear = accessor(get = "Temporal.PlainDateTime.prototype.monthsInYear.<get>"); inLeapYear = accessor(get = "Temporal.PlainDateTime.prototype.inLeapYear.<get>"); hour = accessor(get = "Temporal.PlainDateTime.prototype.hour.<get>"); minute = accessor(get = "Temporal.PlainDateTime.prototype.minute.<get>"); second = accessor(get = "Temporal.PlainDateTime.prototype.second.<get>"); millisecond = accessor(get = "Temporal.PlainDateTime.prototype.millisecond.<get>"); microsecond = accessor(get = "Temporal.PlainDateTime.prototype.microsecond.<get>"); nanosecond = accessor(get = "Temporal.PlainDateTime.prototype.nanosecond.<get>"); with; withPlainTime; withCalendar; add; subtract; until; since; round; equals; toString; toLocaleString; toJSON; valueOf; toZonedDateTime; toPlainDate; toPlainTime; constructor; [Symbol.toStringTag] = "Temporal.PlainDateTime"; }, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError]; Temporal.PlainMonthDay.prototype, members = { monthCode = accessor(get = "Temporal.PlainMonthDay.prototype.monthCode.<get>"); day = accessor(get = "Temporal.PlainMonthDay.prototype.day.<get>"); calendarId = accessor(get = "Temporal.PlainMonthDay.prototype.calendarId.<get>"); with; equals; toPlainDate; toString; toJSON; toLocaleString; valueOf; constructor; [Symbol.toStringTag] = "Temporal.PlainMonthDay"; }, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError]; Temporal.PlainTime.prototype, members = { hour = accessor(get = "Temporal.PlainTime.prototype.hour.<get>"); minute = accessor(get = "Temporal.PlainTime.prototype.minute.<get>"); second = accessor(get = "Temporal.PlainTime.prototype.second.<get>"); millisecond = accessor(get = "Temporal.PlainTime.prototype.millisecond.<get>"); microsecond = accessor(get = "Temporal.PlainTime.prototype.microsecond.<get>"); nanosecond = accessor(get = "Temporal.PlainTime.prototype.nanosecond.<get>"); add; subtract; with; until; since; round; equals; toString; toJSON; toLocaleString; valueOf; constructor; [Symbol.toStringTag] = "Temporal.PlainTime"; }, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError]; Temporal.PlainYearMonth.prototype, members = { year = accessor(get = "Temporal.PlainYearMonth.prototype.year.<get>"); month = accessor(get = "Temporal.PlainYearMonth.prototype.month.<get>"); monthCode = accessor(get = "Temporal.PlainYearMonth.prototype.monthCode.<get>"); daysInMonth = accessor(get = "Temporal.PlainYearMonth.prototype.daysInMonth.<get>"); daysInYear = accessor(get = "Temporal.PlainYearMonth.prototype.daysInYear.<get>"); monthsInYear = accessor(get = "Temporal.PlainYearMonth.prototype.monthsInYear.<get>"); inLeapYear = accessor(get = "Temporal.PlainYearMonth.prototype.inLeapYear.<get>"); calendarId = accessor(get = "Temporal.PlainYearMonth.prototype.calendarId.<get>"); era = accessor(get = "Temporal.PlainYearMonth.prototype.era.<get>"); eraYear = accessor(get = "Temporal.PlainYearMonth.prototype.eraYear.<get>"); with; add; subtract; until; since; equals; toPlainDate; toString; toJSON; toLocaleString; valueOf; constructor; [Symbol.toStringTag] = "Temporal.PlainYearMonth"; }, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError]; } };
     if proto.is_null() {
         return;
     }
@@ -651,7 +651,7 @@ fn install_temporal_getter(
 /// dispatch via the Temporal brand arm and never touch this object.
 #[cfg(feature = "temporal")]
 fn build_zoned_date_time_prototype() -> *mut ObjectHeader {
-    let proto = js_object_alloc(0, 0);
+    let proto = crate::realm_decl! { birth js_object_alloc(0, 0); realm { Temporal.ZonedDateTime.prototype, members = { year = accessor(get = "Temporal.ZonedDateTime.prototype.year.<get>"); month = accessor(get = "Temporal.ZonedDateTime.prototype.month.<get>"); monthCode = accessor(get = "Temporal.ZonedDateTime.prototype.monthCode.<get>"); day = accessor(get = "Temporal.ZonedDateTime.prototype.day.<get>"); hour = accessor(get = "Temporal.ZonedDateTime.prototype.hour.<get>"); minute = accessor(get = "Temporal.ZonedDateTime.prototype.minute.<get>"); second = accessor(get = "Temporal.ZonedDateTime.prototype.second.<get>"); millisecond = accessor(get = "Temporal.ZonedDateTime.prototype.millisecond.<get>"); microsecond = accessor(get = "Temporal.ZonedDateTime.prototype.microsecond.<get>"); nanosecond = accessor(get = "Temporal.ZonedDateTime.prototype.nanosecond.<get>"); era = accessor(get = "Temporal.ZonedDateTime.prototype.era.<get>"); eraYear = accessor(get = "Temporal.ZonedDateTime.prototype.eraYear.<get>"); epochMilliseconds = accessor(get = "Temporal.ZonedDateTime.prototype.epochMilliseconds.<get>"); epochNanoseconds = accessor(get = "Temporal.ZonedDateTime.prototype.epochNanoseconds.<get>"); dayOfWeek = accessor(get = "Temporal.ZonedDateTime.prototype.dayOfWeek.<get>"); dayOfYear = accessor(get = "Temporal.ZonedDateTime.prototype.dayOfYear.<get>"); weekOfYear = accessor(get = "Temporal.ZonedDateTime.prototype.weekOfYear.<get>"); yearOfWeek = accessor(get = "Temporal.ZonedDateTime.prototype.yearOfWeek.<get>"); daysInWeek = accessor(get = "Temporal.ZonedDateTime.prototype.daysInWeek.<get>"); daysInMonth = accessor(get = "Temporal.ZonedDateTime.prototype.daysInMonth.<get>"); daysInYear = accessor(get = "Temporal.ZonedDateTime.prototype.daysInYear.<get>"); monthsInYear = accessor(get = "Temporal.ZonedDateTime.prototype.monthsInYear.<get>"); inLeapYear = accessor(get = "Temporal.ZonedDateTime.prototype.inLeapYear.<get>"); hoursInDay = accessor(get = "Temporal.ZonedDateTime.prototype.hoursInDay.<get>"); offset = accessor(get = "Temporal.ZonedDateTime.prototype.offset.<get>"); offsetNanoseconds = accessor(get = "Temporal.ZonedDateTime.prototype.offsetNanoseconds.<get>"); timeZoneId = accessor(get = "Temporal.ZonedDateTime.prototype.timeZoneId.<get>"); calendarId = accessor(get = "Temporal.ZonedDateTime.prototype.calendarId.<get>"); add; subtract; until; since; round; equals; with; withCalendar; withPlainTime; withTimeZone; toInstant; toPlainDate; toPlainTime; toPlainDateTime; toString; toJSON; toLocaleString; valueOf; startOfDay; getTimeZoneTransition; constructor; [Symbol.toStringTag] = "Temporal.ZonedDateTime"; }, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError]; } };
     if proto.is_null() {
         return proto;
     }
@@ -938,7 +938,7 @@ const PLAIN_DATE_TIME_METHODS: &[(&str, u32)] = &[
 ];
 
 #[cfg(feature = "temporal")]
-pub(crate) fn install_temporal_namespace(ns_obj: *mut ObjectHeader) {
+#[rustfmt::skip] pub(crate) fn install_temporal_namespace(ns_obj: *mut ObjectHeader) {
     if ns_obj.is_null() {
         return;
     }
@@ -946,21 +946,21 @@ pub(crate) fn install_temporal_namespace(ns_obj: *mut ObjectHeader) {
     let duration = install_temporal_constructor(
         ns_obj,
         "Duration",
-        crate::fn_info!(temporal_duration_ctor_thunk, 1; with_rest(0)),
+        crate::fn_info!(#[realm(Temporal.Duration, kind = constructor, members = { from; compare; prototype; }, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] export crate::object::global_this::math_temporal::temporal_duration_ctor_thunk, 1; with_rest(0)),
         0,
     );
     if !duration.is_null() {
         install_constructor_static(
             duration,
             "from",
-            crate::fn_info!(temporal_duration_from_thunk, 1; with_rest(0)),
-            1,
+            crate::fn_info!(#[realm(Temporal.Duration.from, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError], spec = {length = 1}, emit = metadata(realm_temporal_duration_from_metadata))] export crate::object::global_this::math_temporal::temporal_duration_from_thunk, 1; with_rest(0)),
+            realm_temporal_duration_from_metadata!(length),
         );
         install_constructor_static(
             duration,
             "compare",
-            crate::fn_info!(temporal_duration_compare_thunk, 1; with_rest(0)),
-            2,
+            crate::fn_info!(#[realm(Temporal.Duration.compare, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError], spec = {length = 2}, emit = metadata(realm_temporal_duration_compare_metadata))] export crate::object::global_this::math_temporal::temporal_duration_compare_thunk, 1; with_rest(0)),
+            realm_temporal_duration_compare_metadata!(length),
         );
         install_temporal_prototype(
             duration,
@@ -999,26 +999,26 @@ pub(crate) fn install_temporal_namespace(ns_obj: *mut ObjectHeader) {
     let instant = install_temporal_constructor(
         ns_obj,
         "Instant",
-        crate::fn_info!(temporal_instant_ctor_thunk, 1; with_rest(0)),
-        1,
+        crate::fn_info!(#[realm(Temporal.Instant, kind = constructor, members = { from; compare; fromEpochMilliseconds; fromEpochNanoseconds; prototype; }, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError], spec = {length = 1}, emit = metadata(realm_temporal_instant_metadata))] export crate::object::global_this::math_temporal::temporal_instant_ctor_thunk, 1; with_rest(0)),
+        realm_temporal_instant_metadata!(length),
     );
     if !instant.is_null() {
         install_temporal_from_compare(
             instant,
-            crate::fn_info!(temporal_instant_from_thunk, 1; with_rest(0)),
-            crate::fn_info!(temporal_instant_compare_thunk, 1; with_rest(0)),
+            crate::fn_info!(#[realm(Temporal.Instant.from, spec = {length = 1}, emit = metadata(realm_temporal_static_from), births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] export crate::object::global_this::math_temporal::temporal_instant_from_thunk, 1; with_rest(0)),
+            crate::fn_info!(#[realm(Temporal.Instant.compare, spec = {length = 2}, emit = metadata(realm_temporal_static_compare), births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] export crate::object::global_this::math_temporal::temporal_instant_compare_thunk, 1; with_rest(0)),
         );
         install_constructor_static(
             instant,
             "fromEpochMilliseconds",
-            crate::fn_info!(temporal_instant_from_epoch_ms_thunk, 1; with_rest(0)),
-            1,
+            crate::fn_info!(#[realm(Temporal.Instant.fromEpochMilliseconds, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError], spec = {length = 1}, emit = metadata(realm_temporal_instant_fromepochmilliseconds_metadata))] export crate::object::global_this::math_temporal::temporal_instant_from_epoch_ms_thunk, 1; with_rest(0)),
+            realm_temporal_instant_fromepochmilliseconds_metadata!(length),
         );
         install_constructor_static(
             instant,
             "fromEpochNanoseconds",
-            crate::fn_info!(temporal_instant_from_epoch_ns_thunk, 1; with_rest(0)),
-            1,
+            crate::fn_info!(#[realm(Temporal.Instant.fromEpochNanoseconds, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError], spec = {length = 1}, emit = metadata(realm_temporal_instant_fromepochnanoseconds_metadata))] export crate::object::global_this::math_temporal::temporal_instant_from_epoch_ns_thunk, 1; with_rest(0)),
+            realm_temporal_instant_fromepochnanoseconds_metadata!(length),
         );
         install_temporal_prototype(
             instant,
@@ -1044,14 +1044,14 @@ pub(crate) fn install_temporal_namespace(ns_obj: *mut ObjectHeader) {
     let plain_date = install_temporal_constructor(
         ns_obj,
         "PlainDate",
-        crate::fn_info!(temporal_plain_date_ctor_thunk, 1; with_rest(0)),
-        3,
+        crate::fn_info!(#[realm(Temporal.PlainDate, kind = constructor, members = { from; compare; prototype; }, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError], spec = {length = 3}, emit = metadata(realm_temporal_plaindate_metadata))] export crate::object::global_this::math_temporal::temporal_plain_date_ctor_thunk, 1; with_rest(0)),
+        realm_temporal_plaindate_metadata!(length),
     );
     if !plain_date.is_null() {
         install_temporal_from_compare(
             plain_date,
-            crate::fn_info!(temporal_plain_date_from_thunk, 1; with_rest(0)),
-            crate::fn_info!(temporal_plain_date_compare_thunk, 1; with_rest(0)),
+            crate::fn_info!(#[realm(Temporal.PlainDate.from, spec = {length = 1}, emit = metadata(realm_temporal_static_from), births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] export crate::object::global_this::math_temporal::temporal_plain_date_from_thunk, 1; with_rest(0)),
+            crate::fn_info!(#[realm(Temporal.PlainDate.compare, spec = {length = 2}, emit = metadata(realm_temporal_static_compare), births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] export crate::object::global_this::math_temporal::temporal_plain_date_compare_thunk, 1; with_rest(0)),
         );
         install_temporal_prototype(
             plain_date,
@@ -1065,14 +1065,14 @@ pub(crate) fn install_temporal_namespace(ns_obj: *mut ObjectHeader) {
     let plain_time = install_temporal_constructor(
         ns_obj,
         "PlainTime",
-        crate::fn_info!(temporal_plain_time_ctor_thunk, 1; with_rest(0)),
+        crate::fn_info!(#[realm(Temporal.PlainTime, kind = constructor, members = { from; compare; prototype; }, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] export crate::object::global_this::math_temporal::temporal_plain_time_ctor_thunk, 1; with_rest(0)),
         0,
     );
     if !plain_time.is_null() {
         install_temporal_from_compare(
             plain_time,
-            crate::fn_info!(temporal_plain_time_from_thunk, 1; with_rest(0)),
-            crate::fn_info!(temporal_plain_time_compare_thunk, 1; with_rest(0)),
+            crate::fn_info!(#[realm(Temporal.PlainTime.from, spec = {length = 1}, emit = metadata(realm_temporal_static_from), births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] export crate::object::global_this::math_temporal::temporal_plain_time_from_thunk, 1; with_rest(0)),
+            crate::fn_info!(#[realm(Temporal.PlainTime.compare, spec = {length = 2}, emit = metadata(realm_temporal_static_compare), births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] export crate::object::global_this::math_temporal::temporal_plain_time_compare_thunk, 1; with_rest(0)),
         );
     }
 
@@ -1080,14 +1080,14 @@ pub(crate) fn install_temporal_namespace(ns_obj: *mut ObjectHeader) {
     let plain_date_time = install_temporal_constructor(
         ns_obj,
         "PlainDateTime",
-        crate::fn_info!(temporal_plain_date_time_ctor_thunk, 1; with_rest(0)),
-        3,
+        crate::fn_info!(#[realm(Temporal.PlainDateTime, kind = constructor, members = { from; compare; prototype; }, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError], spec = {length = 3}, emit = metadata(realm_temporal_plaindatetime_metadata))] export crate::object::global_this::math_temporal::temporal_plain_date_time_ctor_thunk, 1; with_rest(0)),
+        realm_temporal_plaindatetime_metadata!(length),
     );
     if !plain_date_time.is_null() {
         install_temporal_from_compare(
             plain_date_time,
-            crate::fn_info!(temporal_plain_date_time_from_thunk, 1; with_rest(0)),
-            crate::fn_info!(temporal_plain_date_time_compare_thunk, 1; with_rest(0)),
+            crate::fn_info!(#[realm(Temporal.PlainDateTime.from, spec = {length = 1}, emit = metadata(realm_temporal_static_from), births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] export crate::object::global_this::math_temporal::temporal_plain_date_time_from_thunk, 1; with_rest(0)),
+            crate::fn_info!(#[realm(Temporal.PlainDateTime.compare, spec = {length = 2}, emit = metadata(realm_temporal_static_compare), births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] export crate::object::global_this::math_temporal::temporal_plain_date_time_compare_thunk, 1; with_rest(0)),
         );
         install_temporal_prototype(
             plain_date_time,
@@ -1101,14 +1101,14 @@ pub(crate) fn install_temporal_namespace(ns_obj: *mut ObjectHeader) {
     let plain_year_month = install_temporal_constructor(
         ns_obj,
         "PlainYearMonth",
-        crate::fn_info!(temporal_plain_year_month_ctor_thunk, 1; with_rest(0)),
-        2,
+        crate::fn_info!(#[realm(Temporal.PlainYearMonth, kind = constructor, members = { from; compare; prototype; }, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError], spec = {length = 2}, emit = metadata(realm_temporal_plainyearmonth_metadata))] export crate::object::global_this::math_temporal::temporal_plain_year_month_ctor_thunk, 1; with_rest(0)),
+        realm_temporal_plainyearmonth_metadata!(length),
     );
     if !plain_year_month.is_null() {
         install_temporal_from_compare(
             plain_year_month,
-            crate::fn_info!(temporal_plain_year_month_from_thunk, 1; with_rest(0)),
-            crate::fn_info!(temporal_plain_year_month_compare_thunk, 1; with_rest(0)),
+            crate::fn_info!(#[realm(Temporal.PlainYearMonth.from, spec = {length = 1}, emit = metadata(realm_temporal_static_from), births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] export crate::object::global_this::math_temporal::temporal_plain_year_month_from_thunk, 1; with_rest(0)),
+            crate::fn_info!(#[realm(Temporal.PlainYearMonth.compare, spec = {length = 2}, emit = metadata(realm_temporal_static_compare), births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] export crate::object::global_this::math_temporal::temporal_plain_year_month_compare_thunk, 1; with_rest(0)),
         );
     }
 
@@ -1116,15 +1116,15 @@ pub(crate) fn install_temporal_namespace(ns_obj: *mut ObjectHeader) {
     let plain_month_day = install_temporal_constructor(
         ns_obj,
         "PlainMonthDay",
-        crate::fn_info!(temporal_plain_month_day_ctor_thunk, 1; with_rest(0)),
-        2,
+        crate::fn_info!(#[realm(Temporal.PlainMonthDay, kind = constructor, members = { from; prototype; }, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError], spec = {length = 2}, emit = metadata(realm_temporal_plainmonthday_metadata))] export crate::object::global_this::math_temporal::temporal_plain_month_day_ctor_thunk, 1; with_rest(0)),
+        realm_temporal_plainmonthday_metadata!(length),
     );
     if !plain_month_day.is_null() {
         install_constructor_static(
             plain_month_day,
             "from",
-            crate::fn_info!(temporal_plain_month_day_from_thunk, 1; with_rest(0)),
-            1,
+            crate::fn_info!(#[realm(Temporal.PlainMonthDay.from, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError], spec = {length = 1}, emit = metadata(realm_temporal_plainmonthday_from_metadata))] export crate::object::global_this::math_temporal::temporal_plain_month_day_from_thunk, 1; with_rest(0)),
+            realm_temporal_plainmonthday_from_metadata!(length),
         );
     }
 
@@ -1132,14 +1132,14 @@ pub(crate) fn install_temporal_namespace(ns_obj: *mut ObjectHeader) {
     let zoned = install_temporal_constructor(
         ns_obj,
         "ZonedDateTime",
-        crate::fn_info!(temporal_zoned_date_time_ctor_thunk, 1; with_rest(0)),
-        2,
+        crate::fn_info!(#[realm(Temporal.ZonedDateTime, kind = constructor, members = { from; compare; prototype; }, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError], spec = {length = 2}, emit = metadata(realm_temporal_zoneddatetime_metadata))] export crate::object::global_this::math_temporal::temporal_zoned_date_time_ctor_thunk, 1; with_rest(0)),
+        realm_temporal_zoneddatetime_metadata!(length),
     );
     if !zoned.is_null() {
         install_temporal_from_compare(
             zoned,
-            crate::fn_info!(temporal_zoned_date_time_from_thunk, 1; with_rest(0)),
-            crate::fn_info!(temporal_zoned_date_time_compare_thunk, 1; with_rest(0)),
+            crate::fn_info!(#[realm(Temporal.ZonedDateTime.from, spec = {length = 1}, emit = metadata(realm_temporal_static_from), births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] export crate::object::global_this::math_temporal::temporal_zoned_date_time_from_thunk, 1; with_rest(0)),
+            crate::fn_info!(#[realm(Temporal.ZonedDateTime.compare, spec = {length = 2}, emit = metadata(realm_temporal_static_compare), births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] export crate::object::global_this::math_temporal::temporal_zoned_date_time_compare_thunk, 1; with_rest(0)),
         );
         // Real `Temporal.ZonedDateTime.prototype` with getter/method descriptors
         // so reflective test262 cases resolve (branding / prop-desc / length /
@@ -1187,13 +1187,13 @@ pub(crate) fn install_temporal_namespace(ns_obj: *mut ObjectHeader) {
             "blank",
         ],
         &[
-            ("with", 1),
+            ("with", realm_temporal_duration_prototype_with_metadata!(length)),
             ("negated", 0),
             ("abs", 0),
-            ("add", 1),
-            ("subtract", 1),
-            ("round", 1),
-            ("total", 1),
+            ("add", realm_temporal_duration_prototype_add_metadata!(length)),
+            ("subtract", realm_temporal_duration_prototype_subtract_metadata!(length)),
+            ("round", realm_temporal_duration_prototype_round_metadata!(length)),
+            ("total", realm_temporal_duration_prototype_total_metadata!(length)),
             ("toString", 0),
             ("toJSON", 0),
             ("toLocaleString", 0),
@@ -1209,17 +1209,17 @@ pub(crate) fn install_temporal_namespace(ns_obj: *mut ObjectHeader) {
         // ships neither, and `get()` never implemented them).
         &["epochMilliseconds", "epochNanoseconds"],
         &[
-            ("add", 1),
-            ("subtract", 1),
-            ("until", 1),
-            ("since", 1),
-            ("round", 1),
-            ("equals", 1),
+            ("add", realm_temporal_instant_prototype_add_metadata!(length)),
+            ("subtract", realm_temporal_instant_prototype_subtract_metadata!(length)),
+            ("until", realm_temporal_instant_prototype_until_metadata!(length)),
+            ("since", realm_temporal_instant_prototype_since_metadata!(length)),
+            ("round", realm_temporal_instant_prototype_round_metadata!(length)),
+            ("equals", realm_temporal_instant_prototype_equals_metadata!(length)),
             ("toString", 0),
             ("toJSON", 0),
             ("toLocaleString", 0),
             ("valueOf", 0),
-            ("toZonedDateTimeISO", 1),
+            ("toZonedDateTimeISO", realm_temporal_instant_prototype_tozoneddatetimeiso_metadata!(length)),
         ],
     );
     populate_prototype(
@@ -1246,15 +1246,15 @@ pub(crate) fn install_temporal_namespace(ns_obj: *mut ObjectHeader) {
         &[
             ("toPlainYearMonth", 0),
             ("toPlainMonthDay", 0),
-            ("add", 1),
-            ("subtract", 1),
-            ("with", 1),
-            ("withCalendar", 1),
-            ("until", 1),
-            ("since", 1),
-            ("equals", 1),
+            ("add", realm_temporal_plaindate_prototype_add_metadata!(length)),
+            ("subtract", realm_temporal_plaindate_prototype_subtract_metadata!(length)),
+            ("with", realm_temporal_plaindate_prototype_with_metadata!(length)),
+            ("withCalendar", realm_temporal_plaindate_prototype_withcalendar_metadata!(length)),
+            ("until", realm_temporal_plaindate_prototype_until_metadata!(length)),
+            ("since", realm_temporal_plaindate_prototype_since_metadata!(length)),
+            ("equals", realm_temporal_plaindate_prototype_equals_metadata!(length)),
             ("toPlainDateTime", 0),
-            ("toZonedDateTime", 1),
+            ("toZonedDateTime", realm_temporal_plaindate_prototype_tozoneddatetime_metadata!(length)),
             ("toString", 0),
             ("toJSON", 0),
             ("toLocaleString", 0),
@@ -1273,13 +1273,13 @@ pub(crate) fn install_temporal_namespace(ns_obj: *mut ObjectHeader) {
             "nanosecond",
         ],
         &[
-            ("add", 1),
-            ("subtract", 1),
-            ("with", 1),
-            ("until", 1),
-            ("since", 1),
-            ("round", 1),
-            ("equals", 1),
+            ("add", realm_temporal_plaintime_prototype_add_metadata!(length)),
+            ("subtract", realm_temporal_plaintime_prototype_subtract_metadata!(length)),
+            ("with", realm_temporal_plaintime_prototype_with_metadata!(length)),
+            ("until", realm_temporal_plaintime_prototype_until_metadata!(length)),
+            ("since", realm_temporal_plaintime_prototype_since_metadata!(length)),
+            ("round", realm_temporal_plaintime_prototype_round_metadata!(length)),
+            ("equals", realm_temporal_plaintime_prototype_equals_metadata!(length)),
             ("toString", 0),
             ("toJSON", 0),
             ("toLocaleString", 0),
@@ -1314,18 +1314,18 @@ pub(crate) fn install_temporal_namespace(ns_obj: *mut ObjectHeader) {
             "eraYear",
         ],
         &[
-            ("with", 1),
+            ("with", realm_temporal_plaindatetime_prototype_with_metadata!(length)),
             ("withPlainTime", 0),
-            ("withCalendar", 1),
-            ("add", 1),
-            ("subtract", 1),
-            ("until", 1),
-            ("since", 1),
-            ("round", 1),
-            ("equals", 1),
+            ("withCalendar", realm_temporal_plaindatetime_prototype_withcalendar_metadata!(length)),
+            ("add", realm_temporal_plaindatetime_prototype_add_metadata!(length)),
+            ("subtract", realm_temporal_plaindatetime_prototype_subtract_metadata!(length)),
+            ("until", realm_temporal_plaindatetime_prototype_until_metadata!(length)),
+            ("since", realm_temporal_plaindatetime_prototype_since_metadata!(length)),
+            ("round", realm_temporal_plaindatetime_prototype_round_metadata!(length)),
+            ("equals", realm_temporal_plaindatetime_prototype_equals_metadata!(length)),
             ("toPlainDate", 0),
             ("toPlainTime", 0),
-            ("toZonedDateTime", 1),
+            ("toZonedDateTime", realm_temporal_plaindatetime_prototype_tozoneddatetime_metadata!(length)),
             ("toString", 0),
             ("toJSON", 0),
             ("toLocaleString", 0),
@@ -1348,13 +1348,13 @@ pub(crate) fn install_temporal_namespace(ns_obj: *mut ObjectHeader) {
             "eraYear",
         ],
         &[
-            ("with", 1),
-            ("add", 1),
-            ("subtract", 1),
-            ("until", 1),
-            ("since", 1),
-            ("equals", 1),
-            ("toPlainDate", 1),
+            ("with", realm_temporal_plainyearmonth_prototype_with_metadata!(length)),
+            ("add", realm_temporal_plainyearmonth_prototype_add_metadata!(length)),
+            ("subtract", realm_temporal_plainyearmonth_prototype_subtract_metadata!(length)),
+            ("until", realm_temporal_plainyearmonth_prototype_until_metadata!(length)),
+            ("since", realm_temporal_plainyearmonth_prototype_since_metadata!(length)),
+            ("equals", realm_temporal_plainyearmonth_prototype_equals_metadata!(length)),
+            ("toPlainDate", realm_temporal_plainyearmonth_prototype_toplaindate_metadata!(length)),
             ("toString", 0),
             ("toJSON", 0),
             ("toLocaleString", 0),
@@ -1366,9 +1366,9 @@ pub(crate) fn install_temporal_namespace(ns_obj: *mut ObjectHeader) {
         "Temporal.PlainMonthDay",
         &["monthCode", "day", "calendarId"],
         &[
-            ("with", 1),
-            ("equals", 1),
-            ("toPlainDate", 1),
+            ("with", realm_temporal_plainmonthday_prototype_with_metadata!(length)),
+            ("equals", realm_temporal_plainmonthday_prototype_equals_metadata!(length)),
+            ("toPlainDate", realm_temporal_plainmonthday_prototype_toplaindate_metadata!(length)),
             ("toString", 0),
             ("toJSON", 0),
             ("toLocaleString", 0),
@@ -1409,18 +1409,18 @@ pub(crate) fn install_temporal_namespace(ns_obj: *mut ObjectHeader) {
             "eraYear",
         ],
         &[
-            ("with", 1),
+            ("with", realm_temporal_zoneddatetime_prototype_with_metadata!(length)),
             ("withPlainTime", 0),
-            ("withTimeZone", 1),
-            ("withCalendar", 1),
-            ("add", 1),
-            ("subtract", 1),
-            ("until", 1),
-            ("since", 1),
-            ("round", 1),
-            ("equals", 1),
+            ("withTimeZone", realm_temporal_zoneddatetime_prototype_withtimezone_metadata!(length)),
+            ("withCalendar", realm_temporal_zoneddatetime_prototype_withcalendar_metadata!(length)),
+            ("add", realm_temporal_zoneddatetime_prototype_add_metadata!(length)),
+            ("subtract", realm_temporal_zoneddatetime_prototype_subtract_metadata!(length)),
+            ("until", realm_temporal_zoneddatetime_prototype_until_metadata!(length)),
+            ("since", realm_temporal_zoneddatetime_prototype_since_metadata!(length)),
+            ("round", realm_temporal_zoneddatetime_prototype_round_metadata!(length)),
+            ("equals", realm_temporal_zoneddatetime_prototype_equals_metadata!(length)),
             ("startOfDay", 0),
-            ("getTimeZoneTransition", 1),
+            ("getTimeZoneTransition", realm_temporal_zoneddatetime_prototype_gettimezonetransition_metadata!(length)),
             ("toInstant", 0),
             ("toPlainDate", 0),
             ("toPlainTime", 0),
@@ -1447,13 +1447,11 @@ pub(crate) fn install_temporal_namespace(ns_obj: *mut ObjectHeader) {
 /// Install the standard `from` (spec length 1) and `compare` (spec length 2)
 /// statics — both variadic with call-arity 0 — on a Temporal constructor.
 #[cfg(feature = "temporal")]
-fn install_temporal_from_compare(
+#[rustfmt::skip] fn install_temporal_from_compare(
     ctor: *mut crate::closure::ClosureHeader,
     from_info: *const crate::closure::JsFunctionInfo,
     compare_info: *const crate::closure::JsFunctionInfo,
 ) {
-    install_constructor_static(ctor, "from", from_info, 1);
-    install_constructor_static(ctor, "compare", compare_info, 2);
+    install_constructor_static(ctor, "from", from_info, realm_temporal_static_from!(length));
+    install_constructor_static(ctor, "compare", compare_info, realm_temporal_static_compare!(length));
 }
-
-crate::realm_decl!("math_temporal.realm.json#*");

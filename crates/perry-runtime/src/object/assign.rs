@@ -251,7 +251,7 @@ unsafe fn positional_assign_target_is_safe(
 
         if !target_keys.is_null() {
             if let Some(pos) = crate::object::keys_find_slot_by_bytes(
-                target_keys.arr(),
+                target_keys,
                 target_keys.count(),
                 key_bytes,
             ) {
@@ -268,7 +268,7 @@ unsafe fn positional_assign_target_is_safe(
                 continue;
             }
             if let Some(pos) =
-                crate::object::keys_find_slot_by_bytes(keys.arr(), keys.count(), key_bytes)
+                crate::object::keys_find_slot_by_bytes(keys, keys.count(), key_bytes)
             {
                 let entry = super::key_attrs::keys_entry(keys.arr(), pos as u32);
                 if !super::key_attrs::entry_is_plain_writable_data(entry) {

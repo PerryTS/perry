@@ -25,7 +25,7 @@ fn test_trace_closure_uses_pointer_layout_mask() {
         &valid_ptrs
     ));
     test_reset_trace_slot_reads();
-    trace_marked_objects(&valid_ptrs);
+    trace_marked_objects::<{ cfg!(test) }>(&valid_ptrs);
     assert_eq!(test_trace_slot_reads(), 0);
     clear_marks();
     clear_mark_seeds();
@@ -48,7 +48,7 @@ fn test_trace_closure_uses_pointer_layout_mask() {
         &valid_ptrs
     ));
     test_reset_trace_slot_reads();
-    trace_marked_objects(&valid_ptrs);
+    trace_marked_objects::<{ cfg!(test) }>(&valid_ptrs);
     assert_eq!(test_trace_slot_reads(), 8);
     unsafe {
         assert_ne!((*child_header).gc_flags & GC_FLAG_MARKED, 0);
@@ -86,4 +86,20 @@ fn test_int32_store_without_typed_descriptor_is_left_verbatim() {
         int32_bits,
         "with no intact descriptor there is no raw-f64 contract to uphold — bits stay verbatim"
     );
+}
+
+#[test]
+fn test_raw_capture_word_keeps_closure_pointer_free_at_any_alignment() {
+    // An 8-aligned word is what `layout_pointer_bearing_bits` calls a pointer.
+    // Stored through the plain-word setter it must not demote the layout, so a
+    // link-placed address or a counter value cannot change runtime work.
+    for word in [0x1000_i64, 0x2008, 0x40_0000, 0x5555_1234_5670, 0x5555_1234_5674] {
+        let closure =
+            crate::closure::js_closure_alloc(crate::fn_info!(layout_mask_test_closure, 0), 3);
+        crate::closure::js_closure_set_capture_f64(closure, 0, 1.0);
+        crate::closure::closure_set_capture_word(closure, 1, word);
+        crate::closure::closure_set_capture_word(closure, 2, word ^ 8);
+        assert_eq!(test_layout_pointer_slot_count(closure as usize, 3), Some(0));
+        assert_eq!(crate::closure::js_closure_get_capture_ptr(closure, 1), word);
+    }
 }

@@ -62,6 +62,16 @@ fn gc_header_size_overflow(total: usize) -> ! {
 // Object type constants
 pub const GC_TYPE_ARRAY: u8 = 1;
 pub const GC_TYPE_OBJECT: u8 = 2;
+/// "Is an ordinary object", either header form. S0f meaning (A): `t >= 0xFE`.
+#[inline(always)]
+pub const fn gc_type_is_object(t: u8) -> bool {
+    t == GC_TYPE_OBJECT
+}
+/// "Might carry the meta word". S0f meaning (B): `t == 0xFF`.
+#[inline(always)]
+pub const fn object_has_meta_word(t: u8) -> bool {
+    t == GC_TYPE_OBJECT
+}
 pub const GC_TYPE_STRING: u8 = 3;
 pub const GC_TYPE_CLOSURE: u8 = 4;
 const _: () = assert!(GC_TYPE_CLOSURE == crate::codegen_abi::GC_TYPE_CLOSURE);
@@ -108,7 +118,7 @@ pub const GC_TYPE_TEMPORAL: u8 = 18;
 /// tables and exotic kind as later tranches migrate). Reachable ONLY via
 /// its owner's header slot, so ordinary tracing gives it exactly the
 /// owner's lifetime; movable, and holds one traced NaN-box slot.
-pub const GC_TYPE_OBJECT_META: u8 = 19;
+pub use crate::codegen_abi::GC_TYPE_OBJECT_META;
 /// Native `RegExpHeader`. RegExp used to share `GC_TYPE_OBJECT`, forcing every
 /// ObjectHeader consumer to inspect unrelated payload words for a magic value.
 /// A distinct GC kind is the authoritative, header-external discriminator.
@@ -220,9 +230,11 @@ pub const LARGE_OBJECT_THRESHOLD_BYTES: usize = 16 * 1024;
 ///
 /// # Why the two thresholds cannot be the same number
 ///
-/// Crossing the threshold does not merely change where an object is allocated.
-/// [`crate::arena::arena_alloc_gc`] births it in the old generation **and
-/// stamps `GC_FLAG_TENURED`**, and a minor collection never sweeps old-gen. So
+/// For pointer-bearing containers in this staged implementation, crossing the
+/// threshold still births the object old and stamps `GC_FLAG_TENURED`.
+/// Large cells instead get dedicated non-moving storage with ordinary young
+/// age (`young_large_storage_admits`); size alone no longer makes them old.
+/// A minor never sweeps the old generation. For an old container,
 /// the object — and, if it holds pointers, *everything reachable from it* —
 /// is immortal until a full mark-sweep runs. The threshold is therefore a
 /// trade between two costs:
@@ -232,9 +244,12 @@ pub const LARGE_OBJECT_THRESHOLD_BYTES: usize = 16 * 1024;
 /// * **retention cost**, paid by a born-tenured object that dies: its bytes,
 ///   held until the next full collection.
 ///
-/// For a `pointer_free` object those two quantities are the *same* quantity,
-/// so trading one against the other at 16 KB is a defensible wash. For a
-/// pointer-BEARING object the retention is **transitive and unbounded**: the
+/// The historical pointer-free cutoff traded those equal quantities at
+/// 16 KB. That cutoff now selects young large storage without copying, and so
+/// does the pointer-bearing one below: the container stays young, is traced
+/// by every minor and dies with its children. For a container that is old
+/// (by contract, or after surviving), retention remains
+/// **transitive and unbounded**: the
 /// write barrier records old→young edges out of it, and every minor's dirty
 /// scan then marks its children live, whether or not anything still refers to
 /// the container.
@@ -393,11 +408,34 @@ pub fn large_object_threshold_for_type(obj_type: u8) -> usize {
     }
 }
 
-/// Does `total_size` bytes of `obj_type` have to be born in the non-moving old
-/// generation?
+/// Does `total_size` bytes of `obj_type` need non-moving large storage?
+/// Size picks the storage; it no longer decides the age (see
+/// [`young_large_storage_admits`]).
 #[inline]
 pub fn is_large_object_total_size_for_type(total_size: usize, obj_type: u8) -> bool {
     total_size > large_object_threshold_for_type(obj_type)
+}
+
+/// May a size-driven large birth of `obj_type` take young, non-moving storage?
+///
+/// Derived from the type's own layout facts, never a list of types. A cell
+/// the collector traces through its declared slots and that owns nothing
+/// keyed by its address qualifies: a minor marks it in place, traces its
+/// children, frees it dead or promotes it at its address. The rest keep the
+/// old birth: a move hook means native state keyed by the address (Map/Set
+/// stores, errors, async snapshots), a side allocation is external backing,
+/// and a non-movable cell (buffers, native views) has an address-stability
+/// contract of its own.
+#[inline]
+pub(crate) fn young_large_storage_admits(obj_type: u8) -> bool {
+    gc_type_info(obj_type).is_some_and(|info| {
+        (info.pointer_free && info.rewrite_descriptor_kind == GcRewriteDescriptorKind::Leaf)
+            || (info.arena_walkable
+                && info.movable
+                && info.move_hook_kind == GcMoveHookKind::None
+                && info.external_byte_policy != GcExternalBytePolicy::SideAllocation
+                && !is_buffer_family_type(obj_type))
+    })
 }
 
 #[allow(dead_code)]
@@ -474,7 +512,7 @@ pub(crate) enum GcExternalBytePolicy {
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GcLargeObjectPolicy {
-    OldArenaWhenOverThreshold,
+    ArenaWhenOverThreshold,
     MallocTracked,
     NotApplicable,
 }
@@ -605,7 +643,7 @@ const CORE_TYPE_INFOS: &[Option<GcTypeInfo>] = &[
         GcLayoutSlotKind::ArrayElements,
         true,
         GcExternalBytePolicy::InlinePayload,
-        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        GcLargeObjectPolicy::ArenaWhenOverThreshold,
         false,
         GcMoveHookKind::None,
         GcRewriteHookKind::None,
@@ -620,7 +658,7 @@ const CORE_TYPE_INFOS: &[Option<GcTypeInfo>] = &[
         GcLayoutSlotKind::ObjectFields,
         true,
         GcExternalBytePolicy::InlinePayload,
-        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        GcLargeObjectPolicy::ArenaWhenOverThreshold,
         false,
         GcMoveHookKind::None,
         GcRewriteHookKind::None,
@@ -635,7 +673,7 @@ const CORE_TYPE_INFOS: &[Option<GcTypeInfo>] = &[
         GcLayoutSlotKind::None,
         true,
         GcExternalBytePolicy::InlinePayload,
-        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        GcLargeObjectPolicy::ArenaWhenOverThreshold,
         true,
         GcMoveHookKind::None,
         GcRewriteHookKind::None,
@@ -681,7 +719,7 @@ const CORE_TYPE_INFOS: &[Option<GcTypeInfo>] = &[
         GcLayoutSlotKind::None,
         true,
         GcExternalBytePolicy::InlinePayload,
-        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        GcLargeObjectPolicy::ArenaWhenOverThreshold,
         true,
         GcMoveHookKind::None,
         GcRewriteHookKind::None,
@@ -696,7 +734,7 @@ const CORE_TYPE_INFOS: &[Option<GcTypeInfo>] = &[
         GcLayoutSlotKind::None,
         true,
         GcExternalBytePolicy::None,
-        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        GcLargeObjectPolicy::ArenaWhenOverThreshold,
         false,
         GcMoveHookKind::ErrorSideTables,
         GcRewriteHookKind::None,
@@ -747,7 +785,7 @@ const CORE_TYPE_INFOS: &[Option<GcTypeInfo>] = &[
         // collection, so per-iteration-dead tapes drove `old_gen_bytes`
         // fulls (6 of 9 fulls on the `field_access` fixture).
         GcExternalBytePolicy::SideAllocation,
-        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        GcLargeObjectPolicy::ArenaWhenOverThreshold,
         false,
         GcMoveHookKind::LazyArrayTape,
         GcRewriteHookKind::None,
@@ -795,7 +833,7 @@ const CORE_TYPE_INFOS: &[Option<GcTypeInfo>] = &[
         GcLayoutSlotKind::None,
         false,
         GcExternalBytePolicy::None,
-        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        GcLargeObjectPolicy::ArenaWhenOverThreshold,
         false,
         GcMoveHookKind::None,
         GcRewriteHookKind::None,
@@ -907,7 +945,7 @@ const CORE_TYPE_INFOS: &[Option<GcTypeInfo>] = &[
         GcLayoutSlotKind::None,
         true,
         GcExternalBytePolicy::InlinePayload,
-        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        GcLargeObjectPolicy::ArenaWhenOverThreshold,
         false,
         GcMoveHookKind::None,
         GcRewriteHookKind::None,
@@ -922,7 +960,7 @@ const CORE_TYPE_INFOS: &[Option<GcTypeInfo>] = &[
         GcLayoutSlotKind::None,
         true,
         GcExternalBytePolicy::InlinePayload,
-        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        GcLargeObjectPolicy::ArenaWhenOverThreshold,
         true,
         GcMoveHookKind::None,
         GcRewriteHookKind::None,
@@ -937,7 +975,7 @@ const CORE_TYPE_INFOS: &[Option<GcTypeInfo>] = &[
         GcLayoutSlotKind::None,
         true,
         GcExternalBytePolicy::InlinePayload,
-        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        GcLargeObjectPolicy::ArenaWhenOverThreshold,
         false,
         GcMoveHookKind::None,
         GcRewriteHookKind::None,
@@ -952,7 +990,7 @@ const CORE_TYPE_INFOS: &[Option<GcTypeInfo>] = &[
         GcLayoutSlotKind::None,
         true,
         GcExternalBytePolicy::InlinePayload,
-        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        GcLargeObjectPolicy::ArenaWhenOverThreshold,
         true,
         GcMoveHookKind::None,
         GcRewriteHookKind::None,
@@ -967,7 +1005,7 @@ const CORE_TYPE_INFOS: &[Option<GcTypeInfo>] = &[
         GcLayoutSlotKind::None,
         true,
         GcExternalBytePolicy::InlinePayload,
-        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        GcLargeObjectPolicy::ArenaWhenOverThreshold,
         true,
         GcMoveHookKind::None,
         GcRewriteHookKind::None,
@@ -983,7 +1021,7 @@ const CORE_TYPE_INFOS: &[Option<GcTypeInfo>] = &[
         GcLayoutSlotKind::None,
         true,
         GcExternalBytePolicy::InlinePayload,
-        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        GcLargeObjectPolicy::ArenaWhenOverThreshold,
         false,
         GcMoveHookKind::None,
         GcRewriteHookKind::None,
@@ -1024,7 +1062,7 @@ const CORE_TYPE_INFOS: &[Option<GcTypeInfo>] = &[
         GcLayoutSlotKind::None,
         true,
         GcExternalBytePolicy::InlinePayload,
-        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        GcLargeObjectPolicy::ArenaWhenOverThreshold,
         false,
         GcMoveHookKind::None,
         GcRewriteHookKind::None,
@@ -1039,7 +1077,7 @@ const CORE_TYPE_INFOS: &[Option<GcTypeInfo>] = &[
         GcLayoutSlotKind::None,
         true,
         GcExternalBytePolicy::InlinePayload,
-        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        GcLargeObjectPolicy::ArenaWhenOverThreshold,
         false,
         GcMoveHookKind::None,
         GcRewriteHookKind::WeakStorageIndex,
@@ -1099,7 +1137,7 @@ const CORE_TYPE_INFOS: &[Option<GcTypeInfo>] = &[
         GcLayoutSlotKind::None,
         true,
         GcExternalBytePolicy::SideAllocation,
-        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        GcLargeObjectPolicy::ArenaWhenOverThreshold,
         false,
         GcMoveHookKind::OwnedSetStore,
         GcRewriteHookKind::None,
@@ -1114,7 +1152,7 @@ const CORE_TYPE_INFOS: &[Option<GcTypeInfo>] = &[
         GcLayoutSlotKind::None,
         true,
         GcExternalBytePolicy::SideAllocation,
-        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        GcLargeObjectPolicy::ArenaWhenOverThreshold,
         false,
         GcMoveHookKind::OwnedMapStore,
         GcRewriteHookKind::OwnedMapIndex,
@@ -1223,7 +1261,7 @@ const fn buffer_family_type_info(type_id: u8, name: &'static str) -> GcTypeInfo 
         GcLayoutSlotKind::None,
         false,
         GcExternalBytePolicy::InlinePayload,
-        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        GcLargeObjectPolicy::ArenaWhenOverThreshold,
         false,
         GcMoveHookKind::None,
         GcRewriteHookKind::None,
@@ -1678,17 +1716,14 @@ pub unsafe fn set_forwarding_address(header: *mut GcHeader, new_user_addr: *mut 
 
 /// Per-instance builtin constructability. Kind-disjoint from byte-owner
 /// and array bit 7; copying age/layout updates preserve this bit.
-pub(crate) const GC_CLOSURE_NON_CONSTRUCTABLE: u16 = 0x80;
+pub(crate) use perry_abi::GC_CLOSURE_NON_CONSTRUCTABLE;
 
 // Object flags stored in GcHeader._reserved (u16) for Object.freeze/seal/preventExtensions
-pub const OBJ_FLAG_FROZEN: u16 = 0x01;
-pub const OBJ_FLAG_SEALED: u16 = 0x02;
-pub const OBJ_FLAG_NO_EXTEND: u16 = 0x04;
+pub use perry_abi::{OBJ_FLAG_FROZEN, OBJ_FLAG_NO_EXTEND, OBJ_FLAG_SEALED};
 // #1175: object was created with a null prototype (Object.create(null) /
 // querystring.parse). `Object.getPrototypeOf` returns null for these.
 // Bit 6; bits 3..4 are survival age, bit 5 is callability, and 14..15
 // are layout state. See the complete map below before allocating a bit.
-pub const OBJ_FLAG_NULL_PROTO: u16 = 0x40;
 /// I1 (`gc::never_move`): this `GC_TYPE_OBJECT` never moves once it is in
 /// the old generation. The copying minor promotes it at its next survival,
 /// and old-page defragmentation and idle compaction never select it. A
@@ -1697,7 +1732,8 @@ pub const OBJ_FLAG_NULL_PROTO: u16 = 0x40;
 /// plain address with no root, registry or rewrite. Bit 7 is free for
 /// objects (`OBJ_FLAG_RESERVED_BIT_MAP_SEE_DOC`); arrays and byte owners give
 /// it other meanings, so every reader checks `obj_type` first. Set-only.
-pub(crate) const OBJ_FLAG_NEVER_MOVE: u16 = 0x80;
+pub(crate) use perry_abi::OBJ_FLAG_NEVER_MOVE;
+pub use perry_abi::OBJ_FLAG_NULL_PROTO;
 /// I1 companion (`gc::never_move::note_memo_named`): a site memo stores
 /// this object's address. If a class relink displaces it from a class
 /// identity, the retirement pins it, so the memo keeps reading this object.
@@ -1728,13 +1764,13 @@ pub const OBJ_FLAG_STABLE_TOMBSTONES: u16 = 0x400;
 // `GC_TYPE_OBJECT`. Set-only (clearing a descriptor leaves it set; the slow
 // path is always correct). #7480 reuses bit 11 for `GC_TYPE_ARRAY` as
 // `GC_ARRAY_ELEMENT_SHAPE`; the two are disjoint by `obj_type`.
-pub const OBJ_FLAG_HAS_DESCRIPTORS: u16 = 0x800;
+pub use perry_abi::OBJ_FLAG_HAS_DESCRIPTORS;
 // #2145: this object is a per-kind `<TypedArrayCtor>.prototype` whose
 // `[[Prototype]]` is the shared `%TypedArray%.prototype` intrinsic.
 // `Object.getPrototypeOf(Int8Array.prototype)` returns the cached
 // `TYPED_ARRAY_INTRINSIC_PROTO_PTR` (a single object shared across all
 // 11 typed-array kinds) when this bit is set.
-pub const OBJ_FLAG_TYPED_ARRAY_PROTO: u16 = 0x100;
+pub use perry_abi::OBJ_FLAG_TYPED_ARRAY_PROTO;
 /// Array payload is stored as canonical raw `f64` values, not NaN-boxed
 /// `JSValue` slots. This is only meaningful for `GC_TYPE_ARRAY`; object
 /// flags share the same `_reserved` word but never inspect this bit.
@@ -1780,7 +1816,7 @@ pub(crate) const GC_ARRAY_ARGUMENTS_OBJECT: u16 = 0x200;
 /// pins that. The readers that only use the bit to DECLINE an object fast path
 /// (`proxy/put_value.rs`, `field_set_by_name*`, `delete_rest.rs`,
 /// `read_stub.rs`, `then_probe.rs`) are type-guarded as well.
-pub(crate) const GC_ARRAY_KEY_ATTRS: u16 = 0x100;
+pub(crate) use perry_abi::GC_ARRAY_KEY_ATTRS;
 /// #8098: this `GC_TYPE_OBJECT` allocation is an ORDINARY plain object. It has
 /// no class, but it also carries none of the per-object `[[Set]]` semantics a
 /// class-less receiver may otherwise have — a `URL`'s `pathname`/`search`/…

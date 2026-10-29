@@ -953,7 +953,7 @@ fn take_census(label: &str, pass1: Option<Vec<usize>>) {
         .and_then(|mut f| f.write_all(line.as_bytes()));
     if let Err(e) = res {
         eprintln!("[gc-census] cannot write {path}: {e}");
-    } else if gc_diag_enabled() {
+    } else if diagnostic_hooks::enabled() {
         eprintln!(
             "[gc-census] seq={seq} label={label} live={live_total} late={late_total} dead={dead_total} side={side_total} -> {path}"
         );

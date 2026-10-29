@@ -295,7 +295,7 @@ fn a_string_method_name_on_an_unproven_receiver_is_guarded() {
 /// entry that carries literals as constant data (JST slice 3).
 fn has_nway_fold(ir: &str) -> bool {
     ir.contains("call i64 @js_string_concat_chain(")
-        || ir.contains("call i64 @js_string_concat_parts(")
+        || ir.contains("call i64 @js_string_concat_parts")
 }
 
 #[test]
@@ -313,7 +313,7 @@ fn a_chain_whose_head_pair_is_all_declared_does_not_fold() {
     );
     assert!(
         !ir.contains("call i64 @js_string_concat_chain(")
-            && !ir.contains("call i64 @js_string_concat_parts("),
+            && !ir.contains("call i64 @js_string_concat_parts"),
         "the head pair carries no proof, so the N-way fold is unsound \
          here:\n{ir}"
     );
@@ -385,7 +385,7 @@ fn a_self_append_chain_fuses_the_accumulator_and_suffix() {
     );
     assert_eq!(
         ir.matches("call i64 @js_string_concat_chain(").count()
-            + ir.matches("call i64 @js_string_concat_parts(").count(),
+            + ir.matches("call i64 @js_string_concat_parts").count(),
         0,
         "the suffix must not be allocated before it is appended:\n{ir}"
     );
@@ -814,7 +814,7 @@ fn literal_parts_get_no_symbol_check_and_the_value_part_is_tested_inline() {
     // check each have exactly one site, for the one value part, and each sits
     // in a block reached only through the inline test of the live bits.
     let ir = literal_chain(Expr::LocalGet(1), vec![param(1, "n", Type::Number)]);
-    assert!(ir.contains("call i64 @js_string_concat_parts("), "{ir}");
+    assert!(ir.contains("call i64 @js_string_concat_parts"), "{ir}");
     assert_eq!(
         ir.matches("call void @js_add_throw_if_symbol(").count(),
         1,
@@ -879,7 +879,7 @@ fn an_operand_that_cannot_be_a_symbol_carries_no_check_at_all() {
             Expr::String("z".to_string()),
         ),
     );
-    assert!(ir.contains("call i64 @js_string_concat_parts("), "{ir}");
+    assert!(ir.contains("call i64 @js_string_concat_parts"), "{ir}");
     assert_eq!(
         ir.matches("call void @js_add_throw_if_symbol(").count(),
         1,

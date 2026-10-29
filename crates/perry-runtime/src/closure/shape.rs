@@ -27,88 +27,25 @@ use crate::codegen_abi::LayoutWord;
 use crate::codegen_abi::ShapeId;
 use crate::object::shapes::{self, ShapeObjectKind};
 
-/// Intrinsic-prototype serials (`ObjectMeta.proto_serial`) assigned at
-/// creation, so a base shape can name its prototype before the prototype
-/// object exists. Dynamic serials start above
-/// [`crate::object::proto_validity::FIRST_DYNAMIC_PROTOTYPE_SERIAL`].
-pub(crate) const INTRINSIC_SERIAL_FUNCTION: u64 = 1;
-pub(crate) const INTRINSIC_SERIAL_ASYNC_FUNCTION: u64 = 2;
-pub(crate) const INTRINSIC_SERIAL_GENERATOR_FUNCTION: u64 = 3;
-pub(crate) const INTRINSIC_SERIAL_ASYNC_GENERATOR_FUNCTION: u64 = 4;
-/// Not a prototype: the marker `proto_id` of the class-constructor ShapeId
-/// ([`function_class_shape`]). Shapes are canonical per facts, so without a
-/// fact of its own the class shape would BE the FunctionDictionary id. No
-/// object is ever assigned this serial; a class constructor's real
-/// [[Prototype]] lives on the object (dictionary kind: "ask the object").
-pub(crate) const INTRINSIC_SERIAL_CLASS_CONSTRUCTOR_MARKER: u64 = 5;
-/// Runtime prototypes that runtime layout descriptors name
-/// (`runtime_layouts::*_PROTO_FAMILY`).
-pub(crate) const INTRINSIC_SERIAL_URL: u64 = 6;
-pub(crate) const INTRINSIC_SERIAL_READABLE_STATE: u64 = 7;
-pub(crate) const INTRINSIC_SERIAL_WRITABLE_STATE: u64 = 8;
-pub(crate) const INTRINSIC_SERIAL_TIMEOUT: u64 = 9;
-pub(crate) const INTRINSIC_SERIAL_IMMEDIATE: u64 = 10;
-/// `%Array.prototype%`'s named-property holder (`ArrayHeader.named`, born on
-/// `runtime_layouts::ARRAY_PROTOTYPE_NAMED`): its identity word is how an
-/// array read reaches it.
-pub(crate) const INTRINSIC_SERIAL_ARRAY_PROTOTYPE: u64 = 11;
-/// `%URLSearchParams.prototype%`, which `runtime_layouts::URL_SEARCH_PARAMS`
-/// names through its prototype family.
-pub(crate) const INTRINSIC_SERIAL_URL_SEARCH_PARAMS: u64 = 12;
-/// The prototypes of node:events, node:stream and node:http, born on their
-/// static layouts (`runtime_layouts::node_prototypes`): each layout names its
-/// [[Prototype]] through the parent's identity word.
-pub(crate) const INTRINSIC_SERIAL_EVENT_EMITTER_PROTOTYPE: u64 = 13;
-pub(crate) const INTRINSIC_SERIAL_STREAM_PROTOTYPE: u64 = 14;
-pub(crate) const INTRINSIC_SERIAL_READABLE_PROTOTYPE: u64 = 15;
-pub(crate) const INTRINSIC_SERIAL_WRITABLE_PROTOTYPE: u64 = 16;
-pub(crate) const INTRINSIC_SERIAL_DUPLEX_PROTOTYPE: u64 = 17;
-pub(crate) const INTRINSIC_SERIAL_TRANSFORM_PROTOTYPE: u64 = 18;
-pub(crate) const INTRINSIC_SERIAL_OUTGOING_MESSAGE_PROTOTYPE: u64 = 19;
-pub(crate) const INTRINSIC_SERIAL_SERVER_RESPONSE_PROTOTYPE: u64 = 20;
-pub(crate) const INTRINSIC_SERIAL_INCOMING_MESSAGE_PROTOTYPE: u64 = 21;
-pub(crate) const INTRINSIC_SERIAL_PASSTHROUGH_PROTOTYPE: u64 = 22;
-/// The sealed own-property bags of native constructors (not the closures).
-pub(crate) const INTRINSIC_SERIAL_NATIVE_CTOR_EVENT_EMITTER: u64 = 23;
-pub(crate) const INTRINSIC_SERIAL_NATIVE_CTOR_STREAM: u64 = 24;
-pub(crate) const INTRINSIC_SERIAL_NATIVE_CTOR_READABLE: u64 = 25;
-pub(crate) const INTRINSIC_SERIAL_NATIVE_CTOR_WRITABLE: u64 = 26;
-pub(crate) const INTRINSIC_SERIAL_NATIVE_CTOR_DUPLEX: u64 = 27;
-pub(crate) const INTRINSIC_SERIAL_NATIVE_CTOR_TRANSFORM: u64 = 28;
-pub(crate) const INTRINSIC_SERIAL_NATIVE_CTOR_PASSTHROUGH: u64 = 29;
-pub(crate) const INTRINSIC_SERIAL_NATIVE_CTOR_OUTGOING_MESSAGE: u64 = 30;
-pub(crate) const INTRINSIC_SERIAL_NATIVE_CTOR_SERVER_RESPONSE: u64 = 31;
-pub(crate) const INTRINSIC_SERIAL_NATIVE_CTOR_INCOMING_MESSAGE: u64 = 32;
-const _: () = assert!(
-    INTRINSIC_SERIAL_NATIVE_CTOR_INCOMING_MESSAGE
-        < crate::object::proto_validity::FIRST_DYNAMIC_PROTOTYPE_SERIAL
-);
+pub(crate) use perry_abi::intrinsic_serials::{
+    INTRINSIC_SERIAL_ARRAY_PROTOTYPE, INTRINSIC_SERIAL_ASYNC_FUNCTION,
+    INTRINSIC_SERIAL_ASYNC_GENERATOR_FUNCTION, INTRINSIC_SERIAL_CLASS_CONSTRUCTOR_MARKER,
+    INTRINSIC_SERIAL_DUPLEX_PROTOTYPE, INTRINSIC_SERIAL_EVENT_EMITTER_PROTOTYPE,
+    INTRINSIC_SERIAL_FUNCTION, INTRINSIC_SERIAL_GENERATOR_FUNCTION, INTRINSIC_SERIAL_IMMEDIATE,
+    INTRINSIC_SERIAL_INCOMING_MESSAGE_PROTOTYPE, INTRINSIC_SERIAL_NATIVE_CTOR_DUPLEX,
+    INTRINSIC_SERIAL_NATIVE_CTOR_EVENT_EMITTER, INTRINSIC_SERIAL_NATIVE_CTOR_INCOMING_MESSAGE,
+    INTRINSIC_SERIAL_NATIVE_CTOR_OUTGOING_MESSAGE, INTRINSIC_SERIAL_NATIVE_CTOR_PASSTHROUGH,
+    INTRINSIC_SERIAL_NATIVE_CTOR_READABLE, INTRINSIC_SERIAL_NATIVE_CTOR_SERVER_RESPONSE,
+    INTRINSIC_SERIAL_NATIVE_CTOR_STREAM, INTRINSIC_SERIAL_NATIVE_CTOR_TRANSFORM,
+    INTRINSIC_SERIAL_NATIVE_CTOR_WRITABLE, INTRINSIC_SERIAL_OUTGOING_MESSAGE_PROTOTYPE,
+    INTRINSIC_SERIAL_PASSTHROUGH_PROTOTYPE, INTRINSIC_SERIAL_READABLE_PROTOTYPE,
+    INTRINSIC_SERIAL_READABLE_STATE, INTRINSIC_SERIAL_SERVER_RESPONSE_PROTOTYPE,
+    INTRINSIC_SERIAL_STREAM_PROTOTYPE, INTRINSIC_SERIAL_TIMEOUT,
+    INTRINSIC_SERIAL_TRANSFORM_PROTOTYPE, INTRINSIC_SERIAL_URL, INTRINSIC_SERIAL_URL_SEARCH_PARAMS,
+    INTRINSIC_SERIAL_WRITABLE_PROTOTYPE, INTRINSIC_SERIAL_WRITABLE_STATE,
+};
 
-/// Which intrinsic prototype a function BODY's closures inherit from.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[repr(u8)]
-pub(crate) enum FunctionProtoKind {
-    Function = 0,
-    AsyncFunction = 1,
-    Generator = 2,
-    AsyncGenerator = 3,
-}
-
-impl FunctionProtoKind {
-    /// The body kind `info` records — the same bits
-    /// `generator_function_proto_of` answers [[GetPrototypeOf]] from.
-    pub(crate) fn of_body(info: &super::JsFunctionInfo) -> FunctionProtoKind {
-        if info.flags & super::FN_ASYNC_GENERATOR != 0 {
-            FunctionProtoKind::AsyncGenerator
-        } else if info.flags & super::FN_GENERATOR != 0 {
-            FunctionProtoKind::Generator
-        } else if info.flags & super::FN_ASYNC != 0 {
-            FunctionProtoKind::AsyncFunction
-        } else {
-            FunctionProtoKind::Function
-        }
-    }
-}
+pub(crate) use perry_abi::FunctionProtoKind;
 
 crate::perry_thread_local! {
     static FUNCTION_PROTOTYPE_SLOT: std::sync::atomic::AtomicI64 =
@@ -155,7 +92,7 @@ pub(crate) fn scan_function_prototype_roots_mut(visitor: &mut crate::gc::Runtime
 /// a default (writable, enumerable, configurable) data property, and a
 /// FunctionDictionary shape may describe accessors too. Reporting them keeps
 /// every summary-first reader from treating a function as all-default.
-fn function_shape_summary(kind: ShapeObjectKind) -> u8 {
+pub(crate) fn function_shape_summary(kind: ShapeObjectKind) -> u8 {
     use crate::object::key_attrs::{
         SUMMARY_ACCESSOR, SUMMARY_NON_CONFIGURABLE, SUMMARY_NON_ENUMERABLE, SUMMARY_NON_WRITABLE,
     };
@@ -255,7 +192,7 @@ pub(crate) fn birth_shape_for_body(info: *const super::JsFunctionInfo) -> Layout
     }
     // SAFETY: a non-null info is a static one (the allocation entries' contract).
     let kind = match unsafe { info.as_ref() } {
-        Some(info) => FunctionProtoKind::of_body(info),
+        Some(info) => FunctionProtoKind::of_flags(info.flags),
         // A function object with no body: every call through it is refused
         // (`get_valid_info` answers null), and it has the plain Function shape.
         None => FunctionProtoKind::Function,
@@ -389,7 +326,7 @@ pub(crate) fn refresh_closure_shape(ptr: usize) {
                         }
                         let id = shapes::publish_shape_result(
                             shapes::shape_descriptor_ensure_with_generation(
-                                d.keys as usize as *const crate::array::ArrayHeader,
+                                d.keys_view(),
                                 d.logical_key_count,
                                 d.live_inline_slot_count,
                                 0,
@@ -556,7 +493,7 @@ fn keyed_shape_key_list_lacks(id: LayoutWord, key: &[u8]) -> bool {
     // SAFETY: a live slab record's keys array.
     unsafe {
         crate::object::keys_find_slot_by_bytes_resolved(
-            descriptor.keys as usize as *const crate::array::ArrayHeader,
+            descriptor.keys_view(),
             descriptor.logical_key_count,
             key,
         )
@@ -643,7 +580,7 @@ unsafe fn prototype_slot_of_shape(closure: *const ClosureHeader, id: LayoutWord)
     }
     let keys = descriptor.keys as usize as *const crate::array::ArrayHeader;
     match crate::object::keys_find_slot_by_bytes_resolved(
-        keys,
+        descriptor.keys_view(),
         descriptor.logical_key_count,
         b"prototype",
     ) {

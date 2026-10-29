@@ -11,7 +11,7 @@
 //! machine; the rest match Node's defaults. The major version mirrors the Node
 //! target Perry reports through `process.version` (currently 22).
 
-use crate::array::{js_array_alloc, js_array_push_f64};
+use crate::array::js_array_push_f64;
 use crate::object::{js_object_alloc_with_shape, js_object_set_field};
 use crate::string::js_string_from_bytes;
 use crate::value::{js_nanbox_pointer, js_nanbox_string, JSValue};
@@ -120,12 +120,12 @@ pub(crate) fn navigator_object_with_constructor(constructor: f64) -> f64 {
     // Packed null-separated keys; slot order must match the set_field calls.
     let packed = b"userAgent\0language\0languages\0hardwareConcurrency\0platform\0locks\0";
     let field_count: u32 = 6;
-    let obj = js_object_alloc_with_shape(
+    let obj = crate::realm_decl! { birth js_object_alloc_with_shape(
         NAVIGATOR_CLASS_ID,
         field_count,
         packed.as_ptr(),
         packed.len() as u32,
-    );
+    ); realm { navigator, kind = namespace, extends = Navigator.prototype, members = { userAgent = "Node.js/22", attrs = writable | enumerable | configurable; language = runtime(navigator.language), attrs = writable | enumerable | configurable; languages, attrs = writable | enumerable | configurable; hardwareConcurrency = runtime(navigator.hardwareConcurrency), attrs = writable | enumerable | configurable; platform = target(navigator.platform), attrs = writable | enumerable | configurable; locks, attrs = writable | enumerable | configurable; }; } };
     let obj = scope.root_raw_mut_ptr(obj);
     obj.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj| unsafe {
         (*obj).class_id = NAVIGATOR_CLASS_ID;
@@ -146,7 +146,7 @@ pub(crate) fn navigator_object_with_constructor(constructor: f64) -> f64 {
     // language / languages
     let language = navigator_language();
     obj.with_mut_ptr(|obj| js_object_set_field(obj, 1, nb_str(&language)));
-    let langs = scope.root_raw_mut_ptr(js_array_alloc(1));
+    let langs = scope.root_raw_mut_ptr(crate::realm_decl! { birth crate::array::realm_array_alloc(1, perry_abi::realm_header::ArrayElements::Pointers, false); realm { navigator.languages, value = dynamic, elements = string } });
     let lang = nb_str(&language);
     let pushed = langs.with_mut_ptr(|arr| js_array_push_f64(arr, f64::from_bits(lang.bits())));
     langs.set_raw_mut_ptr(pushed);
@@ -174,7 +174,7 @@ pub(crate) fn navigator_object_with_constructor(constructor: f64) -> f64 {
 
     // locks: a plain object stub (typeof === "object"). Web Locks API is not
     // implemented; the property exists so feature-detection sees the shape.
-    let locks = crate::object::js_object_alloc(0, 0);
+    let locks = crate::realm_decl! { birth crate::object::js_object_alloc(0, 0); realm { navigator.locks, kind = namespace, members = { }; } };
     obj.with_mut_ptr(|obj| {
         js_object_set_field(
             obj,
@@ -216,5 +216,3 @@ mod tests {
         assert_eq!(normalize_navigator_locale("C.UTF-8"), None);
     }
 }
-
-crate::realm_decl!("navigator.realm.json#*");

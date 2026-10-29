@@ -808,7 +808,7 @@ fn get_field_by_name_past_data_probe(
                                     // this function itself.
                                     if let Some(i) =
                                         crate::object::keys_find_property_slot_by_key_ptr(
-                                            keys,
+                                            keys_view,
                                             key_count as u32,
                                             key,
                                         )

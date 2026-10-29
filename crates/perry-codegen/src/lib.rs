@@ -355,3 +355,6 @@ pub mod realm_manifest {
         assert!(reach.names.len() < REALM.len());
     }
 }
+
+/// Compiler-only cell selection and layout facts for the program realm.
+pub mod realm_plan;

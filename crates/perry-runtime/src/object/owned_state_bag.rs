@@ -40,7 +40,11 @@ pub(crate) unsafe fn bag(owner: usize, create: bool, last_slot: u32) -> *mut Arr
         return std::ptr::null_mut();
     }
     let meta = if create {
-        super::object_meta_ensure(holder)
+        // A1_UNPROVEN: descriptor_holder(owner) may return the user object itself (kind-A/B question for S0b-S0e).
+        super::object_meta_ensure(
+            super::MetaObj::runtime_born(holder),
+            super::MetaReason::OwnedState,
+        )
     } else {
         (*holder).meta
     };

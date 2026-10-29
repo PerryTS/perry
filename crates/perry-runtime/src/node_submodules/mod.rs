@@ -27,7 +27,6 @@ use crate::closure::{
     js_closure_alloc, js_closure_call0, js_closure_call1, js_closure_call2,
     js_closure_get_capture_ptr, js_closure_set_capture_ptr, ClosureHeader, JsFunctionInfo,
 };
-use crate::codegen_abi::{JsBody1, JsBody2, JsBody3};
 use crate::feature_hooks::Hook;
 use crate::object::{
     js_object_alloc, js_object_get_field_by_name_f64, js_object_set_field_by_name, ObjectHeader,
@@ -46,7 +45,7 @@ pub(crate) use diagnostics_tail::*;
 /// info (the declared arity, or the rest parameter of a variadic export).
 struct ExportSpec {
     name: &'static str,
-    info: JsFunctionInfo,
+    info: &'static JsFunctionInfo,
 }
 
 /// One entry per submodule. `exports` lists every named export the
@@ -109,48 +108,23 @@ use hono_jsx::{
 };
 
 pub(crate) use consumers::{consume_array_buffer, consume_bytes, consume_json, consume_text};
-use consumers::{
-    thunk_consumers_arrayBuffer, thunk_consumers_blob, thunk_consumers_buffer,
-    thunk_consumers_bytes, thunk_consumers_json, thunk_consumers_text,
-};
 // Re-export at the `node_submodules` root so perry-stdlib's
 // `perry_runtime::node_submodules::js_register_stream_consumer_callbacks`
 // call site keeps resolving after the consumers split.
 pub use consumers::js_register_stream_consumer_callbacks;
 pub(crate) use fs_promises::js_readline_promises_readline_new;
-use fs_promises::{
-    thunk_fs_promises_access, thunk_fs_promises_appendFile, thunk_fs_promises_chmod,
-    thunk_fs_promises_chown, thunk_fs_promises_constants, thunk_fs_promises_copyFile,
-    thunk_fs_promises_cp, thunk_fs_promises_glob, thunk_fs_promises_lchmod,
-    thunk_fs_promises_lchown, thunk_fs_promises_link, thunk_fs_promises_lstat,
-    thunk_fs_promises_lutimes, thunk_fs_promises_mkdir, thunk_fs_promises_mkdtemp,
-    thunk_fs_promises_mkdtempDisposable, thunk_fs_promises_open, thunk_fs_promises_opendir,
-    thunk_fs_promises_readFile, thunk_fs_promises_readdir, thunk_fs_promises_readlink,
-    thunk_fs_promises_realpath, thunk_fs_promises_rename, thunk_fs_promises_rm,
-    thunk_fs_promises_rmdir, thunk_fs_promises_stat, thunk_fs_promises_statfs,
-    thunk_fs_promises_symlink, thunk_fs_promises_truncate, thunk_fs_promises_unlink,
-    thunk_fs_promises_utimes, thunk_fs_promises_watch, thunk_fs_promises_writeFile,
-    thunk_readline_Interface, thunk_readline_Readline, thunk_readline_createInterface,
-};
+use fs_promises::thunk_fs_promises_constants;
 use registry_backed::native_namespace_as_default;
 pub(crate) use registry_backed::{
     registry_backed_module_callable, registry_backed_module_export, stream_promises_export_callable,
 };
-use stream_promises::{thunk_streamP_finished, thunk_streamP_pipeline, value_from_ptr};
-use test::{
-    thunk_reporter_dot, thunk_reporter_junit, thunk_reporter_lcov, thunk_reporter_spec,
-    thunk_reporter_tap, thunk_test, thunk_test_after, thunk_test_after_each, thunk_test_before,
-    thunk_test_before_each, thunk_test_expect_failure, thunk_test_only, thunk_test_run,
-    thunk_test_skip, thunk_test_suite, thunk_test_todo,
-};
+use stream_promises::value_from_ptr;
+#[cfg(test)]
+use stream_promises::{thunk_streamP_finished, thunk_streamP_pipeline};
 use timers::{
-    timers_ns_clear_immediate, timers_ns_clear_interval, timers_ns_clear_timeout,
-    timers_ns_set_immediate, timers_ns_set_interval, timers_ns_set_timeout,
     timers_promises_scheduler, timers_promises_scheduler_wait, timers_promises_scheduler_yield,
-    timers_promises_set_immediate, timers_promises_set_interval, timers_promises_set_timeout,
 };
 pub(crate) use trace_events::{flush_trace_events_output, init_trace_events_runtime};
-use trace_events::{thunk_trace_events_createTracing, thunk_trace_events_getEnabledCategories};
 
 // node:sys is a deprecated alias for node:util. Known util-backed
 // exports are rebound to util's callable singletons below so identity
@@ -190,6 +164,10 @@ extern "C" fn thunk_vm_create_context(
 // ----- submodule table -----
 
 // ----- per-submodule specs (devirt) -----
+// Shared with codegen through perry-dispatch; a module here so the realm
+// manifest reads its declarations as this crate's.
+#[allow(dead_code)]
+mod native_submodule_exports;
 mod static_export_declarations;
 use static_export_declarations::*;
 
@@ -539,10 +517,10 @@ fn timers_promises_scheduler_value() -> f64 {
             return f64::from_bits(JSValue::pointer(cached as *const u8).bits());
         }
 
-        let obj = js_object_alloc(0, 2);
+        let obj = crate::realm_decl! { birth js_object_alloc(0, 2); realm { "node:timers/promises.scheduler", kind = namespace, members = { wait, attrs = writable | enumerable | configurable; yield, attrs = writable | enumerable | configurable; }; } };
 
         let wait = js_closure_alloc(
-            crate::fn_info!(timers_promises_scheduler_wait, 2; with_declared(2)),
+            crate::fn_info!(#[realm("node:timers/promises.scheduler.wait", provider = closure_alloc)] export crate::node_submodules::timers::timers_promises_scheduler_wait, 2; with_declared(2)),
             0,
         );
 
@@ -553,7 +531,7 @@ fn timers_promises_scheduler_value() -> f64 {
         );
 
         let yield_fn = js_closure_alloc(
-            crate::fn_info!(timers_promises_scheduler_yield, 0; with_declared(0)),
+            crate::fn_info!(#[realm("node:timers/promises.scheduler.yield", provider = closure_alloc)] export crate::node_submodules::timers::timers_promises_scheduler_yield, 0; with_declared(0)),
             0,
         );
 
@@ -689,7 +667,7 @@ fn ensure_selected_export(
     if let Some(cached) = EXPORT_SINGLETONS.with(|m| m.borrow().get(&key).copied()) {
         return cached;
     }
-    let allocated = js_closure_alloc(&export.info, 0);
+    let allocated = js_closure_alloc(export.info, 0);
     if submod_key == "timers_promises" && export.name == "scheduler" {
         let wait = js_closure_alloc(
             crate::fn_info!(timers_promises_scheduler_wait, 2; with_declared(2)),
@@ -743,7 +721,7 @@ fn ensure_selected_export(
         );
         crate::object::set_builtin_closure_length(
             allocated_handle.get_raw_mut_ptr::<ClosureHeader>() as usize,
-            crate::closure::info_arity(&export.info).unwrap_or(0),
+            crate::closure::info_arity(export.info).unwrap_or(0),
         );
         crate::object::set_builtin_closure_non_constructable(
             allocated_handle.get_raw_mut_ptr::<ClosureHeader>() as usize,
@@ -823,7 +801,7 @@ fn submodule_default_object_value(submod: &'static SubmoduleSpec) -> Option<f64>
     }
 
     let extra_fields = u32::from(submod.key == "fs_promises");
-    let obj = js_object_alloc(0, submod.exports.len() as u32 + extra_fields);
+    let obj = crate::realm_decl! { birth js_object_alloc(0, submod.exports.len() as u32 + extra_fields); realm { "node:diagnostics_channel.default", kind = namespace, members = { tracingChannel = ref("node:diagnostics_channel.tracingChannel"), attrs = writable | enumerable | configurable; boundedChannel = ref("node:diagnostics_channel.boundedChannel"), attrs = writable | enumerable | configurable; channel = ref("node:diagnostics_channel.channel"), attrs = writable | enumerable | configurable; subscribe = ref("node:diagnostics_channel.subscribe"), attrs = writable | enumerable | configurable; unsubscribe = ref("node:diagnostics_channel.unsubscribe"), attrs = writable | enumerable | configurable; hasSubscribers = ref("node:diagnostics_channel.hasSubscribers"), attrs = writable | enumerable | configurable; Channel = ref("node:diagnostics_channel.Channel"), attrs = writable | enumerable | configurable; BoundedChannel = ref("node:diagnostics_channel.BoundedChannel"), attrs = writable | enumerable | configurable; }; "node:fs.promises", kind = namespace, members = { readFile = ref("node:fs/promises.readFile"), attrs = writable | enumerable | configurable; open = ref("node:fs/promises.open"), attrs = writable | enumerable | configurable; writeFile = ref("node:fs/promises.writeFile"), attrs = writable | enumerable | configurable; appendFile = ref("node:fs/promises.appendFile"), attrs = writable | enumerable | configurable; chmod = ref("node:fs/promises.chmod"), attrs = writable | enumerable | configurable; chown = ref("node:fs/promises.chown"), attrs = writable | enumerable | configurable; lchown = ref("node:fs/promises.lchown"), attrs = writable | enumerable | configurable; lchmod = ref("node:fs/promises.lchmod"), attrs = writable | enumerable | configurable; mkdir = ref("node:fs/promises.mkdir"), attrs = writable | enumerable | configurable; readdir = ref("node:fs/promises.readdir"), attrs = writable | enumerable | configurable; stat = ref("node:fs/promises.stat"), attrs = writable | enumerable | configurable; statfs = ref("node:fs/promises.statfs"), attrs = writable | enumerable | configurable; lstat = ref("node:fs/promises.lstat"), attrs = writable | enumerable | configurable; rm = ref("node:fs/promises.rm"), attrs = writable | enumerable | configurable; rmdir = ref("node:fs/promises.rmdir"), attrs = writable | enumerable | configurable; unlink = ref("node:fs/promises.unlink"), attrs = writable | enumerable | configurable; rename = ref("node:fs/promises.rename"), attrs = writable | enumerable | configurable; copyFile = ref("node:fs/promises.copyFile"), attrs = writable | enumerable | configurable; cp = ref("node:fs/promises.cp"), attrs = writable | enumerable | configurable; truncate = ref("node:fs/promises.truncate"), attrs = writable | enumerable | configurable; utimes = ref("node:fs/promises.utimes"), attrs = writable | enumerable | configurable; lutimes = ref("node:fs/promises.lutimes"), attrs = writable | enumerable | configurable; link = ref("node:fs/promises.link"), attrs = writable | enumerable | configurable; symlink = ref("node:fs/promises.symlink"), attrs = writable | enumerable | configurable; readlink = ref("node:fs/promises.readlink"), attrs = writable | enumerable | configurable; realpath = ref("node:fs/promises.realpath"), attrs = writable | enumerable | configurable; mkdtemp = ref("node:fs/promises.mkdtemp"), attrs = writable | enumerable | configurable; mkdtempDisposable = ref("node:fs/promises.mkdtempDisposable"), attrs = writable | enumerable | configurable; opendir = ref("node:fs/promises.opendir"), attrs = writable | enumerable | configurable; glob = ref("node:fs/promises.glob"), attrs = writable | enumerable | configurable; watch = ref("node:fs/promises.watch"), attrs = writable | enumerable | configurable; access = ref("node:fs/promises.access"), attrs = writable | enumerable | configurable; constants = ref("node:fs.constants"), attrs = writable | enumerable | configurable; }; "node:stream/consumers.default", kind = namespace, members = { text = ref("node:stream/consumers.text"), attrs = writable | enumerable | configurable; json = ref("node:stream/consumers.json"), attrs = writable | enumerable | configurable; buffer = ref("node:stream/consumers.buffer"), attrs = writable | enumerable | configurable; arrayBuffer = ref("node:stream/consumers.arrayBuffer"), attrs = writable | enumerable | configurable; bytes = ref("node:stream/consumers.bytes"), attrs = writable | enumerable | configurable; blob = ref("node:stream/consumers.blob"), attrs = writable | enumerable | configurable; }; "node:stream/web.default", kind = namespace, members = { ReadableStream = ref(ReadableStream), attrs = writable | enumerable | configurable; ReadableStreamDefaultReader = ref("node:stream/web.ReadableStreamDefaultReader"), attrs = writable | enumerable | configurable; ReadableStreamBYOBReader = ref("node:stream/web.ReadableStreamBYOBReader"), attrs = writable | enumerable | configurable; ReadableStreamDefaultController = ref("node:stream/web.ReadableStreamDefaultController"), attrs = writable | enumerable | configurable; ReadableByteStreamController = ref("node:stream/web.ReadableByteStreamController"), attrs = writable | enumerable | configurable; ReadableStreamBYOBRequest = ref("node:stream/web.ReadableStreamBYOBRequest"), attrs = writable | enumerable | configurable; WritableStream = ref(WritableStream), attrs = writable | enumerable | configurable; WritableStreamDefaultWriter = ref("node:stream/web.WritableStreamDefaultWriter"), attrs = writable | enumerable | configurable; WritableStreamDefaultController = ref("node:stream/web.WritableStreamDefaultController"), attrs = writable | enumerable | configurable; TransformStream = ref(TransformStream), attrs = writable | enumerable | configurable; TransformStreamDefaultController = ref("node:stream/web.TransformStreamDefaultController"), attrs = writable | enumerable | configurable; ByteLengthQueuingStrategy = ref("node:stream/web.ByteLengthQueuingStrategy"), attrs = writable | enumerable | configurable; CountQueuingStrategy = ref("node:stream/web.CountQueuingStrategy"), attrs = writable | enumerable | configurable; TextEncoderStream = ref(TextEncoderStream), attrs = writable | enumerable | configurable; TextDecoderStream = ref(TextDecoderStream), attrs = writable | enumerable | configurable; CompressionStream = ref(CompressionStream), attrs = writable | enumerable | configurable; DecompressionStream = ref(DecompressionStream), attrs = writable | enumerable | configurable; }; "node:test/reporters.default", kind = namespace, members = { spec, attrs = writable | enumerable | configurable; tap, attrs = writable | enumerable | configurable; dot, attrs = writable | enumerable | configurable; junit, attrs = writable | enumerable | configurable; lcov, attrs = writable | enumerable | configurable; }; "node:timers.default", kind = namespace, members = { setTimeout, attrs = writable | enumerable | configurable; setInterval, attrs = writable | enumerable | configurable; setImmediate, attrs = writable | enumerable | configurable; clearTimeout, attrs = writable | enumerable | configurable; clearInterval, attrs = writable | enumerable | configurable; clearImmediate, attrs = writable | enumerable | configurable; }; "node:timers.promises", kind = namespace, members = { setTimeout = ref("node:timers/promises.setTimeout"), attrs = writable | enumerable | configurable; setImmediate = ref("node:timers/promises.setImmediate"), attrs = writable | enumerable | configurable; setInterval = ref("node:timers/promises.setInterval"), attrs = writable | enumerable | configurable; scheduler = ref("node:timers/promises.scheduler"), attrs = writable | enumerable | configurable; }; } };
     for spec in submod.exports {
         set_named_value(obj, spec.name, submodule_export_value(submod, spec));
     }
@@ -905,7 +883,7 @@ fn ensure_namespace_singleton(submod: &'static SubmoduleSpec) -> *mut ObjectHead
     let field_count = submod.exports.len() as u32
         + u32::from(submod.key == "fs_promises")
         + u32::from(submodule_has_default_object(submod.key));
-    let obj = js_object_alloc(0, field_count);
+    let obj = crate::realm_decl! { birth js_object_alloc(0, field_count); realm { "node:stream.promises", kind = namespace, members = { pipeline = ref("node:stream/promises.pipeline"), attrs = writable | enumerable | configurable; finished = ref("node:stream/promises.finished"), attrs = writable | enumerable | configurable; default = ref("node:stream.promises"), attrs = writable | enumerable | configurable; }; } };
     // Populate fields. Each export's value is the singleton closure
     // pointer NaN-boxed as POINTER. We route through
     // `js_object_set_field_by_name` so the keys array gets built up
@@ -938,7 +916,7 @@ fn ensure_namespace_singleton(submod: &'static SubmoduleSpec) -> *mut ObjectHead
                 PropertyAttrs::new(true, true, false),
             );
         }
-        let default_obj = js_object_alloc(0, submod.exports.len() as u32);
+        let default_obj = crate::realm_decl! { birth js_object_alloc(0, submod.exports.len() as u32); realm { "node:trace_events.default", kind = namespace, members = { createTracing, attrs = writable | enumerable | configurable; getEnabledCategories, attrs = writable | enumerable | configurable; }; } };
         for spec in submod.exports {
             let closure_ptr = ensure_export_singleton(submod, spec);
             let value = f64::from_bits(JSValue::pointer(closure_ptr as *const u8).bits());
@@ -1273,7 +1251,7 @@ pub unsafe extern "C" fn js_node_submodule_namespace_member(
     f64::from_bits(JSValue::pointer(closure_ptr as *const u8).bits())
 }
 
-/// Returns a NaN-boxed namespace stub object for the given submodule.
+crate::realm_decl! { module_provider /// Returns a NaN-boxed namespace stub object for the given submodule.
 /// Each known named export of that submodule is exposed as an own
 /// property on the object whose value is the export singleton
 /// produced by `js_node_submodule_export_as_function`. Falls back to
@@ -1305,7 +1283,7 @@ pub unsafe extern "C" fn js_node_submodule_namespace(
     }
     let obj = ensure_namespace_singleton(submod);
     f64::from_bits(JSValue::pointer(obj as *const u8).bits())
-}
+} realm { "node:diagnostics_channel", members = { BoundedChannel; Channel; boundedChannel; channel; default; hasSubscribers; subscribe; tracingChannel; unsubscribe; }, births = [Array, Error, Function, Object]; "node:fs/promises", members = { access; appendFile; chmod; chown; constants = ref("node:fs.constants"); copyFile; cp; default = ref("node:fs.promises"); glob; lchmod; lchown; link; lstat; lutimes; mkdir; mkdtemp; mkdtempDisposable; open; opendir; readFile; readdir; readlink; realpath; rename; rm; rmdir; stat; statfs; symlink; truncate; unlink; utimes; watch; writeFile; }, births = [Array, ArrayBuffer, Buffer, Error, Function, Object, Promise, ReadableStream]; "node:readline/promises", members = { Interface; Readline; createInterface; default = ref("node:readline.promises"); }, births = [Array, Error, Function, Object, Promise]; "node:stream/consumers", members = { arrayBuffer; blob; buffer; bytes; default; json; text; }, births = [Array, ArrayBuffer, Blob, Buffer, Error, Function, Object, Promise, ReadableStream]; "node:stream/promises", members = { default = ref("node:stream.promises"); finished; pipeline; }, births = [Array, ArrayBuffer, Buffer, Error, Function, Object, Promise, ReadableStream, WritableStream]; "node:stream/web", members = { ByteLengthQueuingStrategy; CompressionStream = ref(CompressionStream); CountQueuingStrategy; DecompressionStream = ref(DecompressionStream); ReadableByteStreamController; ReadableStream = ref(ReadableStream); ReadableStreamBYOBReader; ReadableStreamBYOBRequest; ReadableStreamDefaultController; ReadableStreamDefaultReader; TextDecoderStream = ref(TextDecoderStream); TextEncoderStream = ref(TextEncoderStream); TransformStream = ref(TransformStream); TransformStreamDefaultController; WritableStream = ref(WritableStream); WritableStreamDefaultController; WritableStreamDefaultWriter; default; }, births = [Array, ArrayBuffer, Buffer, Error, Function, Object, Promise]; "node:sys", members = { MIMEParams; MIMEType; TextDecoder = ref(TextDecoder); TextEncoder = ref(TextEncoder); _errnoException; _exceptionWithHostPort; _extend; aborted; callbackify; convertProcessSignalToExitCode; debug; debuglog = ref("node:sys.debug"); default; deprecate; diff; format; formatWithOptions; getCallSites; getSystemErrorMap; getSystemErrorMessage; getSystemErrorName; inherits; inspect; isArray; isDeepStrictEqual; parseArgs; parseEnv; promisify; setTraceSigInt; stripVTControlCharacters; styleText; toUSVString; transferableAbortController; transferableAbortSignal; types; }, births = [Array, Error, Function, Object]; "node:test", members = { after; afterEach; assert; before; beforeEach; default; describe; expectFailure; it = ref("node:test.default"); mock; only; run; skip; snapshot; suite = ref("node:test.describe"); test = ref("node:test.default"); todo; }, births = [Array, Error, Function, Object]; "node:test/reporters", members = { default; dot = undefined; junit = undefined; lcov = undefined; spec = undefined; tap = undefined; }, births = [Array, Error, Function, Object]; "node:timers", members = { clearImmediate; clearInterval; clearTimeout; default; promises; setImmediate; setInterval; setTimeout; }, births = [AbortSignal, Array, Error, Function, Object, Promise]; "node:timers/promises", members = { default = ref("node:timers.promises"); scheduler; setImmediate; setInterval; setTimeout; }, births = [AbortSignal, Array, Error, Function, Object, Promise]; "node:trace_events", members = { default; }, births = [Array, Error, Function, Object]; } }
 
 #[cfg(test)]
 mod tests;
@@ -1341,5 +1319,3 @@ pub unsafe extern "C" fn js_install_readable_stream_from(info: *const JsFunction
         crate::object::PropertyAttrs::new(true, true, true),
     );
 }
-
-crate::realm_decl!("mod.realm.json#*");

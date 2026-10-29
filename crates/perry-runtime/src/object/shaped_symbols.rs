@@ -125,7 +125,7 @@ pub(crate) unsafe fn define(addr: usize, symbol: usize, bits: u64, entry: u8) ->
             let index = keys.count();
             let key = JSValue::from_bits(symbol.get_nanbox_u64());
             let next = if let Some(proof) = canonical_keys::SharedLayout::of_receiver(current) {
-                let parent = canonical_keys::canonicalize(&proof, keys.arr(), keys.count());
+                let parent = canonical_keys::canonicalize_keys(&proof, keys);
                 canonical_keys::extend_slot(
                     &proof,
                     parent,

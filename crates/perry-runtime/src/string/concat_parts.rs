@@ -72,18 +72,50 @@ pub extern "C" fn js_string_concat_parts(
     if n == 0 || parts.is_null() {
         return crate::string::js_string_from_bytes(b"".as_ptr(), 0);
     }
-    if n <= 4 {
-        concat_parts_sized::<4>(parts, n)
-    } else if n <= 8 {
-        concat_parts_sized::<8>(parts, n)
-    } else {
-        concat_parts_sized::<MAX_PARTS>(parts, n)
+    match n {
+        2 => js_string_concat_parts_2(parts),
+        3 => js_string_concat_parts_3(parts),
+        4 => js_string_concat_parts_4(parts),
+        5 => js_string_concat_parts_5(parts),
+        _ if n <= 8 => concat_parts_sized::<8>(parts, n),
+        _ => concat_parts_sized::<MAX_PARTS>(parts, n),
     }
 }
 
-#[inline]
+/// Count-specialized form of [`js_string_concat_parts`] for a part count the
+/// compiler knows (JST slice 4). `N` is a constant here, so the classification
+/// loop, the scratch arrays and the copy loop are fully unrolled and sized
+/// exactly, and the entry skips the count dispatch. The body is the one the
+/// generic entry runs for that count; nothing is recorded per program.
+#[inline(always)]
+fn concat_parts_fixed<const N: usize>(parts: *const ConcatPartSlot) -> *mut StringHeader {
+    if let Some(result) = concat_parts_simple::<N, true>(parts, N) {
+        return result;
+    }
+    concat_parts_general::<N>(parts, N)
+}
+
+macro_rules! concat_parts_fixed_entry {
+    ($($name:ident = $n:literal),* $(,)?) => {$(
+        /// `js_string_concat_parts` for exactly this many operands.
+        #[no_mangle]
+        #[inline(never)]
+        pub extern "C" fn $name(parts: *const ConcatPartSlot) -> *mut StringHeader {
+            concat_parts_fixed::<$n>(parts)
+        }
+    )*};
+}
+
+concat_parts_fixed_entry! {
+    js_string_concat_parts_2 = 2,
+    js_string_concat_parts_3 = 3,
+    js_string_concat_parts_4 = 4,
+    js_string_concat_parts_5 = 5,
+}
+
+#[inline(never)]
 fn concat_parts_sized<const M: usize>(parts: *const ConcatPartSlot, n: usize) -> *mut StringHeader {
-    if let Some(result) = concat_parts_simple::<M>(parts, n) {
+    if let Some(result) = concat_parts_simple::<M, false>(parts, n) {
         return result;
     }
     concat_parts_general::<M>(parts, n)
@@ -105,32 +137,88 @@ fn exact_u32(value: f64) -> Option<u32> {
     None
 }
 
-/// Literals, heap strings, inline strings and numbers: no user code, and no
-/// allocation before the single result allocation.
-#[inline]
-fn concat_parts_simple<const M: usize>(
-    parts: *const ConcatPartSlot,
-    n: usize,
-) -> Option<*mut StringHeader> {
-    let mut scratch: [core::mem::MaybeUninit<[u8; 32]>; M] = [core::mem::MaybeUninit::uninit(); M];
-    // `piece_ptrs[i]` is null for a part written as digits of `digits[i]`.
-    let mut piece_ptrs: [*const u8; M] = [ptr::null(); M];
-    let mut piece_lens: [u32; M] = [0; M];
-    let mut digits: [u32; M] = [0; M];
-    let mut flags = STRING_FLAG_WTF8_VALIDATED;
+/// Evaluate `$call` (with `?` standing for the index, and its `Option` result
+/// propagated) for each `i in 0..$n`. With `$unroll` the calls are written out.
+macro_rules! drive_parts {
+    ($unroll:expr, $n:expr, $obj:ident . $method:ident ( $parts:ident , ? )) => {{
+        if $unroll {
+            debug_assert!($n <= MAX_UNROLLED_PARTS);
+            if $n > 0 { $obj.$method($parts, 0)?; }
+            if $n > 1 { $obj.$method($parts, 1)?; }
+            if $n > 2 { $obj.$method($parts, 2)?; }
+            if $n > 3 { $obj.$method($parts, 3)?; }
+            if $n > 4 { $obj.$method($parts, 4)?; }
+        } else {
+            for i in 0..$n {
+                $obj.$method($parts, i)?;
+            }
+        }
+    }};
+}
+
+/// Thread `$cursor` through `$obj.$method(i, $cursor)` for `i in 0..$n`,
+/// unrolled like [`drive_parts`]. The final cursor is not needed.
+macro_rules! emit_parts {
+    ($unroll:expr, $n:expr, $obj:ident . $method:ident ( ? , $cursor:ident )) => {{
+        let mut cursor = $cursor;
+        if $unroll {
+            if $n > 0 { cursor = $obj.$method(0, cursor); }
+            if $n > 1 { cursor = $obj.$method(1, cursor); }
+            if $n > 2 { cursor = $obj.$method(2, cursor); }
+            if $n > 3 { cursor = $obj.$method(3, cursor); }
+            if $n > 4 { cursor = $obj.$method(4, cursor); }
+        } else {
+            for i in 0..$n {
+                cursor = $obj.$method(i, cursor);
+            }
+        }
+        let _ = cursor;
+    }};
+}
+
+/// The largest part count the count-specialized entries unroll.
+const MAX_UNROLLED_PARTS: usize = 5;
+
+/// The classification state of [`concat_parts_simple`]: what each operand
+/// contributes to the result, found before the single allocation.
+struct SimpleParts<const M: usize> {
+    scratch: [core::mem::MaybeUninit<[u8; 32]>; M],
+    /// `piece_ptrs[i]` is null for a part written as digits of `digits[i]`.
+    piece_ptrs: [*const u8; M],
+    piece_lens: [u32; M],
+    digits: [u32; M],
+    flags: u32,
     // 32 parts of at most `u32::MAX` bytes cannot overflow a u64; the sum is
-    // checked once, below.
-    let mut total_blen: u64 = 0;
-    let mut total_u16: u64 = 0;
-    for i in 0..n {
+    // checked once, by the caller.
+    total_blen: u64,
+    total_u16: u64,
+}
+
+impl<const M: usize> SimpleParts<M> {
+    #[inline(always)]
+    fn new() -> Self {
+        Self {
+            scratch: [core::mem::MaybeUninit::uninit(); M],
+            piece_ptrs: [ptr::null(); M],
+            piece_lens: [0; M],
+            digits: [0; M],
+            flags: STRING_FLAG_WTF8_VALIDATED,
+            total_blen: 0,
+            total_u16: 0,
+        }
+    }
+
+    /// Classify operand `i`. `None`: not a simple operand.
+    #[inline(always)]
+    fn classify(&mut self, parts: *const ConcatPartSlot, i: usize) -> Option<()> {
         let slot = unsafe { *parts.add(i) };
         if slot.meta != CONCAT_PART_VALUE {
             let blen = lit_blen(slot.meta);
-            piece_ptrs[i] = slot.word as *const u8;
-            piece_lens[i] = blen;
-            total_blen += blen as u64;
-            total_u16 += lit_units(slot.meta) as u64;
-            continue;
+            self.piece_ptrs[i] = slot.word as *const u8;
+            self.piece_lens[i] = blen;
+            self.total_blen += blen as u64;
+            self.total_u16 += lit_units(slot.meta) as u64;
+            return Some(());
         }
         let bits = slot.word;
         if bits >> 48 == 0x7FFF {
@@ -141,65 +229,103 @@ fn concat_parts_simple<const M: usize>(
             let blen = unsafe { (*header).byte_len };
             // An empty operand contributes neither bytes nor provenance.
             if blen == 0 {
-                continue;
+                return Some(());
             }
-            piece_ptrs[i] = string_data(header);
-            piece_lens[i] = blen;
-            flags = combine_string_flags(flags, unsafe { (*header).flags });
-            total_blen += blen as u64;
-            total_u16 += unsafe { (*header).utf16_len } as u64;
-            continue;
+            self.piece_ptrs[i] = string_data(header);
+            self.piece_lens[i] = blen;
+            self.flags = combine_string_flags(self.flags, unsafe { (*header).flags });
+            self.total_blen += blen as u64;
+            self.total_u16 += unsafe { (*header).utf16_len } as u64;
+            return Some(());
         }
         let value = crate::value::JSValue::from_bits(bits);
         if value.is_number() {
             let number = f64::from_bits(bits);
             let len = if let Some(n) = exact_u32(number) {
-                digits[i] = n;
+                self.digits[i] = n;
                 decimal_len(n)
             } else {
-                let buf = scratch[i].write([0u8; 32]);
+                let buf = self.scratch[i].write([0u8; 32]);
                 let len = format_number_into(number, buf);
-                piece_ptrs[i] = buf.as_ptr();
+                self.piece_ptrs[i] = buf.as_ptr();
                 len
             };
-            piece_lens[i] = len as u32;
-            total_blen += len as u64;
-            total_u16 += len as u64; // ASCII
-            continue;
+            self.piece_lens[i] = len as u32;
+            self.total_blen += len as u64;
+            self.total_u16 += len as u64; // ASCII
+            return Some(());
         }
         if value.is_short_string() {
-            let buf = scratch[i].write([0u8; 32]);
+            let buf = self.scratch[i].write([0u8; 32]);
             let mut bytes = [0u8; crate::value::SHORT_STRING_MAX_LEN];
             let len = value.short_string_to_buf(&mut bytes);
             if len == 0 {
-                continue;
+                return Some(());
             }
             buf[..len].copy_from_slice(&bytes[..len]);
             let (units, part_flags) = raw_string_metadata(buf.as_ptr(), len as u32);
-            flags = combine_string_flags(flags, part_flags);
-            piece_ptrs[i] = buf.as_ptr();
-            piece_lens[i] = len as u32;
-            total_blen += len as u64;
-            total_u16 += units as u64;
-            continue;
+            self.flags = combine_string_flags(self.flags, part_flags);
+            self.piece_ptrs[i] = buf.as_ptr();
+            self.piece_lens[i] = len as u32;
+            self.total_blen += len as u64;
+            self.total_u16 += units as u64;
+            return Some(());
         }
+        None
+    }
+
+    /// Write operand `i` at `cursor` and return the cursor after it.
+    ///
+    /// # Safety
+    /// `cursor` has room for the operand's `piece_lens[i]` bytes, and every
+    /// non-null `piece_ptrs[i]` is still valid.
+    #[inline(always)]
+    unsafe fn emit(&self, i: usize, cursor: *mut u8) -> *mut u8 {
+        let len = self.piece_lens[i] as usize;
+        // An empty operand has a null pointer too: it writes nothing.
+        if len == 0 {
+            return cursor;
+        }
+        if self.piece_ptrs[i].is_null() {
+            write_decimal(cursor, self.digits[i], len);
+        } else {
+            // A literal or a number is a handful of bytes: keep them out
+            // of libc's memcpy. Long heap payloads still take it.
+            copy_bytes_small(self.piece_ptrs[i], cursor, len);
+        }
+        cursor.add(len)
+    }
+}
+
+/// Literals, heap strings, inline strings and numbers: no user code, and no
+/// allocation before the single result allocation.
+///
+/// `UNROLL` (the count is a compile-time constant of the caller, at most
+/// [`MAX_UNROLLED_PARTS`]) writes the per-operand steps out, so every index is
+/// a constant and the per-operand arrays live in registers.
+#[inline(always)]
+fn concat_parts_simple<const M: usize, const UNROLL: bool>(
+    parts: *const ConcatPartSlot,
+    n: usize,
+) -> Option<*mut StringHeader> {
+    let mut st = SimpleParts::<M>::new();
+    drive_parts!(UNROLL, n, st.classify(parts, ?));
+    if st.total_blen > u32::MAX as u64 || st.total_u16 > u32::MAX as u64 {
         return None;
     }
-    if total_blen > u32::MAX as u64 || total_u16 > u32::MAX as u64 {
-        return None;
-    }
-    let (total_blen, total_u16) = (total_blen as u32, total_u16 as u32);
+    let (total_blen, total_u16) = (st.total_blen as u32, st.total_u16 as u32);
+    let flags = st.flags;
 
     // `Some` proves nothing moved, so the borrowed heap payloads are valid.
-    let (result, mut cursor) = match string_storage_alloc_no_collect(total_blen) {
+    let (result, cursor) = match string_storage_alloc_no_collect(total_blen) {
         Some(allocated) => allocated,
         None => {
             return Some(concat_parts_rooted_copy::<M>(
                 parts,
                 n,
-                &mut piece_ptrs,
-                &piece_lens,
-                &digits,
+                &mut st.piece_ptrs,
+                &st.piece_lens,
+                &st.digits,
                 total_blen,
                 total_u16,
                 flags,
@@ -208,21 +334,7 @@ fn concat_parts_simple<const M: usize>(
     };
     unsafe {
         init_string_header(result, total_u16, total_blen, total_blen, 0, flags);
-        for i in 0..n {
-            let len = piece_lens[i] as usize;
-            // An empty operand has a null pointer too: it writes nothing.
-            if len == 0 {
-                continue;
-            }
-            if piece_ptrs[i].is_null() {
-                write_decimal(cursor, digits[i], len);
-            } else {
-                // A literal or a number is a handful of bytes: keep them out
-                // of libc's memcpy. Long heap payloads still take it.
-                copy_bytes_small(piece_ptrs[i], cursor, len);
-            }
-            cursor = cursor.add(len);
-        }
+        emit_parts!(UNROLL, n, st.emit(?, cursor));
     }
     // Only a heap or inline operand can carry a lone surrogate, and only a
     // join of two such operands can mint a pair.

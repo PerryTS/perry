@@ -10,9 +10,9 @@
 //! records blocks without start bits: the census then cannot recognise any
 //! object in them, and the rooted strings are swept.
 
+use super::super::mark::adopt_census;
 use super::super::policy::run_promoted_cohort_full_if_due;
 use super::super::promoted_cohort as cohort;
-use super::super::trace::adopt_census;
 use super::super::*;
 use super::support::*;
 

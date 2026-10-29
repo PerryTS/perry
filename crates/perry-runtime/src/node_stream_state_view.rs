@@ -374,7 +374,12 @@ fn install_state_view(stream: f64, kind: usize, property: crate::runtime_state_k
         crate::object::layout_desc::perry_alloc_layout(desc).cast()
     }));
     let obj = object_ptr_from_value(view.get_nanbox_f64()).unwrap();
-    unsafe { crate::object::object_meta_ensure(obj) };
+    unsafe {
+        crate::object::object_meta_ensure(
+            crate::object::MetaObj::runtime_born(obj),
+            crate::object::MetaReason::RuntimeHandle,
+        )
+    };
     let obj = object_ptr_from_value(view.get_nanbox_f64()).unwrap();
     let meta = unsafe { (*obj).meta };
     let owner = stream.get_nanbox_u64();

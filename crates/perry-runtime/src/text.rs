@@ -229,7 +229,10 @@ fn alloc_text_object(class_id: u32, builtin_name: &str, state: u64) -> i64 {
     }
     if state != 0 {
         obj_handle.with_mut_ptr::<ObjectHeader, _>(|obj| unsafe {
-            let meta = crate::object::object_meta_ensure(obj);
+            let meta = crate::object::object_meta_ensure(
+                crate::object::MetaObj::runtime_born(obj),
+                crate::object::MetaReason::RuntimeHandle,
+            );
             // A decoder whose state word never landed would read back as the
             // lenient utf-8 default -- wrong label, wrong `fatal` -- rather than
             // fail, so the only way this stays honest is that the meta exists.
@@ -1109,5 +1112,3 @@ mod tests {
         assert_eq!(got, expected, "decode(DataView) must see the backing bytes");
     }
 }
-
-crate::realm_decl!("text.realm.json#*");

@@ -79,7 +79,10 @@ pub(crate) unsafe fn mark_object_as_prototype(obj: usize) -> Option<u64> {
 /// `obj` is a live, unpublished `GC_TYPE_OBJECT` newborn, old and never
 /// moving; collection is suppressed by the caller.
 pub(crate) unsafe fn mark_born_prototype(obj: *mut crate::object::ObjectHeader) {
-    let meta = crate::object::object_meta_ensure(obj);
+    let meta = crate::object::object_meta_ensure(
+        crate::object::MetaObj::runtime_born(obj),
+        crate::object::MetaReason::BecomesPrototype,
+    );
     if meta.is_null() {
         return;
     }
@@ -94,18 +97,33 @@ pub(crate) unsafe fn mark_born_prototype(obj: *mut crate::object::ObjectHeader) 
 /// creation (`assign_intrinsic_prototype_serial`) so a receiver kind's base
 /// shape can name its prototype before that object exists
 /// (`closure::shape::INTRINSIC_SERIAL_*`).
-pub(crate) const FIRST_DYNAMIC_PROTOTYPE_SERIAL: u64 = 64;
+pub(crate) use perry_abi::intrinsic_serials::FIRST_DYNAMIC_PROTOTYPE_SERIAL;
 
 /// Next prototype serial. 0 means "none assigned"; `1..64` are intrinsic; a
 /// `u64` counter cannot be exhausted by any real program.
 static PROTOTYPE_SERIAL_NEXT: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(FIRST_DYNAMIC_PROTOTYPE_SERIAL);
 
+/// Reserve the image's serial interval before any dynamic prototype can be
+/// born. The existing allocator remains the one authority for later serials.
+pub(crate) fn reserve_image_prototype_serials(end: u64) {
+    if end > FIRST_DYNAMIC_PROTOTYPE_SERIAL {
+        PROTOTYPE_SERIAL_NEXT.fetch_max(end, Ordering::Relaxed);
+    }
+    // Image prototypes already carry their mark in metadata. Mutations must
+    // enter the same notification path as heap-born marked prototypes.
+    ANY_PROTOTYPE_MARKED.store(true, Ordering::Relaxed);
+}
+
 /// Give a shared evaluation holder an identity without declaring it a
 /// prototype or invalidating prototype-chain caches. The existing identity
 /// word directory uses this same serial namespace.
 pub(crate) unsafe fn ensure_object_identity_serial(obj: *mut crate::object::ObjectHeader) -> u64 {
-    let meta = crate::object::object_meta_ensure(obj);
+    // A1_UNPROVEN: ensure_object_identity_serial(obj) parameter, no type test (kind-A/B question for S0b-S0e).
+    let meta = crate::object::object_meta_ensure(
+        crate::object::MetaObj::runtime_born(obj),
+        crate::object::MetaReason::BecomesPrototype,
+    );
     // GC_STORE_AUDIT(POINTER_FREE): a scalar identity, never a heap reference.
     if (*meta).proto_serial == 0 {
         (*meta).proto_serial = PROTOTYPE_SERIAL_NEXT.fetch_add(1, Ordering::Relaxed);
@@ -280,7 +298,13 @@ unsafe fn ensure_meta_for_mark(obj: usize, flag: u64) -> Option<*mut crate::obje
     let scope = crate::gc::RuntimeHandleScope::new();
     let handle = scope.root_raw_mut_ptr(object);
     let (meta, object) = handle
-        .across_mut::<crate::object::ObjectHeader, _>(|| crate::object::object_meta_ensure(object));
+        // A1_UNPROVEN: object parameter, no type test (kind-A/B question for S0b-S0e).
+        .across_mut::<crate::object::ObjectHeader, _>(|| {
+            crate::object::object_meta_ensure(
+                crate::object::MetaObj::runtime_born(object),
+                crate::object::MetaReason::BecomesPrototype,
+            )
+        });
     if meta.is_null() {
         return None;
     }

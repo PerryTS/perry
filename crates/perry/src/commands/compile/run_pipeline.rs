@@ -6217,6 +6217,11 @@ pub fn run_with_parse_cache(
                 } else {
                     None
                 },
+                entry_declared_esm: if is_entry {
+                    super::cjs_wrap::declared_module_format_is_esm(path)
+                } else {
+                    None
+                },
                 native_provider_installs: if is_entry {
                     native_provider_installs.clone()
                 } else {

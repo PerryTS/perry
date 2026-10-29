@@ -726,15 +726,6 @@ pub(crate) unsafe fn selected_native_module_constant(
             }
             _ => None,
         },
-        "vm.constants" => match property {
-            "USE_MAIN_CONTEXT_DEFAULT_LOADER" => Some(crate::symbol::js_symbol_for(str_val(
-                "vm_dynamic_import_main_context_default",
-            ))),
-            "DONT_CONTEXTIFY" => Some(crate::symbol::js_symbol_for(str_val(
-                "vm_context_no_contextify",
-            ))),
-            _ => None,
-        },
         "stream" => match property {
             "Stream" | "default" => Some(bound_native_callable_export_value("stream", "Stream")),
             "promises" => Some(crate::node_submodules::commonjs_value("stream_promises")),

@@ -16,8 +16,12 @@ pub(super) struct EvacuationVerifyCycleContext<'a> {
     pub(super) dirty_snapshot: Option<&'a RememberedDirtySnapshot>,
 }
 
+// Keep diagnostic HotKey descriptors out of LLVM's merged collector globals.
+// Otherwise Mach-O retains their resolver functions without the installer.
 crate::perry_thread_local! {
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_gcdiag")]
     static VERIFY_MINOR_ORDINAL: Cell<u64> = const { Cell::new(0) };
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_gcdiag")]
     static LAST_VERIFY_BUDGETED_COMPLETIONS: Cell<u64> = const { Cell::new(0) };
 }
 
@@ -176,7 +180,7 @@ unsafe fn describe_parent_slot(
     let layout_kind = gc_type_layout_slot_kind((*header).obj_type);
     let mut layout_match = None;
     let mut layout_base = 0usize;
-    visit_gc_layout_slot_descriptors(header, &mut |descriptor| {
+    visit_gc_layout_slot_descriptors::<true>(header, &mut |descriptor| {
         if layout_match.is_none() {
             layout_match = descriptor_slot_index(descriptor, slot_addr)
                 .map(|index| layout_base.saturating_add(index));
@@ -190,7 +194,7 @@ unsafe fn describe_parent_slot(
     let rewrite_kind = gc_type_rewrite_descriptor_kind((*header).obj_type);
     let mut rewrite_match = None;
     let mut rewrite_base = 0usize;
-    visit_gc_rewrite_slot_descriptors(header, |descriptor| {
+    visit_gc_rewrite_slot_descriptors::<true>(header, |descriptor| {
         if rewrite_match.is_none() {
             rewrite_match = descriptor_slot_index(descriptor, slot_addr)
                 .map(|index| rewrite_base.saturating_add(index));
@@ -242,7 +246,7 @@ pub(super) fn panic_stale_forwarded_reference_detailed(
                 "old_page" | "malloc" | "promoted_in_place_this_cycle"
             );
             let (remembered, dirty_snapshot) = if coverage_expected {
-                let remembered_snapshot = remembered_dirty_snapshot();
+                let remembered_snapshot = remembered_dirty_snapshot::<true>();
                 let remembered = old_young_slot_covered(
                     &remembered_snapshot,
                     parent_header as usize,
@@ -296,7 +300,7 @@ pub(super) fn report_evacuation_success(
     stats: EvacuationVerifyStats,
     old_young_edges: usize,
 ) {
-    if gc_diag_enabled() {
+    if diagnostic_hooks::enabled() {
         eprintln!(
             "[gc-verify] minor={} evacuation_ok parents={} slots={} old_young_edges={old_young_edges}",
             context.minor, stats.parents, stats.slots,

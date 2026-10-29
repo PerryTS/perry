@@ -100,7 +100,6 @@ fn due_arm(old_pressure: usize, burst_boundary: bool) -> Option<&'static str> {
     sample_arena();
     ACCOUNT.with(|account| {
         let debt = account.0.get();
-        let band = (128 * MIB).max(debt.live_after_full.saturating_mul(2));
         let large_band = LARGE_BAND_FLOOR.max(debt.live_after_full);
         let scale = 1usize << debt.backoff;
         let burst_scale = 1usize << debt.burst_backoff;
@@ -108,12 +107,31 @@ fn due_arm(old_pressure: usize, burst_boundary: bool) -> Option<&'static str> {
         if mature < 8 * MIB {
             return None;
         }
-        if debt.published >= band.saturating_mul(scale)
-            // Total allocation includes nursery garbage. A full pays mature
-            // growth; a stable old heap must leave this debt to minors.
-            && mature >= debt.live_after_full.saturating_add(large_band.saturating_mul(scale))
-        {
-            return Some("pacing");
+        // OWNER 2026-10-29 (lane GCT): the next full is due when the mature
+        // heap has grown by the live bytes measured at the last full times the
+        // growth factor, and while the young generation is measured retaining
+        // (live data, not garbage) that factor is
+        // `MAJOR_PACING_LIVE_GROWTH_RETAINING_MULTIPLIER`. Only that
+        // live-derived mature-growth term takes the multiplier; the published
+        // (total allocation, nursery garbage included) term stays at twice the
+        // live bytes. The absolute floors are unchanged. The multiplier is
+        // read only once the floor is crossed (the band is never below it), so
+        // a program that has not allocated that much pays nothing for it.
+        if debt.published >= (128 * MIB).saturating_mul(scale) {
+            let growth = super::policy::major_pacing_live_growth_multiplier();
+            let band = (128 * MIB).max(debt.live_after_full.saturating_mul(2));
+            let pacing_large_band =
+                LARGE_BAND_FLOOR.max(debt.live_after_full.saturating_mul(growth));
+            if debt.published >= band.saturating_mul(scale)
+                // Total allocation includes nursery garbage. A full pays mature
+                // growth; a stable old heap must leave this debt to minors.
+                && mature
+                    >= debt
+                        .live_after_full
+                        .saturating_add(pacing_large_band.saturating_mul(scale))
+            {
+                return Some("pacing");
+            }
         }
         if !burst_boundary {
             return None;
@@ -161,7 +179,7 @@ pub(super) fn finish_full(live: usize, freed: usize) {
     ACCOUNT.with(|account| {
         let previous = account.0.get();
         let mature_reclaimed = previous.mature_at_full_start.saturating_sub(mature_live);
-        if super::gc_diag_enabled() {
+        if super::diagnostic_hooks::enabled() {
             eprintln!("[gc-byte-pacing] thread={:?} allocated={} large={} process_debt={} live={} freed={} mature_live={} mature_reclaimed={} backoff={}",
                 std::thread::current().id(), previous.allocated, previous.large,
                 PROCESS_DEBT.load(Ordering::Relaxed), live, freed, mature_live, mature_reclaimed, previous.backoff);
@@ -223,15 +241,8 @@ pub(crate) fn burst_boundary() -> bool {
             None => return false,
         }
     }
-    super::telemetry::note_old_reclaim_why(arm);
-    if super::telemetry::gc_log_enabled() {
-        let debt = ACCOUNT.with(|account| account.0.get());
-        eprintln!(
-            "[gc-log] owed arm={arm} pressure={} allocated={} large={} burst={} live_after_full={} unpaid={} backoff={} burst_backoff={}",
-            pressure(), debt.allocated, debt.large, debt.burst, debt.live_after_full,
-            debt.burst_unpaid_at_full, debt.backoff, debt.burst_backoff
-        );
-    }
+    super::diagnostic_hooks::note_reclaim_reason(arm);
+    super::diagnostic_hooks::log_burst_boundary(arm);
     super::policy::GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(true));
     // A native producer may return to a compiled loop rather than the pump
     // that explicitly invokes a precise poll. Arm the same existing handoff
@@ -442,5 +453,46 @@ mod tests {
         })
         .join()
         .unwrap();
+    }
+}
+
+/// Dedicated leaf allocation already has the ordinary collecting-allocation
+/// effect. Finish an older non-moving cycle before publishing its new owner;
+/// a suppressed/unsafe construction leaves the guarded stepper deferred.
+pub(crate) fn finish_cycle_before_large_birth() {
+    if super::policy::gc_budgeted_cycle_active() && !super::schedule::budgeted_old_reclaim_forced() {
+        super::policy::gc_drain_active_budgeted_cycle();
+    }
+}
+
+/// Numeric pressure arms the existing poll, without tracing a partially
+/// initialized producer result or consulting the old-large major band.
+pub(crate) fn arm_young_after_large_birth() {
+    if super::policy::young_scavenge_cap_due()
+        && !super::policy::GC_SAFEPOINT_PENDING.with(Cell::get)
+    {
+        super::policy::GC_SAFEPOINT_DEFER_ARENA_BASE
+            .with(|base| base.set(crate::arena::arena_total_bytes()));
+        super::policy::set_safepoint_pending(true);
+    }
+}
+
+/// The legacy JSON output route is justified by a copying nursery's cost.
+/// Large non-moving owners count against the young budget, but cannot stand
+/// in for the moving tree this staged workaround was written for.
+pub(crate) fn moving_young_generation_holds_a_nursery() -> bool {
+    super::policy::young_generation_holds_a_nursery()
+        && crate::arena::moving_from_space_in_use_bytes() >= super::gc_scavenge_nursery_cap_bytes()
+}
+
+/// Installed reporting arm; the collector calls the coarse optional slot.
+pub(super) fn report_burst_boundary(arm: &'static str) {
+    if super::telemetry::gc_log_enabled() {
+        let debt = ACCOUNT.with(|account| account.0.get());
+        eprintln!(
+            "[gc-log] owed arm={arm} pressure={} allocated={} large={} burst={} live_after_full={} unpaid={} backoff={} burst_backoff={}",
+            super::policy::old_gen_reclaimable_pressure_bytes().saturating_add(super::policy::external_side_live_bytes()), debt.allocated, debt.large, debt.burst, debt.live_after_full,
+            debt.burst_unpaid_at_full, debt.backoff, debt.burst_backoff
+        );
     }
 }

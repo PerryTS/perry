@@ -20,7 +20,7 @@ mod linux {
         // with multiple codegen units. This function does not apply a policy
         // late; its constructor must already have run before Rust startup.
         unsafe { perry_retain_memory_profile_init() };
-        if crate::gc::gc_diag_enabled() {
+        if crate::gc::diagnostic_hooks::enabled() {
             let mode = unsafe { libc::prctl(libc::PR_GET_THP_DISABLE, 0, 0, 0, 0) };
             let name = match mode {
                 3 => "except-advised",

@@ -302,8 +302,10 @@ fn a_shorter_list_on_an_indexed_backing_is_absent_past_its_count() {
         assert_eq!(long_keys.arr(), short_keys.arr(), "premise: one backing");
         let verdict = |view: ObjectKeys, name: &str| {
             let hash = crate::object::key_bytes_hash(name.as_ptr(), name.len());
+            // CKI S2: a shared backing's index is reached through the
+            // list's node, which the view carries.
             crate::object::shapes::shape_slot_lookup_verdict(
-                view.arr(),
+                view,
                 name.as_bytes(),
                 hash,
                 view.count(),

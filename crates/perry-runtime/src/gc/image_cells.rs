@@ -44,7 +44,7 @@ crate::perry_thread_local! {
 /// inlined at each of them grew `.text` by about 20 KB.
 #[inline(never)]
 unsafe fn visit_cell_slots(header: *mut GcHeader, visit: &mut dyn FnMut(GcMutableSlot)) {
-    visit_gc_rewrite_slots(header, |slot| visit(slot));
+    visit_gc_rewrite_slots::<{ cfg!(test) }>(header, |slot| visit(slot));
 }
 
 /// Is `child_addr` a cell some collector owns, so that an image slot holding
@@ -265,7 +265,9 @@ pub(super) fn mark_image_roots(valid_ptrs: &ValidPointerSet, minor_only: bool) -
 /// stays in this set). Returns the number of slots that changed.
 #[cold]
 #[inline(never)]
-pub(super) unsafe fn visit_image_roots_copying(collector: &mut CopyingNurseryCollector) -> usize {
+pub(super) unsafe fn visit_image_roots_copying<const DIAGNOSTICS: bool>(
+    collector: &mut CopyingNurseryCollector,
+) -> usize {
     #[cfg(test)]
     if sabotage::knocked(sabotage::COPY) {
         return 0;
@@ -275,7 +277,7 @@ pub(super) unsafe fn visit_image_roots_copying(collector: &mut CopyingNurseryCol
         let mut changed = false;
         visit_cell_slots(header, &mut |slot| {
             let before = slot.read();
-            collector.visit_image_root_slot(slot, header);
+            collector.visit_image_root_slot::<DIAGNOSTICS>(slot, header);
             changed |= slot.read() != before;
             rewritten += usize::from(slot.read() != before);
         });
@@ -311,7 +313,7 @@ pub(super) fn rewrite_image_roots(valid_ptrs: &ValidPointerSet) {
         return;
     }
     for header in root_cells(false) {
-        unsafe { rewrite_heap_object_fields(header, valid_ptrs) };
+        unsafe { rewrite_heap_object_fields::<{ cfg!(test) }>(header, valid_ptrs) };
     }
 }
 
@@ -401,5 +403,11 @@ pub(crate) mod sabotage {
             let prior = self.0;
             KNOCKED.with(|k| k.set(prior));
         }
+    }
+}
+
+pub(super) unsafe fn visit_leaf_service_roots(mut visit: impl FnMut(u64)) {
+    for header in image_remembered_headers() {
+        visit_cell_slots(header, &mut |slot| visit(slot.read()));
     }
 }

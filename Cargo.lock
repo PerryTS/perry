@@ -5826,6 +5826,7 @@ dependencies = [
 name = "perry-runtime-manifest"
 version = "0.5.1663"
 dependencies = [
+ "perry-abi",
  "perry-dispatch",
 ]
 

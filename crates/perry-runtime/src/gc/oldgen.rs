@@ -291,7 +291,8 @@ pub(super) fn evacuation_policy_snapshot_after_mark(
         let header = header_ptr as *mut GcHeader;
         unsafe {
             let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
-            if !crate::arena::pointer_in_nursery(user_ptr as usize) {
+            if !crate::arena::pointer_in_nursery(user_ptr as usize)
+                || crate::arena::is_large_storage(user_ptr as usize) {
                 return;
             }
             let flags = (*header).gc_flags;
@@ -462,7 +463,7 @@ pub(super) fn maybe_print_evacuation_policy_diag(
     decision: EvacuationPolicyDecision,
     evacuation: EvacuationTraceStats,
 ) {
-    if !crate::gc::gc_diag_enabled() {
+    if !crate::gc::diagnostic_hooks::enabled() {
         return;
     }
     if !decision.considered && decision.reason != "barriers_inactive" {
@@ -736,7 +737,7 @@ pub(super) fn sweep_with_age_bump_and_malloc(
     sweep_with_age_bump_and_old_reclaim_targets(do_age_bump, false, None, sweep_malloc)
 }
 
-unsafe fn finalize_dead_arena_payload(
+pub(crate) unsafe fn finalize_dead_arena_payload(
     header: *mut GcHeader,
     user_ptr: *mut u8,
     full_dead_owners_pruned: bool,
@@ -832,6 +833,7 @@ fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
     // live objects to offset=0 — the load-bearing optimization that lets the
     // inline bump allocator reuse memory instead of page-faulting fresh blocks.
     let n_blocks = crate::arena::arena_block_count();
+    let large_snapshots = crate::arena::arena_block_snapshots();
     let mut block_has_live: Vec<bool> = vec![false; n_blocks];
     // Inclusive upper bound on indices that age. `general_block_count()`
     // is the first non-general index; objects with `block_idx < general_n`
@@ -1032,7 +1034,7 @@ fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
 
     // Reset every block that ended up with zero live objects.
     // Diagnostic: PERRY_GC_DIAG=1 reports block-level liveness.
-    if crate::gc::gc_diag_enabled() {
+    if crate::gc::diagnostic_hooks::enabled() {
         let live_general = (0..resettable_general_n)
             .filter(|&i| block_has_live[i])
             .count();
@@ -1069,10 +1071,12 @@ fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
     // better than hole-by-hole reuse.
     if reclaim_dead_old_blocks {
         old_free_rebuild_from_live_old_blocks(&block_has_live, old_block_start);
-        if crate::gc::gc_diag_enabled() {
+        if crate::gc::diagnostic_hooks::enabled() {
             eprintln!("[gc-old-free] reusable_bytes={}", old_free_bytes());
         }
     }
+    let old_reset = add_reset_stats(old_reset,
+        crate::arena::finish_swept_young_large(&large_snapshots, &block_has_live));
     let reset = crate::arena::ArenaResetStats {
         reset_blocks: nursery_reset
             .reset_blocks
@@ -1225,7 +1229,7 @@ impl IncrementalSweepState {
     /// #10182: let the arena walk reclaim whole dead blocks without visiting
     /// them, from the synchronous full cycle's census. See
     /// `ArenaSweepObjectsState::apply_block_skip`.
-    pub(super) fn with_block_skip(mut self, census: &super::trace::BlockCensus) -> Self {
+    pub(super) fn with_block_skip(mut self, census: &super::mark::BlockCensus) -> Self {
         self.arena.apply_block_skip(census);
         self
     }
@@ -1280,7 +1284,9 @@ impl IncrementalSweepState {
             SweepCycleSubphase::BlockCleanup => {
                 let cleanup = self.cleanup.as_mut().expect("sweep cleanup state exists");
                 if cleanup.step(budget) {
-                    let reset = cleanup.stats();
+                    let large_reset = crate::arena::finish_swept_young_large(
+                        self.arena.block_snapshots(), self.arena.block_has_live());
+                    let reset = add_reset_stats(cleanup.stats(), large_reset);
                     let freed_bytes = self
                         .malloc
                         .freed_bytes
@@ -1571,7 +1577,7 @@ pub(super) fn evacuate_selected_old_pages_collecting(
     // per-allocation exclusion scan in `old_free_take_exact` has nothing to
     // walk (see `old_free_filter_pages` for the #9644 measurement).
     let dropped_holes = crate::gc::old_free_filter_pages(excluded_pages);
-    if crate::gc::gc_diag_enabled() && dropped_holes > 0 {
+    if crate::gc::diagnostic_hooks::enabled() && dropped_holes > 0 {
         eprintln!("[gc-old-page-defrag] dropped_excluded_holes_bytes={dropped_holes}");
     }
 

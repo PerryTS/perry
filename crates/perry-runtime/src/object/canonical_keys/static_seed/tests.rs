@@ -46,6 +46,10 @@ fn image_and_generic_initializers_share_identity_in_both_orders() {
                 from_static_layout(&proof, keys, false).unwrap()
             };
             assert_eq!(first, second);
+            // One list, one node, whichever initializer ran first: the
+            // node is the identity holders carry (CKI S1).
+            assert_eq!(first.node(), second.node());
+            assert!(node_publishes_for_test(first.view()));
             let before = with_table_or((0, 0), |t| (t.minted, t.allocated_slots));
             assert_eq!(from_static_layout(&proof, keys, false), Some(first));
             assert_eq!(
@@ -63,6 +67,7 @@ fn image_and_generic_initializers_share_identity_in_both_orders() {
                 dynamic = extend_key(&proof, dynamic, string);
             }
             assert_eq!(dynamic, first);
+            assert_eq!(dynamic.node(), first.node());
         }
     }
 }
@@ -80,13 +85,15 @@ fn image_initializer_preserves_attributes_slots_and_unpublished_prefixes() {
                 atom: original[0].atom,
                 slot: 1,
                 attrs: crate::object::key_attrs::ENTRY_NON_WRITABLE,
-                _pad: [0; 3],
+                _pad: 0,
+                off: crate::object::layout_desc::layout_key_off(1 as u32),
             },
             PerryLayoutKey {
                 atom: original[1].atom,
                 slot: 0,
                 attrs: crate::object::key_attrs::ENTRY_NON_ENUMERABLE,
-                _pad: [0; 3],
+                _pad: 0,
+                off: crate::object::layout_desc::layout_key_off(0 as u32),
             },
         ];
         let proof = SharedLayout::shape_cache_entry();
@@ -151,7 +158,8 @@ fn non_image_keys_use_the_generic_initializer() {
             atom: &atom,
             slot: 0,
             attrs: 0,
-            _pad: [0; 3],
+            _pad: 0,
+            off: crate::object::layout_desc::layout_key_off(0 as u32),
         }];
         assert!(from_static_layout(&SharedLayout::shape_cache_entry(), &keys, false).is_none());
         let symbol = crate::object::layout_desc::StaticAtom {
@@ -165,7 +173,8 @@ fn non_image_keys_use_the_generic_initializer() {
             atom: &symbol,
             slot: 0,
             attrs: 0,
-            _pad: [0; 3],
+            _pad: 0,
+            off: crate::object::layout_desc::layout_key_off(0 as u32),
         }];
         assert!(from_static_layout(&SharedLayout::shape_cache_entry(), &symbols, false).is_none());
     }

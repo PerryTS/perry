@@ -598,7 +598,7 @@ fn own_data_slot(
             return (shape.logical_key_count == 0).then_some(None);
         }
         let Some(slot) =
-            crate::object::keys_find_slot_by_bytes_resolved(keys, shape.logical_key_count, name)
+            crate::object::keys_find_slot_by_bytes_resolved(shape.keys_view(), shape.logical_key_count, name)
         else {
             return Some(None);
         };

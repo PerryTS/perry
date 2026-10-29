@@ -911,7 +911,7 @@ pub(crate) fn set_field_by_name_object_tail(
             let proof = crate::object::canonical_keys::SharedLayout::of_receiver(obj)
                 .expect("an object with an overflow appends through it, never here");
             let canonical_parent =
-                crate::object::canonical_keys::canonicalize(&proof, keys, key_count as u32);
+                crate::object::canonical_keys::canonicalize_keys(&proof, keys_view);
             refresh_roots_after_alloc!();
             let new_keys =
                 crate::object::canonical_keys::extend_key(&proof, canonical_parent, key).view();
@@ -1012,7 +1012,7 @@ pub(crate) fn set_field_by_name_object_tail(
         // per-index accessors via `js_array_get`); the original match below
         // still gates the hit, so this cannot widen what is accepted.
         if let Some(i) =
-            crate::object::keys_find_property_slot_by_key_ptr(keys, key_count as u32, key)
+            crate::object::keys_find_property_slot_by_key_ptr(keys_view, key_count as u32, key)
                 .map(|v| v as usize)
         {
             let key_val = crate::array::js_array_get(keys, i as u32);
@@ -1099,7 +1099,7 @@ pub(crate) fn set_field_by_name_object_tail(
         let proof = crate::object::canonical_keys::SharedLayout::of_receiver(obj)
             .expect("an object with an overflow appends through it, never here");
         let canonical_parent =
-            crate::object::canonical_keys::canonicalize(&proof, keys, key_count as u32);
+            crate::object::canonical_keys::canonicalize_keys(&proof, keys_view);
         refresh_roots_after_alloc!();
         let new_keys =
             crate::object::canonical_keys::extend_key(&proof, canonical_parent, key).view();

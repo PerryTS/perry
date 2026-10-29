@@ -81,6 +81,7 @@ pub(crate) use test_helpers::{
 
 use crate::string::StringHeader;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 // NaN-boxing tags (must match value.rs)
@@ -93,22 +94,8 @@ const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 /// Placed at offset 0 so `js_is_symbol` can cheaply detect symbols.
 pub const SYMBOL_MAGIC: u32 = crate::codegen_abi::SYMBOL_HEADER_MAGIC; // "SYMB"
 
-/// Symbol object header. Allocated in the arena (or native storage for registered
-/// symbols that need to outlive GC cycles).
-#[repr(C)]
-pub struct SymbolHeader {
-    /// Magic number for type discrimination. Always SYMBOL_MAGIC.
-    pub magic: u32,
-    /// Whether this symbol is in the global registry (Symbol.for). Registered
-    /// symbols have their description used as the registry key.
-    /// Bit 0 is Symbol.for membership; bit 1 is persistent native storage.
-    pub registered: u32,
-    /// Description string pointer, or null for `Symbol()` with no argument.
-    pub description: *mut StringHeader,
-    /// Unique id (monotonic counter). Two symbols with the same description
-    /// still compare as different unless created via Symbol.for.
-    pub id: u64,
-}
+/// The shared symbol payload; descriptions name the runtime string header.
+pub type SymbolHeader = crate::codegen_abi::SymbolHeader<StringHeader>;
 
 /// Box-leaked symbols obey the same p-8 header contract as GC cells. The
 /// prefix is not registered with the collector: identity and lifetime remain
@@ -576,15 +563,19 @@ pub fn symbol_on_object_for_test(owner: usize, sym: usize) -> Option<bool> {
     }
 }
 
-// Monotonic id counter for fresh symbols. Not thread-safe per-thread but
-// Symbol semantics are compatible with coarse locking.
-static NEXT_SYMBOL_ID: Mutex<u64> = Mutex::new(1);
+// The counter provides uniqueness only; symbol publication has its own locks.
+// Dynamic births count up from 1; image symbols own the top ordinals.
+static NEXT_SYMBOL_ID: AtomicU64 = AtomicU64::new(1);
 
 fn next_id() -> u64 {
-    let mut id = NEXT_SYMBOL_ID.lock().unwrap();
-    let v = *id;
-    *id = v.wrapping_add(1);
-    v
+    // Computed once at birth; every key path still loads the same id.
+    crate::codegen_abi::symbol_identity(NEXT_SYMBOL_ID.fetch_add(1, Ordering::Relaxed))
+}
+
+/// Recover creation order for the defensive own-symbol enumeration fallback.
+/// The mix is invertible, so it loses no identity; image symbols rank first.
+fn creation_order(id: u64) -> u64 {
+    crate::codegen_abi::symbol_birth_rank(id)
 }
 
 pub(crate) unsafe fn str_from_header(ptr: *const StringHeader) -> Option<String> {

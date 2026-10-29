@@ -395,7 +395,7 @@ pub(super) fn worker_resource_limits_object(
 }
 
 pub(super) fn empty_object() -> *mut perry_runtime::object::ObjectHeader {
-    perry_runtime::object::js_object_alloc(0, 0)
+    perry_runtime::realm_decl! { birth perry_runtime::object::js_object_alloc(0, 0); realm { "node:worker_threads.resourceLimits", kind = namespace, members = { }; "node:worker_threads.default.resourceLimits", kind = namespace, members = { }; } }
 }
 
 fn worker_performance_object() -> *mut perry_runtime::object::ObjectHeader {
@@ -738,7 +738,7 @@ pub(super) fn worker_profile_handle(kind_bits: i64) -> f64 {
         perry_runtime::fn_info!(worker_profile_stop, 0; with_declared(0)),
         1,
     );
-    perry_runtime::closure::js_closure_set_capture_ptr(closure, 0, kind_bits);
+    perry_runtime::closure::closure_set_capture_word(closure, 0, kind_bits);
     let obj = perry_runtime::object::js_object_alloc(0, 0);
     set_object_field(
         obj,

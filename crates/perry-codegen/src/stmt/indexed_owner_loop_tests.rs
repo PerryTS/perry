@@ -31,6 +31,14 @@ fn ir(kind: &str, body: Vec<Stmt>) -> String {
     ir_with_facts(kind, body, Default::default())
 }
 fn ir_with_facts(kind: &str, body: Vec<Stmt>, facts: crate::codegen::ElisionFacts) -> String {
+    ir_with_param_type(Type::Named(kind.into()), body, facts)
+}
+fn ir_with_param_type(
+    receiver: Type,
+    body: Vec<Stmt>,
+    facts: crate::codegen::ElisionFacts,
+) -> String {
+    let kind = receiver;
     let mut m = Module::new("indexed_owner_contract");
     let param = |id, name: &str, ty| Param {
         id,
@@ -46,9 +54,9 @@ fn ir_with_facts(kind: &str, body: Vec<Stmt>, facts: crate::codegen::ElisionFact
         name: "operate".into(),
         type_params: vec![],
         params: vec![
-            param(1, "a", Type::Named(kind.into())),
+            param(1, "a", kind.clone()),
             param(2, "scale", Type::Any),
-            param(7, "b", Type::Named(kind.into())),
+            param(7, "b", kind.clone()),
         ],
         return_type: Type::Any,
         body: vec![
@@ -366,7 +374,6 @@ fn specialized_byte_stores_inside_transparent_hir_blocks_use_the_same_region() {
 
 fn string_code(index: Expr) -> Expr {
     Expr::Call {
-        byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
             object: Box::new(get(1)),
             property: "charCodeAt".into(),
@@ -376,6 +383,7 @@ fn string_code(index: Expr) -> Expr {
         args: vec![index],
         type_args: vec![],
         byte_offset: 0,
+        byte_end: 0,
     }
 }
 
@@ -455,11 +463,11 @@ fn string_region_rejects_rebinding_and_calls_before_any_body_effect() {
         vec![
             Stmt::Expr(string_code(get(3))),
             Stmt::Expr(Expr::Call {
-                byte_end: 0,
                 callee: Box::new(get(2)),
                 args: vec![],
                 type_args: vec![],
                 byte_offset: 0,
+                byte_end: 0,
             }),
         ],
         vec![Stmt::If {
@@ -473,5 +481,84 @@ fn string_region_rejects_rebinding_and_calls_before_any_body_effect() {
         }],
     ] {
         assert!(!ir("string", body).contains("indexed.string.storage"));
+    }
+}
+
+fn string_array_length(index: Expr) -> Expr {
+    Expr::PropertyGet {
+        object: Box::new(index_get_of(1, index)),
+        property: "length".into(),
+        byte_offset: 0,
+        byte_end: 0,
+    }
+}
+fn index_get_of(a: u32, i: Expr) -> Expr {
+    index(a, i)
+}
+fn string_array() -> Type {
+    Type::Array(Box::new(Type::String))
+}
+
+// JST slice 4 (F): `lenSum += pieces[i].length` over a declared `string[]`.
+#[test]
+fn string_array_length_region_scans_the_slots_once_and_stays_call_free() {
+    let body = vec![Stmt::Expr(Expr::LocalSet(
+        2,
+        Box::new(bin(BinaryOp::Add, get(2), string_array_length(get(3)))),
+    ))];
+    let ir = ir_with_param_type(string_array(), body, Default::default());
+    assert!(ir.contains("indexed.sarray.scan"), "{ir}");
+    assert!(ir.contains("indexed.owner.slow"), "{ir}");
+    let admission = ir.find("indexed.sarray.scan").unwrap();
+    let first_poll = ir
+        .find("call void @js_gc_loop_safepoint()")
+        .expect("pending GC work must be serviced before the array is read");
+    assert!(
+        first_poll < admission,
+        "the entry poll must precede the slot scan: {ir}"
+    );
+    let fast = ir
+        .split("\nindexed.owner.fast.")
+        .nth(1)
+        .unwrap()
+        .split("\nindexed.owner.exit.")
+        .next()
+        .unwrap();
+    assert!(
+        !fast.contains("call "),
+        "the string-array region stays call-free: {fast}"
+    );
+    // The per-element read is one slot load and one header load.
+    assert!(fast.contains("lshr i64"), "slot tag test: {fast}");
+}
+
+#[test]
+fn string_array_length_region_rejects_stores_and_calls_before_any_body_effect() {
+    for body in [
+        // The array is rebound in the body.
+        vec![
+            Stmt::Expr(Expr::LocalSet(1, Box::new(Expr::Integer(4)))),
+            Stmt::Expr(string_array_length(get(3))),
+        ],
+        // A call can run user code between two element reads.
+        vec![
+            Stmt::Expr(string_array_length(get(3))),
+            Stmt::Expr(Expr::Call {
+                byte_end: 0,
+                callee: Box::new(get(2)),
+                args: vec![],
+                type_args: vec![],
+                byte_offset: 0,
+            }),
+        ],
+        // An element store.
+        vec![Stmt::Expr(Expr::IndexSet {
+            object: Box::new(get(1)),
+            index: Box::new(get(3)),
+            value: Box::new(Expr::String("x".into())),
+        })],
+    ] {
+        let ir = ir_with_param_type(string_array(), body, Default::default());
+        assert!(!ir.contains("indexed.sarray.scan"), "{ir}");
     }
 }

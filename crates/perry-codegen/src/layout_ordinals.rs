@@ -20,6 +20,8 @@ pub enum LayoutKey {
 pub enum LayoutRole {
     Native,
     ClassFamily,
+    /// Runtime and realm descriptor values, directly indexed on first touch.
+    LazyImage,
     OtherStatic,
 }
 
@@ -45,8 +47,11 @@ pub struct OrdinalEntry {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct ProgramLayoutOrdinals {
     pub entries: Vec<OrdinalEntry>,
+    pub lazy_first: u32,
+    pub lazy_count: u32,
     pub family_first: u32,
     pub family_count: u32,
+    pub prototype_serial_end: u64,
 }
 
 impl ProgramLayoutOrdinals {
@@ -67,7 +72,7 @@ impl ProgramLayoutOrdinals {
             }
             Self::append(&mut entries, input)?;
         }
-        let family_first = entries.len() as u32;
+        let lazy_first = entries.len() as u32;
         let mut sorted = BTreeMap::new();
         for input in program {
             if input.role == LayoutRole::Native || matches!(input.key, LayoutKey::Native(_)) {
@@ -95,6 +100,11 @@ impl ProgramLayoutOrdinals {
                 }
             }
         }
+        for input in sorted.values().filter(|i| i.role == LayoutRole::LazyImage) {
+            Self::append(&mut entries, input.clone())?;
+        }
+        let lazy_count = entries.len() as u32 - lazy_first;
+        let family_first = entries.len() as u32;
         let family = |i: &&OrdinalInput| {
             i.role == LayoutRole::ClassFamily && i.band == 0 && i.proto_kind == 0
         };
@@ -102,13 +112,19 @@ impl ProgramLayoutOrdinals {
             Self::append(&mut entries, input.clone())?;
         }
         let family_count = entries.len() as u32 - family_first;
-        for input in sorted.values().filter(|i| !family(i)) {
+        for input in sorted
+            .values()
+            .filter(|i| !family(i) && i.role != LayoutRole::LazyImage)
+        {
             Self::append(&mut entries, input.clone())?;
         }
         Ok(Self {
             entries,
+            lazy_first,
+            lazy_count,
             family_first,
             family_count,
+            prototype_serial_end: perry_abi::intrinsic_serials::FIRST_DYNAMIC_PROTOTYPE_SERIAL,
         })
     }
 
@@ -172,14 +188,29 @@ impl ProgramLayoutOrdinals {
     }
 
     /// The `PerryLayoutImageV1` initializer; `@perry_static_seeds` is the
-    /// static seed unit's table (`stubs::static_shape_seed_ll_with_plan`).
+    /// program table of the static seed unit (`stubs::static_shape_seed_ll_with_plan`).
     pub fn image_initializer(&self) -> String {
         format!(
             "{{ i32 {}, i32 {}, i32 {}, i32 {}, ptr @perry_static_seeds }}",
             perry_abi::LAYOUT_WORD_ABI_VERSION,
             self.static_rows(),
             self.family_first,
-            self.family_count
+            self.family_count,
+        )
+    }
+
+    /// The program table's lazy span fields after `count`
+    /// (`PerryProgramTableV1`): count, first row, padding, prototype serial
+    /// end, span.
+    pub fn table_span_initializer(&self) -> String {
+        let lazy = if self.lazy_count == 0 {
+            "null"
+        } else {
+            "@perry_lazy_layouts"
+        };
+        format!(
+            "i32 {}, i32 {}, i32 0, i64 {}, ptr {lazy}",
+            self.lazy_count, self.lazy_first, self.prototype_serial_end,
         )
     }
 }
@@ -268,6 +299,31 @@ mod tests {
         let mut changed = p.clone();
         changed.entries[1].proto_kind = 1;
         assert_ne!(p.cache_key(), changed.cache_key());
+    }
+
+    #[test]
+    fn lazy_descriptors_are_one_directly_indexed_span_before_class_families() {
+        let a = input("a", LayoutRole::LazyImage, 0);
+        let b = input("b", LayoutRole::LazyImage, 2);
+        let c = input("c", LayoutRole::ClassFamily, 0);
+        let d = input("d", LayoutRole::OtherStatic, 0);
+        let plan = ProgramLayoutOrdinals::assign(native_inputs(), [d, b, c, a]).unwrap();
+        let first = perry_abi::NATIVE_LAYOUT_ROWS;
+        assert_eq!((plan.lazy_first, plan.lazy_count), (first, 2));
+        assert_eq!((plan.family_first, plan.family_count), (first + 2, 1));
+        assert_eq!(plan.entries[first as usize].role, LayoutRole::LazyImage);
+        assert_eq!(plan.entries[first as usize + 1].proto_kind, 2);
+        assert!(plan
+            .table_span_initializer()
+            .ends_with("ptr @perry_lazy_layouts"));
+        assert!(ProgramLayoutOrdinals::assign(native_inputs(), [])
+            .unwrap()
+            .table_span_initializer()
+            .ends_with(&format!(
+                "i32 0, i32 {}, i32 0, i64 {}, ptr null",
+                perry_abi::NATIVE_LAYOUT_ROWS,
+                perry_abi::intrinsic_serials::FIRST_DYNAMIC_PROTOTYPE_SERIAL
+            )));
     }
 
     #[test]

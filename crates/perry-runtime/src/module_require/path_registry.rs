@@ -48,7 +48,9 @@ struct PathModuleEntry {
 
 #[derive(Default)]
 struct PathModuleState {
-    entries: std::collections::HashMap<String, PathModuleEntry>,
+    // AHashState: one per-process seed. A std RandomState's keys advance per
+    // construction, so its probe order depended on how many maps came before.
+    entries: std::collections::HashMap<String, PathModuleEntry, crate::fast_hash::AHashState>,
     /// Logical (not mutex) ownership of the lazy loader. While one thread is
     /// running generated init code, only that thread may claim another path.
     /// This composes concurrency with A -> B -> A cycles without ever holding
@@ -587,15 +589,15 @@ crate::perry_thread_local! {
     /// BEFORE the macro invocation instead attaches to nothing, and `-D
     /// warnings` (a required PR gate) then rejects the build.
     static PATH_MODULE_INIT_ADDRS: std::cell::RefCell<
-        std::sync::Arc<std::collections::HashMap<String, usize>>,
-    > = std::cell::RefCell::new(std::sync::Arc::new(std::collections::HashMap::new()));
+        std::sync::Arc<std::collections::HashMap<String, usize, crate::fast_hash::AHashState>>,
+    > = std::cell::RefCell::new(std::sync::Arc::new(Default::default()));
 }
 
 /// This thread's initializer addresses, to hand to a thread it spawns that
 /// runs the same image. Opaque: the only thing to do with it is
 /// [`adopt_path_init_image`] on the spawned thread before it runs any JS.
 #[derive(Clone)]
-pub struct PathInitImage(std::sync::Arc<std::collections::HashMap<String, usize>>);
+pub struct PathInitImage(std::sync::Arc<std::collections::HashMap<String, usize, crate::fast_hash::AHashState>>);
 
 /// Capture this thread's table for a worker it is about to spawn. The
 /// addresses are code pointers of this image, so they are valid on any thread

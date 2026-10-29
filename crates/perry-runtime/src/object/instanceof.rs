@@ -1022,5 +1022,3 @@ mod tagged_native_handle_tests {
         assert_eq!(result.to_bits(), crate::value::TAG_FALSE);
     }
 }
-
-crate::realm_decl!("instanceof.realm.json#*");

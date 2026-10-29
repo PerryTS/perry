@@ -822,7 +822,11 @@ pub unsafe extern "C" fn js_tls_client_check_identity_from_metadata(handle: i64)
 }
 
 pub fn js_tls_root_certificates() -> f64 {
-    cached_owned_cert_array(&ROOT_CERTS_CACHE, roots::bundled_certificates())
+    // The host's CA bundle, read at run time: the realm declares the birth
+    // (a frozen string array), never its contents.
+    cached_heap_array(&ROOT_CERTS_CACHE, || {
+        crate::realm_decl! { birth crate::array::realm_string_array(&roots::bundled_certificates().iter().map(String::as_str).collect::<Vec<_>>(), false); realm { "node:tls.rootCertificates", value = dynamic, elements = string, integrity = frozen } }
+    })
 }
 
 #[no_mangle]
@@ -1358,7 +1362,7 @@ fn ensure_secure_context_prototype() {
 
     let keys = b"constructor\0";
     let proto =
-        crate::object::js_object_alloc_with_shape(0x7FFF_FF41, 1, keys.as_ptr(), keys.len() as u32);
+        crate::realm_decl! { birth crate::object::js_object_alloc_with_shape(0x7FFF_FF41, 1, keys.as_ptr(), keys.len() as u32); realm { "node:tls.SecureContext.prototype", members = { constructor, attrs = writable | enumerable | configurable; }; } };
     crate::object::class_prototype_object_root_store(CLASS_ID_TLS_SECURE_CONTEXT, proto);
 }
 

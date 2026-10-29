@@ -87,3 +87,24 @@ pub(crate) fn uniform_heap_generation(base: usize, end: usize) -> Option<HeapGen
         legacy_uniform_heap_generation(base, end)
     }
 }
+
+/// Space and allocation class from one canonical publication; only collectors
+/// need the class. No storage lookup is added to either barrier predicate.
+#[inline(always)]
+pub(crate) fn classify_heap_storage_in_range(addr: usize)
+    -> Option<(HeapSpace, usize, *mut u64, bool)>
+{
+    #[cfg(target_os = "linux")]
+    if let Some(found) = crate::arena::region::reservation::owned_storage(addr) {
+        return Some(found);
+    }
+    #[cfg(all(target_os = "linux", not(test)))]
+    { None }
+    #[cfg(any(not(target_os = "linux"), test))]
+    {
+        let key = generation_class_key_for_addr(addr);
+        let pages = hot_page_generations().borrow();
+        let range = pages.get(&key)?.find(addr)?;
+        Some((range.space, range.base, range.object_starts, range.large_storage))
+    }
+}

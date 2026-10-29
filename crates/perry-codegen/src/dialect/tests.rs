@@ -637,6 +637,8 @@ fn emitted_constant_forms() -> Vec<(LlvmType, String)> {
             "12345678901234567890",
             "18446744073709551615",
             "ptrtoint (ptr @constant_forms_global to i64)",
+            // An image literal's text address (`chain_literal_part`).
+            "ptrtoint (ptr getelementptr (i8, ptr getelementptr (i8, ptr @constant_forms_global, i64 8), i64 20) to i64)",
             "undef",
             "poison",
         ],
@@ -694,7 +696,18 @@ fn emitted_constant_forms() -> Vec<(LlvmType, String)> {
         F32,
         &["1.5", "-0.0", "0x3FF8000000000000", "0x7FF0000000000000"]
     );
-    push!(PTR, &["null", "@constant_forms_global", "undef"]);
+    push!(
+        PTR,
+        &[
+            "null",
+            "@constant_forms_global",
+            "undef",
+            // `string_pool::image::pointer`: a literal image past its header.
+            "getelementptr (i8, ptr @constant_forms_global, i64 8)",
+            "getelementptr inbounds (i8, ptr @constant_forms_global, i64 4)",
+            "getelementptr (i8, ptr getelementptr (i8, ptr @constant_forms_global, i64 8), i64 20)",
+        ],
+    );
     push!(
         "<2 x i64>",
         &[

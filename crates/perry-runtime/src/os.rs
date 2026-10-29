@@ -581,7 +581,7 @@ pub unsafe extern "C" fn js_set_process_entry_path(ptr: *const u8, len: u32) {
 /// Returns: string[] (array of NaN-boxed string pointers)
 #[no_mangle]
 pub extern "C" fn js_process_argv() -> *mut ArrayHeader {
-    use crate::array::{js_array_alloc, js_array_push_f64};
+    use crate::array::js_array_push_f64;
     use crate::value::js_nanbox_string;
 
     // #9401: never `std::env::args()` — it panics on a non-UTF-8 argument.
@@ -592,7 +592,7 @@ pub extern "C" fn js_process_argv() -> *mut ArrayHeader {
     // Compiled: ["/path/to/binary", "/path/to/entry.ts", ...user_args]
     // If an older/foreign codegen does not seed the entry path, retain the
     // historical binary-path fallback while keeping user args at index 2+.
-    let arr = js_array_alloc((args.len() + 1) as u32);
+    let arr = crate::realm_decl! { birth crate::array::realm_array_alloc((args.len() + 1) as u32, perry_abi::realm_header::ArrayElements::Pointers, false); realm { process.argv, value = dynamic, elements = string; "node:process.argv", value = dynamic, elements = string; } };
 
     let mut result = arr;
     if let Some(binary_path) = args.first() {
@@ -702,7 +702,7 @@ pub extern "C" fn js_process_versions() -> f64 {
 
     // Fill the declared record slots. Order MUST match the
     // js_object_set_field calls below — slot indices are positional.
-    crate::object::runtime_layouts::runtime_record!(obj, RECORD_F411_0);
+    crate::realm_decl! { record obj, RECORD_F411_0; realm { process.versions, kind = namespace, members = { node = "22.0.0", attrs = writable | enumerable | configurable; v8 = "12.4.254.21", attrs = writable | enumerable | configurable; perry = "0.4.71", attrs = writable | enumerable | configurable; uv = "1.51.0", attrs = writable | enumerable | configurable; modules = "0", attrs = writable | enumerable | configurable; openssl = "0", attrs = writable | enumerable | configurable; zlib = "1.3.0", attrs = writable | enumerable | configurable; ares = "0", attrs = writable | enumerable | configurable; icu = "0", attrs = writable | enumerable | configurable; unicode = "16.0", attrs = writable | enumerable | configurable; napi = "0", attrs = writable | enumerable | configurable; llhttp = "0", attrs = writable | enumerable | configurable; nghttp2 = "0", attrs = writable | enumerable | configurable; undici = "0", attrs = writable | enumerable | configurable; }; "node:process.versions", kind = namespace, members = { node = "22.0.0", attrs = writable | enumerable | configurable; v8 = "12.4.254.21", attrs = writable | enumerable | configurable; perry = "0.4.71", attrs = writable | enumerable | configurable; uv = "1.51.0", attrs = writable | enumerable | configurable; modules = "0", attrs = writable | enumerable | configurable; openssl = "0", attrs = writable | enumerable | configurable; zlib = "1.3.0", attrs = writable | enumerable | configurable; ares = "0", attrs = writable | enumerable | configurable; icu = "0", attrs = writable | enumerable | configurable; unicode = "16.0", attrs = writable | enumerable | configurable; napi = "0", attrs = writable | enumerable | configurable; llhttp = "0", attrs = writable | enumerable | configurable; nghttp2 = "0", attrs = writable | enumerable | configurable; undici = "0", attrs = writable | enumerable | configurable; }; } };
 
     let nb = |s: &str| -> JSValue {
         let bytes = s.as_bytes();
@@ -1520,5 +1520,3 @@ mod tests {
         assert!(!eol.is_null());
     }
 }
-
-crate::realm_decl!("os.realm.json#*");

@@ -169,9 +169,15 @@ pub(crate) struct ShapeRecord {
     /// Borrowed stable identity-word address; zero for DEFAULT/null/per-object.
     /// GC rewrites the word, not this derived address; no new identity fact.
     pub(super) proto_cell: u64,
-    /// Element properties described by this immutable key prefix: 0 plain,
-    /// 1 indexed/length descriptors, 2 a per-object mutable key list.
-    pub(super) element_kind: u32,
+    /// Low byte: element properties described by this immutable key
+    /// prefix: 0 plain, 1 indexed/length descriptors, 2 a per-object mutable
+    /// key list. Bits 8-31: the canonical trie node of `keys` plus one, 0 for
+    /// none (an owned list, no keys, or a holder that never learned it). The
+    /// node is the list's identity in this agent (CKI S1), carried here so
+    /// a receiver's keys reach the trie with no address lookup; it is a fact
+    /// of the key list, never of shape identity (`facts_match` compares the
+    /// `keys` word). Offset 72; codegen never reads it.
+    keys_node_and_element_kind: u32,
     /// The class family layout (its ShapeId, `layout_desc`) this record is a
     /// class evaluation's copy of: the family's keys, slots, holes, kind,
     /// attributes and lanes at the identity `MIXED | class | serial` naming
@@ -304,7 +310,7 @@ impl ShapeRecord {
         rep: 0,
         extras: 0,
         proto_cell: 0,
-        element_kind: 0,
+        keys_node_and_element_kind: 0,
         family_desc_index_plus_one: 0,
         probe: 0,
         colour_mask: [0; 2],
@@ -430,7 +436,7 @@ impl ShapeRecord {
             rep: 0,
             extras: 0,
             proto_cell: 0,
-            element_kind: 0,
+            keys_node_and_element_kind: 0,
             family_desc_index_plus_one: 0,
             probe: 0,
             colour_mask: [0; 2],
@@ -728,12 +734,13 @@ impl ShapeRecord {
     /// the caller: the collector rewrites a record's `keys` in place, so the
     /// address the record was INDEXED under (its family key) is what the
     /// exact-facts accelerator must be probed with until the metadata scan
-    /// re-indexes it.
+    /// re-indexes it. A canonical list folds as its node (CKI S2), which no
+    /// rewrite changes, so `keys` matters only for an owned list.
     #[inline]
     pub(super) fn facts_key_with_keys(&self, keys: u64) -> u64 {
         integrity_facts_key(
             facts_key_proto_with_special(
-                keys,
+                list_identity(self.keys_node(), keys),
                 self.logical_key_count,
                 self.live_inline_slot_count,
                 self.semantic_generation,
@@ -867,13 +874,34 @@ pub(crate) fn brand_lists_equal(a: &[u64], b: &[u64]) -> bool {
     a.len() == b.len() && (a.is_empty() || a == b)
 }
 
+/// The word a key list contributes to the exact-facts fold (CKI S2): its
+/// canonical trie node under a domain tag, or an owned list's heap address.
+/// Never an image address, so the accelerator's buckets, and with them every
+/// intern's probe cost, do not depend on where the link put the image. Heap
+/// addresses are below 2^48, so the two domains cannot meet. Exact matching
+/// still compares the record's keys word (`facts_match_*`).
+///
+/// The empty list (the trie root) is 0, as a keyless shape always folded.
+#[inline(always)]
+pub(super) fn list_identity(node: u32, keys: u64) -> u64 {
+    const LIST_NODE_DOMAIN: u64 = 0x4c4e_4f44 << 32;
+    if node == crate::object::canonical_keys::NO_NODE {
+        keys
+    } else if node == crate::object::canonical_keys::ROOT_NODE {
+        0
+    } else {
+        LIST_NODE_DOMAIN | u64::from(node)
+    }
+}
+
 /// Extended exact-facts hash. Old shapes take the wrapper above and get the
-/// exact old fold; ConstFn adds a domain-separated ordered body list. Address
-/// values are process-local identities, never serialized as static seed keys.
+/// exact old fold; ConstFn adds a domain-separated ordered body list. Every
+/// word folded is an ordinal or a heap address ([`list_identity`]; a ConstFn
+/// body as its metadata owner and entry ordinal), never an image address.
 #[allow(clippy::too_many_arguments)]
 #[inline(always)]
 pub(super) fn facts_key_proto_with_special(
-    keys: u64,
+    list: u64,
     logical_key_count: u32,
     live_inline_slot_count: u32,
     semantic_generation: u64,
@@ -888,7 +916,7 @@ pub(super) fn facts_key_proto_with_special(
     const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
     const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
     let fold = |acc: u64, word: u64| (acc ^ word).wrapping_mul(FNV_PRIME);
-    let mut h = fold(FNV_OFFSET_BASIS, keys);
+    let mut h = fold(FNV_OFFSET_BASIS, list);
     h = fold(h, u64::from(logical_key_count));
     h = fold(h, u64::from(live_inline_slot_count));
     h = fold(h, semantic_generation);
@@ -913,11 +941,7 @@ pub(super) fn facts_key_proto_with_special(
         h = fold(h, rep);
     }
     if !infos.is_empty() {
-        h = fold(h, 0x7_4346_4e);
-        for entry in infos {
-            h = fold(h, u64::from(entry.slot));
-            h = fold(h, entry.info);
-        }
+        h = fold_constfn_infos(h, infos);
     }
     // Brands (#11791) are domain-separated the same way; a brandless shape
     // keeps the key it had before brands existed.
@@ -927,6 +951,22 @@ pub(super) fn facts_key_proto_with_special(
     // Final avalanche: FNV keeps most of its entropy in the high bits and
     // hashbrown's probe sequence starts from the LOW bits.
     h ^ (h >> 32)
+}
+
+/// The ConstFn half of [`facts_key_proto_with_special`], out of line: a body
+/// folds as its metadata identity (the owner's registration index and the
+/// entry ordinal, JST4), not as the address of its info record.
+#[cold]
+#[inline(never)]
+fn fold_constfn_infos(mut h: u64, infos: &[ConstFnSlotInfo]) -> u64 {
+    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+    let fold = |acc: u64, word: u64| (acc ^ word).wrapping_mul(FNV_PRIME);
+    h = fold(h, 0x7_4346_4e);
+    for entry in infos {
+        h = fold(h, u64::from(entry.slot));
+        h = fold(h, crate::builtins::fn_metadata_owner::info_identity_word(entry.info));
+    }
+    h
 }
 
 /// The brand half of [`facts_key_proto_with_special`], out of line: almost
@@ -1358,7 +1398,7 @@ fn note_removal(elems_moved: usize) {
 /// One `[gc-idlist]` line per copying minor under `PERRY_GC_DIAG=1`,
 /// cumulative. `elems_moved` is the rig falsifier for this change.
 pub(crate) fn id_list_report() {
-    if !crate::gc::gc_diag_enabled() {
+    if !crate::gc::diagnostic_hooks::enabled() {
         return;
     }
     let st = ID_LIST_OP_STATS.with(std::cell::Cell::get);

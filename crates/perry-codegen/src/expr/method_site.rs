@@ -539,9 +539,8 @@ pub(crate) fn emit_method_site(
     // The probe: the receiver's own layout, then its prototypes'.
     ctx.current_block = probe_idx;
     let (dir, key_bits, hash) = emit_site_key(ctx, property);
-    if !ctx.program_layouts.families.is_empty()
-        && crate::codegen::static_shape_ids::has_prototype_method(property)
-    {
+    let family_words = crate::layout_desc::methods::family_words(&ctx.program_layouts, property);
+    if !family_words.is_empty() {
         let family_call = ctx.new_block("msite.family_call");
         let ordinary_probe = ctx.new_block("msite.ordinary_probe");
         let family_l = ctx.block_label(family_call);
@@ -550,21 +549,15 @@ pub(crate) fn emit_method_site(
         let family_probe_l = ctx.block_label(family_probe);
         let wp = emit_field_ptr(ctx.block(), &biased, 4);
         let word = ctx.block().load(I32, &wp);
-        let index = ctx.block().sub(
-            I32,
-            &word,
-            &(crate::runtime_abi::LAYOUT_TAG | crate::layout_ordinals::current_plan().family_first)
-                .to_string(),
-        );
-        let family_word = ctx.block().icmp_ult(
-            I32,
-            &index,
-            &crate::layout_ordinals::current_plan()
-                .family_count
-                .to_string(),
-        );
-        ctx.block()
-            .cond_br(&family_word, &family_probe_l, &ordinary_l);
+        // Only rows whose emitted index contains this name can answer. The
+        // runtime still checks the live receiver, holders, and call ABI.
+        let mut dispatch = format!("switch i32 {word}, label %{ordinary_l} [");
+        for word in family_words {
+            dispatch.push_str(&format!(" i32 {word}, label %{family_probe_l}"));
+        }
+        dispatch.push_str(" ]");
+        ctx.block().emit_raw(dispatch);
+        ctx.block().mark_terminated();
         ctx.current_block = family_probe;
         let callee = ctx.block().call(
             I64,

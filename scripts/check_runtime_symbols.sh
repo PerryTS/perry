@@ -99,6 +99,8 @@ SENTINELS=(
   js_map_set_number_key
   js_map_get_string_key
   js_map_get_number_key
+  js_map_get_entry
+  js_map_get_entry__Map
   js_map_has_string_key
   js_map_has_number_key
   js_map_delete_string_key

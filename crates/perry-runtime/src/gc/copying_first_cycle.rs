@@ -28,13 +28,13 @@ pub(super) enum CopiedMinorAttempt {
     RolledBack,
 }
 
-pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
+pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility<const DIAGNOSTICS: bool>(
     trace: &mut Option<GcCycleTrace>,
     start: Instant,
     eligibility: CopiedMinorEligibility,
     trigger_kind: GcTriggerKind,
 ) -> Option<CopiedMinorFastPathOutcome> {
-    match run_copied_minor_attempt(trace, start, eligibility, trigger_kind, true) {
+    match run_copied_minor_attempt::<DIAGNOSTICS>(trace, start, eligibility, trigger_kind, true) {
         CopiedMinorAttempt::Done(outcome) => outcome,
         // The speculative attempt read its own trace and the ratio said
         // evacuate. The rollback restored the pre-cycle heap, so re-deriving
@@ -44,8 +44,14 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
         // attempt consumed; the cost is one more preflight, on a cycle that by
         // construction did not meet its current-survival criterion.
         CopiedMinorAttempt::RolledBack => {
-            let eligibility = CopiedMinorEligibility::evaluate(trigger_kind);
-            match run_copied_minor_attempt(trace, start, eligibility, trigger_kind, false) {
+            let eligibility = CopiedMinorEligibility::evaluate::<DIAGNOSTICS>(trigger_kind);
+            match run_copied_minor_attempt::<DIAGNOSTICS>(
+                trace,
+                start,
+                eligibility,
+                trigger_kind,
+                false,
+            ) {
                 CopiedMinorAttempt::Done(outcome) => outcome,
                 CopiedMinorAttempt::RolledBack => {
                     unreachable!("a non-speculative copied-minor attempt cannot roll back")

@@ -122,8 +122,28 @@ unsafe fn well_formed_join_size(
     };
     let elements = unsafe { array_elements_ptr(arr) };
 
+    // The element sums cannot overflow a u64: at most 2^32 elements of at most
+    // 2^32 bytes each, plus the separators above (which saturate once).
+    let mut byte_total = size.byte_len;
+    let mut utf16_total = size.utf16_len;
+    let mut proof = size.encoding_proof;
     for index in 0..length as usize {
         let bits = unsafe { (*elements.add(index)).to_bits() };
+        // A heap string is the common element: one tag test, one header read.
+        if bits >> 48 == STRING_TAG >> 48 {
+            let string = (bits & POINTER_MASK) as *const StringHeader;
+            let (flags, blen, ulen) =
+                unsafe { ((*string).flags, (*string).byte_len, (*string).utf16_len) };
+            // Copying proven pieces preserves canonical encoding because this
+            // path excludes surrogate halves. Unknown pieces cannot grant proof.
+            if flags & STRING_FLAG_HAS_LONE_SURROGATES != 0 {
+                return None;
+            }
+            proof &= flags;
+            byte_total += blen as u64;
+            utf16_total += ulen as u64;
+            continue;
+        }
         if bits == TAG_HOLE {
             continue;
         }
@@ -141,9 +161,7 @@ unsafe fn well_formed_join_size(
             }
             (len as u64, len as u64)
         } else if let Some(string) = unsafe { direct_string(bits) } {
-            // Copying proven pieces preserves canonical encoding because this
-            // path excludes surrogate halves. Unknown pieces cannot grant proof.
-            size.encoding_proof &= unsafe { (*string).flags };
+            proof &= unsafe { (*string).flags };
             if unsafe { (*string).flags } & STRING_FLAG_HAS_LONE_SURROGATES != 0 {
                 return None;
             }
@@ -156,9 +174,12 @@ unsafe fn well_formed_join_size(
         } else {
             return None;
         };
-        size.byte_len = size.byte_len.saturating_add(byte_len);
-        size.utf16_len = size.utf16_len.saturating_add(utf16_len);
+        byte_total += byte_len;
+        utf16_total += utf16_len;
     }
+    size.byte_len = byte_total;
+    size.utf16_len = utf16_total;
+    size.encoding_proof = proof;
     Some(size)
 }
 
@@ -210,6 +231,14 @@ fn try_join_well_formed(
             }
 
             let bits = (*elements.add(index)).to_bits();
+            if bits >> 48 == STRING_TAG >> 48 {
+                let string = (bits & POINTER_MASK) as *const StringHeader;
+                let len = (*string).byte_len as usize;
+                // A piece is usually a handful of bytes: keep it out of libc.
+                crate::string::concat::copy_bytes_small(crate::string::string_data(string), cursor, len);
+                cursor = cursor.add(len);
+                continue;
+            }
             if bits == TAG_HOLE {
                 continue;
             }

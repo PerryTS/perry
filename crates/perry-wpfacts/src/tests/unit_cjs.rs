@@ -138,10 +138,9 @@ fn both(mods: &[(&str, &str)]) -> (ProgramFacts, ProgramFacts) {
         explain: true,
         ..Default::default()
     };
-    (
-        crate::compute(&list, &cfg),
-        crate::compute_units(&list, &cfg),
-    )
+    let w = crate::compute(&list, &cfg);
+    super::body_activation::assert_only_dead_bodies_dropped(&list, &cfg, &w);
+    (w, crate::compute_units(&list, &cfg))
 }
 
 /// Per unit on main's CommonJS support module: never more than the whole
@@ -150,7 +149,7 @@ fn both(mods: &[(&str, &str)]) -> (ProgramFacts, ProgramFacts) {
 /// instance's fields cross units (DECISIONS 186, field cells).
 fn assert_cjs_per_unit(w: &ProgramFacts, u: &ProgramFacts, n: usize) {
     let (pw, pu) = (proven_sites(w), proven_sites(u));
-    let stronger: Vec<&String> = pu.difference(&pw).collect();
+    let stronger = super::body_activation::stronger_sites(u, w);
     assert!(
         stronger.is_empty(),
         "per unit claims more than whole-program: {stronger:?}"
@@ -205,7 +204,9 @@ fn a_commonjs_unit_proves_what_the_whole_program_proves() {
     // `this.go()` (b.js) and `b.run()` (m.js) are proven whole-program. Per
     // unit the four lost sites are the dispatch's (no user site).
     let (w, u) = both(&T1);
-    assert_eq!(proven_sites(&w).len(), 25);
+    // DECISIONS 225: the wrapper's `module.require` (`moduleRequire`) never
+    // runs in any of the three modules: its call sites are dead (25 -> 22).
+    assert_eq!(proven_sites(&w).len(), 22);
     assert_cjs_per_unit(&w, &u, 7);
 }
 
@@ -247,12 +248,11 @@ fn a_class_bound_through_its_self_cell_is_a_contract() {
             .map(|f| (f.kind.top, f.kind.prims))
     };
     // Per unit `T.k` reads ⊤ until a class instance's fields cross units
-    // (DECISIONS 186); the whole program holds the class and `undefined`.
-    assert_eq!(
-        k_kind(&w),
-        Some((false, crate::model::prim::UNDEF)),
-        "T.k whole-program"
-    );
+    // (DECISIONS 186). The whole program never constructs `T`: `m.js` reads
+    // `r` unbound (a global; the source has no `require("./r")`), so
+    // `newInstance` never runs and `T`'s constructor is dead (DECISIONS
+    // 225): no writer, no kind.
+    assert_eq!(k_kind(&w), Some((false, 0)), "T.k whole-program");
     assert_eq!(
         k_kind(&u),
         Some((true, crate::model::prim::ALL)),
@@ -376,7 +376,8 @@ fn capture_parameters_bound_directly_or_composed_hold_the_class_environment() {
     // unit hands back; reading `P` through it would make `new P(n)` a `new`
     // of an unknown constructor and sink `P`.
     let (w, u) = both(&T5);
-    assert_eq!(proven_sites(&w).len(), 31);
+    // DECISIONS 225: `moduleRequire` never runs (31 -> 28, see T1).
+    assert_eq!(proven_sites(&w).len(), 28);
     assert_cjs_per_unit(&w, &u, 13);
 }
 
@@ -557,8 +558,7 @@ fn a_broken_function_is_still_the_callee_of_a_call_by_its_name() {
         "lost per unit {lost:?}\nbroken {:?}",
         u.broken
     );
-    let (pw, pu) = (proven_sites(&w), proven_sites(&u));
-    let stronger: Vec<&String> = pu.difference(&pw).collect();
+    let stronger = super::body_activation::stronger_sites(&u, &w);
     assert!(
         stronger.is_empty(),
         "per unit claims more than whole-program: {stronger:?}"

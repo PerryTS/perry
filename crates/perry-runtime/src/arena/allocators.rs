@@ -500,6 +500,31 @@ pub(crate) fn arena_alloc_gc_survivor(size: usize, align: usize, obj_type: u8) -
     unsafe { raw.add(GC_HEADER_SIZE) }
 }
 
+/// A large young birth with no collection point, for a caller holding raw
+/// addresses (array growth from a young source). Null when the type is not
+/// admitted or the backing would need a collection; the caller then takes its
+/// rooted path. The young pressure is armed for the next precise poll.
+pub(crate) fn arena_alloc_gc_large_young_no_collect(
+    size: usize,
+    align: usize,
+    obj_type: u8,
+) -> *mut u8 {
+    let total = gc_padded_total_size(size, align);
+    if !crate::gc::is_large_object_total_size_for_type(total, obj_type)
+        || !crate::gc::young_large_storage_admits(obj_type)
+    {
+        return std::ptr::null_mut();
+    }
+    super::alloc_sample::note(total, obj_type);
+    let raw = super::young_large::allocate_no_collect(total, align);
+    if raw.is_null() {
+        return raw;
+    }
+    let user = unsafe { init_young_header(raw, total, obj_type) };
+    crate::gc::allocation_pacing::arm_young_after_large_birth();
+    user
+}
+
 /// Allocate from arena with a GcHeader prepended.
 /// Returns pointer to usable memory AFTER the GcHeader.
 /// The object is NOT added to any tracking list — arena objects are discovered
@@ -525,6 +550,32 @@ pub fn arena_alloc_gc(size: usize, align: usize, obj_type: u8) -> *mut u8 {
     arena_alloc_gc_slow(size, align, obj_type, total)
 }
 
+/// [`arena_alloc_gc`] for an ordinary object of `slots` slots whose idle
+/// `GcHeader` image (`PerryLayoutDesc.gc_header_word`: type, arena flag, total
+/// size) is already known. The size comes from the slot count the caller also
+/// fills by; the image is read through the pointer on the fast arm only, so the
+/// large and slow arms pay nothing for it.
+///
+/// # Safety
+/// `word` points at the descriptor's header image.
+pub(crate) unsafe fn arena_alloc_gc_object_word(word: *const u64, slots: u32) -> *mut u8 {
+    use crate::gc::GC_TYPE_OBJECT;
+    let size = std::mem::size_of::<crate::object::ObjectHeader>() + slots as usize * 8;
+    let total = gc_padded_total_size(size, 8);
+    debug_assert_eq!(total, (*word >> 32) as usize);
+    super::alloc_sample::note(total, GC_TYPE_OBJECT);
+    if !crate::gc::is_large_object_total_size_for_type(total, GC_TYPE_OBJECT)
+        && !crate::gc::hot_arena_free_list_nonempty().get()
+    {
+        let raw = try_inline_bump(total, 8);
+        if !raw.is_null() {
+            // Read only here: the large and slow arms never need the image.
+            return init_young_header_word(raw, *word, GC_TYPE_OBJECT);
+        }
+    }
+    arena_alloc_gc_slow(size, 8, GC_TYPE_OBJECT, total)
+}
+
 /// The current live birth color is read at the allocation, never cached
 /// across a poll. Black births still seed the existing marking worklist,
 /// and kinds requiring exact starts still update the R2 region bitmap.
@@ -548,6 +599,20 @@ unsafe fn init_young_header(raw: *mut u8, total: usize, obj_type: u8) -> *mut u8
     raw.add(GC_HEADER_SIZE)
 }
 
+/// [`init_young_header`] from an idle image (`PerryLayoutDesc.gc_header_word`):
+/// the live birth colour is ORed into the flags byte here, at the allocation.
+#[inline(always)]
+unsafe fn init_young_header_word(raw: *mut u8, idle_image: u64, obj_type: u8) -> *mut u8 {
+    use crate::gc::{GcHeader, GC_HEADER_SIZE};
+    let header = raw as *mut GcHeader;
+    let image = idle_image | (u64::from(crate::gc::gc_birth_extra_flags()) << 8);
+    // GC_STORE_AUDIT(POINTER_FREE): the same eight-byte GcHeader image as `init_young_header`.
+    raw.cast::<u64>().write(image);
+    crate::gc::gc_note_black_birth(header);
+    record_arena_object_start(raw as usize, obj_type);
+    raw.add(GC_HEADER_SIZE)
+}
+
 #[cold]
 #[inline(never)]
 fn arena_alloc_gc_slow(size: usize, align: usize, obj_type: u8, total: usize) -> *mut u8 {
@@ -555,23 +620,20 @@ fn arena_alloc_gc_slow(size: usize, align: usize, obj_type: u8, total: usize) ->
     crate::test_support::bootstrap_test_thread();
     use crate::gc::{GcHeader, GC_FLAG_ARENA, GC_HEADER_SIZE};
 
-    // Large arena-backed GC objects are born directly in non-moving old
-    // generation. The threshold applies to the actual bytes a copying nursery
-    // would otherwise move: GcHeader + payload + alignment padding.
-    //
-    // It is TYPE-DEPENDENT, because the price of crossing it is: this object is
-    // also stamped `GC_FLAG_TENURED`, and a minor never sweeps old-gen — so for
-    // a POINTER-BEARING object the cost is not its own bytes, it is every
-    // object it can reach, held live through the remembered set by a container
-    // nothing refers to any more. See
-    // `gc::LARGE_POINTER_BEARING_OBJECT_THRESHOLD_BYTES` for the measurement
-    // (`shapes.ts` sat 16 bytes over the flat 16 KB line and re-marked 118 006
-    // slots per minor because of it).
-    // `&&` short-circuits, so the scope check is reached only by an allocation
-    // the size test has ALREADY called large -- never on the hot path (#10123).
+    // Size chooses storage independently of age. A leaf or a container the
+    // young large space admits gets a dedicated block that stays young until
+    // a minor traces it, so a producer filling it births its children young
+    // too. Both existing cutoffs and the scoped JSON container exception stay
+    // put.
     if crate::gc::is_large_object_total_size_for_type(total, obj_type)
         && !crate::gc::json_wide_birth_permits(total, obj_type)
     {
+        if crate::gc::young_large_storage_admits(obj_type) {
+            let raw = super::young_large::allocate(total, align);
+            let user = unsafe { init_young_header(raw, total, obj_type) };
+            crate::gc::allocation_pacing::arm_young_after_large_birth();
+            return user;
+        }
         return arena_alloc_gc_old(size, align, obj_type);
     }
 

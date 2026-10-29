@@ -461,6 +461,19 @@ fn then_backpatch_result(
     }
 }
 
+/// An awaited promise goes through PromiseResolve(%Promise%, p), which performs
+/// Get(p, "constructor") before reusing p. A promise carrying an own constructor
+/// (data or accessor) must therefore take the general path that reads it. A null
+/// metadata owner proves there is no own property, so the steady state costs one load.
+#[inline]
+fn promise_reads_own_constructor(value: f64) -> bool {
+    let inner = crate::value::js_nanbox_get_pointer(value) as *const Promise;
+    if inner.is_null() || unsafe { (*inner).meta.is_null() } {
+        return false;
+    }
+    super::promise_has_own_constructor(inner as usize)
+}
+
 #[no_mangle]
 pub extern "C" fn js_async_step_chain(value: f64, step_closure: ClosurePtr) -> *mut Promise {
     if let Some(next) = super::settled_step::try_enqueue(value, step_closure) {
@@ -559,6 +572,7 @@ pub extern "C" fn js_async_step_chain(value: f64, step_closure: ClosurePtr) -> *
             (value.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize,
         )
         .is_none()
+        && !promise_reads_own_constructor(value)
     {
         let inner = crate::value::js_nanbox_get_pointer(value) as *mut Promise;
         if !inner.is_null() {
@@ -1720,7 +1734,7 @@ mod tests {
                 crate::closure::js_closure_alloc(crate::fn_info!(async_step_fulfill_thunk, 1), 4);
             crate::closure::js_closure_set_capture_ptr(thunk, 0, step as i64);
             crate::closure::js_closure_set_capture_ptr(thunk, 1, captured_from as i64);
-            crate::closure::js_closure_set_capture_ptr(thunk, 2, 0);
+            crate::closure::closure_set_capture_word(thunk, 2, 0);
             crate::closure::js_closure_set_capture_f64(thunk, 3, 0.0);
 
             let original = INLINE_TRAP.with(|slot| {

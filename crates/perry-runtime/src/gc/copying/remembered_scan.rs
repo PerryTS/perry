@@ -5,7 +5,7 @@
 
 use super::*;
 
-pub(in crate::gc) fn scan_remembered_dirty_slots_copying(
+pub(in crate::gc) fn scan_remembered_dirty_slots_copying<const DIAGNOSTICS: bool>(
     snapshot: &RememberedDirtySnapshot,
     mut covered: Option<&mut crate::fast_hash::PtrHashSet<usize>>,
     mut visit: impl FnMut(GcMutableSlot, *mut GcHeader, bool, &mut RememberedSetTraceStats),
@@ -85,8 +85,12 @@ pub(in crate::gc) fn scan_remembered_dirty_slots_copying(
                     visit(slot, header, external, stats);
                     changed |= slot.read() != before;
                 };
-            let complete =
-                scan_dirty_object_slots(header, &snapshot.dirty_pages, stats, &mut visit_slot);
+            let complete = scan_dirty_object_slots::<DIAGNOSTICS>(
+                header,
+                &snapshot.dirty_pages,
+                stats,
+                &mut visit_slot,
+            );
             if complete {
                 if let Some(covered) = covered.as_deref_mut() {
                     covered.insert(header as usize);

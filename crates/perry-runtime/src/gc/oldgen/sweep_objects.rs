@@ -114,7 +114,7 @@ impl ArenaSweepObjectsState {
     }
 
     /// #10182: reclaim every dead, obligation-free block without visiting its
-    /// objects. See `gc::trace::block_skip` for the soundness argument; this
+    /// objects. See `gc::mark::block_skip` for the soundness argument; this
     /// is the half that decides, per block of THIS sweep's snapshot:
     ///
     /// * the sweep follows a full trace that reclaims dead old blocks (a
@@ -131,7 +131,7 @@ impl ArenaSweepObjectsState {
     ///
     /// A skipped block contributes nothing to `block_has_live`, which is the
     /// only liveness the cleanup reads.
-    pub(super) fn apply_block_skip(&mut self, census: &super::super::trace::BlockCensus) {
+    pub(super) fn apply_block_skip(&mut self, census: &super::super::mark::BlockCensus) {
         // Reached only from a synchronous full sweep, which is the one whose
         // marks are final and whose whole-block walk the probe reads.
         self.survival_probe =
@@ -148,8 +148,8 @@ impl ArenaSweepObjectsState {
         #[cfg(not(test))]
         let forget_holes = false;
         #[cfg(test)]
-        let forget_holes = super::super::trace::block_skip::sabotage::get()
-            & super::super::trace::block_skip::sabotage::FORGET_HOLES
+        let forget_holes = super::super::mark::block_skip::sabotage::get()
+            & super::super::mark::block_skip::sabotage::FORGET_HOLES
             != 0;
         self.census_hole_free = self
             .block_snapshots
@@ -170,7 +170,7 @@ impl ArenaSweepObjectsState {
             if snapshot.data == 0 || snapshot.offset == 0 {
                 continue;
             }
-            let cleanup_reclaims_dead_block = if block_idx < self.resettable_general_n {
+            let cleanup_reclaims_dead_block = if block_idx < self.resettable_general_n && !snapshot.large_storage {
                 !crate::arena::general_block_in_recent_window(block_idx)
             } else {
                 survivors.contains(&block_idx) || block_idx >= self.old_block_start
@@ -185,7 +185,7 @@ impl ArenaSweepObjectsState {
             let (obligation, reached) = (block.obligation, census.reached(block_idx));
             #[cfg(test)]
             let (obligation, reached) = {
-                use super::super::trace::block_skip::sabotage;
+                use super::super::mark::block_skip::sabotage;
                 let bits = sabotage::get();
                 (
                     block.obligation && bits & sabotage::FORGET_OBLIGATIONS == 0,
@@ -208,7 +208,7 @@ impl ArenaSweepObjectsState {
                 );
             }
             self.freed_bytes = self.freed_bytes.saturating_add(block.bytes);
-            if block_idx < self.resettable_general_n {
+            if block_idx < self.resettable_general_n && !snapshot.large_storage {
                 self.eden_dead_bytes = self.eden_dead_bytes.saturating_add(block.bytes);
             }
             self.block_skip_blocks += 1;
@@ -216,7 +216,7 @@ impl ArenaSweepObjectsState {
             self.block_skip_bytes = self.block_skip_bytes.saturating_add(block.bytes);
         }
         #[cfg(test)]
-        super::super::trace::block_skip::sabotage::record_skipped_block_bases(
+        super::super::mark::block_skip::sabotage::record_skipped_block_bases(
             skip.iter()
                 .enumerate()
                 .filter(|&(_, &skipped)| skipped)
@@ -225,11 +225,11 @@ impl ArenaSweepObjectsState {
         );
         if any {
             #[cfg(test)]
-            if super::super::trace::block_skip::sabotage::get() == 0 {
+            if super::super::mark::block_skip::sabotage::get() == 0 {
                 verify_skipped_blocks_hold_no_live_object(&skip);
             }
             self.cursor.set_skip_blocks(skip);
-            super::super::trace::block_skip::note_block_skip_reclaimed(
+            super::super::mark::block_skip::note_block_skip_reclaimed(
                 self.block_skip_blocks,
                 self.block_skip_objects,
                 self.block_skip_bytes,
@@ -269,8 +269,8 @@ impl ArenaSweepObjectsState {
                 }
                 true
             });
-            super::super::trace::block_skip::note_hole_rebuild_blocks_skipped(skipped);
-            if crate::gc::gc_diag_enabled() {
+            super::super::mark::block_skip::note_hole_rebuild_blocks_skipped(skipped);
+            if crate::gc::diagnostic_hooks::enabled() {
                 eprintln!(
                     "[gc-old-free] reusable_bytes={} rebuild_skipped_blocks={skipped}",
                     super::old_free_bytes()
@@ -338,16 +338,16 @@ impl ArenaSweepObjectsState {
         size: usize,
     ) {
         let is_old = block_idx >= self.old_block_start;
-        let general = block_idx < self.resettable_general_n;
+        let general = block_idx < self.resettable_general_n && !self.large_block(block_idx);
         let age_bump = self.do_age_bump && general;
-        let from_space = crate::arena::block_in_copying_from_space(
+        let from_space = general && crate::arena::block_in_copying_from_space(
             block_idx,
             self.resettable_general_n,
             &self.active_survivor_blocks,
         );
         #[cfg(test)]
-        let record_live = super::super::trace::block_skip::sabotage::get()
-            & super::super::trace::block_skip::sabotage::FORGET_WHOLE_BLOCK_LIVE
+        let record_live = super::super::mark::block_skip::sabotage::get()
+            & super::super::mark::block_skip::sabotage::FORGET_WHOLE_BLOCK_LIVE
             == 0;
         #[cfg(not(test))]
         let record_live = true;
@@ -448,7 +448,7 @@ impl ArenaSweepObjectsState {
     fn page_tally_order_kept(&self) -> bool {
         #[cfg(test)]
         {
-            use super::super::trace::block_skip::sabotage;
+            use super::super::mark::block_skip::sabotage;
             sabotage::get() & sabotage::FORGET_PAGE_TALLY_ORDER == 0
         }
         #[cfg(not(test))]
@@ -473,7 +473,7 @@ impl ArenaSweepObjectsState {
     }
 
     pub(super) fn maybe_print_diag(&self) {
-        if !crate::gc::gc_diag_enabled() {
+        if !crate::gc::diagnostic_hooks::enabled() {
             return;
         }
         let live_general = (0..self.resettable_general_n)
@@ -546,6 +546,11 @@ impl ArenaSweepObjectsState {
 }
 
 impl ArenaSweepObjectsState {
+    #[inline(always)]
+    fn large_block(&self, block_idx: usize) -> bool {
+        self.block_snapshots.get(block_idx).is_some_and(|s| s.large_storage)
+    }
+
     unsafe fn keep_live_object(
         &mut self,
         header: *mut GcHeader,
@@ -566,7 +571,7 @@ impl ArenaSweepObjectsState {
         if block_idx < self.block_has_live.len() {
             self.block_has_live[block_idx] = true;
         }
-        if block_idx < self.resettable_general_n {
+        if block_idx < self.resettable_general_n && !self.large_block(block_idx) {
             self.eden_live_bytes = self.eden_live_bytes.saturating_add((*header).size as u64);
         }
         if count_in_live_census {
@@ -574,11 +579,13 @@ impl ArenaSweepObjectsState {
             self.arena_live_bytes = self.arena_live_bytes.saturating_add(size);
             // #7901: the from-space share of the census, so a following copied
             // minor can remove exactly what it replaces.
+            // The cheap block-index test first: only a from-space block can
+            // hold a young leaf, so old objects never pay the storage lookup.
             if crate::arena::block_in_copying_from_space(
                 block_idx,
                 self.resettable_general_n,
                 &self.active_survivor_blocks,
-            ) {
+            ) && !self.large_block(block_idx) {
                 self.arena_live_from_space_bytes =
                     self.arena_live_from_space_bytes.saturating_add(size);
             }
@@ -617,7 +624,7 @@ impl ArenaSweepObjectsState {
             // therefore excluded from live-allocation accounting.
             let count_in_live_census = self.minor_sweep || flags & GC_FLAG_MARKED != 0;
             self.keep_live_object(header, block_idx, flags, false, false, count_in_live_census);
-            if block_idx < self.resettable_general_n {
+            if block_idx < self.resettable_general_n && !self.large_block(block_idx) {
                 self.retained_forwarded_stub_objects =
                     self.retained_forwarded_stub_objects.saturating_add(1);
                 self.retained_forwarded_stub_bytes = self
@@ -653,7 +660,7 @@ impl ArenaSweepObjectsState {
         }
         let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
         self.freed_bytes = self.freed_bytes.saturating_add(total_size as u64);
-        if block_idx < self.resettable_general_n {
+        if block_idx < self.resettable_general_n && !self.large_block(block_idx) {
             self.eden_dead_bytes = self.eden_dead_bytes.saturating_add(total_size as u64);
         }
         // This existing census vector is armed only by apply_block_skip in

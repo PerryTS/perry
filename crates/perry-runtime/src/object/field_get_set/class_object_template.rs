@@ -993,7 +993,12 @@ pub(crate) unsafe fn prototype_from_template<'s>(
     // prototype's meta record directly: its evaluation (lexical owner) and its
     // [[Prototype]], whose identity the final shape already names.
     let (meta, _) = proto.across_mut::<ObjectHeader, _>(|| {
-        proto.with_mut_ptr::<ObjectHeader, _>(|p| crate::object::object_meta_ensure(p))
+        proto.with_mut_ptr::<ObjectHeader, _>(|p| {
+            crate::object::object_meta_ensure(
+                crate::object::MetaObj::runtime_born(p),
+                crate::object::MetaReason::CtorFnPrototype,
+            )
+        })
     });
     let owner =
         class.with_const_ptr::<ObjectHeader, _>(|c| crate::value::js_nanbox_pointer(c as i64));
@@ -1191,9 +1196,8 @@ pub(crate) unsafe fn evaluation_chain_lost_method(
         return false;
     };
     if let (Some(cell), Some(facts), Some(template)) = (template_cell, template_facts, template) {
-        let keys = template.keys as usize as *const crate::ArrayHeader;
         if let Some(slot) = crate::object::keys_find_slot_by_bytes_resolved(
-            keys,
+            template.keys_view(),
             template.logical_key_count,
             name.as_bytes(),
         ) {

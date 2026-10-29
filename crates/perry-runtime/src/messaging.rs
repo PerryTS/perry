@@ -615,12 +615,12 @@ fn install_port_methods(obj: *mut ObjectHeader) {
         crate::fn_info!(port_close, 0; with_declared(0)),
         0,
     );
-    install_method(obj, "ref", crate::fn_info!(noop0, 0; with_declared(0)), 0);
+    install_method(obj, "ref", crate::fn_info!(#[realm(realm_decl! { BroadcastChannel.prototype.close, constructible = true; BroadcastChannel.prototype.ref, constructible = true; BroadcastChannel.prototype.unref, constructible = true; MessagePort.prototype.close, constructible = true; MessagePort.prototype.ref, constructible = true; MessagePort.prototype.start, constructible = true; MessagePort.prototype.unref, constructible = true; })] export crate::messaging::noop0, 0; with_declared(0)), 0);
     install_method(obj, "unref", crate::fn_info!(noop0, 0; with_declared(0)), 0);
     install_method(
         obj,
         "hasRef",
-        crate::fn_info!(has_ref, 0; with_declared(0)),
+        crate::fn_info!(#[realm(MessagePort.prototype.hasRef, constructible = true)] export crate::messaging::has_ref, 0; with_declared(0)),
         0,
     );
     install_method(
@@ -673,7 +673,7 @@ pub fn populate_messaging_prototype(builtin_name: &str, proto: *mut ObjectHeader
             install_method(
                 proto,
                 "postMessage",
-                crate::fn_info!(noop2, 2; with_declared(2)),
+                crate::fn_info!(#[realm(MessagePort.prototype.postMessage, constructible = true)] export crate::messaging::noop2, 2; with_declared(2)),
                 2,
             );
             install_method(
@@ -716,7 +716,7 @@ pub fn populate_messaging_prototype(builtin_name: &str, proto: *mut ObjectHeader
             install_method(
                 proto,
                 "postMessage",
-                crate::fn_info!(noop1, 1; with_declared(1)),
+                crate::fn_info!(#[realm(BroadcastChannel.prototype.postMessage, constructible = true)] export crate::messaging::noop1, 1; with_declared(1)),
                 1,
             );
             install_method(proto, "ref", crate::fn_info!(noop0, 0; with_declared(0)), 0);
@@ -839,5 +839,3 @@ fn throw_constructor_call_error() -> f64 {
     let err = crate::error::js_typeerror_new(msg);
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
-
-crate::realm_decl!("messaging.realm.json#*");

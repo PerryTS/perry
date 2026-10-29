@@ -143,7 +143,7 @@ runtime_layout!(NATIVE_CTOR_EVENT_EMITTER, kind = LAYOUT_KIND_UNMARKED, 0x4e43_0
     NC_ATOM_DEFAULT_MAX_LISTENERS => E_ACCESSOR | E_HAS_GET | E_HAS_SET | E_NON_CONFIGURABLE | crate::object::key_attrs::ENTRY_NON_WRITABLE,
     NC_ATOM_CAPTURE_REJECTIONS => E_ACCESSOR | E_HAS_GET | E_HAS_SET | E_NON_CONFIGURABLE | crate::object::key_attrs::ENTRY_NON_WRITABLE,
     NC_ATOM_PROTOTYPE => E_NON_ENUMERABLE | E_NON_CONFIGURABLE,
-]);
+], realm = ["node:events.EventEmitter"]);
 
 runtime_layout!(NATIVE_CTOR_STREAM, kind = LAYOUT_KIND_UNMARKED, 0x4e43_0001,
     crate::object::layout_desc::PROTOTYPE_IMAGE_VARIANT, crate::object::layout_desc::LAYOUT_PROTO_NULL, [
@@ -172,7 +172,7 @@ runtime_layout!(NATIVE_CTOR_STREAM, kind = LAYOUT_KIND_UNMARKED, 0x4e43_0001,
     NC_ATOM__IS_ARRAY_BUFFER_VIEW,
     NC_ATOM__IS_UINT8_ARRAY,
     NC_ATOM__UINT8_ARRAY_TO_BUFFER,
-]);
+], realm = ["node:stream.Stream"]);
 
 runtime_layout!(NATIVE_CTOR_READABLE, kind = LAYOUT_KIND_UNMARKED, 0x4e43_0002,
     crate::object::layout_desc::PROTOTYPE_IMAGE_VARIANT, crate::object::layout_desc::LAYOUT_PROTO_NULL, [
@@ -182,7 +182,7 @@ runtime_layout!(NATIVE_CTOR_READABLE, kind = LAYOUT_KIND_UNMARKED, 0x4e43_0002,
     NC_ATOM_FROM,
     NC_ATOM_FROM_WEB,
     NC_ATOM_TO_WEB,
-]);
+], realm = ["node:stream.Readable"]);
 
 runtime_layout!(NATIVE_CTOR_WRITABLE, kind = LAYOUT_KIND_UNMARKED, 0x4e43_0003,
     crate::object::layout_desc::PROTOTYPE_IMAGE_VARIANT, crate::object::layout_desc::LAYOUT_PROTO_NULL, [
@@ -191,7 +191,7 @@ runtime_layout!(NATIVE_CTOR_WRITABLE, kind = LAYOUT_KIND_UNMARKED, 0x4e43_0003,
     NC_ATOM_PROTOTYPE => E_NON_ENUMERABLE | E_NON_CONFIGURABLE,
     NC_ATOM_FROM_WEB,
     NC_ATOM_TO_WEB,
-]);
+], realm = ["node:stream.Writable"]);
 
 runtime_layout!(NATIVE_CTOR_DUPLEX, kind = LAYOUT_KIND_UNMARKED, 0x4e43_0004,
     crate::object::layout_desc::PROTOTYPE_IMAGE_VARIANT, crate::object::layout_desc::LAYOUT_PROTO_NULL, [
@@ -201,39 +201,39 @@ runtime_layout!(NATIVE_CTOR_DUPLEX, kind = LAYOUT_KIND_UNMARKED, 0x4e43_0004,
     NC_ATOM_FROM,
     NC_ATOM_FROM_WEB,
     NC_ATOM_TO_WEB,
-]);
+], realm = ["node:stream.Duplex"]);
 
 runtime_layout!(NATIVE_CTOR_TRANSFORM, kind = LAYOUT_KIND_UNMARKED, 0x4e43_0005,
     crate::object::layout_desc::PROTOTYPE_IMAGE_VARIANT, crate::object::layout_desc::LAYOUT_PROTO_NULL, [
     NC_ATOM_LENGTH => BUILTIN_READ_ONLY,
     NC_ATOM_NAME => BUILTIN_READ_ONLY,
     NC_ATOM_PROTOTYPE => E_NON_ENUMERABLE | E_NON_CONFIGURABLE,
-]);
+], realm = ["node:stream.Transform"]);
 
 runtime_layout!(NATIVE_CTOR_PASSTHROUGH, kind = LAYOUT_KIND_UNMARKED, 0x4e43_0006,
     crate::object::layout_desc::PROTOTYPE_IMAGE_VARIANT, crate::object::layout_desc::LAYOUT_PROTO_NULL, [
     NC_ATOM_LENGTH => BUILTIN_READ_ONLY,
     NC_ATOM_NAME => BUILTIN_READ_ONLY,
     NC_ATOM_PROTOTYPE => E_NON_ENUMERABLE | E_NON_CONFIGURABLE,
-]);
+], realm = ["node:stream.PassThrough"]);
 
 runtime_layout!(NATIVE_CTOR_OUTGOING_MESSAGE, kind = LAYOUT_KIND_UNMARKED, 0x4e43_0007,
     crate::object::layout_desc::PROTOTYPE_IMAGE_VARIANT, crate::object::layout_desc::LAYOUT_PROTO_NULL, [
     NC_ATOM_LENGTH => BUILTIN_READ_ONLY,
     NC_ATOM_NAME => BUILTIN_READ_ONLY,
     NC_ATOM_PROTOTYPE => E_NON_ENUMERABLE | E_NON_CONFIGURABLE,
-]);
+], realm = ["node:http.OutgoingMessage"]);
 
 runtime_layout!(NATIVE_CTOR_SERVER_RESPONSE, kind = LAYOUT_KIND_UNMARKED, 0x4e43_0008,
     crate::object::layout_desc::PROTOTYPE_IMAGE_VARIANT, crate::object::layout_desc::LAYOUT_PROTO_NULL, [
     NC_ATOM_LENGTH => BUILTIN_READ_ONLY,
     NC_ATOM_NAME => BUILTIN_READ_ONLY,
     NC_ATOM_PROTOTYPE => E_NON_ENUMERABLE | E_NON_CONFIGURABLE,
-]);
+], realm = ["node:http.ServerResponse"]);
 
 runtime_layout!(NATIVE_CTOR_INCOMING_MESSAGE, kind = LAYOUT_KIND_UNMARKED, 0x4e43_0009,
     crate::object::layout_desc::PROTOTYPE_IMAGE_VARIANT, crate::object::layout_desc::LAYOUT_PROTO_NULL, [
     NC_ATOM_LENGTH => BUILTIN_READ_ONLY,
     NC_ATOM_NAME => BUILTIN_READ_ONLY,
     NC_ATOM_PROTOTYPE => E_NON_ENUMERABLE | E_NON_CONFIGURABLE,
-]);
+], realm = ["node:http.IncomingMessage"]);

@@ -196,7 +196,7 @@ fn index_layout(count: usize, buckets: usize, blocks: usize) -> std::alloc::Layo
 
 /// The hash a key word is indexed under: a property atom's creation hash
 /// (FNV-1a of its bytes, what codegen emits for a site key), a symbol's
-/// creation number; `None` for a word no site key can equal.
+/// mixed creation id; `None` for a word no site key can equal.
 unsafe fn key_word_hash(bits: u64) -> Option<u64> {
     if bits & TAG_MASK == STRING_TAG {
         let s = (bits & POINTER_MASK) as *const crate::StringHeader;

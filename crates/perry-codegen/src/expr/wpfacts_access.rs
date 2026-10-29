@@ -252,6 +252,15 @@ fn stable_binding(ctx: &FnCtx<'_>, object: &Expr) -> Option<i64> {
     }
 }
 
+/// After a receiver test passed in the current block: later accesses of the
+/// same stable binding in this block see an object.
+pub(crate) fn note_tested(ctx: &mut FnCtx<'_>, object: &Expr) {
+    if let Some(b) = stable_binding(ctx, object) {
+        let blk = ctx.current_block;
+        ctx.wpfacts_tested.push((b, blk));
+    }
+}
+
 fn tested_in_block(ctx: &FnCtx<'_>, object: &Expr) -> bool {
     stable_binding(ctx, object).is_some_and(|b| {
         ctx.wpfacts_tested
@@ -319,10 +328,10 @@ pub(crate) fn prove(
     if recv.nullable && tested_in_block(ctx, object) {
         recv.nullable = false;
     }
-    if recv.nullable && access != Access::Get {
-        crate::fallback_diag::refuse(
-            "nullable store/update receiver requires generic nullish semantics",
-        );
+    // CLS D3: a plain store keeps the receiver test (nullish throws in the
+    // complete `[[Set]]`, which is the test's miss arm); an update does not.
+    if recv.nullable && access == Access::Update {
+        crate::fallback_diag::refuse("nullable update receiver requires generic nullish semantics");
         return None;
     }
     let mut slot: Option<u32> = None;

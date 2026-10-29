@@ -223,19 +223,11 @@ extern "C" fn ns_ee_async_resource_destroy(
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
-/// `EventEmitterAsyncResource.prototype.emit`'s body: `(event, ...args)`.
-static NS_EE_ASYNC_RESOURCE_EMIT_REST: crate::closure::JsFunctionInfo =
-    crate::closure::JsFunctionInfo::of(
-        ns_ee_async_resource_emit_rest as crate::codegen_abi::JsBody2<ClosureHeader>,
-    )
-    .with_rest(1);
+crate::realm_decl! { info // `EventEmitterAsyncResource.prototype.emit`'s body: `(event, ...args)`.
+crate::fn_info!(export static NS_EE_ASYNC_RESOURCE_EMIT_REST = crate::node_stream::dispatch::ns_ee_async_resource_emit_rest, 2; with_rest(1)); realm { "node:events.EventEmitterAsyncResource.prototype.emit", provider = closure, receiver = undefined; } }
 
-/// `emitDestroy`'s body.
-static NS_EE_ASYNC_RESOURCE_DESTROY: crate::closure::JsFunctionInfo =
-    crate::closure::JsFunctionInfo::of(
-        ns_ee_async_resource_destroy as crate::codegen_abi::JsBody0<ClosureHeader>,
-    )
-    .with_declared(0);
+crate::realm_decl! { info // `emitDestroy`'s body.
+crate::fn_info!(export static NS_EE_ASYNC_RESOURCE_DESTROY = crate::node_stream::dispatch::ns_ee_async_resource_destroy, 0; with_declared(0)); realm { "node:events.EventEmitterAsyncResource.prototype.emitDestroy", provider = closure, receiver = undefined; } }
 
 extern "C" fn ns_ee_async_resource_getter(
     closure: *const ClosureHeader,
@@ -287,11 +279,11 @@ pub(crate) unsafe fn install_event_emitter_async_resource_prototype(proto: *mut 
         ("asyncResource", 2),
     ] {
         let closure = js_closure_alloc(
-            crate::fn_info!(ns_ee_async_resource_getter, 0; with_declared(0)),
+            crate::fn_info!(#[realm(realm_decl! { "node:events.EventEmitterAsyncResource.prototype.asyncId.<get>", provider = closure, capture = [undefined, word_property]; "node:events.EventEmitterAsyncResource.prototype.asyncResource.<get>", provider = closure, capture = [undefined, word_property]; "node:events.EventEmitterAsyncResource.prototype.triggerAsyncId.<get>", provider = closure, capture = [undefined, word_property]; })] export crate::node_stream::dispatch::ns_ee_async_resource_getter, 0; with_declared(0)),
             2,
         );
         crate::closure::js_closure_set_capture_ptr(closure, 0, crate::value::TAG_UNDEFINED as i64);
-        crate::closure::js_closure_set_capture_ptr(closure, 1, operation);
+        crate::closure::closure_set_capture_word(closure, 1, operation);
         let closure = scope.root_raw_mut_ptr(closure);
         proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
             closure.with_const_ptr::<ClosureHeader, _>(|closure| {
@@ -359,7 +351,7 @@ pub(crate) unsafe fn install_event_emitter_async_resource_instance_methods(
             0,
             this_value.get_nanbox_f64().to_bits() as i64,
         );
-        crate::closure::js_closure_set_capture_ptr(closure, 1, operation);
+        crate::closure::closure_set_capture_word(closure, 1, operation);
         let closure = scope.root_raw_mut_ptr(closure);
         let key = scope.root_string_ptr(hidden_key(name.as_bytes()));
         obj.with_mut_ptr::<ObjectHeader, _>(|obj| {

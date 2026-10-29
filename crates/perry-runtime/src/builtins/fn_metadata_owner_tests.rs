@@ -181,7 +181,10 @@ fn publication_does_not_allocate_per_entry_and_repeated_init_is_idempotent() {
     unsafe {
         js_register_function_metadata(&image.owner, 1);
     }
-    assert!(image.owner.state.load(Ordering::Acquire).is_null());
+    // No payload is allocated: the state word holds only the owner's
+    // registration index (CKI S2).
+    assert!(state(&image.owner).is_none());
+    assert_ne!(registration(&image.owner), 0);
     let count = owners().lock().unwrap().len();
     unsafe {
         js_register_function_metadata(&image.owner, 1);
@@ -255,4 +258,35 @@ fn invalid_or_empty_publication_cannot_prove_a_reflected_name() {
     // borrowed image name, so callers must not treat success as a name proof.
     assert!(crate::builtins::register_function_name(info, &[0xff]));
     assert_eq!(registered(info).as_deref(), Some("alpha"));
+}
+/// CKI S2: a ConstFn body enters shape identity's fold as its owner's
+/// registration index and its ordinal, never as its info's address. Two images
+/// give two owners; one entry spelled by two info copies is one word.
+#[test]
+fn constfn_identity_word_is_owner_index_and_ordinal() {
+    let first = Box::leak(image(0x4a0c_0000));
+    let second = Box::leak(image(0x4a0d_0000));
+    unsafe {
+        js_register_function_metadata(&first.owner, 1);
+        js_register_function_metadata(&second.owner, 1);
+    }
+    let word = |info: &JsFunctionInfo| info_identity_word(info as *const _ as usize as u64);
+    let a0 = word(&first.records[0].info);
+    let a1 = word(&first.records[1].info);
+    let b0 = word(&second.records[0].info);
+    assert_eq!(a0 as u32, 0);
+    assert_eq!(a1 as u32, 1);
+    assert_ne!(a0 >> 32, 0, "a registered owner names its index");
+    assert_ne!(a0, b0, "another owner, another body");
+    assert_eq!(a0 >> 32, a1 >> 32, "one owner");
+    // The same entry read through a copy of its record at another address.
+    let copy = Box::leak(Box::new(EntryImage {
+        info: first.records[0].info,
+        name_delta: 0,
+        name_len: 0,
+        identity: first.records[0].identity,
+        name: [0; 24],
+        source: [0; 48],
+    }));
+    assert_eq!(word(&copy.info), a0);
 }

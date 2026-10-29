@@ -30,7 +30,7 @@
 // WASI (#11377): `std::os::wasi::fs::symlink_path` for `fs.symlink`.
 #![cfg_attr(target_os = "wasi", feature(wasi_ext))]
 #![cfg_attr(all(target_os = "wasi", target_env = "p2"), feature(wasip2))]
-
+include!(concat!(env!("OUT_DIR"), "/realm-metadata.rs"));
 /// Issue #62: route every Rust heap allocation through mimalloc instead of
 /// the system `malloc`. `gc_malloc`, arena block allocation, Vec/HashMap
 /// growth inside the runtime, and the compiled-program side of the FFI all
@@ -130,6 +130,7 @@ pub mod builtins;
 pub mod bun_compat;
 pub mod bun_ffi;
 pub mod child_process;
+pub mod clone_markers;
 pub mod closure;
 pub mod cluster;
 pub mod cluster_sched;
@@ -187,7 +188,7 @@ pub mod native_payload;
 pub mod native_payload_abi;
 pub mod native_payload_buffer;
 pub mod native_payload_stream_abi;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 mod native_stack;
 pub mod native_value_profile;
 pub mod navigator;

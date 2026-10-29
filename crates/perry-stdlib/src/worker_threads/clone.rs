@@ -22,25 +22,9 @@ pub(super) fn try_clone_message(value: f64, transfer: f64) -> Result<SerializedV
     // Reading the transfer list can allocate.
     let value = scope.root_nanbox_f64(value);
     let buffers = transfer_buffers(transfer)?;
-    let marked: Vec<u64> = UNCLONEABLE_OBJECTS.with(|set| set.borrow().iter().copied().collect());
-    let refuse = |bits: u64| {
-        // Node ignores markAsUncloneable on an ArrayBuffer.
-        marked.contains(&bits)
-            && !perry_runtime::buffer::is_array_buffer((bits & 0x0000_FFFF_FFFF_FFFF) as usize)
-    };
-    let uncloneable: Option<&dyn Fn(u64) -> bool> = if marked.is_empty() {
-        None
-    } else {
-        Some(&refuse)
-    };
     let outcome = perry_runtime::exception::catch_js_throw(|| unsafe {
-        perry_runtime::thread::serialize_message(
-            value.get_nanbox_f64().to_bits(),
-            &buffers,
-            uncloneable,
-        )
+        perry_runtime::thread::serialize_message(value.get_nanbox_f64().to_bits(), &buffers, None)
     });
-    drop(marked);
     drop(buffers);
     drop(scope);
     match outcome {
@@ -82,10 +66,10 @@ fn transfer_buffers(transfer: f64) -> Result<Vec<usize>, String> {
         }
         // Buffers do not move, so their addresses stay valid.
         let addr = perry_runtime::value::js_nanbox_get_pointer(item) as usize;
+        if perry_runtime::clone_markers::is_untransferable(item) {
+            return Err("An object is marked as untransferable.".to_string());
+        }
         if perry_runtime::buffer::is_array_buffer(addr) {
-            if UNTRANSFERABLE_OBJECTS.with(|set| set.borrow().contains(&item.to_bits())) {
-                return Err("An ArrayBuffer is marked as untransferable.".to_string());
-            }
             buffers.push(addr);
         } else if object_ptr_from_value(item).is_none() || port_id_from_object(item).is_none() {
             buffers.push(addr);
@@ -118,7 +102,8 @@ mod transfer_tests {
             )
             .unwrap()
         };
-        CURRENT_WORKER_DATA.with(|slot| *slot.borrow_mut() = Some(WorkerData::Serialized(message)));
+        let received = unsafe { deserialize_nanbox_on_current_thread(&message) };
+        CURRENT_WORKER_DATA.with(|slot| *slot.borrow_mut() = Some(received));
         let first = js_worker_threads_get_worker_data();
         let root = scope.root_nanbox_f64(first);
         perry_runtime::gc::js_gc_collect();

@@ -266,6 +266,68 @@ pub(super) fn constant<'ctx>(
         let source = constant(ctx, module, source_ty, source_value)?.into_pointer_value();
         return Ok(source.const_to_int(destination_ty).into());
     }
+    // An address inside a global is a constant too. An executable's string
+    // literal is an image-resident object, and its address is
+    // `getelementptr (i8, ptr @perry_image_literal_…, i64 8)` (past the GC
+    // header; `string_pool::image::pointer`). The literal-aware concat chain
+    // (`lower_string_concat::chain_literal_part`) passes the text's address,
+    // 20 bytes further, through the integer ABI:
+    //
+    //   store i64 ptrtoint (ptr getelementptr (i8,
+    //       ptr getelementptr (i8, ptr @perry_image_literal_…, i64 8),
+    //       i64 20) to i64), ptr %slot
+    //
+    // The ptrtoint branch above hands its source here, so every consumer
+    // (call argument, store, phi) reads the same form. The base recurses, so
+    // a GEP over a GEP folds the way LLVM's assembler folds it.
+    if let Some(rest) = tok.strip_prefix("getelementptr ") {
+        let (inbounds, rest) = match rest.strip_prefix("inbounds ") {
+            Some(r) => (true, r),
+            None => (false, rest),
+        };
+        let body = rest
+            .trim()
+            .strip_prefix('(')
+            .and_then(|body| body.strip_suffix(')'))
+            .ok_or_else(|| anyhow!("bad getelementptr constant `{tok}`"))?;
+        let parts = split_top_level(body);
+        if parts.len() < 2 {
+            bail!("bad getelementptr constant `{tok}`");
+        }
+        let BasicTypeEnum::PointerType(_) = ty else {
+            bail!("getelementptr constant used as non-pointer {ty:?}");
+        };
+        let pointee = basic_type(ctx, parts[0].trim())?;
+        let (base_ty, base) = ty_and_val(&parts[1])?;
+        let base_ty = basic_type(ctx, base_ty)?;
+        if base_ty != ty {
+            bail!(
+                "getelementptr base type {} disagrees with operand type {} in `{tok}`",
+                base_ty.print_to_string(),
+                ty.print_to_string()
+            );
+        }
+        let base = constant(ctx, module, base_ty, base)?.into_pointer_value();
+        let mut indices = Vec::with_capacity(parts.len() - 2);
+        for part in &parts[2..] {
+            let (index_ty, index) = ty_and_val(part)?;
+            let BasicTypeEnum::IntType(index_ty) = basic_type(ctx, index_ty)? else {
+                bail!("getelementptr index is not an integer in `{tok}`");
+            };
+            indices.push(int_constant(index_ty, index)?.into_int_value());
+        }
+        // SAFETY: the indices are integer constants over a pointer constant;
+        // LLVM's constant folder checks them against `pointee` like its
+        // assembler does, and the verifier runs on the finished module.
+        let address = unsafe {
+            if inbounds {
+                base.const_in_bounds_gep(pointee, &indices)
+            } else {
+                base.const_gep(pointee, &indices)
+            }
+        };
+        return Ok(address.into());
+    }
     Ok(match tok {
         // The null of the OPERAND's type, not of address space 0: RS4GC emits
         // `store ptr addrspace(1) null, ptr %slot`, and an addrspace(0) null

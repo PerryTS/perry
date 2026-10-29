@@ -1889,18 +1889,29 @@ impl<'a> Gen<'a> {
                 if let Some(o) = options {
                     let _ = self.expr(fx, o);
                 }
+                // DECISIONS 226: `paths` holds each specifier as written; the
+                // module's dynamic import entry for it names the module, as
+                // codegen's dispatch resolves it. A target outside this view
+                // (native, another unit) is the fallback's ⊤.
                 let out = self.tmp("dynimport");
-                let mut any = false;
+                let imports = self.imports_of(mi as usize);
                 for p in paths {
-                    if let Some(&t) = self.path_index.get(p) {
+                    let target = imports
+                        .iter()
+                        .filter(|_| !self.dynimport_sabotage)
+                        .find(|i| &i.source == p && (i.is_dynamic || i.is_dynamic_target))
+                        .and_then(|i| i.resolved_path.as_ref())
+                        .and_then(|r| self.path_index.get(r).copied());
+                    if let Some(t) = target {
                         let ns = self.mods[t as usize].ns_tok;
                         self.m.add_tok(out, ns);
-                        any = true;
                     }
                 }
-                if !any {
-                    self.m.add_tok(out, TOP);
-                }
+                // Codegen always emits the no-match fallback (a builtin
+                // namespace, data, a data: URL module, a loader-hook redirect
+                // of any specifier): runtime-made values, never a compiled
+                // module outside `paths`.
+                self.m.add_tok(out, TOP);
                 self.promise_of(mi, out)
             }
 

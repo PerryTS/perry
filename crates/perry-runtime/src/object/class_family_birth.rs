@@ -56,7 +56,7 @@ mod tests {
     static mut LAYOUT: PerryLayoutDesc = PerryLayoutDesc {
         image_keys: std::ptr::null_mut(),
         shape_id: 0,
-        _layout_pad: 0,
+        gc_plan: 0,
         family: 0x41574201,
         variant: 0,
         kind: 0,
@@ -72,6 +72,8 @@ mod tests {
         class_id: CHILD,
         parent_class_id: PARENT,
         methods: std::ptr::null(),
+        gc_header_word: crate::object::layout_desc::layout_gc_header_word(0),
+        _tail_pad: [0; 32],
     };
     wasm_layout!(LAYOUT);
 
@@ -131,7 +133,7 @@ mod evaluation_layout_tests {
     static mut LAYOUT: PerryLayoutDesc = PerryLayoutDesc {
         image_keys: std::ptr::null_mut(),
         shape_id: 0,
-        _layout_pad: 0,
+        gc_plan: 0,
         family: 0x41574202,
         variant: 0,
         kind: 0,
@@ -147,6 +149,8 @@ mod evaluation_layout_tests {
         class_id: CLASS,
         parent_class_id: 0,
         methods: std::ptr::null(),
+        gc_header_word: crate::object::layout_desc::layout_gc_header_word(0),
+        _tail_pad: [0; 32],
     };
 
     static DECLARATION: ClassDeclaration = ClassDeclaration {

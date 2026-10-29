@@ -371,6 +371,57 @@ mod tests {
     /// `FastKeyHasherImpl::write_u64` drops `u64` back onto `Hasher`'s default
     /// `write_u64` -> `write(&n.to_ne_bytes())` byte loop (eight dependent
     /// multiplies instead of one) and turns this red.
+    fn seeded_hash(key: &[u8]) -> u64 {
+        AHashState::default().hash_one(key)
+    }
+
+    /// The seed is one per-process block: no address of a static or of the
+    /// stack goes in, so every instance, wherever it is built, hashes alike.
+    #[test]
+    fn process_seed_ignores_static_and_stack_addresses() {
+        static PAD: [u8; 64] = [0; 64];
+        let here = seeded_hash(b"member");
+        let _stack_pad = [0u8; 4096];
+        let deeper = std::hint::black_box(seeded_hash(b"member"));
+        let other_thread = std::thread::spawn(|| seeded_hash(b"member")).join().unwrap();
+        assert_eq!(here, deeper);
+        assert_eq!(here, other_thread);
+        assert_eq!(here, ahash::RandomState::with_seed(0).hash_one(&b"member"[..]));
+        std::hint::black_box(&PAD);
+        // `RandomState::new()` mixes addresses in; it must differ from the seed.
+        assert_ne!(
+            ahash::RandomState::new().hash_one(&b"member"[..]),
+            ahash::RandomState::new().hash_one(&b"member"[..])
+        );
+    }
+
+    /// Child half of the cross-process test: print the hash and nothing else.
+    #[test]
+    fn process_seed_probe() {
+        if std::env::var_os("PERRY_SEED_PROBE").is_some() {
+            println!("SEED={:016x}", seeded_hash(b"member"));
+        }
+    }
+
+    /// Two processes draw different keys (flood resistance): the same key
+    /// hashes differently in each. Environment normalizers that pin
+    /// getrandom make the two equal, so the check is skipped under them.
+    #[test]
+    fn process_seed_differs_between_processes() {
+        let run = || {
+            let out = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "fast_hash::tests::process_seed_probe", "--nocapture"])
+                .env("PERRY_SEED_PROBE", "1")
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .find_map(|l| l.strip_prefix("SEED=").map(str::to_owned))
+                .expect("probe printed no seed")
+        };
+        assert_ne!(run(), run());
+    }
+
     #[test]
     fn integer_writes_take_the_word_fold_fast_path() {
         let n = 0x0123_4567_89ab_cdefu64;
@@ -496,5 +547,38 @@ mod tests {
         m.remove(&(base, "key0".to_string()));
         assert_eq!(m.get(&(base, "key0".to_string())), None);
         assert_eq!(m.get(&(base, "length".to_string())), Some(&0x07));
+    }
+}
+
+/// The hasher state of the runtime's startup-path `ahash` maps, which are keyed
+/// by program input (member names, JSON property bytes, export names).
+///
+/// Every instance shares the one per-process key block ahash draws from the OS
+/// at first use, so the keys stay unpredictable to an attacker (flood
+/// resistance). Nothing address-derived is mixed in: `ahash::RandomState::new()`
+/// folds in the addresses of one of its statics and of the stack, which makes
+/// probe order and key-compare work depend on link layout and on the
+/// environment.
+#[derive(Clone)]
+pub struct AHashState(ahash::RandomState);
+
+impl Default for AHashState {
+    #[inline]
+    fn default() -> Self {
+        AHashState(ahash::RandomState::with_seed(0))
+    }
+}
+
+impl BuildHasher for AHashState {
+    type Hasher = ahash::AHasher;
+
+    #[inline]
+    fn build_hasher(&self) -> ahash::AHasher {
+        self.0.build_hasher()
+    }
+
+    #[inline]
+    fn hash_one<T: std::hash::Hash>(&self, x: T) -> u64 {
+        self.0.hash_one(x)
     }
 }

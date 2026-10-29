@@ -27,13 +27,14 @@ unsafe fn slots(header: *mut GcHeader, direct: bool) -> Vec<(usize, bool, bool, 
         }
     };
     if direct {
-        super::super::layout_slot_visit::visit_gc_layout_slot_descriptors_inline(
+        super::super::layout_slot_visit::visit_gc_layout_slot_descriptors_inline::<{ cfg!(test) }, _>(
             header, &mut visit,
         );
     } else {
-        super::super::layout_slot_visit::visit_gc_layout_slot_descriptors_generic(
-            header, &mut visit,
-        );
+        super::super::layout_slot_visit::visit_gc_layout_slot_descriptors_generic::<
+            { cfg!(test) },
+            _,
+        >(header, &mut visit);
     }
     out
 }
@@ -64,7 +65,10 @@ fn direct_objects_preserve_slot_order_custody_width_and_representation_masks() {
             }
         }
         let (obj, _) = alloc_nursery_test_object(2);
-        crate::object::object_meta_ensure(obj);
+        crate::object::object_meta_ensure(
+            crate::object::MetaObj::runtime_born(obj),
+            crate::object::MetaReason::RuntimeHandle,
+        );
         let header = header_from_user_ptr(obj.cast()) as *mut GcHeader;
         assert_eq!(slots(header, true), slots(header, false));
     })

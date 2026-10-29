@@ -188,7 +188,10 @@ pub extern "C" fn js_node_stream_legacy_subclass_init(this: f64) -> f64 {
     }
     let obj = raw as *mut ObjectHeader;
     let mut methods: Vec<(&str, StubFn)> = emitter_methods().to_vec();
-    methods.push(("pipe", crate::fn_info!(ns_pipe2, 2; with_declared(2))));
+    methods.push((
+        "pipe",
+        crate::fn_info!(export crate::node_stream::ns_pipe2, 2; with_declared(2)),
+    ));
     install_methods_on_existing_object(obj, this, &methods, &[]);
     this
 }

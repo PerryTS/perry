@@ -306,11 +306,11 @@ pub(crate) fn shape_index_shift_in_place(
         return false;
     }
     let mut inner = crate::state::state().shapes.inner.borrow_mut();
-    let Some(index) = inner.indices.get_mut(&keys_id) else {
+    let Some(index) = inner.owned_indices.get_mut(&keys_id) else {
         return false;
     };
     if index.indexed_len < old_key_count {
-        inner.indices.remove(&keys_id);
+        inner.owned_indices.remove(&keys_id);
         return false;
     }
     index.slots.retain_shift(removed_slot);
@@ -355,9 +355,9 @@ pub(crate) fn shape_index_migrate_after_delete(
     }
     let mut inner = crate::state::state().shapes.inner.borrow_mut();
     let source_index = if old_keys_shared {
-        inner.indices.get(&old_keys_id).cloned()
+        inner.owned_indices.get(&old_keys_id).cloned()
     } else {
-        inner.indices.remove(&old_keys_id)
+        inner.owned_indices.remove(&old_keys_id)
     };
     let Some(mut index) = source_index else {
         return false;
@@ -370,7 +370,7 @@ pub(crate) fn shape_index_migrate_after_delete(
     index.slots.retain_shift(removed_slot);
     index.indexed_len = old_key_count - 1;
     inner.note_young_keys(new_keys_id as u64);
-    inner.indices.insert(new_keys_id, index);
+    inner.owned_indices.insert(new_keys_id, index);
     true
 }
 
@@ -402,7 +402,7 @@ pub(crate) unsafe fn retire_owned_shape_history(
     let keys_addr = keys as u64;
     let mut inner = crate::state::state().shapes.inner.borrow_mut();
     let stale: Vec<LayoutWord> = inner
-        .families
+        .owned_families
         .get(&keys_addr)
         .map(|ids| {
             ids.as_slice()
@@ -656,16 +656,14 @@ pub(crate) unsafe fn rekey_stable_tombstone_shape_after_squeeze(
         .ok()?
         .word
         .0;
-    let replaced = inner
-        .families
-        .get_mut(&record.keys)
-        .is_some_and(|ids| ids.replace(old_id, LayoutWord(new_id)));
+    let replaced =
+        inner.family_replace(record.keys_node(), record.keys, old_id, LayoutWord(new_id));
     if !replaced {
         // `new_id` came from `alloc_shape_id` a few lines above and is in no
         // list yet (see `IdList::append_unchecked`).
-        inner.family_append_fresh(record.keys, LayoutWord(new_id));
+        inner.family_append_fresh(record.keys_node(), record.keys, LayoutWord(new_id));
     }
-    inner.indices.remove(&(record.keys as usize));
+    inner.owned_indices.remove(&(record.keys as usize));
     drop(inner);
 
     // #9200: the funnel re-arms the preserved record for a non-nursery
@@ -838,7 +836,7 @@ fn retire_family_except(keys: u64, keep: LayoutWord) {
     // allocation is per-delete rather than occasional.
     let mut only_stale = None;
     let mut more_than_one = false;
-    if let Some(ids) = inner.families.get(&keys) {
+    if let Some(ids) = inner.owned_families.get(&keys) {
         for &other in ids.as_slice() {
             if other == keep {
                 continue;
@@ -858,7 +856,7 @@ fn retire_family_except(keys: u64, keep: LayoutWord) {
         return;
     }
     let stale: Vec<LayoutWord> = inner
-        .families
+        .owned_families
         .get(&keys)
         .map(|ids| {
             ids.as_slice()
@@ -1044,6 +1042,11 @@ fn rekey_predecessor_for_delete(
     let Some(mut record) = (unsafe { table.slab_mut().remove_handle(predecessor) }) else {
         return LayoutWord(0);
     };
+    let predecessor_node = record.keys_node();
+    if record.logical_key_count != logical_key_count {
+        // The node names `(keys, count)`: another count is another list.
+        record.set_keys_node(crate::object::canonical_keys::NO_NODE);
+    }
     record.logical_key_count = logical_key_count;
     record.live_inline_slot_count = live_inline_slot_count;
     record.semantic_generation = semantic_generation;
@@ -1053,13 +1056,18 @@ fn rekey_predecessor_for_delete(
     let id = unsafe { table.slab_mut().publish_dynamic(id, record) }
         .expect("shape publication")
         .word;
-    let replaced = inner
-        .families
-        .get_mut(&keys)
-        .is_some_and(|ids| ids.replace(predecessor, id));
+    // The family is the list's: a record whose count moved off its node
+    // leaves the node's family for the owned one.
+    let node = record.keys_node();
+    let replaced = if node == predecessor_node {
+        inner.family_replace(node, keys, predecessor, id)
+    } else {
+        inner.family_remove(predecessor_node, keys, predecessor);
+        false
+    };
     if !replaced {
         // `id` came from `alloc_shape_id` above and is in no list yet.
-        inner.family_append_fresh(keys, id);
+        inner.family_append_fresh(node, keys, id);
     }
     id
 }
@@ -1117,7 +1125,10 @@ fn mint_detached_delete_successor(
     let id = unsafe { table.slab_mut().publish_dynamic(id, record) }
         .expect("shape publication")
         .word;
-    table.inner.borrow_mut().family_append_fresh(keys, id);
+    table
+        .inner
+        .borrow_mut()
+        .family_append_fresh(record.keys_node(), keys, id);
     id
 }
 
@@ -1193,7 +1204,7 @@ pub(super) fn install_external_shape_id_with_constfn(
 pub(super) fn install_external_layout_with_constfn(
     identity: ShapeId,
     static_word: Option<LayoutWord>,
-    keys: *const super::ArrayHeader,
+    keys: impl Into<super::ShapeKeys>,
     logical_key_count: u32,
     live_inline_slot_count: u32,
     proto_id: u64,
@@ -1202,6 +1213,8 @@ pub(super) fn install_external_layout_with_constfn(
     infos: &[super::shapes_store::ConstFnSlotInfo],
     to_any: u32,
 ) -> bool {
+    let shape_keys: super::ShapeKeys = keys.into();
+    let keys = shape_keys.arr();
     let id = identity.0;
     let Some(mask) = super::shapes_store::constfn_mask(infos) else {
         return false;
@@ -1261,7 +1274,8 @@ pub(super) fn install_external_layout_with_constfn(
     )
     .with_proto_id(proto_id)
     .with_summary(summary)
-    .with_special_facts(rep, infos, &[]);
+    .with_special_facts(rep, infos, &[])
+    .with_keys_node(shape_keys.resolved_node(logical_key_count));
     record.set(super::shapes_store::RECORD_FLAG_EXTERNAL_CARRIER, true);
     for slot in 0..32 {
         if to_any & (1 << slot) != 0 {
@@ -1284,7 +1298,7 @@ pub(super) fn install_external_layout_with_constfn(
     .expect("worker shape publication");
     let id = published.word.0;
     inner.facts_push_front(record.facts_key_with_keys(keys), LayoutWord(id));
-    inner.family_push_front(keys, LayoutWord(id));
+    inner.family_push_front(record.keys_node(), keys, LayoutWord(id));
     true
 }
 
@@ -1356,8 +1370,16 @@ mod tests {
 
             let survivor = b"shared9006_39";
             let survivor_hash = crate::object::key_bytes_hash(survivor.as_ptr(), survivor.len());
+            // CKI S2: a shared list's index is reached through its node,
+            // which the receiver's view carries.
             assert_eq!(
-                shape_slot_lookup(shared_keys, survivor, survivor_hash, KEY_COUNT as u32, true),
+                shape_slot_lookup(
+                    shared_keys_view,
+                    survivor,
+                    survivor_hash,
+                    KEY_COUNT as u32,
+                    true
+                ),
                 Some(39),
                 "test premise: build the shared source index"
             );
@@ -1376,7 +1398,7 @@ mod tests {
 
             assert_eq!(
                 shape_slot_lookup(
-                    shared_keys,
+                    crate::object::object_keys(sibling),
                     survivor,
                     survivor_hash,
                     KEY_COUNT as u32,

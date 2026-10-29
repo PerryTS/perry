@@ -73,17 +73,17 @@ pub(super) fn install_buffer_species(buffer_ctor: f64) {
 
     // FastBuffer itself: named, sharing Buffer.prototype. Node reports
     // `FastBuffer.length === 0`; the thunk still receives three arguments.
-    let fast = crate::closure::js_closure_alloc(
-        crate::fn_info!(fast_buffer_constructor_thunk, 3; with_declared(3)),
-        0,
-    );
+
+    crate::fn_info!(#[realm("%BufferSpeciesConstructor%", spec = { name = "FastBuffer", length = 0 }, emit = metadata, kind = constructor, instance = Buffer.prototype, family = Buffer)] export crate::object::native_module::callable_exports::buffer_species::fast_buffer_constructor_thunk, 3; with_declared(3); bind fast_info, fast_metadata);
+    let fast = crate::closure::js_closure_alloc(fast_info, 0);
+
     if fast.is_null() {
         return;
     }
     let fast = scope.root_raw_mut_ptr(fast);
     fast.with_mut_ptr::<crate::closure::ClosureHeader, _>(|ptr| {
-        set_bound_native_closure_name(ptr, "FastBuffer");
-        set_builtin_closure_length(ptr as usize, 0);
+        set_bound_native_closure_name(ptr, fast_metadata!(name));
+        set_builtin_closure_length(ptr as usize, fast_metadata!(length));
     });
     if crate::value::JSValue::from_bits(buffer_proto.get_nanbox_f64().to_bits()).is_pointer() {
         fast.with_mut_ptr(|ptr: *mut crate::closure::ClosureHeader| {
@@ -102,7 +102,7 @@ pub(super) fn install_buffer_species(buffer_ctor: f64) {
 
     // The getter, holding FastBuffer in capture slot 0.
     let getter = crate::closure::js_closure_alloc(
-        crate::fn_info!(buffer_species_getter_thunk, 0; with_declared(0)),
+        crate::fn_info!(#[realm("Buffer[\"@@species\"].<get>", capture = [ref("%BufferSpeciesConstructor%")], constructible = true)] export crate::object::native_module::callable_exports::buffer_species::buffer_species_getter_thunk, 0; with_declared(0)),
         1,
     );
     if getter.is_null() {
@@ -138,5 +138,3 @@ pub(super) fn install_buffer_species(buffer_ctor: f64) {
         );
     }
 }
-
-crate::realm_decl!("buffer_species.realm.json#*");

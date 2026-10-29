@@ -137,7 +137,10 @@ fn test_set_gc_field_rewrite_reindexes_elements() {
     let valid_ptrs = build_valid_pointer_set();
     unsafe {
         let store = crate::set::test_set_store_word(set);
-        rewrite_heap_object_fields(header_from_user_ptr(store as *const u8), &valid_ptrs);
+        rewrite_heap_object_fields::<{ cfg!(test) }>(
+            header_from_user_ptr(store as *const u8),
+            &valid_ptrs,
+        );
     }
 
     assert_eq!(crate::set::js_set_value_at(set, 0).to_bits(), old_bits);
@@ -420,7 +423,10 @@ fn test_transient_runtime_handle_array_push_gc() {
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     register_runtime_handle_root_scanner_for_tests();
 
-    let arr = crate::array::js_array_alloc_with_length(200_000);
+    // An old source: its growth target is born old through the collecting
+    // allocation, the GC point this test holds custody across. (A young
+    // source grows without collecting.)
+    let arr = unsafe { promote_young_large(crate::array::js_array_alloc_with_length(200_000)) };
     let value = crate::string::js_string_from_bytes(b"array-payload".as_ptr(), 13);
     let value_bits = string_bits(value as usize);
 
@@ -480,7 +486,7 @@ fn test_transient_runtime_handle_object_set_gc() {
         assert!(!crate::object::object_keys(obj_after).arr().is_null());
         let keys = crate::object::object_keys(obj_after);
         let slot = crate::object::keys_find_property_slot_by_bytes(
-            keys.arr(),
+            keys,
             keys.count(),
             b"transient-unseeded-name",
         )

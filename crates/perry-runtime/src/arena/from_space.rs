@@ -46,16 +46,23 @@ use super::*;
 
 #[derive(Clone, Copy)]
 struct SealedYoungBytes {
-    valid: bool,
+    /// One word answers both questions the due probe asks of this cache: is
+    /// it valid, and does any young large leaf live. A leaf birth or death
+    /// invalidates it, so a leaf-free program reads no extra word.
+    state: u8,
     heap_generation: u64,
     /// Eden bytes outside the current block, plus every byte of the active
     /// survivor space.
     sealed: usize,
 }
 
+const STATE_INVALID: u8 = 0;
+const STATE_LEAF_FREE: u8 = 1;
+const STATE_LEAF_LIVE: u8 = 2;
+
 impl SealedYoungBytes {
     const INVALID: Self = Self {
-        valid: false,
+        state: STATE_INVALID,
         heap_generation: 0,
         sealed: 0,
     };
@@ -88,7 +95,7 @@ pub(crate) fn copying_from_space_in_use_bytes() -> usize {
     let current_bytes = synced_current_eden_block_bytes();
     let generation = crate::gc::heap_generation::heap_generation();
     let cached = SEALED_YOUNG_BYTES.with(Cell::get);
-    if cached.valid && cached.heap_generation == generation {
+    if cached.state != STATE_INVALID && cached.heap_generation == generation {
         let bytes = cached.sealed + current_bytes;
         debug_assert_eq!(
             bytes,
@@ -100,6 +107,32 @@ pub(crate) fn copying_from_space_in_use_bytes() -> usize {
         return bytes;
     }
     walk_and_store(generation, current_bytes)
+}
+
+/// The occupancy [`copying_from_space_in_use_bytes`] reads, and whether no
+/// young large leaf lives, from one cache read. The leaf-free hit costs the
+/// one state compare the plain read pays; everything else (a leaf alive, or
+/// an invalid cache) leaves through the cold walk.
+#[inline(always)]
+pub(crate) fn copying_from_space_in_use_bytes_and_leaf_free() -> (usize, bool) {
+    let current_bytes = synced_current_eden_block_bytes();
+    let generation = crate::gc::heap_generation::heap_generation();
+    let cached = SEALED_YOUNG_BYTES.with(Cell::get);
+    if cached.state == STATE_LEAF_FREE && cached.heap_generation == generation {
+        let bytes = cached.sealed + current_bytes;
+        debug_assert_eq!(bytes, copying_from_space_in_use_bytes_walked());
+        debug_assert_eq!(unsafe { (*hot_arena()).young_large_bytes }, 0);
+        return (bytes, true);
+    }
+    if cached.state == STATE_LEAF_LIVE && cached.heap_generation == generation {
+        let bytes = cached.sealed + current_bytes;
+        debug_assert_eq!(bytes, copying_from_space_in_use_bytes_walked());
+        return (bytes, false);
+    }
+    // Invalid cache: the walk (cold, out of line) re-stores it with leaf-ness.
+    let bytes = walk_and_store(generation, current_bytes);
+    // SAFETY: this thread's own nursery arena, read only.
+    (bytes, unsafe { (*hot_arena()).young_large_bytes } == 0)
 }
 
 /// `sync_inline_arena_state`, then the current Eden block's offset. The same
@@ -128,7 +161,12 @@ fn walk_and_store(generation: u64, current_bytes: usize) -> usize {
     if !crate::gc::heap_generation::heap_change_open() {
         SEALED_YOUNG_BYTES.with(|cache| {
             cache.set(SealedYoungBytes {
-                valid: true,
+                // SAFETY: this thread's own nursery arena, read only.
+                state: if unsafe { (*hot_arena()).young_large_bytes } == 0 {
+                    STATE_LEAF_FREE
+                } else {
+                    STATE_LEAF_LIVE
+                },
                 heap_generation: generation,
                 sealed: bytes - current_bytes,
             })
@@ -142,7 +180,7 @@ pub(crate) fn copying_from_space_in_use_bytes_walked() -> usize {
     sync_inline_arena_state();
     let eden = ARENA.with(|arena| {
         let arena = unsafe { &*arena.get() };
-        arena.blocks.iter().map(|b| b.offset).sum::<usize>()
+        arena.blocks.iter().filter(|b| b.extent_kind != super::region::Kind::LargeObject).map(|b| b.offset).sum::<usize>()
     });
     let active = ACTIVE_SURVIVOR.with(|active| active.get());
     let survivor = with_survivor_arena(active, |arena| {
@@ -177,7 +215,7 @@ mod tests {
     fn cache_hit() -> Option<usize> {
         let current_bytes = synced_current_eden_block_bytes();
         let cached = SEALED_YOUNG_BYTES.with(Cell::get);
-        (cached.valid && cached.heap_generation == crate::gc::heap_generation::heap_generation())
+        (cached.state != STATE_INVALID && cached.heap_generation == crate::gc::heap_generation::heap_generation())
             .then(|| cached.sealed + current_bytes)
     }
 

@@ -75,30 +75,27 @@ fn throw_map_fn_not_callable(map_fn: f64) -> ! {
 ///
 /// Takes the raw NaN-boxed f64 value (NOT a pre-unboxed pointer) so it can
 /// inspect the tag bits before stripping.
-/// #9846: is `value` a String / Set / Map whose iterator prototype has escaped
-/// to user code, so its `Array.from` element copy is no longer unobservable?
-/// See the call site in [`js_array_from_value`].
+/// #9846: is `value` a String / Set / Map whose `Array.from` element copy is
+/// observable: its iterator prototype has escaped to user code, or (a Set /
+/// Map) its `@@iterator` may not be the intrinsic one? See the call site in
+/// [`js_array_from_value`].
 fn array_from_family_not_pristine(value: f64) -> bool {
-    // Sticky-flag loads FIRST. The classification below costs two registry
-    // lookups, and `Array.from` is hot: in the overwhelmingly common program no
-    // iterator prototype has ever escaped, so this must cost three relaxed
-    // loads and nothing else.
-    let string_dirty = crate::object::iterator_prototypes::string_iteration_not_pristine();
-    let set_dirty = crate::object::iterator_prototypes::set_iteration_not_pristine();
-    let map_dirty = crate::object::iterator_prototypes::map_iteration_not_pristine();
-    if !(string_dirty || set_dirty || map_dirty) {
-        return false;
-    }
     let jsv = crate::value::JSValue::from_bits(value.to_bits());
     if jsv.is_any_string() {
-        return string_dirty;
+        return crate::object::iterator_prototypes::string_iteration_not_pristine();
     }
     let raw = crate::value::js_nanbox_get_pointer(value) as usize;
     if raw == 0 {
         return false;
     }
-    (set_dirty && crate::set::is_registered_set(raw))
-        || (map_dirty && crate::map::is_registered_map(raw))
+    let dirty = if crate::set::is_registered_set(raw) {
+        crate::object::iterator_prototypes::set_iteration_not_pristine()
+    } else if crate::map::is_registered_map(raw) {
+        crate::object::iterator_prototypes::map_iteration_not_pristine()
+    } else {
+        return false;
+    };
+    dirty || crate::object::map_set_subclass::plain_collection_default_iteration(value).is_none()
 }
 
 #[no_mangle]
@@ -647,8 +644,18 @@ fn items_is_iterable(items: f64) -> bool {
 }
 
 fn classify_iter_source(items: f64) -> IterSourceKind {
+    // The live walk and the snapshots stand in for `%...IteratorPrototype%.next`
+    // calls; a source whose `next` or `@@iterator` may be user code drives
+    // the protocol instead.
     if jsv_is_array(items) {
+        let arr = clean_arr_ptr(crate::value::js_nanbox_get_pointer(items) as *const ArrayHeader);
+        if arr.is_null() || !unsafe { super::iterator_step::array_iteration_is_intrinsic(arr) } {
+            return IterSourceKind::Generic;
+        }
         return IterSourceKind::LiveArray;
+    }
+    if array_from_family_not_pristine(items) {
+        return IterSourceKind::Generic;
     }
     let jv = JSValue::from_bits(items.to_bits());
     if jv.is_any_string() {

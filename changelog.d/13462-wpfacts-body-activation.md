@@ -1,0 +1,1 @@
+Whole-program facts walk only the function bodies that can run: a body is analysed once a reached transfer calls it or its value escapes, so code the program never invokes no longer leaks escapes into the rest (tssrc whole-program proven 20,003 -> 21,868 sites). Per-unit facts are unchanged.

@@ -124,7 +124,7 @@ unsafe fn present_slot(
         return None;
     }
     let keys = crate::object::object_keys(named);
-    let slot = crate::object::keys_find_property_slot_by_bytes(keys.arr(), keys.count(), wanted)?;
+    let slot = crate::object::keys_find_property_slot_by_bytes(keys, keys.count(), wanted)?;
     (crate::object::field_get_set::js_object_get_key_field(named, slot).bits() != TAG_HOLE)
         .then_some((named, slot))
 }

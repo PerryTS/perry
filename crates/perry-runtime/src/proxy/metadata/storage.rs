@@ -41,7 +41,11 @@ pub(super) unsafe fn metadata_record(target: f64, create: bool) -> *mut ObjectHe
         if !create {
             return std::ptr::null_mut();
         }
-        meta = crate::object::object_meta_ensure(owner);
+        // A1_UNPROVEN: descriptor_holder(addr) may return the user object itself (kind-A/B question for S0b-S0e).
+        meta = crate::object::object_meta_ensure(
+            crate::object::MetaObj::runtime_born(owner),
+            crate::object::MetaReason::ReflectMetadata,
+        );
     }
     if (*meta).reflect_metadata == 0 && create {
         let record = crate::object::js_object_alloc_null_proto(0, 0);
@@ -66,7 +70,7 @@ pub(super) fn lookup(target: f64, key: &str, property: Option<&str>) -> Option<f
         let name = storage_key(key, property);
         let keys = crate::object::object_keys(record);
         let index = crate::object::keys_find_property_slot_by_bytes(
-            keys.arr(),
+            keys,
             keys.count(),
             name.as_bytes(),
         )?;

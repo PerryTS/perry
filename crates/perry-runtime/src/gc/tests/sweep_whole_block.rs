@@ -13,7 +13,7 @@
 
 use super::super::*;
 use super::support::*;
-use crate::gc::trace::block_skip::sabotage;
+use crate::gc::mark::block_skip::sabotage;
 
 #[derive(Debug, PartialEq, Eq)]
 struct Result {

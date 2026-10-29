@@ -601,6 +601,10 @@ pub extern "C" fn js_nm_install_zlib() {
 #[no_mangle]
 pub extern "C" fn js_nm_install_worker_threads() {
     js_nm_install_events();
+    NM_DISPATCH_REGISTRY[NmBucket::WorkerThreads as usize].store(
+        super::native_module::worker_environment::dispatch as NmDispatchFn as *mut (),
+        Ordering::Relaxed,
+    );
     nm_register_attach(
         NmBucket::WorkerThreads,
         super::native_module::constructor_shapes::nm_attach_worker,

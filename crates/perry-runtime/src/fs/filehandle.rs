@@ -98,7 +98,7 @@ pub(crate) unsafe fn build_file_io_result(
 
 pub(crate) fn make_filehandle_method(fd: i32, info: *const crate::closure::JsFunctionInfo) -> f64 {
     let closure = crate::closure::js_closure_alloc(info, 1);
-    crate::closure::js_closure_set_capture_ptr(closure, 0, fd as i64);
+    crate::closure::closure_set_capture_word(closure, 0, fd as i64);
     f64::from_bits(crate::value::JSValue::pointer(closure as *const u8).bits())
 }
 
@@ -108,7 +108,7 @@ pub(crate) fn make_filehandle_method_with_handle(
     info: *const crate::closure::JsFunctionInfo,
 ) -> f64 {
     let closure = crate::closure::js_closure_alloc(info, 2);
-    crate::closure::js_closure_set_capture_ptr(closure, 0, fd as i64);
+    crate::closure::closure_set_capture_word(closure, 0, fd as i64);
     crate::closure::js_closure_set_capture_f64(closure, 1, handle);
     f64::from_bits(crate::value::JSValue::pointer(closure as *const u8).bits())
 }
@@ -120,7 +120,7 @@ fn make_filehandle_method_with_handle_length(
     length: u32,
 ) -> f64 {
     let closure = crate::closure::js_closure_alloc(info, 2);
-    crate::closure::js_closure_set_capture_ptr(closure, 0, fd as i64);
+    crate::closure::closure_set_capture_word(closure, 0, fd as i64);
     crate::closure::js_closure_set_capture_f64(closure, 1, handle);
     crate::object::set_builtin_closure_length(closure as usize, length);
     f64::from_bits(crate::value::JSValue::pointer(closure as *const u8).bits())
@@ -248,7 +248,7 @@ pub(crate) fn close_filehandle_fd(fd: i32, handle: f64) {
 
 fn make_read_lines_method(id: usize, info: *const crate::closure::JsFunctionInfo) -> f64 {
     let closure = crate::closure::js_closure_alloc(info, 1);
-    crate::closure::js_closure_set_capture_ptr(closure, 0, id as i64);
+    crate::closure::closure_set_capture_word(closure, 0, id as i64);
     f64::from_bits(crate::value::JSValue::pointer(closure as *const u8).bits())
 }
 
@@ -366,9 +366,9 @@ fn make_filehandle_webstream_callback(
     info: *const crate::closure::JsFunctionInfo,
 ) -> f64 {
     let closure = crate::closure::js_closure_alloc(info, 3);
-    crate::closure::js_closure_set_capture_ptr(closure, 0, fd as i64);
+    crate::closure::closure_set_capture_word(closure, 0, fd as i64);
     crate::closure::js_closure_set_capture_f64(closure, 1, handle);
-    crate::closure::js_closure_set_capture_ptr(closure, 2, if auto_close { 1 } else { 0 });
+    crate::closure::closure_set_capture_word(closure, 2, if auto_close { 1 } else { 0 });
     f64::from_bits(crate::value::JSValue::pointer(closure as *const u8).bits())
 }
 
@@ -620,7 +620,7 @@ fn stream_iter_method(
     info: *const crate::closure::JsFunctionInfo,
 ) -> f64 {
     let closure = crate::closure::js_closure_alloc(info, 2);
-    crate::closure::js_closure_set_capture_ptr(closure, 0, id as i64);
+    crate::closure::closure_set_capture_word(closure, 0, id as i64);
     crate::closure::js_closure_set_capture_f64(closure, 1, self_value);
     boxed_ptr(closure as *const u8)
 }
@@ -866,7 +866,7 @@ pub(crate) extern "C" fn filehandle_pull_sync_impl(
 
 fn writer_method(id: usize, info: *const crate::closure::JsFunctionInfo) -> f64 {
     let closure = crate::closure::js_closure_alloc(info, 1);
-    crate::closure::js_closure_set_capture_ptr(closure, 0, id as i64);
+    crate::closure::closure_set_capture_word(closure, 0, id as i64);
     boxed_ptr(closure as *const u8)
 }
 

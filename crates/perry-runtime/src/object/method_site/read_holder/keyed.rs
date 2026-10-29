@@ -19,7 +19,7 @@ impl KeyRef<'_> {
         // precede its lookup with an unbounded word scan of the same keys.
         if count >= crate::object::KEYS_INDEX_THRESHOLD {
             return crate::object::keys_find_property_slot_by_bytes_resolved_hashed(
-                keys, count, bytes, hash,
+                crate::object::ObjectKeys::new(keys as *mut _, count), count, bytes, hash,
             );
         }
         let slots = crate::array::array_elements_ptr(keys);
@@ -33,7 +33,7 @@ impl KeyRef<'_> {
                 return Some(i);
             }
         }
-        crate::object::keys_find_property_slot_by_bytes_resolved_hashed(keys, count, bytes, hash)
+        crate::object::keys_find_property_slot_by_bytes_resolved_hashed(crate::object::ObjectKeys::new(keys as *mut _, count), count, bytes, hash)
     }
 }
 

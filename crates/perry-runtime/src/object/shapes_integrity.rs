@@ -190,7 +190,7 @@ unsafe fn transition_owned_integrity(
         shape_id_exhausted_abort();
     }
     let target = publish_shape_result(shape_descriptor_intern_with_special(
-        from.keys as usize as *const ArrayHeader,
+        from.keys_view(),
         from.logical_key_count,
         from.live_inline_slot_count,
         generation,

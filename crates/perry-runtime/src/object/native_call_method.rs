@@ -186,7 +186,7 @@ unsafe fn class_receiver_fast_guard(object: f64, method_bytes: &[u8]) -> Option<
         }
         // #10502: the shared shape index proves presence AND absence after
         // its first build. Do not re-scan every field on every call.
-        if own_slot::find_method_slot(keys, key_count as u32, method_bytes).is_some() {
+        if own_slot::find_method_slot(descriptor.keys_view(), key_count as u32, method_bytes).is_some() {
             return None;
         }
     }
@@ -2313,7 +2313,7 @@ pub(crate) unsafe fn native_call_method_tower(
                 return crate::object::null_stub_value();
             }
             if let Some(slot) =
-                own_slot::find_method_slot(keys, key_count as u32, method_name.as_bytes())
+                own_slot::find_method_slot(keys_view, key_count as u32, method_name.as_bytes())
             {
                 // An optional layout slot holding the hole is absent. Its
                 // method must be looked up on the prototype, as for [[Get]].

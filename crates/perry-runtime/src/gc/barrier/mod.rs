@@ -29,8 +29,8 @@ pub(super) struct RememberedDirtySnapshot {
 /// If a future collector reads those thread-locals directly instead of coming
 /// through here, it must call
 /// [`arm_and_reconstruct_remembered_set_if_unarmed`] itself.
-pub(super) fn remembered_dirty_snapshot() -> RememberedDirtySnapshot {
-    arm_and_reconstruct_remembered_set_if_unarmed();
+pub(super) fn remembered_dirty_snapshot<const DIAGNOSTICS: bool>() -> RememberedDirtySnapshot {
+    arm_and_reconstruct_remembered_set_if_unarmed::<DIAGNOSTICS>();
     let dirty_old_pages: crate::fast_hash::PtrHashSet<usize> =
         DIRTY_OLD_PAGES.with(|s| s.borrow().iter().copied().collect());
     let external_dirty_entries: Vec<(usize, usize)> = EXTERNAL_DIRTY_SLOT_PAGES.with(|s| {
@@ -55,8 +55,8 @@ pub(super) fn remembered_dirty_snapshot() -> RememberedDirtySnapshot {
 
 /// Full root scans arm the barrier and report the log, but do not root its
 /// children. Count existing entries without constructing a slot snapshot.
-pub(super) fn remembered_dirty_counts() -> (usize, usize) {
-    arm_and_reconstruct_remembered_set_if_unarmed();
+pub(super) fn remembered_dirty_counts<const DIAGNOSTICS: bool>() -> (usize, usize) {
+    arm_and_reconstruct_remembered_set_if_unarmed::<DIAGNOSTICS>();
     let entries = DIRTY_OLD_PAGES.with(|s| s.borrow().len())
         + EXTERNAL_DIRTY_SLOT_PAGES.with(|s| {
             s.borrow()
@@ -100,7 +100,7 @@ pub(super) fn scan_remembered_dirty_slot_ranges(
                 if !seen_headers.insert(header as usize) {
                     return;
                 }
-                scan_dirty_header_once(
+                scan_dirty_header_once::<{ cfg!(test) }>(
                     header,
                     &snapshot.dirty_pages,
                     valid_ptrs,
@@ -115,7 +115,7 @@ pub(super) fn scan_remembered_dirty_slot_ranges(
             continue;
         }
         unsafe {
-            scan_dirty_header_once(
+            scan_dirty_header_once::<{ cfg!(test) }>(
                 header_addr as *mut GcHeader,
                 &snapshot.dirty_pages,
                 valid_ptrs,
@@ -126,7 +126,7 @@ pub(super) fn scan_remembered_dirty_slot_ranges(
     }
 }
 
-pub(super) unsafe fn scan_dirty_header_once(
+pub(super) unsafe fn scan_dirty_header_once<const DIAGNOSTICS: bool>(
     header: *mut GcHeader,
     dirty_pages: &crate::fast_hash::PtrHashSet<usize>,
     valid_ptrs: &ValidPointerSet,
@@ -147,9 +147,14 @@ pub(super) unsafe fn scan_dirty_header_once(
     stats.old_objects_considered += 1;
     stats.valid_roots += 1;
     stats.dirty_objects_scanned += 1;
-    let _ = scan_dirty_object_slots(header, dirty_pages, stats, &mut |slot, _, stats| {
-        visit_slot(slot, stats);
-    });
+    let _ = scan_dirty_object_slots::<DIAGNOSTICS>(
+        header,
+        dirty_pages,
+        stats,
+        &mut |slot, _, stats| {
+            visit_slot(slot, stats);
+        },
+    );
 }
 
 #[inline]
@@ -173,7 +178,7 @@ pub(super) fn dirty_pages_contains_addr(
 /// with a slot on a clean page (a multi-page array) or outside its body (a
 /// lazy array's sparse cache, #7538) is reported incomplete and the restore
 /// walks it as before.
-pub(super) unsafe fn scan_dirty_object_slots(
+pub(super) unsafe fn scan_dirty_object_slots<const DIAGNOSTICS: bool>(
     header: *mut GcHeader,
     dirty_pages: &crate::fast_hash::PtrHashSet<usize>,
     stats: &mut RememberedSetTraceStats,
@@ -207,7 +212,7 @@ pub(super) unsafe fn scan_dirty_object_slots(
     };
     super::ephemeron::discover(header);
     let mut complete = true;
-    visit_gc_rewrite_slot_descriptors(header, |descriptor| unsafe {
+    visit_gc_rewrite_slot_descriptors::<DIAGNOSTICS>(header, |descriptor| unsafe {
         match descriptor {
             GcMutableSlotDescriptor::Slot(slot) => {
                 if crate::weakref::is_weak_target_trace_slot(header, slot.slot) {
@@ -217,7 +222,9 @@ pub(super) unsafe fn scan_dirty_object_slots(
                 let dirty = dirty_pages_contains_addr(dirty_pages, slot.slot as usize);
                 complete &= contained && dirty;
                 if dirty {
-                    slot.record_layout_read();
+                    if DIAGNOSTICS {
+                        slot.record_layout_read();
+                    }
                     stats.dirty_slots_scanned += 1;
                     let old = if contained {
                         parent_old
@@ -264,7 +271,9 @@ pub(super) unsafe fn scan_dirty_object_slots(
                             continue;
                         }
                         if let Some(layout_kind) = layout_kind {
-                            record_layout_child_slot_read(layout_kind);
+                            if DIAGNOSTICS {
+                                record_layout_child_slot_read(layout_kind);
+                            }
                         }
                         stats.dirty_slots_scanned += 1;
                         account(slot, old);
@@ -791,7 +800,7 @@ pub(super) fn drain_incremental_mark_barrier_seeds(valid_ptrs: &ValidPointerSet)
         if worklist.is_empty() {
             return;
         }
-        drain_trace_worklist(&mut worklist, valid_ptrs);
+        drain_trace_worklist::<{ cfg!(test) }>(&mut worklist, valid_ptrs);
     }
 }
 
@@ -989,6 +998,7 @@ pub(super) fn write_barrier_decoded_parent(
     // which is the whole cost of the barrier on the second and third push into
     // the same bucket, or on every push into a large array whose tail sits on
     // one page.
+    super::leaf_escape::probe_store(parent_addr, child_addr);
     if !external_slot && inline_slot_store_on_cached_dirty_page(parent_addr, slot_addr) {
         bump_write_barrier_trace_counter(BarrierTraceCounter::DirtyPageCacheHits);
         return;
@@ -1086,6 +1096,8 @@ pub(super) fn replay_old_parent_slot_range(parent_addr: usize, slots: *mut u64, 
     for i in 0..count {
         let slot_addr = slots as usize + i * std::mem::size_of::<u64>();
         let page = crate::arena::generation_page_for_addr(slot_addr);
+        // The page skip below is a coverage shortcut; leaf escape is per value.
+        super::leaf_escape::probe_store_bits(parent_addr, unsafe { *(slot_addr as *const u64) });
         if page == dirtied_page {
             continue;
         }

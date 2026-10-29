@@ -40,6 +40,8 @@ static TEST_NO_CAPTURE_SINGLETON_INFO: crate::closure::JsFunctionInfo =
 /// out, so a future retune moves these fixtures with it instead of silently
 /// turning them into nursery allocations — which is how they would stop
 /// covering the old-gen invariant they exist for rather than fail.
+/// Large containers are born young now; a fixture that needs the old large
+/// parent promotes it with `promote_young_large`.
 const OLD_BORN_ELEMENTS: u32 =
     (crate::gc::LARGE_POINTER_BEARING_OBJECT_THRESHOLD_BYTES / 8) as u32 + 64;
 
@@ -720,7 +722,7 @@ fn test_copied_minor_eligibility_falls_back_for_conservative_stack_scan() {
     let _isolation = copying_nursery_isolation_lock();
     let _barrier_guard = GeneratedWriteBarrierTestGuard::active();
 
-    let eligibility = CopiedMinorEligibility::evaluate_with_stack_decision(
+    let eligibility = CopiedMinorEligibility::evaluate_with_stack_decision::<{ cfg!(test) }>(
         GcTriggerKind::Direct,
         ConservativeStackScanDecision::Scan,
     );
@@ -859,7 +861,7 @@ fn test_copied_minor_eligibility_rejects_copy_only_without_scanning_roots() {
     let child = young_leaf();
     let _copy_only_root_guard = TemporaryCopyOnlyRootScanner::rust_bits(&[ptr_bits(child)]);
 
-    let eligibility = CopiedMinorEligibility::evaluate(GcTriggerKind::Direct);
+    let eligibility = CopiedMinorEligibility::evaluate::<{ cfg!(test) }>(GcTriggerKind::Direct);
 
     assert!(!eligibility.eligible);
     assert_eq!(
@@ -1373,7 +1375,7 @@ fn large_object_copying_minor_excludes_rooted_old_object_from_copy_counts() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let large =
-        crate::arena::arena_alloc_gc(LARGE_OBJECT_THRESHOLD_BYTES, 8, GC_TYPE_STRING) as usize;
+        crate::arena::arena_alloc_gc_old(LARGE_OBJECT_THRESHOLD_BYTES, 8, GC_TYPE_STRING) as usize;
     let header = unsafe { header_from_user_ptr(large as *const u8) };
     let total = unsafe { (*header).size as usize };
 
@@ -1408,8 +1410,8 @@ fn large_object_copying_minor_excludes_rooted_old_object_from_copy_counts() {
 fn large_object_old_born_array_slot_write_keeps_young_child_alive() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let arr = unsafe { promote_young_large(crate::array::js_array_alloc(OLD_BORN_ELEMENTS)) };
     let child = young_leaf();
-    let arr = crate::array::js_array_alloc(OLD_BORN_ELEMENTS);
 
     assert!(crate::arena::pointer_in_old_gen(arr as usize));
     crate::array::js_array_set_f64_extend(arr, 0, f64::from_bits(ptr_bits(child)));
@@ -1444,9 +1446,9 @@ fn large_object_old_born_array_slot_write_keeps_young_child_alive() {
 fn large_object_array_literal_direct_store_keeps_young_child_alive_and_excludes_parent() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let arr = unsafe { promote_young_large(crate::array::js_array_alloc_literal(OLD_BORN_ELEMENTS)) };
     let child = young_leaf();
     let child_total = unsafe { (*header_from_user_ptr(child as *const u8)).size as usize };
-    let arr = crate::array::js_array_alloc_literal(OLD_BORN_ELEMENTS);
     let parent_total = unsafe { (*header_from_user_ptr(arr as *const u8)).size as usize };
 
     assert!(crate::arena::pointer_in_old_gen(arr as usize));
@@ -1488,9 +1490,9 @@ fn large_object_array_literal_direct_store_keeps_young_child_alive_and_excludes_
 fn large_object_inline_push_store_keeps_young_child_alive_and_excludes_parent() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let arr = unsafe { promote_young_large(crate::array::js_array_alloc(OLD_BORN_ELEMENTS)) };
     let child = young_leaf();
     let child_total = unsafe { (*header_from_user_ptr(child as *const u8)).size as usize };
-    let arr = crate::array::js_array_alloc(OLD_BORN_ELEMENTS);
     let parent_total = unsafe { (*header_from_user_ptr(arr as *const u8)).size as usize };
 
     assert!(crate::arena::pointer_in_old_gen(arr as usize));
@@ -1539,7 +1541,7 @@ fn large_object_inline_push_store_keeps_young_child_alive_and_excludes_parent() 
 }
 
 #[test]
-fn large_object_clone_direct_copy_keeps_young_child_alive_and_excludes_parent() {
+fn large_object_clone_direct_copy_keeps_young_child_alive_and_is_promoted_in_place() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let child = young_leaf();
@@ -1560,15 +1562,12 @@ fn large_object_clone_direct_copy_keeps_young_child_alive_and_excludes_parent() 
         (clone as *mut u8).add(std::mem::size_of::<crate::object::ObjectHeader>()) as *mut u64
     };
 
-    assert!(crate::arena::pointer_in_old_gen(clone as usize));
+    assert!(crate::arena::pointer_in_nursery(clone as usize));
+    assert!(crate::arena::is_large_storage(clone as usize), "a large clone is young large storage");
     assert!(is_large_object_total_size_for_type(
         parent_total,
         GC_TYPE_ARRAY
     ));
-    assert!(
-        remembered_set_size() > 0,
-        "old-born clone field copy should dirty old-page metadata"
-    );
     js_shadow_slot_set(0, ptr_bits(clone as usize));
 
     let trace = collect_minor_trace(GcTriggerKind::Direct);
@@ -1576,15 +1575,16 @@ fn large_object_clone_direct_copy_keeps_young_child_alive_and_excludes_parent() 
     let rewritten = unsafe { (*fields & POINTER_MASK) as usize };
 
     assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
-    assert_eq!(clone_after, clone as usize);
+    assert_eq!(clone_after, clone as usize, "traced in place, never moved");
+    assert!(crate::arena::pointer_in_old_gen(clone as usize), "promoted at its address");
     assert_ne!(rewritten, child);
     assert!(crate::arena::pointer_in_nursery(rewritten));
-    assert_eq!(trace.copying_nursery.copied_objects, 1);
-    assert_eq!(trace.copying_nursery.copied_bytes, child_total);
-    assert_eq!(trace.copying_nursery.promoted_objects, 0);
-    assert_eq!(trace.copying_nursery.promoted_bytes, 0);
-    assert!(trace.copying_nursery.large_excluded_objects >= 1);
-    assert!(trace.copying_nursery.large_excluded_bytes >= parent_total);
+    assert!(trace.copying_nursery.copied_bytes >= child_total, "the child itself was copied");
+    assert!(trace.copying_nursery.copied_objects >= 1);
+    assert!(
+        remembered_set_size() > 0,
+        "the promoted clone remembers its still-young child"
+    );
 }
 
 #[test]

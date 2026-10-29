@@ -159,7 +159,7 @@ fn active_stack_value() -> f64 {
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let values = ACTIVE_DOMAINS.with(|stack| stack.borrow().clone());
     let values = scope.root_nanbox_f64_slice(&values);
-    let mut array = scope.root_nanbox_f64(js_nanbox_pointer(js_array_alloc(0) as i64));
+    let mut array = scope.root_nanbox_f64(js_nanbox_pointer(perry_runtime::realm_decl! { birth perry_runtime::array::realm_array_alloc(0, perry_runtime::array::ArrayElements::Scalars, false); realm { "node:domain._stack"; "node:domain.default._stack"; } } as i64));
     for domain in values {
         let next = js_array_push_f64(
             js_nanbox_get_pointer(array.get_nanbox_f64()) as *mut ArrayHeader,
@@ -552,7 +552,7 @@ extern "C" fn domain_intercept_wrapper(
     }
 }
 
-fn install_domain_prototype(proto: &mut PayloadPrototype) {
+#[rustfmt::skip] fn install_domain_prototype(proto: &mut PayloadPrototype) {
     let emitter =
         perry_runtime::object::bound_native_callable_export_value("events", "EventEmitter");
     proto.inherit(perry_runtime::object::js_function_prototype_value_for_read(
@@ -560,22 +560,22 @@ fn install_domain_prototype(proto: &mut PayloadPrototype) {
     ));
     proto.data("members", undefined(), true, true, true);
     macro_rules! method {
-        ($name:literal, $body:ident, $n:tt) => {
-            proto.method($name, perry_runtime::fn_info!(
-                $body, $n; with_declared($n), with_flags(perry_runtime::closure::FN_BUILTIN)
-            ), $n)
+        ($name:literal, $info:expr, $n:tt) => {
+            proto.method($name, $info,
+                // The call site owns the function info and its realm facts.
+                $n)
         };
     }
-    method!("_errorHandler", domain_error_handler_thunk, 2);
-    method!("enter", domain_enter_thunk, 0);
-    method!("exit", domain_exit_thunk, 0);
-    method!("add", domain_add_thunk, 1);
-    method!("remove", domain_remove_thunk, 1);
-    proto.method("run", perry_runtime::fn_info!(
-        domain_run_thunk, 2; with_rest(1), with_declared(1), with_flags(perry_runtime::closure::FN_BUILTIN)
+    method!("_errorHandler", perry_runtime::fn_info!(#[realm("node:domain.Domain.prototype._errorHandler")] export crate::domain::domain_error_handler_thunk, 2; with_declared(2), with_flags(perry_runtime::closure::FN_BUILTIN)), 2);
+    method!("enter", perry_runtime::fn_info!(#[realm("node:domain.Domain.prototype.enter")] export crate::domain::domain_enter_thunk, 0; with_declared(0), with_flags(perry_runtime::closure::FN_BUILTIN)), 0);
+    method!("exit", perry_runtime::fn_info!(#[realm("node:domain.Domain.prototype.exit")] export crate::domain::domain_exit_thunk, 0; with_declared(0), with_flags(perry_runtime::closure::FN_BUILTIN)), 0);
+    method!("add", perry_runtime::fn_info!(#[realm("node:domain.Domain.prototype.add")] export crate::domain::domain_add_thunk, 1; with_declared(1), with_flags(perry_runtime::closure::FN_BUILTIN)), 1);
+    method!("remove", perry_runtime::fn_info!(#[realm("node:domain.Domain.prototype.remove")] export crate::domain::domain_remove_thunk, 1; with_declared(1), with_flags(perry_runtime::closure::FN_BUILTIN)), 1);
+    proto.method("run", perry_runtime::fn_info!(#[realm("node:domain.Domain.prototype.run")] 
+        export crate::domain::domain_run_thunk, 2; with_rest(1), with_declared(1), with_flags(perry_runtime::closure::FN_BUILTIN)
     ), 1);
-    method!("intercept", domain_intercept_thunk, 1);
-    method!("bind", domain_bind_thunk, 1);
+    method!("intercept", perry_runtime::fn_info!(#[realm("node:domain.Domain.prototype.intercept")] export crate::domain::domain_intercept_thunk, 1; with_declared(1), with_flags(perry_runtime::closure::FN_BUILTIN)), 1);
+    method!("bind", perry_runtime::fn_info!(#[realm("node:domain.Domain.prototype.bind")] export crate::domain::domain_bind_thunk, 1; with_declared(1), with_flags(perry_runtime::closure::FN_BUILTIN)), 1);
 }
 
 extern "C" fn domain_error_handler_thunk(
@@ -655,4 +655,3 @@ pub unsafe extern "C" fn js_domain_native_dispatch(
 macro_rules! realm_decl {
     ($facts:literal) => {};
 }
-realm_decl!("domain.realm.json#*");
