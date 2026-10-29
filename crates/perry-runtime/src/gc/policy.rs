@@ -2418,13 +2418,13 @@ pub(super) fn note_copying_minor_young_survival(survival_permille: u64) {
     GC_LAST_FULL_OLD_IN_USE_BYTES.with(|bytes| bytes.set(bytes.get().max(survived)));
 }
 
-/// The growth multiplier the live-proportional pacing bands carry: 1, or
-/// `MAJOR_PACING_RETAINING_GROWTH_MULTIPLIER` while the last copying minor
-/// measured a retaining heap. One definition for the arms that scale a band by
-/// the last full's live bytes.
+/// The multiplier on the byte-pacing full's mature-growth term: 1, or
+/// `MAJOR_PACING_LIVE_GROWTH_RETAINING_MULTIPLIER` while the last copying minor
+/// measured a retaining heap. The next full is due once the mature heap has
+/// grown by the last full's measured live bytes times this factor.
 pub(super) fn major_pacing_live_growth_multiplier() -> usize {
     if GC_MAJOR_PACING_RETAINING.with(|c| c.get()) {
-        MAJOR_PACING_RETAINING_GROWTH_MULTIPLIER
+        MAJOR_PACING_LIVE_GROWTH_RETAINING_MULTIPLIER
     } else {
         1
     }
@@ -2554,6 +2554,11 @@ const MAJOR_PACING_RETAINING_SURVIVAL_PERMILLE: u64 = 900;
 /// only makes the next bigger, so the useless full has to be *predicted*, not
 /// priced after the fact.
 const MAJOR_PACING_RETAINING_GROWTH_MULTIPLIER: usize = 4;
+
+/// The retaining multiplier of the byte-pacing full's live-derived mature-growth
+/// term (OWNER 2026-10-29, lane GCT factor sweep: 2 keeps no pipeline gain, 4
+/// costs the most string-build RSS; 3 keeps the whole pipeline gain).
+const MAJOR_PACING_LIVE_GROWTH_RETAINING_MULTIPLIER: usize = 3;
 
 /// Record what the just-finished full reclaimed and adjust the pacing backoff.
 ///
