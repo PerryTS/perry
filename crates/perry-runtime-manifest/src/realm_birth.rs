@@ -347,6 +347,7 @@ pub(super) fn birth_at(
     };
     let mut extra = Vec::new();
     let mut declared = None;
+    let mut never_move = false;
     let mut seen = BTreeSet::new();
     for clause in &clauses[1..] {
         if clause.len() < 3 || clause[1].text != "=" || !seen.insert(clause[0].text) {
@@ -375,6 +376,7 @@ pub(super) fn birth_at(
             {
                 declared = Some(pair_members(&name, source, clause[4].text)?);
             }
+            "never_move" if clause.len() == 3 && clause[2].text == "true" => never_move = true,
             "births" if clause[2].text == "[" && clause.last().unwrap().text == "]" => {
                 for path in info::split(&clause[3..clause.len() - 1], ",") {
                     extra.push(facts::path(path)?);
@@ -416,6 +418,12 @@ pub(super) fn birth_at(
     }
     if null {
         reserved |= gc["OBJ_FLAG_NULL_PROTO"];
+    }
+    if never_move {
+        if reserved & gc["OBJ_FLAG_NEVER_MOVE"] != 0 {
+            return Err("omit derived never_move".into());
+        }
+        reserved |= gc["OBJ_FLAG_NEVER_MOVE"];
     }
     if kind == "namespace" && super::namespace::sealed_namespace(&name)? {
         reserved |= gc["OBJ_FLAG_NEVER_MOVE"];
