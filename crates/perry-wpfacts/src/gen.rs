@@ -265,6 +265,9 @@ pub struct Gen<'a> {
     /// sources (module path → source → module path). A re-export declares
     /// no import of its source, so the module's imports cannot resolve it.
     pub export_sources: crate::ExportSources,
+    /// The negative control (`PERRY_FACTS_SABOTAGE=dynimport`): `import()`
+    /// sites skip their module mapping (DECISIONS 226).
+    pub dynimport_sabotage: bool,
     /// Object-literal IIFE parameter node → the literal template it births.
     pub iife_birth: FxHashMap<NodeId, TmplId>,
     /// Construction-phase analysis of plain functions used as constructors.
@@ -459,6 +462,7 @@ impl<'a> Gen<'a> {
             shared_closures: Default::default(),
             class_envs: FxHashMap::default(),
             export_sources: Default::default(),
+            dynimport_sabotage: false,
             iife_birth: FxHashMap::default(),
             fn_phase: FxHashMap::default(),
             rooted_stores: Default::default(),

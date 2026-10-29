@@ -292,6 +292,7 @@ fn generate<'a>(
         g.m.diagnostic = Some(Default::default());
     }
     g.export_sources = cfg.export_sources.clone();
+    g.dynimport_sabotage = cfg.sabotage.as_deref() == Some("dynimport");
     g.unit_in = published;
     g.view = view;
     let interp = cfg.dynamic_code.clone().unwrap_or_else(|| "-".into());
