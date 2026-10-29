@@ -154,6 +154,7 @@ pub(crate) use walk::{old_arena_block_for_test, old_arena_note_listed_hole_for_t
 pub(crate) use reset::{
     active_survivor_block_index_range, block_in_copying_from_space,
     copying_active_survivor_in_use_bytes, copying_from_space_in_use_bytes,
+    copying_from_space_in_use_bytes_if_leaf_free,
     copying_prepare_to_space, copying_reset_from_spaces_and_flip,
     discard_previously_idle_eden_pages, old_arena_reclaim_dead_blocks,
     old_arena_reclaim_selected_dead_blocks, survivor_arena_reclaim_dead_blocks,

@@ -268,6 +268,8 @@ fn finish(snapshots: Option<&[ArenaBlockSnapshot]>, live: Option<&[bool]>) -> Ar
             }
         }
     });
+    // Leaf occupancy changed: the sealed-bytes cache also carries leaf-ness.
+    super::from_space::invalidate_sealed_young_bytes();
     stats
 }
 

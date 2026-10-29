@@ -133,7 +133,12 @@ fn young_scavenge_cap_probe(old_reclaimable: impl FnOnce() -> usize) -> YoungSca
             reading: None,
         };
     }
-    let from_space_in_use = crate::arena::copying_from_space_in_use_bytes();
+    // One read of the cached occupancy also says no young leaf lives.
+    let (from_space_in_use, leaf_free) =
+        match crate::arena::copying_from_space_in_use_bytes_if_leaf_free() {
+            Some(bytes) => (bytes, true),
+            None => (crate::arena::copying_from_space_in_use_bytes(), false),
+        };
     // The current Eden block's share of that reading: the inline offset,
     // whenever the inline allocator is initialized (see
     // `synced_current_eden_block_bytes`). Read here, before anything else
@@ -168,8 +173,9 @@ fn young_scavenge_cap_probe(old_reclaimable: impl FnOnce() -> usize) -> YoungSca
     };
     // Growing the inline small allocation can cross the leaf window before
     // the copying cap. Publish the same residual bound to the fast shortcut.
-    // With no young leaf alive this is one load and a not-taken branch.
-    let (leaf_due, limit) = if crate::arena::young_large_in_use_bytes() == 0 {
+    // With no young leaf alive this is the not-taken branch of a flag the
+    // occupancy read already produced.
+    let (leaf_due, limit) = if leaf_free || crate::arena::young_large_in_use_bytes() == 0 {
         (false, limit)
     } else {
         let (due, small_limit) = leaf_memory_due_at_cap(cap, from_space_in_use);
