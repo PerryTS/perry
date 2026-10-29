@@ -68,38 +68,32 @@ pub(super) fn try_enqueue(value: f64, step: ClosurePtr) -> Option<*mut Promise> 
 ///     null metadata (the `try_enqueue` admission);
 ///  5. the microtask queue is empty, so T would be the next job popped;
 ///  6. the job domain is not cancelled (eligible by construction).
-/// On admission the awaited result is written to the iter-result cell and
-/// true is returned; the step loops in place. Otherwise nothing changed and
-/// the caller takes the ordinary FIFO path. Never restarts. Leaf: no JS, no
-/// allocation, no collection.
+/// On admission the awaited result is returned and the step loops in place
+/// with it as the next resume value. Otherwise nothing changed, `TAG_TDZ` (a
+/// value no await can produce) is returned, and the caller takes the ordinary
+/// FIFO path. Never restarts. Leaf: no JS, no allocation, no collection.
 #[no_mangle]
 pub extern "C" fn js_async_step_resume_now(value: f64, step: ClosurePtr) -> f64 {
-    const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
-    const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
-    f64::from_bits(if resume_now(value, step) {
-        TAG_TRUE
-    } else {
-        TAG_FALSE
-    })
+    resume_now(value, step).unwrap_or_else(|| f64::from_bits(crate::value::TAG_TDZ))
 }
 
 #[inline]
-fn resume_now(value: f64, step: ClosurePtr) -> bool {
+fn resume_now(value: f64, step: ClosurePtr) -> Option<f64> {
     if step.is_null() {
-        return false;
+        return None;
     }
     // P1
     if super::microtasks::CURRENT_MICROTASK_CALLBACK.with(|c| c.get()) != step {
-        return false;
+        return None;
     }
     // P2
     let trap = INLINE_TRAP.with(|slot| slot.get());
     if trap.trap_next.is_null() || trap.current_step != step as usize {
-        return false;
+        return None;
     }
     // P3
     if crate::async_hook_slots::promise_hooks_active() || crate::v8::promise_hooks_active() {
-        return false;
+        return None;
     }
     // P4
     let primitive = is_definitely_primitive(value);
@@ -107,23 +101,23 @@ fn resume_now(value: f64, step: ClosurePtr) -> bool {
         value
     } else {
         if js_value_is_promise(value) == 0 {
-            return false;
+            return None;
         }
         let inner = crate::value::js_nanbox_get_pointer(value) as *const Promise;
         unsafe {
             if (*inner).state != PromiseState::Fulfilled || !(*inner).meta.is_null() {
-                return false;
+                return None;
             }
             (*inner).value
         }
     };
     // P5
     if TASK_QUEUE.with(|queue| !queue.borrow().is_empty()) {
-        return false;
+        return None;
     }
     // P6 (last: the only predicate with effects, and only when admitted)
     if !crate::async_context::job_domain::admit_inline_self_next_job() {
-        return false;
+        return None;
     }
     bump(&MT_RUN_COUNT);
     if primitive {
@@ -131,8 +125,7 @@ fn resume_now(value: f64, step: ClosurePtr) -> bool {
     }
     bump(&MT_STEP_CHAIN_REUSE_HIT);
     crate::closure::reset_throw_not_callable_counter();
-    js_iter_result_set(payload, 0);
-    true
+    Some(payload)
 }
 
 /// Called only after the no-async-hook effect check. Native context/token
