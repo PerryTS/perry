@@ -469,8 +469,17 @@ pub(crate) fn class_is_anonymous(class_id: u32) -> bool {
 /// reaches a prototype that already exists. `previous` is the declaration
 /// this one replaces (tests extend a class member by member).
 fn declaration_registered(class_id: u32, decl: &ClassDeclaration, previous: &[ClassMemberDecl]) {
+    let members = decl.members();
+    if members.is_empty() {
+        if decl.is_declared() {
+            super::registration::publish_unbuilt_holder(class_id, true);
+        }
+        return;
+    }
+    // Index loops: the members are addressed from their base each iteration.
     let mut publish = decl.is_declared();
-    for member in decl.members() {
+    for i in 0..members.len() {
+        let member = &members[i];
         let Some(name) = member.literal_name() else {
             continue;
         };
@@ -487,7 +496,8 @@ fn declaration_registered(class_id: u32, decl: &ClassDeclaration, previous: &[Cl
         );
     }
     let mut noted: Vec<&str> = Vec::new();
-    for member in decl.members() {
+    for i in 0..members.len() {
+        let member = &members[i];
         let Some(name) = member.literal_name() else {
             continue;
         };
