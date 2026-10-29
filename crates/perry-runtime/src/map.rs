@@ -1646,20 +1646,27 @@ unsafe fn find_key_index_cold(map: *const MapHeader, key: f64) -> i32 {
 /// or literal), and this pass finds those at a few instructions per entry
 /// before any entry pays for a content comparison (#10697). `key_bits` is
 /// already SameValueZero-normalized, as every stored key is.
+///
+/// The scan has no data-dependent exit. Every entry of the `used` extent is
+/// compared and the matches are collected as a bit per slot, so the position
+/// of the hit never reaches a branch: an early-exit scan over keys that are
+/// looked up in no fixed order mispredicts about once per lookup, and a
+/// mispredict costs far more than the few extra compares of a map this small.
+/// Only the found/missing split remains, and the caller's data decides it,
+/// not where the key sits. The lowest set bit is the first match, exactly
+/// what the early-exit scan returned.
 #[inline(always)]
 unsafe fn find_identical_key(entries: *const f64, used: u32, key_bits: u64) -> Option<i32> {
-    // The caller admits the existing small-map extent. A fixed bound lets
-    // LLVM unroll the identity checks without a loop backedge per candidate.
     debug_assert!(used <= SIDE_TABLE_THRESHOLD);
-    for i in 0..SIDE_TABLE_THRESHOLD {
-        if i >= used {
-            break;
-        }
-        if ptr::read(entries.add((i as usize) * 2)).to_bits() == key_bits {
-            return Some(i as i32);
-        }
+    let mut hit: u32 = 0;
+    for i in 0..used {
+        hit |= ((ptr::read(entries.add((i as usize) * 2)).to_bits() == key_bits) as u32) << i;
     }
-    None
+    if hit == 0 {
+        None
+    } else {
+        Some(hit.trailing_zeros() as i32)
+    }
 }
 
 unsafe fn find_string_key_index(map: *const MapHeader, key: *const StringHeader) -> i32 {
@@ -3102,6 +3109,83 @@ fn js_map_foreach_impl(
 mod tests {
     use super::*;
     use crate::string::js_string_from_bytes;
+
+    /// `find_identical_key` answers by bit identity over the whole `used`
+    /// extent with no early exit: a hit at every index of every extent, the
+    /// lowest index when the bits repeat, and a miss when none match.
+    #[test]
+    fn identical_key_scan_finds_each_index_and_misses() {
+        let mut entries = [0.0f64; 16];
+        for used in 0..=SIDE_TABLE_THRESHOLD {
+            for i in 0..SIDE_TABLE_THRESHOLD as usize {
+                entries[i * 2] = f64::from_bits(0x4000_0000_0000_0000 + 17 * (i as u64 + 1));
+            }
+            let base = entries.as_ptr();
+            for hit_at in 0..used {
+                let bits = entries[hit_at as usize * 2].to_bits();
+                assert_eq!(unsafe { find_identical_key(base, used, bits) }, Some(hit_at as i32));
+            }
+            assert_eq!(unsafe { find_identical_key(base, used, 0x1234) }, None);
+            // A key stored beyond `used` is not part of the extent.
+            if used < SIDE_TABLE_THRESHOLD {
+                let beyond = entries[used as usize * 2].to_bits();
+                assert_eq!(unsafe { find_identical_key(base, used, beyond) }, None);
+            }
+        }
+        // Repeated bits (a hole key repeated by tombstones): first slot wins.
+        for i in [1usize, 3, 6] {
+            entries[i * 2] = f64::from_bits(MAP_HOLE_KEY_BITS);
+        }
+        assert_eq!(
+            unsafe { find_identical_key(entries.as_ptr(), 8, MAP_HOLE_KEY_BITS) },
+            Some(1)
+        );
+        assert_eq!(
+            unsafe { find_identical_key(entries.as_ptr(), 1, MAP_HOLE_KEY_BITS) },
+            None
+        );
+    }
+
+    /// Small-map lookups through the public entry points, at every slot, over
+    /// tombstones, and with the keys the bit-identity lane must not decide:
+    /// `-0` against `+0`, NaN, and string keys equal only by content.
+    #[test]
+    fn small_map_lookup_every_slot_tombstones_and_special_keys() {
+        for n in 1..=SIDE_TABLE_THRESHOLD {
+            let map = js_map_alloc(4);
+            for k in 0..n {
+                js_map_set(map, 100.0 + k as f64, k as f64);
+            }
+            for k in 0..n {
+                assert_eq!(js_map_get(map, 100.0 + k as f64), k as f64, "n={n} slot {k}");
+                assert_eq!(js_map_has(map, 100.0 + k as f64), 1);
+            }
+            assert_eq!(js_map_has(map, 99.0), 0);
+            assert_eq!(js_map_has(map, 100.0 + n as f64), 0);
+            // Delete each slot in turn: the tombstone neither matches nor
+            // hides the entries after it.
+            for k in 0..n {
+                assert_eq!(js_map_delete(map, 100.0 + k as f64), 1);
+                assert_eq!(js_map_has(map, 100.0 + k as f64), 0);
+                for r in (k + 1)..n {
+                    assert_eq!(js_map_get(map, 100.0 + r as f64), r as f64);
+                }
+            }
+        }
+        let map = js_map_alloc(4);
+        js_map_set(map, 0.0, 1.0);
+        js_map_set(map, f64::NAN, 2.0);
+        js_map_set(map, 5.0, 3.0);
+        assert_eq!(js_map_get(map, -0.0), 1.0, "-0 is SameValueZero-equal to +0");
+        assert_eq!(js_map_get(map, f64::from_bits(0x7ff8_0000_0000_0001)), 2.0, "any NaN");
+        assert_eq!(js_map_get(map, 5.0), 3.0);
+        let a = js_string_from_bytes(b"ab".as_ptr(), 2);
+        let b = js_string_from_bytes(b"ab".as_ptr(), 2);
+        let c = js_string_from_bytes(b"ac".as_ptr(), 2);
+        js_map_set_string_number(map, a, 9.0);
+        assert_eq!(js_map_get_string_key(map, b), 9.0, "content-equal, not identical");
+        assert_eq!(js_map_has_string_key(map, c), 0);
+    }
 
     #[test]
     fn string_number_specialized_helpers_use_string_content_keys() {
