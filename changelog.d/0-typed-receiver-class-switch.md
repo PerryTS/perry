@@ -1,1 +1,0 @@
-Method calls on a receiver with a static class (an annotation, or this inside a method) use the facts-proven class-id switch when the whole-program facts prove the receiver one of cased implementor classes, exactly as untyped receivers already do; otherwise the guarded typed path is unchanged. 40-classes executes 14.3% fewer instructions.
