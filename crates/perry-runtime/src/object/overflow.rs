@@ -816,8 +816,8 @@ pub(crate) unsafe fn site_miss_own_get(
 ) -> Option<crate::JSValue> {
     if (obj as u64) >> 48 != 0
         || !crate::value::addr_class::is_above_handle_band(obj as usize)
-        || !crate::gc::object_has_meta_word(
-            (*crate::gc::header_from_trusted_user_ptr(obj.cast())).obj_type,
+        || !crate::object_has_meta_word!(
+            (*crate::gc::header_from_trusted_user_ptr(obj.cast())).obj_type
         )
         || !shadowed(obj)
     {

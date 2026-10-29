@@ -47,12 +47,11 @@ pub(crate) unsafe fn stamp_linked_final_shape_requested(
 ) -> bool {
     let shape_keys: super::ShapeKeys = keys.into();
     let keys = shape_keys.arr();
-    // A1_UNPROVEN: record-first: obj layout word (kind-A/B question for S0f).
     if obj.is_null()
         || keys.is_null()
         || count == 0
         || (requested.is_none()
-            && !crate::object::header::MetaObj::runtime_born(obj as *mut _)
+            && !crate::object::header::MetaObj::from_kind(obj as *mut _, proto_id)
                 .meta()
                 .is_null())
         || !shape_word_is_writable(obj)
@@ -111,13 +110,11 @@ pub(crate) unsafe fn stamp_linked_final_shape_requested(
     ) else {
         return false;
     };
-    // A1_UNPROVEN: record-first: obj layout word (kind-A/B question for S0f).
-    if !crate::object::header::MetaObj::runtime_born(obj as *mut _)
+    if !crate::object::header::MetaObj::from_kind(obj as *mut _, proto_id)
         .meta()
         .is_null()
     {
-        // A1_UNPROVEN: record-first: obj layout word (kind-A/B question for S0f).
-        let meta = crate::object::header::MetaObj::runtime_born(obj as *mut _).meta();
+        let meta = crate::object::header::MetaObj::from_kind(obj as *mut _, proto_id).meta();
         (*meta).prototype = proto_bits;
         // GC_STORE_AUDIT(BARRIERED): the meta may have promoted while the
         // holder was marked. Its prototype slot must be rewritten by minors.

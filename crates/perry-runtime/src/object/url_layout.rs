@@ -6,7 +6,7 @@ pub(crate) unsafe fn is_gc_object_header(obj: *mut ObjectHeader) -> bool {
         return false;
     }
     crate::value::addr_class::try_read_gc_header(obj as usize)
-        .is_some_and(|header| crate::gc::gc_type_is_object(header.obj_type))
+        .is_some_and(|header| crate::gc_type_is_object!(header.obj_type))
 }
 
 pub(crate) fn is_url_object_shape(url: *mut ObjectHeader) -> bool {

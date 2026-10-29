@@ -33,7 +33,7 @@ pub(crate) fn class_evaluation_prototype_class_id(ptr: usize) -> Option<u32> {
     }
     unsafe {
         let header = crate::value::addr_class::try_read_gc_header(ptr)?;
-        if !crate::gc::gc_type_is_object(header.obj_type)
+        if !crate::gc_type_is_object!(header.obj_type)
             || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return None;

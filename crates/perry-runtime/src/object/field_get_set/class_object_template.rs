@@ -1184,7 +1184,7 @@ pub(crate) unsafe fn evaluation_chain_lost_method(
         if proto.is_pointer() {
             let proto = proto.as_pointer::<ObjectHeader>();
             if crate::value::addr_class::try_read_gc_header(proto as usize)
-                .is_some_and(|h| crate::gc::gc_type_is_object(h.obj_type))
+                .is_some_and(|h| crate::gc_type_is_object!(h.obj_type))
                 && (*proto).class_id == class_id
                 && intact(proto)
             {

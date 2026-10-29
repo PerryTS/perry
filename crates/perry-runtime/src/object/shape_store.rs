@@ -102,7 +102,7 @@ pub(crate) unsafe fn try_own_store(
             let bag = crate::array::array_property_bag(arr);
             return !bag.is_null() && try_own_store(bag, key, value);
         }
-        if !crate::gc::gc_type_is_object(header.obj_type)
+        if !crate::gc_type_is_object!(header.obj_type)
             || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return false;
@@ -368,7 +368,7 @@ pub(crate) unsafe fn try_warm_transition(
         if header.obj_type == crate::gc::GC_TYPE_ARRAY {
             return try_warm_array_transition(obj.cast(), key, value, refresh);
         }
-        if !crate::gc::gc_type_is_object(header.obj_type)
+        if !crate::gc_type_is_object!(header.obj_type)
             || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return None;
@@ -481,7 +481,7 @@ unsafe fn dynamic_store_receiver(obj: *mut ObjectHeader) -> Option<shapes::Shape
         return None;
     }
     let header = crate::value::addr_class::try_read_gc_header(obj as usize)?;
-    if !crate::gc::gc_type_is_object(header.obj_type)
+    if !crate::gc_type_is_object!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || header._reserved
             & (crate::gc::OBJ_FLAG_FROZEN
@@ -690,7 +690,7 @@ unsafe fn try_array_store(
                 });
             }
             crate::value::js_nanbox_pointer(proto_bag_root.get_raw_mut_ptr::<ObjectHeader>() as i64)
-        } else if crate::gc::gc_type_is_object(header.obj_type) {
+        } else if crate::gc_type_is_object!(header.obj_type) {
             proto_root.get_nanbox_f64()
         } else {
             return None;
@@ -781,7 +781,7 @@ pub(crate) unsafe fn try_store_with_refresh(
         }
         return try_function_store(target, key, value, name, may_move);
     }
-    if !crate::gc::gc_type_is_object(header.obj_type)
+    if !crate::gc_type_is_object!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
     {
         return None;
@@ -1005,7 +1005,7 @@ unsafe fn try_function_store(
         }
         let addr = (bits & crate::value::POINTER_MASK) as usize;
         let header = crate::value::addr_class::try_read_gc_header(addr)?;
-        if !crate::gc::gc_type_is_object(header.obj_type)
+        if !crate::gc_type_is_object!(header.obj_type)
             || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return None;
@@ -1097,7 +1097,7 @@ pub(crate) unsafe fn chain_blocks(receiver: f64, key: &[u8]) -> bool {
         let Some(header) = crate::value::addr_class::try_read_gc_header(addr) else {
             return true;
         };
-        if !crate::gc::gc_type_is_object(header.obj_type) {
+        if !crate::gc_type_is_object!(header.obj_type) {
             return true;
         }
         let obj = addr as *const ObjectHeader;

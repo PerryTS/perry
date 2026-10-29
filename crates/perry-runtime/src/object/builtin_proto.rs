@@ -310,7 +310,7 @@ pub(crate) fn seal_realm(global: *mut ObjectHeader) {
                 continue;
             };
             match header.obj_type {
-                ty if crate::gc::gc_type_is_object(ty) => {
+                crate::gc_object_type_pat!() => {
                     trace_seal(family, (*(proto as *const ObjectHeader)).parent_class_id);
                     seal_object(proto as *mut ObjectHeader, family);
                     crate::agent_ptrs::publish_intrinsic_proto(
@@ -504,9 +504,7 @@ pub(crate) fn note_write_addr(addr: usize, site: &'static str) {
         return;
     };
     match header.obj_type {
-        ty if crate::gc::gc_type_is_object(ty) => unsafe {
-            note_write(addr as *const ObjectHeader, site)
-        },
+        crate::gc_object_type_pat!() => unsafe { note_write(addr as *const ObjectHeader, site) },
         crate::gc::GC_TYPE_ARRAY => note_array_prototype_write(addr, site),
         crate::gc::GC_TYPE_CLOSURE => unsafe {
             note_write(

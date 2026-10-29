@@ -118,7 +118,7 @@ pub(crate) unsafe fn vt_own_keys_array(
     // Read the namespace brand from the shape before interpreting field zero
     // as a module name; an ordinary object's first value is just user data.
     let header = crate::value::addr_class::try_read_gc_header(obj as usize)?;
-    if !crate::gc::gc_type_is_object(header.obj_type)
+    if !crate::gc_type_is_object!(header.obj_type)
         || super::shapes::object_shape_descriptor(obj)?.object_kind
             != super::shapes::ShapeObjectKind::NativeNamespace
     {

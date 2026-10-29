@@ -212,7 +212,7 @@ unsafe fn private_plain_receiver_shape(obj: f64) -> Option<(*const ObjectHeader,
     }
     let addr = (bits & crate::value::POINTER_MASK) as usize;
     let header = crate::value::addr_class::try_read_gc_header(addr)?;
-    if !crate::gc::gc_type_is_object(header.obj_type)
+    if !crate::gc_type_is_object!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
     {
         return None;

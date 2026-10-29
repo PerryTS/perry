@@ -1070,7 +1070,7 @@ pub(crate) fn class_id_for_decl_prototype_object(ptr: usize) -> Option<u32> {
 fn decl_prototype_class_id(ptr: usize) -> Option<u32> {
     // SAFETY: a live GC allocation's address or arbitrary non-pointer bits.
     let header = unsafe { crate::value::addr_class::try_read_gc_header(ptr) }?;
-    if !crate::gc::gc_type_is_object(header.obj_type) {
+    if !crate::gc_type_is_object!(header.obj_type) {
         return None;
     }
     // SAFETY: the header names an ordinary object at `ptr`; its first word

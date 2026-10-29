@@ -163,7 +163,7 @@ fn is_plain_matcher_object(value: f64) -> bool {
     }
     unsafe {
         let gc_header = ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        crate::gc::gc_type_is_object((*gc_header).obj_type)
+        crate::gc_type_is_object!((*gc_header).obj_type)
     }
 }
 
@@ -433,10 +433,9 @@ fn throw_assertion(
 
 fn if_error_value_message(value: f64) -> Option<String> {
     match gc_type_of(value) {
-        Some(ty)
-            if crate::gc::gc_type_is_object(ty)
-                || ty == crate::gc::GC_TYPE_ARRAY
-                || ty == crate::gc::GC_TYPE_ERROR => {}
+        Some(
+            crate::gc_object_type_pat!() | crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_ERROR,
+        ) => {}
         _ => return None,
     }
 
@@ -747,7 +746,7 @@ fn partial_deep_equal_bool(actual: f64, expected: f64) -> bool {
             actual_ptr as *const crate::array::ArrayHeader,
             expected_ptr as *const crate::array::ArrayHeader,
         ),
-        ty if crate::gc::gc_type_is_object(ty) => partial_object_equal(
+        crate::gc_object_type_pat!() => partial_object_equal(
             actual,
             actual_ptr as *const ObjectHeader,
             expected_ptr as *const ObjectHeader,

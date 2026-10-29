@@ -93,7 +93,7 @@ unsafe fn existing_own_data_overwrite(
         | crate::gc::OBJ_FLAG_SEALED
         | crate::gc::OBJ_FLAG_NO_EXTEND
         | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
-    if !crate::gc::gc_type_is_object(obj_gc.obj_type)
+    if !crate::gc_type_is_object!(obj_gc.obj_type)
         || obj_gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || obj_gc._reserved & BLOCKING_FLAGS != 0
         // #10287: an own descriptor is vetted per KEY. Overwriting a key the
@@ -190,7 +190,11 @@ unsafe fn existing_own_data_overwrite(
                 own_idx = if shape.summary & crate::object::key_attrs::SUMMARY_PRIVATE == 0 {
                     crate::object::keys_find_slot_by_key_ptr(keys_view, key_count as u32, key)
                 } else {
-                    crate::object::keys_find_property_slot_by_key_ptr(keys_view, key_count as u32, key)
+                    crate::object::keys_find_property_slot_by_key_ptr(
+                        keys_view,
+                        key_count as u32,
+                        key,
+                    )
                 };
                 if let Some(i) = own_idx {
                     super::prop_plan::read_plan_record(
@@ -495,7 +499,7 @@ pub(crate) fn try_readd_stable_tombstone(
     }
 
     let initial_gc = unsafe { crate::value::addr_class::try_read_gc_header(obj as usize)? };
-    if !crate::gc::gc_type_is_object(initial_gc.obj_type)
+    if !crate::gc_type_is_object!(initial_gc.obj_type)
         || initial_gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || initial_gc._reserved & crate::gc::OBJ_FLAG_STABLE_TOMBSTONES == 0
     {
@@ -517,7 +521,7 @@ pub(crate) fn try_readd_stable_tombstone(
         let eligible = obj_handle.with_mut_ptr(|obj: *mut ObjectHeader| {
             let gc = crate::value::addr_class::try_read_gc_header(obj as usize)?;
             Some(
-                crate::gc::gc_type_is_object(gc.obj_type)
+                crate::gc_type_is_object!(gc.obj_type)
                     && gc.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
                     && gc._reserved & BLOCKING_FLAGS == 0
                     && gc._reserved & crate::gc::OBJ_FLAG_STABLE_TOMBSTONES != 0
@@ -615,7 +619,7 @@ unsafe fn try_readd_stable_tombstone_sso_no_grow(
     // Stable-tombstone admission already excludes real class/prototype
     // receivers; only class-less and registered anonymous-shape ordinary
     // objects can carry the flag into this append lane.
-    if !crate::gc::gc_type_is_object(gc.obj_type)
+    if !crate::gc_type_is_object!(gc.obj_type)
         || gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || gc._reserved & BLOCKING_FLAGS != 0
         || gc._reserved & crate::gc::OBJ_FLAG_STABLE_TOMBSTONES == 0
@@ -652,8 +656,12 @@ unsafe fn try_readd_stable_tombstone_sso_no_grow(
     // All-holes is a constructive absence proof and is the steady state of a
     // one-live-key receiver immediately after delete.
     if shape.hole_count != shape.logical_key_count
-        && crate::object::keys_find_property_slot_by_bytes(shape.keys_view(), shape.logical_key_count, key_bytes)
-            .is_some()
+        && crate::object::keys_find_property_slot_by_bytes(
+            shape.keys_view(),
+            shape.logical_key_count,
+            key_bytes,
+        )
+        .is_some()
     {
         return None;
     }
@@ -792,7 +800,7 @@ fn object_set_field_by_name_transition_fast_impl_value<const CHAIN_PROVEN: bool>
             Some(h) => h as *const crate::gc::GcHeader,
             None => return None,
         };
-        if !crate::gc::gc_type_is_object((*gc_header).obj_type)
+        if !crate::gc_type_is_object!((*gc_header).obj_type)
             || (*gc_header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return None;

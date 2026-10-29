@@ -160,7 +160,7 @@ fn is_native_module_namespace_value(value: f64, expected: &str) -> bool {
     // (`0x38000`), and `x instanceof EventEmitter` asks this probe first — the
     // null check alone let it read `class_id` out of unmapped low memory.
     let is_object = unsafe { crate::value::addr_class::try_read_gc_header(obj as usize) }
-        .is_some_and(|header| crate::gc::gc_type_is_object(header.obj_type));
+        .is_some_and(|header| crate::gc_type_is_object!(header.obj_type));
     if !is_object {
         return false;
     }
@@ -448,7 +448,7 @@ fn terminal_prototype_matches_id(identity: u64, target: f64) -> Option<bool> {
 fn terminal_prototype_id(value: f64) -> Option<u64> {
     let addr = value_addr(value);
     if !unsafe { crate::value::addr_class::try_read_gc_header(addr) }
-        .is_some_and(|header| crate::gc::gc_type_is_object(header.obj_type))
+        .is_some_and(|header| crate::gc_type_is_object!(header.obj_type))
     {
         return None;
     }
@@ -753,7 +753,7 @@ fn subclass_of_builtin_reaches(value: f64, class_id: u32) -> bool {
     }
     let gc_header =
         unsafe { (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader };
-    if !crate::gc::gc_type_is_object(unsafe { (*gc_header).obj_type }) {
+    if !crate::gc_type_is_object!(unsafe { (*gc_header).obj_type }) {
         return false;
     }
     // Builtin native brands below still answer cells with no physical chain.

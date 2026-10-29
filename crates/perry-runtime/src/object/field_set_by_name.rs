@@ -214,7 +214,7 @@ pub extern "C" fn js_object_set_field_by_name(
                     | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
                 // A born-null receiver takes the lane when its shape proves
                 // it ordinary with no chain (the plan is keyed on that shape).
-                if crate::gc::gc_type_is_object((*gc_hdr).obj_type)
+                if crate::gc_type_is_object!((*gc_hdr).obj_type)
                     && (*gc_hdr)._reserved & LANE_BLOCKING == 0
                     && super::shapes::store_kind::born_null_admits_lane(o, (*gc_hdr)._reserved)
                 {

@@ -84,7 +84,7 @@ unsafe fn holder_of_value(bits: u64) -> *mut ObjectHeader {
         return crate::closure::props::bag_of(addr);
     }
     match crate::value::addr_class::try_read_gc_header(addr) {
-        Some(h) if crate::gc::gc_type_is_object(h.obj_type) => addr as *mut ObjectHeader,
+        Some(h) if crate::gc_type_is_object!(h.obj_type) => addr as *mut ObjectHeader,
         _ => std::ptr::null_mut(),
     }
 }
@@ -197,14 +197,10 @@ pub(crate) unsafe fn note_write(
             // A value store: the slot of `name`, about to take a new value.
             Some(slot) => {
                 !keys.is_null()
-                    && super::keys_find_property_slot_by_bytes(
-                        keys,
-                        keys.count(),
-                        name.as_bytes(),
-                    )
-                    .is_some_and(|pos| {
-                        super::key_attrs::key_storage_slot(keys.arr(), pos) as usize == slot
-                    })
+                    && super::keys_find_property_slot_by_bytes(keys, keys.count(), name.as_bytes())
+                        .is_some_and(|pos| {
+                            super::key_attrs::key_storage_slot(keys.arr(), pos) as usize == slot
+                        })
             }
             // A structural change (key add or delete, descriptor, overflow,
             // relink): does the global still bind `name` to the namespace?

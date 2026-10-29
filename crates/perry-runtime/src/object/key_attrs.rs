@@ -482,8 +482,11 @@ pub(crate) unsafe fn keys_find_accessor_slot_resolved(
         }
         let value = crate::JSValue::from_bits((*slots.add(i)).to_bits());
         if crate::string::js_string_key_bytes(value, &mut sso) == Some(key) {
-            return (crate::object::keys_find_slot_by_bytes_resolved(crate::object::ObjectKeys::new(keys as *mut _, count), count, key)
-                == Some(i as u32))
+            return (crate::object::keys_find_slot_by_bytes_resolved(
+                crate::object::ObjectKeys::new(keys as *mut _, count),
+                count,
+                key,
+            ) == Some(i as u32))
             .then_some(i as u32);
         }
     }
@@ -1063,7 +1066,7 @@ pub(crate) fn attrs_live_in_keys_of_bits(bits: u64) -> bool {
     };
     // SAFETY: the classifier proved a live GC header.
     let header = unsafe { header.as_ref() };
-    crate::gc::gc_type_is_object(header.obj_type)
+    crate::gc_type_is_object!(header.obj_type)
         && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
         && crate::typedarray_hook_slots::lookup_typed_array_kind(
             (bits & crate::value::POINTER_MASK) as usize,
@@ -1087,7 +1090,7 @@ pub(crate) fn attrs_live_in_keys_of_bits(bits: u64) -> bool {
 #[inline]
 pub(crate) unsafe fn attrs_live_in_keys(addr: usize) -> bool {
     match crate::value::addr_class::try_read_gc_header(addr) {
-        Some(claim) if crate::gc::gc_type_is_object(claim.obj_type) => {
+        Some(claim) if crate::gc_type_is_object!(claim.obj_type) => {
             attrs_live_in_keys_of_bits(addr as u64)
         }
         _ => false,

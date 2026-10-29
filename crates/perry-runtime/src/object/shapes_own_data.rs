@@ -102,15 +102,14 @@ pub(crate) unsafe fn plain_receiver_miss_is_final(object: *const ObjectHeader, k
         | OBJ_FLAG_ARGUMENTS
         | GC_OBJECT_CALLABLE
         | OBJ_FLAG_HAS_DESCRIPTORS;
-    if !crate::gc::gc_type_is_object(header.obj_type)
+    if !crate::object_has_meta_word!(header.obj_type)
         || header.gc_flags & (GC_FLAG_ARENA | GC_FLAG_FORWARDED) != GC_FLAG_ARENA
         || header._reserved & BLOCKING != 0
         || (classless && header._reserved & OBJ_FLAG_PLAIN_ORDINARY == 0)
     {
         return false;
     }
-    // A1_UNPROVEN: both: A-tested admission, the meta read needs the B test (kind-A/B question for S0f).
-    let meta = crate::object::header::MetaObj::runtime_born(object as *mut _).meta();
+    let meta = crate::object::header::MetaObj::from_type(object as *mut _, header.obj_type).meta();
     if !meta.is_null()
         && (*meta).flags
             & (crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER

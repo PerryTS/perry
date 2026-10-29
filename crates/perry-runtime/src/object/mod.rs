@@ -1749,7 +1749,7 @@ pub(crate) unsafe fn object_is_regular(obj: *const ObjectHeader) -> bool {
     let Some(header) = crate::value::addr_class::try_read_gc_header(obj as usize) else {
         return false;
     };
-    crate::gc::gc_type_is_object(header.obj_type)
+    crate::gc_type_is_object!(header.obj_type)
         && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
         && shapes::shape_object_kind_of_receiver((*obj).shape_word())
             .is_some_and(|kind| kind.is_ordinary_layout())
@@ -1763,7 +1763,7 @@ pub(crate) unsafe fn object_is_shaped(obj: *const ObjectHeader) -> bool {
     let Some(header) = crate::value::addr_class::try_read_gc_header(obj as usize) else {
         return false;
     };
-    crate::gc::gc_type_is_object(header.obj_type)
+    crate::gc_type_is_object!(header.obj_type)
         && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
 }
 

@@ -21,7 +21,7 @@ unsafe fn receiver_record(receiver: f64) -> Option<(*mut ObjectHeader, shapes::S
         | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
         | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
         | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES;
-    if !crate::gc::gc_type_is_object(gc.obj_type)
+    if !crate::gc_type_is_object!(gc.obj_type)
         || gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || gc._reserved & BLOCKING != 0
     {

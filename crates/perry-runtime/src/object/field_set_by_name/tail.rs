@@ -176,7 +176,7 @@ pub(crate) fn set_field_by_name_object_tail(
             }
             return;
         }
-        if !crate::gc::gc_type_is_object(gc_type) && gc_type != crate::gc::GC_TYPE_CLOSURE {
+        if !crate::gc_type_is_object!(gc_type) && gc_type != crate::gc::GC_TYPE_CLOSURE {
             // A RECOGNIZED non-object heap type (Map/Set/Buffer/TypedArray/…)
             // must never fall through to the plain-object write below: their
             // layouts alias ObjectHeader fields. A Map with EXACTLY one entry
@@ -1098,8 +1098,7 @@ pub(crate) fn set_field_by_name_object_tail(
         let new_index = key_count;
         let proof = crate::object::canonical_keys::SharedLayout::of_receiver(obj)
             .expect("an object with an overflow appends through it, never here");
-        let canonical_parent =
-            crate::object::canonical_keys::canonicalize_keys(&proof, keys_view);
+        let canonical_parent = crate::object::canonical_keys::canonicalize_keys(&proof, keys_view);
         refresh_roots_after_alloc!();
         let new_keys =
             crate::object::canonical_keys::extend_key(&proof, canonical_parent, key).view();

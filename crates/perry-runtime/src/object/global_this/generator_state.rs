@@ -321,7 +321,7 @@ pub(crate) fn fixed_generator_state(value: f64) -> Option<*const crate::closure:
     let addr = value.as_pointer::<u8>() as usize;
     unsafe {
         let header = crate::value::addr_class::try_read_gc_header(addr)?;
-        if !crate::gc::gc_type_is_object(header.obj_type) {
+        if !crate::gc_type_is_object!(header.obj_type) {
             return None;
         }
         fixed_generator_state_of_object(addr as *const ObjectHeader)
@@ -538,7 +538,7 @@ pub(crate) fn generator_observe_record_prototype(value: f64) {
         let Some(header) = crate::value::addr_class::try_read_gc_header(addr) else {
             return;
         };
-        if !crate::gc::gc_type_is_object(header.obj_type)
+        if !crate::gc_type_is_object!(header.obj_type)
             || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return;
@@ -711,7 +711,7 @@ pub(crate) unsafe fn resume_fixed_step(
 unsafe fn prototype_identity(value: f64) -> Option<u64> {
     let addr = (value.to_bits() & crate::value::POINTER_MASK) as usize;
     if let Some(header) = crate::value::addr_class::try_read_gc_header(addr) {
-        if crate::gc::object_has_meta_word(header.obj_type) {
+        if crate::object_has_meta_word!(header.obj_type) {
             let meta = crate::object::header::MetaObj::from_type(
                 addr as *const ObjectHeader as *mut _,
                 header.obj_type,
@@ -846,7 +846,7 @@ pub(super) fn classify_prototype(value: f64, is_async: bool) -> Holder {
     let ordinary = jv.is_pointer()
         && unsafe {
             crate::value::addr_class::try_read_gc_header(jv.as_pointer::<u8>() as usize)
-                .is_some_and(|h| crate::gc::gc_type_is_object(h.obj_type))
+                .is_some_and(|h| crate::gc_type_is_object!(h.obj_type))
         };
     if ordinary {
         Holder::Record(value.to_bits())

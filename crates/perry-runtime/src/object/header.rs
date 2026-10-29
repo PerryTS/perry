@@ -11,7 +11,7 @@
 #![allow(dead_code)]
 
 use super::{ObjectHeader, ObjectMeta};
-use crate::gc::{object_has_meta_word, GcHeader, GC_HEADER_SIZE, GC_TYPE_OBJECT};
+use crate::gc::{GcHeader, GC_HEADER_SIZE, GC_TYPE_OBJECT};
 
 /// The `obj_type` byte of an ordinary object's `GcHeader` (the byte at `obj - 8`).
 ///
@@ -39,7 +39,7 @@ pub(crate) unsafe fn object_slot_at(obj: *mut ObjectHeader, off: u32) -> *mut u6
 /// `t` is `object_type(obj)`, read in this scope.
 #[inline(always)]
 pub(crate) unsafe fn object_meta_if_present(obj: *mut ObjectHeader, t: u8) -> *mut ObjectMeta {
-    if object_has_meta_word(t) {
+    if crate::object_has_meta_word!(t) {
         (*obj).meta
     } else {
         std::ptr::null_mut()
@@ -65,13 +65,13 @@ impl MetaObj {
         MetaObj(obj)
     }
 
-    /// An object in the arm of a dispatch that tested `object_has_meta_word(t)`.
+    /// An object in the arm of a dispatch that tested `crate::object_has_meta_word!(t)`.
     ///
     /// # Safety
     /// `t` is `object_type(obj)`, and the caller has tested it.
     #[inline(always)]
     pub(crate) unsafe fn from_type(obj: *mut ObjectHeader, t: u8) -> Self {
-        debug_assert!(object_has_meta_word(t));
+        debug_assert!(crate::object_has_meta_word!(t));
         debug_assert_eq!(object_type(obj), t);
         MetaObj(obj)
     }
@@ -84,7 +84,7 @@ impl MetaObj {
     /// overflow storage; `obj` is a live ordinary object.
     #[inline(always)]
     pub(crate) unsafe fn from_storage<E>(obj: *mut ObjectHeader, _entry: E) -> Self {
-        debug_assert!(object_has_meta_word(object_type(obj)));
+        debug_assert!(crate::object_has_meta_word!(object_type(obj)));
         MetaObj(obj)
     }
 
@@ -95,7 +95,7 @@ impl MetaObj {
     /// `word` is the layout word of `obj`, read in this scope.
     #[inline(always)]
     pub(crate) unsafe fn from_kind<W>(obj: *mut ObjectHeader, _word: W) -> Self {
-        debug_assert!(object_has_meta_word(object_type(obj)));
+        debug_assert!(crate::object_has_meta_word!(object_type(obj)));
         MetaObj(obj)
     }
 
@@ -106,7 +106,7 @@ impl MetaObj {
     /// `shape` is the runtime-minted shape record of `obj`.
     #[inline(always)]
     pub(crate) unsafe fn of_runtime_shape<S>(obj: *mut ObjectHeader, _shape: S) -> Self {
-        debug_assert!(object_has_meta_word(object_type(obj)));
+        debug_assert!(crate::object_has_meta_word!(object_type(obj)));
         MetaObj(obj)
     }
 

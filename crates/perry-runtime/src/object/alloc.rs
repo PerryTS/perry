@@ -1017,7 +1017,7 @@ pub unsafe extern "C" fn js_object_clone_with_extra(
         && !crate::value::addr_class::is_handle_band(src_raw)
         && matches!(
             crate::value::addr_class::try_read_gc_header(src_raw),
-            Some(h) if crate::gc::gc_type_is_object(h.obj_type)
+            Some(h) if crate::gc_type_is_object!(h.obj_type)
         );
     if !src_is_object {
         let phys_slots = std::cmp::max(extra_count, crate::object::INLINE_SLOT_FLOOR as u32);
@@ -1174,7 +1174,7 @@ pub unsafe extern "C" fn js_object_copy_own_fields(dst_i64: i64, src_f64: f64) {
     // (Maps/Sets/Promises/etc. have their own layouts — reading their bytes
     // as ObjectHeader fields is type confusion).
     match crate::value::addr_class::try_read_gc_header(src_raw) {
-        Some(h) if crate::gc::gc_type_is_object(h.obj_type) => {}
+        Some(h) if crate::gc_type_is_object!(h.obj_type) => {}
         _ => return,
     }
     let src = src_raw as *const ObjectHeader;

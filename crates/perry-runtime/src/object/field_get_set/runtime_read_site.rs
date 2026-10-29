@@ -276,7 +276,7 @@ pub(crate) fn object_receiver(value: f64) -> Option<*mut ObjectHeader> {
         return None;
     }
     let header = unsafe { crate::value::addr_class::try_read_gc_header(addr)? };
-    (crate::gc::gc_type_is_object(header.obj_type)
+    (crate::gc_type_is_object!(header.obj_type)
         && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0)
         .then_some(addr as *mut ObjectHeader)
 }

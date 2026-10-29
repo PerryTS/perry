@@ -142,7 +142,7 @@ pub extern "C" fn js_object_get_own_field_or_undef(
         }
         let gc_header =
             (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        if !crate::gc::gc_type_is_object((*gc_header).obj_type) {
+        if !crate::gc_type_is_object!((*gc_header).obj_type) {
             return f64::from_bits(TAG_UNDEF);
         }
         let keys_view = crate::object::object_keys(obj);

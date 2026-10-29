@@ -49,7 +49,7 @@ pub(crate) unsafe fn cell_meta_slot_for_header(
     gc_hdr: &crate::gc::GcHeader,
 ) -> Option<*mut *mut ObjectMeta> {
     match gc_hdr.obj_type {
-        ty if crate::gc::object_has_meta_word(ty) => {
+        ty @ crate::gc_object_type_pat!() => {
             Some(header::MetaObj::from_type(user_ptr as *mut ObjectHeader, ty).meta_slot())
         }
         crate::gc::GC_TYPE_ERROR => {
@@ -142,4 +142,16 @@ pub(crate) unsafe fn cell_expando_get(user_ptr: usize) -> Option<*mut ObjectHead
         crate::value::JSValue::from_bits((*meta).expando).as_pointer::<ObjectHeader>()
             as *mut ObjectHeader,
     )
+}
+
+/// The meta word of a Map cell (its own header carries it, not an `ObjectHeader`).
+#[inline(always)]
+pub(crate) unsafe fn map_cell_meta(cell: *const crate::map::MapHeader) -> *mut ObjectMeta {
+    (*cell).meta
+}
+
+/// The meta word of a Set cell.
+#[inline(always)]
+pub(crate) unsafe fn set_cell_meta(cell: *const crate::set::SetHeader) -> *mut ObjectMeta {
+    (*cell).meta
 }

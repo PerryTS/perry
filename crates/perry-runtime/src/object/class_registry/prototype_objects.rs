@@ -11,7 +11,7 @@ pub(crate) fn ensure_function_prototype_object(func_value: f64) -> *mut ObjectHe
         if value.is_pointer() {
             let ptr = value.as_pointer::<ObjectHeader>() as usize;
             if unsafe { crate::value::addr_class::try_read_gc_header(ptr) }
-                .is_some_and(|h| crate::gc::gc_type_is_object(h.obj_type))
+                .is_some_and(|h| crate::gc_type_is_object!(h.obj_type))
             {
                 return ptr as *mut ObjectHeader;
             }
@@ -437,7 +437,7 @@ unsafe fn evaluated_parent_instance_field(
         let Some(header) = crate::value::addr_class::try_read_gc_header(addr) else {
             return None;
         };
-        if !crate::gc::gc_type_is_object(header.obj_type) {
+        if !crate::gc_type_is_object!(header.obj_type) {
             return None;
         }
         let proto = addr as *mut ObjectHeader;
@@ -861,7 +861,7 @@ unsafe fn bound_native_parent_prototype_field(
     }
     let proto_obj = proto.as_pointer::<ObjectHeader>();
     if crate::value::addr_class::try_read_gc_header(proto_obj as usize)
-        .is_none_or(|h| !crate::gc::gc_type_is_object(h.obj_type))
+        .is_none_or(|h| !crate::gc_type_is_object!(h.obj_type))
     {
         return None;
     }

@@ -273,7 +273,7 @@ fn object_has_own_generic(obj_value: f64, key_value: f64) -> f64 {
             // immediates or functions). Only a class object, which owns
             // `prototype` without storing it, needs a look before the object
             // arms below.
-            Some(h) if crate::gc::gc_type_is_object(h.obj_type) => {
+            Some(h) if crate::gc_type_is_object!(h.obj_type) => {
                 let ptr = obj_js.as_pointer::<u8>();
                 if super::super::class_registry::parent_static::is_class_object_with_header(ptr, h)
                     && super::super::has_own_helpers::str_from_string_header(key_str).is_some_and(

@@ -331,7 +331,7 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
         };
         return unsafe { rooted_property_key_get(raw, idx) };
     }
-    if crate::gc::gc_type_is_object(gc_type) {
+    if crate::gc_type_is_object!(gc_type) {
         if let Some(index) = numeric_key_u32_index(idx) {
             let receiver = f64::from_bits(crate::value::POINTER_TAG | raw);
             if let Some(value) = crate::array::array_subclass_fast_index_get(receiver, index) {
@@ -524,7 +524,7 @@ pub extern "C" fn js_object_set_index_polymorphic(obj_handle: i64, idx: f64, val
             return;
         }
     }
-    if crate::gc::gc_type_is_object(gc_type) || gc_type == crate::gc::GC_TYPE_CLOSURE {
+    if crate::gc_type_is_object!(gc_type) || gc_type == crate::gc::GC_TYPE_CLOSURE {
         // Stringify the index and route through the object field setter,
         // which handles shape transitions, frozen/sealed/extensible checks,
         // overflow into out-of-line storage, and accessor descriptors.

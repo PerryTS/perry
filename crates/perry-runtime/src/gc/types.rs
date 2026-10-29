@@ -62,15 +62,29 @@ fn gc_header_size_overflow(total: usize) -> ! {
 // Object type constants
 pub const GC_TYPE_ARRAY: u8 = 1;
 pub const GC_TYPE_OBJECT: u8 = 2;
-/// "Is an ordinary object", either header form. S0f meaning (A): `t >= 0xFE`.
-#[inline(always)]
-pub const fn gc_type_is_object(t: u8) -> bool {
-    t == GC_TYPE_OBJECT
+/// "Is an ordinary object", either header form. S0f meaning (A): `($t) >= 0xFE`.
+/// A macro, textually the comparison it replaces, so a site compiles to the
+/// code it had before the migration.
+#[macro_export]
+macro_rules! gc_type_is_object {
+    ($t:expr) => {
+        ($t) == $crate::gc::GC_TYPE_OBJECT
+    };
 }
-/// "Might carry the meta word". S0f meaning (B): `t == 0xFF`.
-#[inline(always)]
-pub const fn object_has_meta_word(t: u8) -> bool {
-    t == GC_TYPE_OBJECT
+/// "Might carry the meta word". S0f meaning (B): `($t) == 0xFF`.
+#[macro_export]
+macro_rules! object_has_meta_word {
+    ($t:expr) => {
+        ($t) == $crate::gc::GC_TYPE_OBJECT
+    };
+}
+/// The constant pattern of a `match` arm on an object type byte. S0f meaning:
+/// both object constants.
+#[macro_export]
+macro_rules! gc_object_type_pat {
+    () => {
+        $crate::gc::GC_TYPE_OBJECT
+    };
 }
 pub const GC_TYPE_STRING: u8 = 3;
 pub const GC_TYPE_CLOSURE: u8 = 4;

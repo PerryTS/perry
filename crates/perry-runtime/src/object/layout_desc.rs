@@ -1245,15 +1245,14 @@ unsafe fn image_matches(d: &PerryLayoutDesc, built: f64, bound: &[u64]) -> bool 
     let Some(header) = crate::value::addr_class::try_read_gc_header(p) else {
         return false;
     };
-    if !crate::gc::gc_type_is_object(header.obj_type)
+    if !crate::object_has_meta_word!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || header._reserved & super::shapes::INTEGRITY_FLAGS != 0
     {
         return false;
     }
     let obj = p as *const ObjectHeader;
-    // A1_UNPROVEN: both: A-tested admission, the meta read needs the B test (kind-A/B question for S0f).
-    let meta = crate::object::header::MetaObj::runtime_born(obj as *mut _).meta();
+    let meta = crate::object::header::MetaObj::from_type(obj as *mut _, header.obj_type).meta();
     if !meta.is_null()
         && ((*meta).boxed_primitive != 0
             || (*meta).reflect_metadata != 0
@@ -1294,6 +1293,7 @@ unsafe fn image_matches(d: &PerryLayoutDesc, built: f64, bound: &[u64]) -> bool 
         _ => {
             let serial = proto_family_serial_registered(d.proto);
             let q = (proto & crate::value::POINTER_MASK) as *const ObjectHeader;
+            // A1_UNPROVEN: record-first: the prototype word q before its type test (kind-A/B question for S0f).
             serial != 0
                 && proto & !crate::value::POINTER_MASK == crate::value::POINTER_TAG
                 && crate::value::addr_class::is_above_handle_band(q as usize)
@@ -1342,7 +1342,7 @@ unsafe fn family_birth(d: &PerryLayoutDesc, proto: f64) -> Option<*mut ObjectHea
         return None;
     }
     let header = crate::value::addr_class::try_read_gc_header(p)?;
-    if !crate::gc::object_has_meta_word(header.obj_type)
+    if !crate::object_has_meta_word!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
     {
         return None;
@@ -1627,9 +1627,12 @@ pub(crate) unsafe fn adopt_family_layout(obj: *mut ObjectHeader) -> *mut ObjectH
     // (`shapes::object_evaluation_brand`); its [[Prototype]] stays a shape
     // fact, re-linked below once the object is on the layout.
     if brand.get_nanbox_u64() != 0 {
-        let (meta, current) =
-            // A1_UNPROVEN: adopt_family_layout(obj) parameter, no type test (kind-A/B question for S0b-S0e).
-            object.across_mut::<ObjectHeader, _>(|| super::object_meta_ensure(super::MetaObj::runtime_born(obj), super::MetaReason::AdoptFamilyLayout));
+        let (meta, current) = object.across_mut::<ObjectHeader, _>(|| {
+            super::object_meta_ensure(
+                super::MetaObj::from_kind(obj, prototype),
+                super::MetaReason::AdoptFamilyLayout,
+            )
+        });
         (*meta).private_evaluation_brand = brand.get_nanbox_u64();
         crate::gc::runtime_write_barrier_slot(
             meta as usize,

@@ -122,7 +122,7 @@ unsafe fn define_other(
             | crate::gc::OBJ_FLAG_SEALED
             | crate::gc::OBJ_FLAG_NO_EXTEND
             | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
-        if !crate::gc::gc_type_is_object(header.obj_type)
+        if !crate::gc_type_is_object!(header.obj_type)
             || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
             || header._reserved & BLOCKING != 0
         {
@@ -383,7 +383,7 @@ unsafe fn definition_admitted(obj_bits: u64, key_value: f64) -> Option<Admitted>
         | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
         | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES
         | crate::gc::OBJ_FLAG_ARGUMENTS;
-    if !crate::gc::gc_type_is_object(header.obj_type)
+    if !crate::object_has_meta_word!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || header._reserved & BLOCKING != 0
     {
@@ -396,8 +396,7 @@ unsafe fn definition_admitted(obj_bits: u64, key_value: f64) -> Option<Admitted>
     {
         return None;
     }
-    // A1_UNPROVEN: both: A-tested admission, the meta read needs the B test (kind-A/B question for S0f).
-    let meta = crate::object::header::MetaObj::runtime_born(obj as *mut _).meta();
+    let meta = crate::object::header::MetaObj::from_type(obj as *mut _, header.obj_type).meta();
     if !meta.is_null()
         && ((*meta).elements != 0
             || (*meta).flags

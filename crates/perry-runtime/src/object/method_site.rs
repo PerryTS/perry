@@ -101,7 +101,7 @@ unsafe fn ordinary_receiver(addr: usize) -> Option<*const ObjectHeader> {
     }
     let header = crate::value::addr_class::try_read_gc_header(addr)?;
     // An OBJECT header is not a closure (closures carry GC_TYPE_CLOSURE).
-    if !crate::gc::gc_type_is_object(header.obj_type)
+    if !crate::object_has_meta_word!(header.obj_type)
         || !address_is_prime_stable(addr)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || header._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0
@@ -131,8 +131,7 @@ unsafe fn ordinary_receiver(addr: usize) -> Option<*const ObjectHeader> {
     if !super::shapes::is_layout_word(stamp.0) {
         return None;
     }
-    // A1_UNPROVEN: record-first: receiver before its type test (kind-A/B question for S0f).
-    let meta = crate::object::header::MetaObj::runtime_born(obj as *mut _).meta();
+    let meta = crate::object::header::MetaObj::from_type(obj as *mut _, header.obj_type).meta();
     if !meta.is_null()
         && ((*meta).elements != 0
             || (*meta).flags & super::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER != 0)

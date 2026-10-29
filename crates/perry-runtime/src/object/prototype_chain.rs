@@ -241,7 +241,7 @@ pub(crate) fn test_resolution_stack_enter_and_forget(owner: usize, mark: usize) 
 /// whose shape can name its prototype directly. Other public owners answer
 /// from their own property holder instead.
 pub(crate) unsafe fn meta_capable_object(obj_ptr: usize) -> Option<*mut crate::ObjectHeader> {
-    crate::gc::gc_type_is_object(receiver_header_type(obj_ptr)?)
+    crate::gc_type_is_object!(receiver_header_type(obj_ptr)?)
         .then_some(obj_ptr as *mut crate::ObjectHeader)
 }
 
@@ -263,10 +263,10 @@ unsafe fn receiver_header_type(obj_ptr: usize) -> Option<u8> {
 /// Public heap receivers whose own-property holder can record a prototype.
 pub(crate) fn owned_prototype_receiver_type(kind: u8) -> bool {
     crate::gc::is_byte_family_type(kind)
-        || crate::gc::gc_type_is_object(kind)
         || matches!(
             kind,
             crate::gc::GC_TYPE_ARRAY
+                | crate::gc_object_type_pat!()
                 | crate::gc::GC_TYPE_CLOSURE
                 | crate::gc::GC_TYPE_PROMISE
                 | crate::gc::GC_TYPE_ERROR
@@ -762,7 +762,7 @@ unsafe fn class_link_prototype(obj_ptr: usize) -> usize {
     let Some(header) = crate::value::addr_class::try_read_gc_header(obj_ptr) else {
         return 0;
     };
-    if !crate::gc::gc_type_is_object(header.obj_type) {
+    if !crate::gc_type_is_object!(header.obj_type) {
         return 0;
     }
     let class_id = (*(obj_ptr as *const crate::ObjectHeader)).class_id;
@@ -784,7 +784,7 @@ unsafe fn cell_is_born_null_proto(obj_ptr: usize) -> bool {
     let Some(header) = crate::value::addr_class::try_read_gc_header(obj_ptr) else {
         return false;
     };
-    crate::gc::gc_type_is_object(header.obj_type)
+    crate::gc_type_is_object!(header.obj_type)
         && header._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0
 }
 
@@ -861,7 +861,7 @@ pub(crate) fn object_prototype_is_foreign(obj_ptr: usize) -> bool {
             return true;
         };
         let class_id = (*obj).class_id;
-        !(crate::gc::gc_type_is_object(header.obj_type)
+        !(crate::gc_type_is_object!(header.obj_type)
             && class_id != 0
             && (*proto).class_id == class_id)
     }
@@ -915,7 +915,7 @@ pub(crate) unsafe fn default_object_prototype_for_owner(obj_ptr: usize) -> Optio
     if (*gc)._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 {
         return None;
     }
-    if !crate::gc::gc_type_is_object((*gc).obj_type)
+    if !crate::gc_type_is_object!((*gc).obj_type)
         || ((*obj).class_id != 0 && !super::shapes::object_is_plain_record(obj))
     {
         return None;

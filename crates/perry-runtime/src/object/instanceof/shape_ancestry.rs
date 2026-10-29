@@ -61,7 +61,7 @@ pub(crate) unsafe fn class_shape_reaches(
         if header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
             return false;
         }
-        if !crate::gc::gc_type_is_object(header.obj_type) {
+        if !crate::gc_type_is_object!(header.obj_type) {
             if !build {
                 return false;
             }

@@ -77,7 +77,7 @@ unsafe fn site_prototype_object(
     }
     let proto = value.as_pointer::<ObjectHeader>() as *mut ObjectHeader;
     let header = crate::value::addr_class::try_read_gc_header(proto as usize)?;
-    (crate::gc::gc_type_is_object(header.obj_type)
+    (crate::gc_type_is_object!(header.obj_type)
         && crate::object::shapes::object_shape_stamp(proto).0 as u64
             == prototype_proof as u32 as u64)
         .then_some(proto)
@@ -171,7 +171,7 @@ unsafe fn own_prototype_object(closure: usize) -> Option<*mut ObjectHeader> {
     }
     let proto = value.as_pointer::<ObjectHeader>() as usize;
     let header = crate::value::addr_class::try_read_gc_header(proto)?;
-    (crate::gc::gc_type_is_object(header.obj_type)).then_some(proto as *mut ObjectHeader)
+    (crate::gc_type_is_object!(header.obj_type)).then_some(proto as *mut ObjectHeader)
 }
 
 /// The class `class_id`'s registered prototype moved from `old` to another
@@ -407,11 +407,11 @@ pub(crate) fn ordinary_compiled_function_has_instance(
         }
         let obj = (bits & crate::value::POINTER_MASK) as usize;
         let header = crate::value::addr_class::try_read_gc_header(obj)?;
-        if !crate::gc::gc_type_is_object(header.obj_type) {
+        if !crate::object_has_meta_word!(header.obj_type) {
             return None;
         }
-        // A1_UNPROVEN: both: A-tested admission, the meta read needs the B test (kind-A/B question for S0f).
-        let meta = crate::object::header::MetaObj::runtime_born(proto as *mut _).meta();
+        let meta =
+            crate::object::header::MetaObj::from_type(proto as *mut _, header.obj_type).meta();
         if !meta.is_null() && (*meta).proto_serial != 0 {
             let shape_id = crate::object::shapes::object_shape_stamp(obj as *const ObjectHeader);
             if crate::object::shapes::shape_proto_id(shape_id) == Some((*meta).proto_serial) {

@@ -32,7 +32,7 @@ pub(super) fn named_read_receiver_kind(obj: *const ObjectHeader) -> NamedReadKin
             return NamedReadKind::Other;
         };
         match header.obj_type {
-            ty if crate::gc::gc_type_is_object(ty) => {
+            crate::gc_object_type_pat!() => {
                 let kind = if header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0 {
                     super::super::shapes::shape_object_kind_of_receiver(
                         (*(addr as *const ObjectHeader)).shape_word(),
@@ -76,7 +76,7 @@ pub(super) fn note_probe(index: usize, obj: *const ObjectHeader) {
     // under test, so replacing that gate with false still trips the assertion.
     let ordinary = unsafe {
         crate::value::addr_class::try_read_gc_header(addr).is_some_and(|header| {
-            crate::gc::gc_type_is_object(header.obj_type)
+            crate::gc_type_is_object!(header.obj_type)
                 && super::super::shapes::object_shape_descriptor(addr as *const ObjectHeader)
                     .is_some_and(|shape| {
                         matches!(

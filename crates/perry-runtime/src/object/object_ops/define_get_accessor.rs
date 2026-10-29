@@ -48,7 +48,7 @@ unsafe fn fast_path_admissible(obj_value: f64, key_value: f64, getter: f64) -> b
     }
     let addr = obj as usize;
     match crate::value::addr_class::try_read_gc_header(addr) {
-        Some(h) if crate::gc::gc_type_is_object(h.obj_type) => {}
+        Some(h) if crate::gc_type_is_object!(h.obj_type) => {}
         _ => return false, // array / typed array / closure / Map / Date / …
     }
     // RegExp is an OBJECT-typed exotic cell; Date/Error route their defines

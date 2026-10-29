@@ -119,13 +119,12 @@ pub(crate) unsafe fn derived_layout(proto: u64) -> Option<*const PerryLayoutDesc
         }
         let obj = value.as_pointer::<ObjectHeader>();
         let header = crate::value::addr_class::try_read_gc_header(obj as usize)?;
-        if !crate::gc::gc_type_is_object(header.obj_type)
+        if !crate::object_has_meta_word!(header.obj_type)
             || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return None;
         }
-        // A1_UNPROVEN: both: A-tested admission, the meta read needs the B test (kind-A/B question for S0f).
-        let meta = crate::object::header::MetaObj::runtime_born(obj as *mut _).meta();
+        let meta = crate::object::header::MetaObj::from_type(obj as *mut _, header.obj_type).meta();
         if !meta.is_null() {
             if let Some(layout) = instance_layout_of_prototype((*meta).proto_serial) {
                 return sealed_chain(f64::from_bits(bits), layout).then_some(layout);

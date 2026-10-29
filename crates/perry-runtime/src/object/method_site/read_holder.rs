@@ -131,7 +131,7 @@ unsafe fn hop_admitted(addr: usize) -> bool {
         return false;
     };
     let obj = addr as *const ObjectHeader;
-    if !crate::gc::object_has_meta_word(header.obj_type)
+    if !crate::object_has_meta_word!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || header._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0
         || crate::object::overflow::has_overflow(obj)

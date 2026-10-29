@@ -462,7 +462,7 @@ fn render_incompatible_receiver(bits: u64) -> String {
             crate::gc::GC_TYPE_CLOSURE => {
                 return "function () { [native code] }".to_string();
             }
-            ty if crate::gc::gc_type_is_object(ty) => {
+            crate::gc_object_type_pat!() => {
                 // An OWN user `toString` overrides the default — V8 refuses to
                 // call it and falls back to the Object.prototype.toString tag.
                 // js_string_from_bytes allocates and can trigger a GC that

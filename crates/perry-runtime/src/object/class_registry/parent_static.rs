@@ -566,7 +566,7 @@ pub extern "C" fn js_object_mark_class(obj: i64) {
             let Some(header) = crate::value::addr_class::try_read_gc_header(obj as usize) else {
                 return;
             };
-            if !crate::gc::gc_type_is_object(header.obj_type)
+            if !crate::gc_type_is_object!(header.obj_type)
                 || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
             {
                 return;
@@ -597,7 +597,7 @@ pub fn is_class_object_ptr(ptr: *const u8) -> bool {
         let Some(header) = crate::value::addr_class::try_read_gc_header(ptr as usize) else {
             return false;
         };
-        crate::gc::gc_type_is_object(header.obj_type)
+        crate::gc_type_is_object!(header.obj_type)
             && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
             && object_shape_kind_is_class(ptr)
     }
@@ -612,7 +612,7 @@ pub(crate) unsafe fn is_class_object_with_header(
     ptr: *const u8,
     header: &crate::gc::GcHeader,
 ) -> bool {
-    crate::gc::gc_type_is_object(header.obj_type)
+    crate::gc_type_is_object!(header.obj_type)
         && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
         && object_shape_kind_is_class(ptr)
 }

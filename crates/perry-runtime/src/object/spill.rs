@@ -85,7 +85,7 @@ pub(crate) unsafe fn spill_capable_owner(obj_ptr: usize) -> bool {
         return false;
     }
     match crate::value::addr_class::try_read_gc_header(obj_ptr) {
-        Some(h) => crate::gc::object_has_meta_word(h.obj_type),
+        Some(h) => crate::object_has_meta_word!(h.obj_type),
         None => false,
     }
 }

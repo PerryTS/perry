@@ -235,7 +235,7 @@ pub(crate) unsafe fn mark_exotic_read_receiver(obj: usize) {
 #[inline]
 pub(crate) unsafe fn object_is_exotic_read_receiver(obj: usize) -> bool {
     if let Some(header) = crate::value::addr_class::try_read_gc_header(obj) {
-        if crate::gc::object_has_meta_word(header.obj_type)
+        if crate::object_has_meta_word!(header.obj_type)
             && header._reserved & crate::gc::OBJ_FLAG_ARGUMENTS != 0
         {
             return true;
@@ -273,15 +273,14 @@ unsafe fn ensure_meta_for_mark(obj: usize, flag: u64) -> Option<*mut crate::obje
         return None;
     }
     let header = crate::value::addr_class::try_read_gc_header(obj)?;
-    if !crate::gc::gc_type_is_object(header.obj_type) {
+    if !crate::object_has_meta_word!(header.obj_type) {
         return None;
     }
     let object = obj as *mut crate::object::ObjectHeader;
-    // A1_UNPROVEN: both: A-tested admission, the meta read needs the B test (kind-A/B question for S0f).
     // Marking is idempotent. The existing owner record already carries a
     // completed mark, so no allocation or semantic transition remains. Do
     // not reopen handles and enter object_meta_ensure for that same record.
-    let meta = crate::object::header::MetaObj::runtime_born(object as *mut _).meta();
+    let meta = crate::object::header::MetaObj::from_type(object as *mut _, header.obj_type).meta();
     if !meta.is_null() && (*meta).flags & flag != 0 {
         return Some(meta);
     }
@@ -324,7 +323,8 @@ unsafe fn ensure_meta_for_mark(obj: usize, flag: u64) -> Option<*mut crate::obje
                 crate::object::shapes::transition_object_shape_semantics(object)
             }
         });
-        let meta = crate::object::header::MetaObj::runtime_born(object as *mut _).meta();
+        let meta =
+            crate::object::header::MetaObj::from_type(object as *mut _, header.obj_type).meta();
         if meta.is_null() {
             return None;
         }
@@ -376,7 +376,7 @@ unsafe fn meta_flag_is_set(obj: usize, flag: u64) -> bool {
         return false;
     }
     match crate::value::addr_class::try_read_gc_header(obj) {
-        Some(header) if crate::gc::object_has_meta_word(header.obj_type) => {
+        Some(header) if crate::object_has_meta_word!(header.obj_type) => {
             let meta = crate::object::header::MetaObj::from_type(
                 obj as *const crate::object::ObjectHeader as *mut _,
                 header.obj_type,
