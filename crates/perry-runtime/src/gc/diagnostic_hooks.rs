@@ -219,6 +219,7 @@ pub(crate) fn install() {
     SITE_PRIMITIVE_DISPATCH.set(super::diag_sites::primitive_dispatch);
     SITE_REPORT_PRIMITIVE_DISPATCH.set(super::diag_sites::report_primitive_dispatch);
     ENABLED.set(super::telemetry::gc_diag_enabled);
+    super::roots::install_verify_walker();
     START_TRACE.set(GcCycleTrace::new);
     BEFORE_COLLECTION.set(super::verify::verify_array_hole_tails_at_collection);
     NOTE_RECLAIM_REASON.set(super::telemetry::note_old_reclaim_why);

@@ -12,6 +12,7 @@ mod shadow_layout;
 #[cfg(any(test, not(perry_native_stack_maps)))]
 mod shadow_stack;
 mod stack_maps;
+pub(super) use stack_maps::install_verify_walker;
 mod stack_roots;
 pub(crate) use stack_maps::census_rows::stack_map_index_census;
 mod temp_roots;

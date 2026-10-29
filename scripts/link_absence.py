@@ -267,9 +267,28 @@ def symbols(binary, nm, demangler):
     return rows, hi-lo
 
 
+def defining_path(name):
+    """The symbol's own path: generic arguments are where the compiler happened
+    to instantiate it, not what it is, so they are dropped. A trait impl's
+    leading '<Type as Trait>' keeps Type and Trait."""
+    out, depth = [], 0
+    for index, char in enumerate(name):
+        if char == "<" and index == 0:
+            continue
+        if char == "<":
+            depth += 1
+        elif char == ">":
+            depth = max(depth-1, 0)
+        elif depth == 0:
+            out.append(char)
+    return "".join(out)
+
+
 def matches(symbol, fixture):
-    # Rust trait impl names start with '<'; their defining module still counts.
-    name = symbol["name"].lstrip("<")
+    # Match the defining implementation, not the types it was instantiated with:
+    # a collector generic over a diagnostic closure is collector code, and a
+    # diagnostic generic over a collector type is still a diagnostic.
+    name = defining_path(symbol["name"])
     if any(name.startswith(prefix) for prefix in fixture["prefixes"]):
         return True
     # A diagnostic does not stop being diagnostic when moved into a collector
