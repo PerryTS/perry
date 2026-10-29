@@ -418,7 +418,11 @@ pub(super) fn start_core(c: &mut H2Conn) -> bool {
     limits.streams = clamp_streams(c.settings.max_concurrent_streams);
     limits.frame_size = c.settings.max_frame_size.clamp(16_384, 0xff_ffff) as usize;
     limits.header_list = c.settings.max_header_list_size.max(4_096) as usize;
-    match http2::Connection::new(c.role, limits) {
+    let mut named = http2::Settings::new();
+    for (id, value) in advertised_settings(&c.settings).named() {
+        named.set(id, value);
+    }
+    match http2::Connection::with_settings(c.role, limits, &named) {
         Ok(core) => {
             c.core = Some(core);
             // Only a server reads a client preface; a client goes straight to
@@ -440,9 +444,7 @@ pub(crate) fn advertised_settings(requested: &Http2SettingsState) -> Http2Settin
     out.max_frame_size = requested.max_frame_size.clamp(16_384, 0xff_ffff);
     out.max_header_list_size = requested.max_header_list_size.max(4_096);
     out.max_header_size = out.max_header_list_size;
-    // The core never negotiates HPACK table size up and never offers push on a
-    // server connection.
-    out.header_table_size = out.header_table_size.min(4_096);
+    // The core never offers push on a server connection.
     out.enable_push = false;
     out
 }

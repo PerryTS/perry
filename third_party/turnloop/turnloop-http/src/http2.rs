@@ -101,9 +101,7 @@ impl Settings {
     fn validate(&self) -> Result<()> {
         for (id, value) in self.iter() {
             let valid = match id {
-                // The HPACK decoder's dynamic table is fixed at 4096 octets;
-                // advertising more would let the peer's encoder outgrow it.
-                Self::HEADER_TABLE_SIZE => value <= 4096,
+                Self::HEADER_TABLE_SIZE => true,
                 // Server push is not implemented: PUSH_PROMISE is always a
                 // connection error, so neither side may invite one.
                 Self::ENABLE_PUSH => value == 0,
@@ -398,6 +396,7 @@ pub struct Connection {
     acked_limits: Limits,
     /// Our SETTINGS_INITIAL_WINDOW_SIZE as acknowledged, and as enforced.
     acked_recv_initial: i64,
+    acked_table: usize,
     recv_initial: i64,
     decoder: hpack::Decoder,
     encoder: hpack::Encoder,
@@ -463,6 +462,7 @@ impl Connection {
             remote_settings: Settings::new(),
             acked_limits: limits,
             acked_recv_initial: 65535,
+            acked_table: 4096,
             recv_initial: 65535,
             decoder: hpack::Decoder::new(4096, limits.header_list),
             encoder: hpack::Encoder::new(4096),
@@ -495,7 +495,7 @@ impl Connection {
     /// peer sent under the old value are never treated as errors.
     ///
     /// Values this endpoint could not honour are refused before anything is
-    /// sent: ENABLE_PUSH other than 0, HEADER_TABLE_SIZE above 4096, and the
+    /// sent: ENABLE_PUSH other than 0, and the
     /// out-of-range values RFC 9113 section 6.5.2 forbids.
     pub fn settings(&mut self, settings: &Settings) -> Result<()> {
         if self.failed {
@@ -519,6 +519,7 @@ impl Connection {
     fn enforce_settings(&mut self) {
         let mut limits = self.acked_limits;
         let mut recv_initial = self.acked_recv_initial;
+        let mut table = self.acked_table;
         for settings in &self.settings_pending {
             for (id, value) in settings.iter() {
                 let value = value as usize;
@@ -529,6 +530,7 @@ impl Connection {
                     Settings::MAX_HEADER_LIST_SIZE => {
                         limits.header_list = limits.header_list.max(value)
                     }
+                    Settings::HEADER_TABLE_SIZE => table = table.max(value),
                     _ => {}
                 }
             }
@@ -543,6 +545,7 @@ impl Connection {
             self.recv_initial = recv_initial;
         }
         self.decoder.max_list_size = limits.header_list;
+        self.decoder.set_allowed(table);
         self.limits = limits;
     }
     /// What this endpoint enforces now, including the effect of SETTINGS it
@@ -1178,6 +1181,7 @@ impl Connection {
                             Settings::MAX_HEADER_LIST_SIZE => {
                                 self.acked_limits.header_list = value as usize
                             }
+                            Settings::HEADER_TABLE_SIZE => self.acked_table = value as usize,
                             _ => {}
                         }
                     }
