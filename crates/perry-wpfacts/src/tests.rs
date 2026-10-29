@@ -21,6 +21,7 @@ mod closed_world;
 mod closure_context;
 mod diagnostics;
 mod dynamic_code;
+mod dynamic_import;
 mod escaped_constructor;
 mod escaped_contract_result;
 mod escaped_method_this;
