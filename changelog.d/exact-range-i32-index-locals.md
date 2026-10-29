@@ -10,7 +10,7 @@ zero times, as in node.
 Native typed-array and buffer element accesses check the lowered index against
 the length on every access instead of turning the bounds proof into an
 assumption. A store outside `[0, length)` does nothing, as in JS; a proven read
-that fails the check traps. An index built only from literals and wrapping
+that fails the check stops with a named internal error. An index built only from literals and wrapping
 operators is checked through its static window, and a fixed-length view of
 constant length through that constant, which keeps the check loop-invariant
 where it can be. The pixel-channel reduction checks its gathered offsets and

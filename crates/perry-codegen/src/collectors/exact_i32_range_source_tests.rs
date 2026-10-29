@@ -8,6 +8,11 @@ use perry_hir::Stmt;
 
 /// `integer_locals` of the function `name` in `source`, by local name.
 fn int32_local_names(source: &str, name: &str) -> HashSet<String> {
+    int32_and_exit_names(source, name).0
+}
+
+/// `integer_locals` and the overflow-exit counters among them, by name.
+fn int32_and_exit_names(source: &str, name: &str) -> (HashSet<String>, HashSet<String>) {
     let source = source.to_string();
     let name = name.to_string();
     std::thread::Builder::new()
@@ -22,16 +27,24 @@ fn int32_local_names(source: &str, name: &str) -> HashSet<String> {
                 .iter()
                 .find(|f| f.name == name)
                 .expect("function under test");
-            let ids = super::integer_locals::collect_integer_locals(
+            let empty = HashSet::new();
+            let not_bigint =
+                super::not_bigint_locals::NotBigIntFacts::collect(&f.body, &[], &HashMap::new());
+            let (ids, exits) = super::integer_locals::collect_integer_locals_and_exits(
                 &f.body,
-                &HashSet::new(),
-                &HashSet::new(),
-                &HashSet::new(),
-                &HashSet::new(),
+                &empty,
+                &empty,
+                &empty,
+                &empty,
+                &empty,
+                &not_bigint,
             );
             let mut names = HashMap::new();
             collect_let_names(&f.body, &mut names);
-            ids.iter().filter_map(|id| names.get(id).cloned()).collect()
+            let named = |set: &HashSet<u32>| -> HashSet<String> {
+                set.iter().filter_map(|id| names.get(id).cloned()).collect()
+            };
+            (named(&ids), named(&exits))
         })
         .unwrap()
         .join()
@@ -66,20 +79,46 @@ fn collect_let_names(stmts: &[Stmt], out: &mut HashMap<u32, String>) {
     }
 }
 
+/// `j = i * i` and `j += i` under `j <= lim` can leave i32 only upward, past
+/// the guard: `j` is int32 through the overflow-exit lowering, not statically.
 #[test]
-fn square_init_and_symbolic_stride_are_not_int32() {
-    let ints = int32_local_names(
-        "function run(x: number, n: number, m: Uint8Array) {
-           const i = x | 0;
+fn square_init_and_symbolic_stride_are_overflow_exit_counters() {
+    let (ints, exits) = int32_and_exit_names(
+        "function run(n: number, m: Uint8Array) {
            const lim = n | 0;
            let steps = 0;
-           for (let j = i * i; j <= lim; j += i) { m[j] = 1; steps++; }
+           for (let i = 1; i <= lim; i++) {
+             for (let j = i * i; j <= lim; j += i) { m[j] = 1; steps++; }
+           }
            return steps;
          }",
         "run",
     );
-    assert!(ints.contains("i") && ints.contains("lim"), "{ints:?}");
-    assert!(!ints.contains("j"), "`i * i` can exceed i32: {ints:?}");
+    assert!(ints.contains("lim") && ints.contains("i"), "{ints:?}");
+    assert!(
+        ints.contains("j") && exits.contains("j"),
+        "{ints:?} {exits:?}"
+    );
+    assert!(!exits.contains("lim"), "{exits:?}");
+}
+
+/// Unbounded int32 operands can make `a * b` overflow DOWNWARD, where the
+/// guard `j <= lim` is true: no overflow-exit admission.
+#[test]
+fn a_possibly_negative_product_is_not_an_overflow_exit_init() {
+    let (ints, exits) = int32_and_exit_names(
+        "function run(x: number, y: number, n: number, m: Uint8Array) {
+           const a = x | 0;
+           const b = y | 0;
+           const lim = n | 0;
+           for (let j = a * b; j <= lim; j++) m[j & 7] = 1;
+         }",
+        "run",
+    );
+    assert!(
+        !ints.contains("j") && !exits.contains("j"),
+        "{ints:?} {exits:?}"
+    );
 }
 
 #[test]
@@ -126,18 +165,25 @@ fn bounded_counters_and_index_chains_stay_int32() {
     }
 }
 
+/// `i++` past `i <= 2^31 - 1` is 2^31: not statically int32, but the guard
+/// is false for it, so the counter is an overflow-exit counter.
 #[test]
-fn le_guard_on_an_unbounded_int32_is_not_enough() {
-    let ints = int32_local_names(
+fn le_guard_on_an_unbounded_int32_needs_the_overflow_exit() {
+    let (ints, exits) = int32_and_exit_names(
         "function run(m: Uint8Array, n: number) {
            const lim = n | 0;
            for (let i = 0; i <= lim; i++) m[i] = 1;
+           for (let k = 0; k < lim; k++) m[k] = 2;
          }",
         "run",
     );
     assert!(
-        !ints.contains("i"),
-        "`i++` past `i <= 2^31 - 1` is 2^31: {ints:?}"
+        ints.contains("i") && exits.contains("i"),
+        "{ints:?} {exits:?}"
+    );
+    assert!(
+        ints.contains("k") && !exits.contains("k"),
+        "`<` proves `k++`: {exits:?}"
     );
 }
 

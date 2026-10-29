@@ -22,7 +22,7 @@ mod escape_arrays;
 mod escape_check;
 mod escape_news;
 mod escape_objects;
-mod exact_i32_range;
+pub(crate) mod exact_i32_range;
 #[cfg(test)]
 mod exact_i32_range_source_tests;
 mod hir_facts;

@@ -565,7 +565,7 @@ pub(super) fn try_emit_buffer_read_intrinsic(
         ctx,
         &proof,
         access_spec,
-        crate::expr::OutOfBoundsArm::Trap,
+        crate::expr::OutOfBoundsArm::Abort,
     );
     let result = emit_numeric_load(
         ctx.block(),

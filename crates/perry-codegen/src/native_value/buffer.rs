@@ -70,6 +70,14 @@ pub(crate) enum BoundsProof {
     LoopGuard,
     MinLength,
     ExplicitGuard,
+    /// The fast copy of a counter-versioned loop (`stmt/loops.rs::
+    /// lower_overflow_exit_for`): a loop-entry check on the ACTUAL i32 values
+    /// — counter `>= 0`, step `>= 0`, `bound + step` inside i32 and
+    /// `bound + width <= length` — plus the guard the copy re-tests on the
+    /// counter's slot every iteration put every access in bounds. Unlike
+    /// the other proofs it is a fact about the lowered index, so the access
+    /// needs no per-access check.
+    EntryGuard,
     // #854: bounds-proof variant matched by uses_unsound_explicit_assume_guard
     // but not yet constructed by any proof emitter; kept as part of the
     // serialized BoundsProof contract.

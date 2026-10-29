@@ -158,9 +158,15 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // ships on the macOS-14 GitHub runner via Xcode 15.x) errors with
     // `error: use of undefined value '@llvm.assume'`.
     module.declare_function("llvm.assume", VOID, &[I1]);
-    // `llvm.trap` — the out-of-range arm of a proven native buffer read
-    // (`expr/buffer_access.rs::OutOfBoundsArm::Trap`).
-    module.declare_function("llvm.trap", VOID, &[]);
+    // The out-of-range arm of a proven native buffer read
+    // (`expr/buffer_access.rs::OutOfBoundsArm::Abort`).
+    module.declare_function("js_native_access_bounds_failed", VOID, &[I32, I32]);
+    // Overflow-checked arithmetic of an overflow-exit loop counter
+    // (`stmt/loops.rs::lower_overflow_exit_for`).
+    module.declare_function("llvm.sadd.with.overflow.i32", "{ i32, i1 }", &[I32, I32]);
+    module.declare_function("llvm.sadd.with.overflow.i64", "{ i64, i1 }", &[I64, I64]);
+    module.declare_function("llvm.smul.with.overflow.i64", "{ i64, i1 }", &[I64, I64]);
+    module.declare_function("llvm.smul.with.overflow.i32", "{ i32, i1 }", &[I32, I32]);
     // `llvm.bswap.i{16,32,64}` — used by Buffer numeric BE-read/write
     // intrinsics (`lower_call.rs::lower_buffer_numeric_read/write` —
     // see the size-keyed lookup table at lower_call.rs:168). Same

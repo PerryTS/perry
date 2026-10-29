@@ -30,6 +30,17 @@ function arrayStride(i: number, n: number, arr: number[]): number {
   return steps;
 }
 
+// The guard bound runs past the array: the loop's entry check cannot cover
+// these accesses, so the checked copy runs and drops the stores past the end.
+function strideShort(n: number, step: number, marks: Uint8Array): number {
+  let steps = 0;
+  for (let j = step * step; j <= n; j += step) {
+    marks[j] = 1;
+    steps++;
+  }
+  return steps;
+}
+
 function nonZero(a: ArrayLike<number>): number {
   let c = 0;
   for (let k = 0; k < a.length; k++) if (a[k] !== 0) c++;
@@ -48,6 +59,11 @@ const big = new Uint8Array(200000);
 console.log("directProduct", directProduct(65537, big), nonZero(big));
 const i32 = new Int32Array(16);
 console.log("directSum", directSum(2147483640, 20, i32), nonZero(i32));
+
+const short = new Uint8Array(100);
+console.log("strideShort", strideShort(1000, 7, short), nonZero(short), short.length);
+const exact = new Uint8Array(1001);
+console.log("strideFits", strideShort(1000, 7, exact), nonZero(exact));
 
 const arr: number[] = new Array(50001).fill(0);
 console.log("arrayStride", arrayStride(46349, 50000, arr), nonZero(arr), arr.length);

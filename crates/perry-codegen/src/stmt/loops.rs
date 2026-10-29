@@ -6688,6 +6688,11 @@ pub(crate) fn lower_for(
     update: Option<&perry_hir::Expr>,
     body: &[Stmt],
 ) -> Result<()> {
+    if let Some(Stmt::Let { id, .. }) = init {
+        if ctx.native_facts.overflow_exit_counters().contains(id) {
+            return lower_overflow_exit_for(ctx, init, condition, update, body);
+        }
+    }
     // Init runs once in the current block. A `let i = 0` here adds `i` to
     // ctx.locals, which the body can then load via LocalGet.
     if let Some(init_stmt) = init {
@@ -6929,7 +6934,588 @@ pub(super) fn lower_for_after_init_with_i32_bound(
         label_prefix,
         precomputed_i32_bound,
         true,
+        None,
     )
+}
+
+/// The state of a loop whose counter is int32 only through the overflow-exit
+/// rule (`collectors/exact_i32_range.rs::overflow_exit_counter`): `flag_slot`
+/// is set when the exact value of the counter's init or step left i32, which
+/// for this counter means the loop guard is false.
+pub(super) struct OverflowExitLoop {
+    counter_id: u32,
+    flag_slot: String,
+    /// `false` in the fast copy of a counter-versioned loop, whose entry
+    /// check proved that no step can leave i32: the step is a plain
+    /// `add nsw` and the flag is not re-tested.
+    checked: bool,
+}
+
+/// Lower a `for` loop whose counter is an overflow-exit counter.
+///
+/// The counter's exact value leaves i32 only upward, past the guard's int32
+/// bound, so the guard is false for every such value and the loop must exit.
+/// The init is computed exactly in i64 and the step with
+/// `llvm.sadd.with.overflow.i32`; when either does not fit, the flag is set
+/// and the condition block leaves the loop before reading the counter. The
+/// counter is the loop's own `let`, so no code after the loop reads it; every
+/// value the loop reads is therefore exact.
+///
+/// The other `for` lowerings are skipped: they lower the update as an
+/// ordinary (wrapping) write.
+fn lower_overflow_exit_for(
+    ctx: &mut FnCtx<'_>,
+    init: Option<&Stmt>,
+    condition: Option<&perry_hir::Expr>,
+    update: Option<&perry_hir::Expr>,
+    body: &[Stmt],
+) -> Result<()> {
+    use perry_hir::{BinaryOp, Expr};
+    let Some(Stmt::Let {
+        id,
+        name,
+        ty,
+        mutable,
+        init: Some(start),
+    }) = init
+    else {
+        unreachable!("an overflow-exit counter is the loop's own `let`");
+    };
+    let counter_id = *id;
+    let flag_slot = ctx.func.alloca_entry(I1);
+    if matches!(
+        start,
+        Expr::Binary {
+            op: BinaryOp::Add | BinaryOp::Mul,
+            ..
+        }
+    ) {
+        // Allocate the counter's storage, then write the exact init.
+        lower_stmt(
+            ctx,
+            &Stmt::Let {
+                id: counter_id,
+                name: name.clone(),
+                ty: ty.clone(),
+                mutable: *mutable,
+                init: Some(Expr::Integer(0)),
+            },
+        )?;
+        let (exact, wide_overflow) = lower_exact_i64_tree(ctx, start)?;
+        let blk = ctx.block();
+        // Opaque to SCEV: the init runs once per loop entry, and loop
+        // strength reduction would otherwise rebuild it (`i * i`) as an
+        // induction variable updated on every iteration of an enclosing loop.
+        let exact_opaque = blk.fresh_reg();
+        blk.emit_raw(format!(
+            "{exact_opaque} = call i64 asm \"\", \"=r,0\"(i64 {exact})"
+        ));
+        let ge_min = blk.icmp_sge(I64, &exact_opaque, &i64::from(i32::MIN).to_string());
+        let le_max = blk.icmp_sle(I64, &exact_opaque, &i64::from(i32::MAX).to_string());
+        let fits = blk.and(I1, &ge_min, &le_max);
+        let not_fits = blk.xor(I1, &fits, "true");
+        let overflow = blk.or(I1, &not_fits, &wide_overflow);
+        let value = blk.trunc(I64, &exact_opaque, I32);
+        ctx.block().store(I1, &overflow, &flag_slot);
+        store_overflow_exit_counter(ctx, counter_id, &value);
+    } else {
+        lower_stmt(ctx, init.expect("checked above"))?;
+        ctx.block().store(I1, "false", &flag_slot);
+    }
+    let state = OverflowExitLoop {
+        counter_id,
+        flag_slot,
+        checked: true,
+    };
+    let Some(entry) = counter_entry_check(ctx, &state, condition, update, body)? else {
+        return lower_for_after_init_impl(
+            ctx,
+            init,
+            condition,
+            update,
+            body,
+            "for",
+            None,
+            true,
+            Some(&state),
+        );
+    };
+    // Counter versioning: one check on the actual values selects a copy whose
+    // steps cannot overflow and whose accesses indexed by the counter are in
+    // bounds (`counter_entry_check`); the checked copy handles the rest.
+    let fast_idx = ctx.new_block("for.counter.fast");
+    let slow_idx = ctx.new_block("for.counter.checked");
+    let merge_idx = ctx.new_block("for.counter.merge");
+    let fast_label = ctx.block_label(fast_idx);
+    let slow_label = ctx.block_label(slow_idx);
+    let merge_label = ctx.block_label(merge_idx);
+    ctx.block().cond_br(&entry.passed, &fast_label, &slow_label);
+
+    ctx.current_block = fast_idx;
+    let scope_id = ctx.next_loop_proof_scope_id();
+    for buffer_local_id in &entry.views {
+        ctx.bounded_buffer_index_pairs.push(BoundedBufferIndex {
+            index_local_id: counter_id,
+            buffer_local_id: *buffer_local_id,
+            scope_id,
+            bounds_width_units: 1,
+            bounds: BoundsState::Proven {
+                proof: BoundsProof::EntryGuard,
+            },
+        });
+    }
+    let fast_state = OverflowExitLoop {
+        checked: false,
+        ..state
+    };
+    lower_for_after_init_impl(
+        ctx,
+        init,
+        condition,
+        update,
+        body,
+        "for.counter.fast",
+        None,
+        true,
+        Some(&fast_state),
+    )?;
+    ctx.bounded_buffer_index_pairs
+        .retain(|fact| fact.scope_id != scope_id);
+    if !ctx.block().is_terminated() {
+        ctx.block().br(&merge_label);
+    }
+
+    ctx.current_block = slow_idx;
+    let state = OverflowExitLoop {
+        checked: true,
+        ..fast_state
+    };
+    lower_for_after_init_impl(
+        ctx,
+        init,
+        condition,
+        update,
+        body,
+        "for",
+        None,
+        true,
+        Some(&state),
+    )?;
+    if !ctx.block().is_terminated() {
+        ctx.block().br(&merge_label);
+    }
+    ctx.current_block = merge_idx;
+    Ok(())
+}
+
+/// The entry check of a counter-versioned loop.
+struct CounterEntryCheck {
+    /// `i1`: every condition below held at loop entry.
+    passed: String,
+    /// Buffer views the body indexes by the counter itself.
+    views: Vec<u32>,
+}
+
+/// Build the entry check that licenses the fast copy of an overflow-exit
+/// loop, from the ACTUAL i32 values the loop compares and adds — not from
+/// any range fact — so it holds whatever those values are:
+///
+/// * the init did not overflow and the counter is `>= 0`;
+/// * the step is `>= 0` (the counter never decreases);
+/// * `B + step` (`B - 1 + step` under `<`) fits i32 for the guard bound `B`:
+///   the step runs only after `counter <= B` held this iteration, so it
+///   cannot overflow;
+/// * `B + 1 <= length` (`B <= length` under `<`) for every fixed-length view
+///   indexed by the counter: every index the guard admits is in bounds.
+///
+/// `B` and the step must be loop-invariant int32 slots or literals and the
+/// body must not write the counter (the overflow-exit rule already requires
+/// it). `None` when any piece is missing; the loop then has only its checked
+/// copy. A labelled loop is not copied: the first copy would consume the
+/// label.
+fn counter_entry_check(
+    ctx: &mut FnCtx<'_>,
+    state: &OverflowExitLoop,
+    condition: Option<&perry_hir::Expr>,
+    update: Option<&perry_hir::Expr>,
+    body: &[Stmt],
+) -> Result<Option<CounterEntryCheck>> {
+    use perry_hir::{CompareOp, Expr};
+    let counter_id = state.counter_id;
+    let (Some(cond), Some(update)) = (condition, update) else {
+        return Ok(None);
+    };
+    if !ctx.pending_labels.is_empty() || stmts_mutate_local(body, counter_id) {
+        return Ok(None);
+    }
+    let invariant_i32 = |ctx: &FnCtx<'_>, e: &Expr| -> bool {
+        match e {
+            Expr::Integer(n) => i32::try_from(*n).is_ok(),
+            Expr::LocalGet(id) => {
+                *id != counter_id
+                    && ctx.i32_counter_slots.contains_key(id)
+                    && !stmts_mutate_local(body, *id)
+                    && !expr_mutates_local(cond, *id)
+                    && !expr_mutates_local(update, *id)
+            }
+            _ => false,
+        }
+    };
+    let Some((op, bound)) =
+        crate::collectors::exact_i32_range::upper_guard_conjuncts(cond, counter_id)
+            .into_iter()
+            .find(|(_, bound)| invariant_i32(ctx, bound))
+    else {
+        return Ok(None);
+    };
+    let step = overflow_exit_step_operand(update, counter_id);
+    if step.is_some_and(|s| !invariant_i32(ctx, s)) {
+        return Ok(None);
+    }
+    let load_i32 = |ctx: &mut FnCtx<'_>, e: &Expr| -> String {
+        match e {
+            Expr::Integer(n) => n.to_string(),
+            Expr::LocalGet(id) => {
+                let slot = ctx.i32_counter_slots[id].clone();
+                ctx.block().load(I32, &slot)
+            }
+            _ => unreachable!("checked invariant_i32"),
+        }
+    };
+    let mut views = Vec::new();
+    collect_counter_indexed_views(ctx, body, counter_id, &mut views);
+
+    let bound_i32 = load_i32(ctx, &bound);
+    let step_i32 = match step {
+        Some(s) => load_i32(ctx, s),
+        None => "1".to_string(),
+    };
+    let counter = load_overflow_exit_counter(ctx, counter_id);
+    let overflowed = ctx.block().load(I1, &state.flag_slot);
+    let mut lengths = Vec::new();
+    for view_id in &views {
+        let view = ctx
+            .receiver_descriptors
+            .buffer_view(view_id)
+            .cloned()
+            .expect("collected view");
+        let len = match (&view.length_slot, &view.length_source) {
+            (Some(slot), _) => {
+                let len = ctx.block().load(I32, slot);
+                ctx.block().zext(I32, &len, I64)
+            }
+            (None, Some(crate::native_value::LengthSource::Constant(n))) => n.to_string(),
+            _ => unreachable!("collected views carry a length"),
+        };
+        lengths.push(len);
+    }
+    let blk = ctx.block();
+    let mut passed = blk.xor(I1, &overflowed, "true");
+    let counter_nonneg = blk.icmp_sge(I32, &counter, "0");
+    passed = blk.and(I1, &passed, &counter_nonneg);
+    let step_nonneg = blk.icmp_sge(I32, &step_i32, "0");
+    passed = blk.and(I1, &passed, &step_nonneg);
+    let bound_i64 = blk.sext(I32, &bound_i32, I64);
+    // The largest counter value the guard admits into the body.
+    let last = if matches!(op, CompareOp::Lt) {
+        blk.sub(I64, &bound_i64, "1")
+    } else {
+        bound_i64
+    };
+    let step_i64 = blk.sext(I32, &step_i32, I64);
+    let after_step = blk.add(I64, &last, &step_i64);
+    let step_fits = blk.icmp_sle(I64, &after_step, &i64::from(i32::MAX).to_string());
+    passed = blk.and(I1, &passed, &step_fits);
+    let end = blk.add(I64, &last, "1");
+    for len in &lengths {
+        let in_bounds = blk.icmp_sle(I64, &end, len);
+        passed = blk.and(I1, &passed, &in_bounds);
+    }
+    Ok(Some(CounterEntryCheck { passed, views }))
+}
+
+/// The views a body indexes by exactly `counter` (or `counter | 0`): element
+/// views with a length the native access itself checks against (its length
+/// slot or constant) and a binding the body never writes, so that length is
+/// the same at loop entry as at every access. The entry check then tests
+/// exactly what each access would have tested.
+fn collect_counter_indexed_views(
+    ctx: &FnCtx<'_>,
+    body: &[Stmt],
+    counter_id: u32,
+    out: &mut Vec<u32>,
+) {
+    use perry_hir::{BinaryOp, Expr};
+    fn is_counter(e: &Expr, counter_id: u32) -> bool {
+        match e {
+            Expr::LocalGet(id) => *id == counter_id,
+            Expr::Binary {
+                op: BinaryOp::BitOr,
+                left,
+                right,
+            } => matches!(right.as_ref(), Expr::Integer(0)) && is_counter(left, counter_id),
+            _ => false,
+        }
+    }
+    fn visit(ctx: &FnCtx<'_>, body: &[Stmt], e: &Expr, counter_id: u32, out: &mut Vec<u32>) {
+        let access = match e {
+            Expr::IndexGet { object, index, .. } | Expr::IndexSet { object, index, .. } => {
+                Some((object.as_ref(), index.as_ref()))
+            }
+            Expr::Uint8ArrayGet { array, index } | Expr::Uint8ArraySet { array, index, .. } => {
+                Some((array.as_ref(), index.as_ref()))
+            }
+            Expr::BufferIndexGet { buffer, index } | Expr::BufferIndexSet { buffer, index, .. } => {
+                Some((buffer.as_ref(), index.as_ref()))
+            }
+            _ => None,
+        };
+        if let Some((Expr::LocalGet(view_id), index)) = access {
+            let usable = ctx
+                .receiver_descriptors
+                .buffer_view(view_id)
+                .is_some_and(|view| {
+                    !stmts_mutate_local(body, *view_id)
+                        // Byte-indexed views qualify when an element is one
+                        // byte: the byte index is the element index.
+                        && (view.index_unit == crate::native_value::BufferIndexUnit::Element
+                            || view.element_width_bytes == 1)
+                        && (view.length_slot.is_some()
+                            || matches!(
+                                view.length_source,
+                                Some(crate::native_value::LengthSource::Constant(_))
+                            ))
+                });
+            if usable && is_counter(index, counter_id) && !out.contains(view_id) {
+                out.push(*view_id);
+            }
+        }
+        perry_hir::walker::walk_expr_children(e, &mut |c| visit(ctx, body, c, counter_id, out));
+    }
+    let mut exprs = Vec::new();
+    collect_stmt_exprs(body, &mut exprs);
+    for e in exprs {
+        visit(ctx, body, e, counter_id, out);
+    }
+}
+
+/// Every top-level expression of `stmts`, through nested blocks and loops.
+fn collect_stmt_exprs<'a>(stmts: &'a [Stmt], out: &mut Vec<&'a perry_hir::Expr>) {
+    for s in stmts {
+        match s {
+            Stmt::Let { init: Some(e), .. }
+            | Stmt::Expr(e)
+            | Stmt::Throw(e)
+            | Stmt::Return(Some(e)) => out.push(e),
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                out.push(condition);
+                collect_stmt_exprs(then_branch, out);
+                if let Some(e) = else_branch {
+                    collect_stmt_exprs(e, out);
+                }
+            }
+            Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+                out.push(condition);
+                collect_stmt_exprs(body, out);
+            }
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
+                if let Some(i) = init {
+                    collect_stmt_exprs(std::slice::from_ref(i.as_ref()), out);
+                }
+                if let Some(c) = condition {
+                    out.push(c);
+                }
+                if let Some(u) = update {
+                    out.push(u);
+                }
+                collect_stmt_exprs(body, out);
+            }
+            Stmt::Labeled { body, .. } => {
+                collect_stmt_exprs(std::slice::from_ref(body.as_ref()), out)
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                collect_stmt_exprs(body, out);
+                if let Some(c) = catch {
+                    collect_stmt_exprs(&c.body, out);
+                }
+                if let Some(f) = finally {
+                    collect_stmt_exprs(f, out);
+                }
+            }
+            Stmt::Switch {
+                discriminant,
+                cases,
+            } => {
+                out.push(discriminant);
+                for c in cases {
+                    if let Some(t) = &c.test {
+                        out.push(t);
+                    }
+                    collect_stmt_exprs(&c.body, out);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The step operand of an overflow-exit update: `None` for `i++`, `s` for
+/// `i = i + s` / `i = s + i`.
+fn overflow_exit_step_operand(
+    update: &perry_hir::Expr,
+    counter_id: u32,
+) -> Option<&perry_hir::Expr> {
+    use perry_hir::{BinaryOp, Expr};
+    match update {
+        Expr::LocalSet(id, value) if *id == counter_id => match value.as_ref() {
+            Expr::Binary {
+                op: BinaryOp::Add,
+                left,
+                right,
+            } => match (left.as_ref(), right.as_ref()) {
+                (Expr::LocalGet(l), s) if *l == counter_id => Some(s),
+                (s, Expr::LocalGet(r)) if *r == counter_id => Some(s),
+                _ => None,
+            },
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// `+`/`*` tree over int32 leaves, computed exactly in i64. Returns the value
+/// and whether an i64 operation overflowed (then the exact value is not an
+/// i32 either).
+fn lower_exact_i64_tree(ctx: &mut FnCtx<'_>, e: &perry_hir::Expr) -> Result<(String, String)> {
+    use perry_hir::{BinaryOp, Expr};
+    match e {
+        Expr::Binary {
+            op: op @ (BinaryOp::Add | BinaryOp::Mul),
+            left,
+            right,
+        } => {
+            let (l, l_ovf) = lower_exact_i64_tree(ctx, left)?;
+            let (r, r_ovf) = lower_exact_i64_tree(ctx, right)?;
+            let intrinsic = match op {
+                BinaryOp::Add => "llvm.sadd.with.overflow.i64",
+                _ => "llvm.smul.with.overflow.i64",
+            };
+            let blk = ctx.block();
+            let pair = blk.fresh_reg();
+            blk.emit_raw(format!(
+                "{pair} = call {{ i64, i1 }} @{intrinsic}(i64 {l}, i64 {r})"
+            ));
+            let value = blk.fresh_reg();
+            blk.emit_raw(format!("{value} = extractvalue {{ i64, i1 }} {pair}, 0"));
+            let ovf = blk.fresh_reg();
+            blk.emit_raw(format!("{ovf} = extractvalue {{ i64, i1 }} {pair}, 1"));
+            let sub = blk.or(I1, &l_ovf, &r_ovf);
+            let any = blk.or(I1, &sub, &ovf);
+            Ok((value, any))
+        }
+        _ => {
+            let leaf = crate::expr::lower_expr_native(
+                ctx,
+                e,
+                crate::native_value::ExpectedNativeRep::I32,
+            )?
+            .value;
+            Ok((ctx.block().sext(I32, &leaf, I64), "false".to_string()))
+        }
+    }
+}
+
+/// Write an overflow-exit counter: its i32 slot and, when it also has one,
+/// its f64 slot (the parallel-shadow model, or a closure-read counter).
+fn store_overflow_exit_counter(ctx: &mut FnCtx<'_>, counter_id: u32, value: &str) {
+    let i32_slot = ctx.i32_counter_slots.get(&counter_id).cloned();
+    let f64_slot = ctx.locals.get(&counter_id).cloned();
+    assert!(
+        i32_slot.is_some() || f64_slot.is_some(),
+        "overflow-exit counter {counter_id} has no local storage"
+    );
+    let blk = ctx.block();
+    if let Some(slot) = i32_slot {
+        blk.store(I32, value, &slot);
+    }
+    if let Some(slot) = f64_slot {
+        let as_double = blk.sitofp(I32, value, DOUBLE);
+        blk.store(DOUBLE, &as_double, &slot);
+    }
+}
+
+fn load_overflow_exit_counter(ctx: &mut FnCtx<'_>, counter_id: u32) -> String {
+    if let Some(slot) = ctx.i32_counter_slots.get(&counter_id).cloned() {
+        return ctx.block().load(I32, &slot);
+    }
+    let slot = ctx
+        .locals
+        .get(&counter_id)
+        .cloned()
+        .expect("overflow-exit counter has local storage");
+    let blk = ctx.block();
+    let value = blk.load(DOUBLE, &slot);
+    // An int32 local's f64 slot holds an int32 value exactly.
+    blk.fptosi(DOUBLE, &value, I32)
+}
+
+/// The overflow-checked step of an overflow-exit counter: `i++`, `i = i + s`
+/// or `i = s + i` (`i += s`).
+fn emit_overflow_exit_step(
+    ctx: &mut FnCtx<'_>,
+    state: &OverflowExitLoop,
+    update: &perry_hir::Expr,
+) -> Result<()> {
+    use perry_hir::Expr;
+    let counter_id = state.counter_id;
+    debug_assert!(
+        matches!(update, Expr::Update { id, .. } if *id == counter_id)
+            || overflow_exit_step_operand(update, counter_id).is_some(),
+        "overflow-exit step shape"
+    );
+    let step = overflow_exit_step_operand(update, counter_id);
+    let step_i32 = match step {
+        None => "1".to_string(),
+        Some(s) => {
+            crate::expr::lower_expr_native(ctx, s, crate::native_value::ExpectedNativeRep::I32)?
+                .value
+        }
+    };
+    crate::expr::invalidate_local_write_facts(ctx, counter_id);
+    let current = load_overflow_exit_counter(ctx, counter_id);
+    if !state.checked {
+        // The fast copy's entry check proved this step stays inside i32.
+        let next = ctx.block().fresh_reg();
+        ctx.block()
+            .emit_raw(format!("{next} = add nsw i32 {current}, {step_i32}"));
+        store_overflow_exit_counter(ctx, counter_id, &next);
+        return Ok(());
+    }
+    let blk = ctx.block();
+    let pair = blk.fresh_reg();
+    blk.emit_raw(format!(
+        "{pair} = call {{ i32, i1 }} @llvm.sadd.with.overflow.i32(i32 {current}, i32 {step_i32})"
+    ));
+    let next = blk.fresh_reg();
+    blk.emit_raw(format!("{next} = extractvalue {{ i32, i1 }} {pair}, 0"));
+    let overflow = blk.fresh_reg();
+    blk.emit_raw(format!("{overflow} = extractvalue {{ i32, i1 }} {pair}, 1"));
+    blk.store(I1, &overflow, &state.flag_slot);
+    store_overflow_exit_counter(ctx, counter_id, &next);
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -6942,6 +7528,7 @@ fn lower_for_after_init_impl(
     label_prefix: &str,
     precomputed_i32_bound: Option<(u32, String)>,
     try_dynamic_bound: bool,
+    overflow_exit: Option<&OverflowExitLoop>,
 ) -> Result<()> {
     let loop_proof_scope_id = ctx.next_loop_proof_scope_id();
     let byte_view_fallback = std::mem::take(&mut ctx.byte_view_fallback_loop);
@@ -7313,6 +7900,15 @@ fn lower_for_after_init_impl(
 
     // Cond block — fast i32 path when both counter and length are i32.
     ctx.current_block = cond_idx;
+    // An overflow-exit counter whose exact value left i32 fails its guard:
+    // leave before anything reads it.
+    if let Some(state) = overflow_exit.filter(|state| state.checked) {
+        let overflowed = ctx.block().load(I1, &state.flag_slot);
+        let go_idx = ctx.new_block(&format!("{label_prefix}.cond.in_range"));
+        let go_label = ctx.block_label(go_idx);
+        ctx.block().cond_br(&overflowed, &exit_label, &go_label);
+        ctx.current_block = go_idx;
+    }
     let used_precomputed_i32_cond = if let Some((counter_id, bound_i32)) = &precomputed_i32_bound {
         // #6011: range-versioned fast copy — the caller already materialized
         // and validated the loop bound as i32 (finite, integral, in range),
@@ -7485,7 +8081,12 @@ fn lower_for_after_init_impl(
     // Update block.
     ctx.current_block = update_idx;
     if let Some(update_expr) = update {
-        let _ = lower_expr(ctx, update_expr)?;
+        match overflow_exit {
+            Some(state) => emit_overflow_exit_step(ctx, state, update_expr)?,
+            None => {
+                let _ = lower_expr(ctx, update_expr)?;
+            }
+        }
         emit_gc_loop_safepoint(ctx, &[], &[update_expr]);
     }
     // #6072: a loop-private i32 counter is invisible to the `Update` lowering

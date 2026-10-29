@@ -193,9 +193,10 @@ pub(crate) enum OutOfBoundsArm {
     Skip,
     /// A load whose native result has no `undefined`: the proof that admitted
     /// the native read said the JS index is in range, so failing the check
-    /// means the index representation disagrees with that proof. Trap rather
-    /// than read outside the buffer or fabricate an element value.
-    Trap,
+    /// means the proof is wrong. Abort through the runtime's named internal
+    /// error (`js_native_access_bounds_failed`) rather than read outside the
+    /// buffer or fabricate an element value.
+    Abort,
 }
 
 pub(crate) struct StoreResult {
@@ -450,6 +451,32 @@ pub(crate) fn emit_buffer_access_pointer(
     };
     let bounds_width_units = spec.bounds_width_units();
     let index_i64 = blk.zext(I32, &proof.index.value, I64);
+    if matches!(
+        proof.bounds,
+        crate::native_value::BoundsState::Proven {
+            proof: crate::native_value::BoundsProof::EntryGuard
+        }
+    ) {
+        // Checked once, at the entry of this loop copy, on the actual values.
+        let byte_index = if spec.element_width_bytes > 1 {
+            blk.mul(I64, &index_i64, &spec.element_width_bytes.to_string())
+        } else {
+            index_i64
+        };
+        let elem_ptr = blk.gep_inbounds(I8, &data_ptr, &[(I64, &byte_index)]);
+        let alias_metadata = if proof.may_emit_noalias {
+            buffer_alias_metadata_suffix(proof.view.scope_idx.expect("scope for noalias proof"))
+        } else {
+            String::new()
+        };
+        return BufferAccessEmission {
+            data_ptr,
+            len_i32,
+            elem_ptr,
+            alias_metadata,
+            skip_join: None,
+        };
+    }
     let len_i64 = match (&proof.view.length_source, proof.view.length_fixed) {
         (Some(crate::native_value::LengthSource::Constant(len)), true) => len.to_string(),
         _ => blk.zext(I32, &len_i32, I64),
@@ -472,8 +499,11 @@ pub(crate) fn emit_buffer_access_pointer(
             ctx.block().br(&join_label);
             Some(join_idx)
         }
-        OutOfBoundsArm::Trap => {
-            ctx.block().call_void("llvm.trap", &[]);
+        OutOfBoundsArm::Abort => {
+            ctx.block().call_void(
+                "js_native_access_bounds_failed",
+                &[(I32, &proof.index.value), (I32, &len_i32)],
+            );
             ctx.block().unreachable();
             None
         }
@@ -557,7 +587,7 @@ pub(crate) fn lower_buffer_load(
     let Some(proof) = lower_buffer_access_proof(ctx, buffer_expr, index_expr, spec)? else {
         return Ok(None);
     };
-    let emission = emit_buffer_access_pointer(ctx, &proof, spec, OutOfBoundsArm::Trap);
+    let emission = emit_buffer_access_pointer(ctx, &proof, spec, OutOfBoundsArm::Abort);
     let byte_val = ctx.block().fresh_reg();
     ctx.block().emit_raw(format!(
         "{} = load i8, ptr {}{}",
@@ -738,7 +768,7 @@ pub(crate) fn lower_typed_array_load(
     let Some(proof) = lower_buffer_access_proof(ctx, array_expr, index_expr, spec)? else {
         return Ok(None);
     };
-    let emission = emit_buffer_access_pointer(ctx, &proof, spec, OutOfBoundsArm::Trap);
+    let emission = emit_buffer_access_pointer(ctx, &proof, spec, OutOfBoundsArm::Abort);
     let result = {
         let blk = ctx.block();
         macro_rules! load_raw {

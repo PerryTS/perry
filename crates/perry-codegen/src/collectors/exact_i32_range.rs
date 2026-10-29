@@ -23,6 +23,14 @@
 //!   or a typed-array length and a unit step that is always inside i32; a
 //!   `<=` guard or a wider step needs a tighter `B`.
 //!
+//! * [`overflow_exit_counter`] admits a `for` counter whose step (or init)
+//!   is not provably inside i32 but can only leave it UPWARD, past a guard
+//!   `i < B` / `i <= B` whose bound is an int32: there the exact value fails
+//!   the guard, so the loop exits, and the counter (scoped to the loop) is
+//!   never observed again. `stmt/loops.rs` lowers such a counter's init and
+//!   step with overflow-checked arithmetic and leaves the loop on overflow,
+//!   so the slot holds the exact value at every point the program reads it.
+//!
 //! Anything unproven keeps the boxed double, which is always exact.
 
 use std::collections::{HashMap, HashSet};
@@ -62,14 +70,21 @@ impl Range {
 pub(crate) struct KnownRanges {
     pub(crate) intervals: HashMap<u32, IntInterval>,
     pub(crate) constants: HashMap<u32, i64>,
+    /// `for` counters that only step upward from an integer literal: inside
+    /// the loop, where they are read, they are at least that literal. (An
+    /// int32 candidate is at most `i32::MAX` by the candidate judgment.)
+    pub(crate) floors: HashMap<u32, i64>,
 }
 
 impl KnownRanges {
     pub(crate) fn collect(stmts: &[Stmt]) -> Self {
         let facts = super::loop_bounded_i32::collect_loop_induction_facts(stmts, &HashMap::new());
+        let mut floors = HashMap::new();
+        collect_counter_floors(stmts, &mut floors);
         Self {
             intervals: facts.intervals,
             constants: facts.integer_constants,
+            floors,
         }
     }
 
@@ -85,7 +100,87 @@ impl KnownRanges {
                 hi: iv.hi,
             };
         }
+        if let Some(&lo) = self.floors.get(&id) {
+            return Range { lo, hi: I32_MAX };
+        }
         Range::I32
+    }
+}
+
+/// `for (let i = <literal>; …; <upward step by a literal or by 1>)` with the
+/// update the only write: `i >= <literal>` wherever the loop reads it.
+fn collect_counter_floors(stmts: &[Stmt], out: &mut HashMap<u32, i64>) {
+    for s in stmts {
+        match s {
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
+                if let (
+                    Some(Stmt::Let {
+                        id,
+                        init: Some(start),
+                        ..
+                    }),
+                    Some(upd),
+                ) = (init.as_deref(), update.as_ref())
+                {
+                    let literal_up = match for_step(upd) {
+                        Some((c, Step::Up(StepBy::One))) => c == *id,
+                        Some((c, Step::Up(StepBy::Expr(e)))) => {
+                            c == *id && integer_constant(e).is_some_and(|k| k >= 0)
+                        }
+                        _ => false,
+                    };
+                    let mut written = HashSet::new();
+                    super::loop_bounded_i32::collect_written_locals(body, &mut written);
+                    if let Some(c) = condition {
+                        super::loop_bounded_i32::collect_written_locals(
+                            &[Stmt::Expr(c.clone())],
+                            &mut written,
+                        );
+                    }
+                    if let (true, Some(n), false) =
+                        (literal_up, integer_constant(start), written.contains(id))
+                    {
+                        out.insert(*id, n);
+                    }
+                }
+                collect_counter_floors(body, out);
+            }
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                collect_counter_floors(then_branch, out);
+                if let Some(e) = else_branch {
+                    collect_counter_floors(e, out);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                collect_counter_floors(body, out)
+            }
+            Stmt::Labeled { body, .. } => {
+                collect_counter_floors(std::slice::from_ref(body.as_ref()), out)
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                collect_counter_floors(body, out);
+                if let Some(c) = catch {
+                    collect_counter_floors(&c.body, out);
+                }
+                if let Some(f) = finally {
+                    collect_counter_floors(f, out);
+                }
+            }
+            _ => {}
+        }
     }
 }
 
@@ -343,6 +438,98 @@ pub(crate) fn for_step_fits(
         }
     }
     None
+}
+
+/// The `counter < B` / `counter <= B` conjuncts of a loop guard (counter on
+/// the left after normalising), for the counter-versioned loop's entry check.
+pub(crate) fn upper_guard_conjuncts(cond: &Expr, counter: u32) -> Vec<(CompareOp, Expr)> {
+    let mut out = Vec::new();
+    guard_conjuncts(cond, counter, &mut out);
+    out.retain(|(op, _)| matches!(op, CompareOp::Lt | CompareOp::Le));
+    out
+}
+
+/// An init the overflow-exit lowering can compute exactly: `+`/`*` over
+/// int32 leaves that are all non-negative, so the exact value is a
+/// non-negative integer (computed in i64) and any overflow is upward.
+pub(crate) fn is_nonneg_exit_init(
+    e: &Expr,
+    leaf_range: &mut dyn FnMut(&Expr) -> Option<Range>,
+) -> bool {
+    match e {
+        Expr::Binary {
+            op: BinaryOp::Add | BinaryOp::Mul,
+            left,
+            right,
+        } => is_nonneg_exit_init(left, leaf_range) && is_nonneg_exit_init(right, leaf_range),
+        _ => leaf_range(e).is_some_and(|r| r.lo >= 0 && r.fits_i32()),
+    }
+}
+
+/// A `for` counter that steps UP under a `counter < B` / `counter <= B`
+/// conjunct with an int32 `B`, whose step is a non-negative loop-invariant
+/// int32 and whose init either fits i32 or is a non-negative `+`/`*` tree
+/// ([`is_nonneg_exit_init`]). Every exact value it can take that leaves i32
+/// is above `i32::MAX >= B`, so the guard is false for it: the overflow-exit
+/// lowering (`stmt/loops.rs`) leaves the loop instead of storing it.
+///
+/// Only a counter declared by the loop's own `let` qualifies — it is not
+/// observable after the loop — and nothing but the update may write it.
+pub(crate) fn overflow_exit_counter(
+    init: Option<&Stmt>,
+    condition: Option<&Expr>,
+    update: &Expr,
+    body: &[Stmt],
+    range_of: &mut dyn FnMut(&Expr) -> Option<Range>,
+) -> Option<u32> {
+    let (counter, step) = for_step(update)?;
+    let Some(Stmt::Let {
+        id,
+        init: Some(start),
+        ..
+    }) = init
+    else {
+        return None;
+    };
+    if *id != counter {
+        return None;
+    }
+    let Step::Up(by) = step else {
+        return None;
+    };
+    let cond = condition?;
+    let mut written = HashSet::new();
+    super::loop_bounded_i32::collect_written_locals(body, &mut written);
+    super::loop_bounded_i32::collect_written_locals(&[Stmt::Expr(cond.clone())], &mut written);
+    if written.contains(&counter) {
+        return None;
+    }
+    let invariant = |e: &Expr| {
+        let mut ids = Vec::new();
+        local_gets(e, &mut ids);
+        ids.iter().all(|id| *id != counter && !written.contains(id))
+    };
+    match by {
+        StepBy::One => {}
+        StepBy::Expr(s) => {
+            if !invariant(s) || !range_of(s).is_some_and(|r| r.lo >= 0 && r.fits_i32()) {
+                return None;
+            }
+        }
+    }
+    let mut conjuncts = Vec::new();
+    guard_conjuncts(cond, counter, &mut conjuncts);
+    let guarded = conjuncts.iter().any(|(op, bound)| {
+        matches!(op, CompareOp::Lt | CompareOp::Le)
+            && invariant(bound)
+            && bound_range(bound, range_of).is_some_and(|b| b.hi <= I32_MAX)
+    });
+    if !guarded {
+        return None;
+    }
+    let init_ok =
+        range_of(start).is_some_and(Range::fits_i32) || is_nonneg_exit_init(start, range_of);
+    init_ok.then_some(counter)
 }
 
 #[cfg(test)]

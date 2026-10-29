@@ -424,6 +424,33 @@ pub(crate) fn collect_integer_locals_with_seeds(
     // #10418: which bitwise results are Numbers rather than possible BigInts.
     not_bigint: &super::not_bigint_locals::NotBigIntFacts,
 ) -> HashSet<u32> {
+    collect_integer_locals_and_exits(
+        stmts,
+        flat_const_ids,
+        clamp_fn_ids,
+        arg_dependent_clamp_fn_ids,
+        numeric_locals,
+        seed_locals,
+        not_bigint,
+    )
+    .0
+}
+
+/// [`collect_integer_locals_with_seeds`] plus the int32 locals that are int32
+/// only through the overflow-exit lowering (`exact_i32_range::
+/// overflow_exit_counter`). Codegen must lower those counters' init and step
+/// with overflow checks (`stmt/loops.rs::lower_overflow_exit_for`); every
+/// other consumer may read them as ordinary int32 locals, because the loop
+/// they are scoped to only ever observes their exact value.
+pub(crate) fn collect_integer_locals_and_exits(
+    stmts: &[perry_hir::Stmt],
+    flat_const_ids: &HashSet<u32>,
+    clamp_fn_ids: &HashSet<u32>,
+    arg_dependent_clamp_fn_ids: &HashSet<u32>,
+    numeric_locals: &HashSet<u32>,
+    seed_locals: &HashSet<u32>,
+    not_bigint: &super::not_bigint_locals::NotBigIntFacts,
+) -> (HashSet<u32>, HashSet<u32>) {
     let mut candidates: HashSet<u32> = seed_locals.clone();
 
     // Issue #50 bridge: pre-compute which locals are row-aliases of
@@ -505,6 +532,7 @@ pub(crate) fn collect_integer_locals_with_seeds(
         disqualified: HashSet::new(),
         closure_written: HashSet::new(),
         known: &known,
+        overflow_exit: HashSet::new(),
     };
     judge.walk_stmts(stmts);
 
@@ -512,6 +540,7 @@ pub(crate) fn collect_integer_locals_with_seeds(
         dependents,
         mut disqualified,
         closure_written,
+        overflow_exit,
         ..
     } = judge;
     // Locals written inside a closure body lose integer-ness in the
@@ -547,7 +576,11 @@ pub(crate) fn collect_integer_locals_with_seeds(
         }
     }
     candidates.retain(|id| !disqualified.contains(id));
-    candidates
+    let exits = overflow_exit
+        .into_iter()
+        .filter(|id| candidates.contains(id))
+        .collect();
+    (candidates, exits)
 }
 
 /// Single-pass obligation collector + judge for the disqualification phase.
@@ -580,6 +613,8 @@ struct ProvenanceJudge<'a> {
     closure_written: HashSet<u32>,
     /// Constant and loop-induction ranges the exact-range proofs start from.
     known: &'a super::exact_i32_range::KnownRanges,
+    /// Counters admitted by the overflow-exit rule (`judge_overflow_exit`).
+    overflow_exit: HashSet<u32>,
 }
 
 impl ProvenanceJudge<'_> {
@@ -615,48 +650,96 @@ impl ProvenanceJudge<'_> {
     /// (`exact_i32_range::for_step_fits`). Returns `false` — and judges
     /// nothing — when the update is not such a step or the step is not
     /// proven, leaving the ordinary write judgment to the caller.
-    fn judge_for_step(&mut self, condition: Option<&Expr>, update: &Expr, body: &[Stmt]) -> bool {
-        let mut deps = HashSet::new();
-        let candidates = self.candidates;
-        let known = self.known;
-        let proven = {
-            let mut range_of = |e: &Expr| {
-                let mut sub_deps = HashSet::new();
-                let r = exact_range_deps(e, candidates, known, &mut sub_deps, &|sub, d| {
-                    int32_producing_deps(
-                        sub,
-                        candidates,
-                        self.flat_const_ids,
-                        self.flat_row_alias_ids,
-                        self.clamp_fn_ids,
-                        self.arg_dependent_clamp_fn_ids,
-                        self.numeric_locals,
-                        self.not_bigint,
-                        known,
-                        d,
-                    )
-                });
-                if r.is_some() {
-                    deps.extend(sub_deps);
-                }
-                r
-            };
-            super::exact_i32_range::for_step_fits(condition, update, body, &mut range_of)
-        };
-        let Some(counter) = proven else {
-            return false;
-        };
-        if !candidates.contains(&counter) {
-            return false;
-        }
+    /// The exact range of `e` under the current candidate set, recording into
+    /// `deps` the candidates it relied on (only when a range is returned).
+    fn judged_range(
+        &self,
+        e: &Expr,
+        deps: &mut HashSet<u32>,
+    ) -> Option<super::exact_i32_range::Range> {
+        exact_range_deps(e, self.candidates, self.known, deps, &|sub, d| {
+            int32_producing_deps(
+                sub,
+                self.candidates,
+                self.flat_const_ids,
+                self.flat_row_alias_ids,
+                self.clamp_fn_ids,
+                self.arg_dependent_clamp_fn_ids,
+                self.numeric_locals,
+                self.not_bigint,
+                self.known,
+                d,
+            )
+        })
+    }
+
+    fn record_deps(&mut self, counter: u32, deps: HashSet<u32>) {
         for dep in deps {
             if dep != counter {
                 self.dependents.entry(dep).or_default().push(counter);
             }
         }
+    }
+
+    /// Judge a `for` loop's update as the guarded step of its counter
+    /// (`exact_i32_range::for_step_fits`). Returns `false` — and judges
+    /// nothing — when the update is not such a step or the step is not
+    /// proven, leaving the ordinary write judgment to the caller.
+    fn judge_for_step(&mut self, condition: Option<&Expr>, update: &Expr, body: &[Stmt]) -> bool {
+        let mut deps = HashSet::new();
+        let proven = super::exact_i32_range::for_step_fits(condition, update, body, &mut |e| {
+            self.judged_range(e, &mut deps)
+        });
+        let Some(counter) = proven.filter(|c| self.candidates.contains(c)) else {
+            return false;
+        };
+        self.record_deps(counter, deps);
         // The step's operand subexpressions may write other locals.
         perry_hir::walker::walk_expr_children(update, &mut |child| self.walk_expr(child));
         true
+    }
+
+    /// A `for` counter that is int32 only through the overflow-exit lowering
+    /// (`exact_i32_range::overflow_exit_counter`): its init or step is not
+    /// statically inside i32. Returns the counter after recording its deps and
+    /// marking it in `overflow_exit`; `None` when the static judgment applies
+    /// (which is then left to run) or the rule does not.
+    fn judge_overflow_exit(
+        &mut self,
+        init: Option<&Stmt>,
+        condition: Option<&Expr>,
+        update: &Expr,
+        body: &[Stmt],
+    ) -> Option<u32> {
+        let mut scratch = HashSet::new();
+        let step_static =
+            super::exact_i32_range::for_step_fits(condition, update, body, &mut |e| {
+                self.judged_range(e, &mut scratch)
+            })
+            .is_some();
+        let init_static = match init {
+            Some(Stmt::Let {
+                init: Some(start), ..
+            }) => self
+                .judged_range(start, &mut scratch)
+                .is_some_and(super::exact_i32_range::Range::fits_i32),
+            _ => true,
+        };
+        if step_static && init_static {
+            return None;
+        }
+        let mut deps = HashSet::new();
+        let counter = super::exact_i32_range::overflow_exit_counter(
+            init,
+            condition,
+            update,
+            body,
+            &mut |e| self.judged_range(e, &mut deps),
+        )
+        .filter(|c| self.candidates.contains(c))?;
+        self.record_deps(counter, deps);
+        self.overflow_exit.insert(counter);
+        Some(counter)
     }
 
     fn walk_stmts(&mut self, stmts: &[Stmt]) {
@@ -708,14 +791,33 @@ impl ProvenanceJudge<'_> {
                     update,
                     body,
                 } => {
+                    let exit_counter = update.as_ref().and_then(|upd| {
+                        self.judge_overflow_exit(init.as_deref(), condition.as_ref(), upd, body)
+                    });
                     if let Some(init_stmt) = init {
-                        self.walk_stmts(std::slice::from_ref(init_stmt));
+                        match (exit_counter, init_stmt.as_ref()) {
+                            // Judged by the overflow-exit rule; only its
+                            // subexpressions remain to walk.
+                            (
+                                Some(counter),
+                                Stmt::Let {
+                                    id,
+                                    init: Some(start),
+                                    ..
+                                },
+                            ) if *id == counter => self.walk_expr(start),
+                            _ => self.walk_stmts(std::slice::from_ref(init_stmt)),
+                        }
                     }
                     if let Some(cond) = condition {
                         self.walk_expr(cond);
                     }
                     if let Some(upd) = update {
-                        if !self.judge_for_step(condition.as_ref(), upd, body) {
+                        if exit_counter.is_some() {
+                            perry_hir::walker::walk_expr_children(upd, &mut |child| {
+                                self.walk_expr(child)
+                            });
+                        } else if !self.judge_for_step(condition.as_ref(), upd, body) {
                             self.walk_expr(upd);
                         }
                     }

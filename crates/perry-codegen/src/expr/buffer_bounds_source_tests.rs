@@ -75,3 +75,69 @@ fn proven_typed_array_store_keeps_a_real_bounds_branch() {
         "a range proof must not become an assumption on the lowered index:\n{ir}"
     );
 }
+
+/// The sieve's loops are counter-versioned: one entry check on the actual
+/// values selects a copy with plain `add nsw` steps and no per-access branch;
+/// the checked copy keeps `sadd.with.overflow` steps and per-access branches.
+#[test]
+fn counter_versioned_fast_copy_drops_only_what_its_entry_check_proved() {
+    let ir = function_ir(
+        "function sieve(n: number): number {
+           const marks = new Uint8Array(n + 1);
+           let count = 0;
+           for (let i = 2; i <= n; i++) {
+             if (marks[i] === 0) {
+               count++;
+               for (let j = i * i; j <= n; j += i) marks[j] = 1;
+             }
+           }
+           return count;
+         }
+         console.log(sieve(100));",
+        "sieve",
+    );
+    assert!(
+        ir.contains("for.counter.fast.body") && ir.contains("add nsw i32"),
+        "no counter-versioned fast copy:\n{ir}"
+    );
+    assert!(
+        ir.contains("@llvm.sadd.with.overflow.i32("),
+        "the checked copy steps with the overflow intrinsic:\n{ir}"
+    );
+    // Every entry check (the block that branches to a fast copy and its
+    // checked copy) tests the step against i32 AND the largest admitted index
+    // against a length; the outer loop indexes `marks[i]`, the inner
+    // `marks[j]` (checked once per copy of the outer loop).
+    let mut entry_checks = 0;
+    for block in ir.split("\n\n") {
+        if !(block.contains("label %for.counter.fast.")
+            && block.contains("label %for.counter.checked."))
+        {
+            continue;
+        }
+        entry_checks += 1;
+        let compares: Vec<&str> = block
+            .lines()
+            .filter(|l| l.contains("icmp sle i64"))
+            .collect();
+        assert!(
+            compares.iter().any(|l| l.ends_with("2147483647")),
+            "entry check without the step-fits test:\n{block}"
+        );
+        assert!(
+            compares.iter().any(|l| !l.ends_with("2147483647")),
+            "entry check without the length test:\n{block}"
+        );
+    }
+    assert!(
+        entry_checks >= 2,
+        "an entry check per versioned loop:\n{ir}"
+    );
+    for block in ir.split("\nfor.counter.fast.body.").skip(1) {
+        let body = block.split("\n\n").next().unwrap_or("");
+        assert!(
+            !body.contains("bufacc.oob"),
+            "a fast-copy access kept its per-access branch:\n{body}"
+        );
+    }
+}

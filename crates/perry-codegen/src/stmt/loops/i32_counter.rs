@@ -44,6 +44,7 @@ pub(super) fn lower(
         "for.iv.slow",
         None,
         false,
+        None,
     )?;
     ctx.block().br(&merge_label);
     ctx.current_block = merge_idx;
@@ -185,6 +186,7 @@ pub(super) fn lower_proven(
         "for.iv.fast",
         Some((counter_id, bound)),
         false,
+        None,
     )?;
     if previous_rep != Some(crate::expr::SlotRep::I32) {
         let counter = ctx.block().load(I32, &guard.counter_i32_slot);
