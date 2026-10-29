@@ -207,7 +207,7 @@ impl CopyingNurseryCollector {
         // descriptor carries (`static_scan`); every other object builds its
         // plan from the shape below.
         if let Some(scan) = super::static_scan::static_scan(header, None) {
-            self.visit_static_scan(&scan, header, weak, remembering);
+            self.visit_static_scan::<DIAGNOSTICS>(&scan, header, weak, remembering);
             return true;
         }
         let plan = plain_object_plan(header);
