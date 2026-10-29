@@ -191,6 +191,10 @@ fn entry_matches(entry: &AsyncContextEntry, token: i64, generation: u64) -> bool
 }
 
 fn discard_disabled_entries(snapshot: &mut AsyncContextSnapshot) {
+    // Most jobs carry no ALS entries: nothing to test, no retain loop.
+    if snapshot.entries.is_empty() {
+        return;
+    }
     snapshot
         .entries
         .retain(|entry| entry.generation == entry.token.generation.load(Ordering::Acquire));
