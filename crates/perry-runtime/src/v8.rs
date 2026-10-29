@@ -13,8 +13,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{LazyLock, Mutex};
 
 use crate::closure::{
-    js_closure_alloc, js_closure_call1, js_closure_call2, js_closure_get_capture_ptr,
-    js_closure_set_capture_ptr, ClosureHeader,
+    js_closure_alloc, js_closure_call1, js_closure_call2, js_closure_get_capture_ptr, ClosureHeader,
 };
 use crate::object::{js_object_get_field_by_name, ObjectHeader};
 use crate::promise::Promise;

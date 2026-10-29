@@ -1532,7 +1532,7 @@ pub(crate) unsafe fn wide_key_index_lookup(
     _keys_id: usize,
     key_bytes: &[u8],
     _key: *const crate::StringHeader,
-    keys: *const crate::array::ArrayHeader,
+    keys: crate::object::ObjectKeys,
     key_count: usize,
 ) -> Option<u32> {
     let h = crate::object::key_bytes_hash(key_bytes.as_ptr(), key_bytes.len());

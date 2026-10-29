@@ -338,11 +338,11 @@ unsafe fn try_data_lookup_key(
                 // shape lookup or allocation.
                 let slot = if summary & super::key_attrs::SUMMARY_PRIVATE == 0 {
                     super::keys_lookup::keys_find_slot_by_bytes_resolved_hashed(
-                        keys, key_count, key, key_hash,
+                        crate::object::ObjectKeys::new(keys as *mut _, key_count), key_count, key, key_hash,
                     )
                 } else {
                     super::keys_lookup::keys_find_property_slot_by_bytes_resolved_hashed(
-                        keys, key_count, key, key_hash,
+                        crate::object::ObjectKeys::new(keys as *mut _, key_count), key_count, key, key_hash,
                     )
                 };
                 if let Some(position) = slot {

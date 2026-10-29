@@ -8,10 +8,10 @@ use super::callable_exports::set_builtin_closure_length;
 use super::*;
 
 const ASYNC_LOCAL_STORAGE_METHODS: &[(&str, u32)] = &[
-    ("run", 2),
+    ("run", realm_async_run_public!(length)),
     ("getStore", 0),
-    ("enterWith", 1),
-    ("exit", 1),
+    ("enterWith", realm_async_scope_public!(length)),
+    ("exit", realm_async_scope_public!(length)),
     ("disable", 0),
 ];
 
@@ -65,7 +65,7 @@ fn attach_prototype(constructor_value: f64, methods: &[(&str, u32)]) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let constructor_handle =
         scope.root_raw_mut_ptr(constructor as *mut crate::closure::ClosureHeader);
-    let prototype = js_object_alloc(0, 0);
+    let prototype = crate::realm_decl! { birth js_object_alloc(0, 0); realm { "node:async_hooks.AsyncLocalStorage.prototype", members = { constructor; run; getStore; enterWith; exit; disable; }; "node:async_hooks.AsyncResource.prototype", members = { constructor; runInAsyncScope; emitDestroy; asyncId; triggerAsyncId; bind; }; } };
     if prototype.is_null() {
         return crate::value::js_nanbox_pointer(
             constructor_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,
@@ -92,7 +92,7 @@ fn attach_prototype(constructor_value: f64, methods: &[(&str, u32)]) -> f64 {
         super::super::PropertyAttrs::new(true, false, true),
     );
 
-    let thunk = crate::fn_info!(async_hooks_prototype_method_thunk, 1; with_rest(0));
+    let thunk = crate::fn_info!(#[realm(realm_decl! { "node:async_hooks.AsyncLocalStorage.prototype.disable", capture = property_key, constructible = true; "node:async_hooks.AsyncLocalStorage.prototype.getStore", capture = property_key, constructible = true; "node:async_hooks.AsyncLocalStorage.prototype.enterWith", capture = property_key, constructible = true, spec = {length = 1}, emit = metadata(realm_async_scope_public); "node:async_hooks.AsyncLocalStorage.prototype.exit", capture = property_key, constructible = true, spec = {length = 1}, emit = metadata(realm_async_scope_public); "node:async_hooks.AsyncLocalStorage.prototype.run", capture = property_key, constructible = true, spec = {length = 2}, emit = metadata(realm_async_run_public); })] async_hooks_prototype_method_thunk, 1; with_rest(0));
     for &(name, length) in methods {
         let method = crate::closure::js_closure_alloc(thunk, 2);
         if method.is_null() {
@@ -167,5 +167,3 @@ pub(super) fn attach_async_resource_prototype(constructor_value: f64) -> f64 {
     crate::async_hook_slots::adopt_async_resource_prototype(proto);
     constructor
 }
-
-crate::realm_decl!("async_hooks_exports.realm.json#*");

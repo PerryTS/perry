@@ -47,6 +47,7 @@ pub(crate) use policy::note_young_leaf_born_old;
 /// The one writer of `GC_SAFEPOINT_PENDING` — it also keeps the poll's global
 /// arming shadow in step. See `gc/poll_arm.rs`.
 pub(crate) use policy::set_safepoint_pending;
+#[cfg(test)]
 pub(crate) use policy::young_generation_holds_a_nursery;
 pub use policy::*;
 mod progress;
@@ -169,6 +170,14 @@ use pin::{note_preflight_skipped, note_preflight_walked, young_pin_latch_armed};
 pub(crate) mod prefetch;
 
 mod copying;
+mod leaf_escape;
+mod leaf_service;
+pub(crate) use leaf_service::repair_promoted_leaf_edges;
+/// A store of `child_addr` into the old/malloc parent `parent_addr` that the
+/// page-granular remembering skipped: record young-leaf escape only.
+pub(crate) fn probe_leaf_escape_store(parent_addr: usize, child_addr: usize) {
+    leaf_escape::probe_store(parent_addr, child_addr);
+}
 mod copying_first_cycle;
 mod copying_object_scan;
 mod copying_parent_facts;
@@ -222,6 +231,7 @@ mod tenuring;
 use tenuring::*;
 mod oldgen;
 use oldgen::*;
+pub(crate) use oldgen::finalize_dead_arena_payload;
 pub(crate) mod heap_generation;
 /// #10698: `gc_check_trigger`'s "nothing is due" watermark and the
 /// `TriggerInput` cell type whose writes retire it.

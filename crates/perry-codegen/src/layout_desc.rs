@@ -31,7 +31,7 @@ use crate::strings::StringPool;
 /// 32 bytes of padding (128 bytes LP64; 112 bytes ILP32).
 pub const DESC_TY: &str =
     "{ i32, i16, i8, i8, i32, i32, i64, ptr, ptr, i32, i32, ptr, i32, i32, ptr, i32, i32, ptr, i64, [32 x i8] }";
-mod methods;
+pub(crate) mod methods;
 /// `%PerryLayoutKey`: atom, slot, attrs, pad, off (16 bytes).
 pub const KEY_TY: &str = "{ ptr, i32, i8, i8, i16 }";
 

@@ -32,6 +32,12 @@ pub struct AppMetadata {
     /// `process.argv[1]` with the script path, matching Node/Bun's argv shape.
     /// It is compiler metadata rather than a user-configurable manifest field.
     pub entry_source_path: Option<String>,
+    /// The module format Node declares for the entry before looking at its
+    /// syntax: `Some(true)` for `.mjs`/`.mts` or a nearest package.json with
+    /// `"type": "module"`, `Some(false)` for `.cjs`/`.cts` or
+    /// `"type": "commonjs"`, `None` when nothing declares one (Node then
+    /// detects the format from module syntax). Set only on the entry module.
+    pub entry_declared_esm: Option<bool>,
     /// Install wrappers of the well-known native providers this program links
     /// (`js_ext_net_nm_install`, …; see `NativeRouting::wrapper_install_hooks`).
     /// Set only on the entry module, whose `main` / dylib initializer calls
@@ -51,6 +57,7 @@ impl Default for AppMetadata {
             app_group: None,
             update_config: None,
             entry_source_path: None,
+            entry_declared_esm: None,
             native_provider_installs: Vec::new(),
         }
     }

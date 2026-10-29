@@ -445,13 +445,13 @@ fn ensure_wasi_prototype() {
 
     let keys = b"constructor\0getImportObject\0start\0initialize\0finalizeBindings\0";
     let proto =
-        crate::object::js_object_alloc_with_shape(0x7FFF_FF41, 5, keys.as_ptr(), keys.len() as u32);
+        crate::realm_decl! { birth crate::object::js_object_alloc_with_shape(0x7FFF_FF41, 5, keys.as_ptr(), keys.len() as u32); realm { "node:wasi.WASI.prototype", members = { constructor; getImportObject; start; initialize; finalizeBindings; }; } };
     // Publish the root before allocating any of the method closures. The
     // class-prototype root is rewritten if those allocations evacuate it.
     crate::object::class_prototype_object_root_store(CLASS_ID_WASI, proto);
     let method_scope = crate::gc::RuntimeHandleScope::new();
     let method = method_scope.root_nanbox_f64(closure_value(
-        crate::fn_info!(js_wasi_get_import_object, 0; with_declared(0)),
+        crate::fn_info!(#[realm("node:wasi.WASI.prototype.getImportObject", constructible = true)] js_wasi_get_import_object, 0; with_declared(0)),
         "getImportObject",
         0,
     ));
@@ -461,7 +461,7 @@ fn ensure_wasi_prototype() {
         JSValue::from_bits(method.get_nanbox_f64().to_bits()),
     );
     method.set_nanbox_f64(closure_value(
-        crate::fn_info!(js_wasi_start, 1; with_declared(1)),
+        crate::fn_info!(#[realm("node:wasi.WASI.prototype.start", constructible = true)] js_wasi_start, 1; with_declared(1)),
         "start",
         1,
     ));
@@ -471,7 +471,7 @@ fn ensure_wasi_prototype() {
         JSValue::from_bits(method.get_nanbox_f64().to_bits()),
     );
     method.set_nanbox_f64(closure_value(
-        crate::fn_info!(js_wasi_initialize, 1; with_declared(1)),
+        crate::fn_info!(#[realm("node:wasi.WASI.prototype.initialize", constructible = true)] js_wasi_initialize, 1; with_declared(1)),
         "initialize",
         1,
     ));
@@ -481,7 +481,7 @@ fn ensure_wasi_prototype() {
         JSValue::from_bits(method.get_nanbox_f64().to_bits()),
     );
     method.set_nanbox_f64(closure_rest_value(
-        crate::fn_info!(js_wasi_finalize_bindings, 2; with_rest(1)),
+        crate::fn_info!(#[realm("node:wasi.WASI.prototype.finalizeBindings", constructible = true)] js_wasi_finalize_bindings, 2; with_rest(1)),
         "finalizeBindings",
         1,
     ));
@@ -1109,5 +1109,3 @@ mod tests {
         assert!(WASI_IMPORT_NAMES.contains(&"sock_shutdown"));
     }
 }
-
-crate::realm_decl!("wasi.realm.json#*");

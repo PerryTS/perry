@@ -66,7 +66,7 @@ impl ShapeTable {
                 0,
             );
             inner.facts_append_fresh(facts, LayoutWord(id));
-            inner.family_append_fresh(0, LayoutWord(id));
+            inner.family_append_fresh(crate::object::canonical_keys::ROOT_NODE, 0, LayoutWord(id));
         }
     }
 }

@@ -1578,7 +1578,7 @@ pub(crate) fn get_field_by_name_object_tail(
         // stay O(1) instead of O(key_count). A `None` falls through to the
         // linear scan below (the index is an accelerator, not authoritative).
         if key_count >= WIDE_KEY_INDEX_MIN_KEYS {
-            if let Some(i) = wide_key_index_lookup(keys_id, key_bytes, key, keys, key_count) {
+            if let Some(i) = wide_key_index_lookup(keys_id, key_bytes, key, keys_view, key_count) {
                 // A slot holding the hole is an absent key (`key_view`): the
                 // own-key miss below continues the read.
                 let own = object_property_at_with_live(obj, keys, i, live_slots);
@@ -1596,7 +1596,7 @@ pub(crate) fn get_field_by_name_object_tail(
         // shape hash index instead of walking every key; the original match
         // below still gates the hit, so this cannot widen what is accepted.
         if let Some(i) =
-            crate::object::keys_find_property_slot_by_key_ptr(keys, key_count as u32, key)
+            crate::object::keys_find_property_slot_by_key_ptr(keys_view, key_count as u32, key)
                 .map(|v| v as usize)
         {
             let key_val = crate::array::keys_array_slot(keys, i as u32);
@@ -1627,7 +1627,7 @@ pub(crate) fn get_field_by_name_object_tail(
                     } else {
                         super::super::shapes::stamp_object_shape(
                             obj as *mut ObjectHeader,
-                            keys,
+                            keys_view,
                             key_count as u32,
                             live_slots,
                         )

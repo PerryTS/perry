@@ -616,10 +616,7 @@ pub(super) fn compile_module_init(
         // Script" is the right answer there for a wrapped entry too — and
         // that predicate is mirrored in `perry-hir`'s `lower_module_fn`,
         // which runs before the wrap flag is knowable here.
-        let cjs_wrapped_entry = crate::collectors::is_cjs_wrapped_module(hir);
-        if (!hir.imports.is_empty() || !hir.exports.is_empty() || hir.has_top_level_await)
-            && !cjs_wrapped_entry
-        {
+        if super::entry_evaluates_as_esm(hir, cross_module) {
             ctx.block().call_void("js_mark_entry_module_esm", &[]);
         }
         // #5579: GlobalDeclarationInstantiation for a Script. A non-ESM entry

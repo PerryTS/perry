@@ -363,5 +363,3 @@ pub(crate) extern "C" fn search_thunk(
 ) -> f64 {
     api::finish(regexp(Operation::Search, this.as_f64(), arg))
 }
-
-crate::realm_decl!("perex_match_search.realm.json#*");

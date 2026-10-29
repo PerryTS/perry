@@ -254,7 +254,7 @@ pub(super) const THROWER_FROZEN_FLAGS: u16 =
 
 pub(super) fn thrower_closure_value() -> f64 {
     let closure = crate::closure::js_closure_alloc_singleton(
-        crate::fn_info!(arguments_throw_type_error, 0; with_declared(0)),
+        crate::fn_info!(#[realm("Function.prototype.arguments.<get>", integrity = frozen, spec = {name = ""}, emit = metadata(realm_thrower_public))] arguments_throw_type_error, 0; with_declared(0)),
     );
     // #10509: configure the per-thread singleton once, not per strict call.
     // The frozen bits are the last step below and live in the closure's own
@@ -269,7 +269,7 @@ pub(super) fn thrower_closure_value() -> f64 {
     {
         return crate::value::js_nanbox_pointer(closure as i64);
     }
-    super::native_module::set_bound_native_closure_name(closure, "");
+    super::native_module::set_bound_native_closure_name(closure, realm_thrower_public!(name));
     super::native_module::set_builtin_closure_length(closure as usize, 0);
     super::native_module::set_builtin_closure_non_constructable(closure as usize);
     let frozen = PropertyAttrs::new(false, false, false);
@@ -1358,5 +1358,3 @@ unsafe fn write_ordinary_own_value(
         }
     }
 }
-
-crate::realm_decl!("arguments.realm.json#*");

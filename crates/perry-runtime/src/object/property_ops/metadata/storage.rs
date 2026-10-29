@@ -70,7 +70,7 @@ pub(super) fn lookup(target: f64, key: &str, property: Option<&str>) -> Option<f
         let name = storage_key(key, property);
         let keys = crate::object::object_keys(record);
         let index = crate::object::keys_find_property_slot_by_bytes(
-            keys.arr(),
+            keys,
             keys.count(),
             name.as_bytes(),
         )?;

@@ -81,6 +81,7 @@ pub(crate) use test_helpers::{
 
 use crate::string::StringHeader;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 // NaN-boxing tags (must match value.rs)
@@ -105,7 +106,7 @@ pub struct SymbolHeader {
     pub registered: u32,
     /// Description string pointer, or null for `Symbol()` with no argument.
     pub description: *mut StringHeader,
-    /// Unique id (monotonic counter). Two symbols with the same description
+    /// Unique, move-stable mixed creation id. Two symbols with the same description
     /// still compare as different unless created via Symbol.for.
     pub id: u64,
 }
@@ -576,15 +577,29 @@ pub fn symbol_on_object_for_test(owner: usize, sym: usize) -> Option<bool> {
     }
 }
 
-// Monotonic id counter for fresh symbols. Not thread-safe per-thread but
-// Symbol semantics are compatible with coarse locking.
-static NEXT_SYMBOL_ID: Mutex<u64> = Mutex::new(1);
+// The counter provides uniqueness only; symbol publication has its own locks.
+static NEXT_SYMBOL_ID: AtomicU64 = AtomicU64::new(1);
 
 fn next_id() -> u64 {
-    let mut id = NEXT_SYMBOL_ID.lock().unwrap();
-    let v = *id;
-    *id = v.wrapping_add(1);
-    v
+    // MurmurHash3's bijective 64-bit finalizer spreads sequential creation ids
+    // across the power-of-two buckets shared with string property hashes.
+    // It is computed once at birth; every key path still loads the same id.
+    let mut id = NEXT_SYMBOL_ID.fetch_add(1, Ordering::Relaxed);
+    id ^= id >> 33;
+    id = id.wrapping_mul(0xff51afd7ed558ccd);
+    id ^= id >> 33;
+    id = id.wrapping_mul(0xc4ceb9fe1a85ec53);
+    id ^ (id >> 33)
+}
+
+/// Recover creation order for the defensive own-symbol enumeration fallback.
+/// Odd multiplication and xor-shifts are invertible, so mixing loses no identity.
+fn creation_order(mut id: u64) -> u64 {
+    id ^= id >> 33;
+    id = id.wrapping_mul(0x9cb4b2f8129337db);
+    id ^= id >> 33;
+    id = id.wrapping_mul(0x4f74430c22a54005);
+    id ^ (id >> 33)
 }
 
 pub(crate) unsafe fn str_from_header(ptr: *const StringHeader) -> Option<String> {

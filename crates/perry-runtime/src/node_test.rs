@@ -140,12 +140,12 @@ pub fn property(property: &str) -> Option<f64> {
 /// #3719: build the `node:test` `assert` namespace object — `{ register }`,
 /// mirroring Node's current shape.
 fn test_assert_object() -> f64 {
-    let obj = crate::object::js_object_alloc(0, 0);
+    let obj = crate::realm_decl! { birth crate::object::js_object_alloc(0, 0); realm { "node:test.assert", kind = namespace, members = { register, attrs = writable | enumerable | configurable; }; } };
     // `assert.register(name, fn)` — length 2 in Node; stubbed (shape parity).
     set(
         obj,
         "register",
-        fn_value(crate::fn_info!(noop3, 3; with_declared(2)), "register"),
+        fn_value(crate::fn_info!(#[realm("node:test.assert.register", constructible = true)] noop3, 3; with_declared(2)), "register"),
     );
     object_value(obj)
 }
@@ -165,5 +165,3 @@ pub fn dispatch_object_method(class_id: u32, method_name: &str) -> Option<f64> {
         _ => None,
     }
 }
-
-crate::realm_decl!("node_test.realm.json#*");

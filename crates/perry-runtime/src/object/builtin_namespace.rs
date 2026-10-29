@@ -110,7 +110,7 @@ unsafe fn own_data(obj: *const ObjectHeader, name: &[u8]) -> Option<u64> {
     if keys.is_null() {
         return None;
     }
-    let pos = super::keys_find_property_slot_by_bytes(keys.arr(), keys.count(), name)?;
+    let pos = super::keys_find_property_slot_by_bytes(keys, keys.count(), name)?;
     if super::key_attrs::key_is_accessor_at(keys.arr(), pos) {
         return None;
     }
@@ -198,7 +198,7 @@ pub(crate) unsafe fn note_write(
             Some(slot) => {
                 !keys.is_null()
                     && super::keys_find_property_slot_by_bytes(
-                        keys.arr(),
+                        keys,
                         keys.count(),
                         name.as_bytes(),
                     )
@@ -324,7 +324,7 @@ pub extern "C" fn js_builtin_namespace_contract_check(
         let member = std::slice::from_raw_parts(member_ptr, member_len);
         let (keys, _) = layout_keys(p);
         let present = !keys.is_null()
-            && super::keys_find_property_slot_by_bytes(keys.arr(), keys.count(), member).is_some();
+            && super::keys_find_property_slot_by_bytes(keys, keys.count(), member).is_some();
         let now = match own_data(p, member) {
             Some(bits) => function_identity(bits),
             None if present => violated(i, member, "the member is an accessor"),

@@ -3,86 +3,6 @@
   "groups": {
     "objects": [
       {
-        "name": "navigator",
-        "kind": "namespace",
-        "properties": [
-          {
-            "key": "hardwareConcurrency",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "dynamic",
-              "value": "navigator.hardwareConcurrency"
-            }
-          },
-          {
-            "key": "language",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "dynamic",
-              "value": "navigator.language"
-            }
-          },
-          {
-            "key": "languages",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "navigator.languages"
-            }
-          },
-          {
-            "key": "locks",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "reference",
-              "value": "navigator.locks"
-            }
-          },
-          {
-            "key": "platform",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "dynamic",
-              "value": "target.navigator.platform"
-            }
-          },
-          {
-            "key": "userAgent",
-            "symbol": false,
-            "attributes": 7,
-            "value": {
-              "kind": "string",
-              "value": "Node.js/22"
-            }
-          }
-        ],
-        "own_key_order": [
-          "userAgent",
-          "language",
-          "languages",
-          "hardwareConcurrency",
-          "platform",
-          "locks"
-        ],
-        "own_symbol_order": [],
-        "header": {
-          "gc_type": 2,
-          "reserved": 512,
-          "class_id": 2147483426
-        },
-        "prototype": "Navigator.prototype",
-        "births": [
-          "Navigator.prototype",
-          "navigator.languages",
-          "navigator.locks"
-        ]
-      },
-      {
         "name": "navigator.languages",
         "kind": "exotic",
         "properties": [],
@@ -100,22 +20,6 @@
           "kind": "dynamic",
           "value": "navigator.languages"
         }
-      },
-      {
-        "name": "navigator.locks",
-        "kind": "namespace",
-        "properties": [],
-        "own_key_order": [],
-        "own_symbol_order": [],
-        "header": {
-          "gc_type": 2,
-          "reserved": 0,
-          "class_id": 0
-        },
-        "prototype": "Object.prototype",
-        "births": [
-          "Object.prototype"
-        ]
       }
     ]
   }

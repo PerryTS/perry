@@ -1373,7 +1373,7 @@ fn large_object_copying_minor_excludes_rooted_old_object_from_copy_counts() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let large =
-        crate::arena::arena_alloc_gc(LARGE_OBJECT_THRESHOLD_BYTES, 8, GC_TYPE_STRING) as usize;
+        crate::arena::arena_alloc_gc_old(LARGE_OBJECT_THRESHOLD_BYTES, 8, GC_TYPE_STRING) as usize;
     let header = unsafe { header_from_user_ptr(large as *const u8) };
     let total = unsafe { (*header).size as usize };
 

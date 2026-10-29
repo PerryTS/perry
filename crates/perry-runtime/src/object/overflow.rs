@@ -678,7 +678,7 @@ pub(crate) unsafe fn delete(obj: *mut ObjectHeader, key: &[u8]) -> bool {
         if let Some(record) = super::shapes::object_shape_record(obj) {
             let keys = record.keys() as usize as *const ArrayHeader;
             if let Some(slot) =
-                super::keys_find_property_slot_by_bytes(keys, record.logical_key_count(), key)
+                super::keys_find_property_slot_by_bytes(record.keys_view(), record.logical_key_count(), key)
             {
                 // A hole is an absent property, including allocator-owned
                 // placeholders before a derived constructor's super call.
@@ -918,7 +918,7 @@ pub(crate) unsafe fn store_routed(
     // an overflow entry shadows (`install` sets the bit).
     let record = super::shapes::object_shape_record(obj).unwrap();
     let fixed = super::keys_find_property_slot_by_key_ptr(
-        record.keys() as usize as *const ArrayHeader,
+        record.keys_view(),
         record.logical_key_count(),
         atom,
     );

@@ -274,7 +274,7 @@ unsafe fn accessor_is_shadowed(start: f64, holder: *const ObjectHeader, name: &[
             return true;
         };
         if crate::object::keys_find_slot_by_bytes_resolved(
-            shape.keys() as usize as *const crate::array::ArrayHeader,
+            shape.keys_view(),
             shape.logical_key_count(),
             name,
         )

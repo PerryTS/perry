@@ -389,7 +389,7 @@ pub(crate) fn refresh_closure_shape(ptr: usize) {
                         }
                         let id = shapes::publish_shape_result(
                             shapes::shape_descriptor_ensure_with_generation(
-                                d.keys as usize as *const crate::array::ArrayHeader,
+                                d.keys_view(),
                                 d.logical_key_count,
                                 d.live_inline_slot_count,
                                 0,
@@ -556,7 +556,7 @@ fn keyed_shape_key_list_lacks(id: LayoutWord, key: &[u8]) -> bool {
     // SAFETY: a live slab record's keys array.
     unsafe {
         crate::object::keys_find_slot_by_bytes_resolved(
-            descriptor.keys as usize as *const crate::array::ArrayHeader,
+            descriptor.keys_view(),
             descriptor.logical_key_count,
             key,
         )
@@ -643,7 +643,7 @@ unsafe fn prototype_slot_of_shape(closure: *const ClosureHeader, id: LayoutWord)
     }
     let keys = descriptor.keys as usize as *const crate::array::ArrayHeader;
     match crate::object::keys_find_slot_by_bytes_resolved(
-        keys,
+        descriptor.keys_view(),
         descriptor.logical_key_count,
         b"prototype",
     ) {

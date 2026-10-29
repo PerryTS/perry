@@ -243,7 +243,7 @@ unsafe fn object_own_get(obj: *const ObjectHeader, key: &[u8]) -> Option<f64> {
         {
             let keys = d.keys as usize as *const crate::array::ArrayHeader;
             let slot =
-                crate::object::keys_find_property_slot_by_bytes(keys, d.logical_key_count, key)?;
+                crate::object::keys_find_property_slot_by_bytes(d.keys_view(), d.logical_key_count, key)?;
             // An accessor key's slot holds its getter/setter pair, never a
             // data value.
             if d.summary & crate::object::key_attrs::SUMMARY_ACCESSOR != 0
@@ -282,7 +282,7 @@ unsafe fn object_own_get(obj: *const ObjectHeader, key: &[u8]) -> Option<f64> {
     if arr.is_null() {
         return None;
     }
-    let slot = crate::object::keys_find_property_slot_by_bytes(arr, keys.count(), key)?;
+    let slot = crate::object::keys_find_property_slot_by_bytes(keys, keys.count(), key)?;
     if crate::object::key_attrs::key_is_accessor_at(arr, slot as u32) {
         return None;
     }
@@ -474,7 +474,7 @@ pub(crate) unsafe fn bag_has_own(ptr: usize, key: &[u8]) -> bool {
     if arr.is_null() {
         return false;
     }
-    let Some(slot) = crate::object::keys_find_property_slot_by_bytes(arr, keys.count(), key) else {
+    let Some(slot) = crate::object::keys_find_property_slot_by_bytes(keys, keys.count(), key) else {
         return false;
     };
     crate::object::key_attrs::key_is_accessor_at(arr, slot as u32)

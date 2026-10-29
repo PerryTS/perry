@@ -1646,5 +1646,3 @@ mod grouping_tests {
         assert!(!grouping_enabled("false", 9, sizes));
     }
 }
-
-crate::realm_decl!("number_format.realm.json#*");

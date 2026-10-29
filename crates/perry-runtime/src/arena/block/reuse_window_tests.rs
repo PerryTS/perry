@@ -285,6 +285,7 @@ fn idle_apple_block_reactivates_when_it_becomes_current() {
             space: HeapSpace::Survivor0,
             allocated_bytes: 0,
             large_allocated_bytes: 0,
+            young_leaf_bytes: 0,
         };
         let reusable = super::super::region::apple_tests::info_for(idle_data).pages_reusable;
         assert!(reusable > 0, "live subject: idle arena pages");

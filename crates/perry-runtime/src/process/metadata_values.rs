@@ -3,7 +3,7 @@ use super::*;
 use crate::value::JSValue;
 
 pub(crate) fn process_release_value() -> f64 {
-    crate::object::runtime_layouts::runtime_record!(obj, RECORD_Q457_0);
+    crate::realm_decl! { record obj, RECORD_Q457_0; realm { process.release, kind = namespace, members = { name = "node", attrs = writable | enumerable | configurable; sourceUrl = "", attrs = writable | enumerable | configurable; headersUrl = "", attrs = writable | enumerable | configurable; }; "node:process.release", kind = namespace, members = { name = "node", attrs = writable | enumerable | configurable; sourceUrl = "", attrs = writable | enumerable | configurable; headersUrl = "", attrs = writable | enumerable | configurable; }; } };
     obj.set(
         0,
         JSValue::from_bits((module_string_value("node")).to_bits()),
@@ -16,7 +16,7 @@ pub(crate) fn process_release_value() -> f64 {
 }
 
 pub(crate) fn process_features_value() -> f64 {
-    crate::object::runtime_layouts::runtime_record!(obj, RECORD_Q458_0);
+    crate::realm_decl! { record obj, RECORD_Q458_0; realm { process.features, kind = namespace, members = { inspector = false, attrs = writable | enumerable | configurable; debug = false, attrs = writable | enumerable | configurable; uv = true, attrs = writable | enumerable | configurable; ipv6 = true, attrs = writable | enumerable | configurable; tls_alpn = true, attrs = writable | enumerable | configurable; tls_sni = true, attrs = writable | enumerable | configurable; tls_ocsp = true, attrs = writable | enumerable | configurable; tls = true, attrs = writable | enumerable | configurable; openssl_is_boringssl = false, attrs = writable | enumerable | configurable; cached_builtins = false, attrs = writable | enumerable | configurable; require_module = false, attrs = writable | enumerable | configurable; quic = false, attrs = writable | enumerable | configurable; typescript = "transform", attrs = writable | enumerable | configurable; }; "node:process.features", kind = namespace, members = { inspector = false, attrs = writable | enumerable | configurable; debug = false, attrs = writable | enumerable | configurable; uv = true, attrs = writable | enumerable | configurable; ipv6 = true, attrs = writable | enumerable | configurable; tls_alpn = true, attrs = writable | enumerable | configurable; tls_sni = true, attrs = writable | enumerable | configurable; tls_ocsp = true, attrs = writable | enumerable | configurable; tls = true, attrs = writable | enumerable | configurable; openssl_is_boringssl = false, attrs = writable | enumerable | configurable; cached_builtins = false, attrs = writable | enumerable | configurable; require_module = false, attrs = writable | enumerable | configurable; quic = false, attrs = writable | enumerable | configurable; typescript = "transform", attrs = writable | enumerable | configurable; }; } };
     obj.set(0, JSValue::from_bits((bool_value(false)).to_bits()));
     obj.set(1, JSValue::from_bits((bool_value(false)).to_bits()));
     obj.set(2, JSValue::from_bits((bool_value(true)).to_bits()));
@@ -37,10 +37,10 @@ pub(crate) fn process_features_value() -> f64 {
 }
 
 pub(crate) fn process_config_value() -> f64 {
-    crate::object::runtime_layouts::runtime_record!(config, RECORD_Q468_0);
-    crate::object::runtime_layouts::runtime_record!(variables, RECORD_Q468_1);
-    crate::object::runtime_layouts::runtime_record!(target_defaults, RECORD_Q468_2);
-    crate::object::runtime_layouts::runtime_record!(configurations, RECORD_Q468_3);
+    crate::realm_decl! { record config, RECORD_Q468_0; realm { process.config, kind = namespace, members = { variables, attrs = writable | enumerable | configurable; target_defaults, attrs = writable | enumerable | configurable; }; "node:process.config", kind = namespace, members = { variables, attrs = writable | enumerable | configurable; target_defaults, attrs = writable | enumerable | configurable; }; } };
+    crate::realm_decl! { record variables, RECORD_Q468_1; realm { process.config.variables, kind = namespace, members = { target_arch = "x64", attrs = writable | enumerable | configurable; host_arch = "x64", attrs = writable | enumerable | configurable; node_module_version = 141.0, attrs = writable | enumerable | configurable; node_shared_openssl = false, attrs = writable | enumerable | configurable; node_use_openssl = true, attrs = writable | enumerable | configurable; node_use_node_code_cache = false, attrs = writable | enumerable | configurable; node_use_node_snapshot = false, attrs = writable | enumerable | configurable; v8_enable_i18n_support = 1.0, attrs = writable | enumerable | configurable; v8_enable_pointer_compression = 0.0, attrs = writable | enumerable | configurable; uv_parent_path = "", attrs = writable | enumerable | configurable; }; "node:process.config.variables", kind = namespace, members = { target_arch = "x64", attrs = writable | enumerable | configurable; host_arch = "x64", attrs = writable | enumerable | configurable; node_module_version = 141.0, attrs = writable | enumerable | configurable; node_shared_openssl = false, attrs = writable | enumerable | configurable; node_use_openssl = true, attrs = writable | enumerable | configurable; node_use_node_code_cache = false, attrs = writable | enumerable | configurable; node_use_node_snapshot = false, attrs = writable | enumerable | configurable; v8_enable_i18n_support = 1.0, attrs = writable | enumerable | configurable; v8_enable_pointer_compression = 0.0, attrs = writable | enumerable | configurable; uv_parent_path = "", attrs = writable | enumerable | configurable; }; } };
+    crate::realm_decl! { record target_defaults, RECORD_Q468_2; realm { process.config.target_defaults, kind = namespace, members = { cflags, attrs = writable | enumerable | configurable; conditions, attrs = writable | enumerable | configurable; defines, attrs = writable | enumerable | configurable; include_dirs, attrs = writable | enumerable | configurable; libraries, attrs = writable | enumerable | configurable; default_configuration = "Release", attrs = writable | enumerable | configurable; configurations, attrs = writable | enumerable | configurable; }; "node:process.config.target_defaults", kind = namespace, members = { cflags, attrs = writable | enumerable | configurable; conditions, attrs = writable | enumerable | configurable; defines, attrs = writable | enumerable | configurable; include_dirs, attrs = writable | enumerable | configurable; libraries, attrs = writable | enumerable | configurable; default_configuration = "Release", attrs = writable | enumerable | configurable; configurations, attrs = writable | enumerable | configurable; }; } };
+    crate::realm_decl! { record configurations, RECORD_Q468_3; realm { process.config.target_defaults.configurations, kind = namespace, members = { Release, attrs = writable | enumerable | configurable; }; "node:process.config.target_defaults.configurations", kind = namespace, members = { Release, attrs = writable | enumerable | configurable; }; } };
 
     variables.set(
         0,
@@ -59,11 +59,11 @@ pub(crate) fn process_config_value() -> f64 {
     variables.set(8, JSValue::from_bits((0.0f64).to_bits()));
     variables.set(9, JSValue::from_bits((module_string_value("")).to_bits()));
 
-    target_defaults.set(0, JSValue::from_bits((module_array_value(&[])).to_bits()));
-    target_defaults.set(1, JSValue::from_bits((module_array_value(&[])).to_bits()));
-    target_defaults.set(2, JSValue::from_bits((module_array_value(&[])).to_bits()));
-    target_defaults.set(3, JSValue::from_bits((module_array_value(&[])).to_bits()));
-    target_defaults.set(4, JSValue::from_bits((module_array_value(&[])).to_bits()));
+    target_defaults.set(0, JSValue::from_bits((crate::realm_decl! { birth module_array_value(&[]); realm { process.config.target_defaults.cflags; "node:process.config.target_defaults.cflags"; } }).to_bits()));
+    target_defaults.set(1, JSValue::from_bits((crate::realm_decl! { birth module_array_value(&[]); realm { process.config.target_defaults.conditions; "node:process.config.target_defaults.conditions"; } }).to_bits()));
+    target_defaults.set(2, JSValue::from_bits((crate::realm_decl! { birth module_array_value(&[]); realm { process.config.target_defaults.defines; "node:process.config.target_defaults.defines"; } }).to_bits()));
+    target_defaults.set(3, JSValue::from_bits((crate::realm_decl! { birth module_array_value(&[]); realm { process.config.target_defaults.include_dirs; "node:process.config.target_defaults.include_dirs"; } }).to_bits()));
+    target_defaults.set(4, JSValue::from_bits((crate::realm_decl! { birth module_array_value(&[]); realm { process.config.target_defaults.libraries; "node:process.config.target_defaults.libraries"; } }).to_bits()));
     target_defaults.set(
         5,
         JSValue::from_bits((module_string_value("Release")).to_bits()),
@@ -72,10 +72,10 @@ pub(crate) fn process_config_value() -> f64 {
         0,
         JSValue::from_bits(
             (module_object_value(unsafe {
-                crate::object::runtime_layouts::perry_build_runtime_record(
+                crate::realm_decl! { birth crate::object::runtime_layouts::perry_build_runtime_record(
                     std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_PCHECKED031),
                     std::ptr::NonNull::<f64>::dangling().as_ptr(),
-                )
+                ); realm { process.config.target_defaults.configurations.Release, kind = namespace, members = { }; "node:process.config.target_defaults.configurations.Release", kind = namespace, members = { }; } }
             }))
             .to_bits(),
         ),
@@ -374,5 +374,5 @@ pub(crate) fn process_allowed_flags_value() -> f64 {
         "-C",
         "-r",
     ];
-    module_set_value(FLAGS)
+    crate::realm_decl! { birth module_set_value(FLAGS); realm { process.allowedNodeEnvironmentFlags; "node:process.allowedNodeEnvironmentFlags"; } }
 }

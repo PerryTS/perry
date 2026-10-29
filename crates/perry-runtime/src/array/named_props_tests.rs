@@ -207,7 +207,7 @@ fn property_key_storage_does_not_alias_a_mutable_input_string() {
         let holder = (*arr).named;
         let keys = crate::object::object_keys(holder);
         let slot = crate::object::keys_find_property_slot_by_bytes(
-            keys.arr(),
+            keys,
             keys.count(),
             b"named-key-ownership",
         )

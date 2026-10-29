@@ -58,20 +58,20 @@ pub(crate) unsafe fn own_position(
         shape.keys_view()
     };
     let position = if table_owned {
-        crate::object::keys_find_slot_by_bytes_resolved(view.arr(), view.count(), name)
+        crate::object::keys_find_slot_by_bytes_resolved(view, view.count(), name)
     } else if view.count() >= crate::object::KEYS_INDEX_THRESHOLD {
         // Presence may build the owner's existing key index once. A complete
         // miss is authoritative, including on a mutable table_owned list.
         let hash = crate::object::key_bytes_hash(name.as_ptr(), name.len());
-        match shapes::shape_slot_lookup_verdict(view.arr(), name, hash, view.count(), true) {
+        match shapes::shape_slot_lookup_verdict(view, name, hash, view.count(), true) {
             shapes::KeysIndexVerdict::Found(slot) => Some(slot),
             shapes::KeysIndexVerdict::Absent => None,
             shapes::KeysIndexVerdict::Unindexed => {
-                crate::object::keys_find_slot_by_bytes_resolved(view.arr(), view.count(), name)
+                crate::object::keys_find_slot_by_bytes_resolved(view, view.count(), name)
             }
         }
     } else {
-        crate::object::keys_find_slot_by_bytes_resolved(view.arr(), view.count(), name)
+        crate::object::keys_find_slot_by_bytes_resolved(view, view.count(), name)
     }
     .and_then(|slot| {
         if crate::object::key_attrs::entry_is_private(crate::object::key_attrs::keys_entry(
@@ -81,7 +81,7 @@ pub(crate) unsafe fn own_position(
             // Private and public strings may have the same diagnostic
             // spelling. Ask the existing property namespace lookup rather
             // than treating the private candidate as proof of absence.
-            crate::object::keys_find_property_slot_by_bytes(view.arr(), view.count(), name)
+            crate::object::keys_find_property_slot_by_bytes(view, view.count(), name)
         } else {
             Some(slot)
         }

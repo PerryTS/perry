@@ -133,7 +133,9 @@ fn young_scavenge_cap_probe(old_reclaimable: impl FnOnce() -> usize) -> YoungSca
             reading: None,
         };
     }
-    let from_space_in_use = crate::arena::copying_from_space_in_use_bytes();
+    // One read of the cached occupancy also says whether no young leaf lives.
+    let (from_space_in_use, leaf_free) =
+        crate::arena::copying_from_space_in_use_bytes_and_leaf_free();
     // The current Eden block's share of that reading: the inline offset,
     // whenever the inline allocator is initialized (see
     // `synced_current_eden_block_bytes`). Read here, before anything else
@@ -166,8 +168,18 @@ fn young_scavenge_cap_probe(old_reclaimable: impl FnOnce() -> usize) -> YoungSca
     } else {
         cap.min(super::tenuring::object_census_seed_point_bytes())
     };
+    // Growing the inline small allocation can cross the leaf window before
+    // the copying cap. Publish the same residual bound to the fast shortcut.
+    // With no young leaf alive this is the not-taken branch of a flag the
+    // occupancy read already produced.
+    let (leaf_due, limit) = if leaf_free {
+        (false, limit)
+    } else {
+        let (due, small_limit) = leaf_memory_due_at_cap(cap, from_space_in_use);
+        (due, limit.min(small_limit))
+    };
     YoungScavengeCapProbe {
-        due: from_space_in_use >= cap,
+        due: from_space_in_use >= cap || leaf_due,
         reading: Some(super::trigger_watermark::YoungArmReading {
             from_space_in_use,
             limit,
@@ -3827,8 +3839,10 @@ fn gc_budgeted_due_trigger_probe() -> (Option<BudgetedGcTrigger>, bool, TriggerW
     // they must not share a basis): the adaptive base trigger against the
     // whole arena, and the scavenge nursery cap against the young generation
     // only.
-    let total = crate::arena::arena_total_bytes();
-    if total >= next_arena_trigger_base() {
+    // Copying capacity never exceeds the gross arena bytes, so the leaf
+    // exclusion (a block walk) is owed only once the gross figure is at the base.
+    let base = next_arena_trigger_base();
+    if crate::arena::arena_total_bytes() >= base && crate::arena::copying_capacity_bytes() >= base {
         return (Some(BudgetedGcTrigger::ArenaBytes), true, RETIRED);
     }
     // Old-gen is untouched since the read above: the arms in between only
@@ -3917,6 +3931,14 @@ pub(crate) fn gc_safepoint_moving_minor() -> bool {
     // mirror would leave the back-edge poll armed forever.
     set_safepoint_pending(false);
     let _declared = DeclaredSafepointGuard::enter();
+    // The trigger ladder coalesces the two young resources into the existing
+    // precise handoff. Only small occupancy/capacity selects small copying.
+    if due == Some(BudgetedGcTrigger::YoungScavengeCap) && !scheduled && gen_gc_enabled()
+        && crate::arena::copying_from_space_in_use_bytes() < scavenge_nursery_cap_dueness_bytes()
+    {
+        super::leaf_service::collect();
+        return true;
+    }
     let kind = match due {
         // #7909: the nursery cap and the whole-arena trigger are the same
         // collection here — this IS the evacuating collector the cap is for.
@@ -5368,4 +5390,18 @@ pub(crate) fn byte_store_test_collection_count() -> u64 {
 #[cfg(test)]
 pub(crate) fn byte_store_test_external_live_bytes() -> usize {
     external_side_live_bytes()
+}
+
+#[cold]
+fn leaf_memory_due_at_cap(cap: usize, small_bytes: usize) -> (bool, usize) {
+    let leaf_bytes = crate::arena::young_large_in_use_bytes();
+    if leaf_bytes == 0 {
+        return (false, usize::MAX);
+    }
+    let window = super::tenuring::eden_allocation_window_bytes(
+        cap, crate::arena::copying_active_survivor_in_use_bytes());
+    (
+        small_bytes.saturating_add(leaf_bytes) >= window,
+        window.saturating_sub(leaf_bytes),
+    )
 }

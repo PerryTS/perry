@@ -93,7 +93,7 @@ unsafe fn ensure_key_in_keys_array_inner(
     crate::string::js_string_addref(key.cast_mut());
     if crate::object::overflow::has_overflow(obj) {
         let keys = crate::object::object_keys(obj);
-        if crate::object::keys_find_property_slot_by_key_ptr(keys.arr(), keys.count(), key)
+        if crate::object::keys_find_property_slot_by_key_ptr(keys, keys.count(), key)
             .is_none()
         {
             crate::object::overflow::insert(obj, key, crate::value::TAG_UNDEFINED, entry);
@@ -870,9 +870,9 @@ unsafe fn own_key_via_index(
         // Object model step 4: an object's overflow is its complete, hashed
         // key index (§3.4), so its answer is authoritative either way.
         let found = if properties_only {
-            super::super::keys_find_property_slot_by_key_ptr(keys.arr(), keys.count(), key)
+            super::super::keys_find_property_slot_by_key_ptr(keys, keys.count(), key)
         } else {
-            super::super::keys_find_slot_by_key_ptr(keys.arr(), keys.count(), key)
+            super::super::keys_find_slot_by_key_ptr(keys, keys.count(), key)
         };
         return Some(found.is_some());
     }
@@ -890,7 +890,7 @@ unsafe fn own_key_via_index(
     let name_bytes = std::slice::from_raw_parts(name_ptr, name_len);
     let key_hash = super::super::key_bytes_hash(name_ptr, name_len);
     match super::super::shapes::shape_slot_lookup_verdict(
-        keys, name_bytes, key_hash, key_count, true,
+        keys_view, name_bytes, key_hash, key_count, true,
     ) {
         super::super::shapes::KeysIndexVerdict::Found(slot) => Some(
             (!properties_only || !slot_is_private_entry(keys, slot as u32))
@@ -994,9 +994,9 @@ unsafe fn own_key_lookup(
     // stale/incomplete indexes retain the dense-slot correctness fallback.
     // Slots and counts are u32 throughout, so there is no 65,536-key ceiling.
     let position = if properties_only {
-        super::super::keys_find_property_slot_by_key_ptr(keys, key_count, key)
+        super::super::keys_find_property_slot_by_key_ptr(keys_view, key_count, key)
     } else {
-        super::super::keys_find_slot_by_key_ptr(keys, key_count, key)
+        super::super::keys_find_slot_by_key_ptr(keys_view, key_count, key)
     };
     // Object model §3.2: an optional key whose slot holds the hole is absent
     // (`key_view`).

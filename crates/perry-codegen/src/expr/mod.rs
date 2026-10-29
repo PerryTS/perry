@@ -139,6 +139,7 @@ mod strings;
 mod typed_feedback;
 mod url_helpers;
 mod v8_interop;
+pub(crate) mod facts_number;
 pub(crate) mod wpfacts_access;
 mod write_barrier;
 

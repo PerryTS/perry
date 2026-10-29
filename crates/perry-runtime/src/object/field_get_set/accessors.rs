@@ -173,7 +173,7 @@ pub unsafe extern "C" fn js_object_record_set_by_bytes(
     let mut index = 0;
     let Some(OwnSlot::Data(_)) = own_property_slot(obj, |keys, count| {
         let position = crate::object::keys_find_property_slot_by_bytes(keys, count, key)?;
-        index = crate::object::key_attrs::key_storage_slot(keys, position);
+        index = crate::object::key_attrs::key_storage_slot(keys.arr(), position);
         Some(position)
     }) else {
         return 0;
@@ -232,7 +232,7 @@ impl OwnSlot {
 
 unsafe fn own_property_slot(
     obj: *const ObjectHeader,
-    find_slot: impl FnOnce(*const crate::array::ArrayHeader, u32) -> Option<u32>,
+    find_slot: impl FnOnce(crate::object::ObjectKeys, u32) -> Option<u32>,
 ) -> Option<OwnSlot> {
     if obj.is_null() || !is_valid_obj_ptr(obj as *const u8) {
         return None;
@@ -266,7 +266,7 @@ unsafe fn own_property_slot(
     // isolated overwrite-loop profile still showed `js_array_get_f64` at 23.5%
     // self time, and the caller graph attributed it here. The shared helper
     // preserves #1781's SSO-key acceptance (its byte resolver is SSO-aware).
-    if let Some(islot) = find_slot(keys, key_count as u32) {
+    if let Some(islot) = find_slot(keys_view, key_count as u32) {
         if crate::object::key_attrs::key_is_accessor_at(keys, islot) {
             // The holder's shape resolved the key to this slot, so its lane
             // holds the accessor pair (#12015): read it there, no name search.

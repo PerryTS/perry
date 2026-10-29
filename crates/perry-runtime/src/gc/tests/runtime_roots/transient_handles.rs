@@ -480,7 +480,7 @@ fn test_transient_runtime_handle_object_set_gc() {
         assert!(!crate::object::object_keys(obj_after).arr().is_null());
         let keys = crate::object::object_keys(obj_after);
         let slot = crate::object::keys_find_property_slot_by_bytes(
-            keys.arr(),
+            keys,
             keys.count(),
             b"transient-unseeded-name",
         )

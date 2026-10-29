@@ -610,7 +610,7 @@ fn a_dead_weak_keys_entry_is_dropped_before_its_storage_is_reused() {
         .object_hot
         .class_keys_by_id
         .borrow_mut()
-        .insert(DEAD_MEMO_CLASS_ID, (addr, 1, 1));
+        .insert(DEAD_MEMO_CLASS_ID, (addr, 1, 1, canonical_keys::NO_NODE));
     assert!(
         crate::arena::pointer_in_old_gen(addr),
         "I3: the list is old"

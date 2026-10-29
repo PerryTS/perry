@@ -9,6 +9,7 @@ mod array_numeric;
 mod array_record;
 mod binding_write_gap;
 mod birth_site;
+mod body_activation;
 mod body_identity;
 mod callable_contract;
 mod builtin_members;
@@ -20,6 +21,7 @@ mod closed_world;
 mod closure_context;
 mod diagnostics;
 mod dynamic_code;
+mod dynamic_import;
 mod escaped_constructor;
 mod escaped_contract_result;
 mod escaped_method_this;
@@ -421,7 +423,10 @@ fn bounds_hold_during_generation() {
              function f{i}(x: any) {{ return x.m() + x.m() + x.m() + new C{i}().m() + [x, x].length; }}\n"
         ));
     }
-    src.push_str("console.log(f0(new C1()));\n");
+    // Every body runs (DECISIONS 225: an uncalled body is not walked).
+    for i in 0..200 {
+        src.push_str(&format!("console.log(f{i}(new C{}()));\n", (i + 1) % 200));
+    }
     let full = facts(&src);
     assert!(!full.stats.aborted);
     // A node bound (max_pts / 8) far below what generation creates.

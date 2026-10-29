@@ -35,8 +35,16 @@ impl WorkerOptions {
         if is_undefined(options) {
             return Self::default();
         }
-        let thread_name = string_value_to_string(get_object_field_from_value(options, "name"))
-            .unwrap_or_default();
+        let name = get_object_field_from_value(options, "name");
+        let thread_name = if perry_runtime::value::js_is_truthy(name) != 0 {
+            // The string reader also accepts pointer-tagged values. Validate first
+            // so an ordinary object is never interpreted as a StringHeader.
+            perry_runtime::validators::validate_string(name, "options.name");
+            string_value_to_string(name).unwrap_or_default()
+        } else {
+            // Node treats every falsy name as the default, not a type error.
+            String::new()
+        };
         Self {
             thread_name,
             resource_limits: resource_limits_from_options(options),

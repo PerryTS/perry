@@ -436,5 +436,3 @@ pub(crate) extern "C" fn timers_promises_scheduler(
     let err = crate::error::js_typeerror_new(msg);
     crate::exception::js_throw(boxed_ptr(err as *const u8))
 }
-
-crate::realm_decl!("timers.realm.json#*");

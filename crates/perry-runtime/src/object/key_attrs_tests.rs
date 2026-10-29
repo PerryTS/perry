@@ -229,7 +229,7 @@ fn an_attribute_on_an_absent_key_claims_the_key() {
             crate::object::PropertyAttrs::new(false, false, true),
         );
         let keys = crate::object::object_keys(obj);
-        let pos = crate::object::keys_find_slot_by_bytes(keys.arr(), keys.count(), b"claimed")
+        let pos = crate::object::keys_find_slot_by_bytes(keys, keys.count(), b"claimed")
             .expect("the attribute claimed its key");
         assert_eq!(
             keys_entry(keys.arr(), pos),

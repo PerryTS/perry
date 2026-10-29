@@ -9,8 +9,7 @@ use std::fs;
 
 use crate::closure::{
     js_closure_alloc, js_closure_call0, js_closure_call1, js_closure_get_capture_f64,
-    js_closure_get_capture_ptr, js_closure_set_capture_f64, js_closure_set_capture_ptr,
-    ClosureHeader,
+    js_closure_get_capture_ptr, js_closure_set_capture_f64, ClosureHeader,
 };
 use crate::object::{js_object_alloc, js_object_set_field_by_name};
 use crate::string::js_string_from_bytes;
@@ -1295,31 +1294,31 @@ fn mock_object_value() -> f64 {
         if let Some(ptr) = *slot.borrow() {
             return boxed_ptr(ptr);
         }
-        let timers = js_object_alloc(0, 5);
+        let timers = crate::realm_decl! { birth js_object_alloc(0, 5); realm { "node:test.mock.timers", kind = namespace, members = { enable, attrs = writable | enumerable | configurable; tick, attrs = writable | enumerable | configurable; runAll, attrs = writable | enumerable | configurable; setTime, attrs = writable | enumerable | configurable; reset, attrs = writable | enumerable | configurable; [Symbol.dispose]; }; } };
         set_field(
             timers,
             "enable",
-            closure_value(crate::fn_info!(mock_timers_enable, 1; with_declared(1)), 1),
+            closure_value(crate::fn_info!(#[realm("node:test.mock.timers.enable", provider = closure)] mock_timers_enable, 1; with_declared(1)), 1),
         );
         set_field(
             timers,
             "tick",
-            closure_value(crate::fn_info!(mock_timers_tick, 1; with_declared(1)), 1),
+            closure_value(crate::fn_info!(#[realm("node:test.mock.timers.tick", provider = closure)] mock_timers_tick, 1; with_declared(1)), 1),
         );
         set_field(
             timers,
             "runAll",
-            closure_value(crate::fn_info!(mock_timers_run_all, 0; with_declared(0)), 0),
+            closure_value(crate::fn_info!(#[realm("node:test.mock.timers.runAll", provider = closure)] mock_timers_run_all, 0; with_declared(0)), 0),
         );
         set_field(
             timers,
             "setTime",
             closure_value(
-                crate::fn_info!(mock_timers_set_time, 1; with_declared(1)),
+                crate::fn_info!(#[realm("node:test.mock.timers.setTime", provider = closure)] mock_timers_set_time, 1; with_declared(1)),
                 1,
             ),
         );
-        let reset = closure_value(crate::fn_info!(mock_timers_reset, 0; with_declared(0)), 0);
+        let reset = closure_value(crate::fn_info!(#[realm(realm_decl! { "node:test.mock.timers[\"@@dispose\"]", constructible = true; "node:test.mock.timers.reset", provider = closure; })] mock_timers_reset, 0; with_declared(0)), 0);
         set_field(timers, "reset", reset);
         let dispose = crate::symbol::well_known_symbol("dispose");
         if !dispose.is_null() {
@@ -1343,38 +1342,38 @@ fn mock_object_value() -> f64 {
             );
         }
 
-        let mock = js_object_alloc(0, 8);
+        let mock = crate::realm_decl! { birth js_object_alloc(0, 8); realm { "node:test.mock", kind = namespace, members = { fn, attrs = writable | enumerable | configurable; method, attrs = writable | enumerable | configurable; getter, attrs = writable | enumerable | configurable; setter, attrs = writable | enumerable | configurable; property, attrs = writable | enumerable | configurable; reset, attrs = writable | enumerable | configurable; restoreAll, attrs = writable | enumerable | configurable; timers, attrs = writable | enumerable | configurable; }; } };
         set_field(
             mock,
             "fn",
-            closure_value(crate::fn_info!(mock_fn_thunk, 3; with_declared(3)), 3),
+            closure_value(crate::fn_info!(#[realm("node:test.mock.fn", provider = closure)] mock_fn_thunk, 3; with_declared(3)), 3),
         );
         set_field(
             mock,
             "method",
-            closure_value(crate::fn_info!(mock_method_thunk, 4; with_declared(4)), 4),
+            closure_value(crate::fn_info!(#[realm("node:test.mock.method", provider = closure)] mock_method_thunk, 4; with_declared(4)), 4),
         );
         set_field(
             mock,
             "getter",
-            closure_value(crate::fn_info!(mock_getter_thunk, 4; with_declared(4)), 4),
+            closure_value(crate::fn_info!(#[realm("node:test.mock.getter", provider = closure)] mock_getter_thunk, 4; with_declared(4)), 4),
         );
         set_field(
             mock,
             "setter",
-            closure_value(crate::fn_info!(mock_setter_thunk, 4; with_declared(4)), 4),
+            closure_value(crate::fn_info!(#[realm("node:test.mock.setter", provider = closure)] mock_setter_thunk, 4; with_declared(4)), 4),
         );
         set_field(mock, "property", property_mock::tracker_property_value());
         set_field(
             mock,
             "reset",
-            closure_value(crate::fn_info!(mock_reset_thunk, 0; with_declared(0)), 0),
+            closure_value(crate::fn_info!(#[realm("node:test.mock.reset", provider = closure)] mock_reset_thunk, 0; with_declared(0)), 0),
         );
         set_field(
             mock,
             "restoreAll",
             closure_value(
-                crate::fn_info!(mock_restore_all_thunk, 0; with_declared(0)),
+                crate::fn_info!(#[realm("node:test.mock.restoreAll", provider = closure)] mock_restore_all_thunk, 0; with_declared(0)),
                 0,
             ),
         );
@@ -1620,7 +1619,7 @@ fn test_context_value(name: &str) -> f64 {
         ),
     );
     let ctx = js_object_alloc(0, 8);
-    let test_fn = closure_value(crate::fn_info!(thunk_test, 3; with_declared(3)), 3);
+    let test_fn = closure_value(crate::fn_info!(#[realm("node:test.default", provider = closure, members = { test = ref("node:test.default"), attrs = writable | enumerable | configurable; skip, attrs = writable | enumerable | configurable; todo, attrs = writable | enumerable | configurable; only, attrs = writable | enumerable | configurable; })] thunk_test, 3; with_declared(3)), 3);
     let test_fn_ptr = raw_ptr_from_value(test_fn);
     let test_fn = if crate::value::addr_class::is_plausible_heap_addr(test_fn_ptr) {
         boxed_ptr(decorate_test_export(
@@ -1825,30 +1824,30 @@ pub(crate) fn decorate_test_export(
         [
             (
                 "skip",
-                crate::fn_info!(thunk_test_suite_skip, 3; with_declared(3)),
+                crate::fn_info!(#[realm("node:test.describe.skip", provider = closure)] thunk_test_suite_skip, 3; with_declared(3)),
             ),
             (
                 "todo",
-                crate::fn_info!(thunk_test_suite_todo, 3; with_declared(3)),
+                crate::fn_info!(#[realm("node:test.describe.todo", provider = closure)] thunk_test_suite_todo, 3; with_declared(3)),
             ),
             (
                 "only",
-                crate::fn_info!(thunk_test_suite_only, 3; with_declared(3)),
+                crate::fn_info!(#[realm("node:test.describe.only", provider = closure)] thunk_test_suite_only, 3; with_declared(3)),
             ),
         ]
     } else {
         [
             (
                 "skip",
-                crate::fn_info!(thunk_test_skip, 3; with_declared(3)),
+                crate::fn_info!(#[realm(realm_decl! { "node:test.default.skip", provider = closure; "node:test.skip", provider = closure_alloc; })] thunk_test_skip, 3; with_declared(3)),
             ),
             (
                 "todo",
-                crate::fn_info!(thunk_test_todo, 3; with_declared(3)),
+                crate::fn_info!(#[realm(realm_decl! { "node:test.default.todo", provider = closure; "node:test.todo", provider = closure_alloc; })] thunk_test_todo, 3; with_declared(3)),
             ),
             (
                 "only",
-                crate::fn_info!(thunk_test_only, 3; with_declared(3)),
+                crate::fn_info!(#[realm(realm_decl! { "node:test.default.only", provider = closure; "node:test.only", provider = closure_alloc; })] thunk_test_only, 3; with_declared(3)),
             ),
         ]
     };
@@ -1916,5 +1915,3 @@ mod tests;
 #[cfg(test)]
 #[path = "test_once_unit_tests.rs"]
 mod once_tests;
-
-crate::realm_decl!("test.realm.json#*");

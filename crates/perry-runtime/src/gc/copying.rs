@@ -417,7 +417,7 @@ impl CopyingNurseryCollector {
                 self.move_young(ptr)
             },
             CopyingPointerKind::ToSurvivor => addr,
-            CopyingPointerKind::Longlived | CopyingPointerKind::Malloc => {
+            CopyingPointerKind::YoungLarge | CopyingPointerKind::Longlived | CopyingPointerKind::Malloc => {
                 unsafe {
                     let flags = (*ptr.header).gc_flags;
                     if flags & GC_FLAG_MARKED == 0 && !super::pin::pinned_counts_as_marked(flags) {
@@ -1064,7 +1064,8 @@ pub(super) fn run_copied_minor_attempt(
     let mut phase_diag = PhaseDiag::enabled();
 
     let phase_start = trace_phase_start(trace);
-    let from_space_bytes = crate::arena::copying_from_space_in_use_bytes();
+    let from_space_bytes = crate::arena::moving_from_space_in_use_bytes();
+    let young_large_bytes = crate::arena::young_large_in_use_bytes();
     let entry_survivor_bytes = crate::arena::copying_active_survivor_in_use_bytes();
     let eden_allocated_bytes = from_space_bytes.saturating_sub(entry_survivor_bytes);
     let entry_nursery_cap = super::tenuring::scavenge_nursery_cap_effective_bytes();
@@ -1096,6 +1097,7 @@ pub(super) fn run_copied_minor_attempt(
     // attempt: no malloc payloads or young native-buffer owners, no instrument
     // requiring movement, and no previous rollback in this collection.
     let can_speculate = may_speculate
+        && young_large_bytes == 0
         && ptrs.malloc_registry_empty_at_start
         && !crate::arena::young_owned_stores_may_exist()
         && untraced_promotion_instrument_veto().is_none();
@@ -1133,7 +1135,7 @@ pub(super) fn run_copied_minor_attempt(
     collector.stats.in_place_promoted_blocks = promotion.block_count();
     // See `CopyingNurseryCollector::skip_remembering` for the proof.
     collector.skip_remembering =
-        promoting_in_place && collector.ptrs.malloc_registry_empty_at_start;
+        promoting_in_place && young_large_bytes == 0 && collector.ptrs.malloc_registry_empty_at_start;
     if collector.skip_remembering {
         debug_assert_no_remembering_possible();
     }
@@ -1173,7 +1175,7 @@ pub(super) fn run_copied_minor_attempt(
     let instrument_veto = untraced_promotion_instrument_veto();
     let untraced = promoting_in_place
         && !speculate
-        && collector.skip_remembering
+        && collector.ptrs.malloc_registry_empty_at_start
         && !crate::weakref::weak_target_holders_allocated()
         && instrument_veto.is_none()
         && super::should_promote_young_untraced();
@@ -1570,7 +1572,9 @@ pub(super) fn run_copied_minor_attempt(
     // run here, same window as fromspace_scan (after rewrite, before reset).
     super::native_stack_scan::run_native_stack_scan();
 
-    let finalization = finalize_dead_copied_minor_from_space_side_allocations();
+    let finalization = if untraced {
+        super::copying_phase::CopiedMinorFinalizationDiag::default()
+    } else { finalize_dead_copied_minor_from_space_side_allocations() };
     if let Some(diag) = phase_diag.as_mut() {
         diag.add_nanos(Phase::DeadOwnerSideTablePruning, finalization.dead_owner_ns);
         diag.add_nanos(
@@ -1585,6 +1589,10 @@ pub(super) fn run_copied_minor_attempt(
     // walk reads `GC_FLAG_MARKED` to decide which objects to index — and it
     // takes the place of, never runs alongside, the from-space reset: the
     // blocks the reset would recycle are the blocks this keeps.
+    let large_reset = if untraced {
+        crate::arena::ArenaResetStats::default()
+    } else { crate::arena::finish_copied_young_large() };
+    let large_live_bytes = young_large_bytes.saturating_sub(large_reset.reusable_bytes);
     let (reset, promotion_stats) = if promoting_in_place {
         let phase_start = trace_phase_start(trace);
         let promotion_phase_start = PhaseDiag::start(&phase_diag);
@@ -1643,11 +1651,11 @@ pub(super) fn run_copied_minor_attempt(
     }
     let remembered_restore_phase_start = PhaseDiag::start(&phase_diag);
     let clear_start = trace_phase_start(trace);
-    remembered_set_clear();
+    if !(untraced && young_large_bytes != 0) { remembered_set_clear(); }
     trace_phase_record(trace, "remembered_set_clear", clear_start);
     let restore_start = trace_phase_start(trace);
     collector.sticky.restore();
-    if !collector.skip_remembering {
+    if !untraced && !collector.skip_remembering {
         restore_surviving_dirty_coverage(&snapshot, &dirty_scan_covered, "copying_minor");
         // Per minor, not at exit: the rig SIGKILLs cc. Cumulative counters, so
         // the last line before the kill is the answer.
@@ -1695,7 +1703,7 @@ pub(super) fn run_copied_minor_attempt(
     // one that measures.
     if untraced {
         super::note_untraced_promotion(promotion_stats.bytes, promotion_stats.objects);
-    } else {
+    } else if from_space_bytes != 0 {
         super::note_young_survival(from_space_bytes, collector.live_from_bytes);
     }
     if !untraced {
@@ -1720,7 +1728,8 @@ pub(super) fn run_copied_minor_attempt(
     } else {
         from_space_bytes.saturating_sub(collector.live_from_bytes) as u64
     };
-    let freed_bytes = nursery_freed_bytes.saturating_add(malloc_freed_bytes);
+    let freed_bytes = nursery_freed_bytes.saturating_add(malloc_freed_bytes)
+        .saturating_add(large_reset.reusable_bytes as u64);
     collector.stats.malloc_validation_lookups = collector.ptrs.malloc_validation_lookups();
     collector.stats.malloc_registry_rebuilds = collector.ptrs.malloc_registry_rebuilds();
     if let Some(trace) = trace.as_mut() {
@@ -1775,7 +1784,7 @@ pub(super) fn run_copied_minor_attempt(
     // one line: the baseline is the base of a GROWTH measurement, not a
     // liveness claim, and withholding it pins that base at 0 on exactly the
     // workloads that reach this path.
-    credit_promoted_bytes_to_old_baseline(collector.stats.promoted_bytes);
+    credit_promoted_bytes_to_old_baseline(collector.stats.promoted_bytes.saturating_add(if untraced { 0 } else { large_live_bytes }));
     // #10241: the promoted cohort counts in-place promotions only; bytes this
     // minor tenured by copy survived a minor already (`promoted_cohort`).
     super::promoted_cohort::note_minor_promotion(
@@ -1807,6 +1816,8 @@ pub(super) fn run_copied_minor_attempt(
     );
     let arena_live_bytes = pre_collection_live_bytes
         .saturating_sub(pre_from_space_live_bytes)
+        .saturating_sub(young_large_bytes)
+        .saturating_add(large_live_bytes)
         .saturating_add(collector.stats.copied_bytes)
         .saturating_add(collector.stats.promoted_bytes);
     // `None`: to-space is compacted by construction — Eden is empty after the
@@ -1845,12 +1856,14 @@ pub(super) fn run_copied_minor_attempt(
         collector.stats.survivor_live_bytes,
         collector.stats.survivor_first_round_live_bytes,
     );
+    if from_space_bytes != 0 {
     retune_after_scavenge(
         collector.stats.eden_live_bytes,
         collector.stats.eden_copied_bytes,
         collector.stats.survivor_first_round_live_bytes,
         eden_allocated_bytes >= entry_eden_budget,
     );
+    }
     if let Some(d) = collector.survival.as_ref() {
         d.report(super::survival_diag::next_minor_seq());
     }

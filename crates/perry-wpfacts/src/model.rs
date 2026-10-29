@@ -1761,6 +1761,31 @@ pub struct Model {
     /// owns (a local, a parameter, or the enclosing `this` of an arrow).
     pub captures: crate::pts::FxHashSet<(NodeId, FnIdx)>,
     pub sum: crate::summary::SumState,
+    /// DECISIONS 225: the function bodies that can run, when the analysis
+    /// gates bodies on it (`None`: every body runs).
+    pub act: Option<Act>,
+}
+
+/// DECISIONS 225: which function bodies can run. A body is active once its
+/// module runs it, a transfer of an active body solves to it, or it escapes
+/// (unknown code may call anything escaped, DECISIONS 150). The set only
+/// grows; generation walks a body once it is active (`Gen::walk_activated`).
+#[derive(Default, Clone, Debug)]
+pub struct Act {
+    /// The active functions, by their stable identity (`Model::act_key`).
+    pub on: crate::pts::FxHashSet<(u32, u32, String)>,
+    /// Activated since generation last walked.
+    pub queue: Vec<FnIdx>,
+    /// The set is final (the analysis after the activation pass): nothing
+    /// activates, a body outside it is never walked.
+    pub fixed: bool,
+    /// The bodies the analysis after the activation pass walked (by
+    /// `Model::act_key`): what can run, module bodies and static
+    /// initializers included (`ProgramFacts::active_bodies`).
+    pub walked: crate::pts::FxHashSet<(u32, u32, String)>,
+    /// The negative control (`PERRY_FACTS_SABOTAGE=activation:<path>`):
+    /// one activation path left out, so its refusal fixture proves wrongly.
+    pub sabotage: Option<String>,
 }
 
 /// The accessors of one holder under one key (or every key, `Key::Any`),

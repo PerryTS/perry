@@ -90,6 +90,19 @@ fn consume_esm_eval_checkpoint() -> bool {
     ESM_EVAL_CHECKPOINT_PENDING.with(|c| c.replace(false))
 }
 
+/// The ids a promise reaction job runs under. Node tracks a promise only
+/// while a promise hook observes it, so an unobserved reaction enters no
+/// promise scope and runs in the enclosing execution context (its before and
+/// after both see id 0).
+#[inline]
+fn reaction_ids(async_id: u64, trigger_async_id: u64) -> (u64, u64) {
+    if crate::async_hook_slots::promise_hooks_active() {
+        (async_id, trigger_async_id)
+    } else {
+        (0, 0)
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn js_promise_run_microtasks() -> i32 {
     run_microtasks(MicrotaskDrainMode::AllowTimers)
@@ -544,15 +557,13 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
                         // No callback registered → propagate the value/reason
                         // to the next promise without invoking anything.
                         if callback.is_null() {
-                            let async_id = if (*promise).next.is_null() {
-                                0
+                            let (async_id, trigger_async_id) = if (*promise).next.is_null() {
+                                (0, 0)
                             } else {
-                                (*(*promise).next).async_id
-                            };
-                            let trigger_async_id = if (*promise).next.is_null() {
-                                0
-                            } else {
-                                (*(*promise).next).trigger_async_id
+                                reaction_ids(
+                                    (*(*promise).next).async_id,
+                                    (*(*promise).next).trigger_async_id,
+                                )
                             };
                             CURRENT_MICROTASK_PROMISE.with(|c| c.set(promise));
                             CURRENT_MICROTASK_VALUE.with(|c| c.set(value));
@@ -636,15 +647,13 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
                         // child's id/resource to before/after and
                         // executionAsyncResource(). Capture those child ids as
                         // plain values before user code can move the heap.
-                        let async_id = if (*promise).next.is_null() {
-                            0
+                        let (async_id, trigger_async_id) = if (*promise).next.is_null() {
+                            (0, 0)
                         } else {
-                            (*(*promise).next).async_id
-                        };
-                        let trigger_async_id = if (*promise).next.is_null() {
-                            0
-                        } else {
-                            (*(*promise).next).trigger_async_id
+                            reaction_ids(
+                                (*(*promise).next).async_id,
+                                (*(*promise).next).trigger_async_id,
+                            )
                         };
                         crate::async_hook_slots::before_promise(async_id, trigger_async_id);
                         let promise = promise_handle.get_raw_mut_ptr::<Promise>();
@@ -741,15 +750,10 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
                     let callback = rooted_closure(&callback_handle);
                     let value = value_handle.get_nanbox_f64();
                     let next = rooted_promise(&next_handle);
-                    let async_id = if next.is_null() {
-                        0
+                    let (async_id, trigger_async_id) = if next.is_null() {
+                        (0, 0)
                     } else {
-                        unsafe { (*next).async_id }
-                    };
-                    let trigger_async_id = if next.is_null() {
-                        0
-                    } else {
-                        unsafe { (*next).trigger_async_id }
+                        unsafe { reaction_ids((*next).async_id, (*next).trigger_async_id) }
                     };
                     crate::async_hook_slots::before_promise(async_id, trigger_async_id);
                     // Inline tasks are produced by `js_promise_resolved_then`
@@ -912,6 +916,8 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
                     step_async_id,
                     step_trigger_id,
                 )) => {
+                    let (step_async_id, step_trigger_id) =
+                        reaction_ids(step_async_id, step_trigger_id);
                     bump(&MT_RUN_COUNT);
                     // The popped Task's activation reference transfers to the
                     // running-reference stack until one of this arm's tails (or
