@@ -1106,4 +1106,3 @@ extern "C" fn event_async_resource_get(
 ) -> f64 {
     bound_native_callable_export_value("events", "EventEmitterAsyncResource")
 }
-

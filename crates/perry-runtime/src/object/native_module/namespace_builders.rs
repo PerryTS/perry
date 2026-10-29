@@ -43,9 +43,8 @@ fn vm_constants_value() -> f64 {
         "vm_dynamic_import_main_context_default",
     );
     store("DONT_CONTEXTIFY", "vm_context_no_contextify");
-    let value = object.with_mut_ptr::<ObjectHeader, _>(|object| {
-        crate::value::js_nanbox_pointer(object as i64)
-    });
+    let value = object
+        .with_mut_ptr::<ObjectHeader, _>(|object| crate::value::js_nanbox_pointer(object as i64));
     super::super::js_object_freeze(value);
     value
 }
