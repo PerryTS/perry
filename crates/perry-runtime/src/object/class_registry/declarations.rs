@@ -37,6 +37,9 @@ pub const CLASS_MEMBER_SETTER: u8 = 2;
 pub const CLASS_MEMBER_SYNTHETIC_ARGUMENTS: u8 = 1;
 /// [`ClassMemberDecl::flags`]: the method has a trailing user rest parameter.
 pub const CLASS_MEMBER_REST: u8 = 2;
+/// [`ClassMemberDecl::flags`]: the name bytes are valid UTF-8, proven by the
+/// emitter (see `perry_abi::layouts::CLASS_MEMBER_NAME_UTF8`).
+pub const CLASS_MEMBER_NAME_UTF8: u8 = perry_abi::layouts::CLASS_MEMBER_NAME_UTF8;
 
 /// One instance ClassBody member. Layout shared with codegen
 /// (`{ ptr, ptr, ptr, i32, i32, i32, i8, i8, i16 }`, 40 bytes).
@@ -99,6 +102,15 @@ pub struct ClassDeclaration {
 
 // SAFETY: image constants (or leaked test copies): never written after
 // registration, and the pointers they hold name immutable code and bytes.
+const _: () = {
+    let ptr = std::mem::size_of::<*const u8>();
+    assert!(std::mem::size_of::<ClassMemberDecl>() == 3 * ptr + 16);
+    assert!(std::mem::offset_of!(ClassMemberDecl, flags) == 3 * ptr + 13);
+    assert!(
+        CLASS_MEMBER_NAME_UTF8 & (CLASS_MEMBER_SYNTHETIC_ARGUMENTS | CLASS_MEMBER_REST) == 0
+    );
+};
+
 unsafe impl Sync for ClassMemberDecl {}
 unsafe impl Send for ClassMemberDecl {}
 unsafe impl Sync for ClassDeclaration {}
@@ -196,7 +208,7 @@ impl ClassMemberDecl {
             definition_order: 0,
             param_count,
             kind: CLASS_MEMBER_METHOD,
-            flags: 0,
+            flags: CLASS_MEMBER_NAME_UTF8,
             set_length: -1,
         }
     }
@@ -215,7 +227,7 @@ impl ClassMemberDecl {
             } else {
                 CLASS_MEMBER_GETTER
             },
-            flags: 0,
+            flags: CLASS_MEMBER_NAME_UTF8,
             set_length: if setter { 1 } else { -1 },
         }
     }
@@ -231,10 +243,16 @@ impl ClassMemberDecl {
     }
 
     /// The literal name, `None` for a computed member (or one that is not
-    /// UTF-8, which names no member).
+    /// UTF-8, which names no member). A name the emitter proved UTF-8
+    /// ([`CLASS_MEMBER_NAME_UTF8`]) is not validated again.
     #[inline]
     pub fn literal_name(&self) -> Option<&str> {
-        std::str::from_utf8(self.name_bytes()?).ok()
+        let bytes = self.name_bytes()?;
+        if self.flags & CLASS_MEMBER_NAME_UTF8 != 0 {
+            // SAFETY: the emitter proved the bytes valid UTF-8.
+            return Some(unsafe { std::str::from_utf8_unchecked(bytes) });
+        }
+        std::str::from_utf8(bytes).ok()
     }
 
     #[inline]
