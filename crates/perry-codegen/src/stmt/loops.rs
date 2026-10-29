@@ -6477,6 +6477,70 @@ pub(super) fn emit_guarded_i32_bound(
     label_prefix: &str,
     extra_body_increments: Option<u32>,
 ) -> Option<DynamicI32Bound> {
+    emit_guarded_i32_bound_with_start(
+        ctx,
+        counter_id,
+        bound_id,
+        op,
+        update,
+        body,
+        label_prefix,
+        extra_body_increments,
+        None,
+    )
+}
+
+/// The int32 literal a `for` loop's own init leaves in `counter`: `let i = 0`,
+/// `i = 0`, or a comma sequence whose last write to the counter is `i = 0`.
+/// `None` when the init leaves anything else (or nothing) there.
+pub(super) fn for_init_literal_counter(init: Option<&Stmt>, counter_id: u32) -> Option<i32> {
+    use perry_hir::Expr;
+    let literal = |e: &Expr| match e {
+        Expr::Integer(n) => i32::try_from(*n).ok(),
+        _ => None,
+    };
+    match init? {
+        Stmt::Let {
+            id,
+            init: Some(start),
+            ..
+        } if *id == counter_id => literal(start),
+        Stmt::Expr(Expr::LocalSet(id, value)) if *id == counter_id => literal(value),
+        Stmt::Expr(Expr::Sequence(items)) => {
+            let last = items
+                .iter()
+                .rposition(|e| matches!(e, Expr::LocalSet(id, _) if *id == counter_id))?;
+            if items[last + 1..]
+                .iter()
+                .any(|e| expr_mutates_local(e, counter_id))
+            {
+                return None;
+            }
+            match &items[last] {
+                Expr::LocalSet(_, value) => literal(value),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// [`emit_guarded_i32_bound`], told the counter's value at loop entry when the
+/// loop's own init sets it to an int32 literal (`for_init_literal_counter`):
+/// a private counter is then seeded with that literal instead of re-checking
+/// its f64 slot at run time.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn emit_guarded_i32_bound_with_start(
+    ctx: &mut FnCtx<'_>,
+    counter_id: u32,
+    bound_id: u32,
+    op: perry_hir::CompareOp,
+    update: Option<&perry_hir::Expr>,
+    body: &[perry_hir::Stmt],
+    label_prefix: &str,
+    extra_body_increments: Option<u32>,
+    known_start: Option<i32>,
+) -> Option<DynamicI32Bound> {
     let bound_slot = ctx.locals.get(&bound_id).cloned()?;
     // Repsel Phase 1: a canonical-i32 counter has no double slot — only the
     // loop-PRIVATE branch below needs one (it seeds from the f64 slot). The
@@ -6557,6 +6621,21 @@ pub(super) fn emit_guarded_i32_bound(
         });
     }
 
+    // A literal start needs no check: the init just stored it.
+    if let Some(start) = known_start.filter(|s| extra_body_increments.is_none() || *s >= 0) {
+        ctx.block()
+            .store(I32, &start.to_string(), &counter_i32_slot);
+        ctx.block().store(I1, &is_integral, &flag_slot);
+        ctx.block().br(&merge_label);
+        ctx.current_block = merge_idx;
+        return Some(DynamicI32Bound {
+            op,
+            flag_slot,
+            bound_i32_slot,
+            counter_i32_slot,
+            counter_is_private,
+        });
+    }
     // Private counter: seed it from the f64 slot, but only on a block the
     // range check dominates — `fptosi` of an out-of-range double is poison.
     // A non-number counter (every NaN-boxed tag is a NaN double) fails the
@@ -7781,7 +7860,7 @@ fn lower_for_after_init_impl(
         condition
             .and_then(|cond| classify_for_local_bound_dynamic(cond, update, body, ctx))
             .and_then(|(counter_id, bound_id, op)| {
-                emit_guarded_i32_bound(
+                emit_guarded_i32_bound_with_start(
                     ctx,
                     counter_id,
                     bound_id,
@@ -7790,6 +7869,7 @@ fn lower_for_after_init_impl(
                     body,
                     label_prefix,
                     None,
+                    for_init_literal_counter(init, counter_id),
                 )
             })
     } else {
