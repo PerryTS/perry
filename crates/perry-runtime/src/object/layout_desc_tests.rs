@@ -322,8 +322,9 @@ fn static_layout_runtime_prototype_families_keep_their_reserved_serials() {
     }
 }
 
-/// Startup draws a runtime layout's id but installs no shape for it: the
-/// first birth in the agent does, under that id.
+/// Startup installs no shape for a runtime layout and draws no id for it
+/// (WRT step 2): the first birth in the agent draws the id and installs the
+/// shape under it.
 #[test]
 fn runtime_layout_is_installed_by_its_first_birth() {
     std::thread::spawn(|| unsafe {
@@ -333,10 +334,10 @@ fn runtime_layout_is_installed_by_its_first_birth() {
         let word = LayoutWord(layout_id(desc));
         assert_eq!(installs(), 0, "startup installed a runtime layout");
         assert!(super::shapes::shape_record_for_word(word).is_none());
-        assert_ne!((*desc).shape_id, 0, "startup draws the id");
         let scope = crate::gc::RuntimeHandleScope::new();
         let obj = scope.root_raw_mut_ptr(perry_alloc_layout(desc));
         assert_eq!(installs(), 1);
+        assert_ne!((*desc).shape_id, 0, "the first birth draws the id");
         assert!(super::shapes::shape_record_for_word(word).is_some());
         obj.with_const_ptr(|o: *const ObjectHeader| assert_eq!((*o).parent_class_id, word.0));
         let _again = scope.root_raw_mut_ptr(perry_alloc_layout(desc));
@@ -346,8 +347,8 @@ fn runtime_layout_is_installed_by_its_first_birth() {
     .unwrap();
 }
 
-/// Every agent draws a runtime layout id in section order before user code,
-/// and installs the shape under it at its own first birth: two agents
+/// The first birth draws a runtime layout's id (the cell is process-wide)
+/// and every agent installs the shape under it at its own first birth: two agents
 /// publish one identity under one word. URL_COMPONENTS names a prototype
 /// family, so its id comes from the identity allocator, not the section index.
 #[test]
@@ -357,8 +358,8 @@ fn two_agents_install_a_runtime_layout_under_one_id() {
         std::thread::spawn(move || unsafe {
             crate::test_support::bootstrap_test_thread();
             let desc = desc as *const PerryLayoutDesc;
-            let drawn = (*desc).shape_id;
             let word = layout_word_for_birth(desc).expect("a runtime layout installs");
+            let drawn = (*desc).shape_id;
             let record = super::shapes::shape_record_for_word(LayoutWord(word)).expect("installed");
             (drawn, word, record.identity().0)
         })
@@ -366,7 +367,7 @@ fn two_agents_install_a_runtime_layout_under_one_id() {
         .unwrap()
     };
     let (first, second) = (agent(), agent());
-    assert_ne!(first.0, 0, "startup draws the id");
+    assert_ne!(first.0, 0, "the first birth draws the id");
     assert_eq!(first, second);
     assert_eq!(
         first.0, first.2,

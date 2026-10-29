@@ -441,7 +441,7 @@ memchr = "2"
 # The single regular-expression engine, through crates/perry-perex.
 # 0.1.15 borrows validated program sections and chains repeated-atom VM phases.
 # It retains format 16, complete captures and exact work charging.
-perex = "0.1.16"
+perex = "0.1.17"
 # The per-agent event-loop driver. alpha.10 adds owned TCP connect, live socket
 # controls and cancellation-safe shutdown used by the synchronous WASI adapter.
 # Release source: e31526b5399d00e94b1452ffe8a8e0e76e4824ad (turnloop PR #115).
@@ -669,4 +669,3 @@ codegen-units = 1
 [patch.crates-io]
 turnloop = { path = "third_party/turnloop/turnloop" }
 turnloop-http = { path = "third_party/turnloop/turnloop-http" }
-

@@ -1304,6 +1304,7 @@ pub(super) fn compile_closure(
         fixed_generator_state,
         private_resume_frame,
         private_async_resume_frame,
+        resume_locals: None,
         versioned_loop_deopt_context,
         trusted_box_capture_ptrs,
         ready_cell_roots: crate::stmt::binding_cell::ReadyCellRoots::with_entry_cells(
@@ -1577,6 +1578,7 @@ pub(super) fn compile_closure(
     // #10812: throw a catchable RangeError before the native stack runs out.
     crate::expr::numeric_order::parameters_ready(&mut ctx, params);
     crate::expr::stack_guard::emit_stack_guard(&mut ctx);
+    crate::expr::resume_locals::enter(&mut ctx, params, body)?;
     if is_async {
         stmt::lower_async_rejecting_stmts(&mut ctx, body)
             .with_context(|| format!("lowering async closure body func_id={}", func_id))?;
@@ -1594,6 +1596,7 @@ pub(super) fn compile_closure(
             let boxed = crate::expr::nanbox_pointer_inline_pub(ctx.block(), &handle);
             ctx.block().ret(DOUBLE, &boxed);
         } else {
+            crate::expr::resume_locals::write_back(&mut ctx)?;
             ctx.block().ret(DOUBLE, &undef);
         }
     }
