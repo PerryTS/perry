@@ -100,7 +100,6 @@ fn due_arm(old_pressure: usize, burst_boundary: bool) -> Option<&'static str> {
     sample_arena();
     ACCOUNT.with(|account| {
         let debt = account.0.get();
-        let band = (128 * MIB).max(debt.live_after_full.saturating_mul(2));
         let large_band = LARGE_BAND_FLOOR.max(debt.live_after_full);
         let scale = 1usize << debt.backoff;
         let burst_scale = 1usize << debt.burst_backoff;
@@ -108,12 +107,30 @@ fn due_arm(old_pressure: usize, burst_boundary: bool) -> Option<&'static str> {
         if mature < 8 * MIB {
             return None;
         }
-        if debt.published >= band.saturating_mul(scale)
-            // Total allocation includes nursery garbage. A full pays mature
-            // growth; a stable old heap must leave this debt to minors.
-            && mature >= debt.live_after_full.saturating_add(large_band.saturating_mul(scale))
-        {
-            return Some("pacing");
+        // OWNER 2026-10-29 (lane GCT): the live-proportional terms of the
+        // full-after-allocation arm are the live bytes measured at the last
+        // full times the growth factor, and while the young generation is
+        // measured retaining (live data, not garbage) that factor carries the
+        // same multiplier the arena escalation and the old-reclaim band
+        // already use. The absolute floors are unchanged. The multiplier is
+        // read only once the floor is crossed (the band is never below it), so
+        // a program that has not allocated that much pays nothing for it.
+        if debt.published >= (128 * MIB).saturating_mul(scale) {
+            let growth = super::policy::major_pacing_live_growth_multiplier();
+            let band =
+                (128 * MIB).max(debt.live_after_full.saturating_mul(2).saturating_mul(growth));
+            let pacing_large_band =
+                LARGE_BAND_FLOOR.max(debt.live_after_full.saturating_mul(growth));
+            if debt.published >= band.saturating_mul(scale)
+                // Total allocation includes nursery garbage. A full pays mature
+                // growth; a stable old heap must leave this debt to minors.
+                && mature
+                    >= debt
+                        .live_after_full
+                        .saturating_add(pacing_large_band.saturating_mul(scale))
+            {
+                return Some("pacing");
+            }
         }
         if !burst_boundary {
             return None;
