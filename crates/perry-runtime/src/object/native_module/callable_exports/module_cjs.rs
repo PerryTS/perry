@@ -138,7 +138,7 @@ pub(crate) fn module_cjs_global_paths_value() -> f64 {
             .unwrap_or_else(|| std::path::PathBuf::from("/usr/local"));
         paths.push(prefix.join("lib/node").to_string_lossy().into_owned());
 
-        let arr = crate::realm_decl! { birth crate::array::realm_string_array(paths.as_slice(), false); realm { "node:module.globalPaths", value = dynamic, elements = string } };
+        let arr = crate::realm_decl! { birth crate::array::realm_string_array(&paths.iter().map(String::as_str).collect::<Vec<_>>(), false); realm { "node:module.globalPaths", value = dynamic, elements = string } };
         store_module_cjs_root(slot, arr)
     })
 }

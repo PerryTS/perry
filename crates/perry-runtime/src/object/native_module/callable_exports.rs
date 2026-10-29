@@ -145,12 +145,13 @@ pub fn bound_native_callable_export_value(module_name: &str, property_name: &str
             crate::closure::js_closure_set_capture_f64(c, 3, class as f64);
         });
     }
-    closure.with_mut_ptr(|c: *mut crate::closure::ClosureHeader| {
-        builtin_closure_metadata::publish_bound_export_birth(
-            c as usize,
-            !bound_export_is_non_constructable(export_module_name, property_name),
-        )
-    });
+    // A bound export declared `constructable = false` is born with the
+    // per-instance bit; every other export's birth word has no bit to add.
+    if bound_export_is_non_constructable(export_module_name, property_name) {
+        closure.with_mut_ptr(|c: *mut crate::closure::ClosureHeader| {
+            builtin_closure_metadata::publish_bound_export_birth(c as usize, false)
+        });
+    }
     #[cfg(test)]
     TEST_COLLECT_NATIVE_EXPORT_AFTER_ALLOC.with(|armed| {
         if armed.replace(false) {
