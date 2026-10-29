@@ -281,7 +281,7 @@ pub(crate) unsafe fn repair_promoted_leaf_edges(h: *mut GcHeader) {
 /// what a copied promotion owes: every slot naming a young or malloc child is
 /// remembered (a young leaf child escapes). A growth stub supplies only its
 /// forwarding edge. Weak target slots follow the evacuated-copy rule.
-pub(crate) unsafe fn remember_promoted_large_container_into(
+pub(crate) unsafe fn remember_promoted_large_container_into<const DIAGNOSTICS: bool>(
     sticky: &mut StickyRememberedSet,
     h: *mut GcHeader,
 ) {
@@ -292,13 +292,15 @@ pub(crate) unsafe fn remember_promoted_large_container_into(
     if crate::gc::gc_object_yields_no_child_slots(h) {
         return;
     }
-    visit_gc_rewrite_slots::<true>(h, |slot| {
+    visit_gc_rewrite_slots::<DIAGNOSTICS>(h, |slot| {
         if crate::weakref::is_weak_target_trace_slot(h, slot.slot)
             && (*h).obj_type != GC_TYPE_WEAK_STORAGE
         {
             return;
         }
-        slot.record_layout_read();
+        if DIAGNOSTICS {
+            slot.record_layout_read()
+        };
         remember_mutable_old_to_young_slot(sticky, h, slot);
     });
 }
@@ -307,7 +309,7 @@ pub(crate) unsafe fn remember_promoted_large_container_into(
 /// remembered set (a sweep): the entries are published at once.
 pub(crate) unsafe fn remember_promoted_large_container(h: *mut GcHeader) {
     let mut sticky = StickyRememberedSet::default();
-    remember_promoted_large_container_into(&mut sticky, h);
+    remember_promoted_large_container_into::<false>(&mut sticky, h);
     sticky.restore();
 }
 

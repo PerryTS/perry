@@ -1587,7 +1587,7 @@ pub(super) fn run_copied_minor_attempt<const DIAGNOSTICS: bool>(
     } else {
         let sticky = &mut collector.sticky;
         crate::arena::finish_copied_young_large(|header| unsafe {
-            super::leaf_service::remember_promoted_large_container_into(sticky, header)
+            super::leaf_service::remember_promoted_large_container_into::<DIAGNOSTICS>(sticky, header)
         })
     };
     let large_live_bytes = young_large_bytes.saturating_sub(large_reset.reusable_bytes);
