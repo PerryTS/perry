@@ -112,7 +112,7 @@ pub(crate) fn copying_from_space_in_use_bytes() -> usize {
 /// The occupancy [`copying_from_space_in_use_bytes`] reads, and whether no
 /// young large leaf lives, from one cache read. The leaf-free hit costs the
 /// one state compare the plain read pays; everything else (a leaf alive, or
-/// an invalid cache) leaves through one cold call.
+/// an invalid cache) leaves through the cold walk.
 #[inline(always)]
 pub(crate) fn copying_from_space_in_use_bytes_and_leaf_free() -> (usize, bool) {
     let current_bytes = synced_current_eden_block_bytes();
@@ -124,21 +124,12 @@ pub(crate) fn copying_from_space_in_use_bytes_and_leaf_free() -> (usize, bool) {
         debug_assert_eq!(unsafe { (*hot_arena()).young_leaf_bytes }, 0);
         return (bytes, true);
     }
-    occupancy_and_leaf_free_slow(generation, current_bytes, cached)
-}
-
-#[cold]
-#[inline(never)]
-fn occupancy_and_leaf_free_slow(
-    generation: u64,
-    current_bytes: usize,
-    cached: SealedYoungBytes,
-) -> (usize, bool) {
     if cached.state == STATE_LEAF_LIVE && cached.heap_generation == generation {
         let bytes = cached.sealed + current_bytes;
         debug_assert_eq!(bytes, copying_from_space_in_use_bytes_walked());
         return (bytes, false);
     }
+    // Invalid cache: the walk (cold, out of line) re-stores it with leaf-ness.
     let bytes = walk_and_store(generation, current_bytes);
     // SAFETY: this thread's own nursery arena, read only.
     (bytes, unsafe { (*hot_arena()).young_leaf_bytes } == 0)
