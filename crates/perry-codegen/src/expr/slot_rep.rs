@@ -63,7 +63,10 @@
 //! - `integer_locals ∩ index_used_locals`: every write's EXACT value is
 //!   proven inside i32 (`collectors/integer_locals.rs` exactness invariant):
 //!   `Add/Sub/Mul` only by interval arithmetic over known operand ranges, a
-//!   `for` step only by the loop guard that bounds it. This bullet used to
+//!   `for` step only by the loop guard that bounds it — statically, or through
+//!   the overflow-exit lowering (`stmt/loops.rs::lower_overflow_exit_for`),
+//!   which leaves the loop where the exact value would fail the guard. This
+//!   bullet used to
 //!   accept unproven `Add/Sub/Mul` chains on the argument that the pre-phase
 //!   shadow model already read the i32 slot at every `LocalGet`. That made the
 //!   wrap equally wrong in both models, not safe in either: `j = i * i` with

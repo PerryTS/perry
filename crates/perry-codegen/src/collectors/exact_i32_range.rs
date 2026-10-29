@@ -363,7 +363,9 @@ fn local_gets(e: &Expr, out: &mut Vec<u32>) {
 /// Range of a loop-guard bound. A `.length` read is a typed-array, buffer or
 /// array length; perry's i32 loop lowering already materialises those as i32
 /// (`stmt/loops.rs` hoists `arr.length` into an `icmp slt i32` bound), so the
-/// bound is `[0, i32::MAX]`.
+/// bound is `[0, i32::MAX]`. That is a model assumption shared with the hoist:
+/// typed arrays and buffers cannot be longer, but a sparse JS array whose
+/// `length` is set past `2^31 - 1` is outside it for both.
 fn bound_range(bound: &Expr, range_of: &mut dyn FnMut(&Expr) -> Option<Range>) -> Option<Range> {
     match bound {
         Expr::PropertyGet { property, .. } if property == "length" => {

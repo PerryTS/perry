@@ -13,7 +13,9 @@
 //! judgment therefore admits such a write only with a proof that the exact
 //! result fits (`collectors/exact_i32_range.rs`): interval arithmetic over the
 //! operands' known ranges, or — for a `for` loop's own step — the loop guard
-//! that bounds the counter. Unproven writes keep the boxed double.
+//! that bounds the counter. A `for` counter that can leave i32 only upward,
+//! past its guard, is int32 through the overflow-exit lowering instead
+//! (`collect_integer_locals_and_exits`). Unproven writes keep the boxed double.
 //!
 //! ## Soundness invariant (regression #4785 and its bug class)
 //!
