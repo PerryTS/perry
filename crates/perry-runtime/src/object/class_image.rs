@@ -716,9 +716,14 @@ pub(crate) fn bind_layout_image(image: crate::codegen_abi::PerryLayoutImageV1) {
     if image.lazy_count != 0 {
         super::proto_validity::reserve_image_prototype_serials(image.prototype_serial_end);
     }
-    let bound = current().layout_image.get_or_init(|| image);
-    assert_eq!(
-        *bound, image,
+    // The first initialization stores `image`; only a repeated one compares.
+    let mut stored = false;
+    let bound = current().layout_image.get_or_init(|| {
+        stored = true;
+        image
+    });
+    assert!(
+        stored || *bound == image,
         "repeated module initialization changed the layout image"
     );
 }
