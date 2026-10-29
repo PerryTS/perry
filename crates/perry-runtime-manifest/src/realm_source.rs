@@ -1377,4 +1377,111 @@ mod tests {
         assert!(inline("fn_info!(slice,2); realm_decl!(\"array.realm.json#*\");").is_err());
         assert!(inline("fn_info!(#[realm(\"array.realm.json#slice\")] slice,2);").is_err());
     }
+
+    fn header_word(d: &Value) -> String {
+        d.get("header").unwrap().get("reserved").unwrap().encode()
+    }
+
+    #[test]
+    fn static_array_births_read_their_table_and_apply_integrity() {
+        let source = r#"const T: &[&str] = &["a", "b"]; fn f() { crate::realm_decl! { birth crate::array::realm_string_array(T, false); realm { Example.list, elements_source = T, integrity = frozen } } }"#;
+        let d = &inline(source).unwrap()[0];
+        assert_eq!(header_word(d), "40967");
+        assert_eq!(
+            d.get("own_key_order").unwrap().encode(),
+            r#"["0","1","length"]"#
+        );
+        let attrs = d.get("properties").unwrap().array().unwrap();
+        assert!(attrs
+            .iter()
+            .any(|p| p.get("key").unwrap().string() == Some("length")
+                && p.get("attributes") == Some(&Value::Number("0".into()))));
+        assert!(inline(&source.replace("elements_source = T", "elements_source = U")).is_err());
+    }
+
+    #[test]
+    fn dynamic_array_births_declare_the_kind_the_allocator_takes() {
+        let source = r#"fn f() { crate::realm_decl! { birth crate::array::realm_array_alloc(n, crate::array::ArrayElements::Pointers, false); realm { Example.a, value = dynamic, elements = string; Example.b, value = dynamic, elements = string; } } }"#;
+        let ds = inline(source).unwrap();
+        assert_eq!(header_word(&ds[0]), "40960");
+        assert_eq!(ds[0].get("kind").unwrap().string(), Some("exotic"));
+        // Both paths name the one birth.
+        assert_eq!(
+            ds[1].get("value").unwrap().get("value").unwrap().string(),
+            Some("Example.a")
+        );
+        assert!(inline(&source.replace(
+            "elements = string; Example.b",
+            "elements = number; Example.b"
+        ))
+        .is_err());
+        let empty = r#"fn f() { crate::realm_decl! { birth crate::array::realm_array_alloc(0, crate::array::ArrayElements::Scalars, false); realm { Example.empty } } }"#;
+        assert_eq!(header_word(&inline(empty).unwrap()[0]), "16384");
+    }
+
+    #[test]
+    fn an_array_holder_lists_its_members_and_never_claims_raw_f64() {
+        let source = r#"fn f() { crate::realm_decl! { birth crate::array::realm_array_alloc(0, crate::array::ArrayElements::Scalars, false); realm { Example.prototype, kind = prototype, extends = Object.prototype, members = { length = 0.0, attrs = writable; constructor; at; }; } } }"#;
+        let d = &inline(source).unwrap()[0];
+        assert_eq!(header_word(d), "16384");
+        assert_eq!(
+            d.get("own_key_order").unwrap().encode(),
+            r#"["length","constructor","at"]"#
+        );
+        assert!(inline(&source.replace("extends = Object.prototype, ", "")).is_err());
+    }
+
+    #[test]
+    fn symbol_captures_name_a_runtime_atom() {
+        let source = r#"crate::fn_info!(#[realm(Example.get, capture = [symbol(NP_SYMBOL_K_CAPTURE)])] body, 0);"#;
+        let d = &inline(source).unwrap()[0];
+        assert_eq!(
+            d.get("captures").unwrap().array().unwrap()[0].encode(),
+            r#"{"kind":"symbol","value":"@runtime:kCapture"}"#
+        );
+        assert!(inline(&source.replace("NP_SYMBOL_K_CAPTURE", "NO_SUCH_ATOM")).is_err());
+    }
+
+    #[test]
+    fn frozen_tables_order_their_rows_and_index_keys_first() {
+        let source = r#"enum V { Code(f64), Name(&'static str) } const ROWS: &[(&str, V)] = &[("Z", V::Code(-1.0)), ("1", V::Name("one")), ("A", V::Code(2.0))]; fn f() { crate::realm_decl! { birth js_object_alloc_null_proto(0, 3); realm { Example.rows, kind = namespace, members_source = ROWS, integrity = frozen } } }"#;
+        let d = &inline(source).unwrap()[0];
+        assert_eq!(d.get("own_key_order").unwrap().encode(), r#"["1","Z","A"]"#);
+        // FROZEN|SEALED|NO_EXTEND|NULL_PROTO|HAS_DESCRIPTORS
+        assert_eq!(header_word(d), "2119");
+        assert!(d
+            .get("properties")
+            .unwrap()
+            .array()
+            .unwrap()
+            .iter()
+            .all(|p| p.get("attributes") == Some(&Value::Number("2".into()))));
+        assert!(
+            inline(&source.replace("members_source = ROWS", "members_source = MISSING")).is_err()
+        );
+    }
+
+    #[test]
+    fn native_namespaces_record_their_vtable_module_and_keep_integrity_behind_it() {
+        let source = r#"fn f() { crate::realm_decl! { birth js_object_alloc(NATIVE_MODULE_CLASS_ID, 1); realm { "node:x.default", native_namespace = "x", module = "x.sub", members = { a = ref("node:x.a"); }; } } }"#;
+        let d = &inline(source).unwrap()[0];
+        assert_eq!(d.get("native_namespace").unwrap().string(), Some("x"));
+        assert_eq!(d.get("module").unwrap().string(), Some("x.sub"));
+        assert!(d.get("exotic_vtable").is_some());
+        assert!(inline(&source.replace("module = \"x.sub\",", "integrity = frozen,")).is_err());
+        let ordinary = source.replace("NATIVE_MODULE_CLASS_ID", "0");
+        assert!(inline(&ordinary).is_err());
+    }
+
+    #[test]
+    fn static_layout_births_take_their_kind_and_stay_unmarked() {
+        let source = r#"fn f() { crate::realm_decl! { birth crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(crate::object::runtime_layouts::EE_ASYNC_RESOURCE_PROTO)); realm { Example.prototype, extends = Base.prototype, members = { constructor; }; } } }"#;
+        // PLAIN_ORDINARY|HAS_DESCRIPTORS; no NEVER_MOVE until a realm birth
+        // names it as its [[Prototype]].
+        assert_eq!(header_word(&inline(source).unwrap()[0]), "2560");
+        let linked = format!(
+            r#"{source} fn g() {{ crate::realm_decl! {{ birth js_object_alloc(0, 0); realm {{ Child, extends = Example.prototype, members = {{}}; }} }} }}"#
+        );
+        assert_eq!(header_word(&inline(&linked).unwrap()[0]), "2688");
+    }
 }
