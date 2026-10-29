@@ -451,3 +451,31 @@ fn even_memberless_layoutless_classes_get_compiler_role_descriptors() {
         "empty declaration has a distinct role"
     );
 }
+
+#[test]
+fn member_names_carry_the_compilers_utf8_fact() {
+    let mut class = anon_shape(0x32b0, "Utf8Names", 92, 80);
+    let template = class.constructor.clone().unwrap();
+    let mut pool = crate::strings::StringPool::new();
+    pool.intern("plain");
+    let lone = pool.intern_wtf8(&[0xED, 0xA0, 0x80]);
+    let lone_key = pool.entry(lone).value.clone();
+    let getter = |id: u32, name: &str| {
+        let mut f = template.clone();
+        f.id = id;
+        f.name = name.to_string();
+        (name.to_string(), f)
+    };
+    class.getters = vec![getter(200, "plain"), getter(201, &lone_key)];
+    let records = super::class_declarations::class_declaration_globals(
+        &[(class.id, &class)],
+        &pool,
+        "utf8_names",
+        &mut |_| panic!("getters request no function body"),
+        &crate::layout_families::ProgramLayouts::default(),
+    );
+    let members = &records[0].globals[0];
+    let plain = members.find("i32 200, i32 0, i8 1, i8 4, i16 -1");
+    let wtf8 = members.find("i32 201, i32 0, i8 1, i8 0, i16 -1");
+    assert!(plain.is_some() && wtf8.is_some(), "{members}");
+}
