@@ -392,6 +392,7 @@ js_async_resource_subclass_init	f64	f64,f64,f64
 js_async_resource_trigger_async_id	f64	i64
 js_async_step_chain	ptr	f64,ptr
 js_async_step_done	ptr	f64,ptr
+js_async_step_resume_now	f64	f64,ptr
 js_atob	ptr	f64
 js_atomics_add	f64	ptr,i64,f64,f64,f64
 js_atomics_and	f64	ptr,i64,f64,f64,f64

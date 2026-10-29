@@ -1399,6 +1399,7 @@ pub fn infer_expr_type<F: HirTypeFacts + ?Sized>(expr: &Expr, env: &F) -> Type {
             Type::Never
         }
 
+        Expr::AsyncStepResumeNow { .. } => Type::Boolean,
         Expr::AsyncStepChain { value, .. } | Expr::AsyncStepDone { value, .. } => {
             Type::Promise(Box::new(infer_expr_type(value, env)))
         }

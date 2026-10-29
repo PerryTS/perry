@@ -214,6 +214,69 @@ pub fn build_async_step_driver_direct(
         stmts
     };
 
+    // Settled self-next continuation: when the await that suspends this resume
+    // is already determined and the runtime proves the FIFO round trip is
+    // unobservable (`AsyncStepResumeNow`), the step re-runs its dispatch in
+    // place with the awaited result as the next resume value. A decline falls
+    // through to the ordinary `AsyncStepChain` publication, unchanged.
+    // The admitted branch falls off the end of the loop body, so the loop's
+    // ordinary back-edge safepoint poll (emitted at a non-terminated body end)
+    // covers every in-place resume; the decline branch returns.
+    let continue_in_place = Stmt::If {
+        condition: Expr::AsyncStepResumeNow {
+            value: Box::new(Expr::IterResultGetValue),
+            step_closure: Box::new(Expr::LocalGet(step_self_id)),
+        },
+        then_branch: vec![
+            Stmt::Expr(Expr::LocalSet(
+                value_param_id,
+                Box::new(Expr::IterResultGetValue),
+            )),
+            Stmt::Expr(Expr::LocalSet(
+                is_error_param_id,
+                Box::new(Expr::Bool(false)),
+            )),
+        ],
+        else_branch: Some(vec![Stmt::Return(Some(Expr::AsyncStepChain {
+            value: Box::new(Expr::IterResultGetValue),
+            step_closure: Box::new(Expr::LocalGet(step_self_id)),
+        }))]),
+    };
+    let resume_loop = Stmt::While {
+        condition: Expr::Bool(true),
+        body: vec![
+            Stmt::Try {
+                body: vec![labeled_loop],
+                catch: Some(CatchClause {
+                    param: Some((catch_e_id, "__step_catch_e".to_string())),
+                    body: vec![
+                        Stmt::If {
+                            condition: Expr::LocalGet(is_error_param_id),
+                            then_branch: reject_arm,
+                            else_branch: None,
+                        },
+                        // Use the step closure captured at entry so nested
+                        // calls cannot disturb the TLS self-reference before
+                        // the error re-entry path runs.
+                        Stmt::Return(Some(Expr::Call {
+                            byte_end: 0,
+                            callee: Box::new(Expr::LocalGet(step_self_id)),
+                            args: vec![Expr::LocalGet(catch_e_id), Expr::Bool(true)],
+                            type_args: vec![],
+                            byte_offset: 0,
+                        })),
+                    ],
+                }),
+                finally: None,
+            },
+            Stmt::If {
+                condition: Expr::IterResultGetDone,
+                then_branch: resolve_arm,
+                else_branch: None,
+            },
+            continue_in_place,
+        ],
+    };
     let step_body: Vec<Stmt> = vec![
         Stmt::Let {
             id: step_self_id,
@@ -222,39 +285,7 @@ pub fn build_async_step_driver_direct(
             mutable: false,
             init: Some(Expr::CurrentStepClosure),
         },
-        Stmt::Try {
-            body: vec![labeled_loop],
-            catch: Some(CatchClause {
-                param: Some((catch_e_id, "__step_catch_e".to_string())),
-                body: vec![
-                    Stmt::If {
-                        condition: Expr::LocalGet(is_error_param_id),
-                        then_branch: reject_arm,
-                        else_branch: None,
-                    },
-                    // Use the step closure captured at entry so nested
-                    // calls cannot disturb the TLS self-reference before
-                    // the error re-entry path runs.
-                    Stmt::Return(Some(Expr::Call {
-                        byte_end: 0,
-                        callee: Box::new(Expr::LocalGet(step_self_id)),
-                        args: vec![Expr::LocalGet(catch_e_id), Expr::Bool(true)],
-                        type_args: vec![],
-                        byte_offset: 0,
-                    })),
-                ],
-            }),
-            finally: None,
-        },
-        Stmt::If {
-            condition: Expr::IterResultGetDone,
-            then_branch: resolve_arm,
-            else_branch: None,
-        },
-        Stmt::Return(Some(Expr::AsyncStepChain {
-            value: Box::new(Expr::IterResultGetValue),
-            step_closure: Box::new(Expr::LocalGet(step_self_id)),
-        })),
+        resume_loop,
     ];
 
     // #691 Phase 2: step_id is NOT captured — the body reads its own
