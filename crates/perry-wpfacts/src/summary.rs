@@ -822,6 +822,7 @@ impl Model {
         let TokKind::Func(f, ctx) = self.toks[key.2 as usize] else {
             unreachable!("instance of a non-function token")
         };
+        self.activate(f, "instance");
         let s = self.sum.of[&f].clone();
         let inst = self.sum.insts.len() as u32;
         // An instance is solve work: the work bound covers instances too.
@@ -949,6 +950,10 @@ impl Model {
     /// instance for the call gets the explicit token (the call's own
     /// operand reaches it in `bind_summarized`).
     pub(crate) fn this_into(&mut self, call: CallId, ft: Tok, this_tok: Option<Tok>) {
+        if self.act.is_some() {
+            let f = self.tok_fn(ft);
+            self.activate(f, "this");
+        }
         if self.diagnostic.is_some() {
             let f = self.tok_fn(ft);
             self.diagnostic_reach(f, "this", call);
@@ -1162,6 +1167,10 @@ impl Model {
     /// its birth keys (`for_in_keys`), each run's key parameter holding its
     /// one key, else once with every key.
     pub(crate) fn for_in_tok(&mut self, call: CallId, ft: Tok, t: Tok) {
+        if self.act.is_some() {
+            let f = self.tok_fn(ft);
+            self.activate(f, "for-in");
+        }
         if !self.sum.ready {
             self.sum.deferred.push(Deferred::ForIn(call, ft, t));
             return;
@@ -1356,6 +1365,7 @@ impl Model {
         }
         for &(i, g) in &s.expanded {
             self.sum.composed.insert((kmap[i as usize], g));
+            self.activate(g, "composed");
         }
         for &(slot, ref toks, prim) in &s.seeds {
             self.add(base[slot as usize], toks, prim);

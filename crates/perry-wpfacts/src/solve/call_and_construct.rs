@@ -179,6 +179,7 @@ impl Model {
         let TokKind::Func(f, _) = self.toks[t as usize] else {
             return;
         };
+        self.activate(f, "call");
         if self.diagnostic.is_some() {
             let kind = if self.ctor_calls.contains(&call) { "new" } else { "call" };
             self.diagnostic_reach(f, kind, call);
@@ -783,6 +784,12 @@ impl Model {
     }
 
     pub fn escape(&mut self, t: Tok, reason: u32) {
+        // DECISIONS 225: unknown code may call an escaped function.
+        if self.act.is_some() {
+            if let TokKind::Func(f, _) = self.toks[t as usize] {
+                self.activate(f, "escape");
+            }
+        }
         if self.diagnostic.is_none() {
             return self.escape_body(t, reason);
         }

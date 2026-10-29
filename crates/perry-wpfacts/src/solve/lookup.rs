@@ -652,6 +652,11 @@ impl Model {
 
     /// Accessor `f` hangs off group (holder, key).
     pub(super) fn group_connect(&mut self, holder: Tok, key: Key, f: Tok, setter: bool) {
+        // DECISIONS 225: a lookup reached the accessor's group.
+        if self.act.is_some() {
+            let g = self.tok_fn(f);
+            self.activate(g, "accessor");
+        }
         let g = self.acc_groups[&(holder, key)].clone();
         // An accessor with a lexical `this` (arrow) never sees the
         // receiver, as for a call (`call_tok`).
@@ -676,6 +681,7 @@ impl Model {
     /// The parameter/result half of `group_connect`.
     pub(crate) fn group_bind(&mut self, holder: Tok, key: Key, ft: Tok, setter: bool) {
         let f = self.tok_fn(ft);
+        self.activate(f, "accessor");
         if self.diagnostic.is_some() {
             self.diagnostic_reach(f, "accessor", u32::MAX);
         }

@@ -135,6 +135,8 @@ pub struct Stats {
 pub struct ProgramFacts {
     /// Dump-only JSON records, scoped by emitting analysis-unit identity.
     pub diagnostics: Vec<(String, Vec<String>)>,
+    /// DECISIONS 225: the activation pass's count (the whole program).
+    pub activation: Option<String>,
     pub module_paths: Vec<String>,
     pub templates: Vec<TemplateFacts>,
     pub sites: Vec<SiteFacts>,
@@ -241,7 +243,7 @@ pub struct ProgramFacts {
 /// Run the analysis over every module (paths must be the keys the caller
 /// uses for `digest_for` / `contract_section`).
 pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts {
-    compute_in(modules, cfg, None, None)
+    compute_act(modules, cfg, None, None, true)
 }
 
 #[path = "lib/contracts.rs"]
@@ -266,19 +268,22 @@ use contracts::unnamed_methods;
 use contracts::value_contract_of;
 use contracts::value_contract_of_toks;
 
-/// [`compute`] for one unit of a per-unit run: `published` is what the other
-/// units can name of its modules (`units::published_surface`).
-pub(crate) fn compute_in<'a>(
-    modules: &'a [(String, &'a Module)],
+/// Generation and the summaries for one analysis of `sorted` (with `act`,
+/// DECISIONS 225: only the bodies that can run are walked; an unfixed set
+/// is the activation pass, which walks each body once it is activated).
+fn generate<'a>(
+    sorted: &[(&'a str, &'a Module)],
     cfg: &FactsConfig,
     published: Option<&'a units::Published>,
     view: Option<&'a decl_units::UnitView>,
-) -> ProgramFacts {
-    let t0 = std::time::Instant::now();
-    let mut sorted: Vec<(&str, &Module)> = modules.iter().map(|(p, m)| (p.as_str(), *m)).collect();
-    sorted.sort_by(|a, b| a.0.cmp(b.0));
-    let mut g = gen::Gen::new(sorted.clone(), cfg.relations, cfg.explain);
-    if cfg.diagnostics {
+    act: Option<model::Act>,
+    t0: std::time::Instant,
+) -> (gen::Gen<'a>, f64, std::time::Instant) {
+    let loud = act.as_ref().is_none_or(|a| a.fixed);
+    let mut g = gen::Gen::new(sorted.to_vec(), cfg.relations && loud, cfg.explain && loud);
+    // DECISIONS 225: a body is walked once its function can run.
+    g.m.act = act;
+    if cfg.diagnostics && loud {
         g.diagnostic = Some(Default::default());
         g.m.diagnostic = Some(Default::default());
     }
@@ -289,7 +294,7 @@ pub(crate) fn compute_in<'a>(
     let dynamic_reach = cfg.dynamic_code_reach.globals as u8;
     g.m.rel(|| format!("dynamicreach {dynamic_reach}"));
     g.m.rel(|| format!("interp {}", interp.replace(' ', "\\s")));
-    if cfg.profile {
+    if cfg.profile && loud {
         g.m.profile = Some(Default::default());
         g.m.prof = Some(Default::default());
     }
@@ -334,7 +339,7 @@ pub(crate) fn compute_in<'a>(
         }
     }
     let gen_ms = t0.elapsed().as_secs_f64() * 1000.0;
-    if cfg.profile {
+    if cfg.profile && loud {
         eprintln!("perry: wpfacts after generation {}", g.m.size_line());
     }
     let t1 = std::time::Instant::now();
@@ -353,11 +358,81 @@ pub(crate) fn compute_in<'a>(
         g.m.sink_node(thrown, r);
     }
     g.m.prof_mark(crate::model::NO_NODE, "generation");
+    if !loud {
+        // The activation pass: one body for every call of each function,
+        // the sound coarser analysis, enough to say which bodies can run.
+        for f in g.m.funcs.iter_mut() {
+            f.no_summary = true;
+        }
+    }
     g.m.summarize_and_replay();
     g.m.prof_mark(crate::model::NO_NODE, "summaries");
-    if cfg.profile || cfg.explain {
+    if (cfg.profile || cfg.explain) && loud {
         eprintln!("perry: wpfacts {}", g.m.sum.stats);
     }
+    (g, gen_ms, t1)
+}
+
+/// DECISIONS 225, the activation pass: which function bodies can run. The
+/// module bodies run; a body is walked once an active body's transfer
+/// solves to its function or the function escapes, until none is left.
+/// Past the work bound: `None`, every body is walked (sound).
+fn activation<'a>(
+    sorted: &[(&'a str, &'a Module)],
+    cfg: &FactsConfig,
+    t0: std::time::Instant,
+) -> Option<model::Act> {
+    let sabotage = cfg
+        .sabotage
+        .as_deref()
+        .and_then(|s| s.strip_prefix("activation:"))
+        .map(str::to_string);
+    let act = model::Act {
+        sabotage,
+        ..Default::default()
+    };
+    let (mut g, _, _) = generate(sorted, cfg, None, None, Some(act), t0);
+    g.m.solve();
+    while !g.m.aborted && g.walk_activated() {
+        g.m.solve();
+    }
+    if g.m.aborted {
+        return None;
+    }
+    let mut a = g.m.act.take()?;
+    a.fixed = true;
+    a.queue.clear();
+    Some(a)
+}
+
+/// [`compute`] for one unit of a per-unit run: `published` is what the other
+/// units can name of its modules (`units::published_surface`).
+pub(crate) fn compute_in<'a>(
+    modules: &'a [(String, &'a Module)],
+    cfg: &FactsConfig,
+    published: Option<&'a units::Published>,
+    view: Option<&'a decl_units::UnitView>,
+) -> ProgramFacts {
+    compute_act(modules, cfg, published, view, false)
+}
+
+fn compute_act<'a>(
+    modules: &'a [(String, &'a Module)],
+    cfg: &FactsConfig,
+    published: Option<&'a units::Published>,
+    view: Option<&'a decl_units::UnitView>,
+    gate: bool,
+) -> ProgramFacts {
+    let t0 = std::time::Instant::now();
+    let mut sorted: Vec<(&str, &Module)> = modules.iter().map(|(p, m)| (p.as_str(), *m)).collect();
+    sorted.sort_by(|a, b| a.0.cmp(b.0));
+    // DECISIONS 225 (the whole program): the facts are over the bodies that
+    // can run. Per unit every body runs (its published functions are called
+    // by units it cannot see).
+    let act = if gate { activation(&sorted, cfg, t0) } else { None };
+    let activation = act.as_ref().map(|a| a.on.len());
+    let (mut g, gen_ms, t1) = generate(&sorted, cfg, published, view, act, t0);
+    let activation = activation.map(|n| format!("active={n} functions={}", g.m.funcs.len()));
     g.m.solve();
     let first_solve_ms = t1.elapsed().as_secs_f64() * 1000.0;
     // Past the bound the unit claims nothing (sound): its contracts are
@@ -1445,6 +1520,7 @@ pub(crate) fn compute_in<'a>(
     };
     let mut pf = ProgramFacts {
         diagnostics,
+        activation,
         super_unrelinked,
         fnproto_bind_written,
         module_paths: sorted.iter().map(|(p, _)| p.to_string()).collect(),
