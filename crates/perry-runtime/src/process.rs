@@ -409,7 +409,7 @@ fn process_exec_argv_value() -> f64 {
         std::env::remove_var("PERRY_PROCESS_EXEC_ARGV");
         serde_json::from_str(&raw).unwrap_or_default()
     });
-    crate::realm_decl! { birth crate::array::realm_string_array(values.as_slice(), false); realm { process.execArgv, value = dynamic, elements = string; "node:process.execArgv", value = dynamic, elements = string; } }
+    crate::realm_decl! { birth crate::array::realm_string_array(&values.iter().map(String::as_str).collect::<Vec<_>>(), false); realm { process.execArgv, value = dynamic, elements = string; "node:process.execArgv", value = dynamic, elements = string; } }
 }
 
 pub(crate) fn module_set_value(items: &[&str]) -> f64 {

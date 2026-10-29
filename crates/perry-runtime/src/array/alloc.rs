@@ -230,7 +230,9 @@ pub(crate) fn js_array_alloc_pointer_elements(capacity: u32) -> *mut ArrayHeader
 /// The array is empty with `capacity` hole slots. For `Pointers` the caller
 /// writes each slot before it publishes the length that covers it, as for
 /// [`js_array_alloc_pointer_elements`]. Integrity is a transition after the
-/// birth (`js_object_freeze`), not a birth bit.
+/// birth (`js_object_freeze`), not a birth bit. Inlined so the declared kind
+/// and arena of each birth site fold into its word.
+#[inline]
 pub fn realm_array_alloc(
     capacity: u32,
     elements: perry_abi::realm_header::ArrayElements,
@@ -263,7 +265,7 @@ pub fn realm_array_alloc(
 
 /// A realm array of strings: a `Pointers` birth whatever the count, filled
 /// in order, each slot written before the length that covers it.
-pub fn realm_string_array<S: AsRef<str>>(items: &[S], longlived: bool) -> f64 {
+pub fn realm_string_array(items: &[&str], longlived: bool) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let arr = scope.root_raw_mut_ptr(realm_array_alloc(
         items.len() as u32,
@@ -271,7 +273,7 @@ pub fn realm_string_array<S: AsRef<str>>(items: &[S], longlived: bool) -> f64 {
         longlived,
     ));
     for item in items {
-        let bytes = item.as_ref().as_bytes();
+        let bytes = item.as_bytes();
         let string = scope.root_string_ptr(if longlived {
             crate::string::js_string_from_bytes_longlived(bytes.as_ptr(), bytes.len() as u32)
         } else {
