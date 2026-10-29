@@ -1,6 +1,7 @@
 //! Prototype allocations derive their header from the runtime layout they own.
 use super::{birth, info, tokens, Token};
 use crate::realm_json::Value;
+use perry_abi::realm_header::{ObjectLayout, PrototypeMark};
 
 fn descriptor(source: &str, name: &str) -> Result<Vec<String>, String> {
     let ts = tokens(source)?;
@@ -52,28 +53,20 @@ pub(super) fn prototype(expression: &str, entry: &[Token<'_>]) -> Result<Value, 
         })?,
         entry,
     )?;
-    let gc = info::gc_constants()?;
-    let abi = super::abi_constants();
+    let kind = fields[1].clone();
+    // The layout prototype allocator owns the layout and marks the prototype
+    // at birth.
+    super::derive::restate(&mut d, |birth| {
+        birth.prototype_mark = PrototypeMark::AtBirth;
+        birth.layout = match kind.as_str() {
+            "kind=LAYOUT_KIND_UNMARKED" => ObjectLayout::Unmarked,
+            "kind=LAYOUT_KIND_CALLABLE" => ObjectLayout::Callable,
+            _ => ObjectLayout::PlainOrdinary,
+        };
+    })?;
     let Value::Object(map) = &mut d else {
         unreachable!()
     };
-    let Value::Object(header) = map.get_mut("header").unwrap() else {
-        unreachable!()
-    };
-    let current = header["reserved"]
-        .encode()
-        .parse::<u64>()
-        .map_err(|e| e.to_string())?;
-    let kind = fields[1].clone();
-    let flags = match kind.as_str() {
-        "kind=LAYOUT_KIND_UNMARKED" => 0,
-        "kind=LAYOUT_KIND_CALLABLE" => abi["GC_OBJECT_CALLABLE"],
-        _ => abi["OBJ_FLAG_PLAIN_ORDINARY"],
-    };
-    header.insert(
-        "reserved".into(),
-        Value::Number((current | gc["OBJ_FLAG_NEVER_MOVE"] | flags).to_string()),
-    );
     if kind == "kind=LAYOUT_KIND_CALLABLE" {
         if let Some(bits) = map["properties"]
             .array()

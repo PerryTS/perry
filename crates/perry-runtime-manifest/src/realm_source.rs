@@ -14,19 +14,21 @@ mod capture;
 mod capture_call;
 #[path = "realm_colors.rs"]
 mod colors;
+#[path = "realm_derive.rs"]
+mod derive;
 #[path = "realm_facts.rs"]
 mod facts;
 #[path = "realm_families.rs"]
 mod families;
 #[path = "realm_hash.rs"]
 mod hash;
+#[cfg(test)]
+#[path = "realm_header_44.rs"]
+mod header_44;
 #[path = "realm_imports.rs"]
 mod imports;
 #[path = "realm_info.rs"]
 mod info;
-#[cfg(test)]
-#[path = "realm_header_44.rs"]
-mod header_44;
 #[path = "realm_layout_birth.rs"]
 mod layout_birth;
 #[path = "realm_module_namespace.rs"]
@@ -359,7 +361,7 @@ fn declarations(
     load: impl FnMut(&str) -> Result<String, String>,
     resolve: impl FnMut(&str) -> Result<(String, String), String>,
 ) -> Result<Vec<Value>, String> {
-    declarations_with_receivers(
+    let mut all = declarations_with_receivers(
         source,
         path,
         package,
@@ -367,7 +369,9 @@ fn declarations(
         resolve,
         &mut Vec::new(),
         &native::runtime_abi()?,
-    )
+    )?;
+    derive::finish(&mut all)?;
+    Ok(all)
 }
 
 fn declarations_with_receivers(
@@ -1087,7 +1091,7 @@ pub fn read(runtime_src: &Path) -> Result<Value, String> {
         exports.read(&source, &path, &package, &needed)?;
     }
     native::resolve_receivers(&mut all, &native_receivers)?;
-    birth::mark_inherited_objects(&mut all)?;
+    derive::finish(&mut all)?;
     exports.link(&mut all)?;
     all.sort_by(|a, b| {
         a.get("name")

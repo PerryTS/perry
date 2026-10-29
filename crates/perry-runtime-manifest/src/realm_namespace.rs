@@ -2,6 +2,7 @@
 //! factory. Member order, constants and tags are not repeated in realm source.
 use super::{info, tokens};
 use crate::realm_json::Value;
+use perry_abi::realm_header::{Integrity, ObjectBirth, ObjectExotic, ObjectLayout, PrototypeMark};
 use std::collections::BTreeSet;
 
 fn string(value: impl Into<String>) -> Value {
@@ -159,18 +160,19 @@ pub(super) fn birth(
             p.get("key").and_then(Value::string).unwrap().to_owned(),
         )
     });
-    let flags = info::gc_constants()?;
-    let reserved = flags
-        .get("OBJ_FLAG_HAS_DESCRIPTORS")
-        .ok_or("missing descriptor flag")?
-        | if sealed_namespace(name)? {
-            *flags
-                .get("OBJ_FLAG_NEVER_MOVE")
-                .ok_or("missing intrinsic stability flag")?
+    let birth = ObjectBirth {
+        exotic: ObjectExotic::Ordinary,
+        null_prototype: false,
+        layout: ObjectLayout::Unmarked,
+        prototype_mark: if sealed_namespace(name)? {
+            PrototypeMark::AtBirth
         } else {
-            0
-        };
-    let abi = info::constants(include_str!("../../perry-abi/src/lib.rs"))?;
+            PrototypeMark::OnFirstLink
+        },
+        descriptors: super::derive::descriptors(&properties),
+        typed_array_prototype: false,
+        integrity: Integrity::Extensible,
+    };
     births.remove(name);
     Ok(object([
         ("name", string(name)),
@@ -180,14 +182,7 @@ pub(super) fn birth(
         ("own_symbol_order", Value::Array(symbols)),
         (
             "header",
-            object([
-                (
-                    "gc_type",
-                    number(*abi.get("GC_TYPE_OBJECT").ok_or("missing object ABI kind")?),
-                ),
-                ("reserved", number(reserved)),
-                ("class_id", number(0)),
-            ]),
+            super::derive::object_header(super::abi_constants()["GC_TYPE_OBJECT"], 0, birth),
         ),
         ("prototype", string("Object.prototype")),
         (

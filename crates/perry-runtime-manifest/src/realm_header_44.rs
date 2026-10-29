@@ -6,7 +6,8 @@
 use crate::realm_json::{parse, Value};
 use perry_abi::realm_header::{
     array_reserved, closure_reserved, members_need_descriptors, object_class_id, object_reserved,
-    ArrayElements, ClosureBirth, Integrity, MemberAttrs, ObjectBirth, ObjectExotic, PrototypeMark,
+    ArrayElements, ClosureBirth, Integrity, MemberAttrs, ObjectBirth, ObjectExotic, ObjectLayout,
+    PrototypeMark,
 };
 use std::collections::BTreeSet;
 
@@ -321,7 +322,11 @@ fn derive(entry: &Value, declared: &Declared, inherited: &BTreeSet<String>) -> (
             let birth = ObjectBirth {
                 exotic: *exotic,
                 null_prototype: entry.get("prototype").is_none(),
-                ordinary_shape: *ordinary_shape,
+                layout: if *ordinary_shape {
+                    ObjectLayout::PlainOrdinary
+                } else {
+                    ObjectLayout::Unmarked
+                },
                 prototype_mark,
                 descriptors: members_need_descriptors(&members(entry)),
                 typed_array_prototype: false,
@@ -400,7 +405,7 @@ fn every_correction_changes_the_recorded_word() {
 /// re-exports them from `perry-abi` (build phase).
 #[test]
 fn derivation_bits_are_the_runtime_bits() {
-    let gc = super::info::constants(include_str!("../../perry-runtime/src/gc/types.rs")).unwrap();
+    let gc = super::info::gc_constants().unwrap();
     let layout =
         super::info::constants(include_str!("../../perry-runtime/src/gc/layout.rs")).unwrap();
     let native = super::info::constants(include_str!(
