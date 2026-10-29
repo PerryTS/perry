@@ -63,6 +63,10 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_string_concat_chain", I64, &[I64, I32]);
     // Literal operands as constant data (`string/concat_parts.rs`).
     module.declare_function("js_string_concat_parts", I64, &[I64, I32]);
+    // The same operation for a part count the compiler knows (2..=5).
+    for n in 2..=5 {
+        module.declare_function(&format!("js_string_concat_parts_{n}"), I64, &[I64]);
+    }
     module.declare_function("js_string_concat_lit_value_box", DOUBLE, &[I64, I64, DOUBLE]);
     module.declare_function("js_to_primitive_default_for_add", DOUBLE, &[DOUBLE]);
     module.declare_function("js_add_throw_if_symbol", VOID, &[DOUBLE]);
