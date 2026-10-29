@@ -3,6 +3,7 @@
 use super::info::{self, Info};
 use super::{hash, Token};
 use crate::realm_json::Value;
+use perry_abi::realm_header::{ClosureBirth, Integrity};
 use std::collections::{BTreeMap, BTreeSet};
 
 fn string(value: impl Into<String>) -> Value {
@@ -768,28 +769,25 @@ pub(super) fn callable(
                 .iter()
                 .all(|c| c.get("kind").and_then(Value::string) == Some("raw_word"))
         });
-    let reserved = if facts.allocated_closure
+    let pointer_free_captures = facts.allocated_closure
         || (facts.bare_closure && scalar_captures)
-        || (facts.bare_closure && (facts.receiver.is_some() || facts.capture_enum.is_some()))
-    {
-        *constants
-            .get("GC_LAYOUT_POINTER_FREE")
-            .ok_or("missing bare closure layout")?
-    } else if facts.bare_closure
-        || facts.constructible
-        || kind == "constructor"
-        || info.flags & non_constructor != 0
-    {
-        0
-    } else {
-        128
-    };
-    let reserved = if facts.frozen {
-        let gc = info::gc_constants()?;
-        reserved | gc["OBJ_FLAG_FROZEN"] | gc["OBJ_FLAG_SEALED"] | gc["OBJ_FLAG_NO_EXTEND"]
-    } else {
-        reserved
-    };
+        || (facts.bare_closure && (facts.receiver.is_some() || facts.capture_enum.is_some()));
+    // Bare and pointer-free closures carry no per-instance non-constructable
+    // bit today whatever their kind; the derivation keeps that encoding
+    // (WRT3a3 open question 2).
+    let reserved = super::derive::closure_word(ClosureBirth {
+        pointer_free_captures,
+        constructable: pointer_free_captures
+            || facts.bare_closure
+            || facts.constructible
+            || kind == "constructor",
+        body_non_constructor: info.flags & non_constructor != 0,
+        integrity: if facts.frozen {
+            Integrity::Frozen
+        } else {
+            Integrity::Extensible
+        },
+    });
     let prototype = facts
         .extends
         .clone()

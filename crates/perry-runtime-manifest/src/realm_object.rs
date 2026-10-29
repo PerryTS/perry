@@ -2,6 +2,7 @@
 //! runtime birth macro and the producer. Encodings and default order are derived.
 use super::{facts, info, Token};
 use crate::realm_json::Value;
+use perry_abi::realm_header::{Integrity, ObjectBirth, ObjectExotic, ObjectLayout, PrototypeMark};
 use std::collections::BTreeSet;
 fn string(value: impl Into<String>) -> Value {
     Value::String(value.into())
@@ -71,6 +72,7 @@ pub(super) fn birth(ts: &[Token<'_>]) -> Result<Value, String> {
         (None, None) => std::cmp::Ordering::Equal,
     });
     properties.sort_by_key(|p| p.get("key").and_then(Value::string).unwrap().to_owned());
+    let descriptors = super::derive::descriptors(&properties);
     Ok(object([
         ("name", string(name)),
         ("kind", string("namespace")),
@@ -82,18 +84,19 @@ pub(super) fn birth(ts: &[Token<'_>]) -> Result<Value, String> {
         ("own_symbol_order", Value::Array(Vec::new())),
         (
             "header",
-            object([
-                (
-                    "gc_type",
-                    number(
-                        *super::abi_constants()
-                            .get("GC_TYPE_OBJECT")
-                            .ok_or("missing object ABI")?,
-                    ),
-                ),
-                ("reserved", number(0)),
-                ("class_id", number(0)),
-            ]),
+            super::derive::object_header(
+                super::abi_constants()["GC_TYPE_OBJECT"],
+                0,
+                ObjectBirth {
+                    exotic: ObjectExotic::Ordinary,
+                    null_prototype: false,
+                    layout: ObjectLayout::Unmarked,
+                    prototype_mark: PrototypeMark::OnFirstLink,
+                    descriptors,
+                    typed_array_prototype: false,
+                    integrity: Integrity::Extensible,
+                },
+            ),
         ),
         ("prototype", string("Object.prototype")),
         ("births", Value::Array(vec![string("Object.prototype")])),

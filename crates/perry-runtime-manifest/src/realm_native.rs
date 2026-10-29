@@ -1,6 +1,7 @@
 //! The bound native-method birth recipe, shared with the runtime sentinel ABI.
 use super::{facts::Facts, hash, info, tokens};
 use crate::realm_json::Value;
+use perry_abi::realm_header::{ClosureBirth, Integrity};
 use std::collections::{BTreeMap, BTreeSet};
 
 fn string(value: impl Into<String>) -> Value {
@@ -354,7 +355,18 @@ pub(super) fn method(facts: Facts, abi: &Abi) -> Result<Value, String> {
             "header",
             object([
                 ("gc_type", number(4)),
-                ("reserved", number(0)),
+                (
+                    "reserved",
+                    // The receiver capture is a pointer. A bound native
+                    // method carries no per-instance non-constructable bit
+                    // at birth (WRT3a3 open question 2).
+                    number(super::derive::closure_word(ClosureBirth {
+                        pointer_free_captures: false,
+                        constructable: true,
+                        body_non_constructor: false,
+                        integrity: Integrity::Extensible,
+                    })),
+                ),
                 ("capture_flags", number(0)),
             ]),
         ),

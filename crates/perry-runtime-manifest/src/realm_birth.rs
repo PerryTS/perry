@@ -2,6 +2,7 @@
 //! The expression remains runtime code; its allocation family supplies the ABI.
 use super::{facts, info, Token};
 use crate::realm_json::Value;
+use perry_abi::realm_header::{Integrity, ObjectBirth, ObjectExotic, ObjectLayout, PrototypeMark};
 use std::collections::{BTreeMap, BTreeSet};
 
 fn string(s: impl Into<String>) -> Value {
@@ -398,36 +399,12 @@ pub(super) fn birth_at(
         }
     }
     members.births.remove(&name);
-    let gc = info::gc_constants()?;
-    let mut reserved = if native {
-        0
-    } else {
-        (if factory {
-            gc["OBJ_FLAG_NEVER_MOVE"]
-        } else {
-            0
-        }) | if members.descriptors {
-            gc["OBJ_FLAG_HAS_DESCRIPTORS"]
-        } else {
-            0
-        }
-    };
-    if shaped {
-        reserved |=
-            info::constants(include_str!("../../perry-abi/src/lib.rs"))?["OBJ_FLAG_PLAIN_ORDINARY"];
+    let derived_mark =
+        factory || (kind == "namespace" && super::namespace::sealed_namespace(&name)?);
+    if never_move && factory {
+        return Err("omit derived never_move".into());
     }
-    if null {
-        reserved |= gc["OBJ_FLAG_NULL_PROTO"];
-    }
-    if never_move {
-        if reserved & gc["OBJ_FLAG_NEVER_MOVE"] != 0 {
-            return Err("omit derived never_move".into());
-        }
-        reserved |= gc["OBJ_FLAG_NEVER_MOVE"];
-    }
-    if kind == "namespace" && super::namespace::sealed_namespace(&name)? {
-        reserved |= gc["OBJ_FLAG_NEVER_MOVE"];
-    }
+    let mut typed_array_prototype = false;
     if factory {
         if let Some(owner) = name.strip_suffix(".prototype") {
             let families = super::families::read(include_str!(
@@ -449,10 +426,31 @@ pub(super) fn birth_at(
                             .into(),
                     );
                 }
-                reserved |= gc["OBJ_FLAG_TYPED_ARRAY_PROTO"];
+                typed_array_prototype = true;
             }
         }
     }
+    let object_birth = ObjectBirth {
+        exotic: if native {
+            ObjectExotic::NativeNamespace
+        } else {
+            ObjectExotic::Ordinary
+        },
+        null_prototype: null,
+        layout: if shaped {
+            ObjectLayout::PlainOrdinary
+        } else {
+            ObjectLayout::Unmarked
+        },
+        prototype_mark: if derived_mark || never_move {
+            PrototypeMark::AtBirth
+        } else {
+            PrototypeMark::OnFirstLink
+        },
+        descriptors: members.descriptors,
+        typed_array_prototype,
+        integrity: Integrity::Extensible,
+    };
     let class_id = if native {
         *info::constants(include_str!(
             "../../perry-runtime/src/object/native_module.rs"
@@ -485,11 +483,11 @@ pub(super) fn birth_at(
         ),
         (
             "header",
-            object([
-                ("gc_type", number(super::abi_constants()["GC_TYPE_OBJECT"])),
-                ("class_id", number(class_id)),
-                ("reserved", number(reserved)),
-            ]),
+            super::derive::object_header(
+                super::abi_constants()["GC_TYPE_OBJECT"],
+                class_id,
+                object_birth,
+            ),
         ),
     ]);
     let Value::Object(map) = &mut declaration else {
@@ -510,44 +508,6 @@ pub(super) fn birth_at(
         );
     }
     Ok(declaration)
-}
-
-/// Ordinary objects that are used as prototypes are marked by proto_validity.
-/// The realm inheritance edges therefore imply their immovability flag.
-pub(super) fn mark_inherited_objects(declarations: &mut [Value]) -> Result<(), String> {
-    let parents = declarations
-        .iter()
-        .filter_map(|d| d.get("prototype").and_then(Value::string))
-        .map(str::to_owned)
-        .collect::<BTreeSet<_>>();
-    let gc = info::gc_constants()?;
-    for declaration in declarations {
-        let name = declaration
-            .get("name")
-            .and_then(Value::string)
-            .ok_or("missing realm name")?;
-        if !parents.contains(name) {
-            continue;
-        }
-        let Some(header) = declaration.get("header") else {
-            continue;
-        };
-        if header.get("gc_type") != Some(&number(2)) || header.get("class_id") != Some(&number(0)) {
-            continue;
-        }
-        let Value::Object(map) = declaration else {
-            unreachable!()
-        };
-        let Value::Object(header) = map.get_mut("header").unwrap() else {
-            unreachable!()
-        };
-        let word = header["reserved"]
-            .encode()
-            .parse::<u64>()
-            .map_err(|e| e.to_string())?;
-        header.insert("reserved".into(), number(word | gc["OBJ_FLAG_NEVER_MOVE"]));
-    }
-    Ok(())
 }
 
 pub(super) fn extend_callable(
@@ -741,7 +701,7 @@ mod tests {
         )
         .unwrap();
         let mut declarations = [ordinary, child, native, leaf];
-        mark_inherited_objects(&mut declarations).unwrap();
+        super::super::derive::finish(&mut declarations).unwrap();
         let words = declarations
             .iter()
             .map(|d| d.get("header").unwrap().get("reserved").unwrap().encode())

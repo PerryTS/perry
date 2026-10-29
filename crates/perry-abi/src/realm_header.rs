@@ -12,9 +12,9 @@
 //! marks, remembered sets): those never belong in a realm header.
 
 use crate::{
-    GC_LAYOUT_ALL_POINTERS, GC_LAYOUT_POINTER_FREE, GC_LAYOUT_SIDE_MASK, OBJ_FLAG_FROZEN,
-    OBJ_FLAG_HAS_DESCRIPTORS, OBJ_FLAG_NEVER_MOVE, OBJ_FLAG_NO_EXTEND, OBJ_FLAG_NULL_PROTO,
-    OBJ_FLAG_PLAIN_ORDINARY, OBJ_FLAG_SEALED,
+    GC_LAYOUT_ALL_POINTERS, GC_LAYOUT_POINTER_FREE, GC_LAYOUT_SIDE_MASK, GC_OBJECT_CALLABLE,
+    OBJ_FLAG_FROZEN, OBJ_FLAG_HAS_DESCRIPTORS, OBJ_FLAG_NEVER_MOVE, OBJ_FLAG_NO_EXTEND,
+    OBJ_FLAG_NULL_PROTO, OBJ_FLAG_PLAIN_ORDINARY, OBJ_FLAG_SEALED,
 };
 
 /// `gc::OBJ_FLAG_TYPED_ARRAY_PROTO`: a per-kind `<TypedArray>.prototype`.
@@ -94,6 +94,18 @@ pub enum ObjectExotic {
     NativeNamespace,
 }
 
+/// The layout an object birth is allocated from, which decides the
+/// classification bits its header carries from birth.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ObjectLayout {
+    /// A dictionary birth: no declared shape classifies its stores.
+    Unmarked,
+    /// A declared shape that proves ordinary `[[Set]]` semantics.
+    PlainOrdinary,
+    /// A declared callable layout (`LAYOUT_KIND_CALLABLE`).
+    Callable,
+}
+
 /// When an object is marked as a prototype, which is what makes it
 /// never-move (`proto_validity`, `gc::never_move`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -112,8 +124,7 @@ pub struct ObjectBirth {
     pub exotic: ObjectExotic,
     /// The `[[Prototype]]` is null.
     pub null_prototype: bool,
-    /// Born from a declared shape that proves ordinary `[[Set]]` semantics.
-    pub ordinary_shape: bool,
+    pub layout: ObjectLayout,
     pub prototype_mark: PrototypeMark,
     /// Some own string-keyed property is an accessor or has non-default
     /// attributes ([`members_need_descriptors`]).
@@ -148,12 +159,22 @@ pub const fn members_need_descriptors(members: &[MemberAttrs]) -> bool {
 }
 
 /// The `_reserved` word of an object birth.
+///
+/// The prototype mark is a fact of the cell, whatever serves its members: a
+/// sealed builtin namespace served by the native vtable (`console`) is
+/// never-move from birth like an ordinary one.
 pub const fn object_reserved(birth: ObjectBirth) -> u16 {
     let integrity = birth.integrity.bits();
     let descriptors = birth.descriptors || birth.integrity.installs_descriptors();
+    let never_move = if matches!(birth.prototype_mark, PrototypeMark::AtBirth) {
+        OBJ_FLAG_NEVER_MOVE
+    } else {
+        0
+    };
     match birth.exotic {
         ObjectExotic::NativeNamespace => {
             integrity
+                | never_move
                 | if birth.integrity.installs_descriptors() {
                     OBJ_FLAG_HAS_DESCRIPTORS
                 } else {
@@ -162,13 +183,9 @@ pub const fn object_reserved(birth: ObjectBirth) -> u16 {
         }
         ObjectExotic::Ordinary => {
             integrity
+                | never_move
                 | if birth.null_prototype {
                     OBJ_FLAG_NULL_PROTO
-                } else {
-                    0
-                }
-                | if matches!(birth.prototype_mark, PrototypeMark::AtBirth) {
-                    OBJ_FLAG_NEVER_MOVE
                 } else {
                     0
                 }
@@ -177,10 +194,10 @@ pub const fn object_reserved(birth: ObjectBirth) -> u16 {
                 } else {
                     0
                 }
-                | if birth.ordinary_shape {
-                    OBJ_FLAG_PLAIN_ORDINARY
-                } else {
-                    0
+                | match birth.layout {
+                    ObjectLayout::Unmarked => 0,
+                    ObjectLayout::PlainOrdinary => OBJ_FLAG_PLAIN_ORDINARY,
+                    ObjectLayout::Callable => GC_OBJECT_CALLABLE,
                 }
                 | if descriptors {
                     OBJ_FLAG_HAS_DESCRIPTORS
@@ -257,7 +274,7 @@ mod tests {
         let birth = ObjectBirth {
             exotic: ObjectExotic::NativeNamespace,
             null_prototype: false,
-            ordinary_shape: false,
+            layout: ObjectLayout::Unmarked,
             prototype_mark: PrototypeMark::OnFirstLink,
             descriptors: true,
             typed_array_prototype: false,

@@ -1,6 +1,7 @@
 //! Fixed array births derive length, index descriptors and their GC kind.
 use super::{facts, info, Token};
 use crate::realm_json::Value;
+use perry_abi::realm_header::{ArrayElements, Integrity};
 fn string(s: impl Into<String>) -> Value {
     Value::String(s.into())
 }
@@ -19,7 +20,6 @@ pub(super) fn empty(expression: &str, entry: &[Token<'_>]) -> Result<Value, Stri
         return Err("empty array properties and length are derived".into());
     }
     let name = facts::path(clauses[0])?;
-    let abi = super::abi_constants();
     let gc = info::gc_constants()?;
     Ok(object([
         ("name", string(name)),
@@ -45,13 +45,11 @@ pub(super) fn empty(expression: &str, entry: &[Token<'_>]) -> Result<Value, Stri
         ("births", Value::Array(vec![string("Array.prototype")])),
         (
             "header",
-            object([
-                (
-                    "gc_type",
-                    number(*gc.get("GC_TYPE_ARRAY").ok_or("missing array ABI")?),
-                ),
-                ("reserved", number(abi["GC_LAYOUT_POINTER_FREE"])),
-            ]),
+            super::derive::array_header(
+                *gc.get("GC_TYPE_ARRAY").ok_or("missing array ABI")?,
+                ArrayElements::Scalars,
+                Integrity::Extensible,
+            ),
         ),
     ]))
 }

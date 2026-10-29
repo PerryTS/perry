@@ -2,6 +2,9 @@
 //! declarations. No color values, key order or array encoding is restated.
 use super::{info, tokens};
 use crate::realm_json::Value;
+use perry_abi::realm_header::{
+    ArrayElements, Integrity, ObjectBirth, ObjectExotic, ObjectLayout, PrototypeMark,
+};
 use std::collections::{BTreeMap, BTreeSet};
 
 fn string(value: impl Into<String>) -> Value {
@@ -121,25 +124,18 @@ fn expand(name: &str, styles: &str) -> Result<Vec<Value>, String> {
             ("own_symbol_order", Value::Array(Vec::new())),
             (
                 "header",
-                object([
-                    (
-                        "gc_type",
-                        number(*gc.get("GC_TYPE_ARRAY").ok_or("missing array ABI")?),
-                    ),
-                    (
-                        "reserved",
-                        number(
-                            *abi.get("GC_LAYOUT_POINTER_FREE")
-                                .ok_or("missing numeric array layout")?,
-                        ),
-                    ),
-                ]),
+                super::derive::array_header(
+                    *gc.get("GC_TYPE_ARRAY").ok_or("missing array ABI")?,
+                    ArrayElements::Scalars,
+                    Integrity::Extensible,
+                ),
             ),
             ("prototype", string("Array.prototype")),
             ("births", Value::Array(vec![string("Array.prototype")])),
         ]));
     }
     properties.sort_by_key(|p| p.get("key").and_then(Value::string).unwrap().to_owned());
+    let descriptors = super::derive::descriptors(&properties);
     declarations.push(object([
         ("name", string(name)),
         ("kind", string("namespace")),
@@ -148,14 +144,19 @@ fn expand(name: &str, styles: &str) -> Result<Vec<Value>, String> {
         ("own_symbol_order", Value::Array(Vec::new())),
         (
             "header",
-            object([
-                (
-                    "gc_type",
-                    number(*abi.get("GC_TYPE_OBJECT").ok_or("missing object ABI")?),
-                ),
-                ("reserved", number(0)),
-                ("class_id", number(0)),
-            ]),
+            super::derive::object_header(
+                abi["GC_TYPE_OBJECT"],
+                0,
+                ObjectBirth {
+                    exotic: ObjectExotic::Ordinary,
+                    null_prototype: false,
+                    layout: ObjectLayout::Unmarked,
+                    prototype_mark: PrototypeMark::OnFirstLink,
+                    descriptors,
+                    typed_array_prototype: false,
+                    integrity: Integrity::Extensible,
+                },
+            ),
         ),
         ("prototype", string("Object.prototype")),
         (
