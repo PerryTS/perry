@@ -446,7 +446,7 @@ fn build_family_proto(
     tag: &str,
     shared: *mut ObjectHeader,
 ) -> *mut ObjectHeader {
-    let proto = js_object_alloc(0, 0);
+    let proto = crate::realm_decl! { birth js_object_alloc(0, 0); realm { "%ArrayIteratorPrototype%", extends = "%IteratorPrototype%", members = { next; [Symbol.toStringTag] = "Array Iterator", attrs = writable | enumerable | configurable; }, never_move = true; "%MapIteratorPrototype%", extends = "%IteratorPrototype%", members = { next; [Symbol.toStringTag] = "Map Iterator", attrs = writable | enumerable | configurable; }, never_move = true; "%SetIteratorPrototype%", extends = "%IteratorPrototype%", members = { next; [Symbol.toStringTag] = "Set Iterator", attrs = writable | enumerable | configurable; }, never_move = true; "%StringIteratorPrototype%", extends = "%IteratorPrototype%", members = { next; [Symbol.toStringTag] = "String Iterator", attrs = writable | enumerable | configurable; }, never_move = true; } };
     if proto.is_null() {
         return std::ptr::null_mut();
     }

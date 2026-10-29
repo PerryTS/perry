@@ -40,6 +40,7 @@ pub(super) struct Facts {
     pub members: Option<super::birth::Members>,
     pub kind: Option<String>,
     pub constructible: bool,
+    pub frozen: bool,
     pub capture_key: bool,
     pub capture_public_name: bool,
     pub capture_enum: Option<String>,
@@ -103,6 +104,7 @@ pub(super) fn parse(ts: &[Token<'_>]) -> Result<Facts, String> {
         members: None,
         kind: None,
         constructible: false,
+        frozen: false,
         capture_key: false,
         capture_public_name: false,
         capture_enum: None,
@@ -174,6 +176,12 @@ pub(super) fn parse(ts: &[Token<'_>]) -> Result<Facts, String> {
                     facts.capture_key = true;
                     facts.capture_public_name = binding == "public_name";
                 }
+            }
+            "integrity" => {
+                if info::text(&clause[2..]) != "frozen" {
+                    return Err("the only integrity level is frozen".into());
+                }
+                facts.frozen = true;
             }
             "constructible" => {
                 if info::text(&clause[2..]) != "true" {
@@ -664,7 +672,7 @@ pub(super) fn callable(
         object([
             ("key", string(key)),
             ("symbol", Value::Bool(false)),
-            ("attributes", number(4)),
+            ("attributes", number(if facts.frozen { 0 } else { 4 })),
             ("value", value),
         ])
     };
@@ -732,6 +740,12 @@ pub(super) fn callable(
         0
     } else {
         128
+    };
+    let reserved = if facts.frozen {
+        let gc = info::constants(include_str!("../../perry-runtime/src/gc/types.rs"))?;
+        reserved | gc["OBJ_FLAG_FROZEN"] | gc["OBJ_FLAG_SEALED"] | gc["OBJ_FLAG_NO_EXTEND"]
+    } else {
+        reserved
     };
     let prototype = facts
         .extends
