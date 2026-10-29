@@ -1320,6 +1320,48 @@ fn sve_vector_length_bytes() -> Option<usize> {
     None
 }
 
+type VerifyWalk = for<'a> fn(&StackMapIndex, &'a mut dyn FnMut(MutableRootSlot)) -> NativeStackWalkStats;
+static VERIFY_WALK: crate::feature_hooks::Hook<VerifyWalk> = crate::feature_hooks::Hook::empty();
+
+fn verify_walk(
+    index: &StackMapIndex,
+    visit: &mut dyn FnMut(MutableRootSlot),
+) -> NativeStackWalkStats {
+    verify::visit(index, &mut |slot| visit(slot))
+}
+
+/// Called by the GC diagnostics installer.
+pub(in crate::gc) fn install_verify_walker() {
+    VERIFY_WALK.set(verify_walk);
+}
+
+/// The ordinary walk: the fp-chain walk, falling back to the unwinder.
+fn visit_fast(
+    index: &StackMapIndex,
+    visit: &mut impl FnMut(MutableRootSlot),
+) -> NativeStackWalkStats {
+    // No whole-image `chain_walkable` precondition any more. v4 decided
+    // it once by scanning every root slot in the section — 4.9M of them
+    // for claude-code — which a lazy index cannot do and should not:
+    // the fast walk now checks the frame it is about to resolve and
+    // fails closed to the unwinder if THAT record uses a base it cannot
+    // reconstruct. That is strictly narrower than disabling the fast
+    // path for the whole image because one function somewhere uses an
+    // exotic register, and it reuses the mid-walk bail this walker
+    // already performs for `x19_is_body_sp` and an unvalidated
+    // `caller_fp`.
+    if let Some(stats) = fp_chain::visit(index, &mut |root: ResolvedRoot| {
+        root.visit_with_context(visit)
+    }) {
+        return stats;
+    }
+    let mut stats = unwind::visit(index, &mut |root: ResolvedRoot| {
+        root.visit_with_context(visit)
+    });
+    stats.fallback_walks = 1;
+    stats
+}
+
 // The GC-effects sidecar seeds this collector entry by name on every target.
 #[inline(never)]
 pub(super) fn visit_stack_map_root_slots(
@@ -1350,29 +1392,14 @@ pub(super) fn visit_stack_map_root_slots(
         WalkerMode::Unwind => unwind::visit(index, &mut |root: ResolvedRoot| {
             root.visit_with_context(visit)
         }),
-        WalkerMode::Fast => {
-            // No whole-image `chain_walkable` precondition any more. v4 decided
-            // it once by scanning every root slot in the section — 4.9M of them
-            // for claude-code — which a lazy index cannot do and should not:
-            // the fast walk now checks the frame it is about to resolve and
-            // fails closed to the unwinder if THAT record uses a base it cannot
-            // reconstruct. That is strictly narrower than disabling the fast
-            // path for the whole image because one function somewhere uses an
-            // exotic register, and it reuses the mid-walk bail this walker
-            // already performs for `x19_is_body_sp` and an unvalidated
-            // `caller_fp`.
-            if let Some(stats) = fp_chain::visit(index, &mut |root: ResolvedRoot| {
-                root.visit_with_context(visit)
-            }) {
-                return stats;
-            }
-            let mut stats = unwind::visit(index, &mut |root: ResolvedRoot| {
-                root.visit_with_context(visit)
-            });
-            stats.fallback_walks = 1;
-            stats
-        }
-        WalkerMode::Verify => verify::visit(index, visit),
+        WalkerMode::Fast => visit_fast(index, visit),
+        // `PERRY_STACKMAP_WALKER=verify` is a diagnostic setting: only the slot
+        // the diagnostics installer fills can honour it. Uninstalled, it is
+        // ignored like `PERRY_GC_VERIFY` and the ordinary walk runs.
+        WalkerMode::Verify => match VERIFY_WALK.get() {
+            Some(verify_walk) => verify_walk(index, visit),
+            None => visit_fast(index, visit),
+        },
     }
 }
 

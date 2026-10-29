@@ -1,10 +1,10 @@
 use super::*;
 
-#[path = "trace/field_word.rs"]
+#[path = "mark/field_word.rs"]
 mod field_word;
 pub(in crate::gc) use field_word::FieldWord;
 
-#[path = "trace/mark_slots.rs"]
+#[path = "mark/mark_slots.rs"]
 mod mark_slots;
 #[cfg(test)]
 pub(crate) use mark_slots::{
@@ -12,11 +12,11 @@ pub(crate) use mark_slots::{
 };
 pub(super) use mark_slots::{trace_heap_rewrite_slots, trace_heap_rewrite_slots_remembering};
 
-#[path = "trace/block_skip.rs"]
+#[path = "mark/block_skip.rs"]
 pub(super) mod block_skip;
 pub(super) use block_skip::BlockCensus;
 
-#[path = "trace/adopt_census.rs"]
+#[path = "mark/adopt_census.rs"]
 pub(crate) mod adopt_census;
 pub(crate) use adopt_census::AdoptableBlockBuilder;
 
@@ -31,27 +31,20 @@ crate::perry_thread_local! {
         const { std::cell::Cell::new(false) };
 }
 
-crate::perry_thread_local! {
-    /// #9717: array-growth forwarding stubs the classifier admitted into a
-    /// budgeted-cycle valid-pointer set that `plausible_arena_user_ptr_header`
-    /// would have rejected. A non-zero count is a POSITIVE report that a live
-    /// slot pointed at a growth stub during a budgeted full trace — the exact
-    /// edge whose loss swept a private-field array on the idle reclaim. Zero on
-    /// a run with no such edge, so it never perturbs a log a gate parses.
-    static FORWARDED_STUB_MEMBERSHIP_RECOVERIES: std::cell::Cell<u64> =
-        const { std::cell::Cell::new(0) };
-}
-
 #[cold]
 fn note_forwarded_stub_membership_recovery() {
-    FORWARDED_STUB_MEMBERSHIP_RECOVERIES.with(|c| c.set(c.get().saturating_add(1)));
+    GC_STATS.with(|stats| {
+        let mut stats = stats.borrow_mut();
+        stats.forwarded_stub_membership_recoveries =
+            stats.forwarded_stub_membership_recoveries.saturating_add(1);
+    });
 }
 
 /// Running count of array-growth forwarding stubs the classifier recovered into
 /// a budgeted valid-pointer set (#9717). A test that plants a stub-only-
 /// referenced array can assert this moved.
 pub(crate) fn forwarded_stub_membership_recoveries() -> u64 {
-    FORWARDED_STUB_MEMBERSHIP_RECOVERIES.with(std::cell::Cell::get)
+    GC_STATS.with(|stats| stats.borrow().forwarded_stub_membership_recoveries)
 }
 
 /// #6179 membership classifier: is `addr` a plausible live GC object start?
@@ -568,6 +561,7 @@ impl ValidPointerSet {
         // other direction (classifier accepts, census lacks) is expected:
         // objects allocated after the census walk; over-approximation is
         // safe (bounded floating garbage under allocate-black).
+        #[cfg(any(test, debug_assertions))]
         if exact && self.built_by_census && classifier_verify_enabled() {
             let heur = classifier_valid_object_start(*ptr);
             // Censused-then-MOVED is a legitimate divergence: the plausible-
@@ -1558,33 +1552,41 @@ pub(super) fn try_mark_young_user_ptr_as_seed(
 /// are NOT recursively traced. This is the time-win core of the
 /// generational design: minor GC's transitive closure is bounded
 /// by `O(young live set + RS roots)` instead of `O(all live)`.
-pub(super) fn drain_trace_worklist(
+pub(super) fn drain_trace_worklist<const DIAGNOSTICS: bool>(
     worklist: &mut Vec<*mut GcHeader>,
     valid_ptrs: &ValidPointerSet,
 ) {
-    drain_trace_worklist_inner(worklist, valid_ptrs, false);
+    drain_trace_worklist_inner::<DIAGNOSTICS>(worklist, valid_ptrs, false);
 }
 
-pub(super) fn drain_trace_worklist_inner(
+pub(super) fn drain_trace_worklist_inner<const DIAGNOSTICS: bool>(
     worklist: &mut Vec<*mut GcHeader>,
     valid_ptrs: &ValidPointerSet,
     minor_only: bool,
 ) {
     let mut cursor = 0;
-    while !drain_trace_worklist_step(worklist, &mut cursor, valid_ptrs, minor_only, usize::MAX) {}
+    while !drain_trace_worklist_step::<DIAGNOSTICS>(
+        worklist,
+        &mut cursor,
+        valid_ptrs,
+        minor_only,
+        usize::MAX,
+    ) {}
 }
 
-pub(super) fn drain_trace_worklist_step(
+pub(super) fn drain_trace_worklist_step<const DIAGNOSTICS: bool>(
     worklist: &mut Vec<*mut GcHeader>,
     cursor: &mut usize,
     valid_ptrs: &ValidPointerSet,
     minor_only: bool,
     budget: usize,
 ) -> bool {
-    drain_trace_worklist_step_impl::<false>(worklist, cursor, valid_ptrs, minor_only, budget, None)
+    drain_trace_worklist_step_impl::<DIAGNOSTICS, false>(
+        worklist, cursor, valid_ptrs, minor_only, budget, None,
+    )
 }
 
-pub(super) fn drain_trace_worklist_step_remembering(
+pub(super) fn drain_trace_worklist_step_remembering<const DIAGNOSTICS: bool>(
     worklist: &mut Vec<*mut GcHeader>,
     cursor: &mut usize,
     valid_ptrs: &ValidPointerSet,
@@ -1595,7 +1597,7 @@ pub(super) fn drain_trace_worklist_step_remembering(
     // Choose once per drain, rather than adding a remembering-mode branch to
     // every young object in a minor's existing mark traversal.
     if let Some(sticky) = sticky {
-        drain_trace_worklist_step_impl::<true>(
+        drain_trace_worklist_step_impl::<DIAGNOSTICS, true>(
             worklist,
             cursor,
             valid_ptrs,
@@ -1604,13 +1606,13 @@ pub(super) fn drain_trace_worklist_step_remembering(
             Some(sticky),
         )
     } else {
-        drain_trace_worklist_step_impl::<false>(
+        drain_trace_worklist_step_impl::<DIAGNOSTICS, false>(
             worklist, cursor, valid_ptrs, minor_only, budget, None,
         )
     }
 }
 
-fn drain_trace_worklist_step_impl<const REMEMBER: bool>(
+fn drain_trace_worklist_step_impl<const DIAGNOSTICS: bool, const REMEMBER: bool>(
     worklist: &mut Vec<*mut GcHeader>,
     cursor: &mut usize,
     valid_ptrs: &ValidPointerSet,
@@ -1629,7 +1631,7 @@ fn drain_trace_worklist_step_impl<const REMEMBER: bool>(
             super::prefetch::prefetch_read(ahead as usize);
         }
         *cursor += 1;
-        trace_one_worklist_header::<REMEMBER>(
+        trace_one_worklist_header::<DIAGNOSTICS, REMEMBER>(
             header,
             valid_ptrs,
             worklist,
@@ -1641,7 +1643,7 @@ fn drain_trace_worklist_step_impl<const REMEMBER: bool>(
     *cursor >= worklist.len()
 }
 
-fn trace_one_worklist_header<const REMEMBER: bool>(
+fn trace_one_worklist_header<const DIAGNOSTICS: bool, const REMEMBER: bool>(
     header: *mut GcHeader,
     valid_ptrs: &ValidPointerSet,
     worklist: &mut Vec<*mut GcHeader>,
@@ -1696,21 +1698,23 @@ fn trace_one_worklist_header<const REMEMBER: bool>(
             }
         }
         if REMEMBER {
-            trace_heap_rewrite_slots_remembering(header, valid_ptrs, worklist, sticky);
+            trace_heap_rewrite_slots_remembering::<DIAGNOSTICS>(
+                header, valid_ptrs, worklist, sticky,
+            );
         } else {
-            trace_heap_rewrite_slots(header, valid_ptrs, worklist);
+            trace_heap_rewrite_slots::<DIAGNOSTICS>(header, valid_ptrs, worklist);
         }
     }
 }
 
 /// Trace from marked objects: follow references iteratively using a worklist.
 #[allow(dead_code)] // test scaffolding: exercised only by gc::tests::layout_trace under cfg(test)
-pub(super) fn trace_marked_objects(valid_ptrs: &ValidPointerSet) {
+pub(super) fn trace_marked_objects<const DIAGNOSTICS: bool>(valid_ptrs: &ValidPointerSet) {
     // Same MARK_SEEDS-based approach as the minor variant — root scans
     // populated `MARK_SEEDS` via `try_mark_value`, no need to walk arena
     // here just to gather them.
     let mut worklist = take_mark_seeds();
-    drain_trace_worklist(&mut worklist, valid_ptrs);
+    drain_trace_worklist::<DIAGNOSTICS>(&mut worklist, valid_ptrs);
 }
 
 /// Block-persistence pass: arena block reset is all-or-nothing, so any arena
@@ -1755,34 +1759,13 @@ pub(super) fn trace_marked_objects(valid_ptrs: &ValidPointerSet) {
 /// old-block neighbors as new block-persist candidates.
 pub(super) const BLOCK_PERSIST_WINDOW: usize = 5;
 
-crate::perry_thread_local! {
-    /// Objects this thread's block-persistence pass has FORCE-MARKED since
-    /// process start — i.e. kept alive for no reason other than sharing a
-    /// block with something reachable.
-    ///
-    /// The census exists for the same reason `gc::scan_fallback`'s does
-    /// (#7148): force-marking is a correctness measure with a *semantic* side
-    /// effect — an unrooted object in a persisting block is not dead, so every
-    /// death-keyed consumer (the `dead_owner` side-table prunes, the Map/Set
-    /// registry sweeps) legitimately declines to act on it. A test that
-    /// asserts "this unrooted owner is dead" is therefore asserting something
-    /// about the tenancy of its arena block, and without this counter it has no
-    /// way to say so: the mark is cleared again by the sweep, so nothing
-    /// observable survives the collection. #7975 is what that costs — two
-    /// `dead_owner_side_tables` cases failed 200/200 when the lazy `globalThis`
-    /// bootstrap landed in their block, and the failure named the prune.
-    ///
-    /// Updated once per pass (per fixed-point round), never per object.
-    static BLOCK_PERSIST_FORCE_MARKS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-}
-
-/// Running count of [`BLOCK_PERSIST_FORCE_MARKS`] on this thread. Compare
+/// Running count of `GcStats::block_persist_force_marks` on this thread. Compare
 /// across a collection: an unchanged value means block persistence force-marked
 /// nothing, so an object left unmarked by that collection was genuinely
 /// unreachable rather than merely a neighbour of something reachable. Also
 /// read by the `PERRY_GC_DIAG` block-persistence line (`window=`).
 pub(crate) fn block_persist_force_mark_count() -> u64 {
-    BLOCK_PERSIST_FORCE_MARKS.with(std::cell::Cell::get)
+    GC_STATS.with(|stats| stats.borrow().block_persist_force_marks)
 }
 
 /// Record one pass's force-mark count. BOTH arms call this: the whole-cycle
@@ -1791,19 +1774,23 @@ pub(crate) fn block_persist_force_mark_count() -> u64 {
 /// would read zero on exactly the cycles that are hardest to reason about.
 pub(super) fn note_block_persist_force_marks(marked: usize) {
     if marked != 0 {
-        BLOCK_PERSIST_FORCE_MARKS
-            .with(|count| count.set(count.get().saturating_add(marked as u64)));
+        GC_STATS.with(|stats| {
+            let mut stats = stats.borrow_mut();
+            stats.block_persist_force_marks = stats
+                .block_persist_force_marks
+                .saturating_add(marked as u64);
+        });
     }
 }
 
 #[allow(dead_code)] // Reference entry used by GC tests.
-pub(super) fn mark_block_persisting_arena_objects(
+pub(super) fn mark_block_persisting_arena_objects<const DIAGNOSTICS: bool>(
     valid_ptrs: &ValidPointerSet,
 ) -> BlockPersistTraceStats {
-    mark_block_persisting_arena_objects_remembering(valid_ptrs, None)
+    mark_block_persisting_arena_objects_remembering::<DIAGNOSTICS>(valid_ptrs, None)
 }
 
-pub(super) fn mark_block_persisting_arena_objects_remembering(
+pub(super) fn mark_block_persisting_arena_objects_remembering<const DIAGNOSTICS: bool>(
     valid_ptrs: &ValidPointerSet,
     mut sticky: Option<&mut StickyRememberedSet>,
 ) -> BlockPersistTraceStats {
@@ -1889,7 +1876,7 @@ pub(super) fn mark_block_persisting_arena_objects_remembering(
         // recent window — old blocks' newly-traced marks don't re-enter
         // the block-persist pump).
         let mut cursor = 0;
-        while !drain_trace_worklist_step_remembering(
+        while !drain_trace_worklist_step_remembering::<DIAGNOSTICS>(
             &mut worklist,
             &mut cursor,
             valid_ptrs,
@@ -1927,7 +1914,7 @@ pub(super) unsafe fn trace_array(
         return;
     }
 
-    trace_heap_rewrite_slots(header as *mut GcHeader, valid_ptrs, worklist);
+    trace_heap_rewrite_slots::<{ cfg!(test) }>(header as *mut GcHeader, valid_ptrs, worklist);
 }
 
 /// Trace object fields and keys array.
@@ -1941,7 +1928,7 @@ pub(super) unsafe fn trace_object(
     worklist: &mut Vec<*mut GcHeader>,
 ) {
     let header = (user_ptr as *const u8).sub(GC_HEADER_SIZE) as *mut GcHeader;
-    trace_heap_rewrite_slots(header, valid_ptrs, worklist);
+    trace_heap_rewrite_slots::<{ cfg!(test) }>(header, valid_ptrs, worklist);
 }
 
 /// Trace closure captures
@@ -1955,7 +1942,7 @@ pub(super) unsafe fn trace_closure(
     worklist: &mut Vec<*mut GcHeader>,
 ) {
     let header = (user_ptr as *const u8).sub(GC_HEADER_SIZE) as *mut GcHeader;
-    trace_heap_rewrite_slots(header, valid_ptrs, worklist);
+    trace_heap_rewrite_slots::<{ cfg!(test) }>(header, valid_ptrs, worklist);
 }
 
 /// Sweep: free unmarked malloc objects; add unmarked arena objects to free list.

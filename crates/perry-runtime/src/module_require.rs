@@ -102,7 +102,7 @@ pub fn scan_cjs_main_module_root_mut(visitor: &mut crate::gc::RuntimeRootVisitor
             // cache followed it" -- the load-bearing question for this
             // holder's identity guarantee, not visible from the generic
             // per-cycle counters.
-            if rewritten && crate::gc::gc_diag_enabled() {
+            if rewritten && crate::gc::diagnostic_hooks::enabled() {
                 CJS_MAIN_MODULE_REWRITES.with(|c| c.set(c.get() + 1));
                 eprintln!(
                     "[cjs-main-module] rewritten: new_bits={:#018x} total_rewrites={}",

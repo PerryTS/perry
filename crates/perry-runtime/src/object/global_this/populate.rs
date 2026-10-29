@@ -136,7 +136,7 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
     // whole window: ~1.15 MB allocated, ~410 KB of it live afterwards, once per
     // thread.
     let _no_move = crate::gc::GcSuppressScope::new();
-    let bootstrap_started = crate::gc::gc_diag_enabled().then(std::time::Instant::now);
+    let bootstrap_started = crate::gc::diagnostic_hooks::enabled().then(std::time::Instant::now);
     let scope = crate::gc::RuntimeHandleScope::new();
     let singleton_handle = scope.root_raw_mut_ptr(singleton_at_entry);
     let singleton = || singleton_handle.get_raw_mut_ptr::<ObjectHeader>();
