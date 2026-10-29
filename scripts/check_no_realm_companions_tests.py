@@ -1,25 +1,47 @@
 #!/usr/bin/env python3
 from pathlib import Path
+import json
 import tempfile
 import unittest
-from check_no_realm_companions import companions
+from check_no_realm_companions import ALLOWED, companions, violations
 
 
-class NoCompanionTests(unittest.TestCase):
+def write(path, count):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"version": 1, "groups": {"objects": [{}] * count}}))
+
+
+class CompanionRatchetTests(unittest.TestCase):
+    def test_allowlist_totals_the_remaining_forty_four(self):
+        self.assertEqual(sum(ALLOWED.values()), 44)
+        self.assertEqual(len(ALLOWED), 6)
+
     def test_nested_source_companion_is_rejected_and_build_output_is_allowed(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             source = root / "crates/example/src/nested"
             source.mkdir(parents=True)
-            (source / "body.rs").write_text("")
             output = root / "target/debug/build/runtime/out"
             output.mkdir(parents=True)
-            (output / "realm-v1.json").write_text("{}")
             (output / "module.realm.json").write_text("{}")
-            self.assertEqual(companions(root), [])
-            forbidden = source / "body.realm.json"
-            forbidden.write_text("{}")
-            self.assertEqual(companions(root), [forbidden.relative_to(root)])
+            self.assertEqual(violations(root, {}), [])
+            write(source / "body.realm.json", 1)
+            self.assertEqual(companions(root), [Path("crates/example/src/nested/body.realm.json")])
+            self.assertEqual(len(violations(root, {})), 1)
+
+    def test_listed_file_may_shrink_or_vanish_but_not_grow(self):
+        allowed = {"crates/a/src/x.realm.json": 3}
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.assertEqual(violations(root / ".", allowed) if (root / "crates").exists() else [], [])
+            (root / "crates").mkdir()
+            self.assertEqual(violations(root, allowed), [])
+            write(root / "crates/a/src/x.realm.json", 3)
+            self.assertEqual(violations(root, allowed), [])
+            write(root / "crates/a/src/x.realm.json", 2)
+            self.assertEqual(violations(root, allowed), [])
+            write(root / "crates/a/src/x.realm.json", 4)
+            self.assertEqual(len(violations(root, allowed)), 1)
 
     def test_missing_repository_is_an_error(self):
         with tempfile.TemporaryDirectory() as temporary:
