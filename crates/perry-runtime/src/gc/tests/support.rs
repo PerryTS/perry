@@ -1076,7 +1076,7 @@ pub(super) fn alloc_tracked_test_symbol() -> *mut crate::symbol::SymbolHeader {
     ptr as *mut crate::symbol::SymbolHeader
 }
 
-pub(super) unsafe fn alloc_old_test_array(
+pub(crate) unsafe fn alloc_old_test_array(
     length: u32,
 ) -> (*mut crate::array::ArrayHeader, *mut u64) {
     let payload = std::mem::size_of::<crate::array::ArrayHeader>() + length as usize * 8;

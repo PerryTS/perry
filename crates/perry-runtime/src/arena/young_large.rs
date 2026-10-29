@@ -1,4 +1,7 @@
-//! Pointer-free young allocations with individually owned, non-moving backing.
+//! Young allocations with individually owned, non-moving backing: size picks
+//! the storage, age picks the collection. A pointer-free leaf and a
+//! pointer-bearing container share it; a minor traces a container's declared
+//! slots like any young cell, and promotion re-remembers its young children.
 //! Ownership lives in the existing Eden/old block vectors, never in a root list.
 use super::region::Kind;
 use super::*;
@@ -8,10 +11,7 @@ pub(super) fn allocate(total: usize, align: usize) -> *mut u8 {
     // while finishing a previously started non-moving cycle.
     crate::gc::gc_check_trigger();
     crate::gc::allocation_pacing::finish_cycle_before_large_birth();
-    let size = total
-        .checked_add(GENERATION_PAGE_SIZE - 1)
-        .expect("large leaf extent overflow")
-        & !(GENERATION_PAGE_SIZE - 1);
+    let size = extent_size(total);
     let data = super::block::block_pool_take(size).unwrap_or_else(|| unsafe {
         let data = super::region::map(Kind::LargeObject, size);
         if data.is_null() {
@@ -26,6 +26,30 @@ pub(super) fn allocate(total: usize, align: usize) -> *mut u8 {
             data
         }
     });
+    publish(data, size, total, align)
+}
+
+/// [`allocate`] without its collection points, for a caller holding raw
+/// addresses (array growth): null when the backing cannot be had without
+/// collecting. The pressure is paid at the next precise poll.
+pub(super) fn allocate_no_collect(total: usize, align: usize) -> *mut u8 {
+    let size = extent_size(total);
+    let data = super::block::block_pool_take(size)
+        .unwrap_or_else(|| unsafe { super::region::map(Kind::LargeObject, size) });
+    if data.is_null() {
+        return data;
+    }
+    publish(data, size, total, align)
+}
+
+fn extent_size(total: usize) -> usize {
+    total
+        .checked_add(GENERATION_PAGE_SIZE - 1)
+        .expect("large leaf extent overflow")
+        & !(GENERATION_PAGE_SIZE - 1)
+}
+
+fn publish(data: *mut u8, size: usize, total: usize, align: usize) -> *mut u8 {
     unsafe { super::region::advise(data, size, Kind::LargeObject) };
     let mut block = ArenaBlock {
         extent_kind: Kind::LargeObject,
@@ -52,7 +76,7 @@ pub(super) fn allocate(total: usize, align: usize) -> *mut u8 {
     // Allocation cannot select this block as the ordinary bump target.
     ARENA.with(|arena| unsafe {
         let arena = &mut *arena.get();
-        arena.young_leaf_bytes += block.offset;
+        arena.young_large_bytes += block.offset;
         arena.note_allocation(total, false); // process debt, without old-large burst debt
         install(arena, block);
     });
@@ -92,7 +116,7 @@ fn young_large_in_use_bytes_walked() -> usize {
 #[inline]
 pub(crate) fn young_large_in_use_bytes() -> usize {
     // SAFETY: this thread's own nursery arena, read only.
-    let bytes = unsafe { (*hot_arena()).young_leaf_bytes };
+    let bytes = unsafe { (*hot_arena()).young_large_bytes };
     #[cfg(debug_assertions)]
     debug_assert_eq!(
         bytes,
@@ -177,25 +201,60 @@ pub(crate) fn is_large_storage(addr: usize) -> bool {
     classify_heap_storage_in_range(addr).is_some_and(|(_, _, _, large)| large)
 }
 
+/// Does a live young container exist? A leaf-only collection cannot decide
+/// one, so its presence selects the tracing minor. Walks block headers only.
+pub(crate) fn young_large_containers_exist() -> bool {
+    ARENA.with(|arena| unsafe {
+        (&*arena.get()).blocks.iter().any(|b| {
+            !b.data.is_null()
+                && b.extent_kind == Kind::LargeObject
+                && b.offset != 0
+                && !header_is_leaf(b.data.cast())
+        })
+    })
+}
+
+#[inline]
+unsafe fn header_is_leaf(header: *const crate::gc::GcHeader) -> bool {
+    crate::gc::gc_type_info((*header).obj_type).is_some_and(|i| {
+        i.pointer_free && i.rewrite_descriptor_kind == crate::gc::GcRewriteDescriptorKind::Leaf
+    })
+}
+
 /// Finish a synchronous copying trace, after weak processing and before any
 /// from-space reset or quarantine. Survivors retain their mark for clear_marks.
-pub(crate) fn finish_copied_young_large() -> ArenaResetStats {
-    finish(None, None)
+/// `promoted` receives every promoted container, now old at its unchanged
+/// address, so the cycle can remember its young and malloc children before
+/// its remembered-set rebuild is restored.
+pub(crate) fn finish_copied_young_large(
+    promoted: impl FnMut(*mut crate::gc::GcHeader),
+) -> ArenaResetStats {
+    finish(None, None, promoted)
 }
 
 /// A sliced/non-moving sweep has already finalized its dead headers and cleared
 /// survivor marks. Its snapshot and live verdict, never current arena contents,
 /// select eligible owners; post-snapshot births remain young for the next cycle.
+/// A sweep keeps the remembered set, so a promoted container's old->young
+/// slots (a child born after the snapshot, a small child the full left young)
+/// are remembered here directly.
 pub(crate) fn finish_swept_young_large(
     snapshots: &[ArenaBlockSnapshot],
     live: &[bool],
 ) -> ArenaResetStats {
-    finish(Some(snapshots), Some(live))
+    finish(Some(snapshots), Some(live), |header| unsafe {
+        crate::gc::remember_promoted_large_container(header)
+    })
 }
 
-fn finish(snapshots: Option<&[ArenaBlockSnapshot]>, live: Option<&[bool]>) -> ArenaResetStats {
+fn finish(
+    snapshots: Option<&[ArenaBlockSnapshot]>,
+    live: Option<&[bool]>,
+    mut promoted: impl FnMut(*mut crate::gc::GcHeader),
+) -> ArenaResetStats {
     crate::gc::heap_generation::debug_assert_heap_change_open();
     let mut stats = ArenaResetStats::default();
+    let mut containers: Vec<*mut crate::gc::GcHeader> = Vec::new();
     ARENA.with(|arena| unsafe {
         let arena = &mut *arena.get();
         for index in 0..arena.blocks.len() {
@@ -235,7 +294,7 @@ fn finish(snapshots: Option<&[ArenaBlockSnapshot]>, live: Option<&[bool]>) -> Ar
                 },
             );
             let (base, size, used) = (block.data as usize, block.size, block.offset);
-            arena.young_leaf_bytes = arena.young_leaf_bytes.saturating_sub(used);
+            arena.young_large_bytes = arena.young_large_bytes.saturating_sub(used);
             if alive {
                 // The escape bit shares HAS_SURVIVED (0x40); it never outlives
                 // the young generation of its leaf.
@@ -250,8 +309,12 @@ fn finish(snapshots: Option<&[ArenaBlockSnapshot]>, live: Option<&[bool]>) -> Ar
                 super::page_meta::register_old_object_pages(base, used);
                 super::block::old_gen_in_use_bytes_add(used);
                 OLD_ARENA.with(|old| install(&mut *old.get(), block));
+                if !header_is_leaf(header) {
+                    containers.push(header);
+                }
             } else {
-                if live.is_none() {
+                // A growth stub owns nothing: its layout and payload moved on.
+                if live.is_none() && (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED == 0 {
                     crate::gc::finalize_dead_arena_payload(
                         header,
                         block.data.add(crate::gc::GC_HEADER_SIZE),
@@ -270,12 +333,17 @@ fn finish(snapshots: Option<&[ArenaBlockSnapshot]>, live: Option<&[bool]>) -> Ar
     });
     // Leaf occupancy changed: the sealed-bytes cache also carries leaf-ness.
     super::from_space::invalidate_sealed_young_bytes();
+    // No arena borrow is held while the promoted containers are visited.
+    for header in containers {
+        promoted(header);
+    }
     stats
 }
 
-/// Capacity of a dedicated whole-cell leaf is not small-copying runway.
+/// Capacity of a dedicated whole-cell extent is not small-copying runway.
 /// Legacy packed old large blocks remain included. Membership and layout,
-/// rather than storage kind alone, prove that one leaf owns the whole block.
+/// rather than storage kind alone, prove that one cell the young large space
+/// admits owns the whole block.
 pub(crate) fn copying_capacity_bytes() -> usize {
     fn dedicated(blocks: &[ArenaBlock]) -> usize {
         blocks.iter().filter(|b| {
@@ -284,8 +352,7 @@ pub(crate) fn copying_capacity_bytes() -> usize {
             }
             unsafe {
                 let h = &*b.data.cast::<crate::gc::GcHeader>();
-                h.size as usize == b.offset && crate::gc::gc_type_info(h.obj_type)
-                    .is_some_and(|i| i.pointer_free && i.rewrite_descriptor_kind == crate::gc::GcRewriteDescriptorKind::Leaf)
+                h.size as usize == b.offset && crate::gc::young_large_storage_admits(h.obj_type)
             }
         }).map(|b| b.size).sum()
     }

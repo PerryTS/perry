@@ -103,10 +103,13 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
         // stub pointing at recycled bytes.
         //
         // For a young source, use the nursery only when the already-open block
-        // can satisfy the grow without collecting. If that allocation would
-        // collect, the source may be promoted while its handle is reloaded;
-        // birth the target old instead so the post-collection source cannot
-        // acquire the same old->young forwarding edge.
+        // can satisfy the grow without collecting, and a large target only
+        // when its young dedicated backing needs no collection either (it is
+        // non-moving, so a young stub may forward into it like into Eden).
+        // If that allocation would collect, the source may be promoted while
+        // its handle is reloaded; birth the target old instead so the
+        // post-collection source cannot acquire the same old->young
+        // forwarding edge.
         let old_header = (arr as *mut u8).sub(gc::GC_HEADER_SIZE) as *mut gc::GcHeader;
         let source_generation = crate::arena::classify_heap_generation(arr as usize);
         let source_requires_old_target = (*old_header).gc_flags & gc::GC_FLAG_TENURED != 0
@@ -114,7 +117,12 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
         let young = if source_requires_old_target {
             ptr::null_mut()
         } else {
-            crate::arena::arena_alloc_gc_no_collect(new_size, 8, gc::GC_TYPE_ARRAY)
+            let small = crate::arena::arena_alloc_gc_no_collect(new_size, 8, gc::GC_TYPE_ARRAY);
+            if small.is_null() {
+                crate::arena::arena_alloc_gc_large_young_no_collect(new_size, 8, gc::GC_TYPE_ARRAY)
+            } else {
+                small
+            }
         };
         let (new_ptr, arr) = if !young.is_null() {
             // No collection, so the source address remains valid without a

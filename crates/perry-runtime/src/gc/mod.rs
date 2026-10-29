@@ -172,7 +172,7 @@ pub(crate) mod prefetch;
 mod copying;
 mod leaf_escape;
 mod leaf_service;
-pub(crate) use leaf_service::repair_promoted_leaf_edges;
+pub(crate) use leaf_service::{remember_promoted_large_container, repair_promoted_leaf_edges};
 /// A store of `child_addr` into the old/malloc parent `parent_addr` that the
 /// page-granular remembering skipped: record young-leaf escape only.
 pub(crate) fn probe_leaf_escape_store(parent_addr: usize, child_addr: usize) {

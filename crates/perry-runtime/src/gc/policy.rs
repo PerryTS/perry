@@ -3932,9 +3932,11 @@ pub(crate) fn gc_safepoint_moving_minor() -> bool {
     set_safepoint_pending(false);
     let _declared = DeclaredSafepointGuard::enter();
     // The trigger ladder coalesces the two young resources into the existing
-    // precise handoff. Only small occupancy/capacity selects small copying.
+    // precise handoff. Only small occupancy/capacity selects small copying,
+    // unless a young large container is alive: its edges need the trace.
     if due == Some(BudgetedGcTrigger::YoungScavengeCap) && !scheduled && gen_gc_enabled()
         && crate::arena::copying_from_space_in_use_bytes() < scavenge_nursery_cap_dueness_bytes()
+        && !crate::arena::young_large_containers_exist()
     {
         super::leaf_service::collect();
         return true;

@@ -551,6 +551,31 @@ pub(crate) fn arena_alloc_gc_survivor(size: usize, align: usize, obj_type: u8) -
     unsafe { raw.add(GC_HEADER_SIZE) }
 }
 
+/// A large young birth with no collection point, for a caller holding raw
+/// addresses (array growth from a young source). Null when the type is not
+/// admitted or the backing would need a collection; the caller then takes its
+/// rooted path. The young pressure is armed for the next precise poll.
+pub(crate) fn arena_alloc_gc_large_young_no_collect(
+    size: usize,
+    align: usize,
+    obj_type: u8,
+) -> *mut u8 {
+    let total = gc_padded_total_size(size, align);
+    if !crate::gc::is_large_object_total_size_for_type(total, obj_type)
+        || !crate::gc::young_large_storage_admits(obj_type)
+    {
+        return std::ptr::null_mut();
+    }
+    super::alloc_sample::note(total, obj_type);
+    let raw = super::young_large::allocate_no_collect(total, align);
+    if raw.is_null() {
+        return raw;
+    }
+    let user = unsafe { init_young_header(raw, total, obj_type) };
+    crate::gc::allocation_pacing::arm_young_after_large_birth();
+    user
+}
+
 /// Allocate from arena with a GcHeader prepended.
 /// Returns pointer to usable memory AFTER the GcHeader.
 /// The object is NOT added to any tracking list — arena objects are discovered
@@ -606,17 +631,15 @@ fn arena_alloc_gc_slow(size: usize, align: usize, obj_type: u8, total: usize) ->
     crate::test_support::bootstrap_test_thread();
     use crate::gc::{GcHeader, GC_FLAG_ARENA, GC_HEADER_SIZE};
 
-    // Size chooses storage independently of age for whole-cell pointer-free
-    // leaves. Their dedicated blocks stay young until traced by a minor.
-    // Pointer-bearing large containers retain the existing old birth contract
-    // until their complete outgoing-edge/forwarding slice is implemented.
-    // Both existing cutoffs and the scoped JSON container exception stay put.
+    // Size chooses storage independently of age. A leaf or a container the
+    // young large space admits gets a dedicated block that stays young until
+    // a minor traces it; a container's children are then born young too
+    // (`ProducerChildBirth` reads the container's actual generation). Both
+    // existing cutoffs and the scoped JSON container exception stay put.
     if crate::gc::is_large_object_total_size_for_type(total, obj_type)
         && !crate::gc::json_wide_birth_permits(total, obj_type)
     {
-        if crate::gc::gc_type_info(obj_type).is_some_and(|info| info.pointer_free
-            && info.rewrite_descriptor_kind == crate::gc::GcRewriteDescriptorKind::Leaf)
-        {
+        if crate::gc::young_large_storage_admits(obj_type) {
             let raw = super::young_large::allocate(total, align);
             let user = unsafe { init_young_header(raw, total, obj_type) };
             crate::gc::allocation_pacing::arm_young_after_large_birth();

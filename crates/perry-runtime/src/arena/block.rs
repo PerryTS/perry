@@ -515,6 +515,15 @@ impl ArenaBlock {
         self.object_starts.as_ptr() as *mut u64
     }
 
+    /// May the bump allocator use this block? Never a tombstone, and never a
+    /// dedicated large extent: its one cell owns the block, and a reset or a
+    /// switch that treated it as an ordinary block would rewind its offset or
+    /// pack small cells into its tail.
+    #[inline]
+    pub(crate) fn bump_target(&self) -> bool {
+        !self.data.is_null() && self.extent_kind != super::region::Kind::LargeObject
+    }
+
     /// Reactivate released pages before the block is handed out. Idle discard
     /// never touches the current block, and every block becomes current
     /// before any of its bytes are written, so this is off the bump path.
@@ -618,7 +627,7 @@ pub(crate) struct Arena {
     /// leaf birth adds, retire/promotion subtracts). Lives in the arena the
     /// trigger probes already hold, so a program with no leaf pays no extra
     /// thread-local resolution to learn that.
-    pub(crate) young_leaf_bytes: usize,
+    pub(crate) young_large_bytes: usize,
 }
 
 /// The GC kinds whose payload owns native memory released at thread exit.
@@ -743,7 +752,7 @@ impl ArenaCell {
             space,
             allocated_bytes: 0,
             large_allocated_bytes: 0,
-            young_leaf_bytes: 0,
+            young_large_bytes: 0,
         }))
     }
 

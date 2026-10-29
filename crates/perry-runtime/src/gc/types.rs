@@ -222,8 +222,8 @@ pub const LARGE_OBJECT_THRESHOLD_BYTES: usize = 16 * 1024;
 ///
 /// For pointer-bearing containers in this staged implementation, crossing the
 /// threshold still births the object old and stamps `GC_FLAG_TENURED`.
-/// Pointer-free whole-cell leaves instead get dedicated non-moving storage
-/// with ordinary young age; size alone no longer makes those leaves old.
+/// Large cells instead get dedicated non-moving storage with ordinary young
+/// age (`young_large_storage_admits`); size alone no longer makes them old.
 /// A minor never sweeps the old generation. For an old container,
 /// the object — and, if it holds pointers, *everything reachable from it* —
 /// is immortal until a full mark-sweep runs. The threshold is therefore a
@@ -235,8 +235,10 @@ pub const LARGE_OBJECT_THRESHOLD_BYTES: usize = 16 * 1024;
 ///   held until the next full collection.
 ///
 /// The historical pointer-free cutoff traded those equal quantities at
-/// 16 KB. That cutoff now selects young large storage without copying. For
-/// the still-pretenured pointer-bearing containers, retention remains
+/// 16 KB. That cutoff now selects young large storage without copying, and so
+/// does the pointer-bearing one below: the container stays young, is traced
+/// by every minor and dies with its children. For a container that is old
+/// (by contract, or after surviving), retention remains
 /// **transitive and unbounded**: the
 /// write barrier records old→young edges out of it, and every minor's dirty
 /// scan then marks its children live, whether or not anything still refers to
@@ -396,11 +398,34 @@ pub fn large_object_threshold_for_type(obj_type: u8) -> usize {
     }
 }
 
-/// Does `total_size` bytes of `obj_type` have to be born in the non-moving old
-/// generation?
+/// Does `total_size` bytes of `obj_type` need non-moving large storage?
+/// Size picks the storage; it no longer decides the age (see
+/// [`young_large_storage_admits`]).
 #[inline]
 pub fn is_large_object_total_size_for_type(total_size: usize, obj_type: u8) -> bool {
     total_size > large_object_threshold_for_type(obj_type)
+}
+
+/// May a size-driven large birth of `obj_type` take young, non-moving storage?
+///
+/// Derived from the type's own layout facts, never a list of types. A cell
+/// the collector traces through its declared slots and that owns nothing
+/// keyed by its address qualifies: a minor marks it in place, traces its
+/// children, frees it dead or promotes it at its address. The rest keep the
+/// old birth: a move hook means native state keyed by the address (Map/Set
+/// stores, errors, async snapshots), a side allocation is external backing,
+/// and a non-movable cell (buffers, native views) has an address-stability
+/// contract of its own.
+#[inline]
+pub(crate) fn young_large_storage_admits(obj_type: u8) -> bool {
+    gc_type_info(obj_type).is_some_and(|info| {
+        (info.pointer_free && info.rewrite_descriptor_kind == GcRewriteDescriptorKind::Leaf)
+            || (info.arena_walkable
+                && info.movable
+                && info.move_hook_kind == GcMoveHookKind::None
+                && info.external_byte_policy != GcExternalBytePolicy::SideAllocation
+                && !is_buffer_family_type(obj_type))
+    })
 }
 
 #[allow(dead_code)]

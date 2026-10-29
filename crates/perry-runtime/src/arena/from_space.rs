@@ -121,7 +121,7 @@ pub(crate) fn copying_from_space_in_use_bytes_and_leaf_free() -> (usize, bool) {
     if cached.state == STATE_LEAF_FREE && cached.heap_generation == generation {
         let bytes = cached.sealed + current_bytes;
         debug_assert_eq!(bytes, copying_from_space_in_use_bytes_walked());
-        debug_assert_eq!(unsafe { (*hot_arena()).young_leaf_bytes }, 0);
+        debug_assert_eq!(unsafe { (*hot_arena()).young_large_bytes }, 0);
         return (bytes, true);
     }
     if cached.state == STATE_LEAF_LIVE && cached.heap_generation == generation {
@@ -132,7 +132,7 @@ pub(crate) fn copying_from_space_in_use_bytes_and_leaf_free() -> (usize, bool) {
     // Invalid cache: the walk (cold, out of line) re-stores it with leaf-ness.
     let bytes = walk_and_store(generation, current_bytes);
     // SAFETY: this thread's own nursery arena, read only.
-    (bytes, unsafe { (*hot_arena()).young_leaf_bytes } == 0)
+    (bytes, unsafe { (*hot_arena()).young_large_bytes } == 0)
 }
 
 /// `sync_inline_arena_state`, then the current Eden block's offset. The same
@@ -162,7 +162,7 @@ fn walk_and_store(generation: u64, current_bytes: usize) -> usize {
         SEALED_YOUNG_BYTES.with(|cache| {
             cache.set(SealedYoungBytes {
                 // SAFETY: this thread's own nursery arena, read only.
-                state: if unsafe { (*hot_arena()).young_leaf_bytes } == 0 {
+                state: if unsafe { (*hot_arena()).young_large_bytes } == 0 {
                     STATE_LEAF_FREE
                 } else {
                     STATE_LEAF_LIVE

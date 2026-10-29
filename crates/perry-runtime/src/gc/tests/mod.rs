@@ -151,6 +151,7 @@ mod weak_read_barrier;
 mod young_leaf_route;
 mod leaf_escape;
 mod young_large;
+mod young_large_containers;
 mod young_log_tests;
 mod zero_slot_fixture;
 mod zero_slot_skip;
