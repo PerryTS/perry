@@ -2,7 +2,7 @@
 //! the compiler never loads or links runtime machine code to obtain these facts.
 use crate::realm_json::{self as json, Value};
 pub const REALM_MANIFEST_VERSION: u32 = 1;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 #[path = "realm_array.rs"]
 mod array;
@@ -69,16 +69,27 @@ fn closing_paren(ts: &[Token<'_>], open: usize) -> Result<usize, String> {
 }
 
 #[derive(Debug)]
-struct Token<'a> {
-    text: &'a str,
-    start: usize,
+pub(super) struct Token<'a> {
+    pub(super) text: &'a str,
+    pub(super) start: usize,
     end: usize,
-    string: Option<String>,
+    pub(super) string: Option<String>,
 }
 
 // Small Rust token reader, not a search for annotation-shaped text. Comments
 // (including nested block comments), raw strings and quoted strings are opaque.
-fn tokens(source: &str) -> Result<Vec<Token<'_>>, String> {
+pub(super) fn tokens(source: &str) -> Result<Vec<Token<'_>>, String> {
+    tokenize(source, false)
+}
+
+/// Rust lexical tokens (`::`, `=>`, `<<`, whole numeric literals): the spelling
+/// `stringify!` gives each token, which exported fn_info! link names are built
+/// from. Declaration readers use the punctuation-per-character stream above.
+pub(super) fn rust_tokens(source: &str) -> Result<Vec<Token<'_>>, String> {
+    tokenize(source, true)
+}
+
+fn tokenize(source: &str, lexical: bool) -> Result<Vec<Token<'_>>, String> {
     let bytes = source.as_bytes();
     let mut out = Vec::new();
     let mut i = 0;
@@ -192,11 +203,48 @@ fn tokens(source: &str) -> Result<Vec<Token<'_>>, String> {
                 continue;
             }
         }
-        if bytes[i].is_ascii_alphabetic() || bytes[i] == b'_' {
+        if lexical && bytes[i].is_ascii_digit() {
+            let nondecimal = source[i..].starts_with("0x")
+                || source[i..].starts_with("0o")
+                || source[i..].starts_with("0b");
+            i += 1;
+            while i < bytes.len() {
+                if bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' {
+                    i += 1;
+                } else if !nondecimal
+                    && bytes[i] == b'.'
+                    && bytes.get(i + 1).is_some_and(u8::is_ascii_digit)
+                {
+                    i += 1;
+                } else if !nondecimal
+                    && matches!(bytes[i], b'+' | b'-')
+                    && matches!(bytes[i - 1], b'e' | b'E')
+                {
+                    i += 1;
+                } else {
+                    break;
+                }
+            }
+        } else if bytes[i].is_ascii_alphabetic() || bytes[i] == b'_' {
             i += 1;
             while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
                 i += 1;
             }
+        } else if lexical
+            && ["<<=", ">>=", "..=", "..."]
+                .iter()
+                .any(|p| source[i..].starts_with(p))
+        {
+            i += 3;
+        } else if lexical
+            && [
+                "..", "::", "<<", ">>", "==", "!=", "<=", ">=", "&&", "||", "->", "=>", "+=", "-=",
+                "*=", "/=", "%=", "&=", "|=", "^=",
+            ]
+            .iter()
+            .any(|p| source[i..].starts_with(p))
+        {
+            i += 2;
         } else {
             i += source[i..].chars().next().unwrap().len_utf8();
         }
@@ -210,16 +258,108 @@ fn tokens(source: &str) -> Result<Vec<Token<'_>>, String> {
     Ok(out)
 }
 
+/// The `export` form names its static from the fully qualified body and ABI
+/// builders. Read the same tokens at the owning declaration; no linker-name
+/// inventory or source-file-to-Rust-module guess is needed.
+pub(super) fn image_info_symbol(
+    ts: &[Token<'_>],
+    body_start: usize,
+    package: &str,
+) -> Result<String, String> {
+    let comma = ts[body_start..]
+        .iter()
+        .position(|t| t.text == ",")
+        .ok_or("exported fn_info has no parameter count")?
+        + body_start;
+    let body = ts[body_start..comma]
+        .iter()
+        .map(|t| t.text)
+        .collect::<String>();
+    if !body.starts_with("crate::") || !body.split("::").all(rust_identifier) {
+        return Err("exported fn_info needs a fully qualified crate:: body path".into());
+    }
+    let mut pos = comma + 1;
+    let count_start = pos;
+    while ts.get(pos).is_some_and(|t| !matches!(t.text, ";" | ")")) {
+        pos += 1;
+    }
+    let count = ts[count_start..pos]
+        .iter()
+        .map(|t| t.text)
+        .collect::<String>();
+    if count.is_empty() || !count.bytes().all(|b| b.is_ascii_digit()) {
+        return Err("exported fn_info needs a literal parameter count".into());
+    }
+    let mut name = format!("perry_fn_info_{package}::{body}::{count}::");
+    if ts.get(pos).is_some_and(|t| t.text == ")") {
+        return Ok(name);
+    }
+    pos += 1;
+    loop {
+        let builder = ts.get(pos).ok_or("unterminated exported fn_info")?.text;
+        if builder == ")" {
+            break;
+        }
+        if !rust_identifier(builder) || ts.get(pos + 1).is_none_or(|t| t.text != "(") {
+            return Err("malformed exported fn_info builder".into());
+        }
+        pos += 2;
+        let start = pos;
+        let mut depth = 1;
+        while let Some(token) = ts.get(pos) {
+            if token.text == "(" {
+                depth += 1;
+            } else if token.text == ")" {
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+            }
+            pos += 1;
+        }
+        if depth != 0 {
+            return Err("unterminated exported fn_info builder".into());
+        }
+        // fn_info!'s export helper recursively concatenates lexical tokens,
+        // preserving delimiters with one separator after each lexical token.
+        // Separators keep distinct valid expressions (casts and identifiers,
+        // for example) from collapsing to the same exported spelling.
+        let argument = ts[start..pos]
+            .iter()
+            .map(|t| format!("{} ", t.text))
+            .collect::<String>();
+        name.push_str(&format!("{builder}({argument});"));
+        pos += 1;
+        match ts.get(pos).map(|t| t.text) {
+            Some(",") => pos += 1,
+            Some(")") => break,
+            Some(";") if ts.get(pos + 1).is_some_and(|t| t.text == "bind") => break,
+            _ => return Err("unterminated exported fn_info builder list".into()),
+        }
+    }
+    Ok(name)
+}
+
+fn rust_identifier(text: &str) -> bool {
+    let mut bytes = text.bytes();
+    bytes
+        .next()
+        .is_some_and(|b| b.is_ascii_alphabetic() || b == b'_')
+        && bytes.all(|b| b.is_ascii_alphanumeric() || b == b'_')
+}
+
 #[cfg(test)]
 fn declarations(
     source: &str,
     path: &str,
+    package: &str,
     load: impl FnMut(&str) -> Result<String, String>,
     resolve: impl FnMut(&str) -> Result<(String, String), String>,
 ) -> Result<Vec<Value>, String> {
     declarations_with_receivers(
         source,
         path,
+        package,
         load,
         resolve,
         &mut Vec::new(),
@@ -230,6 +370,7 @@ fn declarations(
 fn declarations_with_receivers(
     source: &str,
     path: &str,
+    package: &str,
     mut load: impl FnMut(&str) -> Result<String, String>,
     mut resolve: impl FnMut(&str) -> Result<(String, String), String>,
     native_receivers: &mut Vec<(String, String)>,
@@ -310,6 +451,31 @@ fn declarations_with_receivers(
                     let Value::Object(map) = &mut declaration else {
                         unreachable!()
                     };
+                    // A Set born from a literal constant: its compiled cells read
+                    // the same literal (the storage extension), never a copy.
+                    let text = info::text(expression);
+                    if let Some(constant) = text
+                        .strip_prefix("module_set_value(")
+                        .and_then(|rest| rest.strip_suffix(')'))
+                    {
+                        let owner = (0..index)
+                            .rev()
+                            .find(|&i| ts[i].text == "fn" && ts.get(i + 1).is_some())
+                            .map(|i| ts[i + 1].text)
+                            .ok_or("Set birth has no owning function")?;
+                        map.insert(
+                            "storage".into(),
+                            Value::Object(BTreeMap::from([
+                                ("kind".into(), Value::String("set".into())),
+                                (
+                                    "entries_source".into(),
+                                    Value::String(format!("{owner}::{constant}")),
+                                ),
+                            ])),
+                        );
+                        crate::realm_storage::resolve(source, map)
+                            .map_err(|e| format!("{path}: {e}"))?;
+                    }
                     map.insert("source".into(), Value::String(path.replace('\\', "/")));
                     map.insert(
                         "line".into(),
@@ -441,6 +607,37 @@ fn declarations_with_receivers(
                 }
                 entries = &tail[2..tail.len() - 1];
                 Some(body_info)
+            } else if entries.first().is_some_and(|t| t.text == "info")
+                && entries
+                    .get(1)
+                    .is_some_and(|t| !matches!(t.text, "pub" | "static" | "const"))
+            {
+                // The owning item is an exported record:
+                // `fn_info!(export static [vis] NAME = ...);`.
+                let first = info::split(entries, ";")[0];
+                let at = first
+                    .iter()
+                    .position(|t| t.text == "static")
+                    .filter(|&i| i > 0 && first[i - 1].text == "export")
+                    .ok_or("info realm block must own its existing static declaration")?;
+                let mut item = at + 1;
+                if first.get(item).is_some_and(|t| t.text == "pub") {
+                    item += 1;
+                    if first.get(item).is_some_and(|t| t.text == "(") {
+                        item = closing_paren(first, item)? + 1;
+                    }
+                }
+                let binding = first.get(item).ok_or("missing owned info name")?.text;
+                let tail = &entries[first.len() + 1..];
+                if tail.len() < 3
+                    || tail[0].text != "realm"
+                    || tail[1].text != "{"
+                    || tail.last().is_none_or(|t| t.text != "}")
+                {
+                    return Err("owned info requires a realm cell block".into());
+                }
+                entries = &tail[2..tail.len() - 1];
+                Some(typed_info::named(source, binding, abi_constants())?)
             } else if entries.first().is_some_and(|t| t.text == "info") {
                 let mut item = 1;
                 if entries.get(item).is_some_and(|t| t.text == "pub") {
@@ -650,6 +847,9 @@ fn declarations_with_receivers(
                             }
                         }
                     }
+                    if ts.get(begin).is_some_and(|t| t.text == "export") {
+                        begin += 1;
+                    }
                     if ts.get(begin).is_some_and(|t| {
                         matches!(t.text, "native_args" | "unwind" | "unwind_in_tests")
                     }) {
@@ -693,12 +893,17 @@ fn declarations_with_receivers(
             _ => return Err(format!("{path}: realm declaration is not an object/array")),
         };
         let mut body = None;
+        let mut info_symbol = None;
         if annotation {
             let mut after = open + 3;
             if ts.get(after).is_none_or(|t| t.text != "]") {
                 return Err(format!("{path}: malformed realm attribute"));
             }
             after += 1;
+            let exported = ts.get(after).is_some_and(|t| t.text == "export");
+            if exported {
+                after += 1;
+            }
             if ts
                 .get(after)
                 .is_some_and(|t| matches!(t.text, "native_args" | "unwind" | "unwind_in_tests"))
@@ -711,6 +916,13 @@ fn declarations_with_receivers(
                 .ok_or("missing fn_info body")?
                 + after;
             body = Some(ts[after..end].iter().map(|t| t.text).collect::<String>());
+            if exported {
+                let lexical =
+                    rust_tokens(&source[ts[after].start..]).map_err(|e| format!("{path}: {e}"))?;
+                info_symbol = Some(
+                    image_info_symbol(&lexical, 0, package).map_err(|e| format!("{path}: {e}"))?,
+                );
+            }
         }
         for d in &mut ds {
             let Value::Object(d) = d else {
@@ -726,6 +938,7 @@ fn declarations_with_receivers(
                     "{path}: {name}: provenance is derived from its declaring macro"
                 ));
             }
+            crate::realm_storage::resolve(source, d).map_err(|e| format!("{path}: {name}: {e}"))?;
             d.insert("source".into(), Value::String(path.replace('\\', "/")));
             d.insert(
                 "line".into(),
@@ -738,6 +951,15 @@ fn declarations_with_receivers(
                     .to_string(),
                 ),
             );
+            if let Some(symbol) = &info_symbol {
+                if d.get("info_symbol")
+                    .and_then(Value::string)
+                    .is_some_and(|s| s != symbol)
+                {
+                    return Err(format!("{path}: {name} has a stale fn_info export symbol"));
+                }
+                d.insert("info_symbol".into(), Value::String(symbol.clone()));
+            }
             if let Some(body) = &body {
                 if d.get("body")
                     .and_then(Value::string)
@@ -755,6 +977,23 @@ fn declarations_with_receivers(
         out.extend(ds);
     }
     Ok(out)
+}
+
+fn package_name(cargo: &str) -> Result<String, String> {
+    let mut package = false;
+    for line in cargo.lines().map(str::trim) {
+        if line.starts_with('[') {
+            package = line == "[package]";
+        } else if package {
+            if let Some(("name", value)) = line.split_once('=').map(|(k, v)| (k.trim(), v.trim())) {
+                return json::parse(value)?
+                    .string()
+                    .map(str::to_owned)
+                    .ok_or("package name is not a string".into());
+            }
+        }
+    }
+    Err("missing Cargo package name".into())
 }
 
 fn source_files(root: &Path, files: &mut Vec<PathBuf>) -> std::io::Result<()> {
@@ -791,6 +1030,8 @@ pub fn read(runtime_src: &Path) -> Result<Value, String> {
         }
     }
     let mut all = Vec::new();
+    let mut exports = crate::realm_exports::InfoExports::default();
+    let mut export_sources = Vec::new();
     let mut native_receivers = Vec::new();
     let mut selectors = BTreeSet::new();
     let sources = files
@@ -805,9 +1046,15 @@ pub fn read(runtime_src: &Path) -> Result<Value, String> {
     for (file, source) in &sources {
         println!("cargo:rerun-if-changed={}", file.display());
         let relative = file.strip_prefix(crates).unwrap();
+        let package_root = crates.join(relative.components().next().unwrap().as_os_str());
+        let cargo =
+            std::fs::read_to_string(package_root.join("Cargo.toml")).map_err(|e| e.to_string())?;
+        let package = package_name(&cargo)?;
+
         all.extend(declarations_with_receivers(
             &source,
             &relative.to_string_lossy(),
+            &package,
             |selector| {
                 let path = file.parent().unwrap().join(selector);
                 if path.extension().is_none_or(|e| e != "json") {
@@ -826,9 +1073,19 @@ pub fn read(runtime_src: &Path) -> Result<Value, String> {
             &mut native_receivers,
             &native_abi,
         )?);
+        if source.contains("fn_info") && source.contains("export") {
+            export_sources.push((source, relative.to_string_lossy().into_owned(), package));
+        }
+    }
+    all.extend(crate::realm_layouts::read(&runtime_src)?);
+    crate::realm_layouts::attach_births(&mut all)?;
+    let needed = crate::realm_exports::InfoExports::needed(&all);
+    for (source, path, package) in export_sources {
+        exports.read(&source, &path, &package, &needed)?;
     }
     native::resolve_receivers(&mut all, &native_receivers)?;
     birth::mark_inherited_objects(&mut all)?;
+    exports.link(&mut all)?;
     all.sort_by(|a, b| {
         a.get("name")
             .and_then(Value::string)
@@ -937,6 +1194,7 @@ mod tests {
         declarations(
             source,
             "array.rs",
+            "perry-runtime",
             |_| Err("unexpected file".into()),
             |body| Ok((body.into(), format!("source:{body}"))),
         )
@@ -1271,9 +1529,48 @@ mod tests {
         .is_err());
     }
     #[test]
+    fn export_symbol_comes_from_owning_body_and_builders() {
+        let source = r##"fn_info!(#[realm(r#"{"name":"Array","kind":"constructor"}"#)] export crate::object::array, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN));"##;
+        let ds = inline(source).unwrap();
+        assert_eq!(ds[0].get("info_symbol").and_then(Value::string), Some(
+            "perry_fn_info_perry-runtime::crate::object::array::1::with_rest(0 );with_flags(crate :: closure :: FN_BUILTIN );"
+        ));
+        assert_eq!(
+            ds[0].get("body").and_then(Value::string),
+            Some("crate::object::array")
+        );
+        assert!(inline(&source.replace("export crate::object::array", "export array")).is_err());
+        let numeric =
+            inline(&source.replace("with_rest(0)", "with_length(0x20_u32 + 10)")).unwrap();
+        assert_eq!(numeric[0].get("info_symbol").and_then(Value::string), Some(
+            "perry_fn_info_perry-runtime::crate::object::array::1::with_length(0x20_u32 + 10 );with_flags(crate :: closure :: FN_BUILTIN );"
+        ));
+        let compound = inline(&source.replace(
+            "with_rest(0)",
+            "with_rest_kind(0, (crate::FN_A | crate::FN_B)), plain()",
+        ))
+        .unwrap();
+        assert_eq!(compound[0].get("info_symbol").and_then(Value::string), Some(
+            "perry_fn_info_perry-runtime::crate::object::array::1::with_rest_kind(0 , ( crate :: FN_A | crate :: FN_B ) );plain();with_flags(crate :: closure :: FN_BUILTIN );"
+        ));
+        assert!(inline(&source.replace(
+            "\"kind\":\"constructor\"",
+            "\"kind\":\"constructor\",\"info_symbol\":\"stale\""
+        ))
+        .is_err());
+        // Unwind and native-argument ABIs retain the owning static's spelling.
+        for abi in ["unwind", "unwind_in_tests", "native_args"] {
+            assert_eq!(
+                inline(&source.replace("export crate", &format!("export {abi} crate"))).unwrap()[0]
+                    .get("info_symbol"),
+                ds[0].get("info_symbol")
+            );
+        }
+    }
+    #[test]
     fn rust_lexing_and_external_groups() {
         let source = "// realm_decl!(\"fake\")\n/* /* realm_decl! */ */ let x=r###\"realm_decl!(fake)\"###;\nfn_info!(#[ realm (\"array.realm.json#slice\") ] native_args slice,2);";
-        let ds=declarations(source,"array.rs",|file|{assert_eq!(file,"array.realm.json");Ok(r#"{"version":1,"groups":{"slice":[{"name":"Array.slice","kind":"method","body":"crate::array::slice"}]}}"#.into())}, |body| Ok((body.into(), format!("source:{body}")))).unwrap();
+        let ds=declarations(source,"array.rs","perry-runtime",|file|{assert_eq!(file,"array.realm.json");Ok(r#"{"version":1,"groups":{"slice":[{"name":"Array.slice","kind":"method","body":"crate::array::slice"}]}}"#.into())}, |body| Ok((body.into(), format!("source:{body}")))).unwrap();
         assert_eq!(ds.len(), 1);
         assert_eq!(ds[0].get("line"), Some(&Value::Number("3".into())));
     }
@@ -1284,6 +1581,7 @@ mod tests {
         let declarations = declarations(
             source,
             "array.rs",
+            "perry-runtime",
             |_| Ok(data.into()),
             |body| Ok((body.into(), format!("source:{body}"))),
         )
@@ -1292,6 +1590,7 @@ mod tests {
         assert!(super::declarations(
             &source.replace("slice,", "other,"),
             "array.rs",
+            "perry-runtime",
             |_| Ok(data.into()),
             |body| Ok((body.into(), format!("source:{body}")))
         )

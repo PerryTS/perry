@@ -415,3 +415,22 @@ pub mod runtime_layouts;
 pub fn initialize_runtime_fixture() {
     _perry_runtime_link::gc::initialize_runtime_fixture();
 }
+
+// Providers share the owning function-info mechanism without linking runtime.
+#[doc(hidden)]
+pub use perry_abi as __fn_info_abi;
+/// Declare a provider body's immutable, externally named function-info record.
+/// The symbol derives from its fully qualified body path and ABI builders.
+#[macro_export]
+macro_rules! fn_info {
+    (#[realm($path:literal, spec = { length = $length:literal }, emit = metadata)] reference export $body:path, $n:tt; $($m:ident($($a:tt)*)),*; bind $binding:ident, $metadata:ident) => {
+        macro_rules! $metadata { (length) => { $length }; }
+        let $binding = $crate::fn_info!(reference export $body, $n; $($m($($a)*)),*);
+    };
+    ($(#[realm($($facts:tt)*)])? reference $($rest:tt)*) => {
+        $crate::__fn_info_abi::fn_info! { for $crate::RawClosureHeader; reference $($rest)* }
+    };
+    ($(#[realm($($facts:tt)*)])? export $($rest:tt)*) => {
+        $crate::__fn_info_abi::fn_info! { for $crate::RawClosureHeader; export $($rest)* }
+    };
+}

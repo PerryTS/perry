@@ -376,3 +376,8 @@ pub(crate) fn process_allowed_flags_value() -> f64 {
     ];
     crate::realm_decl! { birth module_set_value(FLAGS); realm { process.allowedNodeEnvironmentFlags; "node:process.allowedNodeEnvironmentFlags"; } }
 }
+
+#[cfg(test)]
+mod realm_storage_tests {
+    include!(concat!(env!("OUT_DIR"), "/realm_set_storage_test.rs"));
+}

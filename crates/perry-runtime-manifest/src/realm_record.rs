@@ -21,7 +21,9 @@ pub(super) fn layouts(source: &str, name: &str) -> Result<Vec<Vec<String>>, Stri
         }
         let end = super::closing_paren(&ts, i + 2)?;
         let args = info::split(&ts[i + 3..end], ",");
-        if args.len() != 5
+        // An optional sixth field names the owning realm cells (`realm = [..]`).
+        let owned = args.len() == 6 && info::text(args[5]).starts_with("realm=");
+        if !(args.len() == 5 || owned)
             || info::text(args[3]) != "crate::object::layout_desc::LAYOUT_PROTO_OBJECT"
         {
             return Err("record birth requires its ordinary object layout".into());

@@ -159,7 +159,7 @@ pub(super) fn birth(
             p.get("key").and_then(Value::string).unwrap().to_owned(),
         )
     });
-    let flags = info::constants(include_str!("../../perry-runtime/src/gc/types.rs"))?;
+    let flags = info::gc_constants()?;
     let reserved = flags
         .get("OBJ_FLAG_HAS_DESCRIPTORS")
         .ok_or("missing descriptor flag")?

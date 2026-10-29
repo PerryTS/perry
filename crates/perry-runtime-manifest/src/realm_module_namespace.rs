@@ -78,7 +78,7 @@ pub(super) fn birth(entry: &[Token<'_>]) -> Result<Value, String> {
         return Err("namespace layout factory no longer stamps its module class".into());
     }
     let constants = info::constants(source)?;
-    let gc = info::constants(include_str!("../../perry-runtime/src/gc/types.rs"))?;
+    let gc = info::gc_constants()?;
     let abi = super::abi_constants();
     Ok(object([
         ("name", string(&name)),

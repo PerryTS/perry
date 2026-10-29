@@ -145,7 +145,7 @@ fn test_assert_object() -> f64 {
     set(
         obj,
         "register",
-        fn_value(crate::fn_info!(#[realm("node:test.assert.register", constructible = true)] noop3, 3; with_declared(2)), "register"),
+        fn_value(crate::fn_info!(#[realm("node:test.assert.register", constructible = true)] export crate::node_test::noop3, 3; with_declared(2)), "register"),
     );
     object_value(obj)
 }

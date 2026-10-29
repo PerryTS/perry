@@ -223,19 +223,11 @@ extern "C" fn ns_ee_async_resource_destroy(
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
-crate::realm_decl! { info /// `EventEmitterAsyncResource.prototype.emit`'s body: `(event, ...args)`.
-static NS_EE_ASYNC_RESOURCE_EMIT_REST: crate::closure::JsFunctionInfo =
-    crate::closure::JsFunctionInfo::of(
-        ns_ee_async_resource_emit_rest as crate::codegen_abi::JsBody2<ClosureHeader>,
-    )
-    .with_rest(1); realm { "node:events.EventEmitterAsyncResource.prototype.emit", provider = closure, receiver = undefined; } }
+crate::realm_decl! { info // `EventEmitterAsyncResource.prototype.emit`'s body: `(event, ...args)`.
+crate::fn_info!(export static NS_EE_ASYNC_RESOURCE_EMIT_REST = crate::node_stream::dispatch::ns_ee_async_resource_emit_rest, 2; with_rest(1)); realm { "node:events.EventEmitterAsyncResource.prototype.emit", provider = closure, receiver = undefined; } }
 
-crate::realm_decl! { info /// `emitDestroy`'s body.
-static NS_EE_ASYNC_RESOURCE_DESTROY: crate::closure::JsFunctionInfo =
-    crate::closure::JsFunctionInfo::of(
-        ns_ee_async_resource_destroy as crate::codegen_abi::JsBody0<ClosureHeader>,
-    )
-    .with_declared(0); realm { "node:events.EventEmitterAsyncResource.prototype.emitDestroy", provider = closure, receiver = undefined; } }
+crate::realm_decl! { info // `emitDestroy`'s body.
+crate::fn_info!(export static NS_EE_ASYNC_RESOURCE_DESTROY = crate::node_stream::dispatch::ns_ee_async_resource_destroy, 0; with_declared(0)); realm { "node:events.EventEmitterAsyncResource.prototype.emitDestroy", provider = closure, receiver = undefined; } }
 
 extern "C" fn ns_ee_async_resource_getter(
     closure: *const ClosureHeader,
@@ -287,7 +279,7 @@ pub(crate) unsafe fn install_event_emitter_async_resource_prototype(proto: *mut 
         ("asyncResource", 2),
     ] {
         let closure = js_closure_alloc(
-            crate::fn_info!(#[realm(realm_decl! { "node:events.EventEmitterAsyncResource.prototype.asyncId.<get>", provider = closure, capture = [undefined, word_property]; "node:events.EventEmitterAsyncResource.prototype.asyncResource.<get>", provider = closure, capture = [undefined, word_property]; "node:events.EventEmitterAsyncResource.prototype.triggerAsyncId.<get>", provider = closure, capture = [undefined, word_property]; })] ns_ee_async_resource_getter, 0; with_declared(0)),
+            crate::fn_info!(#[realm(realm_decl! { "node:events.EventEmitterAsyncResource.prototype.asyncId.<get>", provider = closure, capture = [undefined, word_property]; "node:events.EventEmitterAsyncResource.prototype.asyncResource.<get>", provider = closure, capture = [undefined, word_property]; "node:events.EventEmitterAsyncResource.prototype.triggerAsyncId.<get>", provider = closure, capture = [undefined, word_property]; })] export crate::node_stream::dispatch::ns_ee_async_resource_getter, 0; with_declared(0)),
             2,
         );
         crate::closure::js_closure_set_capture_ptr(closure, 0, crate::value::TAG_UNDEFINED as i64);

@@ -161,17 +161,6 @@ const _: () = assert!(
     crate::codegen_abi::WELL_KNOWN_SYMBOLS[WELL_KNOWN_SYMBOL_HAS_INSTANCE as usize].len() == 11,
     "`hasInstance` is well-known symbol 2"
 );
-#[allow(non_snake_case)]
-mod ATOM_SYMBOL_HAS_INSTANCE {
-    pub(crate) const HASH: u64 =
-        crate::codegen_abi::well_known_symbol_atom_hash(super::WELL_KNOWN_SYMBOL_HAS_INSTANCE);
-}
-#[allow(non_snake_case)]
-mod ATOM_SYMBOL_ITERATOR {
-    pub(crate) const HASH: u64 = crate::codegen_abi::well_known_symbol_atom_hash(
-        crate::codegen_abi::WELL_KNOWN_SYMBOL_ITERATOR,
-    );
-}
 
 // `%Object.prototype%`: ECMA-262 §20.1.3 and Annex B §B.2.2, in V8's own-key
 // order. Its [[Prototype]] is null.
@@ -189,7 +178,7 @@ runtime_layout!(OBJECT_PROTOTYPE, kind = LAYOUT_KIND_UNMARKED, 0x5254_0010, 0,
     BP_ATOM_VALUE_OF => BUILTIN_METHOD,
     BP_ATOM_PROTO => BUILTIN_ACCESSOR,
     BP_ATOM_TO_LOCALE_STRING => BUILTIN_METHOD,
-]);
+], realm = ["Object.prototype"]);
 
 // `%Function.prototype%` (a callable ordinary object): ECMA-262 §20.2.3 and
 // the restricted `caller` / `arguments` accessors of §10.2.4
@@ -208,7 +197,7 @@ runtime_layout!(FUNCTION_PROTOTYPE, kind = LAYOUT_KIND_CALLABLE, 0x5254_0011, 0,
     BP_ATOM_CALL => BUILTIN_METHOD,
     BP_ATOM_TO_STRING => BUILTIN_METHOD,
     ATOM_SYMBOL_HAS_INSTANCE,
-]);
+], realm = ["Function.prototype"]);
 
 // `%Array.prototype%`'s named layout (`ArrayHeader.named`, object model step
 // 7): `Symbol.iterator` is its fixed slot 0, so array iteration reads one
@@ -256,7 +245,7 @@ runtime_layout!(ARRAY_PROTOTYPE_NAMED, kind = LAYOUT_KIND_UNMARKED, 0x5254_000C,
     BP_ATOM_JOIN => BUILTIN_METHOD,
     BP_ATOM_CONCAT => BUILTIN_METHOD,
     BP_ATOM_VALUE_OF => BUILTIN_METHOD,
-]);
+], realm = ["Array.prototype"]);
 /// The fixed slot of `Symbol.iterator` in [`ARRAY_PROTOTYPE_NAMED`].
 pub(crate) const ARRAY_PROTOTYPE_ITERATOR_SLOT: u32 = 0;
 

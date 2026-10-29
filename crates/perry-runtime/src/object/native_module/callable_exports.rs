@@ -321,7 +321,7 @@ pub(crate) fn fs_namespace_descriptor_getter_value(property_name: &str) -> f64 {
     }
 
     let property_bytes: &'static [u8] = property_name.as_bytes().to_vec().leak();
-    let func_ptr = crate::fn_info!(#[realm(realm_decl! { "node:fs.default.FileReadStream.<get>", capture = property_key, constructible = true; "node:fs.default.FileWriteStream.<get>", capture = property_key, constructible = true; "node:fs.default.ReadStream.<get>", capture = property_key, constructible = true; "node:fs.default.Utf8Stream.<get>", capture = property_key, constructible = true; "node:fs.default.WriteStream.<get>", capture = property_key, constructible = true; "node:fs.default.promises.<get>", capture = property_key, constructible = true, spec = {name = "get"}, emit = metadata(realm_fs_promises_get_name); })] fs_namespace_descriptor_getter_thunk, 0; with_declared(0));
+    let func_ptr = crate::fn_info!(#[realm(realm_decl! { "node:fs.default.FileReadStream.<get>", capture = property_key, constructible = true; "node:fs.default.FileWriteStream.<get>", capture = property_key, constructible = true; "node:fs.default.ReadStream.<get>", capture = property_key, constructible = true; "node:fs.default.Utf8Stream.<get>", capture = property_key, constructible = true; "node:fs.default.WriteStream.<get>", capture = property_key, constructible = true; "node:fs.default.promises.<get>", capture = property_key, constructible = true, spec = {name = "get"}, emit = metadata(realm_fs_promises_get_name); })] export crate::object::native_module::callable_exports::fs_namespace_descriptor_getter_thunk, 0; with_declared(0));
     let closure = crate::closure::js_closure_alloc(func_ptr, 2);
     crate::closure::closure_set_capture_word(closure, 0, property_bytes.as_ptr() as i64);
     crate::closure::closure_set_capture_word(closure, 1, property_bytes.len() as i64);
@@ -346,7 +346,7 @@ pub(crate) fn fs_namespace_descriptor_setter_value(property_name: &str) -> f64 {
         return f64::from_bits(bits);
     }
 
-    let func_ptr = crate::fn_info!(#[realm(realm_decl! { "node:fs.default.FileReadStream.<set>", constructible = true; "node:fs.default.FileWriteStream.<set>", constructible = true; "node:fs.default.ReadStream.<set>", constructible = true; "node:fs.default.WriteStream.<set>", constructible = true; })] fs_namespace_descriptor_setter_thunk, 1; with_declared(1));
+    let func_ptr = crate::fn_info!(#[realm(realm_decl! { "node:fs.default.FileReadStream.<set>", constructible = true; "node:fs.default.FileWriteStream.<set>", constructible = true; "node:fs.default.ReadStream.<set>", constructible = true; "node:fs.default.WriteStream.<set>", constructible = true; })] export crate::object::native_module::callable_exports::fs_namespace_descriptor_setter_thunk, 1; with_declared(1));
     let closure = crate::closure::js_closure_alloc(func_ptr, 0);
     let name = format!("set {property_name}");
     set_bound_native_closure_name(closure, &name);
@@ -827,7 +827,7 @@ fn attach_crypto_x509_certificate_shape(closure_addr: usize, constructor_value: 
 
     unsafe {
         let getter = crate::closure::js_closure_alloc(
-            crate::fn_info!(#[realm("node:crypto.X509Certificate.prototype.issuerCertificate.<get>", provider = intrinsic_closure, constructible = true)] x509_issuer_certificate_getter_thunk, 0; with_declared(0)),
+            crate::fn_info!(#[realm("node:crypto.X509Certificate.prototype.issuerCertificate.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::native_module::callable_exports::x509_issuer_certificate_getter_thunk, 0; with_declared(0)),
             0,
         );
         if !getter.is_null() {
@@ -1102,7 +1102,7 @@ fn attach_tls_constructor_prototype(constructor_value: f64, constructor_name: &s
         super::super::PropertyAttrs::new(true, false, true),
     );
 
-    let thunk = crate::fn_info!(#[realm(realm_decl! { "node:tls.TLSSocket.prototype.getPeerX509Certificate", capture = property_key, constructible = true; "node:tls.TLSSocket.prototype.getSharedSigalgs", capture = property_key, constructible = true; "node:tls.TLSSocket.prototype.getX509Certificate", capture = property_key, constructible = true; "node:tls.TLSSocket.prototype.setKeyCert", capture = property_key, constructible = true, spec = {length = 1}, emit = metadata(realm_tls_setkey_public); })] tls_prototype_method_thunk, 1; with_rest(0));
+    let thunk = crate::fn_info!(#[realm(realm_decl! { "node:tls.TLSSocket.prototype.getPeerX509Certificate", capture = property_key, constructible = true; "node:tls.TLSSocket.prototype.getSharedSigalgs", capture = property_key, constructible = true; "node:tls.TLSSocket.prototype.getX509Certificate", capture = property_key, constructible = true; "node:tls.TLSSocket.prototype.setKeyCert", capture = property_key, constructible = true, spec = {length = 1}, emit = metadata(realm_tls_setkey_public); })] export crate::object::native_module::callable_exports::tls_prototype_method_thunk, 1; with_rest(0));
     for &(name, length) in methods {
         let method = crate::closure::js_closure_alloc(thunk, 2);
         if method.is_null() {
@@ -1550,7 +1550,7 @@ pub(crate) unsafe fn nm_attach_async_hooks(
             ),
         );
         let bind = scope.root_nanbox_f64(async_hooks_static_method_value(
-            crate::fn_info!(#[realm("node:async_hooks.AsyncLocalStorage.bind")] crate::async_hook_slots::js_async_local_storage_static_bind_method, 2; with_rest(1)),
+            crate::fn_info!(#[realm("node:async_hooks.AsyncLocalStorage.bind")] export crate::async_hook_slots::js_async_local_storage_static_bind_method, 2; with_rest(1)),
             "bind",
             1,
         ));
@@ -1565,7 +1565,7 @@ pub(crate) unsafe fn nm_attach_async_hooks(
             super::PropertyAttrs::new(true, false, true),
         );
         let snapshot = scope.root_nanbox_f64(async_hooks_static_method_value(
-            crate::fn_info!(#[realm("node:async_hooks.AsyncLocalStorage.snapshot")] crate::async_hook_slots::js_async_local_storage_static_snapshot_method, 1; with_rest(0)),
+            crate::fn_info!(#[realm("node:async_hooks.AsyncLocalStorage.snapshot")] export crate::async_hook_slots::js_async_local_storage_static_snapshot_method, 1; with_rest(0)),
             "snapshot",
             0,
         ));
@@ -1588,7 +1588,7 @@ pub(crate) unsafe fn nm_attach_async_hooks(
             ),
         );
         let bind = scope.root_nanbox_f64(async_hooks_static_method_value(
-            crate::fn_info!(#[realm("node:async_hooks.AsyncResource.bind")] crate::async_hook_slots::js_async_resource_static_bind_method, 4; with_rest(3)),
+            crate::fn_info!(#[realm("node:async_hooks.AsyncResource.bind")] export crate::async_hook_slots::js_async_resource_static_bind_method, 4; with_rest(3)),
             "bind",
             3,
         ));

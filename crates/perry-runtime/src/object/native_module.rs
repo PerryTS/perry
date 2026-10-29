@@ -679,7 +679,7 @@ pub(crate) unsafe fn call_native_module_dispatch_hook(
     }
 }
 
-/// Create a native module namespace object/// Create a native module namespace object
+/// Create a native module namespace object
 /// This is used for `import * as X from 'module'` patterns
 /// The returned object identifies itself as an object (typeof returns "object")
 /// and stores the module name for debugging purposes
@@ -1548,3 +1548,8 @@ crate::realm_decl!("native_module.realm.json#*");
 
 #[cfg(test)]
 mod namespace_accessor_tests;
+
+#[cfg(test)]
+mod realm_native_storage_tests {
+    include!(concat!(env!("OUT_DIR"), "/realm_native_storage_test.rs"));
+}

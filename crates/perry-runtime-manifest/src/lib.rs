@@ -242,5 +242,10 @@ mod tests {
     }
 }
 
+mod realm_exports;
 pub mod realm_json;
+/// Shared ABI for typed manifest consumers, including build scripts.
+pub use perry_abi as abi;
+pub mod realm_layouts;
 pub mod realm_source;
+mod realm_storage;

@@ -36,7 +36,7 @@ pub(crate) mod methods;
 pub const KEY_TY: &str = "{ ptr, i32, i8, i8, i16 }";
 
 /// The descriptor tail after `image_keys`: `gc_header_word` for a layout of `slot_count` slots.
-fn desc_tail(triple: &str, slot_count: u32) -> String {
+pub(crate) fn desc_tail(triple: &str, slot_count: u32) -> String {
     use crate::target_layout::layout_gc_header_word;
     format!(
         "i64 {}, [32 x i8] zeroinitializer",
@@ -45,7 +45,7 @@ fn desc_tail(triple: &str, slot_count: u32) -> String {
 }
 
 /// The `off` field of the key stored in `slot`.
-fn key_off(triple: &str, slot: u32) -> u64 {
+pub(crate) fn key_off(triple: &str, slot: u32) -> u64 {
     crate::target_layout::layout_key_off(triple, slot)
 }
 /// `%StaticAtom`: hash, string, kind, pad, index (24 bytes; §6a).
@@ -936,7 +936,9 @@ pub(crate) fn emit_module_layouts(
     // carried layout naming it.
     let (protos, create_sites, images) = create_families::emission();
     for global in &protos {
-        llmod.add_raw_global(format!("@{global} = internal global i64 0, align 8"));
+        llmod.add_raw_global(format!(
+            "@{global} = internal global {{ i64, ptr }} {{ i64 0, ptr null }}, align 8"
+        ));
     }
     // Object model §3.6: each prototype's carried layout (its birth when
     // the object its initializer built is exactly this).

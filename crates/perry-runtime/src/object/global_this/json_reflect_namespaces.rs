@@ -1,12 +1,4 @@
 //! Ordered JSON and Reflect births, reached only through their feature hooks.
-use super::bigint_promise::{
-    json_is_raw_json_thunk, json_parse_thunk, json_raw_json_thunk, json_stringify_thunk,
-    reflect_apply_thunk, reflect_construct_thunk, reflect_define_property_thunk,
-    reflect_delete_property_thunk, reflect_get_own_property_descriptor_thunk,
-    reflect_get_prototype_of_thunk, reflect_get_thunk, reflect_has_thunk,
-    reflect_is_extensible_thunk, reflect_own_keys_thunk, reflect_prevent_extensions_thunk,
-    reflect_set_prototype_of_thunk, reflect_set_thunk,
-};
 use super::builtin_namespace::{self, Member};
 use crate::object::ObjectHeader;
 
@@ -14,22 +6,22 @@ use crate::object::ObjectHeader;
 const JSON_MEMBERS: &[Member] = &[
     Member::method(
         "parse",
-        crate::fn_info!(#[realm(JSON.parse, births = [Array, Boolean, Number, Object, String])] json_parse_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(JSON.parse, births = [Array, Boolean, Number, Object, String])] export crate::object::global_this::bigint_promise::json_parse_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
         2,
     ),
     Member::method(
         "stringify",
-        crate::fn_info!(#[realm(JSON.stringify)] json_stringify_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(JSON.stringify)] export crate::object::global_this::bigint_promise::json_stringify_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN)),
         3,
     ),
     Member::method(
         "rawJSON",
-        crate::fn_info!(#[realm(JSON.rawJSON)] json_raw_json_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(JSON.rawJSON)] export crate::object::global_this::bigint_promise::json_raw_json_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         1,
     ),
     Member::method(
         "isRawJSON",
-        crate::fn_info!(#[realm(JSON.isRawJSON)] json_is_raw_json_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(JSON.isRawJSON)] export crate::object::global_this::bigint_promise::json_is_raw_json_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         1,
     ),
     Member::tag("JSON"),
@@ -44,67 +36,67 @@ pub(crate) fn create_json_namespace() -> *mut ObjectHeader {
 const REFLECT_MEMBERS: &[Member] = &[
     Member::method(
         "defineProperty",
-        crate::fn_info!(#[realm(Reflect.defineProperty)] reflect_define_property_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Reflect.defineProperty)] export crate::object::global_this::bigint_promise::reflect_define_property_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN)),
         3,
     ),
     Member::method(
         "deleteProperty",
-        crate::fn_info!(#[realm(Reflect.deleteProperty)] reflect_delete_property_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Reflect.deleteProperty)] export crate::object::global_this::bigint_promise::reflect_delete_property_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
         2,
     ),
     Member::method(
         "apply",
-        crate::fn_info!(#[realm(Reflect.apply)] reflect_apply_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Reflect.apply)] export crate::object::global_this::bigint_promise::reflect_apply_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN)),
         3,
     ),
     Member::method(
         "construct",
-        crate::fn_info!(#[realm(Reflect.construct)] reflect_construct_thunk, 3; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Reflect.construct)] export crate::object::global_this::bigint_promise::reflect_construct_thunk, 3; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
         2,
     ),
     Member::method(
         "get",
-        crate::fn_info!(#[realm(Reflect.get)] reflect_get_thunk, 3; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Reflect.get)] export crate::object::global_this::bigint_promise::reflect_get_thunk, 3; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
         2,
     ),
     Member::method(
         "getOwnPropertyDescriptor",
-        crate::fn_info!(#[realm(Reflect.getOwnPropertyDescriptor)] reflect_get_own_property_descriptor_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Reflect.getOwnPropertyDescriptor)] export crate::object::global_this::bigint_promise::reflect_get_own_property_descriptor_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
         2,
     ),
     Member::method(
         "getPrototypeOf",
-        crate::fn_info!(#[realm(Reflect.getPrototypeOf)] reflect_get_prototype_of_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Reflect.getPrototypeOf)] export crate::object::global_this::bigint_promise::reflect_get_prototype_of_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         1,
     ),
     Member::method(
         "has",
-        crate::fn_info!(#[realm(Reflect.has)] reflect_has_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Reflect.has)] export crate::object::global_this::bigint_promise::reflect_has_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
         2,
     ),
     Member::method(
         "isExtensible",
-        crate::fn_info!(#[realm(Reflect.isExtensible)] reflect_is_extensible_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Reflect.isExtensible)] export crate::object::global_this::bigint_promise::reflect_is_extensible_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         1,
     ),
     Member::method(
         "ownKeys",
-        crate::fn_info!(#[realm(Reflect.ownKeys)] reflect_own_keys_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Reflect.ownKeys)] export crate::object::global_this::bigint_promise::reflect_own_keys_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         1,
     ),
     Member::method(
         "preventExtensions",
-        crate::fn_info!(#[realm(Reflect.preventExtensions)] reflect_prevent_extensions_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Reflect.preventExtensions)] export crate::object::global_this::bigint_promise::reflect_prevent_extensions_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         1,
     ),
     Member::method(
         "set",
-        crate::fn_info!(#[realm(Reflect.set)] reflect_set_thunk, 4; with_declared(3), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Reflect.set)] export crate::object::global_this::bigint_promise::reflect_set_thunk, 4; with_declared(3), with_flags(crate::closure::FN_BUILTIN)),
         3,
     ),
     Member::method(
         "setPrototypeOf",
-        crate::fn_info!(#[realm(Reflect.setPrototypeOf)] reflect_set_prototype_of_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Reflect.setPrototypeOf)] export crate::object::global_this::bigint_promise::reflect_set_prototype_of_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
         2,
     ),
     Member::tag("Reflect"),

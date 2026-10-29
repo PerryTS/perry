@@ -33,25 +33,25 @@ pub(super) fn install_string_proto_methods(
     ipm(
         proto_obj,
         "at",
-        crate::fn_info!(#[realm(String.prototype.at)] string_proto_at_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(String.prototype.at)] export crate::object::string_proto_thunks::string_proto_at_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         1,
     );
     ipm(
         proto_obj,
         "charAt",
-        crate::fn_info!(#[realm(String.prototype.charAt)] string_proto_char_at_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(String.prototype.charAt)] export crate::object::string_proto_thunks::string_proto_char_at_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         1,
     );
     ipm(
         proto_obj,
         "charCodeAt",
-        crate::fn_info!(#[realm(String.prototype.charCodeAt)] string_proto_char_code_at_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(String.prototype.charCodeAt)] export crate::object::string_proto_thunks::string_proto_char_code_at_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         1,
     );
     ipm(
         proto_obj,
         "codePointAt",
-        crate::fn_info!(#[realm(String.prototype.codePointAt)] string_proto_code_point_at_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(String.prototype.codePointAt)] export crate::object::string_proto_thunks::string_proto_code_point_at_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         1,
     );
     install_string_iterator_symbol(proto_obj);
@@ -125,22 +125,22 @@ fn install_generic_string_proto_methods(proto_obj: *mut ObjectHeader) {
         ) {
             let fp = match name {
                 "match" => {
-                    crate::fn_info!(#[realm(String.prototype.match, births = [RegExp])] string_proto_match_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN))
+                    crate::fn_info!(#[realm(String.prototype.match, births = [RegExp])] export crate::object::string_proto_thunks::string_proto_match_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN))
                 }
                 "matchAll" => {
-                    crate::fn_info!(#[realm(String.prototype.matchAll, births = [RegExp])] string_proto_match_all_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN))
+                    crate::fn_info!(#[realm(String.prototype.matchAll, births = [RegExp])] export crate::object::string_proto_thunks::string_proto_match_all_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN))
                 }
                 "replace" => {
-                    crate::fn_info!(#[realm(String.prototype.replace)] string_proto_replace_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN))
+                    crate::fn_info!(#[realm(String.prototype.replace)] export crate::object::string_proto_thunks::string_proto_replace_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN))
                 }
                 "replaceAll" => {
-                    crate::fn_info!(#[realm(String.prototype.replaceAll)] string_proto_replace_all_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN))
+                    crate::fn_info!(#[realm(String.prototype.replaceAll)] export crate::object::string_proto_thunks::string_proto_replace_all_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN))
                 }
                 "split" => {
-                    crate::fn_info!(#[realm(String.prototype.split)] string_proto_split_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN))
+                    crate::fn_info!(#[realm(String.prototype.split)] export crate::object::string_proto_thunks::string_proto_split_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN))
                 }
                 _ => {
-                    crate::fn_info!(#[realm(String.prototype.search)] string_proto_search_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN))
+                    crate::fn_info!(#[realm(String.prototype.search)] export crate::object::string_proto_thunks::string_proto_search_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN))
                 }
             };
             super::global_this::install_proto_method(proto_obj, name, fp, spec_length);
@@ -151,7 +151,7 @@ fn install_generic_string_proto_methods(proto_obj: *mut ObjectHeader) {
             super::global_this::install_proto_method(
                 proto_obj,
                 name,
-                crate::fn_info!(#[realm(String.prototype.indexOf, spec = {length = 1}, emit = metadata(realm_string_prototype_indexof_metadata))] string_proto_index_of_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(String.prototype.indexOf, spec = {length = 1}, emit = metadata(realm_string_prototype_indexof_metadata))] export crate::object::string_proto_thunks::string_proto_index_of_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
                 spec_length,
             );
             continue;
@@ -161,7 +161,7 @@ fn install_generic_string_proto_methods(proto_obj: *mut ObjectHeader) {
         super::global_this::install_proto_method_rest_with_length(
             proto_obj,
             name,
-            crate::fn_info!(#[realm(realm_decl! { String.prototype.big; String.prototype.blink; String.prototype.bold; String.prototype.fixed; String.prototype.isWellFormed; String.prototype.italics; String.prototype.normalize; String.prototype.small; String.prototype.strike; String.prototype.sub; String.prototype.sup; String.prototype.toLocaleLowerCase; String.prototype.toLocaleUpperCase; String.prototype.toLowerCase; String.prototype.toUpperCase; String.prototype.toWellFormed; String.prototype.trim; String.prototype.trimEnd; String.prototype.anchor, spec = {length = 1}, emit = metadata(realm_string_prototype_anchor_metadata); String.prototype.concat, spec = {length = 1}, emit = metadata(realm_string_prototype_concat_metadata); String.prototype.endsWith, spec = {length = 1}, emit = metadata(realm_string_prototype_endswith_metadata); String.prototype.fontcolor, spec = {length = 1}, emit = metadata(realm_string_prototype_fontcolor_metadata); String.prototype.fontsize, spec = {length = 1}, emit = metadata(realm_string_prototype_fontsize_metadata); String.prototype.includes, spec = {length = 1}, emit = metadata(realm_string_prototype_includes_metadata); String.prototype.lastIndexOf, spec = {length = 1}, emit = metadata(realm_string_prototype_lastindexof_metadata); String.prototype.link, spec = {length = 1}, emit = metadata(realm_string_prototype_link_metadata); String.prototype.localeCompare, spec = {length = 1}, emit = metadata(realm_string_prototype_localecompare_metadata); String.prototype.padEnd, spec = {length = 1}, emit = metadata(realm_string_prototype_padend_metadata); String.prototype.padStart, spec = {length = 1}, emit = metadata(realm_string_prototype_padstart_metadata); String.prototype.repeat, spec = {length = 1}, emit = metadata(realm_string_prototype_repeat_metadata); String.prototype.slice, spec = {length = 2}, emit = metadata(realm_string_prototype_slice_metadata); String.prototype.startsWith, spec = {length = 1}, emit = metadata(realm_string_prototype_startswith_metadata); String.prototype.substr, spec = {length = 2}, emit = metadata(realm_string_prototype_substr_metadata); String.prototype.substring, spec = {length = 2}, emit = metadata(realm_string_prototype_substring_metadata); String.prototype.trimStart, alias = String.prototype.trimLeft; })] string_proto_generic_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm(realm_decl! { String.prototype.big; String.prototype.blink; String.prototype.bold; String.prototype.fixed; String.prototype.isWellFormed; String.prototype.italics; String.prototype.normalize; String.prototype.small; String.prototype.strike; String.prototype.sub; String.prototype.sup; String.prototype.toLocaleLowerCase; String.prototype.toLocaleUpperCase; String.prototype.toLowerCase; String.prototype.toUpperCase; String.prototype.toWellFormed; String.prototype.trim; String.prototype.trimEnd; String.prototype.anchor, spec = {length = 1}, emit = metadata(realm_string_prototype_anchor_metadata); String.prototype.concat, spec = {length = 1}, emit = metadata(realm_string_prototype_concat_metadata); String.prototype.endsWith, spec = {length = 1}, emit = metadata(realm_string_prototype_endswith_metadata); String.prototype.fontcolor, spec = {length = 1}, emit = metadata(realm_string_prototype_fontcolor_metadata); String.prototype.fontsize, spec = {length = 1}, emit = metadata(realm_string_prototype_fontsize_metadata); String.prototype.includes, spec = {length = 1}, emit = metadata(realm_string_prototype_includes_metadata); String.prototype.lastIndexOf, spec = {length = 1}, emit = metadata(realm_string_prototype_lastindexof_metadata); String.prototype.link, spec = {length = 1}, emit = metadata(realm_string_prototype_link_metadata); String.prototype.localeCompare, spec = {length = 1}, emit = metadata(realm_string_prototype_localecompare_metadata); String.prototype.padEnd, spec = {length = 1}, emit = metadata(realm_string_prototype_padend_metadata); String.prototype.padStart, spec = {length = 1}, emit = metadata(realm_string_prototype_padstart_metadata); String.prototype.repeat, spec = {length = 1}, emit = metadata(realm_string_prototype_repeat_metadata); String.prototype.slice, spec = {length = 2}, emit = metadata(realm_string_prototype_slice_metadata); String.prototype.startsWith, spec = {length = 1}, emit = metadata(realm_string_prototype_startswith_metadata); String.prototype.substr, spec = {length = 2}, emit = metadata(realm_string_prototype_substr_metadata); String.prototype.substring, spec = {length = 2}, emit = metadata(realm_string_prototype_substring_metadata); String.prototype.trimStart, alias = String.prototype.trimLeft; })] export crate::object::string_proto_thunks::string_proto_generic_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
             spec_length,
         );
     }
@@ -232,7 +232,7 @@ fn install_string_iterator_symbol(proto_obj: *mut ObjectHeader) {
     if iter.is_null() {
         return;
     }
-    let func_ptr = crate::fn_info!(#[realm("String.prototype[\"@@iterator\"]")] string_proto_symbol_iterator_thunk, 0; with_declared(0));
+    let func_ptr = crate::fn_info!(#[realm("String.prototype[\"@@iterator\"]")] export crate::object::string_proto_thunks::string_proto_symbol_iterator_thunk, 0; with_declared(0));
     let closure = crate::closure::js_closure_alloc(func_ptr, 0);
     if closure.is_null() {
         return;

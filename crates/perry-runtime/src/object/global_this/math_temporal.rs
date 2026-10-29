@@ -301,32 +301,32 @@ fn build_temporal_now_namespace() -> f64 {
     for (name, info, len) in [
         (
             "instant",
-            crate::fn_info!(#[realm(Temporal.Now.instant, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] temporal_now_instant_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm(Temporal.Now.instant, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] export crate::object::global_this::math_temporal::temporal_now_instant_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
             0u32,
         ),
         (
             "timeZoneId",
-            crate::fn_info!(#[realm(Temporal.Now.timeZoneId, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] temporal_now_timezone_id_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm(Temporal.Now.timeZoneId, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] export crate::object::global_this::math_temporal::temporal_now_timezone_id_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
             0,
         ),
         (
             "plainDateTimeISO",
-            crate::fn_info!(#[realm(Temporal.Now.plainDateTimeISO, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] temporal_now_plain_date_time_iso_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm(Temporal.Now.plainDateTimeISO, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] export crate::object::global_this::math_temporal::temporal_now_plain_date_time_iso_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
             0,
         ),
         (
             "plainDateISO",
-            crate::fn_info!(#[realm(Temporal.Now.plainDateISO, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] temporal_now_plain_date_iso_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm(Temporal.Now.plainDateISO, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] export crate::object::global_this::math_temporal::temporal_now_plain_date_iso_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
             0,
         ),
         (
             "plainTimeISO",
-            crate::fn_info!(#[realm(Temporal.Now.plainTimeISO, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] temporal_now_plain_time_iso_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm(Temporal.Now.plainTimeISO, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] export crate::object::global_this::math_temporal::temporal_now_plain_time_iso_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
             0,
         ),
         (
             "zonedDateTimeISO",
-            crate::fn_info!(#[realm(Temporal.Now.zonedDateTimeISO, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] temporal_now_zoned_date_time_iso_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm(Temporal.Now.zonedDateTimeISO, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] export crate::object::global_this::math_temporal::temporal_now_zoned_date_time_iso_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
             0,
         ),
     ] {
@@ -946,20 +946,20 @@ const PLAIN_DATE_TIME_METHODS: &[(&str, u32)] = &[
     let duration = install_temporal_constructor(
         ns_obj,
         "Duration",
-        crate::fn_info!(#[realm(Temporal.Duration, kind = constructor, members = { from; compare; prototype; }, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] temporal_duration_ctor_thunk, 1; with_rest(0)),
+        crate::fn_info!(#[realm(Temporal.Duration, kind = constructor, members = { from; compare; prototype; }, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] export crate::object::global_this::math_temporal::temporal_duration_ctor_thunk, 1; with_rest(0)),
         0,
     );
     if !duration.is_null() {
         install_constructor_static(
             duration,
             "from",
-            crate::fn_info!(#[realm(Temporal.Duration.from, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError], spec = {length = 1}, emit = metadata(realm_temporal_duration_from_metadata))] temporal_duration_from_thunk, 1; with_rest(0)),
+            crate::fn_info!(#[realm(Temporal.Duration.from, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError], spec = {length = 1}, emit = metadata(realm_temporal_duration_from_metadata))] export crate::object::global_this::math_temporal::temporal_duration_from_thunk, 1; with_rest(0)),
             realm_temporal_duration_from_metadata!(length),
         );
         install_constructor_static(
             duration,
             "compare",
-            crate::fn_info!(#[realm(Temporal.Duration.compare, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError], spec = {length = 2}, emit = metadata(realm_temporal_duration_compare_metadata))] temporal_duration_compare_thunk, 1; with_rest(0)),
+            crate::fn_info!(#[realm(Temporal.Duration.compare, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError], spec = {length = 2}, emit = metadata(realm_temporal_duration_compare_metadata))] export crate::object::global_this::math_temporal::temporal_duration_compare_thunk, 1; with_rest(0)),
             realm_temporal_duration_compare_metadata!(length),
         );
         install_temporal_prototype(
@@ -999,25 +999,25 @@ const PLAIN_DATE_TIME_METHODS: &[(&str, u32)] = &[
     let instant = install_temporal_constructor(
         ns_obj,
         "Instant",
-        crate::fn_info!(#[realm(Temporal.Instant, kind = constructor, members = { from; compare; fromEpochMilliseconds; fromEpochNanoseconds; prototype; }, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError], spec = {length = 1}, emit = metadata(realm_temporal_instant_metadata))] temporal_instant_ctor_thunk, 1; with_rest(0)),
+        crate::fn_info!(#[realm(Temporal.Instant, kind = constructor, members = { from; compare; fromEpochMilliseconds; fromEpochNanoseconds; prototype; }, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError], spec = {length = 1}, emit = metadata(realm_temporal_instant_metadata))] export crate::object::global_this::math_temporal::temporal_instant_ctor_thunk, 1; with_rest(0)),
         realm_temporal_instant_metadata!(length),
     );
     if !instant.is_null() {
         install_temporal_from_compare(
             instant,
-            crate::fn_info!(#[realm(Temporal.Instant.from, spec = {length = 1}, emit = metadata(realm_temporal_static_from), births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] temporal_instant_from_thunk, 1; with_rest(0)),
-            crate::fn_info!(#[realm(Temporal.Instant.compare, spec = {length = 2}, emit = metadata(realm_temporal_static_compare), births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] temporal_instant_compare_thunk, 1; with_rest(0)),
+            crate::fn_info!(#[realm(Temporal.Instant.from, spec = {length = 1}, emit = metadata(realm_temporal_static_from), births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] export crate::object::global_this::math_temporal::temporal_instant_from_thunk, 1; with_rest(0)),
+            crate::fn_info!(#[realm(Temporal.Instant.compare, spec = {length = 2}, emit = metadata(realm_temporal_static_compare), births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] export crate::object::global_this::math_temporal::temporal_instant_compare_thunk, 1; with_rest(0)),
         );
         install_constructor_static(
             instant,
             "fromEpochMilliseconds",
-            crate::fn_info!(#[realm(Temporal.Instant.fromEpochMilliseconds, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError], spec = {length = 1}, emit = metadata(realm_temporal_instant_fromepochmilliseconds_metadata))] temporal_instant_from_epoch_ms_thunk, 1; with_rest(0)),
+            crate::fn_info!(#[realm(Temporal.Instant.fromEpochMilliseconds, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError], spec = {length = 1}, emit = metadata(realm_temporal_instant_fromepochmilliseconds_metadata))] export crate::object::global_this::math_temporal::temporal_instant_from_epoch_ms_thunk, 1; with_rest(0)),
             realm_temporal_instant_fromepochmilliseconds_metadata!(length),
         );
         install_constructor_static(
             instant,
             "fromEpochNanoseconds",
-            crate::fn_info!(#[realm(Temporal.Instant.fromEpochNanoseconds, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError], spec = {length = 1}, emit = metadata(realm_temporal_instant_fromepochnanoseconds_metadata))] temporal_instant_from_epoch_ns_thunk, 1; with_rest(0)),
+            crate::fn_info!(#[realm(Temporal.Instant.fromEpochNanoseconds, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError], spec = {length = 1}, emit = metadata(realm_temporal_instant_fromepochnanoseconds_metadata))] export crate::object::global_this::math_temporal::temporal_instant_from_epoch_ns_thunk, 1; with_rest(0)),
             realm_temporal_instant_fromepochnanoseconds_metadata!(length),
         );
         install_temporal_prototype(
@@ -1044,14 +1044,14 @@ const PLAIN_DATE_TIME_METHODS: &[(&str, u32)] = &[
     let plain_date = install_temporal_constructor(
         ns_obj,
         "PlainDate",
-        crate::fn_info!(#[realm(Temporal.PlainDate, kind = constructor, members = { from; compare; prototype; }, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError], spec = {length = 3}, emit = metadata(realm_temporal_plaindate_metadata))] temporal_plain_date_ctor_thunk, 1; with_rest(0)),
+        crate::fn_info!(#[realm(Temporal.PlainDate, kind = constructor, members = { from; compare; prototype; }, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError], spec = {length = 3}, emit = metadata(realm_temporal_plaindate_metadata))] export crate::object::global_this::math_temporal::temporal_plain_date_ctor_thunk, 1; with_rest(0)),
         realm_temporal_plaindate_metadata!(length),
     );
     if !plain_date.is_null() {
         install_temporal_from_compare(
             plain_date,
-            crate::fn_info!(#[realm(Temporal.PlainDate.from, spec = {length = 1}, emit = metadata(realm_temporal_static_from), births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] temporal_plain_date_from_thunk, 1; with_rest(0)),
-            crate::fn_info!(#[realm(Temporal.PlainDate.compare, spec = {length = 2}, emit = metadata(realm_temporal_static_compare), births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] temporal_plain_date_compare_thunk, 1; with_rest(0)),
+            crate::fn_info!(#[realm(Temporal.PlainDate.from, spec = {length = 1}, emit = metadata(realm_temporal_static_from), births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] export crate::object::global_this::math_temporal::temporal_plain_date_from_thunk, 1; with_rest(0)),
+            crate::fn_info!(#[realm(Temporal.PlainDate.compare, spec = {length = 2}, emit = metadata(realm_temporal_static_compare), births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] export crate::object::global_this::math_temporal::temporal_plain_date_compare_thunk, 1; with_rest(0)),
         );
         install_temporal_prototype(
             plain_date,
@@ -1065,14 +1065,14 @@ const PLAIN_DATE_TIME_METHODS: &[(&str, u32)] = &[
     let plain_time = install_temporal_constructor(
         ns_obj,
         "PlainTime",
-        crate::fn_info!(#[realm(Temporal.PlainTime, kind = constructor, members = { from; compare; prototype; }, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] temporal_plain_time_ctor_thunk, 1; with_rest(0)),
+        crate::fn_info!(#[realm(Temporal.PlainTime, kind = constructor, members = { from; compare; prototype; }, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] export crate::object::global_this::math_temporal::temporal_plain_time_ctor_thunk, 1; with_rest(0)),
         0,
     );
     if !plain_time.is_null() {
         install_temporal_from_compare(
             plain_time,
-            crate::fn_info!(#[realm(Temporal.PlainTime.from, spec = {length = 1}, emit = metadata(realm_temporal_static_from), births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] temporal_plain_time_from_thunk, 1; with_rest(0)),
-            crate::fn_info!(#[realm(Temporal.PlainTime.compare, spec = {length = 2}, emit = metadata(realm_temporal_static_compare), births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] temporal_plain_time_compare_thunk, 1; with_rest(0)),
+            crate::fn_info!(#[realm(Temporal.PlainTime.from, spec = {length = 1}, emit = metadata(realm_temporal_static_from), births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] export crate::object::global_this::math_temporal::temporal_plain_time_from_thunk, 1; with_rest(0)),
+            crate::fn_info!(#[realm(Temporal.PlainTime.compare, spec = {length = 2}, emit = metadata(realm_temporal_static_compare), births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] export crate::object::global_this::math_temporal::temporal_plain_time_compare_thunk, 1; with_rest(0)),
         );
     }
 
@@ -1080,14 +1080,14 @@ const PLAIN_DATE_TIME_METHODS: &[(&str, u32)] = &[
     let plain_date_time = install_temporal_constructor(
         ns_obj,
         "PlainDateTime",
-        crate::fn_info!(#[realm(Temporal.PlainDateTime, kind = constructor, members = { from; compare; prototype; }, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError], spec = {length = 3}, emit = metadata(realm_temporal_plaindatetime_metadata))] temporal_plain_date_time_ctor_thunk, 1; with_rest(0)),
+        crate::fn_info!(#[realm(Temporal.PlainDateTime, kind = constructor, members = { from; compare; prototype; }, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError], spec = {length = 3}, emit = metadata(realm_temporal_plaindatetime_metadata))] export crate::object::global_this::math_temporal::temporal_plain_date_time_ctor_thunk, 1; with_rest(0)),
         realm_temporal_plaindatetime_metadata!(length),
     );
     if !plain_date_time.is_null() {
         install_temporal_from_compare(
             plain_date_time,
-            crate::fn_info!(#[realm(Temporal.PlainDateTime.from, spec = {length = 1}, emit = metadata(realm_temporal_static_from), births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] temporal_plain_date_time_from_thunk, 1; with_rest(0)),
-            crate::fn_info!(#[realm(Temporal.PlainDateTime.compare, spec = {length = 2}, emit = metadata(realm_temporal_static_compare), births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] temporal_plain_date_time_compare_thunk, 1; with_rest(0)),
+            crate::fn_info!(#[realm(Temporal.PlainDateTime.from, spec = {length = 1}, emit = metadata(realm_temporal_static_from), births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] export crate::object::global_this::math_temporal::temporal_plain_date_time_from_thunk, 1; with_rest(0)),
+            crate::fn_info!(#[realm(Temporal.PlainDateTime.compare, spec = {length = 2}, emit = metadata(realm_temporal_static_compare), births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] export crate::object::global_this::math_temporal::temporal_plain_date_time_compare_thunk, 1; with_rest(0)),
         );
         install_temporal_prototype(
             plain_date_time,
@@ -1101,14 +1101,14 @@ const PLAIN_DATE_TIME_METHODS: &[(&str, u32)] = &[
     let plain_year_month = install_temporal_constructor(
         ns_obj,
         "PlainYearMonth",
-        crate::fn_info!(#[realm(Temporal.PlainYearMonth, kind = constructor, members = { from; compare; prototype; }, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError], spec = {length = 2}, emit = metadata(realm_temporal_plainyearmonth_metadata))] temporal_plain_year_month_ctor_thunk, 1; with_rest(0)),
+        crate::fn_info!(#[realm(Temporal.PlainYearMonth, kind = constructor, members = { from; compare; prototype; }, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError], spec = {length = 2}, emit = metadata(realm_temporal_plainyearmonth_metadata))] export crate::object::global_this::math_temporal::temporal_plain_year_month_ctor_thunk, 1; with_rest(0)),
         realm_temporal_plainyearmonth_metadata!(length),
     );
     if !plain_year_month.is_null() {
         install_temporal_from_compare(
             plain_year_month,
-            crate::fn_info!(#[realm(Temporal.PlainYearMonth.from, spec = {length = 1}, emit = metadata(realm_temporal_static_from), births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] temporal_plain_year_month_from_thunk, 1; with_rest(0)),
-            crate::fn_info!(#[realm(Temporal.PlainYearMonth.compare, spec = {length = 2}, emit = metadata(realm_temporal_static_compare), births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] temporal_plain_year_month_compare_thunk, 1; with_rest(0)),
+            crate::fn_info!(#[realm(Temporal.PlainYearMonth.from, spec = {length = 1}, emit = metadata(realm_temporal_static_from), births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] export crate::object::global_this::math_temporal::temporal_plain_year_month_from_thunk, 1; with_rest(0)),
+            crate::fn_info!(#[realm(Temporal.PlainYearMonth.compare, spec = {length = 2}, emit = metadata(realm_temporal_static_compare), births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] export crate::object::global_this::math_temporal::temporal_plain_year_month_compare_thunk, 1; with_rest(0)),
         );
     }
 
@@ -1116,14 +1116,14 @@ const PLAIN_DATE_TIME_METHODS: &[(&str, u32)] = &[
     let plain_month_day = install_temporal_constructor(
         ns_obj,
         "PlainMonthDay",
-        crate::fn_info!(#[realm(Temporal.PlainMonthDay, kind = constructor, members = { from; prototype; }, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError], spec = {length = 2}, emit = metadata(realm_temporal_plainmonthday_metadata))] temporal_plain_month_day_ctor_thunk, 1; with_rest(0)),
+        crate::fn_info!(#[realm(Temporal.PlainMonthDay, kind = constructor, members = { from; prototype; }, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError], spec = {length = 2}, emit = metadata(realm_temporal_plainmonthday_metadata))] export crate::object::global_this::math_temporal::temporal_plain_month_day_ctor_thunk, 1; with_rest(0)),
         realm_temporal_plainmonthday_metadata!(length),
     );
     if !plain_month_day.is_null() {
         install_constructor_static(
             plain_month_day,
             "from",
-            crate::fn_info!(#[realm(Temporal.PlainMonthDay.from, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError], spec = {length = 1}, emit = metadata(realm_temporal_plainmonthday_from_metadata))] temporal_plain_month_day_from_thunk, 1; with_rest(0)),
+            crate::fn_info!(#[realm(Temporal.PlainMonthDay.from, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError], spec = {length = 1}, emit = metadata(realm_temporal_plainmonthday_from_metadata))] export crate::object::global_this::math_temporal::temporal_plain_month_day_from_thunk, 1; with_rest(0)),
             realm_temporal_plainmonthday_from_metadata!(length),
         );
     }
@@ -1132,14 +1132,14 @@ const PLAIN_DATE_TIME_METHODS: &[(&str, u32)] = &[
     let zoned = install_temporal_constructor(
         ns_obj,
         "ZonedDateTime",
-        crate::fn_info!(#[realm(Temporal.ZonedDateTime, kind = constructor, members = { from; compare; prototype; }, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError], spec = {length = 2}, emit = metadata(realm_temporal_zoneddatetime_metadata))] temporal_zoned_date_time_ctor_thunk, 1; with_rest(0)),
+        crate::fn_info!(#[realm(Temporal.ZonedDateTime, kind = constructor, members = { from; compare; prototype; }, births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError], spec = {length = 2}, emit = metadata(realm_temporal_zoneddatetime_metadata))] export crate::object::global_this::math_temporal::temporal_zoned_date_time_ctor_thunk, 1; with_rest(0)),
         realm_temporal_zoneddatetime_metadata!(length),
     );
     if !zoned.is_null() {
         install_temporal_from_compare(
             zoned,
-            crate::fn_info!(#[realm(Temporal.ZonedDateTime.from, spec = {length = 1}, emit = metadata(realm_temporal_static_from), births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] temporal_zoned_date_time_from_thunk, 1; with_rest(0)),
-            crate::fn_info!(#[realm(Temporal.ZonedDateTime.compare, spec = {length = 2}, emit = metadata(realm_temporal_static_compare), births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] temporal_zoned_date_time_compare_thunk, 1; with_rest(0)),
+            crate::fn_info!(#[realm(Temporal.ZonedDateTime.from, spec = {length = 1}, emit = metadata(realm_temporal_static_from), births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] export crate::object::global_this::math_temporal::temporal_zoned_date_time_from_thunk, 1; with_rest(0)),
+            crate::fn_info!(#[realm(Temporal.ZonedDateTime.compare, spec = {length = 2}, emit = metadata(realm_temporal_static_compare), births = [Array, BigInt, Error, Number, RangeError, String, Temporal, TypeError])] export crate::object::global_this::math_temporal::temporal_zoned_date_time_compare_thunk, 1; with_rest(0)),
         );
         // Real `Temporal.ZonedDateTime.prototype` with getter/method descriptors
         // so reflective test262 cases resolve (branding / prop-desc / length /

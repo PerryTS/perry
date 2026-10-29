@@ -8,7 +8,19 @@
 
 pub mod function_metadata;
 pub use function_metadata::*;
+extern crate alloc;
+
 pub mod accessor_guards;
+mod builtin_proto;
+pub use builtin_proto::{BuiltinProto, FunctionProtoKind};
+pub mod intrinsic_serials;
+pub mod object_meta_flags;
+mod shape_kind;
+pub use shape_kind::ShapeObjectKind;
+mod set_cells;
+pub use set_cells::*;
+mod realm_cells;
+pub use realm_cells::*;
 pub mod layouts;
 pub use layouts::*;
 
@@ -116,6 +128,10 @@ pub const ATOM_KIND_REGISTERED_SYMBOL: u8 = 3;
 /// the prototype's bind (`perry_bind_family_prototype`) hands the layout's
 /// such keys in key order, and the layout registers there.
 pub const ATOM_KIND_BINDING_SYMBOL: u8 = 4;
+/// The atom's pointer directly names an immutable realm symbol cell. The
+/// pointer field carries a SymbolHeader rather than a StringHeader for this
+/// kind; no symbol creation or registry lookup is needed to link its keys.
+pub const ATOM_KIND_IMAGE_SYMBOL: u8 = 5;
 /// `PerryLayoutDesc.variant` of a carried prototype layout (object model
 /// §3.6): a marked prototype's, registered under its own semantic generation.
 pub const LAYOUT_VARIANT_PROTOTYPE_IMAGE: u16 = 1;
@@ -310,6 +326,20 @@ pub const GC_OBJECT_CALLABLE: u16 = 0x0020;
 /// Heap-birth facts shared by runtime allocation and realm-cell emission.
 /// These are existing meanings in GcHeader::_reserved, never image markers.
 pub const OBJ_FLAG_PLAIN_ORDINARY: u16 = 0x0200;
+/// An object has a null [[Prototype]].
+pub const OBJ_FLAG_NULL_PROTO: u16 = 0x40;
+/// At least one own property carries non-default descriptor attributes.
+pub const OBJ_FLAG_HAS_DESCRIPTORS: u16 = 0x800;
+/// An array has one front-reserve pointer to its key-attribute array.
+pub const GC_ARRAY_KEY_ATTRS: u16 = 0x100;
+
+/// Integrity bits in every object/array GC header, shared with image births.
+pub const OBJ_FLAG_FROZEN: u16 = 0x01;
+pub const OBJ_FLAG_SEALED: u16 = 0x02;
+pub const OBJ_FLAG_NO_EXTEND: u16 = 0x04;
+/// Requested on prototype holders; image holders preserve this birth fact.
+pub const OBJ_FLAG_NEVER_MOVE: u16 = 0x80;
+
 pub const GC_LAYOUT_POINTER_FREE: u16 = 0x4000;
 pub const GC_LAYOUT_SIDE_MASK: u16 = 0x8000;
 pub const GC_LAYOUT_ALL_POINTERS: u16 = 0x2000;
@@ -1205,3 +1235,5 @@ pub const fn canonical_key_attribute_word(
         | (entries as u64) << 16
         | (accessors as u64) << 32
 }
+
+mod fn_info;

@@ -12,7 +12,7 @@ pub(crate) fn register_static_layouts() {
             {
                 continue;
             }
-            if (*desc).layout_id == 0 {
+            if (*desc).layout_id == 0 || super::lazy_image::contains(desc) {
                 continue;
             }
             // WRT step 2: a runtime layout or a module namespace draws its id
@@ -49,7 +49,7 @@ pub(super) fn is_runtime_layout_word(word: u32) -> bool {
 #[inline]
 pub(crate) unsafe fn layout_word_for_birth(desc: *const PerryLayoutDesc) -> Option<u32> {
     let id = registered_layout_id(load_layout_id(desc))?;
-    if is_runtime_layout_word(id)
+    if (is_runtime_layout_word(id) || super::lazy_image::contains(desc))
         && super::super::shapes::shape_record_for_word(LayoutWord(id)).is_none()
     {
         install_runtime_layout(desc)?;
@@ -60,7 +60,11 @@ pub(crate) unsafe fn layout_word_for_birth(desc: *const PerryLayoutDesc) -> Opti
 #[cold]
 #[inline(never)]
 unsafe fn install_runtime_layout(desc: *const PerryLayoutDesc) -> Option<()> {
-    let requested = layout_id_of_index(descriptor_index(desc)?)?;
+    let requested = if super::lazy_image::contains(desc) {
+        0
+    } else {
+        layout_id_of_index(descriptor_index(desc)?)?
+    };
     let id = register_bound(desc, requested, &[], None);
     (id != 0 && super::super::shapes::shape_record_for_word(LayoutWord(id)).is_some()).then_some(())
 }
@@ -183,7 +187,23 @@ pub(super) unsafe fn register_bound(
         return 0;
     }
     let d = &*desc;
-    let Some(kind) = declared_kind(d.kind) else {
+    let lazy = super::lazy_image::contains(desc);
+    let kind = declared_kind(d.kind).or_else(|| {
+        use super::super::shapes::ShapeObjectKind::*;
+        lazy.then(|| {
+            [
+                Function,
+                FunctionBoundCall,
+                FunctionBoundApply,
+                FunctionBound,
+                NativeNamespace,
+            ]
+            .into_iter()
+            .find(|kind| kind.code() == u64::from(d.kind))
+        })
+        .flatten()
+    });
+    let Some(kind) = kind else {
         return 0;
     };
     if existing.is_none() && !function && requested >= super::super::shapes::STATIC_SHAPE_ID_END {
@@ -225,6 +245,11 @@ pub(super) unsafe fn register_bound(
             crate::codegen_abi::ATOM_KIND_STRING if !(*key.atom).string.is_null() => {}
             crate::codegen_abi::ATOM_KIND_WELL_KNOWN_SYMBOL
                 if ((*key.atom).index as usize) < crate::codegen_abi::WELL_KNOWN_SYMBOLS.len() => {}
+            crate::codegen_abi::ATOM_KIND_IMAGE_SYMBOL
+                if !(*key.atom).string.is_null()
+                    && crate::value::addr_class::realm::is_image_object(
+                        (*key.atom).string as usize,
+                    ) => {}
             // A symbol of node's own library the runtime binds
             // (`runtime_layouts::runtime_symbol_of_atom`).
             crate::codegen_abi::ATOM_KIND_PROGRAM_SYMBOL
@@ -337,7 +362,10 @@ pub(super) unsafe fn register_bound(
         .view()
     };
     let list = list_keys.arr();
-    let summary = super::super::key_attrs::keys_summary(list, key_count);
+    let mut summary = super::super::key_attrs::keys_summary(list, key_count);
+    if kind.is_function_layout() {
+        summary |= crate::closure::shape::function_shape_summary(kind);
+    }
     // A carried prototype layout is a marked prototype's: its own semantic
     // generation, shared with no other layout.
     let image = d.variant == PROTOTYPE_IMAGE_VARIANT;
@@ -371,6 +399,8 @@ pub(super) unsafe fn register_bound(
     }
     let proposed = if let Some(id) = existing {
         id
+    } else if lazy {
+        super::super::shapes::allocate_declared_layout_for_kind(proto_id, kind).0
     } else if function {
         super::super::shapes::allocate_declared_layout_id(proto_id).0
     } else if proto_id == super::super::shapes::PROTO_ID_DEFAULT

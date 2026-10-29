@@ -600,7 +600,11 @@ impl ShapeSlab {
         }
         let row = band0;
         // SAFETY: an issued row of this agent's readable reservation.
-        Some(unsafe { dir.flat_base.get().add(row) })
+        let record = unsafe { dir.flat_base.get().add(row) };
+        if !unsafe { (*record).present() } {
+            crate::object::layout_desc::publish_image_receiver(word);
+        }
+        Some(record)
     }
     /// [`Self::receiver_row_record`] for a word outside band 0 (dictionary,
     /// exotic) or no issued row: out of line, so the inlined ordinary read
@@ -620,7 +624,11 @@ impl ShapeSlab {
             return None;
         }
         // SAFETY: an issued row of this agent's readable reservation.
-        Some(unsafe { AGENT_SHAPE_DIR[0].flat_base.get().add(row) })
+        let record = unsafe { AGENT_SHAPE_DIR[0].flat_base.get().add(row) };
+        if !unsafe { (*record).present() } {
+            crate::object::layout_desc::publish_image_receiver(word);
+        }
+        Some(record)
     }
     /// Requires an existing owner/carrier; never use for identity absence checks.
     pub(in super::super) fn handle_record_ptr(&self, word: LayoutWord) -> Option<*mut ShapeRecord> {

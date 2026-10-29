@@ -19,6 +19,32 @@ pub(super) fn runtime_abi() -> Result<Abi, String> {
 }
 fn abi(source: &str) -> Result<Abi, String> {
     let ts = tokens(source)?;
+    // The exported record: `fn_info!(export static pub BOUND_METHOD_INFO = sentinel path, n)`.
+    if let Some(at) = ts.windows(4).position(|w| {
+        w[0].text == "export"
+            && w[1].text == "static"
+            && w[2].text == "pub"
+            && w[3].text == "BOUND_METHOD_INFO"
+    }) {
+        let decl = &ts[at + 4..];
+        if decl.first().is_none_or(|t| t.text != "=")
+            || decl.get(1).is_none_or(|t| t.text != "sentinel")
+        {
+            return Err("unsupported exported bound-method ABI".into());
+        }
+        let close = decl
+            .iter()
+            .position(|t| t.text == ")")
+            .ok_or("unterminated exported bound-method ABI")?;
+        let args = info::split(&decl[2..close], ",");
+        if args.len() != 2 {
+            return Err("unsupported exported bound-method ABI".into());
+        }
+        let path = info::text(args[0]);
+        let symbol = path.rsplit("::").next().unwrap().to_owned();
+        let params = info::integer(&info::text(args[1]), &BTreeMap::new())?;
+        return sentinel_abi(&ts, symbol, params);
+    }
     let start = ts
         .windows(2)
         .position(|w| w[0].text == "static" && w[1].text == "BOUND_METHOD_INFO")
@@ -41,6 +67,10 @@ fn abi(source: &str) -> Result<Abi, String> {
     }
     let symbol = args[0][0].text.to_owned();
     let params = info::integer(&info::text(args[1]), &BTreeMap::new())?;
+    sentinel_abi(&ts, symbol, params)
+}
+
+fn sentinel_abi(ts: &[super::Token<'_>], symbol: String, params: u64) -> Result<Abi, String> {
     let constant = ts
         .windows(2)
         .position(|w| w[0].text == "const" && w[1].text == symbol)

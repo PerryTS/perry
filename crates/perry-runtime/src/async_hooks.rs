@@ -19,10 +19,6 @@ use crate::string::{js_string_from_bytes, StringHeader};
 use crate::value::{JSValue, POINTER_MASK};
 
 mod resource_methods;
-use resource_methods::{
-    async_resource_bind_thunk, async_resource_destroy_thunk, async_resource_id_thunk,
-    async_resource_run_thunk, async_resource_trigger_id_thunk,
-};
 
 mod arg_values;
 use arg_values::{
@@ -232,27 +228,27 @@ pub(crate) fn install_async_resource_prototype(
 ) {
     proto.method(
         "runInAsyncScope",
-        crate::fn_info!(#[realm("node:async_hooks.AsyncResource.prototype.runInAsyncScope")] async_resource_run_thunk, 3; with_rest(2), with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm("node:async_hooks.AsyncResource.prototype.runInAsyncScope")] export crate::async_hooks::resource_methods::async_resource_run_thunk, 3; with_rest(2), with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
         2,
     );
     proto.method(
         "emitDestroy",
-        crate::fn_info!(#[realm("node:async_hooks.AsyncResource.prototype.emitDestroy")] async_resource_destroy_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm("node:async_hooks.AsyncResource.prototype.emitDestroy")] export crate::async_hooks::resource_methods::async_resource_destroy_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
         0,
     );
     proto.method(
         "asyncId",
-        crate::fn_info!(#[realm("node:async_hooks.AsyncResource.prototype.asyncId")] async_resource_id_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm("node:async_hooks.AsyncResource.prototype.asyncId")] export crate::async_hooks::resource_methods::async_resource_id_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
         0,
     );
     proto.method(
         "triggerAsyncId",
-        crate::fn_info!(#[realm("node:async_hooks.AsyncResource.prototype.triggerAsyncId")] async_resource_trigger_id_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm("node:async_hooks.AsyncResource.prototype.triggerAsyncId")] export crate::async_hooks::resource_methods::async_resource_trigger_id_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
         0,
     );
     proto.method(
         "bind",
-        crate::fn_info!(#[realm("node:async_hooks.AsyncResource.prototype.bind")] async_resource_bind_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm("node:async_hooks.AsyncResource.prototype.bind")] export crate::async_hooks::resource_methods::async_resource_bind_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
         2,
     );
 }

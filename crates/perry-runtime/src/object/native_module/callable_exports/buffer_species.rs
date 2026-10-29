@@ -74,7 +74,7 @@ pub(super) fn install_buffer_species(buffer_ctor: f64) {
     // FastBuffer itself: named, sharing Buffer.prototype. Node reports
     // `FastBuffer.length === 0`; the thunk still receives three arguments.
 
-    crate::fn_info!(#[realm("%BufferSpeciesConstructor%", spec = { name = "FastBuffer", length = 0 }, emit = metadata, kind = constructor, instance = Buffer.prototype, family = Buffer)] fast_buffer_constructor_thunk, 3; with_declared(3); bind fast_info, fast_metadata);
+    crate::fn_info!(#[realm("%BufferSpeciesConstructor%", spec = { name = "FastBuffer", length = 0 }, emit = metadata, kind = constructor, instance = Buffer.prototype, family = Buffer)] export crate::object::native_module::callable_exports::buffer_species::fast_buffer_constructor_thunk, 3; with_declared(3); bind fast_info, fast_metadata);
     let fast = crate::closure::js_closure_alloc(fast_info, 0);
 
     if fast.is_null() {
@@ -102,7 +102,7 @@ pub(super) fn install_buffer_species(buffer_ctor: f64) {
 
     // The getter, holding FastBuffer in capture slot 0.
     let getter = crate::closure::js_closure_alloc(
-        crate::fn_info!(#[realm("Buffer[\"@@species\"].<get>", capture = [ref("%BufferSpeciesConstructor%")], constructible = true)] buffer_species_getter_thunk, 0; with_declared(0)),
+        crate::fn_info!(#[realm("Buffer[\"@@species\"].<get>", capture = [ref("%BufferSpeciesConstructor%")], constructible = true)] export crate::object::native_module::callable_exports::buffer_species::buffer_species_getter_thunk, 0; with_declared(0)),
         1,
     );
     if getter.is_null() {

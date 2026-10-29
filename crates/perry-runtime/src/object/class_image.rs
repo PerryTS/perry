@@ -713,6 +713,9 @@ mod tests {
 
 pub(crate) fn bind_layout_image(image: crate::codegen_abi::PerryLayoutImageV1) {
     assert!(image.valid(), "invalid layout image ABI/range");
+    if image.lazy_count != 0 {
+        super::proto_validity::reserve_image_prototype_serials(image.prototype_serial_end);
+    }
     let bound = current().layout_image.get_or_init(|| image);
     assert_eq!(
         *bound, image,
