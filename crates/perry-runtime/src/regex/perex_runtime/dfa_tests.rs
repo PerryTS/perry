@@ -156,7 +156,7 @@ fn only_eligible_programs_carry_a_cache() {
         let program = super::super::perex_api::bind_program(owner, &mut budget).unwrap();
         let cache = program
             .with_view(|p| {
-                let len = unsafe { super::super::perex_owner::cell_dfa_cache(p.words()) }
+                let len = unsafe { super::super::perex_owner::cell_dfa_cache(p) }
                     .map(|cache| cache.len());
                 (len, dfa::minimum_words(p))
             })
@@ -215,7 +215,7 @@ fn literal_prefixes_need_neither_dfa_cache_nor_evaluator_scratch() {
             .with_view(|p| {
                 assert!(p.literal_prefix().is_some());
                 assert_eq!(dfa::minimum_words(p), Some(0));
-                assert!(unsafe { super::super::perex_owner::cell_dfa_cache(p.words()) }.is_none());
+                assert!(unsafe { super::super::perex_owner::cell_dfa_cache(p) }.is_none());
             })
             .unwrap();
         for start in 0..=subject.encode_utf16().count() + 1 {
@@ -233,5 +233,118 @@ fn literal_prefixes_need_neither_dfa_cache_nor_evaluator_scratch() {
     assert_eq!(
         EVALUATOR_METADATA_READS.with(std::cell::Cell::get),
         metadata_before
+    );
+}
+
+const CAPTURE_CASES: &[(&str, &str, &str)] = &[
+    ("(\\d+)-(\\d+)", "", "a 12-34 b"),
+    ("(a)(b)", "y", "ab"),
+    ("(b)", "y", "ab"),
+    ("^(\\w+) (\\w+)$", "", "foo bar"),
+    ("(?:(a)|b)+", "", "abab"),
+    ("(a)?b", "", "b"),
+    ("^(\\d{4})-(\\d{2})-(\\d{2})$", "", "2024-10-28"),
+    ("(\\w+)@(\\w+)\\.com", "", "mail bob@example.com now"),
+    ("(a*)(a*)b", "", "aaab"),
+    ("(a|ab)(c|bcd)(d*)", "", "xabcd"),
+    ("(x)*y", "", "xxxy"),
+];
+
+/// Searches whose groups the automaton's capture pass reads agree with the
+/// evaluator's, from every start; a one-pass program is answered by the pass
+/// and an ambiguous one is declined to the evaluator.
+#[test]
+fn dfa_capture_pass_matches_the_evaluator() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    for &(pattern, flags, subject) in CAPTURE_CASES {
+        let before = DFA_CAPTURE_ANSWERS.with(std::cell::Cell::get);
+        for start in 0..=subject.encode_utf16().count() {
+            let (first, reference) = both(pattern, flags, subject, start, CaptureMode::All);
+            assert_eq!(
+                first, reference,
+                "/{pattern}/{flags} on {subject:?} from {start}"
+            );
+        }
+        let answered = DFA_CAPTURE_ANSWERS.with(std::cell::Cell::get) - before;
+        let ambiguous = matches!(pattern, "(a*)(a*)b" | "(a|ab)(c|bcd)(d*)");
+        if ambiguous {
+            assert!(
+                answered < subject.encode_utf16().count() + 1,
+                "/{pattern}/ is not one-pass"
+            );
+        } else {
+            assert!(answered > 0, "/{pattern}/ is one-pass but never answered");
+        }
+    }
+}
+
+/// One program searched over many subjects: its storage starts at the
+/// minimum plus a few states, thrashes, is reallocated once at the size
+/// Perex reports, and the pass answers every later search.
+#[test]
+fn dfa_storage_grows_for_a_program_that_thrashes() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let pattern = "^(\\d{4})-(\\d{2})-(\\d{2})T[\\d:]+ \\[(\\w+)\\] user=(\\d+) action=(\\w+) latency=(\\d+)ms$";
+    let lines: Vec<String> = (0..120)
+        .map(|k| {
+            format!(
+                "20{:02}-{:02}-{:02}T{:02}:{:02}:{:02} [{}] user={} action={} latency={}ms",
+                10 + k % 15,
+                1 + k % 12,
+                1 + k % 28,
+                k % 24,
+                k % 60,
+                (k * 7) % 60,
+                ["info", "warn", "error", "debug"][k % 4],
+                k * 31,
+                ["login", "logout", "view", "buy_item"][k % 4],
+                k * 3
+            )
+        })
+        .collect();
+    let scope = RuntimeHandleScope::new();
+    let re = scope.root_raw_mut_ptr(regexp(&scope, pattern, ""));
+    let mut budget = Budget::new(WORK);
+    let memory = MemoryBudget::new(super::super::perex_api::SCRATCH_BYTES);
+    let owner = re
+        .with_const_ptr::<RegExpHeader, _>(|re| unsafe { GcProgram::from_regexp(&scope, re) })
+        .unwrap();
+    let program = super::super::perex_api::bind_program(owner, &mut budget).unwrap();
+    let words = |program: &BoundProgram<GcProgram<'_>>| {
+        program
+            .with_view(|p| unsafe { super::super::perex_owner::cell_dfa_cache(p) }.map(|c| c.len()))
+            .unwrap()
+    };
+    let before = DFA_CAPTURE_ANSWERS.with(std::cell::Cell::get);
+    let mut first_len = None;
+    for (n, line) in lines.iter().enumerate() {
+        let (_, reference) = both(pattern, "", line, 0, CaptureMode::All);
+        let input = scope.root_string_ptr(make_string(line));
+        let subject = super::super::perex_api::bind_heap_subject(input).unwrap();
+        let (found, _) = find_near(
+            &program,
+            &subject,
+            0,
+            None,
+            CaptureMode::All,
+            &mut budget,
+            &memory,
+            64,
+            &mut poll,
+        )
+        .unwrap();
+        let got = found.map(|m| m.captures.unwrap().to_vec());
+        assert_eq!(got, reference, "line {n}");
+        if n == 0 {
+            first_len = words(&program);
+        }
+    }
+    let grown = words(&program).unwrap();
+    assert!(grown > first_len.unwrap(), "storage never grew");
+    let answered = DFA_CAPTURE_ANSWERS.with(std::cell::Cell::get) - before;
+    assert!(
+        answered >= lines.len() - 12,
+        "the pass answered {answered} of {} searches",
+        lines.len()
     );
 }
