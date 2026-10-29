@@ -24,7 +24,7 @@ perry-ffi.workspace = true
 # database/table/column names). Together they are exactly the five keys
 # better-sqlite3's `Statement#columns()` reports; without them that method
 # cannot be answered faithfully and callers read `undefined`.
-rusqlite = { version = "0.39", features = [
+rusqlite = { version = "0.40", features = [
     "bundled",
     "column_decltype",
     "column_metadata",

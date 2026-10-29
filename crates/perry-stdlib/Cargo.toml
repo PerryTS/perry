@@ -336,7 +336,7 @@ rustls-pemfile = { workspace = true, optional = true }
 # No sqlx / redis / mongodb / bson here any more (turnloop P8 group H): the
 # bundled copies that needed them were deleted, and the perry-ext-* wrappers
 # carry their own edges. rusqlite stays — it is not a tokio driver.
-rusqlite = { version = "0.39", features = ["bundled", "column_decltype", "limits", "session"], optional = true }
+rusqlite = { version = "0.40", features = ["bundled", "column_decltype", "limits", "session"], optional = true }
 
 # Crypto
 # SHA-384/512 contexts come from OpenSSL's CPU-dispatched fixed contexts
