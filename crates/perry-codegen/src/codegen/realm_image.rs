@@ -44,7 +44,6 @@ pub(crate) use records::{
 };
 
 const GC_TYPE_ARRAY: u8 = 1;
-const GC_TYPE_OBJECT: u8 = crate::runtime_abi::GC_TYPE_OBJECT;
 const GC_TYPE_CLOSURE: u8 = 4;
 /// `GC_FLAG_MARKED | GC_FLAG_PINNED`: an image cell is never white and never
 /// moves (perry-runtime `realm::IMAGE_CELL_FLAGS`).
@@ -359,9 +358,10 @@ pub(crate) fn emit_object_cell_with_fields(
             });
         }
     }
+    let gc_type_object = perry_abi::GC_TYPE_OBJECT;
     llmod.add_raw_global(format!(
         "@{name} = {linkage}global {{ i8, i8, i16, i32, i32, i32, {pad_ty}ptr, {{ {} }} }} \
-         {{ i8 {GC_TYPE_OBJECT}, i8 {IMAGE_CELL_FLAGS}, i16 {reserved}, i32 {size}, i32 {class_id}, i32 {}, {pad_init}ptr {meta}, {{ {} }} {{ {} }} }}, \
+         {{ i8 {gc_type_object}, i8 {IMAGE_CELL_FLAGS}, i16 {reserved}, i32 {size}, i32 {class_id}, i32 {}, {pad_init}ptr {meta}, {{ {} }} {{ {} }} }}, \
          section \"{}\", align 8",
         types.join(", "),
         layout_word as i32,

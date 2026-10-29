@@ -1,23 +1,30 @@
-//! The object-type predicates for crates below `perry-runtime` (this crate,
-//! `perry-codegen`). Each macro expands textually to the comparison it
-//! replaces, so a migrated site compiles to the code it had before. The
-//! runtime's own copies live in `perry-runtime/src/gc/types.rs`.
+//! THE single definition of the object-type predicates (`perry-abi` owns
+//! `GC_TYPE_OBJECT`); `perry-codegen` and `perry-runtime` both use these.
+//! Each macro expands textually to the comparison it replaces, so a migrated
+//! site compiles to the code it had before.
 //!
-//! This file and `gc/types.rs` are the only places allowed to name
-//! `GC_TYPE_OBJECT` in a comparison (`scripts/check_object_header_access.sh`).
+//! This file is the only place allowed to name `GC_TYPE_OBJECT` in a
+//! comparison (`scripts/check_object_header_access.sh`).
 
-/// "Is an ordinary object", either header form.
+/// "Is an ordinary object", either header form. S0f meaning (A): `t >= 0xFE`.
 #[macro_export]
 macro_rules! gc_type_is_object {
     ($t:expr) => {
         ($t) == $crate::GC_TYPE_OBJECT
     };
 }
-/// "Might carry the meta word".
+/// "Might carry the meta word". S0f meaning (B): `t == 0xFF`.
 #[macro_export]
 macro_rules! object_has_meta_word {
     ($t:expr) => {
         ($t) == $crate::GC_TYPE_OBJECT
+    };
+}
+/// The negation of [`object_has_meta_word!`]. S0f meaning (B): `t != 0xFF`.
+#[macro_export]
+macro_rules! object_lacks_meta_word {
+    ($t:expr) => {
+        ($t) != $crate::GC_TYPE_OBJECT
     };
 }
 /// The negation of [`gc_type_is_object!`] for a site that compared with `!=`.
