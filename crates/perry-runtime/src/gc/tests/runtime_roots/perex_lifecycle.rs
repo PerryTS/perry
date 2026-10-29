@@ -373,3 +373,92 @@ fn regexp_literal_site_is_the_only_root_and_rewrites_after_moving_gc() {
     ));
     assert!(matches(&fresh, "site-only-root"));
 }
+
+fn caches() -> usize {
+    let mut cursor = crate::arena::ArenaObjectCursor::new(crate::arena::ArenaWalkOrder::Address);
+    let mut remaining = usize::MAX;
+    let mut count = 0;
+    while let Some((header, _)) = cursor.next_budgeted(&mut remaining) {
+        if unsafe { (*(header as *const GcHeader)).obj_type == GC_TYPE_REGEX_CACHE } {
+            count += 1;
+        }
+    }
+    count
+}
+
+/// A program's automaton storage is allocated by its first search, is reached
+/// through the program cell's one traced edge, survives moving collections of
+/// the cell and answers the same searches afterwards, and dies with the
+/// program.
+#[test]
+fn perex_automaton_storage_follows_its_program_through_collections() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _scan = ConservativeScanDisabledGuard::new();
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _force = ForcedEvacuationTestGuard::on();
+    super::perex_public::register_host_roots();
+    let before = caches();
+    let survivor_scope = RuntimeHandleScope::new();
+    let survivor = {
+        let temporary = RuntimeHandleScope::new();
+        let re = regex(&temporary, r"^(\d{4})-(\d{2}) needle\d+$", "");
+        assert_eq!(caches(), before, "construction allocates no storage");
+        assert!(matches(&re, "2024-10 needle42"));
+        assert_eq!(caches(), before + 1, "the first search allocates it");
+        re.with_mut_ptr(|re: *mut RegExpHeader| re)
+    };
+    let survivor = survivor_scope.root_raw_mut_ptr(survivor);
+    let old = survivor.with_const_ptr(|p| crate::regex::test_regexp_program_address(p));
+    crate::regex::perex_cache::clear_for_tests();
+    gc_collect_minor();
+    gc_collect_minor();
+    assert_ne!(
+        survivor.with_const_ptr(|p| crate::regex::test_regexp_program_address(p)),
+        old,
+        "the program cell moved"
+    );
+    assert_eq!(caches(), before + 1, "the storage follows its program");
+    crate::gc::js_gc_collect();
+    crate::gc::js_gc_collect();
+    assert_eq!(
+        caches(),
+        before + 1,
+        "a full collection keeps the live program's storage"
+    );
+    assert!(matches(&survivor, "1999-01 needle7"));
+    assert!(!matches(&survivor, "1999-01 nope7"));
+    assert_eq!(caches(), before + 1, "no second allocation");
+    drop(survivor_scope);
+    crate::regex::perex_cache::clear_for_tests();
+    gc_collect_minor();
+    crate::gc::js_gc_collect();
+    assert_eq!(caches(), before, "the storage dies with its program");
+}
+
+/// Repeated `exec` of one literal reuses its program\x27s storage: one
+/// allocation, one build, and the capture pass answering every call.
+#[test]
+fn perex_exec_reuses_one_automaton_storage() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    super::perex_public::register_host_roots();
+    let before = caches();
+    let answers = crate::regex::perex_runtime::DFA_CAPTURE_ANSWERS.with(std::cell::Cell::get);
+    let scope = RuntimeHandleScope::new();
+    let re = regex(&scope, r"^(\d{4})-(\d{2}) user=(\d+)$", "");
+    for i in 0..300 {
+        let line = format!("2024-10 user={i}");
+        let input = text(&scope, &line);
+        let found = re.with_mut_ptr::<RegExpHeader, _>(|re| {
+            input.with_const_ptr(|input| crate::regex::js_regexp_exec(re, input))
+        });
+        assert!(!found.is_null(), "line {i}");
+    }
+    assert_eq!(caches(), before + 1, "one storage for every call");
+    let answered =
+        crate::regex::perex_runtime::DFA_CAPTURE_ANSWERS.with(std::cell::Cell::get) - answers;
+    assert!(
+        answered >= 290,
+        "the capture pass answered {answered} of 300"
+    );
+}
