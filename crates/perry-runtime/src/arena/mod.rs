@@ -21,7 +21,7 @@ pub(crate) use from_space::copying_from_space_in_use_bytes_and_leaf_free;
 pub(crate) use young_large::{young_large_in_use_bytes, moving_from_space_in_use_bytes,
     is_large_storage, exact_young_leaf_header, young_leaf_headers, for_each_young_small_header,
     finish_copied_young_large, finish_swept_young_large, copying_capacity_bytes,
-    young_large_containers_exist};
+    young_large_containers_exist, is_young_large_owner};
 mod region;
 pub(crate) use construction::ConstructionBatch;
 #[cfg(test)]

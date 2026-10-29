@@ -146,6 +146,14 @@ pub(crate) fn exact_young_leaf_header(addr: usize) -> Option<*mut crate::gc::GcH
     .then_some(base as *mut crate::gc::GcHeader)
 }
 
+/// Is `addr` the user address of a young large owner (leaf or container)?
+/// The value test runs first, so an ordinary address pays no lookup.
+#[inline]
+pub(crate) fn is_young_large_owner(addr: usize) -> bool {
+    addr & (GENERATION_PAGE_SIZE - 1) == crate::gc::GC_HEADER_SIZE
+        && exact_young_leaf_header(addr).is_some()
+}
+
 /// Headers of every young dedicated leaf owner, in block order.
 pub(crate) fn young_leaf_headers() -> Vec<*mut crate::gc::GcHeader> {
     ARENA.with(|arena| unsafe {
