@@ -355,9 +355,9 @@ pub(crate) use global_this_tables::*;
 pub use groupby::*;
 pub use instanceof::*;
 pub(crate) use iterator_prototypes::{
-    attach_iterator_prototype, call_overridden_iterator_next, iterator_next_property_owner,
-    iterator_prototype_for_class_id, iterator_prototypes_materialized,
-    iterator_step_method_is_builtin,
+    attach_iterator_prototype, attach_wrap_for_valid_iterator_prototype,
+    call_overridden_iterator_next, iterator_next_property_owner, iterator_prototype_for_class_id,
+    iterator_prototypes_materialized, iterator_step_method_is_builtin,
 };
 pub use namespace_create::*;
 pub use native_call_method::*;
@@ -1567,6 +1567,7 @@ pub fn scan_object_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
         &iterator_prototypes::STRING_ITERATOR_PROTOTYPE_PTR,
         &iterator_prototypes::REGEXP_STRING_ITERATOR_PROTOTYPE_PTR,
         &iterator_prototypes::ITERATOR_HELPER_PROTOTYPE_PTR,
+        &iterator_prototypes::WRAP_FOR_VALID_ITERATOR_PROTOTYPE_PTR,
     ] {
         slot.with_slot(|slot| {
             visitor.visit_atomic_i64_slot(slot, Ordering::Acquire, Ordering::Release);
