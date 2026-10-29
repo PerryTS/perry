@@ -200,3 +200,108 @@ pub(super) fn apply_flags(inst: Option<InstructionValue<'_>>, flags: &[&str]) {
         unsafe { llvm_sys::core::LLVMSetFastMathFlags(inst.as_value_ref(), fmf) };
     }
 }
+
+/// Inline metadata as Perry writes it: `!"text"` (LLVM's `\XX` escapes) and
+/// `!{a, b, ..}` tuples of those, nested (`!{!{!"owner.1", !{!"domain"}}}`,
+/// an alias scope list). Quote-aware: a string may hold `,` or braces.
+/// Returns the node and the bytes of `s` it spans.
+pub(super) fn inline_metadata<'ctx>(
+    ctx: &'ctx Context,
+    s: &str,
+) -> Result<(inkwell::values::MetadataValue<'ctx>, usize)> {
+    fn value<'ctx>(
+        ctx: &'ctx Context,
+        s: &[u8],
+        at: &mut usize,
+    ) -> Result<inkwell::values::MetadataValue<'ctx>> {
+        while *at < s.len() && s[*at].is_ascii_whitespace() {
+            *at += 1;
+        }
+        if s.get(*at) != Some(&b'!') {
+            bail!("metadata expected at byte {at}");
+        }
+        *at += 1;
+        match s.get(*at) {
+            Some(b'"') => {
+                *at += 1;
+                let mut bytes = Vec::new();
+                loop {
+                    match s.get(*at) {
+                        None => bail!("unterminated metadata string"),
+                        Some(b'"') => break,
+                        Some(b'\\') => {
+                            let hex = s
+                                .get(*at + 1..*at + 3)
+                                .and_then(|h| std::str::from_utf8(h).ok())
+                                .and_then(|h| u8::from_str_radix(h, 16).ok())
+                                .ok_or_else(|| anyhow!("bad metadata string escape"))?;
+                            bytes.push(hex);
+                            *at += 3;
+                        }
+                        Some(&b) => {
+                            bytes.push(b);
+                            *at += 1;
+                        }
+                    }
+                }
+                *at += 1;
+                let text = String::from_utf8(bytes)
+                    .map_err(|_| anyhow!("metadata string is not UTF-8"))?;
+                Ok(ctx.metadata_string(&text))
+            }
+            Some(b'{') => {
+                *at += 1;
+                let mut items: Vec<inkwell::values::BasicMetadataValueEnum<'ctx>> = Vec::new();
+                loop {
+                    while *at < s.len() && s[*at].is_ascii_whitespace() {
+                        *at += 1;
+                    }
+                    if s.get(*at) == Some(&b'}') {
+                        *at += 1;
+                        break;
+                    }
+                    items.push(value(ctx, s, at)?.into());
+                    while *at < s.len() && s[*at].is_ascii_whitespace() {
+                        *at += 1;
+                    }
+                    match s.get(*at) {
+                        Some(b',') => *at += 1,
+                        Some(b'}') => {}
+                        _ => bail!("bad metadata tuple"),
+                    }
+                }
+                Ok(ctx.metadata_node(&items))
+            }
+            _ => bail!("unsupported metadata form"),
+        }
+    }
+    let mut at = 0;
+    let node = value(ctx, s.as_bytes(), &mut at).with_context(|| format!("metadata `{s}`"))?;
+    Ok((node, at))
+}
+
+/// Attach the instruction metadata `kind` (`alias.scope`, `noalias`) an
+/// instruction's text carries inline (`, !alias.scope !{..}`), as the
+/// textual IR would.
+pub(super) fn set_inline_attachment(
+    ctx: &Context,
+    inst: InstructionValue<'_>,
+    text: &str,
+    kind: &str,
+) -> Result<()> {
+    use inkwell::context::AsContextRef;
+    let marker = format!(", !{kind} ");
+    let Some(pos) = text.find(&marker) else {
+        return Ok(());
+    };
+    let (node, _) = inline_metadata(ctx, &text[pos + marker.len()..])?;
+    let id = unsafe {
+        llvm_sys::core::LLVMGetMDKindIDInContext(
+            ctx.as_ctx_ref(),
+            kind.as_ptr() as *const std::os::raw::c_char,
+            kind.len() as u32,
+        )
+    };
+    inst.set_metadata(node, id)
+        .map_err(|e| anyhow!("attach !{kind}: {e}"))
+}

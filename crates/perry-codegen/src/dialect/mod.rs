@@ -42,8 +42,9 @@ pub(crate) const LLVM_CC_PRESERVE_NONE: u32 = 21;
 pub(crate) const LLVM_CC_PRESERVE_MOST: u32 = 14;
 
 use text::{
-    add_enum_attr, apply_flags, be, float_pred, int_pred, rauw, rmatch_paren, set_alignment_if_any,
-    set_invariant_load, split_top_level, take_quoted, unquote,
+    add_enum_attr, apply_flags, be, float_pred, inline_metadata, int_pred, rauw, rmatch_paren,
+    set_alignment_if_any, set_inline_attachment, set_invariant_load, split_top_level, take_quoted,
+    unquote,
 };
 use types::{basic_type, constant, fn_type_of, indirect_fn_type, strip_label, ty_and_val};
 #[cfg(test)]
@@ -636,6 +637,8 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
                     let _ = inst.set_volatile(true);
                 }
                 set_alignment_if_any(Some(inst), rest);
+                set_inline_attachment(self.ctx, inst, rest, "alias.scope")?;
+                set_inline_attachment(self.ctx, inst, rest, "noalias")?;
                 Ok(())
             }
             "br" => {
@@ -711,6 +714,10 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
             if let Some(i) = v.as_instruction_value() {
                 set_invariant_load(self.ctx, i);
             }
+        }
+        if let Some(i) = v.as_instruction_value() {
+            set_inline_attachment(self.ctx, i, rest, "alias.scope")?;
+            set_inline_attachment(self.ctx, i, rest, "noalias")?;
         }
         if atomic {
             let ord = match ordering {
@@ -879,16 +886,14 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
         for a in split_top_level(args_str) {
             let (aty, atok) = ty_and_val(&a)?;
             if aty == "metadata" {
-                // `metadata !{!"NAME"}`: the one metadata operand Perry
-                // emits, `llvm.read_register`'s register name
-                // (`expr/stack_guard.rs`).
-                let name = atok
-                    .strip_prefix("!{!\"")
-                    .and_then(|t| t.strip_suffix("\"}"))
-                    .ok_or_else(|| anyhow!("unsupported metadata operand `{atok}`"))?;
-                let node = self
-                    .ctx
-                    .metadata_node(&[self.ctx.metadata_string(name).into()]);
+                // Inline metadata operands: `llvm.read_register`'s register
+                // name (`!{!"NAME"}`, `expr/stack_guard.rs`) and an
+                // indexed-owner loop's alias scope list
+                // (`llvm.experimental.noalias.scope.decl`).
+                let (node, used) = inline_metadata(self.ctx, atok)?;
+                if !atok[used..].trim().is_empty() {
+                    bail!("trailing text after metadata operand `{atok}`");
+                }
                 args.push(node.into());
                 arg_types.push(self.ctx.metadata_type().into());
                 continue;
