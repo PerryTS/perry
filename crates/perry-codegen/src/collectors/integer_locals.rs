@@ -855,9 +855,10 @@ fn int32_producing_deps(
         // `+`/`-`/`*` of int32 values is an integer but not necessarily an
         // int32: only an exact result proven inside i32 may be written into an
         // i32 slot (`collectors/exact_i32_range.rs`).
-        Expr::Binary { op, .. } if matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul) => {
-            exact_range_deps(e, candidates, known, deps, &recurse).is_some_and(|r| r.fits_i32())
-        }
+        Expr::Binary {
+            op: BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul,
+            ..
+        } => exact_range_deps(e, candidates, known, deps, &recurse).is_some_and(|r| r.fits_i32()),
         Expr::Call { callee, args, .. } => {
             if let Expr::FuncRef(fid) = callee.as_ref() {
                 if !clamp_fn_ids.contains(fid) {
