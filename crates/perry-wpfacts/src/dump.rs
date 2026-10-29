@@ -139,6 +139,9 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
         "# interp_guard {}\n",
         pf.interp_guard.clone().unwrap_or_else(|| "none".into())
     ));
+    if let Some(a) = &pf.activation {
+        out.push_str(&format!("# activation {a}\n"));
+    }
     out.push_str(&format!("# top_calls {}\n", s.top_calls));
     for (k, n, ms) in &s.profile {
         out.push_str(&format!("# profile {k} {n} {ms:.1}\n"));

@@ -231,16 +231,71 @@ impl<'a> Gen<'a> {
         &mut self,
         mi: u32,
         fxi: FnIdx,
-        f: &Function,
+        f: &'a Function,
         class: Option<TmplId>,
         ctor_of: Option<TmplId>,
     ) {
-        let info = self.m.funcs[fxi as usize].clone();
         let fn_ctor = class.is_none() && ctor_of.is_none();
         if fn_ctor {
             self.note_fn_phase(fxi, crate::ctor_phase::analyze_fn(f));
         }
         self.rooted_stores.extend(crate::rooted::stores(&f.body));
+        // DECISIONS 225: a body generation walks once it can run.
+        if self.defer_walk(fxi, PendingWalk::Fn(mi, fxi, f, class, ctor_of)) {
+            return;
+        }
+        self.walk_fn_body(mi, fxi, f, class, ctor_of);
+    }
+
+    /// DECISIONS 225: whether the body of `f` waits (it is not active):
+    /// kept for `walk_activated`, or, with the set final, never walked.
+    pub(crate) fn defer_walk(&mut self, f: FnIdx, w: PendingWalk<'a>) -> bool {
+        if self.m.body_active(f) {
+            return false;
+        }
+        if !self.m.act.as_ref().is_some_and(|a| a.fixed) {
+            self.pending_walk.entry(f).or_default().push(w);
+        }
+        true
+    }
+
+    /// DECISIONS 225: walk the bodies activated since the last walk (their
+    /// rules apply as generation emits them). Whether any was walked.
+    pub(crate) fn walk_activated(&mut self) -> bool {
+        let mut any = false;
+        loop {
+            let q = match self.m.act.as_mut() {
+                Some(a) if !a.queue.is_empty() => std::mem::take(&mut a.queue),
+                _ => return any,
+            };
+            for f in q {
+                if self.m.aborted {
+                    return any;
+                }
+                for w in self.pending_walk.remove(&f).unwrap_or_default() {
+                    any = true;
+                    match w {
+                        PendingWalk::Fn(mi, fxi, func, class, ctor_of) => {
+                            self.walk_fn_body(mi, fxi, func, class, ctor_of)
+                        }
+                        PendingWalk::Fields(mi, c) => self.walk_fields_body(mi, c),
+                        PendingWalk::Closure(cfx, e) => self.walk_closure_body(&cfx, e),
+                    }
+                }
+            }
+        }
+    }
+
+    fn walk_fn_body(
+        &mut self,
+        mi: u32,
+        fxi: FnIdx,
+        f: &'a Function,
+        class: Option<TmplId>,
+        ctor_of: Option<TmplId>,
+    ) {
+        let info = self.m.funcs[fxi as usize].clone();
+        let fn_ctor = class.is_none() && ctor_of.is_none();
         let fx = Fx {
             module: mi,
             f: fxi,
@@ -291,7 +346,18 @@ impl<'a> Gen<'a> {
         }
     }
 
-    fn walk_class(&mut self, mi: u32, c: &Class, outer: &Fx) {
+    fn walk_class(&mut self, mi: u32, c: &'a Class, outer: &Fx) {
+        let tm = self.mods[mi as usize].classes[&c.name];
+        // DECISIONS 225: the field initializers run when an instance is
+        // constructed (`run_ctor_chain`).
+        let fi = self.field_init_fn[&tm];
+        if !self.defer_walk(fi, PendingWalk::Fields(mi, c)) {
+            self.walk_fields_body(mi, c);
+        }
+        self.walk_class_rest(mi, c, outer);
+    }
+
+    fn walk_fields_body(&mut self, mi: u32, c: &'a Class) {
         let tm = self.mods[mi as usize].classes[&c.name];
         // Instance field initializers run in the field-init context.
         let fi = self.field_init_fn[&tm];
@@ -357,6 +423,10 @@ impl<'a> Gen<'a> {
                 }
             }
         }
+    }
+
+    fn walk_class_rest(&mut self, mi: u32, c: &'a Class, outer: &Fx) {
+        let tm = self.mods[mi as usize].classes[&c.name];
         // Static fields and static blocks: `this` is the class object.
         let si = self.static_init_fn[&tm];
         let sfx = Fx {
@@ -428,6 +498,10 @@ impl<'a> Gen<'a> {
         for cm in &c.computed_members {
             let _ = self.expr(outer, &cm.key_expr);
             let f = self.mods[mi as usize].funcs[&cm.function.id];
+            // DECISIONS 225: a computed accessor runs on reads through the
+            // prototype under any key (its `this` is seeded at
+            // registration), never through a call: active with its class.
+            self.m.activate(f, "computed");
             self.walk_fn(mi, f, &cm.function, Some(tm), None);
         }
         for d in c.fields.iter().chain(c.static_fields.iter()) {

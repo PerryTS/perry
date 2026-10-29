@@ -216,8 +216,6 @@ impl<'a> Gen<'a> {
             body,
             captures_this,
             is_arrow,
-            is_async,
-            is_generator,
             ..
         } = canonical
         else {
@@ -256,20 +254,46 @@ impl<'a> Gen<'a> {
             fn_ctor,
         };
         if !self.walked.contains(&f) {
-            self.walked.insert(f);
             if fn_ctor {
                 let ph = crate::ctor_phase::analyze_closure(params, body);
                 self.note_fn_phase(f, ph);
             }
-            self.params(&cfx, params);
-            if *is_async || *is_generator {
-                self.m
-                    .add_top(info.ret, |_| "async/generator closure result".into());
+            // DECISIONS 225: its body is walked once the closure can run.
+            let deferred = match self.emitted_closure(mi, *func_id) {
+                Some(c) => self.defer_walk(f, crate::gen::PendingWalk::Closure(cfx.clone(), c)),
+                None => false,
+            };
+            if !deferred {
+                self.walk_closure_body(&cfx, canonical);
             }
-            self.stmts(&cfx, body);
-            let _: &Vec<Stmt> = body;
         }
         self.tok_node(info.token)
+    }
+
+    /// The body of closure `e` in its context `cfx` (once per function).
+    pub(crate) fn walk_closure_body(&mut self, cfx: &Fx, e: &Expr) {
+        let f = cfx.f;
+        if !self.walked.insert(f) {
+            return;
+        }
+        let Expr::Closure {
+            params,
+            body,
+            is_async,
+            is_generator,
+            ..
+        } = e
+        else {
+            return;
+        };
+        let ret = self.m.funcs[f as usize].ret;
+        self.params(cfx, params);
+        if *is_async || *is_generator {
+            self.m
+                .add_top(ret, |_| "async/generator closure result".into());
+        }
+        self.stmts(cfx, body);
+        let _: &Vec<Stmt> = body;
     }
 
     /// `new Name(args)`.
