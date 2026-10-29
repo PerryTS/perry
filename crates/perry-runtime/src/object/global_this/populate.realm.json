@@ -5314,41 +5314,6 @@
         ]
       },
       {
-        "name": "node:vm.constants",
-        "kind": "namespace",
-        "properties": [
-          {
-            "key": "DONT_CONTEXTIFY",
-            "symbol": false,
-            "attributes": 2,
-            "value": {
-              "kind": "symbol",
-              "value": "@for:vm_context_no_contextify"
-            }
-          },
-          {
-            "key": "USE_MAIN_CONTEXT_DEFAULT_LOADER",
-            "symbol": false,
-            "attributes": 2,
-            "value": {
-              "kind": "symbol",
-              "value": "@for:vm_dynamic_import_main_context_default"
-            }
-          }
-        ],
-        "own_key_order": [
-          "USE_MAIN_CONTEXT_DEFAULT_LOADER",
-          "DONT_CONTEXTIFY"
-        ],
-        "own_symbol_order": [],
-        "header": {
-          "gc_type": 2,
-          "reserved": 2055,
-          "class_id": 4294967294
-        },
-        "births": []
-      },
-      {
         "name": "node:vm.default",
         "kind": "namespace",
         "properties": [

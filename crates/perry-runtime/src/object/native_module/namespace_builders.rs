@@ -4,17 +4,49 @@ use std::sync::atomic::Ordering;
 /// The compiled code treats the result as another NativeModuleRef, so chained
 /// property accesses like `fs.constants.O_RDONLY` work through the dispatch table.
 pub(crate) fn create_sub_namespace(name: &str) -> f64 {
-    let value = js_create_native_module_namespace(name.as_ptr(), name.len());
     if name == "vm.constants" {
-        let object = JSValue::from_bits(value.to_bits()).as_pointer::<ObjectHeader>();
-        if !object.is_null() {
-            super::super::prototype_chain::object_set_static_prototype(
-                object as usize,
-                crate::value::TAG_NULL,
-            );
-            super::super::js_object_freeze(value);
+        // One object per realm, kept where the namespace was kept before.
+        if let Some(bits) = NATIVE_MODULE_NAMESPACES.with(|cache| cache.borrow().get(name).copied())
+        {
+            return f64::from_bits(bits);
         }
+        let value = vm_constants_value();
+        NATIVE_MODULE_NAMESPACES.with(|cache| {
+            cache.borrow_mut().insert(name.to_string(), value.to_bits());
+        });
+        return value;
     }
+    js_create_native_module_namespace(name.as_ptr(), name.len())
+}
+
+/// `vm.constants`: as in Node, an ordinary frozen object with a null
+/// prototype holding two registered symbols, written in Node's order.
+fn vm_constants_value() -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let object = scope.root_raw_mut_ptr(crate::realm_decl! { birth crate::object::js_object_alloc_null_proto(0, 2); realm { "node:vm.constants", kind = namespace, members = { USE_MAIN_CONTEXT_DEFAULT_LOADER = Symbol.for("vm_dynamic_import_main_context_default"), attrs = writable | enumerable | configurable; DONT_CONTEXTIFY = Symbol.for("vm_context_no_contextify"), attrs = writable | enumerable | configurable; }, integrity = frozen } });
+    let store = |key: &str, description: &str| {
+        let symbol = scope.root_nanbox_f64(unsafe {
+            crate::symbol::js_symbol_for(global_agent_string_value(description))
+        });
+        let key = scope.root_string_ptr(crate::string::js_string_from_bytes(
+            key.as_ptr(),
+            key.len() as u32,
+        ));
+        object.with_mut_ptr::<ObjectHeader, _>(|object| {
+            key.with_const_ptr::<crate::StringHeader, _>(|key| {
+                super::super::js_object_set_field_by_name(object, key, symbol.get_nanbox_f64())
+            })
+        });
+    };
+    store(
+        "USE_MAIN_CONTEXT_DEFAULT_LOADER",
+        "vm_dynamic_import_main_context_default",
+    );
+    store("DONT_CONTEXTIFY", "vm_context_no_contextify");
+    let value = object.with_mut_ptr::<ObjectHeader, _>(|object| {
+        crate::value::js_nanbox_pointer(object as i64)
+    });
+    super::super::js_object_freeze(value);
     value
 }
 
