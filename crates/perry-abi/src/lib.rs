@@ -23,6 +23,7 @@ mod realm_cells;
 pub use realm_cells::*;
 pub mod layouts;
 pub use layouts::*;
+pub mod realm_header;
 
 /// `object::shapes::SHAPE_ID_BASE`: the first ShapeId.
 pub const SHAPE_ID_BASE: u32 = 0x8000_0000;
