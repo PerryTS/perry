@@ -700,11 +700,15 @@ unsafe fn registered_atom_symbol(
     Some((symbol & crate::value::POINTER_MASK) as *mut crate::symbol::SymbolHeader)
 }
 
-/// The symbol a symbol atom names (well-known, node's own, or registered),
-/// `None` for a string atom.
+/// The symbol a symbol atom names (well-known, node's own, registered or an
+/// image cell), `None` for a string atom. A string key, the common atom,
+/// leaves after one compare instead of failing each symbol kind's test.
 pub(crate) unsafe fn atom_symbol(
     atom: *const StaticAtom,
 ) -> Option<*mut crate::symbol::SymbolHeader> {
+    if (*atom).kind == crate::codegen_abi::ATOM_KIND_STRING {
+        return None;
+    }
     well_known_atom_symbol(atom)
         .or_else(|| super::runtime_layouts::runtime_symbol_of_atom(atom))
         .or_else(|| registered_atom_symbol(atom))
@@ -760,7 +764,9 @@ pub(crate) use registration::register_function_layout;
 pub(crate) use registration::register_namespace_layout;
 pub(crate) use registration::register_one;
 pub(crate) use registration::register_one_bound;
+#[cfg(test)]
 pub(crate) use registration::register_static_layouts;
+pub(crate) use registration::register_static_layouts_in;
 
 /// Allocate an object of a registered layout: the header, `slot_count`
 /// slots holding the hole marker, and the layout word. The caller (a static
@@ -1924,8 +1930,6 @@ fn image_atoms() -> impl Iterator<Item = *mut StaticAtom> {
         records::<StaticAtom>(atom_bounds())
     }
 }
-// The startup registrar walks the section around its lazy span itself.
-#[cfg(any(test, target_family = "wasm"))]
 pub(super) fn image_layouts() -> impl Iterator<Item = *mut PerryLayoutDesc> {
     #[cfg(target_family = "wasm")]
     {

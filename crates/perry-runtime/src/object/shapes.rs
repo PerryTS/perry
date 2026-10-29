@@ -930,7 +930,7 @@ impl PartialEq for ShapeDescriptor {
 
 impl Eq for ShapeDescriptor {}
 
-pub(crate) use perry_abi::ShapeObjectKind;
+perry_abi::define_shape_object_kind!(pub(crate));
 
 struct ShapeTableInner {
     /// Slot indices of OWNED keys arrays, keyed by heap address. A canonical

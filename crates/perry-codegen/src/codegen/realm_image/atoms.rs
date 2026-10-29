@@ -260,11 +260,17 @@ fn symbol_identities() -> Result<BTreeMap<String, u64>, String> {
     for name in perry_abi::WELL_KNOWN_SYMBOLS {
         let key = format!("@@{name}");
         keys.remove(&key);
-        result.insert(key, perry_abi::IMAGE_SYMBOL_ID_BIT | result.len() as u64);
+        result.insert(
+            key,
+            perry_abi::symbol_identity(perry_abi::IMAGE_SYMBOL_ORDINAL_BASE + result.len() as u64),
+        );
     }
     for key in keys {
         symbol_description(&key)?;
-        result.insert(key, perry_abi::IMAGE_SYMBOL_ID_BIT | result.len() as u64);
+        result.insert(
+            key,
+            perry_abi::symbol_identity(perry_abi::IMAGE_SYMBOL_ORDINAL_BASE + result.len() as u64),
+        );
     }
     Ok(result)
 }

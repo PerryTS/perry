@@ -1,9 +1,39 @@
 //! Shared physical layouts of realm cells emitted by the compiler.
 //! Runtime births and image emission address these same fields.
 
-/// Image symbols use the upper half of the identity space; dynamic births
-/// draw only from the lower half. Identity does not depend on the link address.
-pub const IMAGE_SYMBOL_ID_BIT: u64 = 1 << 63;
+/// Image symbols take the top `IMAGE_SYMBOL_ORDINALS` birth ordinals; dynamic
+/// births count up from 1 and never reach them. Identity does not depend on
+/// the link address.
+pub const IMAGE_SYMBOL_ORDINALS: u64 = 1 << 32;
+pub const IMAGE_SYMBOL_ORDINAL_BASE: u64 = 0u64.wrapping_sub(IMAGE_SYMBOL_ORDINALS);
+
+/// A symbols identity is MurmurHash3s bijective 64-bit finalizer of its birth
+/// ordinal: it spreads sequential births across the power-of-two buckets shared
+/// with string property hashes, and distinct ordinals give distinct identities.
+#[inline(always)]
+pub const fn symbol_identity(ordinal: u64) -> u64 {
+    let mut id = ordinal;
+    id ^= id >> 33;
+    id = id.wrapping_mul(0xff51afd7ed558ccd);
+    id ^= id >> 33;
+    id = id.wrapping_mul(0xc4ceb9fe1a85ec53);
+    id ^ (id >> 33)
+}
+
+/// Birth rank of an identity: its ordinal recovered by the exact inverse
+/// (xor-shifts by 33 undo themselves on 64 bits; the multipliers are inverses
+/// modulo 2^64), rotated so image symbols rank 0.. ahead of every dynamic birth.
+#[inline]
+pub const fn symbol_birth_rank(mut id: u64) -> u64 {
+    id ^= id >> 33;
+    id = id.wrapping_mul(0x9cb4b2f8129337db);
+    id ^= id >> 33;
+    id = id.wrapping_mul(0x4f74430c22a54005);
+    (id ^ (id >> 33)).wrapping_add(IMAGE_SYMBOL_ORDINALS)
+}
+
+const _: () = assert!(0xff51afd7ed558ccdu64.wrapping_mul(0x4f74430c22a54005) == 1);
+const _: () = assert!(0xc4ceb9fe1a85ec53u64.wrapping_mul(0x9cb4b2f8129337db) == 1);
 
 /// GC kind of an object-owned metadata record.
 pub const GC_TYPE_OBJECT_META: u8 = 19;
@@ -245,8 +275,8 @@ pub struct SymbolHeader<S> {
     pub registered: u32,
     /// Description string pointer, or null for `Symbol()` with no argument.
     pub description: *mut S,
-    /// Unique id (monotonic counter). Two symbols with the same description
-    /// still compare as different unless created via Symbol.for.
+    /// Unique, move-stable mixed creation id (`symbol_identity`). Two symbols with
+    /// the same description still compare as different unless created via Symbol.for.
     pub id: u64,
 }
 
@@ -273,5 +303,37 @@ pub const fn closure_reserved_with_props(reserved: u16) -> u16 {
         reserved & !crate::GC_LAYOUT_POINTER_FREE
     } else {
         reserved
+    }
+}
+
+#[cfg(test)]
+mod symbol_identity_tests {
+    use super::*;
+
+    #[test]
+    fn birth_rank_inverts_identity_and_ranks_image_symbols_first() {
+        let edges = [0, 1, 2, 1 << 31, 1 << 32, 1 << 33, 1 << 63, u64::MAX];
+        let mut x = 0x9e37_79b9_7f4a_7c15u64;
+        let samples = (0..4096u64).chain(edges).chain((0..4096).map(|_| {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        }));
+        for ordinal in samples {
+            let rank = symbol_birth_rank(symbol_identity(ordinal));
+            assert_eq!(rank, ordinal.wrapping_add(IMAGE_SYMBOL_ORDINALS));
+        }
+        // The last image ordinal ranks just below the first dynamic birth.
+        let last_image = symbol_identity(u64::MAX);
+        assert_eq!(symbol_birth_rank(last_image), IMAGE_SYMBOL_ORDINALS - 1);
+        assert_eq!(
+            symbol_birth_rank(symbol_identity(1)),
+            IMAGE_SYMBOL_ORDINALS + 1
+        );
+        assert_eq!(
+            symbol_birth_rank(symbol_identity(IMAGE_SYMBOL_ORDINAL_BASE)),
+            0
+        );
     }
 }

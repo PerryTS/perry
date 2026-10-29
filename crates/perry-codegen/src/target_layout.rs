@@ -645,30 +645,27 @@ mod dense_layout_tests {
             assert_eq!(layout_descriptor_size_bytes(target), 64);
             assert_eq!(layout_descriptor_identity_offset(target), 56);
         }
-        use perry_abi::{PerryLayoutImageV1 as Image, PerryStaticLayoutRequestV1 as Request};
-        // Header, literal seeds and the directly indexed lazy descriptor span.
+        use perry_abi::{
+            PerryLayoutImageV1 as Image, PerryProgramTableV1 as Table,
+            PerryStaticLayoutRequestV1 as Request,
+        };
+        // Header and the program table: literal seeds and the directly
+        // indexed lazy descriptor span.
         assert_eq!(
             std::mem::size_of::<Image>(),
-            32 + 2 * std::mem::size_of::<usize>()
+            16 + std::mem::size_of::<usize>()
         );
         assert_eq!(std::mem::align_of::<Image>(), std::mem::size_of::<usize>());
         assert_eq!(std::mem::offset_of!(Image, abi_version), 0);
         assert_eq!(std::mem::offset_of!(Image, static_rows), 4);
         assert_eq!(std::mem::offset_of!(Image, family_first), 8);
         assert_eq!(std::mem::offset_of!(Image, family_count), 12);
-        assert_eq!(std::mem::offset_of!(Image, seeds), 16);
-        assert_eq!(
-            std::mem::offset_of!(Image, lazy_first),
-            16 + std::mem::size_of::<usize>()
-        );
-        assert_eq!(
-            std::mem::offset_of!(Image, lazy_count),
-            20 + std::mem::size_of::<usize>()
-        );
-        assert_eq!(
-            std::mem::offset_of!(Image, lazy_layouts),
-            24 + std::mem::size_of::<usize>()
-        );
+        assert_eq!(std::mem::offset_of!(Image, program), 16);
+        assert_eq!(std::mem::offset_of!(Table, lazy_count), 4);
+        assert_eq!(std::mem::offset_of!(Table, lazy_first), 8);
+        assert_eq!(std::mem::offset_of!(Table, prototype_serial_end), 16);
+        assert_eq!(std::mem::offset_of!(Table, lazy_layouts), 24);
+        assert_eq!(std::mem::offset_of!(Table, seeds), 32);
         assert_eq!(std::mem::size_of::<Request>(), 8);
         assert_eq!(std::mem::offset_of!(Request, layout_word), 4);
     }

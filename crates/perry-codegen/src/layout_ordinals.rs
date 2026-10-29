@@ -188,22 +188,29 @@ impl ProgramLayoutOrdinals {
     }
 
     /// The `PerryLayoutImageV1` initializer; `@perry_static_seeds` is the
-    /// static seed unit's table (`stubs::static_shape_seed_ll_with_plan`).
+    /// program table of the static seed unit (`stubs::static_shape_seed_ll_with_plan`).
     pub fn image_initializer(&self) -> String {
+        format!(
+            "{{ i32 {}, i32 {}, i32 {}, i32 {}, ptr @perry_static_seeds }}",
+            perry_abi::LAYOUT_WORD_ABI_VERSION,
+            self.static_rows(),
+            self.family_first,
+            self.family_count,
+        )
+    }
+
+    /// The program table's lazy span fields after `count`
+    /// (`PerryProgramTableV1`): count, first row, padding, prototype serial
+    /// end, span.
+    pub fn table_span_initializer(&self) -> String {
         let lazy = if self.lazy_count == 0 {
             "null"
         } else {
             "@perry_lazy_layouts"
         };
         format!(
-            "{{ i32 {}, i32 {}, i32 {}, i32 {}, ptr @perry_static_seeds, i32 {}, i32 {}, ptr {lazy}, i64 {} }}",
-            perry_abi::LAYOUT_WORD_ABI_VERSION,
-            self.static_rows(),
-            self.family_first,
-            self.family_count,
-            self.lazy_first,
-            self.lazy_count,
-            self.prototype_serial_end,
+            "i32 {}, i32 {}, i32 0, i64 {}, ptr {lazy}",
+            self.lazy_count, self.lazy_first, self.prototype_serial_end,
         )
     }
 }
@@ -306,12 +313,15 @@ mod tests {
         assert_eq!((plan.family_first, plan.family_count), (first + 2, 1));
         assert_eq!(plan.entries[first as usize].role, LayoutRole::LazyImage);
         assert_eq!(plan.entries[first as usize + 1].proto_kind, 2);
-        assert!(plan.image_initializer().contains("ptr @perry_lazy_layouts"));
+        assert!(plan
+            .table_span_initializer()
+            .ends_with("ptr @perry_lazy_layouts"));
         assert!(ProgramLayoutOrdinals::assign(native_inputs(), [])
             .unwrap()
-            .image_initializer()
+            .table_span_initializer()
             .ends_with(&format!(
-                "i32 0, ptr null, i64 {} }}",
+                "i32 0, i32 {}, i32 0, i64 {}, ptr null",
+                perry_abi::NATIVE_LAYOUT_ROWS,
                 perry_abi::intrinsic_serials::FIRST_DYNAMIC_PROTOTYPE_SERIAL
             )));
     }

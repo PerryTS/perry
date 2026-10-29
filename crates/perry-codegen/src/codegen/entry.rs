@@ -433,11 +433,8 @@ pub(super) fn compile_module_entry(
             Vec::new()
         };
         llmod.add_raw_global("@perry_static_seeds = external constant i8".to_string());
-        if crate::layout_ordinals::current_plan().lazy_count != 0 {
-            llmod.add_raw_global("@perry_lazy_layouts = external global i8".to_string());
-        }
         llmod.add_raw_global(format!(
-            "@perry_layout_image = private constant {{ i32, i32, i32, i32, ptr, i32, i32, ptr, i64 }} {}, align 8",
+            "@perry_layout_image = private constant {{ i32, i32, i32, i32, ptr }} {}, align 8",
             crate::layout_ordinals::current_plan().image_initializer()
         ));
         // WRT step 1: the realm image's test fixture (a compile-time knob).
