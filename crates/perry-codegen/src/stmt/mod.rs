@@ -539,6 +539,7 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                 ctx.block().call_void("js_derived_super_scope_pop", &[]);
             }
             crate::expr::private_resume_frame::write_out_kind(ctx)?;
+            crate::expr::resume_locals::write_back(ctx)?;
             ctx.block().ret(DOUBLE, &final_v);
             Ok(())
         }
@@ -585,6 +586,7 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                 if ctx.shared_super_scope_active {
                     ctx.block().call_void("js_derived_super_scope_pop", &[]);
                 }
+                crate::expr::resume_locals::write_back(ctx)?;
                 ctx.block().ret(DOUBLE, &undef);
             }
             Ok(())
@@ -669,13 +671,17 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
             // entry with an EMPTY cont slot (it is a break target only), so
             // `continue` inside a switch must resolve to the innermost real
             // LOOP, not the switch exit (#5989 — see switch_stmt.rs).
-            let (cont_label, target_depth) = ctx
+            let (loop_index, (cont_label, target_depth)) = ctx
                 .loop_targets
                 .iter()
+                .enumerate()
                 .rev()
-                .find(|(c, _b, _d)| !c.is_empty())
-                .map(|(c, _b, d)| (c.clone(), *d))
+                .find(|(_i, (c, _b, _d))| !c.is_empty())
+                .map(|(i, (c, _b, d))| (i, (c.clone(), *d)))
                 .ok_or_else(|| anyhow!("continue statement outside any loop"))?;
+            let cont_label =
+                crate::expr::resume_locals::direct_dispatch_target(ctx, loop_index)
+                    .unwrap_or(cont_label);
             // Pop try frames escaped by jumping back to the loop header
             // (see Stmt::Break / Stmt::Return for the balancing rationale).
             for _ in target_depth..ctx.try_depth {
@@ -812,6 +818,7 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                 let boxed = crate::expr::nanbox_pointer_inline_pub(blk, &handle);
                 blk.ret(DOUBLE, &boxed);
             } else {
+                crate::expr::resume_locals::write_back(ctx)?;
                 ctx.block().call_void("js_throw", &[(DOUBLE, &val)]);
                 ctx.block().unreachable();
             }
