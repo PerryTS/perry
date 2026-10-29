@@ -12,7 +12,7 @@
 # Exit 1 if a witness total is above main, or a function with +Ir is not listed in allow.txt
 # (one function name per line, '#' comments). A matched +/- pair from inlining is explained by
 # listing both names there.
-# Measurement controls are the accepted JST recipe (nightly/CW/STARTUP_RULE_2026-10-28.md): a minimal
+# Measurement controls (preload chain below: fixed inputs, maps shim, byte-loop string compares) follow the accepted JST recipe (nightly/CW/STARTUP_RULE_2026-10-28.md): a minimal
 # environment, the fixed-inputs preload (clock, entropy, /proc/self/maps normalization), ASLR off,
 # --cache-sim=no --branch-sim=no. IRDIFF_PRELOAD overrides the preload path.
 # IRDIFF_ONLY="hello commander_help" limits the run to those witnesses.
@@ -20,7 +20,7 @@
 # (fast_hash::AHashState); the fixed-inputs preload pins the entropy, so counts are layout-independent.
 # Each perry binary sits next to its runtime libs (PERRY_RUNTIME_DIR = dirname of the resolved
 # binary). Workspace roots: IRDIFF_WS_MAIN / IRDIFF_WS_HEAD (defaults /root/A1S0/main-src and
-# /root/A1S0/src). Witness roots: IRDIFF_SCORE (/root/hwp-move/score), IRDIFF_SAMPLES (/root/STU/samples),
+# /root/A1S0/src (arms need equal-length roots)). Witness roots: IRDIFF_SCORE (/root/hwp-move/score), IRDIFF_SAMPLES (/root/STU/samples),
 # IRDIFF_NSB (/root/NSB/jsc).
 set -u
 full=0; pos=()
@@ -30,8 +30,16 @@ ALLOW=${pos[3]:-/dev/null}
 SC=${IRDIFF_SCORE:-/root/hwp-move/score}; SAMPLES=${IRDIFF_SAMPLES:-/root/STU/samples}; NSB=${IRDIFF_NSB:-/root/NSB/jsc}
 WS_MAIN=${IRDIFF_WS_MAIN:-/root/A1S0/main-src}; WS_HEAD=${IRDIFF_WS_HEAD:-/root/A1S0/src}
 mkdir -p "$OUT/w" "$OUT/cg" "$OUT/tmp"; OUT=$(readlink -f "$OUT")
-PRELOAD=${IRDIFF_PRELOAD:-/root/JST/jst-cg/measurement/jst-fixed-inputs.so}
-[ -f "$PRELOAD" ] || { echo "missing measurement preload $PRELOAD" >&2; exit 2; }
+# Artifact controls (STARTUP_RULE_2026-10-28.md, addendum), applied to BOTH arms: the fixed-inputs preload
+# (clock, entropy, /proc/self/maps normalization), JAG10b's maps shim (std's stack-guard parse of
+# /proc/self/maps answers the main thread from the stack rlimit, so valgrind's mapping placement per arm
+# costs nothing) and the byte-loop string control (memcmp, bcmp, strcmp, strncmp, getenv, secure_getenv:
+# glibc avx2 compare cost follows rodata alignment). Each is overridable; all three must exist.
+FIXED=${IRDIFF_PRELOAD:-/root/JAG10/fixed-inputs.so}
+MAPS_SHIM=${IRDIFF_MAPS_SHIM:-/root/JAG10/tmp/stk-shim.so}
+STR_PLAIN=${IRDIFF_STR_PLAIN:-/root/IOV/ctl/str-plain.so}
+for f in "$FIXED" "$MAPS_SHIM" "$STR_PLAIN"; do [ -f "$f" ] || { echo "missing measurement preload $f" >&2; exit 2; }; done
+PRELOAD="$FIXED:$MAPS_SHIM:$STR_PLAIN"
 # minimal environment of both the compile and the run (same for both arms)
 ENVV=(PATH=/usr/lib/llvm-22/bin:/root/.cargo/bin:/usr/bin:/bin HOME="$HOME" LANG=C LC_ALL=C TZ=UTC LD_PRELOAD="$PRELOAD" PERRY_ALLOW_PERRY_FEATURES=1 TMPDIR="$OUT/tmp" NO_COLOR=1 PKG_BENCH_N=0 PKG_BENCH_WARM=0)
 

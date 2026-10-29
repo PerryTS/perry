@@ -155,3 +155,31 @@ pub(crate) unsafe fn map_cell_meta(cell: *const crate::map::MapHeader) -> *mut O
 pub(crate) unsafe fn set_cell_meta(cell: *const crate::set::SetHeader) -> *mut ObjectMeta {
     (*cell).meta
 }
+
+/// The address of a Promise cell's meta word (the collector's edge).
+#[inline(always)]
+pub(crate) unsafe fn promise_cell_meta_slot(
+    cell: *mut crate::promise::Promise,
+) -> *mut *mut ObjectMeta {
+    std::ptr::addr_of_mut!((*cell).meta)
+}
+
+/// The address of an Error cell's meta word.
+#[inline(always)]
+pub(crate) unsafe fn error_cell_meta_slot(
+    cell: *mut crate::error::ErrorHeader,
+) -> *mut *mut ObjectMeta {
+    std::ptr::addr_of_mut!((*cell).meta)
+}
+
+/// The address of a Map cell's meta word.
+#[inline(always)]
+pub(crate) unsafe fn map_cell_meta_slot(cell: *mut crate::map::MapHeader) -> *mut *mut ObjectMeta {
+    std::ptr::addr_of_mut!((*cell).meta)
+}
+
+/// The address of a Set cell's meta word.
+#[inline(always)]
+pub(crate) unsafe fn set_cell_meta_slot(cell: *mut crate::set::SetHeader) -> *mut *mut ObjectMeta {
+    std::ptr::addr_of_mut!((*cell).meta)
+}
