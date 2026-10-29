@@ -213,6 +213,13 @@ Errors in both global `structuredClone` and worker messages; builtin clone kinds
 such as arrays, Maps, Sets and buffers retain their own serialization behavior.
 Marked transfer buffers are rejected without detachment. The marker table does
 not keep its targets alive.
+Inside a Node-compatible Worker, process-wide mutations such as `abort`, `chdir`,
+credential setters, IPC send/disconnect and setting `umask` are rejected before
+OS effects. IPC members remain absent unless enabled by the Worker startup
+environment. Disabled process callables expose `disabled === true`; reading
+`umask` remains allowed. Worker title writes remain local to the existing title
+value, and mutable CommonJS/default reads observe the updated title. Named ESM
+title imports remain a known parity limitation.
 Other worker API parity gaps remain.
 
 ## Next Steps

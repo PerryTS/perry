@@ -37,6 +37,10 @@ pub(crate) fn minted_native_callable_export(canonical_key: &str) -> Option<f64> 
 }
 
 pub fn bound_native_callable_export_value(module_name: &str, property_name: &str) -> f64 {
+    if crate::process::worker_restrictions::worker_process_member_hidden(module_name, property_name)
+    {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
     // Bound-native closures carry (module, method) metadata that the
     // generic property/call paths resolve through the vtable — and they
     // can be minted via the codegen NativeModuleRef fast path without any
@@ -177,6 +181,20 @@ pub fn bound_native_callable_export_value(module_name: &str, property_name: &str
     let value = scope.root_nanbox_f64(closure.with_mut_ptr(
         |c: *mut crate::closure::ClosureHeader| crate::value::js_nanbox_pointer(c as i64),
     ));
+
+    if crate::process::worker_restrictions::worker_process_callable_disabled(
+        module_name,
+        property_name,
+    ) {
+        closure.with_mut_ptr(|c: *mut crate::closure::ClosureHeader| {
+            crate::closure::closure_define_data_with_attrs(
+                c as usize,
+                "disabled",
+                f64::from_bits(crate::value::TAG_TRUE),
+                crate::object::PropertyAttrs::new(true, true, true),
+            );
+        });
+    }
 
     // Publish the rooted constructor before resolving its children/parent.
     // Stream.Readable forms a cycle with its constructor parent;

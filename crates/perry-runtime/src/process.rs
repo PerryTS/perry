@@ -30,12 +30,14 @@ pub use ipc_hooks::{js_process_ipc_drain, js_process_ipc_has_active};
 mod node_module;
 mod permission;
 pub(crate) mod report;
+pub(crate) mod worker_restrictions;
 pub use credentials::{
     js_process_getegid, js_process_geteuid, js_process_getgid, js_process_getgroups,
     js_process_getuid, js_process_initgroups, js_process_setegid, js_process_seteuid,
     js_process_setgid, js_process_setgroups, js_process_setuid,
 };
 pub(crate) use ipc::*;
+pub use worker_restrictions::WorkerProcessState;
 
 // ── env_misc re-exports (preserve `crate::process::*` paths) ────────────────
 pub use env_misc::{
