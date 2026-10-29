@@ -60,13 +60,15 @@
 //!   Both are real range arguments, not compatibility bounds: there is no
 //!   reachable state in which the value leaves i32. Unknown loop counts and
 //!   step expressions remain boxed; see `collectors/loop_bounded_i32.rs`.
-//! - `integer_locals ∩ index_used_locals`: admission accepts `Add/Sub/Mul`
-//!   chains that can in principle exceed i32 — but under the pre-phase shadow
-//!   model every `LocalGet` of such a local ALREADY reads the i32 slot
-//!   (`literals_vars.rs`), so canonical-i32 storage preserves the shipped,
-//!   byte-exact-validated semantics for exactly the same set of locals. No new
-//!   overflow surface is introduced; tightening further would drop the loop
-//!   counters and index chains this phase exists for.
+//! - `integer_locals ∩ index_used_locals`: every write's EXACT value is
+//!   proven inside i32 (`collectors/integer_locals.rs` exactness invariant):
+//!   `Add/Sub/Mul` only by interval arithmetic over known operand ranges, a
+//!   `for` step only by the loop guard that bounds it. This bullet used to
+//!   accept unproven `Add/Sub/Mul` chains on the argument that the pre-phase
+//!   shadow model already read the i32 slot at every `LocalGet`. That made the
+//!   wrap equally wrong in both models, not safe in either: `j = i * i` with
+//!   `i = 46349` stored `-2146737495`, so `for (…; j <= n; j += i)` ran 46318
+//!   times instead of zero and indexed with the wrapped value.
 //!
 //! Gated by `PERRY_CANONICAL_I32_LOCALS` (default on; `0`/`off`/`false`
 //! reverts to the parallel-shadow model — keyed into the object cache).

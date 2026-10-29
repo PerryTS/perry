@@ -49,7 +49,7 @@
 //!
 //! Both endpoints are compile-time integers; the local is admitted only when
 //! **both fit i32**. That is a genuine range argument, not the compatibility
-//! bound that `integer_locals ∩ index_used_locals` rests on (see the range
+//! bound that `integer_locals ∩ index_used_locals` used to rest on (see the range
 //! soundness audit in `expr/slot_rep.rs`): it introduces no new overflow
 //! surface, because there is no reachable state in which the value leaves i32.
 //!

@@ -1,6 +1,19 @@
-//! Integer-local analysis: which locals are provably integer-valued, making
-//! them eligible for an i32 shadow slot (see `needs_i32_slot` in
-//! `stmt/let_stmt.rs`).
+//! Integer-local analysis: which locals provably hold an int32 value — an
+//! integer whose EXACT value is inside `[-2^31, 2^31 - 1]` — making them
+//! eligible for an i32 slot (see `needs_i32_slot` in `stmt/let_stmt.rs`).
+//!
+//! ## Exactness invariant
+//!
+//! Every consumer reads the slot as the local's value: the Let-site and loop
+//! counter slots, i32 loop guards, i32-native expression chains and native
+//! typed-array indices. So "integer-valued" is not enough. `a + b`, `a - b`,
+//! `a * b` and `x++` over int32 values are integers whose exact value can
+//! leave i32, and an `add`/`mul i32` keeps only its low 32 bits: the slot would
+//! then hold a different number than the program computed. The strict
+//! judgment therefore admits such a write only with a proof that the exact
+//! result fits (`collectors/exact_i32_range.rs`): interval arithmetic over the
+//! operands' known ranges, or — for a `for` loop's own step — the loop guard
+//! that bounds the counter. Unproven writes keep the boxed double.
 //!
 //! ## Soundness invariant (regression #4785 and its bug class)
 //!
@@ -779,6 +792,12 @@ impl ProvenanceJudge<'_> {
 ///
 /// Mirrors `is_int32_producing_expr` (the admission-side judgment), except
 /// it is strict where admission is optimistic:
+///   - `+` `-` `*`: int-producing only when the EXACT result is proven inside
+///     i32 from the operands' ranges (`exact_range_deps`); an int32 operand
+///     alone only bounds it to `[-2^31, 2^31 - 1]`, so `a + b` of two
+///     unbounded int32 values is not. `x >>> 0` is a Uint32 and never is.
+///     The writes `x++` / `x--` are judged in `ProvenanceJudge::walk_expr`
+///     and `judge_for_step`.
 ///   - `Expr::Update`: int-producing only when the updated local is itself
 ///     a candidate (admission says unconditionally yes; `++` on a
 ///     non-integer local yields whatever `ToNumber` gives — possibly a
@@ -1184,10 +1203,10 @@ pub fn collect_flat_row_aliases(
 ///     enables the accumulator pattern `acc = acc + int_expr` without
 ///     requiring a `| 0` wrapper on every write.
 ///   - (issue #49) `Add` / `Sub` / `Mul` when both operands are
-///     int-producing. The sum/product may overflow i32, but the existing
-///     i32-slot machinery already accepts this risk — the double slot is
-///     maintained in parallel and reads past i32::MAX were already wrong
-///     for `| 0`-written accumulators.
+///     int-producing. Optimistic: the exact sum/product can leave i32, so the
+///     disqualification judgment admits it only when the exact result is
+///     proven inside i32 (`collectors/exact_i32_range.rs`); an unproven one
+///     is pruned.
 ///
 /// Rejected: everything else (notably `Div`/`Mod` without a `|0` wrapper,
 /// bare floats, calls returning doubles, etc.) because they can produce
