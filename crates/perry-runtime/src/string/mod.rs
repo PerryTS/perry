@@ -113,6 +113,7 @@ mod compare_value_eq;
 #[cfg(test)]
 pub(crate) use compare::test_key_byte_reads;
 pub(crate) mod concat;
+pub(crate) mod concat_parts;
 mod concat_boundary;
 pub(crate) mod concat_site;
 mod format;
@@ -203,6 +204,7 @@ pub use concat::{
     js_string_concat_chain, js_string_concat_value, js_value_add_string, js_value_concat_string,
     scan_concat_memo_roots, scan_concat_memo_roots_mut,
 };
+pub use concat_parts::{js_string_concat_lit_value_box, js_string_concat_parts};
 pub use concat_site::{js_string_concat_site_value, CONCAT_SITE_SLOTS};
 pub(crate) use format::ascii_char_string;
 pub(crate) use format::fix_exponent_format;
@@ -558,13 +560,16 @@ pub struct StringHeader {
 /// cannot share a constant. This assertion is the link: reordering, resizing,
 /// or padding this struct fails the runtime BUILD here, at the definition,
 /// rather than silently miscompiling every `.length` and `charCodeAt` in
-/// every user program. The literals are duplicated in
+/// every user program.  (12) is read by the inline pointer-push
+/// arm in . The literals are duplicated in
 /// `lower_string_method.rs`'s `STRING_HEADER_*` constants, which name this
 /// item.
 const STRING_HEADER_ABI_MATCHES_CODEGEN: () = {
     assert!(std::mem::size_of::<StringHeader>() == 20);
     assert!(std::mem::offset_of!(StringHeader, utf16_len) == 0);
     assert!(std::mem::offset_of!(StringHeader, byte_len) == 4);
+    assert!(std::mem::offset_of!(StringHeader, refcount) == 12);
+    assert!(std::mem::offset_of!(StringHeader, refcount) == 12);
     assert!(std::mem::offset_of!(StringHeader, flags) == 16);
 };
 const _: () = STRING_HEADER_ABI_MATCHES_CODEGEN;
