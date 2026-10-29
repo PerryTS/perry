@@ -38,6 +38,7 @@ use super::*;
 #[derive(Clone)]
 struct PlainObjectPlan {
     prefix: [Option<GcMutableSlot>; 5],
+    #[cfg(any(test, debug_assertions))]
     next_prefix: usize,
     payload: HeapSlotRange,
     walk: PayloadWalk,
@@ -53,6 +54,7 @@ enum PayloadWalk {
 }
 
 impl PlainObjectPlan {
+    #[cfg(any(test, debug_assertions))]
     #[inline(always)]
     unsafe fn next_slot(&mut self) -> Option<GcMutableSlot> {
         while self.next_prefix < self.prefix.len() {
@@ -120,6 +122,7 @@ unsafe fn plain_object_plan(header: *mut GcHeader) -> PlainObjectPlan {
         // edge and no carrier note, no meta edge, no payload.
         return PlainObjectPlan {
             prefix: [None; 5],
+            #[cfg(any(test, debug_assertions))]
             next_prefix: 5,
             payload: HeapSlotRange::new(std::ptr::null_mut(), 0),
             walk: PayloadWalk::Word(0),
@@ -177,6 +180,7 @@ unsafe fn plain_object_plan(header: *mut GcHeader) -> PlainObjectPlan {
             meta.map(|slot| GcMutableSlot::pointer(slot.cast())),
             crate::object::arguments_mapping_slot(obj).map(|slot| GcMutableSlot::new(slot, None)),
         ],
+        #[cfg(any(test, debug_assertions))]
         next_prefix: 0,
         payload: range,
         walk,

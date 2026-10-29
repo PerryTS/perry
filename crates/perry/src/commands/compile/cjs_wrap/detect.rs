@@ -17,6 +17,33 @@
 /// top-level `import`/`export` *inside* the IIFE body and SWC errors with
 /// `ImportExportInScript`. The guard below short-circuits the wrap when a
 /// top-level `import`/`export` statement is detected.
+/// The module format Node assigns a file before it looks at the syntax:
+/// `.mjs`/`.mts` are ES modules and `.cjs`/`.cts` CommonJS; any other file
+/// takes the `"type"` of its nearest package.json (`"module"` / `"commonjs"`).
+/// `None` when nothing declares a format, and Node detects it from syntax.
+pub(in crate::commands::compile) fn declared_module_format_is_esm(
+    path: &std::path::Path,
+) -> Option<bool> {
+    match path.extension().and_then(|ext| ext.to_str()) {
+        Some("mjs" | "mts") => return Some(true),
+        Some("cjs" | "cts") => return Some(false),
+        _ => {}
+    }
+    // The nearest package.json decides, with or without a `"type"` field.
+    let manifest = path
+        .ancestors()
+        .skip(1)
+        .map(|dir| dir.join("package.json"))
+        .find(|manifest| manifest.is_file())?;
+    let json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(manifest).ok()?).ok()?;
+    match json.get("type").and_then(|kind| kind.as_str()) {
+        Some("module") => Some(true),
+        Some("commonjs") => Some(false),
+        _ => None,
+    }
+}
+
 pub(in crate::commands::compile) fn is_commonjs(source: &str) -> bool {
     // An empty (or whitespace-only) file is a valid CJS module exporting
     // `{}` — marker packages like react's `client-only` ship a 0-byte
@@ -668,5 +695,34 @@ mod import_meta_tests {
         ] {
             assert!(is_commonjs(source), "{source}");
         }
+    }
+}
+
+#[cfg(test)]
+mod declared_format_tests {
+    use super::declared_module_format_is_esm;
+
+    #[test]
+    fn extension_then_nearest_package_type_declares_the_format() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let nested = root.join("cjs");
+        let plain = root.join("plain");
+        std::fs::create_dir_all(&nested).expect("nested dir");
+        std::fs::create_dir_all(&plain).expect("plain dir");
+        std::fs::write(root.join("package.json"), r#"{ "type": "module" }"#)
+            .expect("root manifest");
+        std::fs::write(nested.join("package.json"), r#"{ "type": "commonjs" }"#)
+            .expect("nested manifest");
+        std::fs::write(plain.join("package.json"), r#"{ "name": "plain" }"#)
+            .expect("plain manifest");
+
+        assert_eq!(declared_module_format_is_esm(&root.join("main.ts")), Some(true));
+        assert_eq!(declared_module_format_is_esm(&nested.join("main.ts")), Some(false));
+        // The nearest manifest decides even without a "type": syntax then does.
+        assert_eq!(declared_module_format_is_esm(&plain.join("main.ts")), None);
+        // The extension wins over any manifest.
+        assert_eq!(declared_module_format_is_esm(&nested.join("main.mts")), Some(true));
+        assert_eq!(declared_module_format_is_esm(&root.join("main.cts")), Some(false));
     }
 }

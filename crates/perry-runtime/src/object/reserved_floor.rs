@@ -37,6 +37,7 @@ use crate::array::ArrayHeader;
 ///   * buffer: `buffer/iter.rs` (fields 0..2)
 ///   * regexp-string: `regex/match_all.rs` (fields 0..4)
 ///   * iterator helpers: `iterator_helpers.rs` (fields 0..3)
+#[inline(always)]
 pub(crate) fn reserved_slot_floor_for_class_id(class_id: u32) -> u32 {
     match class_id {
         crate::array::ARRAY_ITERATOR_CLASS_ID => 5,
@@ -52,8 +53,54 @@ pub(crate) fn reserved_slot_floor_for_class_id(class_id: u32) -> u32 {
 
 /// Builtin iterator internal fields still use the compatibility floor.
 /// URL declares its private component slots in its static layout at birth.
+#[inline(always)]
 pub(crate) unsafe fn reserved_slot_floor_for_object(obj: *mut ObjectHeader) -> u32 {
     reserved_slot_floor_for_class_id((*obj).class_id)
+}
+
+/// A receiver whose class reserves raw fields and whose keys array has not
+/// been seeded yet. Its keyless shape does not describe those raw fields (and
+/// can be shared with an ordinary keyless object of the same prototype), so a
+/// key count or a learned edge read from it is not a slot index: every
+/// key-add funnel either seeds first ([`ensure_reserved_floor_keys`]) or
+/// leaves the add to one that does.
+///
+/// # Safety
+/// `obj` must be a live `GC_TYPE_OBJECT` allocation.
+#[inline(always)]
+pub(crate) unsafe fn reserved_floor_unseeded(obj: *mut ObjectHeader) -> bool {
+    reserved_slot_floor_for_object(obj) != 0 && super::object_keys(obj).is_null()
+}
+
+/// The lowest class id with a reserved raw-field floor. Every such id, and
+/// the native-module namespace id, lies at or above it in the runtime band.
+const LOWEST_RESERVED_FLOOR_CLASS_ID: u32 = crate::buffer::BUFFER_ITERATOR_CLASS_ID;
+const _: () = {
+    assert!(super::NATIVE_MODULE_CLASS_ID >= LOWEST_RESERVED_FLOOR_CLASS_ID);
+    assert!(crate::array::ARRAY_ITERATOR_CLASS_ID >= LOWEST_RESERVED_FLOOR_CLASS_ID);
+    assert!(crate::collection_iter_object::MAP_ITERATOR_CLASS_ID >= LOWEST_RESERVED_FLOOR_CLASS_ID);
+    assert!(crate::collection_iter_object::SET_ITERATOR_CLASS_ID >= LOWEST_RESERVED_FLOOR_CLASS_ID);
+    assert!(crate::string::STRING_ITERATOR_CLASS_ID >= LOWEST_RESERVED_FLOOR_CLASS_ID);
+    assert!(crate::regex::REGEXP_STRING_ITERATOR_CLASS_ID >= LOWEST_RESERVED_FLOOR_CLASS_ID);
+    assert!(crate::iterator_helpers::ITERATOR_HELPER_CLASS_ID >= LOWEST_RESERVED_FLOOR_CLASS_ID);
+};
+
+/// A shape-proven key add declines this receiver: a native-module namespace,
+/// or an unseeded reserved-field receiver ([`reserved_floor_unseeded`]). One
+/// compare for every receiver outside the runtime band, the cost of the
+/// namespace test alone.
+///
+/// # Safety
+/// `obj` must be a live `GC_TYPE_OBJECT` allocation.
+#[inline(always)]
+pub(crate) unsafe fn runtime_receiver_declines_key_add(obj: *mut ObjectHeader) -> bool {
+    (*obj).class_id >= LOWEST_RESERVED_FLOOR_CLASS_ID && runtime_band_receiver_declines(obj)
+}
+
+#[cold]
+#[inline(never)]
+unsafe fn runtime_band_receiver_declines(obj: *mut ObjectHeader) -> bool {
+    (*obj).class_id == super::NATIVE_MODULE_CLASS_ID || reserved_floor_unseeded(obj)
 }
 
 /// Install the reserved-floor keys array on a keys-less receiver whose class

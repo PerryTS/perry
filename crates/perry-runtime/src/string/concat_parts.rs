@@ -156,21 +156,23 @@ macro_rules! drive_parts {
     }};
 }
 
-/// Fold `$cursor = $obj.$method(i, $cursor)` over `i in 0..$n`, unrolled like
-/// [`drive_parts`].
+/// Thread `$cursor` through `$obj.$method(i, $cursor)` for `i in 0..$n`,
+/// unrolled like [`drive_parts`]. The final cursor is not needed.
 macro_rules! emit_parts {
-    ($unroll:expr, $n:expr, $obj:ident . $method:ident ( ? , $cursor:ident ) , $out:ident) => {{
+    ($unroll:expr, $n:expr, $obj:ident . $method:ident ( ? , $cursor:ident )) => {{
+        let mut cursor = $cursor;
         if $unroll {
-            if $n > 0 { $out = $obj.$method(0, $cursor); }
-            if $n > 1 { $out = $obj.$method(1, $out); }
-            if $n > 2 { $out = $obj.$method(2, $out); }
-            if $n > 3 { $out = $obj.$method(3, $out); }
-            if $n > 4 { $out = $obj.$method(4, $out); }
+            if $n > 0 { cursor = $obj.$method(0, cursor); }
+            if $n > 1 { cursor = $obj.$method(1, cursor); }
+            if $n > 2 { cursor = $obj.$method(2, cursor); }
+            if $n > 3 { cursor = $obj.$method(3, cursor); }
+            if $n > 4 { cursor = $obj.$method(4, cursor); }
         } else {
             for i in 0..$n {
-                $out = $obj.$method(i, $out);
+                cursor = $obj.$method(i, cursor);
             }
         }
+        let _ = cursor;
     }};
 }
 
@@ -315,7 +317,7 @@ fn concat_parts_simple<const M: usize, const UNROLL: bool>(
     let flags = st.flags;
 
     // `Some` proves nothing moved, so the borrowed heap payloads are valid.
-    let (result, mut cursor) = match string_storage_alloc_no_collect(total_blen) {
+    let (result, cursor) = match string_storage_alloc_no_collect(total_blen) {
         Some(allocated) => allocated,
         None => {
             return Some(concat_parts_rooted_copy::<M>(
@@ -332,7 +334,7 @@ fn concat_parts_simple<const M: usize, const UNROLL: bool>(
     };
     unsafe {
         init_string_header(result, total_u16, total_blen, total_blen, 0, flags);
-        emit_parts!(UNROLL, n, st.emit(?, cursor), cursor);
+        emit_parts!(UNROLL, n, st.emit(?, cursor));
     }
     // Only a heap or inline operand can carry a lone surrogate, and only a
     // join of two such operands can mint a pair.
