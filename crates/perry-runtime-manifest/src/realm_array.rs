@@ -161,8 +161,28 @@ pub(super) fn realm(expression: &str, entry: &[Token<'_>], source: &str) -> Resu
     let mut declared_kind = None;
     let mut source_table = None;
     let mut integrity = Integrity::Extensible;
+    let mut members = None;
+    let mut prototype_kind = false;
+    let mut extends = None;
     let mut seen = std::collections::BTreeSet::new();
     for clause in &clauses[1..] {
+        if clause.len() > 3
+            && clause[0].text == "members"
+            && clause[1].text == "="
+            && clause[2].text == "{"
+            && clause.last().is_some_and(|t| t.text == "}")
+            && seen.insert("members")
+        {
+            members = Some(super::birth::members(&name, &clause[3..clause.len() - 1])?);
+            continue;
+        }
+        if clause.len() >= 3 && clause[0].text == "extends" && clause[1].text == "=" {
+            if !seen.insert("extends") {
+                return Err(format!("{name}: duplicate array inheritance"));
+            }
+            extends = Some(facts::path(&clause[2..])?);
+            continue;
+        }
         if clause.len() != 3 || clause[1].text != "=" || !seen.insert(clause[0].text) {
             return Err(format!("{name}: malformed or duplicate array birth fact"));
         }
@@ -171,6 +191,7 @@ pub(super) fn realm(expression: &str, entry: &[Token<'_>], source: &str) -> Resu
             ("elements", kind) => declared_kind = Some(elements_kind(kind)?),
             ("elements_source", table) => source_table = Some(table.to_owned()),
             ("integrity", level) => integrity = super::derive::integrity(level)?,
+            ("kind", "prototype") => prototype_kind = true,
             _ => {
                 return Err(format!(
                     "{name}: unknown array birth fact {}",
@@ -223,6 +244,47 @@ pub(super) fn realm(expression: &str, entry: &[Token<'_>], source: &str) -> Resu
             }
         }
     };
+    if let Some(mut members) = members {
+        // An array holder with own members (`%Array.prototype%`): an empty
+        // scalar birth whose members the declaration lists in their order.
+        if dynamic
+            || source_table.is_some()
+            || declared_kind.is_some()
+            || !call.starts_with(REALM_ARRAY_ALLOC)
+            || args[0] != "0"
+            || elements != ArrayElements::Scalars
+        {
+            return Err(format!("{name}: an array holder is an empty scalar birth"));
+        }
+        let prototype = extends.unwrap_or_else(|| "Array.prototype".to_owned());
+        if prototype == "Array.prototype" {
+            return Err(format!("{name}: omit default array inheritance"));
+        }
+        members.births.insert(prototype.clone());
+        members.births.remove(&name);
+        let mut map = base(
+            if prototype_kind {
+                "prototype"
+            } else {
+                "namespace"
+            },
+            elements,
+        );
+        map.insert("prototype".into(), string(prototype));
+        map.insert(
+            "births".into(),
+            Value::Array(members.births.into_iter().map(string).collect()),
+        );
+        map.insert("properties".into(), Value::Array(members.properties));
+        map.insert("own_key_order".into(), Value::Array(members.keys));
+        map.insert("own_symbol_order".into(), Value::Array(members.symbols));
+        return Ok(Value::Object(map));
+    }
+    if prototype_kind || extends.is_some() {
+        return Err(format!(
+            "{name}: only an array holder declares its kind or inheritance"
+        ));
+    }
     if dynamic {
         if source_table.is_some() {
             return Err(format!("{name}: a dynamic array has no element table"));
