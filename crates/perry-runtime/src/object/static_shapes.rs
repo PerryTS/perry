@@ -116,10 +116,14 @@ pub extern "C" fn js_object_final_shape_id_for_class_keys_static_private(
     let proof = super::canonical_keys::SharedLayout::shape_cache_entry();
     // The receiver's first claim extends the canonical form of its birth list
     // (`ensure_key_in_keys_array_inner`); so does this.
-    let (mut list_root, mut count) = if names.is_empty() {
+    // `list` is the canonical handle once this agent's trie answered for
+    // the list (its node travels to the minted record); `None` keeps the
+    // caller's keys word unchanged.
+    let (mut list_root, mut count, mut list) = if names.is_empty() {
         (
             scope.root_raw_mut_ptr(keys as usize as *mut ArrayHeader),
             key_count,
+            None,
         )
     } else {
         let base = unsafe {
@@ -129,28 +133,34 @@ pub extern "C" fn js_object_final_shape_id_for_class_keys_static_private(
                 key_count,
             )
         };
-        (scope.root_raw_mut_ptr(base.as_ptr()), base.len())
+        (scope.root_raw_mut_ptr(base.as_ptr()), base.len(), Some(base))
     };
     for name in &names {
         let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
         let key = scope.root_string_ptr(key);
-        let next = list_root.with_mut_ptr::<ArrayHeader, _>(|list| {
+        let parent = list.expect("a nonempty name list canonicalized its base");
+        let next = list_root.with_mut_ptr::<ArrayHeader, _>(|arr| {
             key.with_const_ptr::<crate::StringHeader, _>(|key| unsafe {
                 super::canonical_keys::extend_key_with_entry(
                     &proof,
-                    super::canonical_keys::CanonicalKeys::from_rooted(list, count),
+                    parent.rooted_at(arr),
                     key,
                     super::key_attrs::PRIVATE_FIELD_ENTRY,
                 )
             })
         });
         count = next.len();
+        list = Some(next);
         list_root = scope.root_raw_mut_ptr(next.as_ptr());
     }
-    let id = list_root.with_const_ptr::<ArrayHeader, _>(|list| {
-        let summary = unsafe { super::key_attrs::keys_summary_checked(list, count) };
+    let id = list_root.with_const_ptr::<ArrayHeader, _>(|arr| {
+        let summary = unsafe { super::key_attrs::keys_summary_checked(arr, count) };
+        let shape_keys: shapes::ShapeKeys = match list {
+            Some(list) => list.rooted_at(arr.cast_mut()).into(),
+            None => arr.into(),
+        };
         shapes::publish_shape_result(shapes::shape_descriptor_intern_with_special(
-            list,
+            shape_keys,
             count,
             live.max(count),
             0,
@@ -1051,10 +1061,14 @@ pub extern "C" fn js_object_final_layout_for_class_keys_static_private(
     let proof = super::canonical_keys::SharedLayout::shape_cache_entry();
     // The receiver's first claim extends the canonical form of its birth list
     // (`ensure_key_in_keys_array_inner`); so does this.
-    let (mut list_root, mut count) = if names.is_empty() {
+    // `list` is the canonical handle once this agent's trie answered for
+    // the list (its node travels to the minted record); `None` keeps the
+    // caller's keys word unchanged.
+    let (mut list_root, mut count, mut list) = if names.is_empty() {
         (
             scope.root_raw_mut_ptr(keys as usize as *mut ArrayHeader),
             key_count,
+            None,
         )
     } else {
         let base = unsafe {
@@ -1064,28 +1078,34 @@ pub extern "C" fn js_object_final_layout_for_class_keys_static_private(
                 key_count,
             )
         };
-        (scope.root_raw_mut_ptr(base.as_ptr()), base.len())
+        (scope.root_raw_mut_ptr(base.as_ptr()), base.len(), Some(base))
     };
     for name in &names {
         let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
         let key = scope.root_string_ptr(key);
-        let next = list_root.with_mut_ptr::<ArrayHeader, _>(|list| {
+        let parent = list.expect("a nonempty name list canonicalized its base");
+        let next = list_root.with_mut_ptr::<ArrayHeader, _>(|arr| {
             key.with_const_ptr::<crate::StringHeader, _>(|key| unsafe {
                 super::canonical_keys::extend_key_with_entry(
                     &proof,
-                    super::canonical_keys::CanonicalKeys::from_rooted(list, count),
+                    parent.rooted_at(arr),
                     key,
                     super::key_attrs::PRIVATE_FIELD_ENTRY,
                 )
             })
         });
         count = next.len();
+        list = Some(next);
         list_root = scope.root_raw_mut_ptr(next.as_ptr());
     }
-    let id = list_root.with_const_ptr::<ArrayHeader, _>(|list| {
-        let summary = unsafe { super::key_attrs::keys_summary_checked(list, count) };
+    let id = list_root.with_const_ptr::<ArrayHeader, _>(|arr| {
+        let summary = unsafe { super::key_attrs::keys_summary_checked(arr, count) };
+        let shape_keys: shapes::ShapeKeys = match list {
+            Some(list) => list.rooted_at(arr.cast_mut()).into(),
+            None => arr.into(),
+        };
         shapes::publish_shape_result(shapes::intern_static_layout(
-            list,
+            shape_keys,
             count,
             live.max(count),
             0,

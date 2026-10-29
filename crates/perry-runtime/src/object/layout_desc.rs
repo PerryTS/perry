@@ -305,7 +305,11 @@ pub struct PerryLayoutDesc {
     /// Immutable layout-owned method index, or null.
     pub methods: *const methods::PerryFamilyMethods,
     pub shape_id: u32,
-    pub _layout_pad: u32,
+    /// The static GC scan plan ([`crate::codegen_abi::layout_gc_plan`]): bit 31
+    /// set and the slots that may hold a heap pointer in bits 0..=30, or 0 for
+    /// the generic walk. Immutable image data emitted by codegen; the
+    /// collectors read it for an object on this descriptor's own layout.
+    pub gc_plan: u32,
     /// Immutable descriptor-owned canonical key-list cell; null for bindings
     /// whose keys are local to an evaluation, and on the wasm fallback arm.
     pub image_keys: *mut crate::array::ArrayHeader,
@@ -437,7 +441,7 @@ section_sentinel!(
     PerryLayoutDesc {
         image_keys: std::ptr::null_mut(),
         shape_id: 0,
-        _layout_pad: 0,
+        gc_plan: 0,
         family: SENTINEL_FAMILY,
         variant: 0,
         kind: 0,
@@ -1690,6 +1694,35 @@ pub(crate) unsafe fn family_desc_of(obj: *const ObjectHeader) -> Option<&'static
         .family_desc_index_plus_one()
         .checked_sub(1)?;
     literal_birth::family_at(index).map(|desc| &*desc)
+}
+
+/// The static GC scan plan of `obj`: the slots that may hold a heap pointer,
+/// read from the descriptor of the family layout `obj` is born on
+/// ([`PerryLayoutDesc::gc_plan`]), or `None` when the collectors must walk it
+/// generically.
+///
+/// The plan applies only to an object on its family's OWN layout word: not an
+/// evaluation copy (it names a different prototype and holder) and not a
+/// shadowed word (the object carries own overflow). `record` is the shape
+/// record of that word, which the caller already resolved. A family record is
+/// a static record (`install_declared_layout` marks it an external carrier),
+/// so the shape table roots its keys array and no prune retires it; that is
+/// what lets a plan walk skip the per-object keys edge and carrier notes.
+///
+/// # Safety
+/// `obj` is a live object and `record` is the record of its layout word.
+#[inline(always)]
+pub(crate) unsafe fn static_gc_scan_mask(
+    obj: *const ObjectHeader,
+    record: super::shapes::ShapeRecordRef,
+) -> Option<u32> {
+    let index = record.family_desc_index_plus_one().checked_sub(1)?;
+    let desc = literal_birth::family_at(index)?;
+    let plan = (*desc).gc_plan;
+    (plan & crate::codegen_abi::LAYOUT_GC_PLAN_STATIC != 0
+        && (*desc).layout_id == (*obj).parent_class_id
+        && record.is_static_record())
+    .then_some(plan & !crate::codegen_abi::LAYOUT_GC_PLAN_STATIC)
 }
 
 /// Is `obj` a class family object: on its family layout, or on a class

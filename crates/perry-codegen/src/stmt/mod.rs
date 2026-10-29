@@ -211,6 +211,7 @@ fn lower_stmts_from(
     let lowered = lower_stmts_list(ctx, stmts, emit_shadow_clears, version_tails);
     // A class-guard run never outlives its statement list.
     crate::expr::class_guard_memo::close(ctx);
+    crate::expr::map_entry_fusion::close_list(ctx, stmts);
     ctx.ready_cell_roots.pop_list();
     ctx.numeric_order_ready.pop_list();
     lowered
@@ -330,10 +331,12 @@ fn lower_stmts_list(
             }
         }
         crate::expr::class_guard_memo::before_stmt(ctx, stmts, i);
+        crate::expr::map_entry_fusion::before_stmt(ctx, stmts, i);
         crate::layout_desc::create_families::before_stmt(ctx, stmts, i);
         let lowered = lower_stmt(ctx, &stmts[i]);
         crate::layout_desc::create_families::after_stmt(ctx);
         crate::expr::class_guard_memo::after_stmt(ctx);
+        crate::expr::map_entry_fusion::after_stmt(ctx, stmts, i);
         lowered?;
         if let Some(id) = ctx.born_let.take() {
             anyhow::bail!("closure birth table: declaration of local {id} was not lowered as born");

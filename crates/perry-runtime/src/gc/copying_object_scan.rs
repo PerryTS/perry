@@ -196,6 +196,13 @@ impl CopyingNurseryCollector {
         // answer.
         let weak = weak_holder_fact(header);
         let remembering = ParentRemembering::of(header, self.skip_remembering);
+        // An object on a family layout is scanned from the plan its
+        // descriptor carries (`static_scan`); every other object builds its
+        // plan from the shape below.
+        if let Some(scan) = super::static_scan::static_scan(header, None) {
+            self.visit_static_scan(&scan, header, weak, remembering);
+            return true;
+        }
         let plan = plain_object_plan(header);
         #[cfg(test)]
         let cross_check = !sabotage::cross_check_disabled();

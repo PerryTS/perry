@@ -166,5 +166,26 @@ impl AsyncContextSnapshot {
     }
 }
 
+/// Settled self-next continuation (SNC) admission for the context half: would
+/// publishing a job from the current context and dispatching it at once be
+/// accepted and eligible? A cancelled domain drops the job at enqueue, so SNC
+/// declines. Otherwise the job would inherit the current domain (the enqueue
+/// adopts the current one for an unowned/exited token and dispatch keeps the
+/// active domain), so only the `ready` mark and the dispatch-time discard of
+/// disabled ALS entries remain to be performed. Declines change nothing.
+pub(crate) fn admit_inline_self_next_job() -> bool {
+    ACTIVE_CONTEXT.with(|ctx| {
+        let mut ctx = ctx.borrow_mut();
+        if let Some(owner) = ctx.job_domain.as_ref() {
+            if owner.0.status.load(Ordering::Acquire) == DOMAIN_CANCELLED {
+                return false;
+            }
+            owner.0.ready.store(true, Ordering::Release);
+        }
+        discard_disabled_entries(&mut ctx);
+        true
+    })
+}
+
 #[cfg(test)]
 mod tests;

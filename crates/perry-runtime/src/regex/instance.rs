@@ -119,12 +119,13 @@ fn prepare_shape(receiver: *mut RegExpHeader) -> *mut RegExpHeader {
             PRIVATE_FIELD_ENTRY,
         )
     };
+    let first = keys;
     let keys = scope.root_raw_mut_ptr(keys.as_ptr());
     let index_key = crate::string::intern_ascii_literal(b"lastIndex");
     let final_keys = keys.with_mut_ptr::<crate::array::ArrayHeader, _>(|keys| unsafe {
         crate::object::canonical_keys::extend_key_with_entry(
             &proof,
-            CanonicalKeys::from_rooted(keys, 1),
+            first.rooted_at(keys),
             index_key,
             attr_bits_to_entry(1),
         )
@@ -134,7 +135,7 @@ fn prepare_shape(receiver: *mut RegExpHeader) -> *mut RegExpHeader {
     receiver.with_mut_ptr::<RegExpHeader, _>(|r| unsafe {
         assert!(crate::object::shapes::stamp_linked_final_shape(
             r,
-            final_keys.as_ptr(),
+            final_keys,
             2,
             proto_id,
             prototype.with_const_ptr::<RegExpHeader, _>(|p| js_nanbox_pointer(p as i64).to_bits()),

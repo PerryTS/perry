@@ -280,8 +280,10 @@ pub(super) unsafe fn register_bound(
     // Compatibility key arrays are owned by the one authoritative shape
     // record, and are shared by the canonical key trie when names/attrs agree.
     let _no_gc = crate::gc::GcSuppressScope::new();
-    let list = if key_count == 0 {
-        std::ptr::null_mut()
+    // The canonical handle's view: the list and its trie node, which the
+    // shape record carries (CKI S1).
+    let list_keys = if key_count == 0 {
+        super::super::ObjectKeys::NONE
     } else if super::super::image_keys::prepare(keys, d.image_keys) {
         super::super::canonical_keys::static_seed::link_image_list(
             &super::super::canonical_keys::SharedLayout::shape_cache_entry(),
@@ -290,7 +292,6 @@ pub(super) unsafe fn register_bound(
         )
         .expect("descriptor image list agrees with its keys and attributes")
         .view()
-        .arr()
     } else if let Some(canonical) = (!function)
         .then(|| {
             super::super::canonical_keys::from_static_layout(
@@ -301,7 +302,7 @@ pub(super) unsafe fn register_bound(
         })
         .flatten()
     {
-        canonical.view().arr()
+        canonical.view()
     } else {
         let list = super::super::key_attrs::alloc_canonical_key_list(
             key_count,
@@ -334,8 +335,8 @@ pub(super) unsafe fn register_bound(
             key_count,
         )
         .view()
-        .arr()
     };
+    let list = list_keys.arr();
     let summary = super::super::key_attrs::keys_summary(list, key_count);
     // A carried prototype layout is a marked prototype's: its own semantic
     // generation, shared with no other layout.
@@ -348,7 +349,7 @@ pub(super) unsafe fn register_bound(
     if function {
         let word = super::super::shapes::publish_shape_result(
             super::super::shapes::shape_descriptor_intern_with_rep(
-                list,
+                list_keys,
                 key_count,
                 slot_count,
                 generation,
@@ -404,7 +405,7 @@ pub(super) unsafe fn register_bound(
             } else {
                 0
             },
-            list,
+            list_keys,
             key_count,
             slot_count,
             kind,

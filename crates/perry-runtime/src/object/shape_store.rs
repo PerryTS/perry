@@ -882,7 +882,7 @@ unsafe fn apply_proven_add(
         let obj = owner.get_raw_mut_ptr::<ObjectHeader>();
         let proof = super::canonical_keys::SharedLayout::of_receiver(obj)?;
         let keys = super::object_keys(obj);
-        let parent = super::canonical_keys::canonicalize(&proof, keys.arr(), slot as u32);
+        let parent = super::canonical_keys::canonical_prefix(&proof, keys, (slot as u32).min(keys.count()));
         let next = super::canonical_keys::extend_key(
             &proof,
             parent,

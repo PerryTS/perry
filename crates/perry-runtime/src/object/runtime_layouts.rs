@@ -162,7 +162,7 @@ macro_rules! runtime_layout {
         /// Declared layout of a checked runtime record.
         pub static mut $name: PerryLayoutDesc = PerryLayoutDesc {
         image_keys: crate::object::image_keys::image_key_list!($name::KEYS),
-            shape_id: 0, _layout_pad: 0,
+            shape_id: 0, gc_plan: 0,
             family: $family, variant: $variant, kind: $kind, integrity: 0,
             slot_count: $name::SLOT_COUNT as u32,
             layout_id: crate::object::runtime_layouts::runtime_layout_word(stringify!($name)),
@@ -631,7 +631,7 @@ static READABLE_STATE_INDEX: [u32; 16] = [
 pub(crate) static mut READABLE_STATE: PerryLayoutDesc = PerryLayoutDesc {
     image_keys: crate::object::image_keys::image_key_list!(READABLE_STATE_KEYS),
     shape_id: 0,
-    _layout_pad: 0,
+    gc_plan: 0,
     family: 0x52540001,
     variant: 0,
     kind: 0,
@@ -722,7 +722,7 @@ static WRITABLE_STATE_INDEX: [u32; 16] = [
 pub(crate) static mut WRITABLE_STATE: PerryLayoutDesc = PerryLayoutDesc {
     image_keys: crate::object::image_keys::image_key_list!(WRITABLE_STATE_KEYS),
     shape_id: 0,
-    _layout_pad: 0,
+    gc_plan: 0,
     family: 0x52540002,
     variant: 0,
     kind: 0,
@@ -766,7 +766,7 @@ static URL_SEARCH_PARAMS_INDEX: [u32; 4] = [0, 1, u32::MAX, u32::MAX];
 pub(crate) static mut URL_SEARCH_PARAMS: PerryLayoutDesc = PerryLayoutDesc {
     image_keys: crate::object::image_keys::image_key_list!(URL_SEARCH_PARAMS_KEYS),
     shape_id: 0,
-    _layout_pad: 0,
+    gc_plan: 0,
     family: 0x52540003,
     variant: 0,
     kind: 0,
@@ -903,7 +903,7 @@ static URL_COMPONENTS_INDEX: [u32; 32] = [
 pub(crate) static mut URL_COMPONENTS: PerryLayoutDesc = PerryLayoutDesc {
     image_keys: crate::object::image_keys::image_key_list!(URL_COMPONENTS_KEYS),
     shape_id: 0,
-    _layout_pad: 0,
+    gc_plan: 0,
     family: 0x52540004,
     variant: 0,
     kind: 0,
@@ -947,7 +947,7 @@ static ITERATOR_RESULT_INDEX: [u32; 4] = [u32::MAX, 1, 0, u32::MAX];
 pub(crate) static mut ITERATOR_RESULT: PerryLayoutDesc = PerryLayoutDesc {
     image_keys: crate::object::image_keys::image_key_list!(ITERATOR_RESULT_KEYS),
     shape_id: 0,
-    _layout_pad: 0,
+    gc_plan: 0,
     family: 0x52540005,
     variant: 0,
     kind: 0,
@@ -991,7 +991,7 @@ static ITERATOR_RESULT_DONE_FIRST_INDEX: [u32; 4] = [u32::MAX, 0, 1, u32::MAX];
 pub(crate) static mut ITERATOR_RESULT_DONE_FIRST: PerryLayoutDesc = PerryLayoutDesc {
     image_keys: crate::object::image_keys::image_key_list!(ITERATOR_RESULT_DONE_FIRST_KEYS),
     shape_id: 0,
-    _layout_pad: 0,
+    gc_plan: 0,
     family: 0x52540006,
     variant: 0,
     kind: 0,
@@ -1022,7 +1022,7 @@ static TIMEOUT_INDEX: [u32; 2] = [u32::MAX, u32::MAX];
 pub(crate) static mut TIMEOUT: PerryLayoutDesc = PerryLayoutDesc {
     image_keys: crate::object::image_keys::image_key_list!(TIMEOUT_KEYS),
     shape_id: 0,
-    _layout_pad: 0,
+    gc_plan: 0,
     family: 0x52540007,
     variant: 0,
     kind: 0,
@@ -1053,7 +1053,7 @@ static IMMEDIATE_INDEX: [u32; 2] = [u32::MAX, u32::MAX];
 pub(crate) static mut IMMEDIATE: PerryLayoutDesc = PerryLayoutDesc {
     image_keys: crate::object::image_keys::image_key_list!(IMMEDIATE_KEYS),
     shape_id: 0,
-    _layout_pad: 0,
+    gc_plan: 0,
     family: 0x52540008,
     variant: 0,
     kind: 0,
@@ -1139,7 +1139,7 @@ static REGEX_EXEC_NAMED_INDEX: [u32; 8] = [u32::MAX, u32::MAX, u32::MAX, 1, 2, 0
 pub(crate) static mut REGEX_EXEC_NAMED: PerryLayoutDesc = PerryLayoutDesc {
     image_keys: crate::object::image_keys::image_key_list!(REGEX_EXEC_NAMED_KEYS),
     shape_id: 0,
-    _layout_pad: 0,
+    gc_plan: 0,
     family: 0x52540009,
     variant: 0,
     kind: 0,
@@ -1218,7 +1218,7 @@ static REGEX_EXEC_INDICES_NAMED_INDEX: [u32; 16] = [
 pub(crate) static mut REGEX_EXEC_INDICES_NAMED: PerryLayoutDesc = PerryLayoutDesc {
     image_keys: crate::object::image_keys::image_key_list!(REGEX_EXEC_INDICES_NAMED_KEYS),
     shape_id: 0,
-    _layout_pad: 0,
+    gc_plan: 0,
     family: 0x5254000A,
     variant: 0,
     kind: 0,
@@ -1262,7 +1262,7 @@ static REGEX_INDICES_GROUPS_NAMED_INDEX: [u32; 4] = [u32::MAX, 0, 1, u32::MAX];
 pub(crate) static mut REGEX_INDICES_GROUPS_NAMED: PerryLayoutDesc = PerryLayoutDesc {
     image_keys: crate::object::image_keys::image_key_list!(REGEX_INDICES_GROUPS_NAMED_KEYS),
     shape_id: 0,
-    _layout_pad: 0,
+    gc_plan: 0,
     family: 0x5254000B,
     variant: 0,
     kind: 0,
@@ -1298,7 +1298,7 @@ static ARRAY_NAMED_INDEX: [u32; 2] = [u32::MAX, 0];
 pub(crate) static mut ARRAY_NAMED: PerryLayoutDesc = PerryLayoutDesc {
     image_keys: crate::object::image_keys::image_key_list!(ARRAY_NAMED_KEYS),
     shape_id: 0,
-    _layout_pad: 0,
+    gc_plan: 0,
     family: 0x5254000D,
     variant: 0,
     kind: 0,
@@ -1508,7 +1508,7 @@ static SQLITE_COLUMN_INDEX: [u32; 16] = [
 pub static mut SQLITE_COLUMN_METADATA: PerryLayoutDesc = PerryLayoutDesc {
     image_keys: crate::object::image_keys::image_key_list!(SQLITE_COLUMN_KEYS),
     shape_id: 0,
-    _layout_pad: 0,
+    gc_plan: 0,
     family: 0x53514c01,
     variant: 0,
     kind: 0,

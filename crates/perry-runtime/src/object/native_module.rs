@@ -1300,18 +1300,14 @@ pub(crate) fn build_symbol_bound_method_closure(
     let meta: i64 = (param_count as i64) | ((has_rest as i64) << 32) | ((is_static as i64) << 33);
     closure_handle.with_mut_ptr::<crate::closure::ClosureHeader, _>(|closure| {
         crate::closure::js_closure_set_capture_f64(closure, 0, receiver_value);
-        crate::closure::js_closure_set_capture_ptr(
+        crate::closure::closure_set_capture_word(
             closure,
             1,
             SYMBOL_BOUND_METHOD_NAME.as_ptr() as i64,
         );
-        crate::closure::js_closure_set_capture_ptr(
-            closure,
-            2,
-            SYMBOL_BOUND_METHOD_NAME.len() as i64,
-        );
-        crate::closure::js_closure_set_capture_ptr(closure, 3, func_ptr as i64);
-        crate::closure::js_closure_set_capture_ptr(closure, 4, meta);
+        crate::closure::closure_set_capture_word(closure, 2, SYMBOL_BOUND_METHOD_NAME.len() as i64);
+        crate::closure::closure_set_capture_word(closure, 3, func_ptr as i64);
+        crate::closure::closure_set_capture_word(closure, 4, meta);
     });
     // Spec `.length` = declared params minus a trailing rest param.
     let spec_length = if has_rest {

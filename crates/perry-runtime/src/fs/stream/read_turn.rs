@@ -24,7 +24,7 @@ pub(super) fn schedule_read_stream_turn(id: usize) {
             crate::fn_info!(read_stream_turn_impl, 0; with_declared(0)),
             1,
         );
-        js_closure_set_capture_ptr(closure, 0, id as i64);
+        crate::closure::closure_set_capture_word(closure, 0, id as i64);
         let _ = crate::timer::js_set_timeout_callback(closure as i64, 0.0);
     }
 }

@@ -624,7 +624,7 @@ fn split_by_delimiter(s: *const StringHeader, delimiter: &str, limit: i32) -> *m
 
     let scope = crate::gc::RuntimeHandleScope::new();
     let s_handle = scope.root_string_ptr(s);
-    let (arr, _) = s_handle.across_const::<StringHeader, _>(|| {
+    let (arr, mut s_cur) = s_handle.across_const::<StringHeader, _>(|| {
         crate::array::js_array_alloc_pointer_elements(n as u32)
     });
     // Decided once, before the first part allocation and before the result
@@ -632,17 +632,33 @@ fn split_by_delimiter(s: *const StringHeader, delimiter: &str, limit: i32) -> *m
     // the remembered set nothing (`crate::gc::ProducerChildBirth`).
     let birth = crate::gc::ProducerChildBirth::for_fresh_container(arr as usize);
     let arr_handle = scope.root_raw_mut_ptr(arr);
+    // JST slice 4 (D): `s_cur` and `arr_cur` are the live addresses of the
+    // source and the result. A piece taken from the block that is already open
+    // (`string_storage_alloc_for_no_collect` returns `Some`) cannot have
+    // collected, so both are still valid and neither is reloaded from its
+    // handle. A refusal takes the rooted collecting allocation exactly as every
+    // piece did before, and refreshes both from the handles.
+    let mut arr_cur = arr;
 
     unsafe {
         for (i, &(offset, byte_len)) in part_ranges.iter().enumerate() {
             // Allocate the destination FIRST (it may move the source), then
             // re-read the source address before touching its bytes.
-            let (((sh, data_ptr), s_now), arr_now) =
-                arr_handle.across_mut::<ArrayHeader, _>(|| {
-                    s_handle.across_const::<StringHeader, _>(|| {
-                        string_storage_alloc_for(birth, byte_len)
-                    })
-                });
+            let ((sh, data_ptr), s_now, arr_now) =
+                match crate::string::string_storage_alloc_for_no_collect(birth, byte_len) {
+                    Some(allocated) => (allocated, s_cur, arr_cur),
+                    None => {
+                        let (((sh, data_ptr), s_now), arr_now) =
+                            arr_handle.across_mut::<ArrayHeader, _>(|| {
+                                s_handle.across_const::<StringHeader, _>(|| {
+                                    string_storage_alloc_for(birth, byte_len)
+                                })
+                            });
+                        s_cur = s_now;
+                        arr_cur = arr_now;
+                        ((sh, data_ptr), s_now, arr_now)
+                    }
+                };
             let part_ptr = string_data(s_now).add(offset as usize);
             // Derive metadata from THIS PART's own bytes. The only shortcut
             // taken is the all-ASCII one, which was verified by scanning the
@@ -668,7 +684,7 @@ fn split_by_delimiter(s: *const StringHeader, delimiter: &str, limit: i32) -> *m
         }
     }
 
-    arr_handle.get_raw_mut_ptr::<ArrayHeader>()
+    arr_cur
 }
 
 /// `String.prototype.split` for the shape nearly every call has: a heap string

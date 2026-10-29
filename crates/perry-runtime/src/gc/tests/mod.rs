@@ -123,6 +123,7 @@ mod shape_keys_descriptor_edge;
 mod shape_young_log_release;
 mod smoke;
 mod start_bitmap;
+mod static_scan;
 mod static_seed_keys;
 mod step_bounds;
 mod stream_state_record;

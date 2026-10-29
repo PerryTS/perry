@@ -694,7 +694,7 @@ pub(super) fn cp_install_abort_signal(handle: u64, signal: Option<f64>, opts_val
     };
 
     let listener = js_closure_alloc(crate::fn_info!(cp_abort_listener, 0; with_declared(0)), 1);
-    js_closure_set_capture_ptr(listener, 0, handle as i64);
+    crate::closure::closure_set_capture_word(listener, 0, handle as i64);
     let listener_val = cp_box_ptr(listener as *const u8);
     let kill_signal = cp_read_abort_kill_signal(opts_val);
 

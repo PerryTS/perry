@@ -416,6 +416,7 @@ fn lower_expr_inner(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::IterResultGetValue
         | Expr::IterResultGetDone
         | Expr::AsyncStepChain { .. }
+        | Expr::AsyncStepResumeNow { .. }
         | Expr::AsyncStepDone { .. }
         | Expr::CurrentStepClosure
         | Expr::AsyncFirstCall { .. }

@@ -621,6 +621,25 @@ fn coerce_concat_body(
         {
             return Ok(value);
         }
+        // A non-empty ASCII source literal as the prefix: its bytes, length
+        // and UTF-16 length go to the runtime as constants, so the call skips
+        // the prefix validation, ASCII scan and header reads (JST slice 3).
+        // Same answers and the same memo consultation as the fused call below.
+        if let Expr::String(prefix) = left {
+            if !prefix.is_empty() && prefix.is_ascii() && prefix.len() < (1 << 31) {
+                if let Some(literal) = chain_literal_part(ctx, left) {
+                    return Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_string_concat_lit_value_box",
+                        &[
+                            (I64, &literal_address_operand(&literal)),
+                            (I64, &literal_value_meta_operand(&literal)),
+                            (DOUBLE, r_box),
+                        ],
+                    ));
+                }
+            }
+        }
         // Issue #214: SSO-safe unbox; repsel Phase 3a: inline `bitcast+and`
         // for proven-heap operands (string literals — the `"user_" + i`
         // shape) and tag-dispatch for canonical-Str locals.
@@ -876,6 +895,152 @@ fn chain_part_needs_default_primitive(ctx: &FnCtx<'_>, part: &Expr) -> bool {
         && !crate::expr::expr_produces_non_pointer_bits_by_construction(ctx, part)
 }
 
+/// A string literal operand of a concat chain, passed to the runtime as
+/// `(rodata address, byte length, UTF-16 length)` instead of as a heap handle.
+/// The bytes are the literal's own `.str.N.bytes` constant, which the module
+/// already emits for the string pool; nothing is recorded per site.
+#[derive(Clone)]
+pub(crate) struct LiteralPart {
+    /// The literal's text as a constant `i64` address operand.
+    address: String,
+    byte_len: usize,
+    utf16_len: usize,
+    /// The literal's header would pass the concat memo's admission test: it is
+    /// created at run time, not placed in the program image.
+    memo_eligible: bool,
+}
+
+/// One operand of `js_string_concat_parts`.
+pub(crate) enum ConcatPartArg {
+    Value(String),
+    Literal(LiteralPart),
+}
+
+/// The literal form of `part`, when it is a source string literal. A source
+/// `Expr::String` is valid UTF-8 with no lone surrogate (`Expr::WtfString` is
+/// the other kind and stays a value operand).
+pub(crate) fn chain_literal_part(ctx: &mut FnCtx<'_>, part: &Expr) -> Option<LiteralPart> {
+    let Expr::String(text) = part else {
+        return None;
+    };
+    let utf16_len = text.encode_utf16().count();
+    if text.len() >= (1 << 31) || utf16_len >= (1 << 31) {
+        return None;
+    }
+    let idx = ctx.strings.intern(text);
+    let entry = ctx.strings.entry(idx);
+    // An executable's literals are image-resident string objects: the text is
+    // the 20 bytes after the record's `StringHeader`, already in the binary.
+    // Pointing at it adds no data. A library output (`dylib`/`staticlib`)
+    // creates its literals at run time and keeps the pool's `.rodata` bytes.
+    let address = if ctx.strings.image_literals() {
+        format!(
+            "ptrtoint (ptr getelementptr (i8, ptr {}, i64 20) to i64)",
+            crate::codegen::string_pool_image_pointer(entry)
+        )
+    } else {
+        format!("ptrtoint (ptr @{} to i64)", entry.bytes_global)
+    };
+    Some(LiteralPart {
+        address,
+        byte_len: entry.byte_len,
+        utf16_len,
+        memo_eligible: !ctx.strings.image_literals(),
+    })
+}
+
+/// Whether `part` is a source string literal `chain_literal_part` accepts.
+pub(crate) fn is_chain_literal(part: &Expr) -> bool {
+    matches!(part, Expr::String(text)
+        if text.len() < (1 << 31) && text.encode_utf16().count() < (1 << 31))
+}
+
+/// The literal's address as a constant operand.
+pub(crate) fn literal_address_operand(literal: &LiteralPart) -> String {
+    literal.address.clone()
+}
+
+/// `byte_len | utf16_len << 32`, as the signed immediate the IR spells.
+pub(crate) fn literal_meta_operand(literal: &LiteralPart) -> String {
+    let meta = (literal.byte_len as u64) | ((literal.utf16_len as u64) << 32);
+    (meta as i64).to_string()
+}
+
+/// The `js_string_concat_lit_value_box` form: `literal_meta_operand` plus bit
+/// 63 when the memo may be consulted (`CONCAT_LIT_MEMO_ELIGIBLE`).
+pub(crate) fn literal_value_meta_operand(literal: &LiteralPart) -> String {
+    let meta = (literal.byte_len as u64)
+        | ((literal.utf16_len as u64) << 32)
+        | if literal.memo_eligible { 1 << 63 } else { 0 };
+    (meta as i64).to_string()
+}
+
+/// True when `bits` may need ToPrimitive / may be a Symbol: everything except
+/// a plain number, a heap string and an inline string. Those three are
+/// primitive and never a Symbol. INT32-tagged values stay on the call because
+/// a class reference is an INT32 class id (#9087), and so do pointers, BigInts,
+/// undefined/null/booleans and handles.
+fn emit_value_needs_conversion(ctx: &mut FnCtx<'_>, bits: &str) -> String {
+    use crate::nanbox::{SHORT_STRING_TAG_TOP16_I64, STRING_TAG_TOP16_I64};
+    let blk = ctx.block();
+    let plain = crate::codegen::emit_plain_number_bits_test(blk, bits);
+    let top16 = blk.lshr(I64, bits, "48");
+    let is_string = blk.icmp_eq(I64, &top16, STRING_TAG_TOP16_I64);
+    let is_inline = blk.icmp_eq(I64, &top16, SHORT_STRING_TAG_TOP16_I64);
+    let skip = blk.or(crate::types::I1, &plain, &is_string);
+    let skip = blk.or(crate::types::I1, &skip, &is_inline);
+    blk.xor(crate::types::I1, &skip, "true")
+}
+
+/// `js_to_primitive_default_for_add(raw)` behind one inline test of the live
+/// bits: a plain number, heap string or inline string is its own primitive.
+fn emit_to_primitive_for_add_tested(ctx: &mut FnCtx<'_>, raw: &str) -> String {
+    let bits = ctx.block().bitcast_double_to_i64(raw);
+    let needs = emit_value_needs_conversion(ctx, &bits);
+    let call_idx = ctx.new_block("cat.prim.call");
+    let merge_idx = ctx.new_block("cat.prim.merge");
+    let call_label = ctx.block_label(call_idx);
+    let merge_label = ctx.block_label(merge_idx);
+    let pred = ctx.block().label.clone();
+    ctx.block().cond_br(&needs, &call_label, &merge_label);
+
+    ctx.current_block = call_idx;
+    let converted = ctx
+        .block()
+        .call(DOUBLE, "js_to_primitive_default_for_add", &[(DOUBLE, raw)]);
+    let call_pred = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = merge_idx;
+    ctx.block()
+        .phi(DOUBLE, &[(raw, &pred), (&converted, &call_pred)])
+}
+
+/// `js_add_throw_if_symbol(value)` behind the same inline test.
+fn emit_symbol_check_tested(ctx: &mut FnCtx<'_>, value: &str) {
+    let bits = ctx.block().bitcast_double_to_i64(value);
+    let needs = emit_value_needs_conversion(ctx, &bits);
+    let call_idx = ctx.new_block("cat.sym.call");
+    let done_idx = ctx.new_block("cat.sym.done");
+    let call_label = ctx.block_label(call_idx);
+    let done_label = ctx.block_label(done_idx);
+    ctx.block().cond_br(&needs, &call_label, &done_label);
+    ctx.current_block = call_idx;
+    ctx.block()
+        .call_void("js_add_throw_if_symbol", &[(DOUBLE, value)]);
+    ctx.block().br(&done_label);
+    ctx.current_block = done_idx;
+}
+
+/// A part that cannot be a Symbol: a literal, a proven runtime string, or a
+/// value whose bits are non-pointer by construction.
+fn chain_part_cannot_be_symbol(ctx: &FnCtx<'_>, part: &Expr, literal: bool) -> bool {
+    literal
+        || matches!(part, Expr::String(_) | Expr::WtfString(_))
+        || crate::type_analysis::string_value_is_runtime_guaranteed(ctx, part)
+        || crate::expr::expr_produces_non_pointer_bits_by_construction(ctx, part)
+}
+
 pub(crate) fn lower_string_concat_chain(ctx: &mut FnCtx<'_>, parts: &[&Expr]) -> Result<String> {
     debug_assert!(parts.len() >= 2);
     debug_assert!(parts.len() <= CONCAT_CHAIN_MAX_PARTS);
@@ -888,52 +1053,82 @@ pub(crate) fn lower_string_concat_chain(ctx: &mut FnCtx<'_>, parts: &[&Expr]) ->
         .map(|part| chain_part_without_redundant_coerce(ctx, part))
         .collect();
     let parts = parts.as_slice();
+    // A literal has no value to convert, root or check: it goes to the runtime
+    // as constant data. It is still LOWERED in its source position, and the
+    // result simply unused, so the string pool interns literals in exactly the
+    // order it always did (the image layout, and every address derived from
+    // it, stays the same); the dead handle load is removed by the optimizer.
+    let is_literal: Vec<bool> = parts.iter().map(|part| is_chain_literal(part)).collect();
 
     if needs_primitive.iter().any(|needed| *needed) {
+        let may_be_symbol: Vec<bool> = parts
+            .iter()
+            .zip(&is_literal)
+            .map(|(part, literal)| !chain_part_cannot_be_symbol(ctx, part, *literal))
+            .collect();
         return with_rooted_group(ctx, parts.len() + 2, |ctx, group| {
             // For the first Add, both operands are evaluated before either is
             // coerced. Later parts are evaluated and coerced one at a time,
             // before the next Add's right operand is evaluated.
             let mut first = Vec::with_capacity(2);
-            for part in parts.iter().take(2) {
+            for (part, literal) in parts.iter().zip(&is_literal).take(2) {
                 let raw = lower_expr(ctx, part)?;
-                first.push(group.adopt_emitted(ctx, Repr::Boxed, &raw, true));
+                if *literal {
+                    first.push(None);
+                    continue;
+                }
+                first.push(Some(group.adopt_emitted(ctx, Repr::Boxed, &raw, true)));
             }
 
             let mut converted = Vec::with_capacity(parts.len());
             for i in 0..parts.len() {
-                let raw = if i < 2 {
-                    group.reread_emitted(ctx, first[i])
+                if !is_literal[i] {
+                    let raw = if i < 2 {
+                        group.reread_emitted(ctx, first[i].expect("value part has a root"))
+                    } else {
+                        lower_expr(ctx, parts[i])?
+                    };
+                    let value = if needs_primitive[i] {
+                        emit_to_primitive_for_add_tested(ctx, &raw)
+                    } else {
+                        raw
+                    };
+                    converted.push(Some(group.adopt_emitted(ctx, Repr::Boxed, &value, true)));
                 } else {
-                    lower_expr(ctx, parts[i])?
-                };
-                let value = if needs_primitive[i] {
-                    ctx.block()
-                        .call(DOUBLE, "js_to_primitive_default_for_add", &[(DOUBLE, &raw)])
-                } else {
-                    raw
-                };
-                converted.push(group.adopt_emitted(ctx, Repr::Boxed, &value, true));
+                    if i >= 2 {
+                        lower_expr(ctx, parts[i])?;
+                    }
+                    converted.push(None);
+                }
                 // A Symbol throws only after both operands of this Add have
                 // been converted. Do that check after the head pair, then
                 // after each later right operand and before the next one.
+                // An operand that cannot be a Symbol carries no check at all;
+                // any other is checked behind an inline test of its bits.
                 if i == 1 {
-                    for part in converted.iter().take(2) {
-                        let value = group.reread_emitted(ctx, *part);
-                        ctx.block()
-                            .call_void("js_add_throw_if_symbol", &[(DOUBLE, &value)]);
+                    for index in 0..2 {
+                        if let (true, Some(root)) = (may_be_symbol[index], converted[index]) {
+                            let value = group.reread_emitted(ctx, root);
+                            emit_symbol_check_tested(ctx, &value);
+                        }
                     }
                 } else if i > 1 {
-                    let value = group.reread_emitted(ctx, converted[i]);
-                    ctx.block()
-                        .call_void("js_add_throw_if_symbol", &[(DOUBLE, &value)]);
+                    if let (true, Some(root)) = (may_be_symbol[i], converted[i]) {
+                        let value = group.reread_emitted(ctx, root);
+                        emit_symbol_check_tested(ctx, &value);
+                    }
                 }
             }
-            let lowered: Vec<String> = converted
-                .into_iter()
-                .map(|part| group.reread_emitted(ctx, part))
-                .collect();
-            Ok(emit_string_concat_chain(ctx, &lowered))
+            let mut lowered = Vec::with_capacity(parts.len());
+            for (index, root) in converted.into_iter().enumerate() {
+                lowered.push(match root {
+                    Some(root) => ConcatPartArg::Value(group.reread_emitted(ctx, root)),
+                    None => ConcatPartArg::Literal(
+                        chain_literal_part(ctx, parts[index]).expect("literal part"),
+                    ),
+                });
+            }
+            Ok(emit_string_concat_parts(ctx, &lowered))
         });
     }
 
@@ -944,8 +1139,61 @@ pub(crate) fn lower_string_concat_chain(ctx: &mut FnCtx<'_>, parts: &[&Expr]) ->
     // one allocating interpolation was enough to sweep the parts already
     // lowered. Parts that nothing allocating follows emit no rooting calls.
     with_operands_rooted(ctx, parts, |ctx, lowered| {
-        Ok(emit_string_concat_chain(ctx, lowered))
+        let args: Vec<ConcatPartArg> = parts
+            .iter()
+            .zip(lowered)
+            .map(|(part, value)| match chain_literal_part(ctx, part) {
+                Some(literal) => ConcatPartArg::Literal(literal),
+                None => ConcatPartArg::Value(value.clone()),
+            })
+            .collect();
+        Ok(emit_string_concat_parts(ctx, &args))
     })
+}
+
+/// Emit the parts buffer for `js_string_concat_parts`: two words per operand,
+/// `{bits, -1}` for a value and `{rodata address, byte_len | utf16_len << 32}`
+/// for a literal. The buffer is hoisted to the entry block like the chain's
+/// (issue #167).
+pub(crate) fn emit_string_concat_parts(ctx: &mut FnCtx<'_>, parts: &[ConcatPartArg]) -> String {
+    debug_assert!(parts.len() >= 2);
+    debug_assert!(parts.len() <= CONCAT_CHAIN_MAX_PARTS);
+    let n = parts.len();
+    let buf_reg = ctx.func.alloca_entry_array(I64, 2 * CONCAT_CHAIN_MAX_PARTS);
+    let blk = ctx.block();
+    for (i, part) in parts.iter().enumerate() {
+        let word = blk.gep(I64, &buf_reg, &[(I64, &(2 * i).to_string())]);
+        let meta = blk.gep(I64, &buf_reg, &[(I64, &(2 * i + 1).to_string())]);
+        match part {
+            ConcatPartArg::Value(value) => {
+                let bits = blk.bitcast_double_to_i64(value);
+                blk.store(I64, &bits, &word);
+                blk.store(I64, "-1", &meta);
+            }
+            ConcatPartArg::Literal(literal) => {
+                blk.store(I64, &literal_address_operand(literal), &word);
+                blk.store(I64, &literal_meta_operand(literal), &meta);
+            }
+        }
+    }
+    let base_i64 = blk.next_reg();
+    blk.emit_raw(format!("{} = ptrtoint ptr {} to i64", base_i64, buf_reg));
+    // A count the runtime has a specialized entry for takes it (the count is
+    // then a constant of the callee); any other count takes the generic entry.
+    let result_handle = if (2..=5).contains(&n) {
+        blk.call(
+            I64,
+            &format!("js_string_concat_parts_{n}"),
+            &[(I64, &base_i64)],
+        )
+    } else {
+        blk.call(
+            I64,
+            "js_string_concat_parts",
+            &[(I64, &base_i64), (I32, &n.to_string())],
+        )
+    };
+    nanbox_string_inline(blk, &result_handle)
 }
 
 /// Emit the shared stack-buffer + runtime-call core for values that have

@@ -97,3 +97,20 @@ pub(crate) fn emit_array_element_descriptors(blk: &mut LlBlock, arr_addr: &str) 
     );
     blk.icmp_ne(crate::types::I32, &kind, "0")
 }
+
+/// Emit the i1 "an ordinary, unforwarded `GC_TYPE_ARRAY` with no element
+/// descriptors" test for the live heap handle `handle` (an i64 address the
+/// caller has already placed in the heap-pointer band): the receiver guard of
+/// every inline element read. A call-free region reads the dense slots of an
+/// array admitted by it.
+pub(crate) fn emit_ordinary_array_admission(blk: &mut LlBlock, handle: &str) -> String {
+    let word = super::index_get::guarded_array::emit_array_guard_word(blk, handle);
+    super::index_get::guarded_array::emit_array_guard_word_ok(blk, &word, handle)
+}
+
+/// `bits - POINTER_TAG - 2 MiB`, compared unsigned against this span, holds
+/// exactly for a heap-pointer-tagged value above the runtime-id band: the
+/// precondition of reading the header behind it.
+pub(crate) const HEAP_POINTER_BAND_BASE_I64: &str = super::receiver_range::RECEIVER_BIAS_LITERAL;
+/// The span of the band that [`HEAP_POINTER_BAND_BASE_I64`] biases into.
+pub(crate) const HEAP_POINTER_BAND_SPAN_I64: &str = super::receiver_range::RECEIVER_SPAN_LITERAL;

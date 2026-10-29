@@ -291,7 +291,7 @@ pub(crate) unsafe fn install_event_emitter_async_resource_prototype(proto: *mut 
             2,
         );
         crate::closure::js_closure_set_capture_ptr(closure, 0, crate::value::TAG_UNDEFINED as i64);
-        crate::closure::js_closure_set_capture_ptr(closure, 1, operation);
+        crate::closure::closure_set_capture_word(closure, 1, operation);
         let closure = scope.root_raw_mut_ptr(closure);
         proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
             closure.with_const_ptr::<ClosureHeader, _>(|closure| {
@@ -359,7 +359,7 @@ pub(crate) unsafe fn install_event_emitter_async_resource_instance_methods(
             0,
             this_value.get_nanbox_f64().to_bits() as i64,
         );
-        crate::closure::js_closure_set_capture_ptr(closure, 1, operation);
+        crate::closure::closure_set_capture_word(closure, 1, operation);
         let closure = scope.root_raw_mut_ptr(closure);
         let key = scope.root_string_ptr(hidden_key(name.as_bytes()));
         obj.with_mut_ptr::<ObjectHeader, _>(|obj| {

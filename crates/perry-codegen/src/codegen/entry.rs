@@ -996,6 +996,7 @@ pub(super) fn compile_module_entry(
             typed_element_locals: std::collections::HashSet::new(),
             create_families: Default::default(),
             class_guard_window: None,
+            map_entry_fusion: Default::default(),
             i1_local_slots: HashMap::new(),
             index_used_locals: main_native_facts.index_used_locals(),
             strictly_i32_bounded_locals: main_native_facts.strictly_i32_bounded_locals(),

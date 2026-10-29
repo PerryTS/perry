@@ -186,7 +186,7 @@ pub(super) fn decl_prototype_born_final(class_id: u32, parent_bits: u64) -> Opti
     // The canonical key list with its attribute entries: one edge per key.
     let proof = crate::object::canonical_keys::SharedLayout::shape_cache_entry();
     let list = scope.root_raw_mut_ptr::<crate::ArrayHeader>(std::ptr::null_mut());
-    let mut count = 0u32;
+    let mut cur = crate::object::canonical_keys::CanonicalKeys::EMPTY;
     for (name, entry) in std::iter::once(b"constructor".as_slice())
         .chain(members.iter().map(|(n, _)| n.as_slice()))
         .zip(entries)
@@ -195,12 +195,12 @@ pub(super) fn decl_prototype_born_final(class_id: u32, parent_bits: u64) -> Opti
         // SAFETY: the parent list is rooted in `list`; `extend_key_with_entry`
         // roots its operands across its allocation.
         let next = list.with_mut_ptr(|arr: *mut crate::ArrayHeader| unsafe {
-            let parent = crate::object::canonical_keys::CanonicalKeys::from_rooted(arr, count);
-            crate::object::canonical_keys::extend_key_with_entry(&proof, parent, key, entry)
+            crate::object::canonical_keys::extend_key_with_entry(&proof, cur.rooted_at(arr), key, entry)
         });
         list.set_raw_mut_ptr(next.as_ptr());
-        count = next.len();
+        cur = next;
     }
+    let count = cur.len();
     if count as usize != values.len() {
         // A duplicate name cannot come from a declaration; refuse rather
         // than stamp a shape whose keys miss a value.
@@ -244,7 +244,7 @@ pub(super) fn decl_prototype_born_final(class_id: u32, parent_bits: u64) -> Opti
         let stamped = list.with_mut_ptr::<crate::ArrayHeader, _>(|keys| {
             crate::object::shapes::stamp_linked_final_shape_requested(
                 p,
-                keys,
+                cur.rooted_at(keys),
                 count,
                 proto_id,
                 parent_bits,

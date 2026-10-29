@@ -25,7 +25,7 @@ extern "C" fn webcrypto_digest_settle(
         );
         perry_runtime::closure::js_closure_set_capture_ptr(cl, 0, promise_bits as i64);
         perry_runtime::closure::js_closure_set_capture_ptr(cl, 1, value_bits as i64);
-        perry_runtime::closure::js_closure_set_capture_ptr(cl, 2, remaining - 1);
+        perry_runtime::closure::closure_set_capture_word(cl, 2, remaining - 1);
         perry_runtime::timer::js_set_immediate_callback(cl as i64);
         return f64::from_bits(JSValue::undefined().bits());
     }
@@ -80,7 +80,7 @@ pub unsafe extern "C" fn js_webcrypto_digest(algo_bits: f64, data_bits: f64) -> 
         value.get_nanbox_f64().to_bits() as i64,
     );
     // Remaining macrotask hops (Node's threadpool digest = 2 setImmediate ticks).
-    perry_runtime::closure::js_closure_set_capture_ptr(cl.get_raw_mut_ptr(), 2, 2);
+    perry_runtime::closure::closure_set_capture_word(cl.get_raw_mut_ptr(), 2, 2);
     perry_runtime::timer::schedule_native_callback(
         cl.get_raw_mut_ptr::<perry_runtime::ClosureHeader>() as i64,
         &[],

@@ -1196,7 +1196,7 @@ fn readable_pull_settled_closure(
     stream_id: usize,
 ) -> *mut ClosureHeader {
     let closure = js_closure_alloc(info, 1);
-    js_closure_set_capture_ptr(closure, 0, stream_id as i64);
+    perry_runtime::closure::closure_set_capture_word(closure, 0, stream_id as i64);
     closure
 }
 
@@ -1308,7 +1308,11 @@ unsafe fn maybe_pull_inner(stream_id: usize, force: bool) {
     );
     js_closure_set_capture_ptr(pull, 0, controller.to_bits() as i64);
     js_closure_set_capture_ptr(pull, 1, cb);
-    js_closure_set_capture_ptr(pull, 2, if pull_returns_byte_chunk { 1 } else { 0 });
+    perry_runtime::closure::closure_set_capture_word(
+        pull,
+        2,
+        if pull_returns_byte_chunk { 1 } else { 0 },
+    );
     perry_runtime::builtins::js_queue_microtask(pull as i64);
 }
 

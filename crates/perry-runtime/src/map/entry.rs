@@ -83,6 +83,39 @@ fn set_resolved(map: *mut MapHeader, key: f64, value: f64) -> *mut MapHeader {
     map
 }
 
+/// Read `key` and report the live value slot of its entry through `slot_out`
+/// (0 when absent or when the receiver is not a plain Map). The slot is a
+/// plain address, valid only until the next call that can run code, collect or
+/// touch the Map: compiled code zeroes its copy before every such call and
+/// stores through it only while the key bits it saw still match.
+#[inline(always)]
+pub(super) fn get_with_slot(map: *const MapHeader, key: f64, slot_out: *mut u64) -> f64 {
+    unsafe {
+        *slot_out = 0;
+    }
+    let Some(plain) = plain_receiver(map) else {
+        return get_receiver_fallback(map, key);
+    };
+    get_with_slot_resolved(plain, key, slot_out)
+}
+
+/// [`get_with_slot`] for a receiver already proven to be a plain Map.
+#[inline(always)]
+pub(super) fn get_with_slot_resolved(map: *const MapHeader, key: f64, slot_out: *mut u64) -> f64 {
+    unsafe {
+        let index = match identical_entry(map, key) {
+            Some(index) => index,
+            None => find_key_index(map, normalize_zero(key)),
+        };
+        if index < 0 {
+            *slot_out = 0;
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+        *slot_out = entries_ptr(map).add(index as usize * 2 + 1) as u64;
+        map_read_entry_value(map, index)
+    }
+}
+
 #[inline(never)]
 pub(super) fn get_receiver_fallback(map: *const MapHeader, key: f64) -> f64 {
     let map = clean_map_ptr(map);
@@ -229,6 +262,76 @@ mod tests {
         assert_eq!(unsafe { map_entry_key_raw(map, 1) }, 2.0);
         assert_eq!(js_map_get(map, key), 4.0);
         assert_eq!(js_map_get(map, boxed_heap_string_key(b)), 4.0);
+    }
+
+    #[test]
+    fn get_with_slot_reports_the_live_entry_slot() {
+        let map = js_map_alloc(8);
+        let mut slot = 7u64;
+        assert_eq!(
+            js_map_get_entry(map, 1.0, &mut slot).to_bits(),
+            TAG_UNDEFINED
+        );
+        assert_eq!(slot, 0, "absent key reports no slot");
+        js_map_set(map, 1.0, 10.0);
+        js_map_set(map, 2.0, 20.0);
+        assert_eq!(js_map_get_entry(map, 2.0, &mut slot), 20.0);
+        assert_ne!(slot, 0);
+        unsafe { *(slot as *mut f64) = 21.0 };
+        assert_eq!(js_map_get(map, 2.0), 21.0);
+        js_map_set(map, 0.0, 5.0);
+        assert_eq!(js_map_get_entry(map, -0.0, &mut slot), 5.0);
+        assert_eq!(unsafe { *(slot as *const f64) }, 5.0);
+        js_map_set(map, f64::NAN, 6.0);
+        assert_eq!(js_map_get_entry(map, f64::NAN, &mut slot), 6.0);
+        assert_ne!(slot, 0);
+        js_map_delete(map, 1.0);
+        assert_eq!(
+            js_map_get_entry(map, 1.0, &mut slot).to_bits(),
+            TAG_UNDEFINED
+        );
+        assert_eq!(slot, 0, "a tombstone is absent");
+        // a store through the slot keeps size and order
+        assert_eq!(js_map_size(map), 3);
+        assert_eq!(unsafe { map_entry_key_raw(map, 1) }, 2.0);
+    }
+
+    #[test]
+    fn get_with_slot_finds_content_equal_strings_and_rejects_foreign_receivers() {
+        let a = crate::string::js_string_from_bytes(b"same".as_ptr(), 4);
+        let b = crate::string::js_string_from_bytes(b"same".as_ptr(), 4);
+        let map = js_map_alloc(8);
+        js_map_set(map, boxed_heap_string_key(a), 3.0);
+        let mut slot = 0u64;
+        assert_eq!(
+            js_map_get_entry(map, boxed_heap_string_key(b), &mut slot),
+            3.0
+        );
+        assert_ne!(slot, 0);
+        let not_a_map = std::ptr::null::<MapHeader>();
+        slot = 9;
+        assert_eq!(
+            js_map_get_entry(not_a_map, 1.0, &mut slot).to_bits(),
+            TAG_UNDEFINED
+        );
+        assert_eq!(slot, 0);
+    }
+
+    #[test]
+    fn slot_survives_nothing_a_grow_moves_the_entries() {
+        let map = js_map_alloc(2);
+        js_map_set(map, 1.0, 1.0);
+        let mut slot = 0u64;
+        js_map_get_entry(map, 1.0, &mut slot);
+        let before = slot;
+        for i in 2..200 {
+            js_map_set(map, i as f64, i as f64);
+        }
+        let mut after = 0u64;
+        assert_eq!(js_map_get_entry(map, 1.0, &mut after), 1.0);
+        assert_ne!(after, 0);
+        // the address is only a per-call fact: compiled code never reuses it
+        let _ = before;
     }
 
     #[test]

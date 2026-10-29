@@ -379,7 +379,7 @@ unsafe fn ensure_key_in_keys_array_inner(
     let new_keys = match crate::object::canonical_keys::SharedLayout::of_receiver(obj) {
         Some(proof) => {
             let canonical_parent =
-                crate::object::canonical_keys::canonicalize(&proof, keys.arr(), key_count as u32);
+                crate::object::canonical_keys::canonicalize_keys(&proof, keys);
             refresh_define_property_roots!();
             crate::object::canonical_keys::extend_key_with_entry(
                 &proof,

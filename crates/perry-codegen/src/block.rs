@@ -176,6 +176,9 @@ pub struct RegCounter {
     /// Flags of the open class-guard run (`expr::class_guard_memo`). The
     /// same choke point clears them; the run's end unregisters them.
     guard_memo_slots: RefCell<Vec<String>>,
+    /// Entry-slot cells of the open Map get-then-set regions
+    /// (`expr::map_entry_fusion`). The same choke point zeroes them.
+    map_entry_slots: RefCell<Vec<String>>,
     /// The compilation's runtime call-effect table, injected by
     /// `LlModule::define_function` (and the other module entry points) from
     /// `CompileOptions::gc_effects`. `None` for functions built outside a
@@ -198,6 +201,7 @@ impl RegCounter {
             stable_packed_revalidation_slots: RefCell::new(Vec::new()),
             byte_access_dirty_slots: RefCell::new(Vec::new()),
             guard_memo_slots: RefCell::new(Vec::new()),
+            map_entry_slots: RefCell::new(Vec::new()),
             gc_effects: RefCell::new(None),
         }
     }
@@ -269,6 +273,21 @@ impl RegCounter {
 
     pub(crate) fn clear_guard_memo_slots(&self) {
         self.guard_memo_slots.borrow_mut().clear();
+    }
+
+    pub(crate) fn push_map_entry_slot(&self, slot: String) {
+        self.map_entry_slots.borrow_mut().push(slot);
+    }
+
+    pub(crate) fn pop_map_entry_slot(&self, slot: &str) {
+        let mut slots = self.map_entry_slots.borrow_mut();
+        if let Some(at) = slots.iter().rposition(|s| s == slot) {
+            slots.remove(at);
+        }
+    }
+
+    fn map_entry_slots(&self) -> Vec<String> {
+        self.map_entry_slots.borrow().clone()
     }
 
     fn guard_memo_slots(&self) -> Vec<String> {
@@ -582,6 +601,16 @@ impl LlBlock {
         }
         for slot in self.counter.guard_memo_slots() {
             self.store(crate::types::I8, "0", &slot);
+        }
+        #[cfg(test)]
+        let skip =
+            std::env::var("PERRY_PIP_SABOTAGE").ok().as_deref() == Some("map_entry_call_edge");
+        #[cfg(not(test))]
+        let skip = false;
+        if !skip {
+            for slot in self.counter.map_entry_slots() {
+                self.store(crate::types::I64, "0", &slot);
+            }
         }
     }
 

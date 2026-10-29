@@ -1178,6 +1178,13 @@ where
             f(value);
             f(step_closure);
         }
+        Expr::AsyncStepResumeNow {
+            value,
+            step_closure,
+        } => {
+            f(value);
+            f(step_closure);
+        }
         Expr::AsyncStepDone {
             value,
             step_closure,
