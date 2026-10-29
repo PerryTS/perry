@@ -66,7 +66,7 @@ pub(crate) enum Answer {
 #[inline(always)]
 unsafe fn ordinary_word(obj: *const ObjectHeader) -> Option<u32> {
     let h = crate::gc::header_from_trusted_user_ptr(obj.cast());
-    if (*h).obj_type != crate::gc::GC_TYPE_OBJECT
+    if !crate::gc::object_has_meta_word((*h).obj_type)
         || (*h).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || (*h)._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0
     {

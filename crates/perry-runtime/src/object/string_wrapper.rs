@@ -12,7 +12,7 @@ use crate::{ArrayHeader, JSValue, StringHeader};
 pub(super) fn length(owner: usize) -> Option<u32> {
     unsafe {
         let header = crate::value::addr_class::try_read_gc_header(owner)?;
-        if header.obj_type != crate::gc::GC_TYPE_OBJECT
+        if !crate::gc::gc_type_is_object(header.obj_type)
             || (*(owner as *const ObjectHeader)).class_id != 0xFFFF_00D1
         {
             return None;

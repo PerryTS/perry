@@ -1063,7 +1063,7 @@ pub(crate) fn attrs_live_in_keys_of_bits(bits: u64) -> bool {
     };
     // SAFETY: the classifier proved a live GC header.
     let header = unsafe { header.as_ref() };
-    header.obj_type == crate::gc::GC_TYPE_OBJECT
+    crate::gc::gc_type_is_object(header.obj_type)
         && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
         && crate::typedarray_hook_slots::lookup_typed_array_kind(
             (bits & crate::value::POINTER_MASK) as usize,
@@ -1087,7 +1087,7 @@ pub(crate) fn attrs_live_in_keys_of_bits(bits: u64) -> bool {
 #[inline]
 pub(crate) unsafe fn attrs_live_in_keys(addr: usize) -> bool {
     match crate::value::addr_class::try_read_gc_header(addr) {
-        Some(claim) if claim.obj_type == crate::gc::GC_TYPE_OBJECT => {
+        Some(claim) if crate::gc::gc_type_is_object(claim.obj_type) => {
             attrs_live_in_keys_of_bits(addr as u64)
         }
         _ => false,

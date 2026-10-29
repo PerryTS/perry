@@ -30,7 +30,7 @@ pub(super) unsafe fn validated_class_entry(
     }
     let object = value.as_pointer::<ObjectHeader>();
     let header = crate::value::addr_class::try_read_gc_header(object as usize)?;
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+    if !crate::gc::gc_type_is_object(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || crate::object::shapes::object_shape_stamp(object).0 as u64 != shape
         || (*object).class_id != (*site.add(1)).load(Ordering::Relaxed) as u32
@@ -169,7 +169,7 @@ pub unsafe extern "C-unwind" fn js_class_value_super_construct_site(
         if this_value.is_pointer() {
             let receiver = this_value.as_pointer::<ObjectHeader>() as *mut ObjectHeader;
             if crate::value::addr_class::try_read_gc_header(receiver as usize)
-                .is_some_and(|header| header.obj_type == crate::gc::GC_TYPE_OBJECT)
+                .is_some_and(|header| crate::gc::gc_type_is_object(header.obj_type))
             {
                 let cid = (*object).class_id;
                 let capture_slot = capture_slot(site);
@@ -278,7 +278,7 @@ unsafe fn init_error_family_receiver(
         || !crate::value::addr_class::try_read_gc_header(
             receiver.as_pointer::<ObjectHeader>() as usize
         )
-        .is_some_and(|header| header.obj_type == crate::gc::GC_TYPE_OBJECT)
+        .is_some_and(|header| crate::gc::gc_type_is_object(header.obj_type))
     {
         return None;
     }

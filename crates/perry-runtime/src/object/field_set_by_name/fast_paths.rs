@@ -93,7 +93,7 @@ unsafe fn existing_own_data_overwrite(
         | crate::gc::OBJ_FLAG_SEALED
         | crate::gc::OBJ_FLAG_NO_EXTEND
         | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
-    if obj_gc.obj_type != crate::gc::GC_TYPE_OBJECT
+    if !crate::gc::gc_type_is_object(obj_gc.obj_type)
         || obj_gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || obj_gc._reserved & BLOCKING_FLAGS != 0
         // #10287: an own descriptor is vetted per KEY. Overwriting a key the
@@ -495,7 +495,7 @@ pub(crate) fn try_readd_stable_tombstone(
     }
 
     let initial_gc = unsafe { crate::value::addr_class::try_read_gc_header(obj as usize)? };
-    if initial_gc.obj_type != crate::gc::GC_TYPE_OBJECT
+    if !crate::gc::gc_type_is_object(initial_gc.obj_type)
         || initial_gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || initial_gc._reserved & crate::gc::OBJ_FLAG_STABLE_TOMBSTONES == 0
     {
@@ -517,7 +517,7 @@ pub(crate) fn try_readd_stable_tombstone(
         let eligible = obj_handle.with_mut_ptr(|obj: *mut ObjectHeader| {
             let gc = crate::value::addr_class::try_read_gc_header(obj as usize)?;
             Some(
-                gc.obj_type == crate::gc::GC_TYPE_OBJECT
+                crate::gc::gc_type_is_object(gc.obj_type)
                     && gc.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
                     && gc._reserved & BLOCKING_FLAGS == 0
                     && gc._reserved & crate::gc::OBJ_FLAG_STABLE_TOMBSTONES != 0
@@ -615,7 +615,7 @@ unsafe fn try_readd_stable_tombstone_sso_no_grow(
     // Stable-tombstone admission already excludes real class/prototype
     // receivers; only class-less and registered anonymous-shape ordinary
     // objects can carry the flag into this append lane.
-    if gc.obj_type != crate::gc::GC_TYPE_OBJECT
+    if !crate::gc::gc_type_is_object(gc.obj_type)
         || gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || gc._reserved & BLOCKING_FLAGS != 0
         || gc._reserved & crate::gc::OBJ_FLAG_STABLE_TOMBSTONES == 0
@@ -792,7 +792,7 @@ fn object_set_field_by_name_transition_fast_impl_value<const CHAIN_PROVEN: bool>
             Some(h) => h as *const crate::gc::GcHeader,
             None => return None,
         };
-        if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT
+        if !crate::gc::gc_type_is_object((*gc_header).obj_type)
             || (*gc_header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return None;

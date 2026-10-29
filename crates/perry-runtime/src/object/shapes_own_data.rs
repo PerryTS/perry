@@ -102,7 +102,7 @@ pub(crate) unsafe fn plain_receiver_miss_is_final(object: *const ObjectHeader, k
         | OBJ_FLAG_ARGUMENTS
         | GC_OBJECT_CALLABLE
         | OBJ_FLAG_HAS_DESCRIPTORS;
-    if header.obj_type != GC_TYPE_OBJECT
+    if !crate::gc::object_has_meta_word(header.obj_type)
         || header.gc_flags & (GC_FLAG_ARENA | GC_FLAG_FORWARDED) != GC_FLAG_ARENA
         || header._reserved & BLOCKING != 0
         || (classless && header._reserved & OBJ_FLAG_PLAIN_ORDINARY == 0)

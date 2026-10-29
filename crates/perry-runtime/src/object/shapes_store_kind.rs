@@ -415,7 +415,7 @@ pub(crate) unsafe fn restore_unproven_twin(obj: *mut ObjectHeader, unproven: Lay
 /// `obj` is a live `ObjectHeader`.
 #[inline]
 pub(crate) unsafe fn retire_proof_before_stamp(obj: *mut ObjectHeader, new_id: LayoutWord) {
-    if (*gc_header(obj)).obj_type != crate::gc::GC_TYPE_OBJECT
+    if !crate::gc::gc_type_is_object((*gc_header(obj)).obj_type)
         || !receiver_carries_numeric_proof(obj)
     {
         return;
@@ -426,7 +426,7 @@ pub(crate) unsafe fn retire_proof_before_stamp(obj: *mut ObjectHeader, new_id: L
 #[cold]
 #[inline(never)]
 unsafe fn retire_proof_before_stamp_slow(obj: *mut ObjectHeader, new_id: LayoutWord) {
-    if (*gc_header(obj)).obj_type != crate::gc::GC_TYPE_OBJECT {
+    if !crate::gc::gc_type_is_object((*gc_header(obj)).obj_type) {
         return;
     }
     if super::shape_object_kind_of_receiver((new_id).0)

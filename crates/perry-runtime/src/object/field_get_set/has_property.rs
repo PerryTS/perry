@@ -318,7 +318,7 @@ fn object_has_property_generic(obj: f64, key: f64) -> f64 {
             // expando registry — they must keep routing through the exotic arm
             // below (`"lastIndex" in re`), so one registry probe stays in the
             // fast path. Everything else OBJECT-typed is an ordinary object.
-            if h.obj_type == crate::gc::GC_TYPE_OBJECT
+            if crate::gc::gc_type_is_object(h.obj_type)
                 && super::super::exotic_expando::exotic_expando_kind(addr).is_none()
             {
                 let present = unsafe {

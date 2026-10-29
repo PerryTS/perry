@@ -176,7 +176,7 @@ pub(crate) fn set_field_by_name_object_tail(
             }
             return;
         }
-        if gc_type != crate::gc::GC_TYPE_OBJECT && gc_type != crate::gc::GC_TYPE_CLOSURE {
+        if !crate::gc::gc_type_is_object(gc_type) && gc_type != crate::gc::GC_TYPE_CLOSURE {
             // A RECOGNIZED non-object heap type (Map/Set/Buffer/TypedArray/…)
             // must never fall through to the plain-object write below: their
             // layouts alias ObjectHeader fields. A Map with EXACTLY one entry

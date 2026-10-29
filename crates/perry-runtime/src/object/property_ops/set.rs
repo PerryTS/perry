@@ -368,7 +368,7 @@ pub(crate) fn own_set_descriptor(target: f64, key: f64) -> Option<OwnSetDescript
     let addr = extract_pointer(target.to_bits()) as usize;
     let indexed_owner = unsafe {
         match crate::value::addr_class::try_read_gc_header(addr) {
-            Some(header) if header.obj_type == crate::gc::GC_TYPE_OBJECT => {
+            Some(header) if crate::gc::object_has_meta_word(header.obj_type) => {
                 // The indexed answer reads the layout alone; a prototype with
                 // an overflow keeps keys and attributes in its entries (object
                 // model step 4), which the complete lookup below reads.
@@ -962,7 +962,7 @@ pub(crate) fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, rece
                     // longer sends every later store on this receiver down the
                     // full walk. Read before the coercion below: it reads key
                     // bytes only and cannot allocate.
-                    if header.obj_type == crate::gc::GC_TYPE_OBJECT
+                    if crate::gc::gc_type_is_object(header.obj_type)
                         && header._reserved & SLOW_FLAGS == 0
                         && crate::object::own_descriptors_skip_key(addr, key)
                     {

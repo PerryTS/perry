@@ -77,7 +77,7 @@ unsafe fn site_prototype_object(
     }
     let proto = value.as_pointer::<ObjectHeader>() as *mut ObjectHeader;
     let header = crate::value::addr_class::try_read_gc_header(proto as usize)?;
-    (header.obj_type == crate::gc::GC_TYPE_OBJECT
+    (crate::gc::gc_type_is_object(header.obj_type)
         && crate::object::shapes::object_shape_stamp(proto).0 as u64
             == prototype_proof as u32 as u64)
         .then_some(proto)
@@ -171,7 +171,7 @@ unsafe fn own_prototype_object(closure: usize) -> Option<*mut ObjectHeader> {
     }
     let proto = value.as_pointer::<ObjectHeader>() as usize;
     let header = crate::value::addr_class::try_read_gc_header(proto)?;
-    (header.obj_type == crate::gc::GC_TYPE_OBJECT).then_some(proto as *mut ObjectHeader)
+    (crate::gc::object_has_meta_word(header.obj_type)).then_some(proto as *mut ObjectHeader)
 }
 
 /// The class `class_id`'s registered prototype moved from `old` to another
@@ -401,7 +401,7 @@ pub(crate) fn ordinary_compiled_function_has_instance(
         }
         let obj = (bits & crate::value::POINTER_MASK) as usize;
         let header = crate::value::addr_class::try_read_gc_header(obj)?;
-        if header.obj_type != crate::gc::GC_TYPE_OBJECT {
+        if !crate::gc::object_has_meta_word(header.obj_type) {
             return None;
         }
         let meta = (*proto).meta;

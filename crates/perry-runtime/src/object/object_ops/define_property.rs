@@ -307,7 +307,7 @@ pub(crate) unsafe fn apply_property_descriptor(
                 let a = jv.as_pointer::<u8>() as usize;
                 matches!(
                     crate::value::addr_class::try_read_gc_header(a),
-                    Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT
+                    Some(h) if crate::gc::gc_type_is_object(h.obj_type)
                 ) && super::super::exotic_expando::exotic_expando_kind(a).is_none()
             }
         };

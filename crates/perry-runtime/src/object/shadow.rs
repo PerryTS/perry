@@ -450,7 +450,7 @@ unsafe fn ordinary(addr: usize) -> Option<*mut ObjectHeader> {
         return None;
     }
     let header = crate::value::addr_class::try_read_gc_header(addr)?;
-    (header.obj_type == crate::gc::GC_TYPE_OBJECT).then_some(addr as *mut ObjectHeader)
+    (crate::gc::gc_type_is_object(header.obj_type)).then_some(addr as *mut ObjectHeader)
 }
 
 /// `addr`'s [[Prototype]] changed (the prototype funnel): what any binding

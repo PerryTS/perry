@@ -143,7 +143,7 @@ impl ArgumentsState {
 #[inline]
 unsafe fn arguments_state(obj: *const ObjectHeader) -> Option<ArgumentsState> {
     let header = crate::value::addr_class::try_read_gc_header(obj as usize)?;
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+    if !crate::gc::gc_type_is_object(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
     {
         return None;

@@ -1043,7 +1043,7 @@ unsafe fn iterator_family_owner(
         return None;
     }
     if !crate::value::addr_class::try_read_gc_header(proto as usize)
-        .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_OBJECT)
+        .is_some_and(|h| crate::gc::gc_type_is_object(h.obj_type))
     {
         return None;
     }
@@ -1105,7 +1105,7 @@ unsafe fn iterator_step_builtin_info(obj: *const ObjectHeader) -> Option<u64> {
     let parent =
         crate::value::js_nanbox_get_pointer(f64::from_bits(parent_bits)) as *const ObjectHeader;
     if !crate::value::addr_class::try_read_gc_header(parent as usize)
-        .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_OBJECT)
+        .is_some_and(|h| crate::gc::gc_type_is_object(h.obj_type))
         || super::overflow::has_overflow(parent)
     {
         return None;
@@ -1920,7 +1920,7 @@ pub(crate) unsafe fn array_record_close_is_absent() -> bool {
         }
         let raw = crate::value::js_nanbox_get_pointer(f64::from_bits(parent)) as usize;
         if !crate::value::addr_class::try_read_gc_header(raw)
-            .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_OBJECT)
+            .is_some_and(|h| crate::gc::gc_type_is_object(h.obj_type))
         {
             return false;
         }

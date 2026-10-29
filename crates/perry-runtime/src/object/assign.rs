@@ -219,7 +219,7 @@ unsafe fn positional_assign_target_is_safe(
         | crate::gc::OBJ_FLAG_SEALED
         | crate::gc::OBJ_FLAG_NO_EXTEND
         | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+    if !crate::gc::gc_type_is_object(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || header._reserved & BLOCKING != 0
         || target_shape.object_kind != super::shapes::ShapeObjectKind::Ordinary
@@ -300,7 +300,7 @@ unsafe fn positional_prototype_shape_keys(
         };
         // A hop with an overflow holds keys and attributes its layout does
         // not list (object model step 4): no positional proof.
-        if header.obj_type != crate::gc::GC_TYPE_OBJECT
+        if !crate::gc::gc_type_is_object(header.obj_type)
             || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
             || header._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0
             || super::overflow::has_overflow(addr as *const ObjectHeader)
@@ -384,7 +384,7 @@ unsafe fn positional_source_plan(src: *const ObjectHeader) -> PositionalPlan {
     let Some(header) = crate::value::addr_class::try_read_gc_header(src_raw) else {
         return PositionalPlan::Refused;
     };
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+    if !crate::gc::gc_type_is_object(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || header._reserved
             & (crate::gc::OBJ_FLAG_HAS_DESCRIPTORS | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES)
@@ -907,7 +907,7 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
     // Repro: `Object.assign({}, /x/g)` under
     // PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_HEAP_LIMIT=8.
 
-    let positional_plan = if source_obj_type == crate::gc::GC_TYPE_OBJECT {
+    let positional_plan = if crate::gc::gc_type_is_object(source_obj_type) {
         positional_source_plan(src)
     } else {
         PositionalPlan::Refused
@@ -915,12 +915,10 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
     let strict_set_is_shape_equivalent =
         !define && positional_assign_target_is_safe(target, target_is_array, positional_plan);
     if (!define
-        || (source_obj_type == crate::gc::GC_TYPE_OBJECT && super::overflow::has_overflow(src)))
+        || (crate::gc::gc_type_is_object(source_obj_type) && super::overflow::has_overflow(src)))
         && !strict_set_is_shape_equivalent
-        && matches!(
-            source_obj_type,
-            crate::gc::GC_TYPE_OBJECT | crate::gc::GC_TYPE_ARRAY
-        )
+        && (crate::gc::gc_type_is_object(source_obj_type)
+            || source_obj_type == crate::gc::GC_TYPE_ARRAY)
     {
         // Assign's [[Set]] can run a setter even for a plain data source, so
         // neither positional slots nor a prefiltered enumerable-key list stay
@@ -1023,12 +1021,12 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
                 })
             });
         }
-    } else if source_obj_type == crate::gc::GC_TYPE_OBJECT
+    } else if crate::gc::gc_type_is_object(source_obj_type)
         && copy_positional_source(define, positional_plan, &tgt_h, &src_h, target_is_array)
     {
         // Every own string key was an enumerable data property of the
         // source shape, copied by position (`copy_positional_source`).
-    } else if source_obj_type == crate::gc::GC_TYPE_OBJECT {
+    } else if crate::gc::gc_type_is_object(source_obj_type) {
         let src_keys = if super::string_wrapper::length(src as usize).is_some() {
             let names = src_h.with_const_ptr(|src: *const ObjectHeader| {
                 js_object_get_own_property_names(crate::value::js_nanbox_pointer(src as i64))

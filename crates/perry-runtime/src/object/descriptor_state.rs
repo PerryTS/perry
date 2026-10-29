@@ -287,7 +287,7 @@ pub(crate) fn note_descriptor_target_edits(obj: usize, edits: &[AttrsEdit<'_>]) 
         // header or keys (`attrs_live_in_keys_for_install`).
         if let Some(header) = crate::value::addr_class::try_read_tracked_gc_header(obj) {
             let header = header.as_ptr();
-            if (*header).obj_type == crate::gc::GC_TYPE_OBJECT {
+            if crate::gc::gc_type_is_object((*header).obj_type) {
                 (*header)._reserved |= crate::gc::OBJ_FLAG_HAS_DESCRIPTORS;
                 super::key_attrs::apply_edits(obj as *mut crate::object::ObjectHeader, edits);
             }
@@ -494,7 +494,7 @@ pub(crate) unsafe fn holder_word_blocks_store(mut bits: u64, name: &[u8]) -> Opt
             } else {
                 crate::value::addr_class::tracked_header_of_bits(bits)?.as_ref()
             };
-        if header.obj_type != crate::gc::GC_TYPE_OBJECT
+        if !crate::gc::gc_type_is_object(header.obj_type)
             || header._reserved
                 & (crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO | crate::gc::OBJ_FLAG_FROZEN)
                 != 0
@@ -716,7 +716,7 @@ pub(crate) unsafe fn plain_custom_prototype_may_intercept(obj_addr: usize, key: 
         // A non-object prototype (function, array, …) may carry semantics this
         // walk does not model; a frozen one makes every inherited data property
         // non-writable whether or not a per-key entry records it.
-        if header.obj_type != crate::gc::GC_TYPE_OBJECT
+        if !crate::gc::gc_type_is_object(header.obj_type)
             || header._reserved
                 & (crate::gc::OBJ_FLAG_FROZEN | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO)
                 != 0

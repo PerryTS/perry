@@ -43,7 +43,7 @@ pub(crate) unsafe fn diag_explain(obj_handle: i64, key: *const crate::StringHead
         String::from("handle")
     } else {
         match crate::value::addr_class::try_read_gc_header(obj) {
-            Some(h) if h.obj_type != crate::gc::GC_TYPE_OBJECT => format!("gctype{}", h.obj_type),
+            Some(h) if !crate::gc::gc_type_is_object(h.obj_type) => format!("gctype{}", h.obj_type),
             None => String::from("nogc"),
             Some(_) => {
                 let o = obj as *const ObjectHeader;

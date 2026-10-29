@@ -63,7 +63,7 @@ pub(crate) unsafe fn fetch_subclass_handle_id(obj: usize) -> Option<i64> {
     let Some(gc_header) = crate::value::addr_class::try_read_gc_header(obj) else {
         return None;
     };
-    if gc_header.obj_type != crate::gc::GC_TYPE_OBJECT {
+    if !crate::gc::gc_type_is_object(gc_header.obj_type) {
         return None;
     }
     // #7498: the key allocation below can trigger a copying minor, which moves
@@ -165,7 +165,7 @@ pub(crate) unsafe fn temporal_subclass_cell(obj: usize) -> Option<f64> {
         return None;
     }
     let gc_header = (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT {
+    if !crate::gc::gc_type_is_object((*gc_header).obj_type) {
         return None;
     }
     // #7498: same shape as `fetch_subclass_handle_id` above — `obj` must not

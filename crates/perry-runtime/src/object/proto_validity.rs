@@ -235,7 +235,7 @@ pub(crate) unsafe fn mark_exotic_read_receiver(obj: usize) {
 #[inline]
 pub(crate) unsafe fn object_is_exotic_read_receiver(obj: usize) -> bool {
     if let Some(header) = crate::value::addr_class::try_read_gc_header(obj) {
-        if header.obj_type == crate::gc::GC_TYPE_OBJECT
+        if crate::gc::object_has_meta_word(header.obj_type)
             && header._reserved & crate::gc::OBJ_FLAG_ARGUMENTS != 0
         {
             return true;
@@ -273,7 +273,7 @@ unsafe fn ensure_meta_for_mark(obj: usize, flag: u64) -> Option<*mut crate::obje
         return None;
     }
     let header = crate::value::addr_class::try_read_gc_header(obj)?;
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT {
+    if !crate::gc::object_has_meta_word(header.obj_type) {
         return None;
     }
     let object = obj as *mut crate::object::ObjectHeader;
@@ -375,7 +375,7 @@ unsafe fn meta_flag_is_set(obj: usize, flag: u64) -> bool {
         return false;
     }
     match crate::value::addr_class::try_read_gc_header(obj) {
-        Some(header) if header.obj_type == crate::gc::GC_TYPE_OBJECT => {
+        Some(header) if crate::gc::object_has_meta_word(header.obj_type) => {
             let meta = (*(obj as *const crate::object::ObjectHeader)).meta;
             !meta.is_null() && (*meta).flags & flag != 0
         }

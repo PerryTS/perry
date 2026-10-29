@@ -100,7 +100,7 @@ pub(crate) unsafe fn compiled_target_call(
                     .map(|i| crate::array::js_array_get_f64(arr, i))
                     .collect()
             }
-            Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT => {
+            Some(h) if crate::gc::gc_type_is_object(h.obj_type) => {
                 crate::object::arguments_object_to_vec(addr as *const crate::object::ObjectHeader)?
             }
             _ => return None,

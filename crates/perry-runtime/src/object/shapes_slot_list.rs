@@ -471,7 +471,7 @@ pub(crate) unsafe fn try_update_stable_tombstone_shape(
         return None;
     }
     let gc = crate::value::addr_class::try_read_gc_header(obj as usize)?;
-    if gc.obj_type != crate::gc::GC_TYPE_OBJECT
+    if !crate::gc::gc_type_is_object(gc.obj_type)
         || gc._reserved & crate::gc::OBJ_FLAG_STABLE_TOMBSTONES == 0
     {
         return None;
@@ -556,7 +556,7 @@ pub(crate) unsafe fn try_update_stable_tombstone_shape_cached(
         return None;
     }
     let gc = crate::value::addr_class::try_read_gc_header(obj as usize)?;
-    if gc.obj_type != crate::gc::GC_TYPE_OBJECT
+    if !crate::gc::gc_type_is_object(gc.obj_type)
         || gc._reserved & crate::gc::OBJ_FLAG_STABLE_TOMBSTONES == 0
     {
         return None;
@@ -609,7 +609,7 @@ pub(crate) unsafe fn rekey_stable_tombstone_shape_after_squeeze(
         return None;
     }
     let gc = crate::value::addr_class::try_read_gc_header(obj as usize)?;
-    if gc.obj_type != crate::gc::GC_TYPE_OBJECT
+    if !crate::gc::gc_type_is_object(gc.obj_type)
         || gc._reserved & crate::gc::OBJ_FLAG_STABLE_TOMBSTONES == 0
     {
         return None;

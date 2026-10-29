@@ -266,7 +266,7 @@ unsafe fn try_data_lookup_key(
                 }
                 let header = &*crate::gc::header_from_trusted_user_ptr(addr as *const u8);
                 if header.gc_flags & crate::gc::GC_FLAG_ARENA == 0
-                    || header.obj_type != crate::gc::GC_TYPE_OBJECT
+                    || !crate::gc::gc_type_is_object(header.obj_type)
                     || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
                     || header._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0
                 {

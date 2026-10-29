@@ -571,14 +571,14 @@ unsafe fn define_append_transition_eligible(
         | crate::gc::OBJ_FLAG_NO_EXTEND
         | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
         | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES;
-    if gc.obj_type != crate::gc::GC_TYPE_OBJECT
+    if !crate::gc::gc_type_is_object(gc.obj_type)
         || gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || gc._reserved & BLOCKING != 0
         || !crate::object::object_is_regular(obj)
     {
         #[cfg(feature = "shape-mint-diag")]
         crate::object::shape_mint_census::note_define_outcome(
-            if gc.obj_type != crate::gc::GC_TYPE_OBJECT {
+            if !crate::gc::gc_type_is_object(gc.obj_type) {
                 "ineligible: not GC_TYPE_OBJECT"
             } else if gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
                 "ineligible: forwarded"
@@ -855,7 +855,7 @@ unsafe fn own_key_via_index(
     // both for the receiver and for whatever the keys_array slot holds (a
     // corrupted slot must classify as "no keys array", not fault; #321/#3527).
     match crate::value::addr_class::try_read_gc_header(obj as usize) {
-        Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT => {}
+        Some(h) if crate::gc::gc_type_is_object(h.obj_type) => {}
         _ => return None,
     }
     if (*obj).class_id == super::super::native_module::NATIVE_MODULE_CLASS_ID {
@@ -960,7 +960,7 @@ unsafe fn own_key_lookup(
     // non-object has no own string keys, so answer false and let the caller
     // fall through to the type-specific tail (which serves e.g. `Map.size`).
     match crate::value::addr_class::try_read_gc_header(obj as usize) {
-        Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT => {}
+        Some(h) if crate::gc::gc_type_is_object(h.obj_type) => {}
         _ => return false,
     }
     if super::super::string_wrapper::has_index_key(obj as usize, key) {

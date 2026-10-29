@@ -84,7 +84,7 @@ unsafe fn holder_of_value(bits: u64) -> *mut ObjectHeader {
         return crate::closure::props::bag_of(addr);
     }
     match crate::value::addr_class::try_read_gc_header(addr) {
-        Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT => addr as *mut ObjectHeader,
+        Some(h) if crate::gc::gc_type_is_object(h.obj_type) => addr as *mut ObjectHeader,
         _ => std::ptr::null_mut(),
     }
 }

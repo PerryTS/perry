@@ -1247,7 +1247,7 @@ unsafe fn image_matches(d: &PerryLayoutDesc, built: f64, bound: &[u64]) -> bool 
     let Some(header) = crate::value::addr_class::try_read_gc_header(p) else {
         return false;
     };
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+    if !crate::gc::object_has_meta_word(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || header._reserved & super::shapes::INTEGRITY_FLAGS != 0
     {
@@ -1340,7 +1340,7 @@ unsafe fn family_birth(d: &PerryLayoutDesc, proto: f64) -> Option<*mut ObjectHea
         return None;
     }
     let header = crate::value::addr_class::try_read_gc_header(p)?;
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+    if !crate::gc::object_has_meta_word(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
     {
         return None;

@@ -125,7 +125,7 @@ unsafe fn class_receiver_fast_guard(object: f64, method_bytes: &[u8]) -> Option<
     // resolution uses, so the fast path cannot classify a receiver differently
     // from the code it is short-circuiting.
     let (ptr, gc_type) = gc_pointer_and_type_from_value(object)?;
-    if gc_type != crate::gc::GC_TYPE_OBJECT || ptr as usize != obj_addr {
+    if !crate::gc::object_has_meta_word(gc_type) || ptr as usize != obj_addr {
         return None;
     }
     // `meta_capable_object` rather than a bare header read: it is the
@@ -1101,7 +1101,7 @@ pub(crate) unsafe fn test_gc_pointer_and_type_from_value(value: f64) -> Option<(
 #[inline]
 pub(crate) unsafe fn object_ptr_from_value(value: f64) -> Option<*mut ObjectHeader> {
     let (ptr, gc_type) = gc_pointer_and_type_from_value(value)?;
-    if gc_type == crate::gc::GC_TYPE_OBJECT {
+    if crate::gc::gc_type_is_object(gc_type) {
         Some(ptr as *mut ObjectHeader)
     } else {
         None
@@ -2188,7 +2188,7 @@ pub(crate) unsafe fn native_call_method_tower(
         // the entry's fields into a plain object. Safe to read the header:
         // `obj` is a validated heap object (gc_type read above).
         if method_name == "toJSON"
-            && gc_type == crate::gc::GC_TYPE_OBJECT
+            && crate::gc::gc_type_is_object(gc_type)
             && crate::perf_hook_slots::is_perf_entry_object(obj)
         {
             return crate::perf_hook_slots::perf_entry_to_json(object());
@@ -2199,7 +2199,7 @@ pub(crate) unsafe fn native_call_method_tower(
         // Node's `toJSON` lives on the prototype — so it must NOT become an own
         // key here (`Object.keys(nodeTiming)` is pinned at the 12 milestones).
         if method_name == "toJSON"
-            && gc_type == crate::gc::GC_TYPE_OBJECT
+            && crate::gc::gc_type_is_object(gc_type)
             && crate::perf_hook_slots::is_node_timing_object(obj)
         {
             return crate::perf_hook_slots::node_timing_to_json(object());
@@ -2217,7 +2217,7 @@ pub(crate) unsafe fn native_call_method_tower(
             return r;
         }
 
-        if gc_type != crate::gc::GC_TYPE_OBJECT {
+        if !crate::gc::gc_type_is_object(gc_type) {
             // An exotic receiver (an Error instance, gc type ERROR) of a class
             // whose methods live on its prototype chain rather than in a
             // class-id method table: a class expression or a function-nested

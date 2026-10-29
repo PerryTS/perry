@@ -101,7 +101,7 @@ unsafe fn ordinary_receiver(addr: usize) -> Option<*const ObjectHeader> {
     }
     let header = crate::value::addr_class::try_read_gc_header(addr)?;
     // An OBJECT header is not a closure (closures carry GC_TYPE_CLOSURE).
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+    if !crate::gc::gc_type_is_object(header.obj_type)
         || !address_is_prime_stable(addr)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || header._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0

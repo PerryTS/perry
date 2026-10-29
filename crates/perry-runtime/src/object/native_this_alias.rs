@@ -126,7 +126,7 @@ pub(crate) fn alias_handle_for_object(receiver: f64) -> Option<(f64, bool)> {
         return None;
     }
     let header = unsafe { crate::value::addr_class::try_read_gc_header(addr) }?;
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+    if !crate::gc::gc_type_is_object(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
     {
         return None;

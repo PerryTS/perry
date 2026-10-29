@@ -82,7 +82,7 @@ fn extends_builtin_view(value: f64) -> Option<ViewBrand> {
     let ptr = v.as_pointer::<u8>();
     let gc_header = unsafe { crate::value::addr_class::try_read_tracked_gc_header(ptr as usize) }?;
     let class_id = unsafe {
-        if (*gc_header.as_ptr()).obj_type != crate::gc::GC_TYPE_OBJECT {
+        if !crate::gc::gc_type_is_object((*gc_header.as_ptr()).obj_type) {
             return None;
         }
         (*(ptr as *const super::ObjectHeader)).class_id

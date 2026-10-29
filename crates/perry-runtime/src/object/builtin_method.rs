@@ -127,7 +127,7 @@ unsafe fn set_ok(v: f64) -> bool {
 #[inline(always)]
 unsafe fn weak_ok(v: f64, brand: u32) -> bool {
     heap_cell(v).is_some_and(|h| {
-        (*h).obj_type == crate::gc::GC_TYPE_OBJECT
+        crate::gc::gc_type_is_object((*h).obj_type)
             && (*(raw(v) as *const super::ObjectHeader)).parent_class_id
                 == super::shapes::branded_birth_layout(brand)
     }) && pristine(if brand == crate::weakref::CLASS_ID_WEAKSET {
@@ -1933,7 +1933,7 @@ pub unsafe extern "C-unwind" fn js_bm_lookup(
             // The Map and Set families' entries name only methods a WeakMap
             // and a WeakSet also have (`get`/`set`/`has`/`delete`,
             // `add`/`has`/`delete`).
-            crate::gc::GC_TYPE_OBJECT => {
+            ty if crate::gc::gc_type_is_object(ty) => {
                 (families & FAMILY_MAP != 0 && weak_ok(recv, WEAKMAP))
                     || (families & FAMILY_SET != 0 && weak_ok(recv, WEAKSET))
             }

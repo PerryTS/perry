@@ -1383,7 +1383,7 @@ pub(crate) unsafe fn probe_accessor_word(
     }
     let dir = super::ordinary_dir_addr();
     let header = crate::gc::header_from_trusted_user_ptr(obj.cast());
-    if (*header).obj_type != crate::gc::GC_TYPE_OBJECT {
+    if !crate::gc::gc_type_is_object((*header).obj_type) {
         return None;
     }
     let mut cur = obj;
@@ -1545,7 +1545,7 @@ pub unsafe extern "C" fn perry_probe_own_method(
     if bits & TAG_MASK == POINTER_TAG && payload >= perry_abi::RECEIVER_HANDLE_FLOOR {
         let h = crate::gc::header_from_trusted_user_ptr(payload as *const u8);
         let obj = payload as *const ObjectHeader;
-        if (*h).obj_type == crate::gc::GC_TYPE_OBJECT
+        if crate::gc::gc_type_is_object((*h).obj_type)
             && (*h).gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
             && (*obj).parent_class_id & crate::object::overflow::SHADOW_BIT == 0
         {

@@ -15,7 +15,7 @@ pub(crate) fn brand_vm_script_instance(value: f64) -> f64 {
     if result_value.is_pointer() {
         let object = result_value.as_pointer::<ObjectHeader>() as *mut ObjectHeader;
         if unsafe { crate::value::addr_class::try_read_gc_header(object as usize) }
-            .is_some_and(|header| header.obj_type == crate::gc::GC_TYPE_OBJECT)
+            .is_some_and(|header| crate::gc::gc_type_is_object(header.obj_type))
         {
             let proto = js_function_prototype_value_for_read(constructor.get_nanbox_f64());
             super::super::prototype_chain::object_link_class_default_prototype(

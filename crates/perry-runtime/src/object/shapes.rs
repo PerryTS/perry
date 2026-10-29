@@ -5185,7 +5185,7 @@ unsafe fn prototype_serial(bits: u64) -> u64 {
     }
     let addr = value.as_pointer::<u8>() as usize;
     match crate::value::addr_class::try_read_gc_header(addr) {
-        Some(header) if header.obj_type == crate::gc::GC_TYPE_OBJECT => {
+        Some(header) if crate::gc::object_has_meta_word(header.obj_type) => {
             let meta = (*(addr as *const crate::object::ObjectHeader)).meta;
             if meta.is_null() {
                 0
@@ -5546,7 +5546,7 @@ unsafe fn bits_name_object_of_class(bits: u64, class: u32) -> bool {
     let addr = value.as_pointer::<u8>() as usize;
     matches!(
         crate::value::addr_class::try_read_gc_header(addr),
-        Some(header) if header.obj_type == crate::gc::GC_TYPE_OBJECT
+        Some(header) if crate::gc::gc_type_is_object(header.obj_type)
             && (*(addr as *const crate::object::ObjectHeader)).class_id == class
     )
 }

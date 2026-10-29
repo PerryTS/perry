@@ -122,7 +122,7 @@ unsafe fn define_other(
             | crate::gc::OBJ_FLAG_SEALED
             | crate::gc::OBJ_FLAG_NO_EXTEND
             | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
-        if header.obj_type != crate::gc::GC_TYPE_OBJECT
+        if !crate::gc::gc_type_is_object(header.obj_type)
             || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
             || header._reserved & BLOCKING != 0
         {
@@ -383,7 +383,7 @@ unsafe fn definition_admitted(obj_bits: u64, key_value: f64) -> Option<Admitted>
         | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
         | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES
         | crate::gc::OBJ_FLAG_ARGUMENTS;
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+    if !crate::gc::object_has_meta_word(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || header._reserved & BLOCKING != 0
     {
