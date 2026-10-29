@@ -227,14 +227,22 @@ pub(crate) fn try_lower_instance_method_call(
         )
         .map(Some);
     }
+    // D1: a receiver with a static class (an annotation, or `this` in a
+    // method) first asks the facts whether the site is proven; the
+    // annotation only picks the lowering, the facts prove the semantics.
+    let typed_candidate = !needs_dynamic_dispatch
+        && !is_global
+        && !is_builtin_receiver
+        && receiver_class.is_some()
+        && crate::expr::wpfacts_access::proven_receiver_classes(ctx, object).is_some();
     // #11910: arguments that can observe when the method is read. The
     // tower's implementor arms read nothing (a proven class id under intact
     // prototype guards names its body); every other receiver must have its
     // method read before the arguments, through the split method site.
-    let split = needs_dynamic_dispatch
+    let split = (needs_dynamic_dispatch || typed_candidate)
         && crate::expr::method_site::args_may_observe_lookup(ctx, args)
         && crate::expr::method_site::method_site_enabled(ctx, property, args.len());
-    if needs_dynamic_dispatch {
+    if needs_dynamic_dispatch || typed_candidate {
         // Find all (class_id → fn_name) for `property` — including
         // INHERITED methods. Per JS spec, `subInstance.method()` for a
         // method defined on a parent dispatches to the parent's
@@ -317,7 +325,44 @@ pub(crate) fn try_lower_instance_method_call(
                 cur = ctx.classes.get(&c).and_then(|cc| cc.extends_name.clone());
             }
         }
-        if !implementors.is_empty() {
+        // A compiled case is a class whose method is a prototype constant
+        // (`select::cased`: a chain the compiler names, a slot the write
+        // census proves written once). Receivers of any other class keep
+        // the universal method site, and a site with no case is that
+        // generic arm alone.
+        let cased: Vec<bool> = implementors
+            .iter()
+            .zip(&impl_class)
+            .map(|((_, f), class)| select::cased(ctx, class, property, f))
+            .collect();
+        // FVA: the facts prove the receiver one of its classes, each a
+        // cased implementor: the site is the T0set read shape, one load
+        // of the receiver's class id and a switch whose arms are the
+        // direct calls, with no probe. Its generic arm is only a nullable
+        // receiver's (the receiver test a read keeps): a nullish receiver
+        // reads its method, before the arguments, and throws.
+        let proven: Option<(Vec<(u32, usize)>, bool)> =
+            crate::expr::wpfacts_access::proven_receiver_classes(ctx, object).and_then(
+                |(cids, nullable)| {
+                    cids.iter()
+                        .map(|&cid| {
+                            implementors
+                                .iter()
+                                .zip(&cased)
+                                .position(|((c, _), &k)| k && *c == cid)
+                                .map(|i| (cid, i))
+                        })
+                        .collect::<Option<Vec<_>>>()
+                        .map(|m| (m, nullable))
+                },
+            );
+        // A typed receiver takes this route only when the facts close the
+        // site over cased implementors; otherwise the guarded typed path
+        // below is unchanged.
+        let typed_closed = typed_candidate
+            && !(crate::codegen::full_outline_ic_enabled() && method_dispatch_collapse_enabled())
+            && proven.is_some();
+        if !implementors.is_empty() && (needs_dynamic_dispatch || typed_closed) {
             // #9417: the receiver is lowered FIRST — JS evaluation order requires
             // the MemberExpression to be evaluated before the arguments — and
             // consumed LAST, after every argument expression. Each of those is
@@ -361,37 +406,6 @@ pub(crate) fn try_lower_instance_method_call(
             if collapse_dynamic {
                 return Ok(None);
             }
-            // A compiled case is a class whose method is a prototype constant
-            // (`select::cased`: a chain the compiler names, a slot the write
-            // census proves written once). Receivers of any other class keep
-            // the universal method site, and a site with no case is that
-            // generic arm alone.
-            let cased: Vec<bool> = implementors
-                .iter()
-                .zip(&impl_class)
-                .map(|((_, f), class)| select::cased(ctx, class, property, f))
-                .collect();
-            // FVA: the facts prove the receiver one of its classes, each a
-            // cased implementor: the site is the T0set read shape, one load
-            // of the receiver's class id and a switch whose arms are the
-            // direct calls, with no probe. Its generic arm is only a nullable
-            // receiver's (the receiver test a read keeps): a nullish receiver
-            // reads its method, before the arguments, and throws.
-            let proven: Option<(Vec<(u32, usize)>, bool)> =
-                crate::expr::wpfacts_access::proven_receiver_classes(ctx, object).and_then(
-                    |(cids, nullable)| {
-                        cids.iter()
-                            .map(|&cid| {
-                                implementors
-                                    .iter()
-                                    .zip(&cased)
-                                    .position(|((c, _), &k)| k && *c == cid)
-                                    .map(|i| (cid, i))
-                            })
-                            .collect::<Option<Vec<_>>>()
-                            .map(|m| (m, nullable))
-                    },
-                );
             let closed = proven.as_ref().is_some_and(|(_, nullable)| !nullable);
             let split = split && !closed;
             let post_args_may_collect = ctx.strings.call_location_for(call_byte_offset).is_some()
