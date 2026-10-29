@@ -32,9 +32,16 @@ pub(super) fn prototype(expression: &str, entry: &[Token<'_>]) -> Result<Value, 
         .strip_prefix("std::ptr::addr_of!(crate::object::runtime_layouts::")
         .and_then(|s| s.strip_suffix(')'))
         .ok_or("prototype birth requires its existing layout expression")?;
-    let source =
-        include_str!("../../perry-runtime/src/object/runtime_layouts/builtin_prototypes.rs");
-    let fields = descriptor(source, name)?;
+    let fields = descriptor(
+        include_str!("../../perry-runtime/src/object/runtime_layouts/builtin_prototypes.rs"),
+        name,
+    )
+    .or_else(|_| {
+        descriptor(
+            include_str!("../../perry-runtime/src/object/runtime_layouts/node_prototypes.rs"),
+            name,
+        )
+    })?;
     // A seventh field names the realm cells that own the layout (`realm = [..]`).
     let owned = fields.len() == 7 && fields[6].starts_with("realm=");
     if !(fields.len() == 6 || owned) || fields[1].clone().strip_prefix("kind=").is_none() {
@@ -86,6 +93,70 @@ pub(super) fn prototype(expression: &str, entry: &[Token<'_>]) -> Result<Value, 
     }
     Ok(d)
 }
+/// An ordinary object born on a declared static layout
+/// (`perry_alloc_layout(addr_of!(runtime_layouts::X))`): the layout's kind
+/// decides its classification; it is not marked as a prototype at birth.
+pub(super) fn ordinary(expression: &str, entry: &[Token<'_>]) -> Result<Value, String> {
+    let name = expression
+        .strip_prefix(
+            "crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(crate::object::runtime_layouts::",
+        )
+        .and_then(|s| s.strip_suffix("))"))
+        .ok_or("invalid layout birth")?;
+    let ts = tokens(include_str!(
+        "../../perry-runtime/src/object/runtime_layouts/stream_prototypes.rs"
+    ))?;
+    let start = ts
+        .windows(4)
+        .position(|w| {
+            w[0].text == "mut"
+                && w[1].text == name
+                && w[2].text == ":"
+                && w[3].text == "PerryLayoutDesc"
+        })
+        .ok_or_else(|| format!("missing static layout {name}"))?;
+    let open = start
+        + ts[start..]
+            .iter()
+            .position(|t| t.text == "{")
+            .ok_or("static layout has no fields")?;
+    let mut depth = 0usize;
+    let close = open
+        + ts[open..]
+            .iter()
+            .position(|t| {
+                match t.text {
+                    "{" => depth += 1,
+                    "}" => depth -= 1,
+                    _ => {}
+                }
+                depth == 0
+            })
+            .ok_or("unterminated static layout")?;
+    let mut kind = None;
+    let mut proto = None;
+    for field in info::split(&ts[open + 1..close], ",") {
+        if field.len() >= 3 && field[1].text == ":" {
+            match field[0].text {
+                "kind" => kind = Some(info::text(&field[2..])),
+                "proto" => proto = Some(info::text(&field[2..])),
+                _ => {}
+            }
+        }
+    }
+    let layout = match kind.as_deref() {
+        Some("0") => ObjectLayout::PlainOrdinary,
+        Some("crate::object::runtime_layouts::LAYOUT_KIND_UNMARKED") => ObjectLayout::Unmarked,
+        _ => return Err(format!("{name}: unsupported static layout kind")),
+    };
+    if proto.as_deref() != Some("crate::object::layout_desc::LAYOUT_PROTO_OBJECT") {
+        return Err(format!("{name}: unsupported static layout inheritance"));
+    }
+    let mut d = birth::birth(&tokens("js_object_alloc(0,0)")?, entry)?;
+    super::derive::restate(&mut d, |birth| birth.layout = layout)?;
+    Ok(d)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
