@@ -76,6 +76,7 @@ pub(crate) fn queue_session_ping(handle: i64, args: &[f64]) -> f64 {
         // is fired by `complete_turnloop_ping` from `Event::Ping { ack: true }`.
         if let Some(session) = get_handle_mut::<Http2SessionHandle>(handle) {
             session.pending_callbacks.push(callback);
+            session.ping_sent.push_back(std::time::Instant::now());
         }
         return bool_value(true);
     }
@@ -86,6 +87,7 @@ pub(crate) fn queue_session_ping(handle: i64, args: &[f64]) -> f64 {
         session_handle: handle,
         callback,
         payload,
+        duration: 0.0,
     });
     bool_value(true)
 }
@@ -100,8 +102,13 @@ pub(crate) fn queue_session_settings(handle: i64, args: &[f64]) -> f64 {
         .copied()
         .map(|v| closure_arg(Some(v)))
         .unwrap_or(0);
+    // A frame already in flight is what this one builds on: the peer will see
+    // them in order.
     let mut settings = get_handle::<Http2SessionHandle>(handle)
-        .map(|session| session.local_settings.clone())
+        .map(|session| match session.settings_sent.back() {
+            Some((_, pending)) => pending.clone(),
+            None => session.local_settings.clone(),
+        })
         .unwrap_or_default();
     settings.apply_value(settings_value_arg);
     if let Some(conn) = turnloop_of(handle) {
@@ -112,7 +119,9 @@ pub(crate) fn queue_session_settings(handle: i64, args: &[f64]) -> f64 {
             return f64::from_bits(TAG_UNDEFINED);
         };
         if let Some(session) = get_handle_mut::<Http2SessionHandle>(handle) {
-            session.local_settings = effective;
+            session
+                .settings_sent
+                .push_back((std::time::Instant::now(), effective));
             session.pending_settings_ack = true;
             if callback != 0 {
                 session.pending_callbacks.push(callback);
@@ -168,6 +177,7 @@ pub(crate) fn queue_session_settings(handle: i64, args: &[f64]) -> f64 {
             session_handle: handle,
             callback,
             settings: settings.clone(),
+            duration: 0.0,
         });
     }
     push_h2_event(Http2PendingEvent::SessionSettingsEvent {
