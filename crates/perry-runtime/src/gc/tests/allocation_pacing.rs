@@ -586,7 +586,7 @@ fn native_input_bulk_debt_does_not_arm_a_disabled_loop_poll() {
 
 /// OWNER 2026-10-29 (lane GCT): the byte-pacing full is due at the last full's
 /// live bytes times the growth factor, and a retaining heap (live data, not
-/// garbage) carries the same multiplier the arena escalation uses, so a
+/// garbage) carries a larger multiplier on that term, so a
 /// program that is building its live set does not pay a full that frees
 /// nothing at 2x. The control (not retaining) fires at the old 2x point, so
 /// the test can fail if the multiplier is not what moves the boundary.
@@ -608,12 +608,12 @@ fn a_retaining_heap_scales_the_byte_pacing_full_by_the_growth_multiplier() {
     policy::note_copying_minor_young_survival(0);
     assert!(!due(live + live / 2, false));
     assert!(due(live + live + MIB, false), "control: the plain 2x point fires");
-    // Retaining: the same heap is not due at 2x, nor at 4x, but is at 1 + 4x.
+    // Retaining: the same heap is not due at 2x, nor at 3x, but is at 1 + 3x.
     policy::note_copying_minor_young_survival(1000);
     assert!(policy::major_pacing_retaining());
     assert!(!due(live + live + MIB, false), "retaining heap fired at 2x");
-    assert!(!due(live + 3 * live, false), "retaining heap fired below 5x");
-    assert!(due(live + 4 * live + MIB, false), "retaining heap never fires");
+    assert!(!due(live + 2 * live, false), "retaining heap fired below 4x");
+    assert!(due(live + 3 * live + MIB, false), "retaining heap never fires");
     policy::note_copying_minor_young_survival(0);
     js_shadow_frame_pop(frame);
 }

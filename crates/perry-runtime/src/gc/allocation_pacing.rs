@@ -110,8 +110,8 @@ fn due_arm(old_pressure: usize, burst_boundary: bool) -> Option<&'static str> {
         // OWNER 2026-10-29 (lane GCT): the next full is due when the mature
         // heap has grown by the live bytes measured at the last full times the
         // growth factor, and while the young generation is measured retaining
-        // (live data, not garbage) that factor carries the same multiplier the
-        // arena escalation and the old-reclaim band already use. Only that
+        // (live data, not garbage) that factor is
+        // `MAJOR_PACING_LIVE_GROWTH_RETAINING_MULTIPLIER`. Only that
         // live-derived mature-growth term takes the multiplier; the published
         // (total allocation, nursery garbage included) term stays at twice the
         // live bytes. The absolute floors are unchanged. The multiplier is
