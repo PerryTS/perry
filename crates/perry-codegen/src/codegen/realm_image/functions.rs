@@ -97,21 +97,11 @@ pub(crate) fn emit_function(
                 exported: true,
                 class_id: 0,
                 layout_word: layouts.bag,
-                reserved: perry_abi::OBJ_FLAG_NULL_PROTO
-                    | perry_abi::OBJ_FLAG_PLAIN_ORDINARY
-                    | if layouts.bag_flags
-                        & perry_abi::object_meta_flags::OBJECT_META_FLAG_IS_PROTOTYPE
-                        != 0
-                    {
-                        perry_abi::OBJ_FLAG_NEVER_MOVE
-                    } else {
-                        0
-                    }
-                    | if attrs {
-                        perry_abi::OBJ_FLAG_HAS_DESCRIPTORS
-                    } else {
-                        0
-                    },
+                reserved: super::header::bag_word(
+                    layouts.bag_flags & perry_abi::object_meta_flags::OBJECT_META_FLAG_IS_PROTOTYPE
+                        != 0,
+                    attrs,
+                ),
                 meta: has_meta.then_some(meta.as_str()),
                 slots: &values,
             },
@@ -125,10 +115,11 @@ pub(crate) fn emit_function(
     // Reflection can describe lazy name/length properties before the heap
     // function owns a bag. An image bag is born now, so apply the same header
     // fact change as layout_note_closure_edge_installed: pointer-free -> unknown.
+    let born = super::header::closure_word(cell, header)?;
     let reserved = if has_bag {
-        perry_abi::closure_reserved_with_props(header.reserved)
+        perry_abi::closure_reserved_with_props(born)
     } else {
-        header.reserved
+        born
     };
     fixups.extend(emit_closure_cell_with_fields(
         module,
