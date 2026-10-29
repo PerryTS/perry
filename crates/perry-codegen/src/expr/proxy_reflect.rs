@@ -1035,6 +1035,28 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // literal — none of which has evaluation-order side effects).
             if let Some(property) = static_write_key(ctx, key) {
                 if same_put_value_receiver_expr(target, receiver) {
+                    // CLS D3: a receiver the facts prove (prefix-stable
+                    // classes, a definite data birth field, no accessor)
+                    // stores into the proven slot; the proven store is the
+                    // same `[[Set]]` as the by-name site for such a receiver.
+                    if super::wpfacts_access::prove(
+                        ctx,
+                        target,
+                        &property,
+                        super::wpfacts_access::Access::Set,
+                    )
+                    .is_some()
+                    {
+                        return super::property_set::lower(
+                            ctx,
+                            &Expr::PropertySet {
+                                object: target.clone(),
+                                property,
+                                value: value.clone(),
+                            },
+                            *strict,
+                        );
+                    }
                     downgrade_unknown_call_expr(ctx, target);
                     downgrade_unknown_call_expr(ctx, value);
                     downgrade_unknown_call_expr(ctx, receiver);
