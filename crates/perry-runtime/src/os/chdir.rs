@@ -12,6 +12,7 @@ use crate::string::{js_string_from_bytes, StringHeader};
 /// `Error` when the target can't be entered.
 #[no_mangle]
 pub extern "C" fn js_process_chdir(dir_ptr: *const StringHeader) {
+    crate::process::worker_restrictions::ensure_worker_operation_allowed("chdir");
     unsafe {
         if dir_ptr.is_null() {
             return;

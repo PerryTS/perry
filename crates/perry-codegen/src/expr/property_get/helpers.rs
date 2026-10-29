@@ -507,8 +507,11 @@ pub(crate) fn lower_raw_f64_class_field_get_for_number_context(
         ctx.note_ptr_shape_consumed(object.as_ref(), "class_field_get_number.shape_proven_load");
         let recv_box = lower_expr(ctx, object)?;
         let field_idx_str = field_index.to_string();
-        let header_skip =
-            crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
+        let header_skip = crate::target_layout::object_slot_base_bytes(
+            ctx.target_triple,
+            crate::target_layout::class_instance_form(&class_name),
+        )
+        .to_string();
         let blk = ctx.block();
         let obj_bits = blk.bitcast_double_to_i64(&recv_box);
         let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
@@ -579,8 +582,11 @@ pub(crate) fn lower_raw_f64_class_field_get_for_number_context(
         ctx.note_ptr_shape_consumed(object.as_ref(), "ptr_shape_get_number");
         let recv_box = lower_expr(ctx, object)?;
         let field_idx_str = field_index.to_string();
-        let header_skip =
-            crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
+        let header_skip = crate::target_layout::object_slot_base_bytes(
+            ctx.target_triple,
+            crate::target_layout::class_instance_form(&class_name),
+        )
+        .to_string();
         let (val_raw, is_plain) = {
             let blk = ctx.block();
             let obj_bits = blk.bitcast_double_to_i64(&recv_box);

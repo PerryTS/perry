@@ -108,7 +108,7 @@ unsafe extern "C" fn accepted(closure: *const RawClosureHeader, _: JsThis, owner
         peer.as_ref().map(|peer| peer.port).unwrap_or(0),
         secure,
         if secure { "h2" } else { "h2c" },
-        conn::advertised_settings(&settings),
+        conn::advertised_settings(&settings, turnloop_http::http2::Role::Server),
     );
     let scope = TransientRootScope::enter();
     let codec = scope.root_nanbox(unsafe {

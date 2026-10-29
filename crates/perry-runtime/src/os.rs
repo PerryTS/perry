@@ -581,7 +581,7 @@ pub unsafe extern "C" fn js_set_process_entry_path(ptr: *const u8, len: u32) {
 /// Returns: string[] (array of NaN-boxed string pointers)
 #[no_mangle]
 pub extern "C" fn js_process_argv() -> *mut ArrayHeader {
-    use crate::array::{js_array_alloc, js_array_push_f64};
+    use crate::array::js_array_push_f64;
     use crate::value::js_nanbox_string;
 
     // #9401: never `std::env::args()` — it panics on a non-UTF-8 argument.
@@ -592,7 +592,7 @@ pub extern "C" fn js_process_argv() -> *mut ArrayHeader {
     // Compiled: ["/path/to/binary", "/path/to/entry.ts", ...user_args]
     // If an older/foreign codegen does not seed the entry path, retain the
     // historical binary-path fallback while keeping user args at index 2+.
-    let arr = js_array_alloc((args.len() + 1) as u32);
+    let arr = crate::realm_decl! { birth crate::array::realm_array_alloc((args.len() + 1) as u32, perry_abi::realm_header::ArrayElements::Pointers, false); realm { process.argv, value = dynamic, elements = string; "node:process.argv", value = dynamic, elements = string; } };
 
     let mut result = arr;
     if let Some(binary_path) = args.first() {

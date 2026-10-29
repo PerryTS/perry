@@ -31,6 +31,7 @@ use crate::types::{DOUBLE, I64, I8, VOID};
 pub(crate) mod arrays;
 pub(crate) mod atoms;
 pub(crate) mod functions;
+pub(crate) mod header;
 #[cfg(test)]
 mod key_list_tests;
 pub(crate) mod layouts;
@@ -43,7 +44,6 @@ pub(crate) use records::{
 };
 
 const GC_TYPE_ARRAY: u8 = 1;
-const GC_TYPE_OBJECT: u8 = 2;
 const GC_TYPE_CLOSURE: u8 = 4;
 /// `GC_FLAG_MARKED | GC_FLAG_PINNED`: an image cell is never white and never
 /// moves (perry-runtime `realm::IMAGE_CELL_FLAGS`).
@@ -326,9 +326,15 @@ pub(crate) fn emit_object_cell_with_fields(
     let layout_word = cell.layout_word;
     let reserved = cell.reserved;
     let slots = cell.slots;
-    let meta = cell.meta.map_or_else(|| "null".into(), user_address);
+    // The image cell's metadata edge: this record's own field, not a read of a
+    // live ObjectHeader.
+    let ObjectCell { meta, .. } = cell;
+    let meta = meta.map_or_else(|| "null".into(), user_address);
     let triple = llmod.target_triple.clone();
-    let header = crate::target_layout::object_header_size_bytes(&triple);
+    let header = crate::target_layout::object_slot_base_bytes(
+        &triple,
+        crate::target_layout::HeaderForm::Meta,
+    );
     let size = GC_HEADER_SIZE + header + 8 * slots.len() as u64;
     let ilp32 = crate::target_layout::target_is_ilp32(&triple);
     // ILP32 keeps the slot region 8-aligned with a pad word before `meta`.
@@ -352,9 +358,10 @@ pub(crate) fn emit_object_cell_with_fields(
             });
         }
     }
+    let gc_type_object = perry_abi::GC_TYPE_OBJECT;
     llmod.add_raw_global(format!(
         "@{name} = {linkage}global {{ i8, i8, i16, i32, i32, i32, {pad_ty}ptr, {{ {} }} }} \
-         {{ i8 {GC_TYPE_OBJECT}, i8 {IMAGE_CELL_FLAGS}, i16 {reserved}, i32 {size}, i32 {class_id}, i32 {}, {pad_init}ptr {meta}, {{ {} }} {{ {} }} }}, \
+         {{ i8 {gc_type_object}, i8 {IMAGE_CELL_FLAGS}, i16 {reserved}, i32 {size}, i32 {class_id}, i32 {}, {pad_init}ptr {meta}, {{ {} }} {{ {} }} }}, \
          section \"{}\", align 8",
         types.join(", "),
         layout_word as i32,

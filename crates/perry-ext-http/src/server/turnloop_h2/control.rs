@@ -20,8 +20,8 @@
 //!
 //! | setting | the core's coupling |
 //! |---|---|
-//! | HEADER_TABLE_SIZE | `hpack::Decoder::new(4096, …)` — a larger table would be advertised and then not honoured, and the peer's next header block would fail to decode |
-//! | INITIAL_WINDOW_SIZE | each `Stream`'s `recv_window` is **hard-coded to 65535**; advertising more invites DATA the core answers with FLOW_CONTROL_ERROR |
+//! | HEADER_TABLE_SIZE | the decoder admits the peer's table-size updates up to the advertised value, so any value is honoured |
+//! | INITIAL_WINDOW_SIZE | the core adjusts every stream's receive window when the setting is sent, so any value in range is honoured |
 //! | MAX_CONCURRENT_STREAMS | `Limits::streams` is both the advertisement and the size of the stream table; advertising more produces `REFUSED_STREAM` from inside `receive`, which is a connection error |
 //! | MAX_FRAME_SIZE | `decode_frame(input, limits.frame_size)` rejects anything larger as FRAME_SIZE_ERROR |
 //! | MAX_HEADER_LIST_SIZE | the decoder's own limit, fixed at construction |
@@ -66,10 +66,6 @@ pub(crate) fn clamp_to_core(
     advertised: &Http2SettingsState,
 ) -> Http2SettingsState {
     let mut out = requested.clone();
-    out.header_table_size = requested
-        .header_table_size
-        .min(advertised.header_table_size);
-    out.initial_window_size = advertised.initial_window_size;
     out.max_concurrent_streams = requested
         .max_concurrent_streams
         .min(advertised.max_concurrent_streams);
@@ -90,17 +86,12 @@ fn settings_payload(role_is_client: bool, settings: &Http2SettingsState) -> Vec<
         payload.extend_from_slice(&id.to_be_bytes());
         payload.extend_from_slice(&value.to_be_bytes());
     };
-    put(HEADER_TABLE_SIZE, settings.header_table_size);
-    if role_is_client {
-        // Only a client may set ENABLE_PUSH to a non-zero value, and RFC 9113
-        // §6.5.2 makes a server that raises it a connection error on the
-        // client's side. Perry never pushes, so the value is always zero.
-        put(ENABLE_PUSH, 0);
+    for (id, value) in settings.named() {
+        // Only a client may invite pushes (RFC 9113 section 6.5.2); a server
+        // that raised ENABLE_PUSH would be a connection error on the client's
+        // side, so its value is always zero.
+        put(id, if id == ENABLE_PUSH && !role_is_client { 0 } else { value });
     }
-    put(MAX_CONCURRENT_STREAMS, settings.max_concurrent_streams);
-    put(INITIAL_WINDOW_SIZE, settings.initial_window_size);
-    put(MAX_FRAME_SIZE, settings.max_frame_size);
-    put(MAX_HEADER_LIST_SIZE, settings.max_header_list_size);
     payload
 }
 
@@ -272,6 +263,7 @@ mod tests {
             max_header_size: 32_768,
             max_header_list_size: 32_768,
             enable_connect_protocol: false,
+            given: 0,
         }
     }
 
@@ -296,35 +288,44 @@ mod tests {
         let mut requested = advertised();
         requested.max_concurrent_streams = 10_000;
         requested.max_frame_size = 1 << 20;
-        requested.header_table_size = 65_536;
-        requested.initial_window_size = 1 << 20;
         let out = clamp_to_core(&requested, &advertised());
         assert_eq!(out.max_concurrent_streams, 128);
         assert_eq!(out.max_frame_size, 16_384);
-        assert_eq!(out.header_table_size, 4_096);
-        assert_eq!(out.initial_window_size, 65_535);
     }
 
-    /// A server must never advertise ENABLE_PUSH; a client advertises zero.
-    #[test]
-    fn enable_push_is_a_client_only_identifier_and_always_zero() {
-        let server = settings_payload(false, &advertised());
-        assert!(!server
-            .chunks_exact(6)
-            .any(|c| u16::from_be_bytes([c[0], c[1]]) == ENABLE_PUSH));
-        let client = settings_payload(true, &advertised());
-        let push = client
+    fn push_entry(payload: &[u8]) -> Option<u32> {
+        payload
             .chunks_exact(6)
             .find(|c| u16::from_be_bytes([c[0], c[1]]) == ENABLE_PUSH)
-            .expect("client advertises ENABLE_PUSH");
-        assert_eq!(u32::from_be_bytes([push[2], push[3], push[4], push[5]]), 0);
+            .map(|c| u32::from_be_bytes([c[2], c[3], c[4], c[5]]))
+    }
+
+    fn naming_push(enable: bool) -> Http2SettingsState {
+        let mut settings = advertised();
+        settings.enable_push = enable;
+        settings.given = 1 << ENABLE_PUSH;
+        settings
+    }
+
+    /// Only the identifiers the caller named go on the wire, so an unnamed
+    /// ENABLE_PUSH is absent from either role. A server's is always zero; a
+    /// client's is what it asked for.
+    #[test]
+    fn enable_push_is_sent_only_when_named_and_a_server_never_raises_it() {
+        assert_eq!(push_entry(&settings_payload(false, &advertised())), None);
+        assert_eq!(push_entry(&settings_payload(true, &advertised())), None);
+        assert_eq!(push_entry(&settings_payload(false, &naming_push(true))), Some(0));
+        assert_eq!(push_entry(&settings_payload(true, &naming_push(true))), Some(1));
+        assert_eq!(push_entry(&settings_payload(true, &naming_push(false))), Some(0));
     }
 
     /// The payload is a whole number of 6-byte entries, which is what keeps the
     /// peer from answering FRAME_SIZE_ERROR.
     #[test]
     fn settings_payload_is_a_whole_number_of_entries() {
-        assert_eq!(settings_payload(false, &advertised()).len() % 6, 0);
-        assert_eq!(settings_payload(true, &advertised()).len() % 6, 0);
+        let mut all = advertised();
+        all.given = u16::MAX;
+        assert_eq!(settings_payload(false, &all).len() % 6, 0);
+        assert_eq!(settings_payload(true, &all).len() % 6, 0);
     }
 }

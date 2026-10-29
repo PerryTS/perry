@@ -208,6 +208,13 @@ pub struct Http2SessionHandle {
     pub listeners: HashMap<String, Vec<i64>>,
     pub close_callbacks: Vec<i64>,
     pub pending_callbacks: Vec<i64>,
+    /// When each PING still awaiting its acknowledgement was sent, oldest
+    /// first; the ack measures the round trip from it.
+    pub ping_sent: std::collections::VecDeque<std::time::Instant>,
+    /// The SETTINGS frames still awaiting acknowledgement, oldest first: when
+    /// each was sent and what it asks for. `local_settings` takes the values
+    /// only when the peer acknowledges them.
+    pub settings_sent: std::collections::VecDeque<(std::time::Instant, Http2SettingsState)>,
     pub timeout_callback: i64,
     /// The turnloop connection carrying this session, or zero when the
     /// session has no transport at all. Every control surface routes on this:
@@ -270,11 +277,13 @@ pub(crate) enum Http2PendingEvent {
         session_handle: i64,
         callback: i64,
         settings: Http2SettingsState,
+        duration: f64,
     },
     SessionPingCallback {
         session_handle: i64,
         callback: i64,
         payload: Vec<u8>,
+        duration: f64,
     },
     SessionGoaway {
         session_handle: i64,

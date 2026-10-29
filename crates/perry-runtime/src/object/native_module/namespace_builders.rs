@@ -4,17 +4,48 @@ use std::sync::atomic::Ordering;
 /// The compiled code treats the result as another NativeModuleRef, so chained
 /// property accesses like `fs.constants.O_RDONLY` work through the dispatch table.
 pub(crate) fn create_sub_namespace(name: &str) -> f64 {
-    let value = js_create_native_module_namespace(name.as_ptr(), name.len());
     if name == "vm.constants" {
-        let object = JSValue::from_bits(value.to_bits()).as_pointer::<ObjectHeader>();
-        if !object.is_null() {
-            super::super::prototype_chain::object_set_static_prototype(
-                object as usize,
-                crate::value::TAG_NULL,
-            );
-            super::super::js_object_freeze(value);
+        // One object per realm, kept where the namespace was kept before.
+        if let Some(bits) = NATIVE_MODULE_NAMESPACES.with(|cache| cache.borrow().get(name).copied())
+        {
+            return f64::from_bits(bits);
         }
+        let value = vm_constants_value();
+        NATIVE_MODULE_NAMESPACES.with(|cache| {
+            cache.borrow_mut().insert(name.to_string(), value.to_bits());
+        });
+        return value;
     }
+    js_create_native_module_namespace(name.as_ptr(), name.len())
+}
+
+/// `vm.constants`: as in Node, an ordinary frozen object with a null
+/// prototype holding two registered symbols, written in Node's order.
+fn vm_constants_value() -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let object = scope.root_raw_mut_ptr(crate::realm_decl! { birth crate::object::js_object_alloc_null_proto(0, 2); realm { "node:vm.constants", kind = namespace, members = { USE_MAIN_CONTEXT_DEFAULT_LOADER = Symbol.for("vm_dynamic_import_main_context_default"), attrs = writable | enumerable | configurable; DONT_CONTEXTIFY = Symbol.for("vm_context_no_contextify"), attrs = writable | enumerable | configurable; }, integrity = frozen } });
+    let store = |key: &str, description: &str| {
+        let symbol = scope.root_nanbox_f64(unsafe {
+            crate::symbol::js_symbol_for(global_agent_string_value(description))
+        });
+        let key = scope.root_string_ptr(crate::string::js_string_from_bytes(
+            key.as_ptr(),
+            key.len() as u32,
+        ));
+        object.with_mut_ptr::<ObjectHeader, _>(|object| {
+            key.with_const_ptr::<crate::StringHeader, _>(|key| {
+                super::super::js_object_set_field_by_name(object, key, symbol.get_nanbox_f64())
+            })
+        });
+    };
+    store(
+        "USE_MAIN_CONTEXT_DEFAULT_LOADER",
+        "vm_dynamic_import_main_context_default",
+    );
+    store("DONT_CONTEXTIFY", "vm_context_no_contextify");
+    let value = object
+        .with_mut_ptr::<ObjectHeader, _>(|object| crate::value::js_nanbox_pointer(object as i64));
+    super::super::js_object_freeze(value);
     value
 }
 
@@ -97,22 +128,8 @@ pub(crate) unsafe fn http_methods_array() -> f64 {
         "UNLOCK",
         "UNSUBSCRIBE",
     ];
-    let arr = crate::array::js_array_alloc_with_length_longlived(METHODS.len() as u32);
-    let elements_ptr =
-        crate::array::array_elements_ptr(arr as *const crate::array::ArrayHeader) as *mut f64;
-    for (i, m) in METHODS.iter().enumerate() {
-        let bytes = m.as_bytes();
-        let str_ptr =
-            crate::string::js_string_from_bytes_longlived(bytes.as_ptr(), bytes.len() as u32);
-        let nanboxed = f64::from_bits(
-            crate::value::STRING_TAG | (str_ptr as u64 & crate::value::POINTER_MASK),
-        );
-        *elements_ptr.add(i) = nanboxed;
-        crate::array::note_array_slot_layout_only(arr, i, nanboxed.to_bits());
-    }
-    // The list is fresh and every slot holds a method name.
-    crate::array::ek_birth_prefix(arr, METHODS.len() as u32);
-    let value = crate::value::js_nanbox_pointer(arr as i64);
+    // Born in the longlived arena with its pointer layout, filled in order.
+    let value = crate::realm_decl! { birth crate::array::realm_string_array(METHODS, true); realm { "node:http.METHODS", elements_source = METHODS } };
     // GC_STORE_AUDIT(ROOT): HTTP_METHODS_CACHE is a mutable root visited by scan_object_cache_roots_mut.
     crate::object::HTTP_METHODS_CACHE.with_slot(|slot| {
         crate::gc::runtime_store_root_atomic_nanbox_u64(slot, value.to_bits(), Ordering::Relaxed);

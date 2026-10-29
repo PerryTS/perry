@@ -120,6 +120,7 @@ mod channel;
 #[cfg(test)]
 mod class_method_arguments_object_tests;
 pub(crate) mod collection_receiver;
+pub(crate) mod facts_number;
 mod helpers;
 mod i32_fast_path;
 mod index;
@@ -139,7 +140,6 @@ mod strings;
 mod typed_feedback;
 mod url_helpers;
 mod v8_interop;
-pub(crate) mod facts_number;
 pub(crate) mod wpfacts_access;
 mod write_barrier;
 
@@ -3335,11 +3335,11 @@ pub(crate) mod class_field_inline_guard;
 pub(crate) mod element_shape_guard;
 pub(crate) mod element_shape_reads;
 mod generator_control_slots;
-pub(crate) mod resume_locals;
 pub(crate) mod ic_fast_split;
 mod js_runtime;
 mod literals_vars;
 pub(crate) mod private_resume_frame;
+pub(crate) mod resume_locals;
 pub(crate) use literals_vars::{bind_lowered_value_to_local, note_born_local_write};
 mod logical_collections;
 mod math_simple;
@@ -4848,3 +4848,12 @@ mod array_layout_loop_tests;
 
 #[cfg(test)]
 mod sort_numeric_source_tests;
+
+impl ElementShapeLoopFact {
+    /// The header form predicted for the objects this record describes (`HeaderForm`:
+    /// every ordinary object has the meta word today). Sites take their slot base
+    /// from here, never from the type byte.
+    pub(crate) fn form(&self) -> crate::target_layout::HeaderForm {
+        crate::target_layout::HeaderForm::Meta
+    }
+}

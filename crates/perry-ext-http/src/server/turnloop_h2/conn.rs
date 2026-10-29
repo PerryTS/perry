@@ -128,6 +128,11 @@ pub(crate) enum Owned {
     /// surface Node exposes for that.
     SettingsAck,
     WindowUpdate,
+    /// The server promised a response on `promised`. Perry has no surface for a
+    /// pushed stream yet, so the promise is declined (see `apply`).
+    PushPromise {
+        promised: u32,
+    },
 }
 
 fn own_event(event: Event<'_>) -> Owned {
@@ -185,6 +190,7 @@ fn own_event(event: Event<'_>) -> Owned {
         } => Owned::Goaway { last_stream, code },
         Event::Ping { ack, data } => Owned::Ping { ack, data },
         Event::WindowUpdate { .. } => Owned::WindowUpdate,
+        Event::PushPromise { promised, .. } => Owned::PushPromise { promised },
     }
 }
 
@@ -418,7 +424,11 @@ pub(super) fn start_core(c: &mut H2Conn) -> bool {
     limits.streams = clamp_streams(c.settings.max_concurrent_streams);
     limits.frame_size = c.settings.max_frame_size.clamp(16_384, 0xff_ffff) as usize;
     limits.header_list = c.settings.max_header_list_size.max(4_096) as usize;
-    match http2::Connection::new(c.role, limits) {
+    let mut named = http2::Settings::new();
+    for (id, value) in advertised_settings(&c.settings, c.role).named() {
+        named.set(id, value);
+    }
+    match http2::Connection::with_settings(c.role, limits, &named) {
         Ok(core) => {
             c.core = Some(core);
             // Only a server reads a client preface; a client goes straight to
@@ -434,16 +444,16 @@ pub(super) fn start_core(c: &mut H2Conn) -> bool {
 /// The SETTINGS this connection's core actually advertises, after `Limits`
 /// clamping — what `session.localSettings` must report, rather than the
 /// unclamped option object JS passed in.
-pub(crate) fn advertised_settings(requested: &Http2SettingsState) -> Http2SettingsState {
+pub(crate) fn advertised_settings(requested: &Http2SettingsState, role: Role) -> Http2SettingsState {
     let mut out = requested.clone();
     out.max_concurrent_streams = clamp_streams(requested.max_concurrent_streams) as u32;
     out.max_frame_size = requested.max_frame_size.clamp(16_384, 0xff_ffff);
     out.max_header_list_size = requested.max_header_list_size.max(4_096);
     out.max_header_size = out.max_header_list_size;
-    // The core never negotiates HPACK table size up and never offers push on a
-    // server connection.
-    out.header_table_size = out.header_table_size.min(4_096);
-    out.enable_push = false;
+    // Only a client invites pushes; a server never offers them.
+    if role == Role::Server {
+        out.enable_push = false;
+    }
     out
 }
 
@@ -595,7 +605,7 @@ pub(crate) fn connect_client(
         // What this connection's core will actually advertise, so
         // `clamp_to_core` in `control.rs` has something truthful to clamp a
         // later `session.settings()` against.
-        settings: advertised_settings(&Http2SettingsState::default()),
+        settings: advertised_settings(&Http2SettingsState::default(), Role::Client),
         preface_done: false,
         core_settings_acked: false,
         owed_settings_acks: 0,
@@ -1003,6 +1013,14 @@ fn apply(conn: &mut H2Conn, event: Owned) {
         // `pump_outbox` walks every stream and `send_data` answers zero for
         // any that is still shut.
         Owned::WindowUpdate => stream::pump_outbox(conn),
+        // A client may decline any promise with RST_STREAM(CANCEL) (RFC 9113
+        // section 8.4.2). Until pushed streams have a JS surface, that is the
+        // whole answer; the core has already kept HPACK in step.
+        Owned::PushPromise { promised } => {
+            if let Some(core) = conn.core.as_mut() {
+                let _ = core.reset(promised, 8);
+            }
+        }
     }
 }
 

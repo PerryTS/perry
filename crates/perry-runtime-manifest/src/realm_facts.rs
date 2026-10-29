@@ -3,6 +3,7 @@
 use super::info::{self, Info};
 use super::{hash, Token};
 use crate::realm_json::Value;
+use perry_abi::realm_header::{ClosureBirth, Integrity};
 use std::collections::{BTreeMap, BTreeSet};
 
 fn string(value: impl Into<String>) -> Value {
@@ -56,6 +57,15 @@ pub(super) struct Facts {
     pub native_key: Option<String>,
     pub builtin_constructor: bool,
     pub receiver: Option<String>,
+    /// The native module a bound constructor also serves as the namespace of
+    /// (its statics dispatch as that module).
+    pub module: Option<String>,
+    /// The `perry_abi::native_class_ids` constant a bound native constructor
+    /// captures as its class identity.
+    pub class_identity: Option<String>,
+    /// `constructable = false`: a bound native export born with the
+    /// per-instance non-constructable bit.
+    pub non_constructable: bool,
     pub alias: Option<String>,
     pub get: Option<String>,
     pub set: Option<String>,
@@ -120,6 +130,9 @@ pub(super) fn parse(ts: &[Token<'_>]) -> Result<Facts, String> {
         native_key: None,
         builtin_constructor: false,
         receiver: None,
+        module: None,
+        class_identity: None,
+        non_constructable: false,
         alias: None,
         get: None,
         set: None,
@@ -274,6 +287,20 @@ pub(super) fn parse(ts: &[Token<'_>]) -> Result<Facts, String> {
                 member_tokens = Some(&clause[3..clause.len() - 1]);
             }
             "receiver" => facts.receiver = Some(path(&clause[2..])?),
+            "module" if clause.len() == 3 => {
+                facts.module = Some(
+                    clause[2]
+                        .string
+                        .clone()
+                        .ok_or("module names its native module as a literal")?,
+                )
+            }
+            "constructable" if clause.len() == 3 && clause[2].text == "false" => {
+                facts.non_constructable = true
+            }
+            "class_identity" if clause.len() == 3 => {
+                facts.class_identity = Some(clause[2].text.to_owned())
+            }
             "alias" => facts.alias = Some(path(&clause[2..])?),
             "get" => facts.get = Some(path(&clause[2..])?),
             "set" => facts.set = Some(path(&clause[2..])?),
@@ -470,8 +497,12 @@ pub(super) fn logical(
     if facts.members.is_some() {
         return Err("object members require an owned birth expression".into());
     }
-    if facts.receiver.is_some() {
-        return Err("receiver is only a bound-method birth fact".into());
+    if facts.receiver.is_some()
+        || facts.module.is_some()
+        || facts.class_identity.is_some()
+        || facts.non_constructable
+    {
+        return Err("receiver, module and class_identity are bound-method birth facts".into());
     }
     if let Some(table) = facts.namespace_table {
         if facts
@@ -510,21 +541,34 @@ pub(super) fn logical(
             // The receiver's physical birth: an ordinary object allocated with the
             // native-module class id (js_create_native_module_namespace).
             let gc = info::gc_constants()?;
-            let native = info::constants(include_str!(
-                "../../perry-runtime/src/object/native_module.rs"
-            ))?;
             let source = include_str!("../../perry-runtime/src/object/native_module.rs");
-            let reserved = if sealed_native_namespaces(source)?.contains(&module) {
-                gc["OBJ_FLAG_SEALED"] | gc["OBJ_FLAG_NO_EXTEND"] | gc["OBJ_FLAG_HAS_DESCRIPTORS"]
-            } else {
-                0
+            let birth = perry_abi::realm_header::ObjectBirth {
+                exotic: perry_abi::realm_header::ObjectExotic::NativeNamespace,
+                null_prototype: false,
+                layout: perry_abi::realm_header::ObjectLayout::Unmarked,
+                prototype_mark: perry_abi::realm_header::PrototypeMark::OnFirstLink,
+                descriptors: false,
+                typed_array_prototype: false,
+                integrity: if sealed_native_namespaces(source)?.contains(&module) {
+                    Integrity::Sealed
+                } else {
+                    Integrity::Extensible
+                },
             };
             declaration.insert(
                 "header".into(),
                 Value::Object(BTreeMap::from([
                     ("gc_type".into(), number(gc["GC_TYPE_OBJECT"])),
-                    ("reserved".into(), number(reserved)),
-                    ("class_id".into(), number(native["NATIVE_MODULE_CLASS_ID"])),
+                    (
+                        "reserved".into(),
+                        number(u64::from(perry_abi::realm_header::object_reserved(birth))),
+                    ),
+                    (
+                        "class_id".into(),
+                        number(u64::from(perry_abi::realm_header::object_class_id(
+                            birth.exotic,
+                        ))),
+                    ),
                 ])),
             );
             declaration.insert("prototype".into(), string("Object.prototype"));
@@ -768,28 +812,25 @@ pub(super) fn callable(
                 .iter()
                 .all(|c| c.get("kind").and_then(Value::string) == Some("raw_word"))
         });
-    let reserved = if facts.allocated_closure
+    let pointer_free_captures = facts.allocated_closure
         || (facts.bare_closure && scalar_captures)
-        || (facts.bare_closure && (facts.receiver.is_some() || facts.capture_enum.is_some()))
-    {
-        *constants
-            .get("GC_LAYOUT_POINTER_FREE")
-            .ok_or("missing bare closure layout")?
-    } else if facts.bare_closure
-        || facts.constructible
-        || kind == "constructor"
-        || info.flags & non_constructor != 0
-    {
-        0
-    } else {
-        128
-    };
-    let reserved = if facts.frozen {
-        let gc = info::gc_constants()?;
-        reserved | gc["OBJ_FLAG_FROZEN"] | gc["OBJ_FLAG_SEALED"] | gc["OBJ_FLAG_NO_EXTEND"]
-    } else {
-        reserved
-    };
+        || (facts.bare_closure && (facts.receiver.is_some() || facts.capture_enum.is_some()));
+    // Bare and pointer-free closures carry no per-instance non-constructable
+    // bit today whatever their kind; the derivation keeps that encoding
+    // (WRT3a3 open question 2).
+    let reserved = super::derive::closure_word(ClosureBirth {
+        pointer_free_captures,
+        constructable: pointer_free_captures
+            || facts.bare_closure
+            || facts.constructible
+            || kind == "constructor",
+        body_non_constructor: info.flags & non_constructor != 0,
+        integrity: if facts.frozen {
+            Integrity::Frozen
+        } else {
+            Integrity::Extensible
+        },
+    });
     let prototype = facts
         .extends
         .clone()
