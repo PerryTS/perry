@@ -140,7 +140,7 @@ pub(crate) unsafe fn build_shape_prefix_template(first_elem_bits: u64) -> Option
     if crate::buffer::is_registered_buffer(first_ptr as usize) {
         return None;
     }
-    if gc_obj_type(first_ptr) != crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_not_object!(gc_obj_type(first_ptr)) {
         return None;
     }
     let obj = first_ptr as *const crate::ObjectHeader;
@@ -344,7 +344,7 @@ pub(crate) unsafe fn try_emit_shape_element(
     } else {
         return false;
     };
-    if gc_obj_type(elem_ptr) != crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_not_object!(gc_obj_type(elem_ptr)) {
         return false;
     }
     // A later element can share the template's keys while carrying its own

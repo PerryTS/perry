@@ -917,7 +917,7 @@ fn clean_map_ptr(map: *const MapHeader) -> *const MapHeader {
         // Genuine Map: `js_map_alloc` allocates the header with GC_TYPE_MAP.
         Some(header) if header.obj_type == crate::gc::GC_TYPE_MAP => map,
         // Only a plain object can be a Map subclass instance.
-        Some(header) if header.obj_type == crate::gc::GC_TYPE_OBJECT => {
+        Some(header) if crate::gc_type_is_object!(header.obj_type) => {
             crate::object::map_set_subclass::redirect_collection_receiver(
                 addr,
                 crate::object::map_set_subclass::CollectionKind::Map,
@@ -1240,7 +1240,7 @@ pub extern "C" fn js_map_alloc(capacity: u32) -> *mut MapHeader {
         (*ptr).capacity = cap;
         (*ptr).entries = (*store).entries;
         (*ptr).store = store;
-        (*ptr).meta = ptr::null_mut();
+        *crate::object::cell_meta::map_cell_meta_slot(ptr) = ptr::null_mut();
         (*ptr).used = 0;
         (*ptr).compaction_epoch = 0;
         crate::gc::runtime_write_barrier_gc_slot(

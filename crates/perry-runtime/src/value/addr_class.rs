@@ -504,6 +504,14 @@ pub(crate) unsafe fn try_read_tracked_gc_header_of_type(
     tracked_gc_header_admitting(addr, |obj_type| obj_type == kind)
 }
 
+/// [`try_read_tracked_gc_header_of_type`] for an ordinary object (either header form).
+#[inline(never)]
+pub(crate) unsafe fn try_read_tracked_gc_header_of_object(
+    addr: usize,
+) -> Option<std::ptr::NonNull<GcHeader>> {
+    tracked_gc_header_admitting(addr, |obj_type| crate::gc_type_is_object!(obj_type))
+}
+
 /// Distinguish an owned cell of another kind from an address outside the
 /// tracked heap. Symbol's immortal fallback needs that distinction: ordinary
 /// receivers must reject the brand before any immortal-registry lookup.

@@ -55,7 +55,7 @@ unsafe fn inline_fields_with_live<'a>(
     let header = &*crate::gc::header_from_trusted_user_ptr(obj.cast());
     if count == 0
         || count > MAX_FIELDS
-        || header.obj_type != crate::gc::GC_TYPE_OBJECT
+        || crate::gc_type_is_not_object!(header.obj_type)
         || header._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS != 0
         || (header.size as usize)
             < crate::gc::GC_HEADER_SIZE + std::mem::size_of::<crate::ObjectHeader>() + count * 8

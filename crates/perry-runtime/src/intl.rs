@@ -237,7 +237,7 @@ fn object_ptr_from_value(value: f64) -> Option<*mut ObjectHeader> {
     }
     unsafe {
         let gc = ptr.sub(gc::GC_HEADER_SIZE) as *const gc::GcHeader;
-        if (*gc).obj_type != gc::GC_TYPE_OBJECT {
+        if crate::gc_type_is_not_object!((*gc).obj_type) {
             return None;
         }
     }

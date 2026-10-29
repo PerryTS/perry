@@ -336,7 +336,7 @@ fn is_plain_options_object(value: f64) -> bool {
     if !super::stream::extract_closure_ptr(value).is_null() {
         return false;
     }
-    gc_type_for_value(value) == Some(crate::gc::GC_TYPE_OBJECT)
+    matches!(gc_type_for_value(value), Some(crate::gc_object_type_pat!()))
 }
 
 /// Validate fs options parameters that accept either an encoding string or an

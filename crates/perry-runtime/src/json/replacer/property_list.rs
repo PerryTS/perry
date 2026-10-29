@@ -207,7 +207,7 @@ pub(crate) unsafe fn stringify_value_with_array_replacer(
                     );
                     return;
                 }
-                crate::gc::GC_TYPE_OBJECT if is_object_pointer(ptr) => {
+                crate::gc_object_type_pat!() if is_object_pointer(ptr) => {
                     stringify_object_with_array_replacer(
                         ptr,
                         allowed_keys,

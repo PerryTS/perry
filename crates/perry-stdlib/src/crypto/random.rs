@@ -182,7 +182,7 @@ unsafe fn validate_random_uuid_options(options_bits: f64) -> bool {
         );
         perry_runtime::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
     }
-    if header.obj_type != perry_runtime::gc::GC_TYPE_OBJECT {
+    if perry_runtime::gc_type_is_not_object!(header.obj_type) {
         return false;
     }
     let key = js_string_from_bytes(b"disableEntropyCache".as_ptr(), 19);

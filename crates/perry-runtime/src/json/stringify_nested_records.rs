@@ -28,7 +28,7 @@ unsafe fn ordinary_object(bits: u64) -> Option<(*const crate::ObjectHeader, usiz
     }
     let obj = (bits & POINTER_MASK) as *const crate::ObjectHeader;
     let header = crate::value::addr_class::try_read_tracked_gc_header(obj as usize)?.as_ref();
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::gc_type_is_not_object!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || header._reserved & crate::gc::OBJ_FLAG_PLAIN_ORDINARY == 0
         || header._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS != 0

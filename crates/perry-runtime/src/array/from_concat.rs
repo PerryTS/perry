@@ -268,7 +268,7 @@ pub extern "C" fn js_array_concat_variadic(
                     (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
                 (*hdr).obj_type
             };
-            if obj_type == crate::gc::GC_TYPE_OBJECT || obj_type == crate::gc::GC_TYPE_CLOSURE {
+            if crate::gc_type_is_object!(obj_type) || obj_type == crate::gc::GC_TYPE_CLOSURE {
                 let recv_value = f64::from_bits(JSValue::pointer(recv as *const u8).bits());
                 let result = crate::array::js_arraylike_concat(recv_value, args_ptr, count);
                 return crate::value::js_nanbox_get_pointer(result) as *mut ArrayHeader;

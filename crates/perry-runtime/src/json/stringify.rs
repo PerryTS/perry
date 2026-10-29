@@ -66,10 +66,7 @@ pub(crate) unsafe fn is_object_pointer(ptr: *const u8) -> bool {
     // (a primitive number whose f64 bits land in the heap window) would likewise
     // SIGSEGV on the `keys_array` read below — require a genuinely GC-tracked
     // allocation before dereferencing anything.
-    if crate::value::addr_class::try_read_tracked_gc_header_of_type(
-        ptr as usize,
-        crate::gc::GC_TYPE_OBJECT,
-    )
+    if crate::value::addr_class::try_read_tracked_gc_header_of_object(ptr as usize)
     .is_none()
     {
         return false;
@@ -131,10 +128,7 @@ pub(crate) unsafe fn object_has_no_own_keys(ptr: *const u8) -> bool {
     // value right after that probe returns false (to tell an empty object apart
     // from a corrupted pointer), so an unmapped in-range garbage address must be
     // rejected here too before the `keys_array` field read.
-    if crate::value::addr_class::try_read_tracked_gc_header_of_type(
-        ptr as usize,
-        crate::gc::GC_TYPE_OBJECT,
-    )
+    if crate::value::addr_class::try_read_tracked_gc_header_of_object(ptr as usize)
     .is_none()
     {
         return false;
@@ -270,7 +264,7 @@ pub(crate) unsafe fn object_get_to_json(ptr: *const u8) -> Option<f64> {
     let recv = f64::from_bits(make_pointer_bits(ptr));
     let is_proxy = crate::proxy_hooks::proxy_is_proxy(recv) != 0;
     if !is_proxy
-        && (gc_obj_type(ptr) != crate::gc::GC_TYPE_OBJECT
+        && (crate::gc_type_is_not_object!(gc_obj_type(ptr))
             || crate::buffer::is_registered_buffer(ptr as usize))
     {
         return None;
@@ -407,7 +401,7 @@ pub(crate) unsafe fn arm_to_json_result_guard(result: f64) {
     }
     if let Some(res_ptr) = extract_pointer(result.to_bits()) {
         let ty = gc_obj_type(res_ptr);
-        if (ty == crate::gc::GC_TYPE_OBJECT || ty == crate::gc::GC_TYPE_ARRAY)
+        if (crate::gc_type_is_object!(ty) || ty == crate::gc::GC_TYPE_ARRAY)
             && !crate::buffer::is_registered_buffer(res_ptr as usize)
         {
             SUPPRESS_NEXT_TO_JSON.with(|c| c.set(true));
@@ -642,7 +636,7 @@ pub(crate) unsafe fn stringify_value(value: f64, type_hint: u32, buf: &mut Strin
             // ObjectHeader/ArrayHeader/StringHeader (test262
             // JSON/stringify/value-function).
             crate::gc::GC_TYPE_CLOSURE => buf.push_str("null"),
-            crate::gc::GC_TYPE_OBJECT => {
+            crate::gc_object_type_pat!() => {
                 if crate::node_stream::try_stringify_node_stream_json(ptr, buf) {
                     return;
                 }
@@ -916,7 +910,7 @@ pub(crate) unsafe fn stringify_value_depth(
             return stringify_array_depth(elements as *const u8, buf, depth);
         }
         match gc_obj_type(ptr) {
-            crate::gc::GC_TYPE_OBJECT => stringify_object_inner(ptr, buf, depth),
+            crate::gc_object_type_pat!() => stringify_object_inner(ptr, buf, depth),
             crate::gc::GC_TYPE_ARRAY => stringify_array_depth(ptr, buf, depth),
             // A function — see the matching branch in `stringify_value`.
             crate::gc::GC_TYPE_CLOSURE => buf.push_str("null"),
@@ -1294,7 +1288,7 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
                 continue;
             }
             match gc_obj_type(elem_ptr) {
-                crate::gc::GC_TYPE_OBJECT => stringify_object_inner(elem_ptr, buf, depth + 1),
+                crate::gc_object_type_pat!() => stringify_object_inner(elem_ptr, buf, depth + 1),
                 crate::gc::GC_TYPE_ARRAY => stringify_array_depth(elem_ptr, buf, depth + 1),
                 crate::gc::GC_TYPE_STRING => {
                     let str_ptr = elem_ptr as *const StringHeader;
@@ -1391,7 +1385,7 @@ pub(crate) unsafe fn estimate_json_size(value: f64, _type_hint: u32) -> usize {
                 let len = (*(ptr as *const crate::ArrayHeader)).length as usize;
                 return len.saturating_mul(300).max(256);
             }
-            crate::gc::GC_TYPE_OBJECT => {
+            crate::gc_object_type_pat!() => {
                 let fields = crate::object::object_live_slot_count(ptr.cast()) as usize;
                 return fields.saturating_mul(200).max(256);
             }

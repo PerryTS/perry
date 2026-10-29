@@ -57,7 +57,7 @@ fn object_from_value(value: f64) -> Option<*mut ObjectHeader> {
         &*((ptr as *const u8).sub(perry_runtime::gc::GC_HEADER_SIZE)
             as *const perry_runtime::gc::GcHeader)
     };
-    (header.obj_type == perry_runtime::gc::GC_TYPE_OBJECT).then_some(ptr)
+    (perry_runtime::gc_type_is_object!(header.obj_type)).then_some(ptr)
 }
 
 unsafe fn object_get(value: f64, key: &str) -> f64 {

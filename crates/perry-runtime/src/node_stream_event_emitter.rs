@@ -400,7 +400,7 @@ fn shape_set_existing(target: f64, name: &[u8], value: f64) -> bool {
     };
     // The overwrite consults the key's VALUE only to vet an own descriptor;
     // an object with none never reaches that check.
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::gc_type_is_not_object!(header.obj_type)
         || header._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS != 0
     {
         return false;
@@ -503,7 +503,7 @@ fn own_data_slot(
 
     unsafe {
         let header = crate::value::addr_class::try_read_tracked_gc_header(addr)?.as_ref();
-        if header.obj_type != crate::gc::GC_TYPE_OBJECT
+        if crate::gc_type_is_not_object!(header.obj_type)
             || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return None;
@@ -515,7 +515,8 @@ fn own_data_slot(
         if let Some(found) =
             crate::node_stream::instance_birth::instance_layout_slot(obj, name, None)
         {
-            let meta = (*obj).meta;
+            // A1_UNPROVEN: record-first: stream object layout word (kind-A/B question for S0f).
+            let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
             if !meta.is_null() && (*meta).elements != 0 {
                 return None;
             }
@@ -532,7 +533,7 @@ fn own_data_slot(
         // the generic path.
         let table = crate::object::overflow::table(obj);
         if !table.is_null() {
-            let meta = (*obj).meta;
+            let meta = crate::meta_read!(crate::meta_obj_from_storage!(obj as *mut _, table));
             if !meta.is_null() && (*meta).elements != 0 {
                 return None;
             }
@@ -565,7 +566,8 @@ fn own_data_slot(
         {
             return None;
         }
-        let meta = (*obj).meta;
+        // A1_UNPROVEN: record-first: stream object layout word (kind-A/B question for S0f).
+        let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
         if (!meta.is_null() && (*meta).elements != 0)
             || crate::object::key_attrs::object_key_is_accessor(obj, name)
         {
@@ -614,10 +616,7 @@ fn is_object_value(value: f64) -> bool {
     }
     let addr = jsval.as_pointer::<u8>() as usize;
     unsafe {
-        crate::value::addr_class::try_read_tracked_gc_header_of_type(
-            addr,
-            crate::gc::GC_TYPE_OBJECT,
-        )
+        crate::value::addr_class::try_read_tracked_gc_header_of_object(addr)
     }
     .is_some()
         || super::object_ptr_from_value(value).is_some()

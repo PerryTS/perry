@@ -155,3 +155,41 @@ pub(crate) unsafe fn map_cell_meta(cell: *const crate::map::MapHeader) -> *mut O
 pub(crate) unsafe fn set_cell_meta(cell: *const crate::set::SetHeader) -> *mut ObjectMeta {
     (*cell).meta
 }
+
+/// The address of a Map cell's meta word.
+#[inline(always)]
+pub(crate) unsafe fn map_cell_meta_slot(cell: *mut crate::map::MapHeader) -> *mut *mut ObjectMeta {
+    &mut (*cell).meta
+}
+
+/// The address of a Set cell's meta word.
+#[inline(always)]
+pub(crate) unsafe fn set_cell_meta_slot(cell: *mut crate::set::SetHeader) -> *mut *mut ObjectMeta {
+    &mut (*cell).meta
+}
+
+/// The meta word of a Promise cell.
+#[inline(always)]
+pub(crate) unsafe fn promise_cell_meta(cell: *const crate::promise::Promise) -> *mut ObjectMeta {
+    (*cell).meta
+}
+
+/// The address of a Date cell's meta word.
+#[inline(always)]
+pub(crate) unsafe fn date_cell_meta_slot(cell: *mut crate::date::DateCell) -> *mut *mut ObjectMeta {
+    &mut (*cell).meta
+}
+
+/// The address of an Error cell's meta word.
+#[inline(always)]
+pub(crate) unsafe fn error_cell_meta_slot(cell: *mut crate::error::ErrorHeader) -> *mut *mut ObjectMeta {
+    &mut (*cell).meta
+}
+
+/// The address of a RegExp cell's meta word.
+#[inline(always)]
+pub(crate) unsafe fn regexp_cell_meta_slot(
+    cell: *mut crate::regex::RegExpHeader,
+) -> *mut *mut ObjectMeta {
+    &mut (*cell).meta
+}

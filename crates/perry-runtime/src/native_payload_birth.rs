@@ -137,7 +137,7 @@ pub(super) fn alloc_born<T: 'static>(
 /// The prototype identity a family instance's shape names: its class-default
 /// link to the family prototype (`born_instance`'s birth record).
 unsafe fn family_proto_id(proto: *mut ObjectHeader) -> Option<u64> {
-    let meta = (*proto).meta;
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(proto as *mut _));
     (!meta.is_null()).then(|| (*meta).proto_serial)
 }
 

@@ -157,7 +157,8 @@ stream_slots! {
 fn record_of(stream: f64) -> Option<*mut ArrayHeader> {
     let obj = crate::object::field_get_set::runtime_read_site::object_receiver(stream)?;
     // SAFETY: a live ordinary object (checked above).
-    let meta = unsafe { (*obj).meta };
+    // A1_UNPROVEN: record-first: stream object layout word (kind-A/B question for S0f).
+    let meta = unsafe { crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _)) };
     if meta.is_null() {
         return None;
     }
@@ -512,7 +513,7 @@ pub(crate) fn ensure_record(stream: f64) -> bool {
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj = scope.root_raw_mut_ptr(obj);
     let meta =
-        // A1_UNPROVEN: object_ptr_from_value(stream): a JS value, no type test (kind-A/B question for S0b-S0e).
+        // A1_UNPROVEN: object_ptr_from_value(stream): a JS value, no type test (record-first: the receiver layout word; kind-A/B question for S0f).
         obj.with_mut_ptr::<ObjectHeader, _>(|o| unsafe { crate::object::object_meta_ensure(crate::meta_obj_runtime_born!(o), crate::object::MetaReason::RuntimeHandle) });
     if meta.is_null() {
         return false;
@@ -549,7 +550,8 @@ pub(crate) fn ensure_record(stream: f64) -> bool {
     }
     let record_word = crate::value::JSValue::pointer(record as *const u8).bits();
     obj.with_mut_ptr::<ObjectHeader, _>(|o| unsafe {
-        let meta = (*o).meta;
+        // A1_UNPROVEN: record-first: stream object layout word (kind-A/B question for S0f).
+        let meta = crate::meta_read!(crate::meta_obj_runtime_born!(o as *mut _));
         (*meta).native_state = record_word;
         crate::gc::runtime_write_barrier_slot(
             meta as usize,

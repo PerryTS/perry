@@ -176,7 +176,7 @@ crate::perry_thread_local! {
 /// this module is willing to reason about.
 unsafe fn proto_signature(proto_addr: usize) -> Option<(usize, u32, u16, u32)> {
     let header = crate::value::addr_class::try_read_gc_header(proto_addr)?;
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::gc_type_is_not_object!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
     {
         return None;
@@ -487,7 +487,7 @@ unsafe fn prove_no_then(value: f64) -> Outcome {
     let Some(gc) = crate::value::addr_class::try_read_gc_header(addr) else {
         return Outcome::NotArena;
     };
-    if gc.obj_type != crate::gc::GC_TYPE_OBJECT || gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
+    if crate::gc_type_is_not_object!(gc.obj_type) || gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
         return Outcome::NotPlainObject;
     }
     let flags = gc._reserved;

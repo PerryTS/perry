@@ -648,7 +648,7 @@ unsafe fn state_ensure(ptr: usize) -> Option<*mut ObjectHeader> {
         return None;
     }
     let state = crate::object::js_object_alloc_null_proto(0, 0);
-    let meta = (*bag).meta;
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(bag as *mut _));
     let boxed = crate::value::js_nanbox_pointer(state as i64).to_bits();
     // GC_STORE_AUDIT(BARRIERED): metadata-record slot store + object barrier.
     (*meta).expando = boxed;

@@ -88,7 +88,7 @@ pub(crate) fn timer_handle_parts(value: f64) -> Option<(i64, bool)> {
     }
     let addr = (bits & crate::value::POINTER_MASK) as usize;
     let header = unsafe { crate::value::addr_class::try_read_gc_header(addr)? };
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_not_object!(header.obj_type) {
         return None;
     }
     let obj = addr as *mut crate::object::ObjectHeader;
@@ -97,7 +97,7 @@ pub(crate) fn timer_handle_parts(value: f64) -> Option<(i64, bool)> {
         if class_id != TIMEOUT_CLASS_ID && class_id != IMMEDIATE_CLASS_ID {
             return None;
         }
-        let meta = (*obj).meta;
+        let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
         if meta.is_null() {
             return None;
         }

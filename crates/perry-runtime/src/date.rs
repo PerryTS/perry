@@ -29,7 +29,7 @@ pub fn alloc_date_cell(ts: f64) -> f64 {
         // as a pointer. Since the rule-3 relayout it is also the word the
         // emitted read path loads as a ShapeId, so it is written FIRST: the
         // cell must never be observable carrying a dead tenant's shape.
-        (*ptr).meta = std::ptr::null_mut();
+        *crate::object::cell_meta::date_cell_meta_slot(ptr) = std::ptr::null_mut();
         #[cfg(target_pointer_width = "32")]
         {
             // The arena does not zero reused memory, and a pointer-width store

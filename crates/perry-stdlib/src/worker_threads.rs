@@ -668,7 +668,7 @@ fn object_ptr_from_value(value: f64) -> Option<*mut perry_runtime::object::Objec
     unsafe {
         let header = (raw as *const u8).sub(perry_runtime::gc::GC_HEADER_SIZE)
             as *const perry_runtime::gc::GcHeader;
-        if (*header).obj_type != perry_runtime::gc::GC_TYPE_OBJECT {
+        if perry_runtime::gc_type_is_not_object!((*header).obj_type) {
             return None;
         }
     }

@@ -174,7 +174,7 @@ fn object_ptr_from_value(value: f64) -> Option<*const ObjectHeader> {
         return None;
     }
     unsafe {
-        if gc_type_for_ptr(raw) != Some(crate::gc::GC_TYPE_OBJECT) {
+        if !matches!(gc_type_for_ptr(raw), Some(crate::gc_object_type_pat!())) {
             return None;
         }
     }
@@ -335,7 +335,7 @@ fn append_chunk_bytes_for_consumer(
             Some(crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY) => {
                 append_array_chunk_bytes(raw, out, mode, depth)
             }
-            Some(crate::gc::GC_TYPE_OBJECT) => {
+            Some(crate::gc_object_type_pat!()) => {
                 if let Some(Ok(chunks)) =
                     crate::node_stream::js_node_stream_collect_chunks_result(value)
                 {

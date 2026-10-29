@@ -17,7 +17,7 @@ pub(super) fn ordinary_object(value: f64) -> Option<(*mut crate::object::ObjectH
     // SAFETY: canonical ownership admission precedes all header reads.
     let tracked = unsafe { crate::value::addr_class::try_read_tracked_gc_header(addr) }?;
     let header = unsafe { tracked.as_ref() };
-    (header.obj_type == crate::gc::GC_TYPE_OBJECT
+    (crate::gc_type_is_object!(header.obj_type)
         && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0)
         .then_some((addr as *mut crate::object::ObjectHeader, header._reserved))
 }
@@ -73,7 +73,8 @@ pub(super) fn own_slot_in(
     // SAFETY: as above; the shape record and its key list are read
     // immediately, with no allocation in between.
     unsafe {
-        let meta = (*obj).meta;
+        // A1_UNPROVEN: record-first: stream object layout word (kind-A/B question for S0f).
+        let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
         if (!meta.is_null() && (*meta).elements != 0)
             || crate::object::key_attrs::object_summary(obj)
                 & crate::object::key_attrs::SUMMARY_ACCESSOR

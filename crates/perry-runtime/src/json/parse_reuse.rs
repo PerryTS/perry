@@ -184,7 +184,7 @@ pub(crate) unsafe fn remember_parse_object_template(
     // The plan rebuilds fixed slots under one layout. A record with an
     // overflow (§3.4) keeps keys and values in that table, which no plan
     // describes, so such a record is never remembered.
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT || crate::object::overflow::has_overflow(object)
+    if crate::gc_type_is_not_object!(header.obj_type) || crate::object::overflow::has_overflow(object)
     {
         return;
     }

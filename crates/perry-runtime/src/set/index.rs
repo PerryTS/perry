@@ -35,7 +35,7 @@ unsafe fn key_identity(addr: usize, create: bool) -> Option<u64> {
                     crate::object::MetaReason::SetKeyIdentity,
                 )
             } else {
-                (*bag).meta
+                crate::meta_read!(crate::meta_obj_runtime_born!(bag))
             }
         }
         crate::gc::GC_TYPE_CLOSURE => {
@@ -53,7 +53,7 @@ unsafe fn key_identity(addr: usize, create: bool) -> Option<u64> {
                     crate::object::MetaReason::SetKeyIdentity,
                 )
             } else {
-                (*bag).meta
+                crate::meta_read!(crate::meta_obj_runtime_born!(bag))
             }
         }
         _ => {
@@ -152,7 +152,7 @@ fn hash_value(value: f64, insert: bool) -> Option<u32> {
                 .hash(&mut hasher);
             } else if matches!(
                 kind,
-                crate::gc::GC_TYPE_OBJECT
+                crate::gc_object_type_pat!()
                     | crate::gc::GC_TYPE_ARRAY
                     | crate::gc::GC_TYPE_CLOSURE
                     | crate::gc::GC_TYPE_PROMISE
@@ -253,7 +253,7 @@ unsafe fn mutable_index(set: *mut SetHeader) -> *mut SetIndex {
 }
 
 unsafe fn index_ptr(set: *const SetHeader) -> *mut SetIndex {
-    let meta = (*set).meta;
+    let meta = crate::object::cell_meta::set_cell_meta(set);
     if meta.is_null() {
         ptr::null_mut()
     } else {
@@ -385,7 +385,7 @@ pub(super) unsafe fn clear_index(set: *mut SetHeader) {
     if index_ptr(set).is_null() {
         return;
     }
-    (*(*set).meta).native_state = 0;
+    (*crate::object::cell_meta::set_cell_meta(set)).native_state = 0;
     let old = (*(*set).store).index.take();
     if let Some(index) = old {
         crate::gc::gc_note_external_side_free(index.byte_len());
@@ -603,7 +603,7 @@ mod tests {
         }
         unsafe {
             assert!(
-                (*set).meta.is_null(),
+                crate::object::cell_meta::set_cell_meta(set).is_null(),
                 "eight mixed values need no metadata or index"
             );
             for value in values {

@@ -296,7 +296,7 @@ impl GuardState<'_> {
         }
         let address = (value.bits() & POINTER_MASK) as usize;
         let header = crate::value::addr_class::try_read_gc_header(address)?;
-        if header.obj_type != crate::gc::GC_TYPE_OBJECT
+        if crate::gc_type_is_not_object!(header.obj_type)
             || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return None;

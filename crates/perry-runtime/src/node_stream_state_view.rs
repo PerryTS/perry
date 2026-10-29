@@ -98,7 +98,8 @@ fn bool_bits(value: bool) -> f64 {
 fn view_owner(this: crate::closure::JsThis) -> Option<f64> {
     let this = this.as_f64();
     let obj = object_ptr_from_value(this)?;
-    let meta = unsafe { (*obj).meta };
+    // A1_UNPROVEN: record-first: stream object layout word (kind-A/B question for S0f).
+    let meta = unsafe { crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _)) };
     if meta.is_null() {
         return None;
     }
@@ -381,7 +382,8 @@ fn install_state_view(stream: f64, kind: usize, property: crate::runtime_state_k
         )
     };
     let obj = object_ptr_from_value(view.get_nanbox_f64()).unwrap();
-    let meta = unsafe { (*obj).meta };
+    // A1_UNPROVEN: record-first: stream object layout word (kind-A/B question for S0f).
+    let meta = unsafe { crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _)) };
     let owner = stream.get_nanbox_u64();
     // The existing MetaOnly visitor traces every pointer-tagged native_state.
     unsafe {

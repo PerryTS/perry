@@ -1094,7 +1094,7 @@ pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
                 as *const crate::gc::GcHeader;
             (*hdr).obj_type
         };
-        if obj_type == crate::gc::GC_TYPE_OBJECT {
+        if crate::gc_type_is_object!(obj_type) {
             // `try_read_as_search_params` interns its own key string, so the
             // receiver address is re-read from the root for the entries call
             // rather than reused from before that probe.
@@ -1273,7 +1273,7 @@ pub(crate) fn is_builtin_iterator_class_id(raw_ptr: usize) -> bool {
     unsafe {
         let gc =
             (raw_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        if (*gc).obj_type != crate::gc::GC_TYPE_OBJECT {
+        if crate::gc_type_is_not_object!((*gc).obj_type) {
             return false;
         }
         let class_id = (*(raw_ptr as *const crate::object::ObjectHeader)).class_id;

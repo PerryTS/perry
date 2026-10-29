@@ -144,7 +144,7 @@ pub(crate) fn abort_signal_ptr_from_value(value: f64) -> Option<*mut ObjectHeade
     }
     let is_signal = unsafe {
         crate::value::addr_class::try_read_tracked_gc_header(ptr as usize)
-            .is_some_and(|h| h.as_ref().obj_type == crate::gc::GC_TYPE_OBJECT)
+            .is_some_and(|h| crate::gc_type_is_object!(h.as_ref().obj_type))
             && (*ptr).class_id == ABORT_SIGNAL_CLASS_ID
     };
     is_signal.then_some(ptr)

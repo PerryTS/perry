@@ -266,7 +266,7 @@ fn classify_pointer(recv: f64) -> Option<PtrKind> {
         let hdr = (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         (*hdr).obj_type
     };
-    if obj_type == crate::gc::GC_TYPE_OBJECT || obj_type == crate::gc::GC_TYPE_CLOSURE {
+    if crate::gc_type_is_object!(obj_type) || obj_type == crate::gc::GC_TYPE_CLOSURE {
         return Some(PtrKind::Object);
     }
     if let Some(kind) = crate::object::exotic_expando::exotic_expando_kind(raw) {
@@ -1324,7 +1324,7 @@ pub(crate) fn non_array_object_receiver(arr: *const ArrayHeader) -> Option<f64> 
         let hdr = (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         (*hdr).obj_type
     };
-    if obj_type == crate::gc::GC_TYPE_OBJECT || obj_type == crate::gc::GC_TYPE_CLOSURE {
+    if crate::gc_type_is_object!(obj_type) || obj_type == crate::gc::GC_TYPE_CLOSURE {
         Some(f64::from_bits(JSValue::pointer(raw as *const u8).bits()))
     } else {
         None

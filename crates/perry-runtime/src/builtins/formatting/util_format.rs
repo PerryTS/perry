@@ -53,7 +53,7 @@ unsafe fn util_format_json_ptr_has_cycle(ptr: *const u8, stack: &mut Vec<usize>)
     let gc_header = ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
     match (*gc_header).obj_type {
         crate::gc::GC_TYPE_ARRAY => util_format_json_array_has_cycle(ptr, stack),
-        crate::gc::GC_TYPE_OBJECT => util_format_json_object_has_cycle(ptr, stack),
+        crate::gc_object_type_pat!() => util_format_json_object_has_cycle(ptr, stack),
         _ => false,
     }
 }
@@ -164,7 +164,7 @@ unsafe fn util_format_s_inspects(val: f64) -> bool {
     };
     match header.obj_type {
         crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_MAP | crate::gc::GC_TYPE_SET => true,
-        crate::gc::GC_TYPE_OBJECT => !object_has_a_user_to_string(val),
+        crate::gc_object_type_pat!() => !object_has_a_user_to_string(val),
         _ => false,
     }
 }

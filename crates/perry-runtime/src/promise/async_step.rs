@@ -468,7 +468,7 @@ fn then_backpatch_result(
 #[inline]
 fn promise_reads_own_constructor(value: f64) -> bool {
     let inner = crate::value::js_nanbox_get_pointer(value) as *const Promise;
-    if inner.is_null() || unsafe { (*inner).meta.is_null() } {
+    if inner.is_null() || unsafe { crate::object::cell_meta::promise_cell_meta(inner).is_null() } {
         return false;
     }
     super::promise_has_own_constructor(inner as usize)

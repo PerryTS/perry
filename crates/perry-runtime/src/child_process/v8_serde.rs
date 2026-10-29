@@ -343,7 +343,7 @@ impl Serializer {
                 self.write_dense_array(raw as *mut crate::array::ArrayHeader);
                 return true;
             }
-            if header.obj_type == crate::gc::GC_TYPE_OBJECT {
+            if crate::gc_type_is_object!(header.obj_type) {
                 if self.depth >= MAX_DEPTH {
                     self.out.push(TAG_UNDEFINED);
                     return true;

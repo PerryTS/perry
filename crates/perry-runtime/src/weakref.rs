@@ -251,6 +251,19 @@ unsafe fn header_from_user_addr(addr: usize) -> *mut crate::gc::GcHeader {
 }
 
 #[inline]
+unsafe fn value_points_to_object(
+    bits: u64,
+    valid_ptrs: &crate::gc::ValidPointerSet,
+) -> Option<usize> {
+    let ptr = heap_ptr_from_tagged_bits(bits)?;
+    if !valid_ptrs.contains(&ptr) {
+        return None;
+    }
+    let header = header_from_user_addr(ptr);
+    crate::gc_type_is_object!((*header).obj_type).then_some(ptr)
+}
+
+#[inline]
 unsafe fn value_points_to_gc_type(
     bits: u64,
     valid_ptrs: &crate::gc::ValidPointerSet,
@@ -270,7 +283,7 @@ unsafe fn object_value_with_class(
     valid_ptrs: &crate::gc::ValidPointerSet,
     class_id: u32,
 ) -> Option<*mut ObjectHeader> {
-    let ptr = value_points_to_gc_type(bits, valid_ptrs, crate::gc::GC_TYPE_OBJECT)?;
+    let ptr = value_points_to_object(bits, valid_ptrs)?;
     let obj = ptr as *mut ObjectHeader;
     ((*obj).class_id == class_id).then_some(obj)
 }
@@ -328,7 +341,7 @@ pub(crate) unsafe fn header_may_hold_weak_target_slots(header: *mut crate::gc::G
     if !header.is_null() && (*header).obj_type == crate::gc::GC_TYPE_WEAK_STORAGE {
         return true;
     }
-    if header.is_null() || (*header).obj_type != crate::gc::GC_TYPE_OBJECT {
+    if header.is_null() || crate::gc_type_is_not_object!((*header).obj_type) {
         return false;
     }
     let obj = (header as *mut u8).add(crate::gc::GC_HEADER_SIZE) as *mut ObjectHeader;
@@ -353,7 +366,7 @@ pub(crate) unsafe fn is_weak_holder_header(header: *mut crate::gc::GcHeader) -> 
     if !header.is_null() && (*header).obj_type == crate::gc::GC_TYPE_WEAK_STORAGE {
         return true;
     }
-    if header.is_null() || (*header).obj_type != crate::gc::GC_TYPE_OBJECT {
+    if header.is_null() || crate::gc_type_is_not_object!((*header).obj_type) {
         return false;
     }
     let obj = (header as *mut u8).add(crate::gc::GC_HEADER_SIZE) as *mut ObjectHeader;
@@ -380,7 +393,7 @@ pub(crate) unsafe fn is_weak_target_trace_slot(
                 .add(offset / std::mem::size_of::<storage::Entry>()))
             .key != TAG_UNDEFINED;
     }
-    if header.is_null() || (*header).obj_type != crate::gc::GC_TYPE_OBJECT {
+    if header.is_null() || crate::gc_type_is_not_object!((*header).obj_type) {
         return false;
     }
     let obj = (header as *mut u8).add(crate::gc::GC_HEADER_SIZE) as *mut ObjectHeader;
@@ -822,7 +835,7 @@ impl WeakLiveness for CopiedMinorLiveness<'_> {
         bits: u64,
         class_id: u32,
     ) -> Option<*mut ObjectHeader> {
-        let ptr = classify_gc_type_child(bits, self.ptrs, crate::gc::GC_TYPE_OBJECT)?;
+        let ptr = classify_object_child(bits, self.ptrs)?;
         let obj = ptr as *mut ObjectHeader;
         ((*obj).class_id == class_id).then_some(obj)
     }
@@ -887,6 +900,12 @@ pub(crate) fn weak_target_should_clear_copied(
 /// doesn't mark old-gen), delaying finalization — the original
 /// `object_value_to_array` / `object_value_with_class` resolvers only checked
 /// validity + `obj_type`, never MARKED.
+unsafe fn classify_object_child(bits: u64, ptrs: &crate::gc::CopyingPointerSet) -> Option<usize> {
+    let ptr = heap_ptr_from_tagged_bits(bits)?;
+    let cp = ptrs.classify(ptr)?;
+    crate::gc_type_is_object!(unsafe { (*cp.header).obj_type }).then_some(ptr)
+}
+
 unsafe fn classify_gc_type_child(
     bits: u64,
     ptrs: &crate::gc::CopyingPointerSet,
@@ -966,7 +985,7 @@ unsafe fn resolve_weak_holder_full(
         return HolderDisposition::Drop;
     }
     let header = header_from_user_addr(addr);
-    if (*header).obj_type != crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_not_object!((*header).obj_type) {
         return HolderDisposition::Drop;
     }
     let obj = addr as *mut ObjectHeader;

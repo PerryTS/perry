@@ -68,7 +68,7 @@ unsafe fn init_bound_native_receiver(
     let receiver_object = crate::value::JSValue::from_bits(receiver.to_bits());
     if receiver_object.is_pointer() && receiver.to_bits() != namespace_obj.to_bits() {
         let address = receiver_object.as_pointer::<u8>() as usize;
-        if matches!(crate::value::addr_class::try_read_gc_header(address), Some(header) if header.obj_type == crate::gc::GC_TYPE_OBJECT)
+        if matches!(crate::value::addr_class::try_read_gc_header(address), Some(header) if crate::gc_type_is_object!(header.obj_type))
             && crate::object::js_object_get_class_id(address as *const crate::object::ObjectHeader)
                 != crate::object::NATIVE_MODULE_CLASS_ID
         {

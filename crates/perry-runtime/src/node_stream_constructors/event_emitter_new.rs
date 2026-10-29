@@ -65,7 +65,7 @@ pub(crate) fn own_prototype_by_bag(ctor: f64) -> Option<f64> {
     let bag = unsafe { (*(addr as *const crate::closure::ClosureHeader)).props };
     // SAFETY: as above, for the bag object.
     let bag_header = unsafe { crate::value::addr_class::try_read_gc_header(bag as usize) }?;
-    if bag_header.obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::gc_type_is_not_object!(bag_header.obj_type)
         || bag_header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
     {
         return None;
@@ -74,7 +74,7 @@ pub(crate) fn own_prototype_by_bag(ctor: f64) -> Option<f64> {
     unsafe {
         const SPILL: u32 = 1 << 31;
         let encoded = {
-            let meta = (*bag).meta;
+            let meta = crate::meta_read!(crate::meta_obj_runtime_born!(bag as *mut _));
             if !meta.is_null() && (*meta).elements != 0 {
                 return None;
             }
@@ -96,7 +96,7 @@ pub(crate) fn own_prototype_by_bag(ctor: f64) -> Option<f64> {
             let fields = (bag as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64;
             *fields.add(slot)
         } else {
-            let spill = (*(*bag).meta).spill as *const crate::array::ArrayHeader;
+            let spill = (*crate::meta_read!(crate::meta_obj_runtime_born!(bag as *mut _))).spill as *const crate::array::ArrayHeader;
             *crate::array::array_elements_ptr(spill).add(slot)
         };
         (bits != crate::value::TAG_HOLE).then_some(f64::from_bits(bits))

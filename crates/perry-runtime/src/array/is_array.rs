@@ -55,7 +55,7 @@ pub extern "C" fn js_array_is_array(value: f64) -> f64 {
         let obj_type = (*gc_header).obj_type;
         if obj_type == GC_TYPE_ARRAY || obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
             true_val
-        } else if obj_type == crate::gc::GC_TYPE_OBJECT {
+        } else if crate::gc_type_is_object!(obj_type) {
             // `class X extends Array` — the instance is a plain ObjectHeader, but
             // ECMA-262 IsArray must still report true for an Array subclass.
             if super::subclass::has_array_exotic_brand(

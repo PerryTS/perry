@@ -245,8 +245,8 @@ pub(crate) unsafe fn finalize_set_side_allocation_for_gc(set: *mut SetHeader) {
     if !store.is_null() {
         finalize_owned_store(store.cast(), true);
     }
-    if !(*set).meta.is_null() {
-        (*(*set).meta).native_state = 0;
+    if !crate::object::cell_meta::set_cell_meta(set).is_null() {
+        (*crate::object::cell_meta::set_cell_meta(set)).native_state = 0;
     }
     // GC_STORE_AUDIT(POINTER_FREE): Set reset clears elements alias to null; no new edge.
     (*set).elements = ptr::null_mut();
@@ -991,7 +991,7 @@ pub extern "C" fn js_set_alloc(capacity: u32) -> *mut SetHeader {
         (*ptr).size = 0;
         (*ptr).capacity = cap;
         (*ptr).elements = (*store).elements;
-        (*ptr).meta = ptr::null_mut();
+        *crate::object::cell_meta::set_cell_meta_slot(ptr) = ptr::null_mut();
         (*ptr).used = 0;
         (*ptr).compaction_epoch = 0;
         (*ptr).store = store;
@@ -1037,7 +1037,7 @@ fn clean_set_ptr(set: *const SetHeader) -> *const SetHeader {
     let addr = set as usize;
     match unsafe { crate::value::addr_class::try_read_gc_header(addr) } {
         Some(header) if header.obj_type == crate::gc::GC_TYPE_SET => set,
-        Some(header) if header.obj_type == crate::gc::GC_TYPE_OBJECT => {
+        Some(header) if crate::gc_type_is_object!(header.obj_type) => {
             crate::object::map_set_subclass::redirect_collection_receiver(
                 addr,
                 crate::object::map_set_subclass::CollectionKind::Set,

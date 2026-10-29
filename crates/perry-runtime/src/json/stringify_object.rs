@@ -62,7 +62,7 @@ unsafe fn member_to_json(value: f64) -> Option<f64> {
     }
     match gc_obj_type(ptr) {
         crate::gc::GC_TYPE_ARRAY => array_get_to_json(ptr as *const crate::ArrayHeader),
-        crate::gc::GC_TYPE_OBJECT => {
+        crate::gc_object_type_pat!() => {
             let resolved = object_get_to_json(ptr);
             if resolved.is_none() {
                 // Hand the verdict to the member's own walk (#10696); the
