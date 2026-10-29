@@ -45,6 +45,7 @@ crate::perry_thread_local! {
     static STRING_ITERATOR_PROTOTYPE_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
     static REGEXP_STRING_ITERATOR_PROTOTYPE_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
     static ITERATOR_HELPER_PROTOTYPE_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
+    static WRAP_FOR_VALID_ITERATOR_PROTOTYPE_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
 }
 
 pub(crate) static ITERATOR_PROTOTYPE_PTR: super::RealmAtomicI64 =
@@ -61,6 +62,8 @@ pub(crate) static REGEXP_STRING_ITERATOR_PROTOTYPE_PTR: super::RealmAtomicI64 =
     super::RealmAtomicI64::new(&REGEXP_STRING_ITERATOR_PROTOTYPE_PTR_SLOT);
 pub(crate) static ITERATOR_HELPER_PROTOTYPE_PTR: super::RealmAtomicI64 =
     super::RealmAtomicI64::new(&ITERATOR_HELPER_PROTOTYPE_PTR_SLOT);
+pub(crate) static WRAP_FOR_VALID_ITERATOR_PROTOTYPE_PTR: super::RealmAtomicI64 =
+    super::RealmAtomicI64::new(&WRAP_FOR_VALID_ITERATOR_PROTOTYPE_PTR_SLOT);
 
 /// Sticky per-family siblings of `PERRY_ARRAY_ITERATION_NOT_PRISTINE`: the
 /// Map / Set / String iterator PROTOTYPE object escaped to user code, so
@@ -394,6 +397,10 @@ fn build_iterator_prototypes() {
         shared,
     );
     crate::iterator_helpers::install_prototype_methods(shared, iterator_helper_proto);
+    crate::iterator_helpers::install_dispose(shared);
+    let wrap_proto = js_object_alloc(0, 0);
+    crate::iterator_helpers::install_wrap_prototype_methods(wrap_proto);
+    chain_to(wrap_proto, shared);
 
     ITERATOR_PROTOTYPE_PTR.store(shared as i64, Ordering::Release);
     ARRAY_ITERATOR_PROTOTYPE_PTR.store(array_proto as i64, Ordering::Release);
@@ -402,6 +409,7 @@ fn build_iterator_prototypes() {
     STRING_ITERATOR_PROTOTYPE_PTR.store(string_proto as i64, Ordering::Release);
     REGEXP_STRING_ITERATOR_PROTOTYPE_PTR.store(regexp_string_proto as i64, Ordering::Release);
     ITERATOR_HELPER_PROTOTYPE_PTR.store(iterator_helper_proto as i64, Ordering::Release);
+    WRAP_FOR_VALID_ITERATOR_PROTOTYPE_PTR.store(wrap_proto as i64, Ordering::Release);
     super::iterator_ctor::note_birth_keys(shared);
 }
 
@@ -565,6 +573,15 @@ pub(crate) fn attach_iterator_prototype(obj_ptr: *mut ObjectHeader, class_id: u3
         return;
     }
     chain_to(obj_ptr, proto_ptr as *mut ObjectHeader);
+}
+
+/// Link a new `Iterator.from` wrapper to `%WrapForValidIteratorPrototype%`.
+/// Its class id is the helper family's, so the link is per instance.
+pub(crate) fn attach_wrap_for_valid_iterator_prototype(obj_ptr: *mut ObjectHeader) {
+    ensure_iterator_prototypes();
+    let proto = WRAP_FOR_VALID_ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire);
+    let proto_bits = crate::value::js_nanbox_pointer(proto).to_bits();
+    super::prototype_chain::object_link_created_prototype(obj_ptr as usize, proto_bits);
 }
 
 /// Invoke a user replacement of a built-in iterator prototype's `next`

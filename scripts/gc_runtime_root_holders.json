@@ -3823,6 +3823,11 @@
     },
     {
       "file": "crates/perry-runtime/src/object/iterator_prototypes.rs",
+      "name": "WRAP_FOR_VALID_ITERATOR_PROTOTYPE_PTR_SLOT",
+      "scanner": "scan_object_cache_roots_mut"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/iterator_prototypes.rs",
       "name": "STRING_ITERATOR_PROTOTYPE_PTR_SLOT"
     },
     {

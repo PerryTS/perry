@@ -91,9 +91,11 @@ unsafe fn array_numbers(value: f64) -> Vec<f64> {
         .collect()
 }
 
-/// `Iterator.from(iterable)` — the object every case below starts from.
+/// `Iterator.from(array).drop(0)` — the object every case below starts from.
+/// (`Iterator.from` returns an array's own iterator, which is not a helper.)
 unsafe fn helper_over(values: &[f64]) -> f64 {
-    let h = super::js_iterator_from(number_array(values));
+    let source = super::get_iterator_direct(super::js_iterator_from(number_array(values)));
+    let h = super::new_helper(OP_DROP, source, 0.0);
     let p = crate::value::js_nanbox_get_pointer(h);
     assert_ne!(p, 0, "`Iterator.from` must return an object");
     assert_eq!(
@@ -831,6 +833,39 @@ fn helper_return_closes_the_underlying_iterator() {
         assert!(
             step(tower(mapped, "next", &[])).1,
             "a returned helper is done"
+        );
+    }
+}
+
+/// `Iterator.from({next})` is a `%WrapForValidIteratorPrototype%` wrapper,
+/// not a helper: its prototype is the wrapper one and helper methods reject it.
+#[test]
+fn iterator_from_wraps_a_plain_iterator_with_its_own_brand() {
+    crate::gc::js_gc_init();
+    crate::object::static_shapes::js_shape_run_static_seed();
+    unsafe {
+        let plain = crate::object::js_object_alloc(0, 0);
+        let w = super::js_iterator_from(crate::value::js_nanbox_pointer(plain as i64));
+        assert!(
+            super::statics::is_wrapper(w),
+            "a plain object must be wrapped"
+        );
+        let wrap_proto = crate::object::iterator_prototypes::WRAP_FOR_VALID_ITERATOR_PROTOTYPE_PTR
+            .load(std::sync::atomic::Ordering::Acquire);
+        assert_eq!(
+            crate::object::js_object_get_prototype_of(w).to_bits(),
+            crate::value::js_nanbox_pointer(wrap_proto).to_bits(),
+        );
+        assert!(
+            !super::is_helper_op(w),
+            "a wrapper has no [[UnderlyingIterators]]"
+        );
+        assert!(
+            crate::exception::catch_js_throw(|| super::helper_next(
+                crate::value::js_nanbox_get_pointer(w) as *mut ObjectHeader
+            ))
+            .is_err(),
+            "Iterator Helper.prototype.next must reject a wrapper"
         );
     }
 }

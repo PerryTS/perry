@@ -27,10 +27,15 @@ use crate::value::{js_nanbox_get_pointer, js_nanbox_pointer, JSValue, TAG_UNDEFI
 use std::cell::Cell;
 
 mod proto_methods;
+mod statics;
 pub(crate) use proto_methods::install_prototype_methods;
 pub use proto_methods::{
     dispatch_iterator_helper_method, is_iterator_helper_method,
     maybe_dispatch_helper_on_builtin_iterator, maybe_dispatch_helper_on_iterator,
+};
+pub use statics::js_iterator_from;
+pub(crate) use statics::{
+    install_dispose, install_iterator_statics, install_wrap_prototype_methods,
 };
 
 #[cfg(test)]
@@ -60,25 +65,30 @@ mod tests;
 pub const ITERATOR_HELPER_CLASS_ID: u32 = 0xFFFF_000B;
 
 // Op kinds stored in `F_OP`.
-const OP_IDENTITY: i32 = 0; // Iterator Record / `Iterator.from(x)` wrapper.
+const OP_IDENTITY: i32 = 0; // Iterator Record (GetIteratorDirect).
 const OP_MAP: i32 = 1;
 const OP_FILTER: i32 = 2;
 const OP_TAKE: i32 = 3;
 const OP_DROP: i32 = 4;
 const OP_FLATMAP: i32 = 5;
+/// An `Iterator.from` wrapper: an Iterator Record with its own prototype.
+const OP_WRAP: i32 = 6;
+const OP_CONCAT: i32 = 7;
 
 /// Identity: the iterator itself. Others: the record or helper they step.
 const F_ITERATED: u32 = 0;
 const F_OP: u32 = 1;
-/// The callback (map/filter/flatMap) or the validated limit (take/drop).
+/// The callback (map/filter/flatMap), the validated limit (take/drop) or
+/// concat's `[item, @@iterator method, ...]` array.
 const F_ARG: u32 = 2;
-/// Remaining count (take/drop) or the active inner record (flatMap).
+/// Remaining count (take/drop) or the active inner record (flatMap/concat).
 const F_STATE: u32 = 3;
 /// Identity: the `next` method read once by GetIteratorDirect.
 const F_NEXT: u32 = 4;
+/// Callback counter, or concat's next item index.
 const F_COUNTER: u32 = 5;
 const F_GEN_STATE: u32 = 6;
-const FIELD_COUNT: u32 = 7;
+pub(crate) const FIELD_COUNT: u32 = 7;
 
 // `[[GeneratorState]]` of a helper (§27.1.2.1).
 const GEN_START: f64 = 0.0;
@@ -243,8 +253,12 @@ unsafe fn alloc_helper(op: i32, iterated: f64, arg: f64, next: f64) -> f64 {
     set_field(obj, F_NEXT, next.get_nanbox_f64());
     set_field(obj, F_COUNTER, 0.0);
     set_field(obj, F_GEN_STATE, GEN_START);
-    // `%IteratorHelperPrototype%`, whose parent is `%Iterator.prototype%`.
-    crate::object::attach_iterator_prototype(obj_h.get_raw_mut_ptr(), ITERATOR_HELPER_CLASS_ID);
+    if op == OP_WRAP {
+        crate::object::attach_wrap_for_valid_iterator_prototype(obj_h.get_raw_mut_ptr());
+    } else {
+        // `%IteratorHelperPrototype%`, whose parent is `%Iterator.prototype%`.
+        crate::object::attach_iterator_prototype(obj_h.get_raw_mut_ptr(), ITERATOR_HELPER_CLASS_ID);
+    }
     js_nanbox_pointer(obj_h.get_raw_mut_ptr::<ObjectHeader>() as i64)
 }
 
@@ -253,26 +267,30 @@ pub(crate) unsafe fn new_helper(op: i32, iterated: f64, arg: f64) -> f64 {
     alloc_helper(op, iterated, arg, undefined())
 }
 
-/// GetIteratorDirect(obj) (§27.1.1.3): `next` is read once. A helper whose
-/// `next` is the intrinsic one is stepped directly; anything else gets an
-/// identity record.
+/// GetIteratorDirect(obj) (§27.1.1.3): `next` is read once. A helper or
+/// wrapper whose `next` is the intrinsic one is stepped directly (a wrapper's
+/// `next` only forwards to its record); anything else gets an identity record.
 pub(crate) unsafe fn get_iterator_direct(obj: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj_h = scope.root_nanbox_f64(obj);
     let next = get(obj, b"next");
     let p = js_nanbox_get_pointer(obj_h.get_nanbox_f64()) as usize;
     let np = js_nanbox_get_pointer(next) as *const ClosureHeader;
-    if is_iterator_helper_addr(p)
-        && !np.is_null()
-        && is_closure_ptr(np as usize)
-        && (*np).code() == crate::object::iterator_prototypes::iterator_helper_next_code()
-    {
-        return obj_h.get_nanbox_f64();
+    if is_iterator_helper_addr(p) && !np.is_null() && is_closure_ptr(np as usize) {
+        let intrinsic = if field(obj_h.get_nanbox_f64(), F_OP) as i32 == OP_WRAP {
+            statics::wrap_next_code()
+        } else {
+            crate::object::iterator_prototypes::iterator_helper_next_code()
+        };
+        if (*np).code() == intrinsic {
+            return obj_h.get_nanbox_f64();
+        }
     }
     alloc_helper(OP_IDENTITY, obj_h.get_nanbox_f64(), undefined(), next)
 }
 
-/// The iterator a record or helper closes: the wrapped one for a record.
+/// The iterator a record or helper closes: the wrapped one for a record (a
+/// wrapper closes through its own `return`).
 unsafe fn close_target(iterated: f64) -> f64 {
     if field(iterated, F_OP) as i32 == OP_IDENTITY {
         field(iterated, F_ITERATED)
@@ -311,25 +329,7 @@ pub(crate) unsafe fn close_quietly(iterated: f64) {
 
 /// GetIteratorFlattenable(value, reject-primitives) as a record.
 unsafe fn get_iterator_flattenable(value: f64) -> f64 {
-    if !is_object(value) {
-        type_error("flatMap mapper result is not an object");
-    }
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let value = scope.root_nanbox_f64(value);
-    let sym = crate::symbol::well_known_symbol("iterator");
-    let key = f64::from_bits(JSValue::pointer(sym as *const u8).bits());
-    let method = crate::proxy::js_reflect_get(value.get_nanbox_f64(), key, value.get_nanbox_f64());
-    let iter = if is_nullish(method) {
-        value.get_nanbox_f64()
-    } else if !crate::object::value_is_callable(method) {
-        type_error("Symbol.iterator is not a function");
-    } else {
-        call(method, value.get_nanbox_f64(), &[])
-    };
-    if !is_object(iter) {
-        type_error("Iterator is not an object");
-    }
-    get_iterator_direct(iter)
+    get_iterator_direct(statics::flattenable_iterator(value, false))
 }
 
 /// Step a record or helper; `None` when done. Records have no state; a
@@ -337,7 +337,7 @@ unsafe fn get_iterator_flattenable(value: f64) -> f64 {
 /// throw leaves it done, and a callback's throw closes its iterator.
 pub(crate) unsafe fn helper_step(iterated: f64) -> Option<f64> {
     let op = field(iterated, F_OP) as i32;
-    if op == OP_IDENTITY {
+    if op == OP_IDENTITY || op == OP_WRAP {
         return step_value(field(iterated, F_ITERATED), field(iterated, F_NEXT));
     }
     let state = field(iterated, F_GEN_STATE);
@@ -442,36 +442,38 @@ unsafe fn run_op(
             let inner = get_iterator_flattenable(mapped);
             set_field(h(), F_STATE, inner);
         },
+        // A step error is not closed: only the active inner iterator is open.
+        OP_CONCAT => loop {
+            let inner = field(h(), F_STATE);
+            if is_object(inner) {
+                if let Some(value) = helper_step(inner) {
+                    return Some(value);
+                }
+                set_field(h(), F_STATE, undefined());
+            }
+            let index = field(h(), F_COUNTER) as u32;
+            let list = js_nanbox_get_pointer(field(h(), F_ARG)) as *const crate::array::ArrayHeader;
+            if index * 2 >= crate::array::js_array_length(list) {
+                return None;
+            }
+            set_field(h(), F_COUNTER, (index + 1) as f64);
+            let item = crate::array::js_array_get_f64(list, index * 2);
+            let method = crate::array::js_array_get_f64(list, index * 2 + 1);
+            let iter = call(method, item, &[]);
+            if !is_object(iter) {
+                type_error("Iterator is not an object");
+            }
+            set_field(h(), F_STATE, get_iterator_direct(iter));
+        },
         _ => None,
     }
 }
 
-/// `Iterator.from(x)` — wrap any iterable/iterator in an identity helper so the
-/// helper methods are available. Returns a NaN-boxed pointer.
-#[no_mangle]
-pub extern "C" fn js_iterator_from(val_f64: f64) -> f64 {
-    unsafe {
-        let source = crate::symbol::js_get_iterator(val_f64);
-        // If the source is already one of our helper objects, hand it back
-        // unchanged (Node returns the iterator itself when it already inherits
-        // from Iterator.prototype).
-        let p = js_nanbox_get_pointer(source);
-        if p != 0 && is_iterator_helper_addr(p as usize) {
-            return source;
-        }
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let source = scope.root_nanbox_f64(source);
-        let next = get(source.get_nanbox_f64(), b"next");
-        alloc_helper(OP_IDENTITY, source.get_nanbox_f64(), undefined(), next)
-    }
-}
-
-#[cfg(feature = "keepalive-anchors")]
-#[used(compiler)]
-static KEEP_ITERATOR_FROM: extern "C" fn(f64) -> f64 = js_iterator_from;
-
 /// `%IteratorHelperPrototype%.next` (§27.1.2.1.1).
 unsafe fn helper_next(obj: *mut ObjectHeader) -> f64 {
+    if !is_helper_op(js_nanbox_pointer(obj as i64)) {
+        type_error("Method Iterator Helper.prototype.next called on incompatible receiver");
+    }
     match helper_step(js_nanbox_pointer(obj as i64)) {
         Some(value) => make_iter_result(JSValue::from_bits(value.to_bits()), false),
         None => make_iter_result(JSValue::undefined(), true),
@@ -486,17 +488,19 @@ pub(crate) unsafe fn iterator_helper_next_builtin(obj: *mut ObjectHeader) -> f64
     helper_next(obj)
 }
 
+/// Is the helper-class object `obj` a helper (has `[[UnderlyingIterators]]`),
+/// not a record or an `Iterator.from` wrapper?
+pub(crate) unsafe fn is_helper_op(obj: f64) -> bool {
+    !matches!(field(obj, F_OP) as i32, OP_IDENTITY | OP_WRAP)
+}
+
 /// `%IteratorHelperPrototype%.return` (§27.1.2.1.2).
 pub(crate) unsafe fn helper_return(obj: *mut ObjectHeader) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let helper = scope.root_nanbox_f64(js_nanbox_pointer(obj as i64));
     let h = || helper.get_nanbox_f64();
     let done = || make_iter_result(JSValue::undefined(), true);
-    if field(h(), F_OP) as i32 == OP_IDENTITY {
-        // An `Iterator.from` wrapper forwards to the wrapped iterator.
-        close_normal(h());
-        return done();
-    }
+    let op = field(h(), F_OP) as i32;
     let state = field(h(), F_GEN_STATE);
     if state == GEN_RUNNING {
         type_error("Generator is already running");
@@ -506,15 +510,25 @@ pub(crate) unsafe fn helper_return(obj: *mut ObjectHeader) -> f64 {
     }
     if state == GEN_START {
         set_field(h(), F_GEN_STATE, GEN_DONE);
-        close_normal(field(h(), F_ITERATED));
+        // concat has opened nothing yet.
+        if op != OP_CONCAT {
+            close_normal(field(h(), F_ITERATED));
+        }
         return done();
     }
     // Suspended at a yield: resume with a return completion, which closes
-    // flatMap's inner iterator first, then the underlying one.
+    // flatMap's inner iterator first, then the underlying one (concat has
+    // only its active inner iterator).
     set_field(h(), F_GEN_STATE, GEN_RUNNING);
     let result = crate::exception::catch_js_throw(|| {
         let inner = field(h(), F_STATE);
-        if field(h(), F_OP) as i32 == OP_FLATMAP && is_object(inner) {
+        if op == OP_CONCAT {
+            if is_object(inner) {
+                close_normal(inner);
+            }
+            return;
+        }
+        if op == OP_FLATMAP && is_object(inner) {
             if let Err(error) = crate::exception::catch_js_throw(|| close_normal(inner)) {
                 let scope = crate::gc::RuntimeHandleScope::new();
                 let error = scope.root_nanbox_f64(error);

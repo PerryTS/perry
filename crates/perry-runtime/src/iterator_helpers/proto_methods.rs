@@ -152,7 +152,10 @@ pub(crate) fn install_prototype_methods(
 extern "C" fn helper_return_thunk(_closure: *const ClosureHeader, this: JsThis) -> f64 {
     let this = this.as_f64();
     let p = js_nanbox_get_pointer(this) as usize;
-    if !is_object(this) || !super::is_iterator_helper_addr(p) {
+    if !is_object(this)
+        || !super::is_iterator_helper_addr(p)
+        || !unsafe { super::is_helper_op(this) }
+    {
         type_error("Iterator Helper.prototype.return called on incompatible receiver");
     }
     unsafe { super::helper_return(p as *mut ObjectHeader) }
@@ -392,6 +395,11 @@ pub unsafe fn dispatch_iterator_helper_method(
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
+    let receiver = js_nanbox_pointer(obj as i64);
+    if !super::is_helper_op(receiver) && !matches!(method_name, "Symbol.iterator" | "@@iterator") {
+        // An `Iterator.from` wrapper: its methods are ordinary properties.
+        return call_named(receiver, method_name, args_ptr, args_len);
+    }
     match method_name {
         // #9019: an own `next` assigned onto the helper instance wins over
         // the builtin advance, exactly as on the Map/Set path.
@@ -405,11 +413,30 @@ pub unsafe fn dispatch_iterator_helper_method(
         }
         "Symbol.iterator" | "@@iterator" => js_nanbox_pointer(obj as i64),
         "return" => super::helper_return(obj),
-        "throw" => crate::iter_result::make_iter_result(JSValue::undefined(), true),
         _ => match Method::from_name(method_name) {
-            Some(m) => call_resolved(js_nanbox_pointer(obj as i64), m, args_ptr, args_len, true)
+            Some(m) => call_resolved(receiver, m, args_ptr, args_len, true)
                 .unwrap_or_else(|| type_error(&format!("{method_name} is not a function"))),
-            None => undefined(),
+            None => call_named(receiver, method_name, args_ptr, args_len),
         },
     }
+}
+
+/// `receiver[name](...args)` by ordinary property lookup.
+unsafe fn call_named(receiver: f64, name: &str, args_ptr: *const f64, args_len: usize) -> f64 {
+    let scope = RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(receiver);
+    let args = scope.root_nanbox_f64_slice(if args_ptr.is_null() {
+        &[]
+    } else {
+        std::slice::from_raw_parts(args_ptr, args_len)
+    });
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let key = f64::from_bits(crate::js_nanbox_string(key as i64).to_bits());
+    let method =
+        crate::proxy::js_reflect_get(receiver.get_nanbox_f64(), key, receiver.get_nanbox_f64());
+    if !crate::object::value_is_callable(method) {
+        type_error(&format!("{name} is not a function"));
+    }
+    let args = RuntimeHandleScope::refreshed_nanbox_f64_slice(&args);
+    call(method, receiver.get_nanbox_f64(), &args)
 }
