@@ -122,3 +122,7 @@ pub(super) unsafe fn continued<const ABSENT: bool, const SITE: bool, const LAZY_
     };
     unloaded::finish::<ABSENT, SITE, LAZY_HASH>(dir, obj, key_bits, hash, pos, load, memo)
 }
+
+#[cfg(test)]
+#[path = "layout_probe_indexed_tests.rs"]
+mod tests;
