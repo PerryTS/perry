@@ -633,32 +633,57 @@ fn execute_rooted_output<P: OutputProjection>(
     poll: &mut impl FnMut() -> Result<(), EngineError>,
     reuse: Option<&Reuse<'_, '_>>,
 ) -> Result<Option<ExecMatch>, EngineError> {
-    let has_indices = unsafe { (*super::regexp_data_ptr(regexp(receiver))).has_indices };
+    // The receiver's matcher data and `lastIndex` are read once. On the RegExp
+    // birth layout (one header word, `instance::birth_layout`) both are that
+    // layout's own inline slots; any other layout (a subclass, an added own
+    // key, an accessor `lastIndex`) keeps the keyed brand read and the ordinary
+    // `Get(R, "lastIndex")`. Only copies of the data escape this read: the Get
+    // can run user code that recompiles the receiver.
+    let birth = super::instance::birth_layout(receiver.get_nanbox_f64());
+    let (has_indices, stateful, stored) = match birth {
+        Some(re) => unsafe {
+            let data = &*super::instance::builtin_data(re);
+            (
+                data.has_indices,
+                data.global || data.sticky,
+                super::instance::builtin_last_index(re),
+            )
+        },
+        None => unsafe {
+            let data = &*super::regexp_data_ptr(regexp(receiver));
+            let (has_indices, stateful) = (data.has_indices, data.global || data.sticky);
+            (has_indices, stateful, super::get_last_index(regexp(receiver)))
+        },
+    };
     let mode = if matches!(output, ExecOutput::Test) {
         CaptureMode::Full
     } else {
         CaptureMode::All
     };
-    let stateful = unsafe {
-        let data = &*super::regexp_data_ptr(regexp(receiver));
-        data.global || data.sticky
-    };
     let Some(start) = exec_start(
         regexp(receiver),
         input.with_const_ptr::<StringHeader, _>(|s| s),
         stateful,
-        super::get_last_index(regexp(receiver)),
+        stored,
     )?
-    .map(Start::at) else {
+    else {
         return Ok(None);
     };
+    // The data the search runs on. A Number `lastIndex` ran nothing, so on the
+    // birth layout the slot read above still names it; otherwise user code may
+    // have run (`compile` publishes new data), so it is read again.
+    let data = match (start, birth) {
+        (Start::Number(_), Some(re)) => unsafe { super::instance::builtin_data(re) },
+        _ => super::regexp_data_ptr(regexp(receiver)),
+    };
+    let start = start.at();
+    // SAFETY: nothing has collected since `data` was read.
+    let data = unsafe { &*data };
+    let program = data.perex_program;
     // A string without the pattern's leading units (`perex_lead`) has no
     // start a match can take: the search fails before anything is bound.
     let excluded = unsafe {
-        super::perex_lead::excludes_header(
-            &*super::regexp_data_ptr(regexp(receiver)),
-            input.with_const_ptr::<StringHeader, _>(|s| s),
-        )
+        super::perex_lead::excludes_header(data, input.with_const_ptr::<StringHeader, _>(|s| s))
     };
     if excluded {
         if stateful {
@@ -702,7 +727,7 @@ fn execute_rooted_output<P: OutputProjection>(
         }
         None => search_from(
             regexp(receiver),
-            unsafe { (*super::regexp_data_ptr(regexp(receiver))).perex_program },
+            program,
             input.with_const_ptr::<StringHeader, _>(|s| s),
             start,
             stateful,

@@ -457,7 +457,21 @@ fn template_facts(
     }
     let escape = global.clone().or(escape);
     let prefix_stable = escape.is_none() && hard.is_none() && chain_problem.is_none();
-    let adds = m.adds_keys.get(&tm).copied().unwrap_or(0);
+    // A named store the solve counted as a key add while the class had only
+    // its own birth keys is no add when the settled layout (the parent unit's
+    // class as its prefix) holds the key from birth.
+    let settled_stores: u32 = m
+        .adds_named
+        .iter()
+        .filter(|((t, a), _)| *t == tm && tpl.birth_keys.contains(a))
+        .map(|(_, n)| *n)
+        .sum();
+    let adds = m
+        .adds_keys
+        .get(&tm)
+        .copied()
+        .unwrap_or(0)
+        .saturating_sub(settled_stores);
     // Slots: birth order, valid up to the first non-definite / accessor key.
     let mut fields = Vec::new();
     let mut slot_ok = true;

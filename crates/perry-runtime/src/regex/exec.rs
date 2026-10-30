@@ -6,8 +6,7 @@ pub extern "C" fn js_regexp_exec(
     re: *mut RegExpHeader,
     s: *const StringHeader,
 ) -> *mut crate::array::ArrayHeader {
-    if !crate::regex::regexp_data_of(crate::value::js_nanbox_pointer((re) as i64)).is_some()
-        || !is_valid_ptr(s)
+    if !instance::is_branded(crate::value::js_nanbox_pointer((re) as i64)) || !is_valid_ptr(s)
     {
         LAST_EXEC_INDEX.with(|idx| *idx.borrow_mut() = -1.0);
         LAST_EXEC_GROUPS.with(|g| *g.borrow_mut() = ptr::null_mut());
@@ -45,7 +44,7 @@ pub extern "C" fn js_regexp_exec_projected(
     let receiver = scope.root_nanbox_f64(receiver);
     let method = scope.root_nanbox_f64(method);
     let argument = scope.root_nanbox_f64(argument);
-    let branded = crate::regex::regexp_data_of(receiver.get_nanbox_f64()).is_some();
+    let branded = instance::is_branded(receiver.get_nanbox_f64());
     if !branded
         || !crate::object::regex_proto_thunks::is_builtin_regexp_exec(method.get_nanbox_f64())
     {
