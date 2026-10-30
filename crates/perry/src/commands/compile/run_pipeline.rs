@@ -8328,6 +8328,7 @@ pub fn run_with_parse_cache(
             // macOS gets libm through the implicit `-lSystem`.
             link::push_unix_dylib_output(&mut cmd, is_linux, &exe_path);
         }
+        cmd.args(link::extra_link_args());
 
         let status = tool_output::run_internal_tool(&mut cmd, verbose)?;
         if !status.success() {

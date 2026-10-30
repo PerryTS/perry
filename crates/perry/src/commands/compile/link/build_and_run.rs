@@ -1904,15 +1904,7 @@ pub(crate) fn build_and_run_link(
     // take the same path once the arguments are large: macOS caps them at
     // 1 MiB (`link_args_need_response_file`).
     // `PERRY_FORCE_LINK_RESPONSE_FILE=1` forces the path for testing.
-    // PERRY_EXTRA_LINK_ARGS — space-separated args appended verbatim to the
-    // final link invocation. Diagnostic escape hatch (e.g.
-    // `-Wl,-why_live,_js_fs_open` to ask ld64 why a symbol survived
-    // dead-strip); not part of any documented stable surface.
-    if let Ok(extra) = std::env::var("PERRY_EXTRA_LINK_ARGS") {
-        for a in extra.split_whitespace() {
-            cmd.arg(a);
-        }
-    }
+    cmd.args(super::extra_link_args());
 
     let mut response_file_to_clean: Option<PathBuf> = None;
     if cfg!(target_os = "windows")

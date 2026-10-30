@@ -29,7 +29,7 @@ MAIN=$(readlink -f "${pos[0]:?perry-main}"); HEAD=$(readlink -f "${pos[1]:?perry
 ALLOW=${pos[3]:-/dev/null}
 SC=${IRDIFF_SCORE:-/root/hwp-move/score}; SAMPLES=${IRDIFF_SAMPLES:-/root/STU/samples}; NSB=${IRDIFF_NSB:-/root/NSB/jsc}
 WS_MAIN=${IRDIFF_WS_MAIN:-/root/A1S0/main-src}; WS_HEAD=${IRDIFF_WS_HEAD:-/root/A1S0/src}
-mkdir -p "$OUT/w" "$OUT/cg" "$OUT/tmp"; OUT=$(readlink -f "$OUT")
+mkdir -p "$OUT/w" "$OUT/cg" "$OUT/tmp" "$OUT/pad"; OUT=$(readlink -f "$OUT")
 # Artifact controls (STARTUP_RULE_2026-10-28.md, addendum), applied to BOTH arms: the fixed-inputs preload
 # (clock, entropy, /proc/self/maps normalization), JAG10b's maps shim (std's stack-guard parse of
 # /proc/self/maps answers the main thread from the stack rlimit, so valgrind's mapping placement per arm
@@ -40,6 +40,15 @@ MAPS_SHIM=${IRDIFF_MAPS_SHIM:-/root/JAG10/tmp/stk-shim.so}
 STR_PLAIN=${IRDIFF_STR_PLAIN:-/root/IOV/ctl/str-plain.so}
 for f in "$FIXED" "$MAPS_SHIM" "$STR_PLAIN"; do [ -f "$f" ] || { echo "missing measurement preload $f" >&2; exit 2; }; done
 PRELOAD="$FIXED:$MAPS_SHIM:$STR_PLAIN"
+# Link-pad control (on unless IRDIFF_LINKPAD=0): rows that follow addresses with equal call counts (mimalloc
+# page map, address-sorted ranges, libc alignment) move when one arm's sections are smaller. linkpad.py pads
+# each arm with unreferenced retained sections linked last (PERRY_EXTRA_LINK_ARGS) until every paddable
+# section ends at the same address in both arms, so later sections, segments and the heap start coincide;
+# the layout proof is $OUT/<witness>.layout.txt and the pads are $OUT/pads.tsv. Nothing executes a pad.
+# Self-test of the control (A/A): IRDIFF_HEAD_LINK_ARGS links extra inputs (e.g. a perturbing pad object)
+# into the head arm only; with the same perry on both arms the unpadded run shows the address rows, the
+# padded run must show 0.
+LINKPAD=${IRDIFF_LINKPAD:-1}; LINKPAD_PY=$(dirname "$(readlink -f "$0")")/linkpad.py
 # minimal environment of both the compile and the run (same for both arms)
 ENVV=(PATH=/usr/lib/llvm-22/bin:/root/.cargo/bin:/usr/bin:/bin HOME="$HOME" LANG=C LC_ALL=C TZ=UTC LD_PRELOAD="$PRELOAD" PERRY_ALLOW_PERRY_FEATURES=1 TMPDIR="$OUT/tmp" NO_COLOR=1 PKG_BENCH_N=0 PKG_BENCH_WARM=0)
 
@@ -57,11 +66,28 @@ if [ $full = 1 ]; then
       "nextjs_hello|${IRDIFF_NEXT:-/root/secret-tests/nextjs-hello}|${IRDIFF_NEXT_SRC:-main.ts}|")
 fi
 
-compile() { # arm perry ws name dir src
-  local arm=$1 perry=$2 ws=$3 n=$4 d=$5 s=$6
-  ( cd "$d" && env -i "${ENVV[@]}" PERRY_RUNTIME_DIR=$(dirname "$perry") PERRY_WORKSPACE_ROOT=$ws PERRY_TARGET_CPU=x86-64-v3 PERRY_KEEP_SYMBOLS=1 \
+compile() { # arm perry ws name dir src [pad-object]  -> $OUT/w/$n.$arm
+  local arm=$1 perry=$2 ws=$3 n=$4 d=$5 s=$6 pad=${7:--} extra=() link=""
+  [ "$arm" = head ] && link=${IRDIFF_HEAD_LINK_ARGS:-}
+  [ "$pad" != - ] && link="$link $pad"
+  [ -n "${link// }" ] && extra=(PERRY_EXTRA_LINK_ARGS="${link# }")
+  ( cd "$d" && env -i "${ENVV[@]}" "${extra[@]}" PERRY_RUNTIME_DIR=$(dirname "$perry") PERRY_WORKSPACE_ROOT=$ws PERRY_TARGET_CPU=x86-64-v3 PERRY_KEEP_SYMBOLS=1 \
       "$perry" compile --cache-dir "$OUT/tmp/cache" "$s" -o "$OUT/w/$n" > "$OUT/cg/$n.$arm.compile.log" 2>&1 )
-  local rc=$?; rm -rf "$OUT/tmp/cache"; return $rc
+  local rc=$?; rm -rf "$OUT/tmp/cache"; [ $rc = 0 ] && mv "$OUT/w/$n" "$OUT/w/$n.$arm"; return $rc
+}
+# pads both arms of witness $n to the same layout (see LINKPAD); exit 1 if it does not converge
+linkpad() { # name dir src
+  local n=$1 d=$2 s=$3 r res pm=- ph=- cm=- ch=-
+  rm -f "$OUT/pad/$n.json"
+  for r in 1 2 3 4 5; do
+    res=$(python3 "$LINKPAD_PY" plan "$OUT/w/$n.main" "$OUT/w/$n.head" "$OUT/pad/$n.json" "$OUT/pad") || return 1
+    [ "$res" = CONVERGED ] && break
+    pm=$(sed 's/.*main=\([^ ]*\).*/\1/' <<< "$res"); ph=$(sed 's/.*head=\([^ ]*\).*/\1/' <<< "$res")
+    [ "$pm" != "$cm" ] && { compile main "$MAIN" "$WS_MAIN" "$n" "$d" "$s" "$pm" || return 1; cm=$pm; }
+    [ "$ph" != "$ch" ] && { compile head "$HEAD" "$WS_HEAD" "$n" "$d" "$s" "$ph" || return 1; ch=$ph; }
+  done
+  printf "%s\t%s\t%s\t%s\t%s\n" "$n" "$res" "$(basename "$cm")" "$(basename "$ch")" "$(tr -d ' \n' < "$OUT/pad/$n.json")" >> "$OUT/pads.tsv"
+  python3 "$LINKPAD_PY" check "$OUT/w/$n.main" "$OUT/w/$n.head" > "$OUT/$n.layout.txt"
 }
 # per-function Ir of one callgrind run: fn<TAB>ir
 fn_ir() { # outfile
@@ -82,8 +108,9 @@ unstable() { # arm name
     "$OUT/cg/$n.$arm.1.fn" "$OUT/cg/$n.$arm.2.fn" "$OUT/cg/$n.$arm.3.fn" | sort > "$OUT/cg/$n.$arm.unstable"
 }
 # prints "total" and writes $OUT/cg/$n.$arm.fn (fn<TAB>ir)
-measure() { # arm name dir args
+measure() { # arm name dir args  (runs $OUT/w/$n.$arm from the one path $OUT/w/$n)
   local arm=$1 n=$2 d=$3 a=$4 totals=() i
+  cp "$OUT/w/$n.$arm" "$OUT/w/$n"
   for i in 1 2 3; do
     ( cd "$d"; ulimit -v 8000000; timeout 900 env -i "${ENVV[@]}" setarch x86_64 -R valgrind --tool=callgrind --cache-sim=no --branch-sim=no --callgrind-out-file="$OUT/cg/$n.$arm.$i.out" "$OUT/w/$n" $a > /dev/null 2> "$OUT/cg/$n.$arm.$i.log" )
     totals+=("$(grep -o 'Collected : [0-9]*' "$OUT/cg/$n.$arm.$i.log" | grep -o '[0-9]*$')")
@@ -101,10 +128,13 @@ for spec in "${W[@]}"; do
   if [ -n "${IRDIFF_ONLY:-}" ] && [[ " $IRDIFF_ONLY " != *" $n "* ]]; then continue; fi
   if [ ! -f "$d/$s" ]; then echo "MISSING $n: no harness at $d/$s" | tee -a "$OUT/missing.txt"; printf "%s\tMISSING\tMISSING\t-\t-\n" "$n" >> "$OUT/summary.tsv"; continue; fi
   compile main "$MAIN" "$WS_MAIN" "$n" "$d" "$s" || { echo "COMPILE-FAIL $n main"; fail=1; continue; }
-  tm=$(measure main "$n" "$d" "$a") || { fail=1; continue; }
   compile head "$HEAD" "$WS_HEAD" "$n" "$d" "$s" || { echo "COMPILE-FAIL $n head"; fail=1; continue; }
+  if [ "$LINKPAD" = 1 ]; then
+    linkpad "$n" "$d" "$s" || { echo "LINKPAD-FAIL $n: layouts differ (see $OUT/$n.layout.txt, $OUT/pads.tsv)"; fail=1; continue; }
+  fi
+  tm=$(measure main "$n" "$d" "$a") || { fail=1; continue; }
   th=$(measure head "$n" "$d" "$a") || { fail=1; continue; }
-  rm -f "$OUT/w/$n"
+  rm -f "$OUT/w/$n" "$OUT/w/$n.main" "$OUT/w/$n.head"
   awk -F'\t' 'NR==FNR { m[$1]=$2; next } { h[$1]=$2 } END { for (f in m) u[f]; for (f in h) u[f]; for (f in u) printf "%s\t%d\t%d\t%d\n", f, m[f]+0, h[f]+0, h[f]-m[f] }' \
     "$OUT/cg/$n.main.fn" "$OUT/cg/$n.head.fn" | awk -F'\t' '$4!=0' | sort -t$'\t' -k4,4nr > "$OUT/$n.tsv"
   grep -v '^#' "$ALLOW" 2>/dev/null | sed '/^$/d' | sort -u > "$OUT/tmp/allow.$n"
@@ -118,6 +148,7 @@ for spec in "${W[@]}"; do
   [ "$bad" -gt 0 ] && { echo "UNEXPLAINED +Ir in $n: $bad functions (see $OUT/$n.tsv)"; fail=1; }
 done
 [ -f "$OUT/unstable.tsv" ] && cat "$OUT/unstable.tsv" >> "$OUT/summary.tsv"
+[ -f "$OUT/pads.tsv" ] && sed 's/^/linkpad\t/' "$OUT/pads.tsv" >> "$OUT/summary.tsv"
 cat "$OUT/summary.tsv"
 echo "IRDIFF-DONE fail=$fail"
 exit $fail
