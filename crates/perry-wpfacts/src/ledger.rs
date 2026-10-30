@@ -290,7 +290,7 @@ fn composite(origin: &str) -> Option<Unknown> {
 /// `None` when no member names it (a capture gap the ledger reports).
 pub(crate) fn classify(origin: &str) -> Option<Unknown> {
     use Unknown::*;
-    if origin.is_empty() || origin == "cycle" {
+    if origin.is_empty() || origin == "cycle" || origin.starts_with("untraced: ") {
         return Some(UntracedTop);
     }
     if let Some(c) = composite(origin) {
