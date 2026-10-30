@@ -128,7 +128,7 @@ fn class_hosts_do_not_acquire_instance_state() {
         );
         let meta = unsafe {
             crate::object::object_meta_ensure(
-                crate::object::MetaObj::runtime_born(host),
+                crate::meta_obj_runtime_born!(host),
                 crate::object::MetaReason::RuntimeHandle,
             )
         };

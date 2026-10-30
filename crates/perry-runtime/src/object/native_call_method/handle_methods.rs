@@ -805,7 +805,7 @@ pub(super) unsafe fn dispatch_handle(
         // Validate GcHeader to confirm this is actually an object before reading class_id
         let gc_header =
             (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        if (*gc_header).obj_type == crate::gc::GC_TYPE_OBJECT {
+        if crate::gc_type_is_object!((*gc_header).obj_type) {
             if (*obj).class_id == NATIVE_MODULE_CLASS_ID {
                 // #853: the `is_valid_obj_ptr` guard that used to live after
                 // this return was dead — the early return claims the path

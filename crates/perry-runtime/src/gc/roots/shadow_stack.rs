@@ -334,7 +334,7 @@ fn frame_zero_span(slot_count: usize) -> usize {
         }
 }
 
-/// Encode a bound compiled-local address into a live [`ShadowEntry::meta`].
+/// Encode a bound compiled-local address into a live [`ShadowEntry::bound`].
 ///
 /// Bit 0 carries the liveness flag, so an address whose bit 0 is set cannot be
 /// recorded. Rather than truncate it — which would hand the collector a
@@ -431,7 +431,7 @@ unsafe fn push_frame(s: &mut ShadowStackState, slot_count: u32) -> u64 {
         header,
         ShadowEntry {
             value: s.frame_top as u64,
-            meta: slot_count as usize,
+            bound: slot_count as usize,
         },
     );
     clear_slots(header.add(SHADOW_STACK_HEADER_SLOTS), slot_count as usize);
@@ -580,16 +580,16 @@ pub extern "C" fn js_shadow_slot_set(idx: u32, value: u64) {
             return;
         }
         let entry = s.ptr.add(slot);
-        let meta = (*entry).meta;
+        let meta = (*entry).bound;
         (*entry).value = value;
         if value == 0 {
             // Codegen's "dead from here" clear: drop the liveness bit but keep
             // the binding, so a later re-activation still writes through to the
             // same compiled local slot.
-            (*entry).meta = meta & SLOT_PTR_MASK;
+            (*entry).bound = meta & SLOT_PTR_MASK;
             return;
         }
-        (*entry).meta = meta | SLOT_ACTIVE;
+        (*entry).bound = meta | SLOT_ACTIVE;
         root_shading_barrier(value);
         let bound = (meta & SLOT_PTR_MASK) as *mut u64;
         if !bound.is_null() {
@@ -630,7 +630,7 @@ pub extern "C" fn js_shadow_slot_bind(idx: u32, value_slot: *mut u64) {
             s.ptr.add(slot),
             ShadowEntry {
                 value,
-                meta: bound_slot_meta(raw),
+                bound: bound_slot_meta(raw),
             },
         );
         root_shading_barrier(value);
@@ -748,7 +748,7 @@ pub extern "C" fn js_shadow_frame_restore_to(frame_handle: u64) {
         if base >= s.len {
             return;
         }
-        let slots = (*s.ptr.add(base)).meta;
+        let slots = (*s.ptr.add(base)).bound;
         let end = base + SHADOW_STACK_HEADER_SLOTS + slots;
         if end <= s.len {
             s.set_slots_len(end);

@@ -151,7 +151,7 @@ pub fn weak_wrapper_class_id(receiver: f64) -> Option<u32> {
     // allocations above the cutoff. See `value::addr_class` for the band map.
     unsafe {
         match crate::value::addr_class::try_read_gc_header(addr) {
-            Some(header) if header.obj_type == crate::gc::GC_TYPE_OBJECT => {}
+            Some(header) if crate::gc_type_is_object!(header.obj_type) => {}
             _ => return None,
         }
         let obj = addr as *const ObjectHeader;

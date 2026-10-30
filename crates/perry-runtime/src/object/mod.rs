@@ -752,7 +752,7 @@ pub(crate) use call_method_depth::call_method_depth;
 pub(crate) use call_method_depth::test_enter_catch_method;
 #[cfg(test)]
 mod a1_death_tests;
-mod header;
+pub(crate) mod header;
 pub(crate) use header::*;
 mod meta_accessors;
 use call_method_depth::CallMethodDepthGuard;
@@ -1752,7 +1752,7 @@ pub(crate) unsafe fn object_is_regular(obj: *const ObjectHeader) -> bool {
     let Some(header) = crate::value::addr_class::try_read_gc_header(obj as usize) else {
         return false;
     };
-    header.obj_type == crate::gc::GC_TYPE_OBJECT
+    crate::gc_type_is_object!(header.obj_type)
         && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
         && shapes::shape_object_kind_of_receiver((*obj).shape_word())
             .is_some_and(|kind| kind.is_ordinary_layout())
@@ -1766,7 +1766,7 @@ pub(crate) unsafe fn object_is_shaped(obj: *const ObjectHeader) -> bool {
     let Some(header) = crate::value::addr_class::try_read_gc_header(obj as usize) else {
         return false;
     };
-    header.obj_type == crate::gc::GC_TYPE_OBJECT
+    crate::gc_type_is_object!(header.obj_type)
         && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
 }
 

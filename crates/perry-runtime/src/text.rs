@@ -230,7 +230,7 @@ fn alloc_text_object(class_id: u32, builtin_name: &str, state: u64) -> i64 {
     if state != 0 {
         obj_handle.with_mut_ptr::<ObjectHeader, _>(|obj| unsafe {
             let meta = crate::object::object_meta_ensure(
-                crate::object::MetaObj::runtime_born(obj),
+                crate::meta_obj_runtime_born!(obj),
                 crate::object::MetaReason::RuntimeHandle,
             );
             // A decoder whose state word never landed would read back as the

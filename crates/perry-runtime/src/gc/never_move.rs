@@ -28,13 +28,13 @@
 //! bytes as pinned bytes, so defragmentation selection skips their pages
 //! instead of selecting a block it then has to decline.
 use super::types::{
-    GcHeader, GC_HEADER_SIZE, GC_TYPE_OBJECT, OBJ_FLAG_MEMO_NAMED, OBJ_FLAG_NEVER_MOVE,
+    GcHeader, GC_HEADER_SIZE, OBJ_FLAG_MEMO_NAMED, OBJ_FLAG_NEVER_MOVE,
 };
 
 /// Does this header word say "never moves once old"?
 #[inline(always)]
 pub(crate) fn header_is_never_move(obj_type: u8, reserved: u16) -> bool {
-    obj_type == GC_TYPE_OBJECT && reserved & OBJ_FLAG_NEVER_MOVE != 0
+    crate::gc_type_is_object!(obj_type) && reserved & OBJ_FLAG_NEVER_MOVE != 0
 }
 
 /// [`header_is_never_move`] of a header in place.
@@ -77,7 +77,7 @@ pub(crate) unsafe fn blocks_evacuation(header: *const GcHeader) -> bool {
 /// `addr` is a live `GC_TYPE_OBJECT` user pointer.
 pub(crate) unsafe fn request_never_move(addr: usize) {
     let header = (addr - GC_HEADER_SIZE) as *mut GcHeader;
-    if (*header).obj_type != GC_TYPE_OBJECT || (*header)._reserved & OBJ_FLAG_NEVER_MOVE != 0 {
+    if crate::gc_type_is_not_object!((*header).obj_type) || (*header)._reserved & OBJ_FLAG_NEVER_MOVE != 0 {
         return;
     }
     // GC_STORE_AUDIT(POINTER_FREE): a scalar header classification bit.
@@ -112,7 +112,7 @@ pub(crate) unsafe fn pin_displaced_memo_prototype(addr: usize) {
     let Some(header) = crate::value::addr_class::try_read_gc_header(addr) else {
         return;
     };
-    if header.obj_type != GC_TYPE_OBJECT
+    if crate::gc_type_is_not_object!(header.obj_type)
         || header._reserved & OBJ_FLAG_MEMO_NAMED == 0
         || header.gc_flags & super::types::GC_FLAG_PINNED != 0
     {

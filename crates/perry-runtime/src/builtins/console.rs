@@ -750,7 +750,7 @@ unsafe fn install_console_instance_state(
     }
     // A1_UNPROVEN: install_console_instance_state(obj) parameter, no type test (kind-A/B question for S0b-S0e).
     let meta = crate::object::object_meta_ensure(
-        crate::object::MetaObj::runtime_born(obj),
+        crate::meta_obj_runtime_born!(obj),
         crate::object::MetaReason::RuntimeHandle,
     );
     (*meta).native_state = crate::value::JSValue::pointer(state.cast()).bits();

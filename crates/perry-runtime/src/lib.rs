@@ -122,6 +122,11 @@ pub(crate) mod dyn_eval_hooks;
 pub mod feature_hooks;
 /// The layout facts generated code bakes in (`perry-abi`).
 pub use perry_abi as codegen_abi;
+/// The object-type predicates, defined once in `perry_abi::object_type`.
+pub use perry_abi::{
+    gc_object_type_pat, gc_type_is_not_object, gc_type_is_object, object_has_meta_word,
+    object_lacks_meta_word,
+};
 pub(crate) mod cold_sort;
 pub(crate) mod once_init;
 mod source_read_count;

@@ -17,7 +17,7 @@ pub(super) unsafe fn get(
         _ => return None,
     };
     let header = crate::value::addr_class::try_read_gc_header(obj as usize)?;
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_not_object!(header.obj_type) {
         return None;
     }
     let record = super::super::super::shapes::object_shape_record(obj)?;
