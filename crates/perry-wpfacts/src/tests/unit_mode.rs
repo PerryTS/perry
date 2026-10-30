@@ -597,3 +597,6 @@ mod return_transfers;
 mod commonjs_helper;
 #[path = "unit_mode/pub_callable.rs"]
 mod pub_callable;
+
+#[path = "unit_mode/method_on_read.rs"]
+mod method_on_read;

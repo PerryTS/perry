@@ -313,8 +313,10 @@ pub(super) fn a_broken_namespace_field_function_resolves_only_the_units_that_see
     // ([754, 879, 986, 543, 467]). SEH: a join of two descriptions keeps what
     // each says of a field (`ClassContract::join`) where it made the field ⊤:
     // round 2 builds what the readers held as ⊤, and the fixpoint ends one
-    // round earlier.
-    assert_eq!(pf.round_work, [754, 1090, 948, 42], "{:?}", pf.units);
+    // round earlier. A method called on a marker with values beside it
+    // reads its key's reach (`method_on`): [754, 1090, 948, 42] -> the pin
+    // below.
+    assert_eq!(pf.round_work, [758, 1094, 952, 42], "{:?}", pf.units);
 }
 
 #[test]
