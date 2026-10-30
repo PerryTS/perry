@@ -3,7 +3,7 @@
 //! ShapeId diamond) has nothing left to catch. A class the facts only prove
 //! stable keeps the recheck. Every program is compared with Node.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::sync::Once;
 
