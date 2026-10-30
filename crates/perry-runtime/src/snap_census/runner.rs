@@ -1087,14 +1087,23 @@ static mut PREV_TRAP: Prev = Prev(std::mem::MaybeUninit::uninit());
 
 
 unsafe fn install_handlers() {
+    // The handlers run on their own stack: a fault whose frame cannot be
+    // pushed on the current stack (a protected page) still reaches them.
+    let size = 1 << 20;
+    let ss = libc::stack_t {
+        ss_sp: map_zeroed::<u8>(size).cast(),
+        ss_flags: 0,
+        ss_size: size,
+    };
+    libc::sigaltstack(&ss, std::ptr::null_mut());
     let mut a: libc::sigaction = std::mem::zeroed();
     a.sa_sigaction = on_segv as *const () as usize;
-    a.sa_flags = libc::SA_SIGINFO | libc::SA_NODEFER;
+    a.sa_flags = libc::SA_SIGINFO | libc::SA_NODEFER | libc::SA_ONSTACK;
     libc::sigemptyset(&mut a.sa_mask);
     libc::sigaction(libc::SIGSEGV, &a, std::ptr::addr_of_mut!(PREV_SEGV.0).cast());
     let mut t: libc::sigaction = std::mem::zeroed();
     t.sa_sigaction = on_trap as *const () as usize;
-    t.sa_flags = libc::SA_SIGINFO;
+    t.sa_flags = libc::SA_SIGINFO | libc::SA_ONSTACK;
     libc::sigemptyset(&mut t.sa_mask);
     libc::sigaction(libc::SIGTRAP, &t, std::ptr::addr_of_mut!(PREV_TRAP.0).cast());
 }
