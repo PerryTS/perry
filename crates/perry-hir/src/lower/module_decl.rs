@@ -11,7 +11,7 @@ mod namespace;
 pub(super) mod native_default_import;
 pub(super) mod native_profile_import;
 mod object_literal;
-mod static_import_bindings;
+pub(super) mod static_import_bindings;
 mod typescript;
 
 // Re-export moved items so existing `crate::...` / `super::*` call paths keep
@@ -302,6 +302,10 @@ pub(crate) fn lower_module_decl(
                                 } else {
                                     (source.clone(), Some(imported.clone()))
                                 };
+                            if native_method.is_none() && native_module != source {
+                                ctx.native_import_value_origins
+                                    .insert(local.clone(), (source.clone(), imported.clone()));
+                            }
                             init_named_cell(module, &source, &imported, native_method.as_ref());
                             ctx.register_native_module(local.clone(), native_module, native_method);
                             // #1991: `perry/ui` exposes these as numeric

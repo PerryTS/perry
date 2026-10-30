@@ -310,6 +310,40 @@ fn module_uses_global_math(module: &perry_hir::Module) -> bool {
     module_any_expr(module, &mut uses)
 }
 
+/// A materialized process object can escape through aliases, arguments or
+/// computed member access. Select its optional hooks at that source, rather
+/// than treating every unrelated `on`/`emit` property as a process operation.
+/// Dedicated process intrinsics and explicit imports are handled separately.
+fn module_uses_process_object(module: &perry_hir::Module) -> bool {
+    use perry_hir::walker::walk_expr_children;
+    use perry_hir::Expr;
+
+    fn uses(expr: &Expr) -> bool {
+        match expr {
+            Expr::NativeModuleRef(module) | Expr::NativeMethodCall { module, .. }
+                if matches!(module.as_str(), "process" | "process.default" | "process.namespace") =>
+            {
+                return true;
+            }
+            // This also covers globalThis.process and a computed literal key.
+            // Unknown global keys are covered by global_object::may_escape.
+            Expr::PropertyGet { property, .. } if property == "process" => return true,
+            Expr::IndexGet { index, .. }
+                if matches!(index.as_ref(), Expr::String(key) if key == "process") =>
+            {
+                return true;
+            }
+            Expr::Closure { body, .. } if stmts_any_expr(body, &mut uses) => return true,
+            _ => {}
+        }
+        let mut found = false;
+        walk_expr_children(expr, &mut |child| found |= uses(child));
+        found
+    }
+
+    module_any_expr(module, &mut uses)
+}
+
 fn module_uses_webassembly_namespace(module: &perry_hir::Module) -> bool {
     use perry_hir::walker::walk_expr_children;
     use perry_hir::Expr;
@@ -669,30 +703,7 @@ pub(super) fn detect_optional_feature_usage(
         ]
         .iter()
         .any(|name| hir_debug.contains(name))
-        || [
-            "on",
-            "once",
-            "off",
-            "emit",
-            "stdin",
-            "stdout",
-            "stderr",
-            "addListener",
-            "removeListener",
-            "removeAllListeners",
-            "prependListener",
-            "prependOnceListener",
-            "listeners",
-            "rawListeners",
-            "eventNames",
-            "listenerCount",
-            "setMaxListeners",
-            "getMaxListeners",
-            "kill",
-            "finalization",
-        ]
-        .iter()
-        .any(|name| hir_debug.contains(&format!("\"{name}\"")));
+        || module_uses_process_object(hir_module);
     ctx.uses_perf_hooks |= global_object::may_escape(hir_module)
         || hir_debug.contains(r#""performance""#)
         || hir_debug.contains(r#""perf_hooks""#);
@@ -1501,6 +1512,37 @@ mod tests {
             crate::commands::compile::CompilationContext::new(std::path::PathBuf::from("/tmp"));
         super::detect_optional_feature_usage(&mut ctx, &hir);
         ctx
+    }
+
+    #[test]
+    fn emitter_members_do_not_select_process_hooks() {
+        for source in [
+            r#"import { EventEmitter } from "events"; const e = new EventEmitter(); e.on("x", () => {}); e.emit("x");"#,
+            r#"const e = { on() {}, emit() {} }; e.on(); e.emit();"#,
+            r#"console.log("stdin", "on", "emit", "kill");"#,
+            r#"console.log(process.argv[2], process.env.HOME, process.pid);"#,
+        ] {
+            assert!(!detect_for_source(source).uses_os, "{source}");
+        }
+    }
+
+    #[test]
+    fn process_objects_and_operations_keep_process_hooks() {
+        for source in [
+            r#"process.on("beforeExit", () => {});"#,
+            r#"const p = process; p.on("beforeExit", () => {});"#,
+            r#"const p = process; p[process.argv[2]]("beforeExit", () => {});"#,
+            r#"function subscribe(p: any) { p.on("beforeExit", () => {}); } subscribe(process);"#,
+            r#"globalThis.process.on("beforeExit", () => {});"#,
+            r#"const p = globalThis["process"]; p.on("beforeExit", () => {});"#,
+            r#"import p from "node:process"; p.on("beforeExit", () => {});"#,
+            r#"import { stdin } from "node:process"; console.log(stdin);"#,
+            r#"const callback = () => { const p = process; p.on("beforeExit", () => {}); }; callback();"#,
+            r#"class C { subscribe(p: any = process) { p.on("beforeExit", () => {}); } } new C().subscribe();"#,
+            r#"console.log(process.stdin, process.stdout, process.stderr);"#,
+        ] {
+            assert!(detect_for_source(source).uses_os, "{source}");
+        }
     }
 
     #[test]

@@ -50,6 +50,7 @@ pub(super) unsafe fn resolve(
     if code.is_null()
         || code == BOUND_FUNCTION_FUNC_PTR
         || code == BOUND_METHOD_FUNC_PTR
+        || body.flags & crate::codegen_abi::FN_NATIVE_EXPORT != 0
         || code == crate::object::global_this_builtin_noop_thunk as *const u8
         || code == crate::object::global_this_array_thunk as *const u8
         || crate::closure::shape::is_class_info((*operand).info)
@@ -159,7 +160,10 @@ pub(crate) unsafe fn try_native_apply(target: f64, this: f64, list: f64) -> Opti
     }
     let operand = value.as_pointer::<ClosureHeader>();
     let body = crate::closure::closure_info(operand)?;
+    // Export bodies retain constructor forwarding, just as legacy bound
+    // exports do; apply must run the explicit-this intrinsic first.
     if body.flags & crate::closure::FN_BUILTIN == 0
+        || body.flags & crate::codegen_abi::FN_NATIVE_EXPORT != 0
         || body.code == BOUND_FUNCTION_FUNC_PTR
         || body.code == BOUND_METHOD_FUNC_PTR
         || body.code == crate::object::global_this_builtin_noop_thunk as *const u8

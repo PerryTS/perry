@@ -10,3 +10,7 @@ EventEmitter.prototype.emit.call(stream,"hws",42);
 EventEmitter.prototype.removeAllListeners.call(stream,"hws");
 console.log(EventEmitter.prototype.listenerCount.call(stream,"hws"));
 stream.write("payload");stream.flushSync();console.log(readFileSync(path,"utf8").trim());stream.destroy();
+
+// This positive witness also exercises the complete module installer.
+import * as moduleSurface from "node:fs";
+if (Object.keys(moduleSurface).length === 0) throw new Error("empty builtin namespace");

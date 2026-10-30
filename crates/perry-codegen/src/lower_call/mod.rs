@@ -630,6 +630,13 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
         if name == "js_native_module_named_esm_export_value"
             && !ctx.import_function_prefixes.contains_key(name)
         {
+            if let [Expr::String(module), Expr::String(property)] = args {
+                if let Some(export) =
+                    crate::native_export_value::prepare(ctx.strings, module, property, false)
+                {
+                    return Ok(export.emit(ctx.block()));
+                }
+            }
             if let Some(Expr::String(module)) = args.first() {
                 if let Some(install) = crate::nm_install::nm_install_symbol(module) {
                     ctx.block().call_void(install, &[]);

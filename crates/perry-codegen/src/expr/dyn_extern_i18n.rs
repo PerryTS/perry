@@ -976,6 +976,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // object instead of the namespace object itself.
             if let Some((submod_key, exported_name)) = ctx.import_function_node_submodule.get(name)
             {
+                if let Some(export) = crate::native_export_value::prepare_submodule(
+                    ctx.strings,
+                    submod_key,
+                    exported_name,
+                    false,
+                ) {
+                    return Ok(export.emit(ctx.block()));
+                }
                 let install_sym = crate::nm_install::nm_submod_install_symbol(submod_key);
                 let submod_label = emit_string_literal_global(ctx, submod_key);
                 let name_label = emit_string_literal_global(ctx, exported_name);

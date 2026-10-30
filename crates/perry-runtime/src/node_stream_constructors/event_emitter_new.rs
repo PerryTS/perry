@@ -13,9 +13,9 @@ use crate::codegen_abi::LayoutWord;
 use crate::object::ObjectHeader;
 use crate::value::JSValue;
 
-/// The bound `events.<export>` constructor. The events attach is armed first:
-/// minting the constructor before it would cache one without its statics
-/// (`defaultMaxListeners`, `once`, ...) for the whole process.
+/// The export declaration owns its constructor and prototype decoration.
+/// Internal instance births use the same declaration as named/member reads,
+/// including when no whole events namespace has been requested.
 pub fn event_emitter_constructor_value(export: &str) -> f64 {
     let minted = match export {
         "EventEmitter" => {
@@ -29,8 +29,13 @@ pub fn event_emitter_constructor_value(export: &str) -> f64 {
     if let Some(ctor) = minted {
         return ctor;
     }
-    crate::object::js_nm_install_events();
-    crate::object::bound_native_callable_export_value("events", export)
+    match export {
+        "EventEmitter" => crate::object::native_module::event_emitter_export_value(0),
+        "EventEmitterAsyncResource" => {
+            crate::object::native_module::event_emitter_async_resource_export_value(0)
+        }
+        _ => f64::from_bits(crate::value::TAG_UNDEFINED),
+    }
 }
 
 /// `<export>.prototype`, resolved exactly the way a subclass's parent edge

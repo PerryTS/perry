@@ -1441,19 +1441,6 @@ fn collect_module_one(
             ctx.native_module_imports.insert("stream/web".to_string());
         }
 
-        // `node:fs/promises` itself is runtime-backed, but
-        // FileHandle.readableWebStream() needs perry-stdlib's Web Streams
-        // factory even when user code never imports `node:stream/web`.
-        if import
-            .source
-            .strip_prefix("node:")
-            .unwrap_or(&import.source)
-            == "fs/promises"
-        {
-            ctx.needs_stdlib = true;
-            ctx.native_module_imports.insert("fs/promises".to_string());
-        }
-
         // Refs #665: an opt-in via `perry.compilePackages` overrides the
         // built-in native binding. HIR lowering set `is_native` based on the
         // NATIVE_MODULES manifest alone; downgrade it here so the import

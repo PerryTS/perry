@@ -1596,6 +1596,7 @@ fn fs_codec_is_filehandle(value: f64) -> bool {
 }
 
 fn build_filehandle_object(fd: i32) -> f64 {
+    crate::fs::install_handle_roots();
     // Bounded native initialization; the created closures do not execute JS.
     let _no_move = crate::gc::GcSuppressScope::new();
     // Arm BEFORE the object exists: every FileHandle (attached or detached)

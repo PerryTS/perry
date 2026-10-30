@@ -360,9 +360,13 @@ pub(crate) unsafe fn bag_define_value(ptr: usize, key: &str, value: f64) {
 
 pub(crate) unsafe fn bag_define_value_bytes(ptr: usize, key: &[u8], value: f64) {
     let _no_move = crate::gc::GcSuppressScope::new();
-    if let Ok(key) = std::str::from_utf8(key) {
-        if bag_of(ptr).is_null() && bag_born_with_attrs(ptr, &[(key, value)], &[]) {
-            return;
+    // Only a new bag needs a UTF-8 key for its birth declaration. Existing
+    // bags use byte keys below, so their updates need no UTF-8 validation.
+    if bag_of(ptr).is_null() {
+        if let Ok(key) = std::str::from_utf8(key) {
+            if bag_born_with_attrs(ptr, &[(key, value)], &[]) {
+                return;
+            }
         }
     }
     let declared = crate::object::class_value::holds_declared_static_method_bytes(ptr, key);
@@ -397,15 +401,17 @@ pub(crate) unsafe fn bag_define_data_with_attrs_bytes(
     attrs: u8,
 ) {
     let _no_move = crate::gc::GcSuppressScope::new();
-    if let Ok(key) = std::str::from_utf8(key) {
-        if bag_of(ptr).is_null()
-            && bag_born_with_attrs(
+    // UTF-8 is required only by the bag's birth declaration. Once the
+    // function owns a bag, its shape and byte-key operations are sufficient.
+    if bag_of(ptr).is_null() {
+        if let Ok(key) = std::str::from_utf8(key) {
+            if bag_born_with_attrs(
                 ptr,
                 &[(key, value)],
                 &[crate::object::key_attrs::attr_bits_to_entry(attrs)],
-            )
-        {
-            return;
+            ) {
+                return;
+            }
         }
     }
     let entry = crate::object::key_attrs::attr_bits_to_entry(attrs);

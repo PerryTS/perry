@@ -80,6 +80,7 @@ impl LoweringContext {
             imported_functions: Vec::new(),
             builtin_named_imports: Vec::new(),
             native_modules: Vec::new(),
+            native_import_value_origins: HashMap::new(),
             require_destructured_native_locals: HashMap::new(),
             builtin_module_aliases: Vec::new(),
             subns_path_aliases: HashMap::new(),

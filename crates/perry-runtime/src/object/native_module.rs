@@ -22,7 +22,16 @@ mod callable_export_check;
 mod callable_export_table;
 pub(crate) mod callable_exports;
 mod perf_instance_bind;
+mod static_exports;
 pub(crate) use perf_instance_bind::{instance_bound_perf_method, performance_namespace_method};
+pub(crate) use static_exports::construct as static_export_construct;
+pub(crate) use static_exports::selected_value as selected_native_export_value;
+pub(crate) use static_exports::{
+    call_minted as call_minted_native_export,
+    js_native_export_6576656e7473_4576656e74456d6974746572 as event_emitter_export_value,
+    js_native_export_6576656e7473_4576656e74456d69747465724173796e635265736f75726365 as event_emitter_async_resource_export_value,
+    stream_export_value,
+};
 pub(crate) mod constants;
 mod constants_tables;
 mod constructor_exports;
@@ -886,17 +895,6 @@ unsafe fn native_module_property_by_name_impl(
         if let Some(value) = crate::process::process_ipc_property(property_name) {
             return value;
         }
-    }
-    // node:perf_hooks — `performance` and `constants` are object-valued
-    // exports. Resolve them to a `perf_hooks`-tagged namespace object so
-    // `typeof performance === "object"`, `performance.timeOrigin` (a
-    // constant), `performance.now` (a callable export), and
-    // `constants.NODE_PERFORMANCE_GC_*` (constants) all dispatch coherently.
-    if matches!(module_name, "perf_hooks" | "perf_hooks.default") && property_name == "performance"
-    {
-        // Singleton so `require("perf_hooks").performance` and the global
-        // `performance` are the same object (Node identity guarantee, #1327).
-        return crate::perf_hook_slots::performance_namespace();
     }
     if matches!(module_name, "perf_hooks" | "perf_hooks.default") && property_name == "constants" {
         // Its OWN tag. Sharing the `perf_hooks` tag made every read of the
