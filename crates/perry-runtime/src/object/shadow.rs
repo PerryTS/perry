@@ -310,7 +310,8 @@ pub(crate) unsafe fn publish_word(
     if word.0 != id.0 || previous == id.0 {
         return word;
     }
-    let meta = (*obj).meta;
+    // A1_UNPROVEN: record-first: shape word publish (kind-A/B question for S0f).
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
     let prototype = !meta.is_null() && (*meta).flags & super::OBJECT_META_FLAG_IS_PROTOTYPE != 0;
     if !prototype
         && shape_record_of_receiver((id).0).is_some_and(|r| {
@@ -346,7 +347,8 @@ pub(crate) unsafe fn publish_key_add_word(
     if word.0 != id.0 || previous == id.0 || key.is_null() {
         return word;
     }
-    let meta = (*obj).meta;
+    // A1_UNPROVEN: record-first: shape word publish (kind-A/B question for S0f).
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
     let prototype = !meta.is_null() && (*meta).flags & super::OBJECT_META_FLAG_IS_PROTOTYPE != 0;
     let Some(names) = names() else {
         return word;
@@ -450,7 +452,7 @@ unsafe fn ordinary(addr: usize) -> Option<*mut ObjectHeader> {
         return None;
     }
     let header = crate::value::addr_class::try_read_gc_header(addr)?;
-    (header.obj_type == crate::gc::GC_TYPE_OBJECT).then_some(addr as *mut ObjectHeader)
+    (crate::gc_type_is_object!(header.obj_type)).then_some(addr as *mut ObjectHeader)
 }
 
 /// `addr`'s [[Prototype]] changed (the prototype funnel): what any binding

@@ -99,7 +99,7 @@ pub(crate) unsafe fn publish_object_shape_last_key_rollback(
     let Some(header) = crate::value::addr_class::try_read_gc_header(obj as usize) else {
         return LayoutWord(0);
     };
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::gc_type_is_not_object!(header.obj_type)
         || header._reserved
             & (crate::gc::OBJ_FLAG_STABLE_TOMBSTONES
                 | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS

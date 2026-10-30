@@ -336,10 +336,7 @@ pub unsafe extern "C" fn perry_alloc_runtime_record(
     desc: *const PerryLayoutDesc,
 ) -> *mut super::ObjectHeader {
     let object = super::layout_desc::perry_alloc_layout(desc);
-    let fields = object
-        .cast::<u8>()
-        .add(std::mem::size_of::<super::ObjectHeader>())
-        .cast::<u64>();
+    let fields = crate::meta_slots_of!(crate::meta_obj_runtime_born!(object));
     // GC_STORE_AUDIT(INIT): unpublished record; undefined words have no managed edges.
     for slot in 0..(*desc).slot_count as usize {
         *fields.add(slot) = crate::value::TAG_UNDEFINED;

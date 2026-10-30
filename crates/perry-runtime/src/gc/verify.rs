@@ -23,7 +23,7 @@ pub(crate) fn for_each_live_object_at_sweep_start(
     crate::arena::arena_walk_objects(|header_ptr| unsafe {
         let header = &*(header_ptr as *const GcHeader);
         let flags = header.gc_flags;
-        if header.obj_type != GC_TYPE_OBJECT
+        if crate::gc_type_is_not_object!(header.obj_type)
             || flags & GC_FLAG_FORWARDED != 0
             || flags & (GC_FLAG_MARKED | GC_FLAG_PINNED) == 0
         {

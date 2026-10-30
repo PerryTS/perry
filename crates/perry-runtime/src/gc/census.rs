@@ -338,7 +338,7 @@ struct ClassAcc {
     bytes: u64,
     slot_capacity: u64,
     slot_live: u64,
-    meta: u64,
+    meta_objects: u64,
     unshaped: u64,
 }
 
@@ -456,8 +456,8 @@ impl Census {
         self.size_hist[size_bucket(size)].add(size);
         let user = (header as *const u8).add(GC_HEADER_SIZE);
         match obj_type {
-            GC_TYPE_OBJECT => {
-                self.visit_object(user as *const crate::object::ObjectHeader, size, flags)
+            t @ crate::gc_object_type_pat!() => {
+                self.visit_object(user as *const crate::object::ObjectHeader, size, flags, t)
             }
             GC_TYPE_ARRAY => {
                 self.visit_array(user as *const crate::array::ArrayHeader, size, flags)
@@ -475,20 +475,26 @@ impl Census {
         obj: *const crate::object::ObjectHeader,
         size: usize,
         _flags: u8,
+        t: u8,
     ) {
-        let header_bytes = GC_HEADER_SIZE + std::mem::size_of::<crate::object::ObjectHeader>();
+        let _ = t; // only the debug form check reads it
+        let header_bytes = GC_HEADER_SIZE + crate::object::header::meta_form_alloc_bytes(0);
         let slot_capacity = size.saturating_sub(header_bytes) / 8;
         let class_id = (*obj).class_id;
         let entry = self.classes.entry(class_id).or_default();
         entry.count += 1;
         entry.bytes += size as u64;
         entry.slot_capacity += slot_capacity as u64;
-        if !(*obj).meta.is_null() {
-            entry.meta += 1;
+        if !crate::meta_read!(crate::meta_obj_from_type!(obj as *mut crate::object::ObjectHeader, t))
+            .is_null()
+        {
+            entry.meta_objects += 1;
             self.obj_meta += 1;
         }
-        let slots = (obj as *const u8).add(std::mem::size_of::<crate::object::ObjectHeader>())
-            as *const u64;
+        let slots = crate::object::header::object_slot_at(
+            obj as *mut crate::object::ObjectHeader,
+            crate::object::header::meta_form_alloc_bytes(0) as u32,
+        ) as *const u64;
         let live = match crate::object::shapes::object_shape_descriptor(obj) {
             Some(d) => {
                 let stamp = crate::object::shapes::object_shape_stamp(obj);
@@ -814,7 +820,7 @@ fn take_census(label: &str, pass1: Option<Vec<usize>>) {
                     "bytes": a.bytes,
                     "slot_capacity": a.slot_capacity,
                     "slot_live": a.slot_live,
-                    "meta": a.meta,
+                    "meta": a.meta_objects,
                     "unshaped": a.unshaped,
                 }),
             )

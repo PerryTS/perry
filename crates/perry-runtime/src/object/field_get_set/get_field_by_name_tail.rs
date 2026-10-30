@@ -1154,7 +1154,7 @@ pub(crate) fn get_field_by_name_object_tail(
         // Only lastIndex is an own header property. Other properties follow
         // expandos and the actual prototype, including observable accessors.
 
-        if gc_type != crate::gc::GC_TYPE_OBJECT {
+        if crate::gc_type_is_not_object!(gc_type) {
             return JSValue::undefined();
         }
         if super::super::is_arguments_object(obj) {

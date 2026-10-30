@@ -283,7 +283,7 @@ fn only_the_private_identity_identifies_an_arguments_object() {
     let with_meta = js_object_alloc(0, 1);
     assert!(!unsafe {
         object_meta_ensure(
-            crate::object::MetaObj::runtime_born(with_meta),
+            crate::meta_obj_runtime_born!(with_meta),
             crate::object::MetaReason::RuntimeHandle,
         )
     }

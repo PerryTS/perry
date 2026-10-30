@@ -90,7 +90,7 @@ impl PlainObjectPlan {
 /// hands the object back to the generic walk.
 #[inline(always)]
 unsafe fn plain_object_admissible(header: *mut GcHeader) -> bool {
-    (*header).obj_type == GC_TYPE_OBJECT
+    crate::gc_type_is_object!((*header).obj_type)
         && (*header).gc_flags & GC_FLAG_FORWARDED == 0
         // A full trace notes every carrier; a layout-scan trace counts every
         // slot. Neither is reproduced here.

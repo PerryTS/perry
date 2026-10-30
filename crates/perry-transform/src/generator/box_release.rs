@@ -180,12 +180,53 @@ mod tests {
     /// one on the resolve arm, one on the reject arm.
     #[test]
     fn a_confined_body_local_is_released_at_the_terminal_states() {
-        let mut m = async_module(vec![awaited_let(50), Stmt::Return(Some(local_get(50)))]);
+        let mut m = async_module(vec![
+            awaited_let(50),
+            awaited_let(51),
+            Stmt::Return(Some(local_get(50))),
+        ]);
         run_async_pipeline(&mut m);
         assert_eq!(
             count_release_stores(&m.functions[0].body, 50),
             2,
             "expected a release on each terminal arm:\n{:#?}",
+            m.functions[0].body
+        );
+    }
+
+    fn preallocated(body: &[Stmt]) -> Vec<LocalId> {
+        body.iter()
+            .find_map(|s| match s {
+                Stmt::PreallocateBoxes(ids) => Some(ids.clone()),
+                _ => None,
+            })
+            .unwrap_or_default()
+    }
+
+    /// A plain async local declared and read inside one resume state never
+    /// survives a suspend: it keeps no heap-frame cell. One that crosses an
+    /// await still does.
+    #[test]
+    fn a_state_local_binding_gets_no_frame_cell_but_a_crossing_one_does() {
+        let mut m = async_module(vec![
+            awaited_let(50),
+            Stmt::Return(Some(local_get(50))),
+        ]);
+        run_async_pipeline(&mut m);
+        assert!(
+            !preallocated(&m.functions[0].body).contains(&50),
+            "a binding confined to one resume state must stay an ordinary local:\n{:#?}",
+            m.functions[0].body
+        );
+        let mut m = async_module(vec![
+            awaited_let(50),
+            awaited_let(51),
+            Stmt::Return(Some(local_get(50))),
+        ]);
+        run_async_pipeline(&mut m);
+        assert!(
+            preallocated(&m.functions[0].body).contains(&50),
+            "a binding read after another await keeps its frame cell:\n{:#?}",
             m.functions[0].body
         );
     }
@@ -215,7 +256,11 @@ mod tests {
     /// which reproduces the pre-release terminal path exactly.
     #[test]
     fn the_whole_activation_frame_is_released() {
-        let mut m = async_module(vec![awaited_let(50), Stmt::Return(Some(local_get(50)))]);
+        let mut m = async_module(vec![
+            awaited_let(50),
+            awaited_let(51),
+            Stmt::Return(Some(local_get(50))),
+        ]);
         run_async_pipeline(&mut m);
         let body = &m.functions[0].body;
         let prealloc: Vec<LocalId> = body

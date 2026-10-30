@@ -146,7 +146,7 @@ pub(crate) unsafe fn seal_object_family(obj: *mut ObjectHeader, family: usize) {
     // Marking may have moved nothing (startup runs with collection
     // suppressed by the caller) but it did ensure a meta record.
     let meta = super::object_meta_ensure(
-        super::MetaObj::runtime_born(obj),
+        crate::meta_obj_runtime_born!(obj),
         super::MetaReason::BuiltinSeal,
     );
     if meta.is_null() {
@@ -226,7 +226,7 @@ pub(crate) unsafe fn name_runtime_prototype(
 ) -> Option<*mut super::ObjectMeta> {
     let _no_move = crate::gc::GcSuppressScope::new();
     let meta = super::object_meta_ensure(
-        super::MetaObj::runtime_born(proto),
+        crate::meta_obj_runtime_born!(proto),
         super::MetaReason::RuntimePrototypeName,
     );
     if meta.is_null() {
@@ -261,7 +261,7 @@ pub(crate) fn seal_realm(global: *mut ObjectHeader) {
                 continue;
             };
             match header.obj_type {
-                crate::gc::GC_TYPE_OBJECT => {
+                crate::gc_object_type_pat!() => {
                     trace_seal(family, (*(proto as *const ObjectHeader)).parent_class_id);
                     seal_object(proto as *mut ObjectHeader, family);
                     crate::agent_ptrs::publish_intrinsic_proto(
@@ -342,7 +342,8 @@ pub(crate) unsafe fn note_write(obj: *const ObjectHeader, site: &'static str) {
     if obj.is_null() {
         return;
     }
-    let meta = (*obj).meta;
+    // A1_UNPROVEN: record-first: caller intrinsic-proto membership (kind-A/B question for S0f).
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
     if meta.is_null() {
         return;
     }
@@ -413,7 +414,8 @@ pub(crate) unsafe fn note_value_store(
     spill: bool,
     site: &'static str,
 ) {
-    let meta = (*obj).meta;
+    // A1_UNPROVEN: record-first: caller intrinsic-proto membership (kind-A/B question for S0f).
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
     if meta.is_null() || (*meta).flags & super::OBJECT_META_FLAG_IS_PROTOTYPE == 0 {
         return;
     }
@@ -453,7 +455,7 @@ pub(crate) fn note_write_addr(addr: usize, site: &'static str) {
         return;
     };
     match header.obj_type {
-        crate::gc::GC_TYPE_OBJECT => unsafe { note_write(addr as *const ObjectHeader, site) },
+        crate::gc_object_type_pat!() => unsafe { note_write(addr as *const ObjectHeader, site) },
         crate::gc::GC_TYPE_ARRAY => note_array_prototype_write(addr, site),
         crate::gc::GC_TYPE_CLOSURE => unsafe {
             note_write(
