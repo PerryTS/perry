@@ -66,9 +66,11 @@ pub(crate) unsafe fn is_object_pointer(ptr: *const u8) -> bool {
     // (a primitive number whose f64 bits land in the heap window) would likewise
     // SIGSEGV on the `keys_array` read below — require a genuinely GC-tracked
     // allocation before dereferencing anything.
-    if crate::value::addr_class::try_read_tracked_gc_header(ptr as usize)
-        .filter(|h| crate::gc_type_is_object!(unsafe { h.as_ref() }.obj_type))
-        .is_none()
+    if crate::value::addr_class::try_read_tracked_gc_header_of_type(
+        ptr as usize,
+        crate::gc_object_type_pat!(),
+    )
+    .is_none()
     {
         return false;
     }
@@ -129,9 +131,11 @@ pub(crate) unsafe fn object_has_no_own_keys(ptr: *const u8) -> bool {
     // value right after that probe returns false (to tell an empty object apart
     // from a corrupted pointer), so an unmapped in-range garbage address must be
     // rejected here too before the `keys_array` field read.
-    if crate::value::addr_class::try_read_tracked_gc_header(ptr as usize)
-        .filter(|h| crate::gc_type_is_object!(unsafe { h.as_ref() }.obj_type))
-        .is_none()
+    if crate::value::addr_class::try_read_tracked_gc_header_of_type(
+        ptr as usize,
+        crate::gc_object_type_pat!(),
+    )
+    .is_none()
     {
         return false;
     }

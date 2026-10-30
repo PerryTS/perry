@@ -1007,9 +1007,11 @@ pub(crate) unsafe fn stringify_object_pretty(
     // in-range-but-unmapped garbage address (a denormal double that survived the
     // tag probes) SIGSEGVs here. Require a genuinely GC-tracked allocation first
     // and emit `null` otherwise, rather than faulting inside JSON.stringify.
-    if crate::value::addr_class::try_read_tracked_gc_header(ptr as usize)
-        .filter(|h| crate::gc_type_is_object!(unsafe { h.as_ref() }.obj_type))
-        .is_none()
+    if crate::value::addr_class::try_read_tracked_gc_header_of_type(
+        ptr as usize,
+        crate::gc_object_type_pat!(),
+    )
+    .is_none()
     {
         buf.push_str("null");
         return;
