@@ -56,8 +56,16 @@ fn site_of(e: &Expr) -> Option<(u32, u32, &'static str)> {
             byte_end,
             ..
         } => (*byte_offset, *byte_end, "call"),
-        Expr::New { byte_offset, .. } => (*byte_offset, 0, "new"),
-        Expr::PropertyGet { byte_offset, .. } => (*byte_offset, 0, "property"),
+        Expr::New {
+            byte_offset,
+            byte_end,
+            ..
+        } => (*byte_offset, *byte_end, "new"),
+        Expr::PropertyGet {
+            byte_offset,
+            byte_end,
+            ..
+        } => (*byte_offset, *byte_end, "property"),
         Expr::IndexGet {
             byte_offset,
             byte_end,
