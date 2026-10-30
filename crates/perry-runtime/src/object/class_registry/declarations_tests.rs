@@ -325,3 +325,63 @@ fn native_names_carry_the_utf8_fact_and_unproven_wtf8_names_name_no_member() {
     assert_eq!(w.flags & CLASS_MEMBER_NAME_UTF8, 0);
     assert_eq!(w.literal_name(), None);
 }
+
+fn declared(cid: u32) -> Vec<(String, u32)> {
+    class_declared_members(cid)
+        .0
+        .into_iter()
+        .map(|m| (String::from_utf8(m.name).unwrap(), m.at.method))
+        .collect()
+}
+
+#[test]
+fn declared_members_find_the_last_declaration_of_each_name_once() {
+    // Bytes path: the test builder copies each name to its own pointer.
+    let cid = 0x7E57_0001;
+    register(cid, b"Dup");
+    literal(cid, "a", 1);
+    literal(cid, "b", 2);
+    literal(cid, "a", 3);
+    assert_eq!(declared(cid), [("a".into(), 2), ("b".into(), 1)]);
+    // The index the walk found is the member the by-name search finds.
+    for (name, index) in declared(cid) {
+        let found = class_method_decl_bytes(cid, name.as_bytes()).unwrap();
+        let at = class_method_decl_at(cid, index).unwrap();
+        assert!(std::ptr::eq(found, at), "{name}");
+    }
+}
+
+#[test]
+fn a_pooled_declaration_compares_name_pointers_not_bytes() {
+    static A: &[u8] = b"alpha";
+    static A_COPY: &[u8] = b"alpha";
+    static B: &[u8] = b"beta";
+    // The compiler's contract: equal names share a pointer.
+    let pooled = 0x7E57_0002;
+    test_declare_pointer_named(pooled, &[A, B, A], true);
+    assert_eq!(declared(pooled), [("alpha".into(), 2), ("beta".into(), 1)]);
+    // The runtime trusts the flag: a pooled declaration naming one string by
+    // two pointers lists it twice. This is what fails if the compare reads
+    // bytes.
+    let split = 0x7E57_0003;
+    let (p, q) = (A.as_ptr(), A_COPY.as_ptr());
+    if p != q {
+        test_declare_pointer_named(split, &[A, A_COPY], true);
+        assert_eq!(declared(split), [("alpha".into(), 0), ("alpha".into(), 1)]);
+    }
+    // Without the flag the same members dedupe by bytes.
+    let unpooled = 0x7E57_0004;
+    test_declare_pointer_named(unpooled, &[A, A_COPY, B], false);
+    assert_eq!(declared(unpooled), [("alpha".into(), 1), ("beta".into(), 2)]);
+}
+
+#[test]
+fn a_computed_member_joins_a_literal_of_the_same_name_by_bytes() {
+    let cid = 0x7E57_0005;
+    register(cid, b"Mixed");
+    literal(cid, "k", 1);
+    test_declare_computed_member(cid, 2, method());
+    name_computed_member(cid, 2, MemberName::Str(b"k".to_vec()));
+    // The computed member is the later declaration of the name `k`.
+    assert_eq!(declared(cid), [("k".into(), 1)]);
+}

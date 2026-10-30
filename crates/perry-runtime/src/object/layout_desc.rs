@@ -677,8 +677,11 @@ pub(crate) fn coloured_atoms() -> Vec<(&'static [u8], u64, u32, u32)> {
             }
         }
     }
-    out.sort();
-    out.dedup();
+    // Ordered by the program's own numbers (colour bit, slot, hash). A
+    // coloured key has one (bit, slot), so equal triples are one atom image
+    // repeated; the bytes never need comparing.
+    out.sort_unstable_by_key(|a| (a.2, a.3, a.1));
+    out.dedup_by_key(|a| (a.2, a.3, a.1));
     out
 }
 

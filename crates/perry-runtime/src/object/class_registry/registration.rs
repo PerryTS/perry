@@ -219,6 +219,23 @@ pub(crate) fn class_own_accessor_ptrs_bytes(class_id: u32, name: &[u8]) -> Optio
     (decl.get != 0 || decl.set != 0).then_some((decl.get, decl.set))
 }
 
+/// [`class_own_accessor_ptrs_bytes`] for the accessor whose halves sit at `at`.
+pub(crate) fn class_own_accessor_ptrs_at(
+    class_id: u32,
+    at: super::declarations::DeclAt,
+) -> Option<(usize, usize)> {
+    let decl = super::declarations::class_accessor_decl_at(class_id, at)?;
+    (decl.get != 0 || decl.set != 0).then_some((decl.get, decl.set))
+}
+
+/// The spec `.length` of the setter half at `at`.
+pub(crate) fn class_own_setter_length_at(
+    class_id: u32,
+    at: super::declarations::DeclAt,
+) -> Option<u32> {
+    super::declarations::class_accessor_decl_at(class_id, at)?.set_length
+}
+
 /// The compiled entries of the ClassBody static accessor `name` of `class_id`
 /// as REGISTERED (`CLASS_STATIC_ACCESSORS`): the input the class function
 /// object's accessor property is built from, not the property itself — a
