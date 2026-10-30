@@ -159,11 +159,9 @@ pub extern "C" fn perry_wpfacts_check_field(
     let addr = (bits & POINTER_MASK) as usize;
     let cid = unsafe {
         if crate::value::addr_class::is_handle_band(addr)
-            || crate::value::addr_class::try_read_tracked_gc_header_of_type(
-                addr,
-                crate::gc::GC_TYPE_OBJECT,
-            )
-            .is_none()
+            || crate::value::addr_class::try_read_tracked_gc_header(addr)
+                .filter(|h| crate::gc_type_is_object!(unsafe { h.as_ref() }.obj_type))
+                .is_none()
         {
             violate(
                 site,

@@ -905,6 +905,7 @@ unsafe fn classify_object_child(bits: u64, ptrs: &crate::gc::CopyingPointerSet) 
     crate::gc_type_is_object!(unsafe { (*cp.header).obj_type }).then_some(ptr)
 }
 
+#[inline(never)]
 unsafe fn classify_gc_type_child(
     bits: u64,
     ptrs: &crate::gc::CopyingPointerSet,

@@ -380,6 +380,7 @@ fn throw_invalid_validate_stream(value: f64) -> ! {
     crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
 }
 
+#[inline(never)]
 fn heap_ptr_with_gc_type(value: f64, expected_type: u8) -> Option<*const u8> {
     let jsvalue = JSValue::from_bits(value.to_bits());
     if !jsvalue.is_pointer() {

@@ -618,10 +618,8 @@ fn is_object_value(value: f64) -> bool {
     }
     let addr = jsval.as_pointer::<u8>() as usize;
     unsafe {
-        crate::value::addr_class::try_read_tracked_gc_header_of_type(
-            addr,
-            crate::gc::GC_TYPE_OBJECT,
-        )
+        crate::value::addr_class::try_read_tracked_gc_header(addr)
+            .filter(|h| crate::gc_type_is_object!(unsafe { h.as_ref() }.obj_type))
     }
     .is_some()
         || super::object_ptr_from_value(value).is_some()

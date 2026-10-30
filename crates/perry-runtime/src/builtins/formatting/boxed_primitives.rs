@@ -250,7 +250,8 @@ pub(crate) fn boxed_primitive_payload(value: f64) -> Option<(u32, f64)> {
         // two apart. `Number.prototype.toString` reaches here with exactly
         // that receiver once the dispatch tower has classified it a number.
         && unsafe {
-            crate::value::addr_class::try_read_tracked_gc_header_of_type(bits as usize, crate::gc::GC_TYPE_OBJECT)
+            crate::value::addr_class::try_read_tracked_gc_header(bits as usize)
+            .filter(|h| crate::gc_type_is_object!(unsafe { h.as_ref() }.obj_type))
         }
         .is_some()
     {
