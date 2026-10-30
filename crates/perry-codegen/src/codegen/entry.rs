@@ -190,6 +190,9 @@ pub(super) fn compile_module_entry(
             llmod.declare_function(&format!("{}__init", prefix), VOID, &[]);
             llmod.declare_function(&format!("__perry_prepare_literals_{}", prefix), VOID, &[]);
         }
+        if std::env::var_os("PERRY_SNAP_CENSUS").is_some_and(|v| !v.is_empty()) {
+            llmod.declare_function("js_snap_entry_body", VOID, &[]);
+        }
         // Issue #753: emit a no-op `<entry_prefix>__init` stub so the
         // dispatch site in some other module that does `await
         // import("./entry.ts")` resolves at link time. The entry
@@ -696,8 +699,8 @@ pub(super) fn compile_module_entry(
                 }
                 blk.call_void(&format!("{}__init", prefix), &[]);
             }
-            // SNAP census, instrumented compiles only (`PERRY_SNAP_CENSUS`
-            // set while compiling): the entry's own body starts here.
+            // SNAP census (`PERRY_SNAP_CENSUS` set while compiling, with
+            // `PERRY_GC_INSTRUMENTS=1`): the entry's own body starts here.
             if std::env::var_os("PERRY_SNAP_CENSUS").is_some_and(|v| !v.is_empty()) {
                 blk.call_void("js_snap_entry_body", &[]);
             }
