@@ -442,12 +442,14 @@ fn even_memberless_layoutless_classes_get_compiler_role_descriptors() {
         2,
         "neither role may be omitted without members or layout"
     );
+    // Role bit 8 (literal) or 16 (declared), plus `CLASS_DECL_NAMES_POOLED` = 32,
+    // which every emitted declaration carries.
     assert!(
-        records[0].globals[1].contains("i32 8, i32 0, ptr null"),
+        records[0].globals[1].contains("i32 40, i32 0, ptr null"),
         "literal role is compiler-owned"
     );
     assert!(
-        records[1].globals[1].contains("i32 16, i32 0, ptr null"),
+        records[1].globals[1].contains("i32 48, i32 0, ptr null"),
         "empty declaration has a distinct role"
     );
 }
