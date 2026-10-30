@@ -1218,6 +1218,7 @@ mod tests {
     /// own shapes): the start, a few prologue offsets, the middle, the end.
     #[test]
     fn direct_rows_match_gimli_across_every_fde() {
+        let _loader = crate::test_support::loaded_objects_test_lock();
         let walker = locked_walker().expect("walker");
         let mut ctx: UnwindContext<usize, SmallStore> = UnwindContext::new_in();
         let mut cies = CieMemo::default();

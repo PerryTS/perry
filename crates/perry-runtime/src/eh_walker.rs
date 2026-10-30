@@ -1757,6 +1757,7 @@ mod tests {
     #[test]
     #[inline(never)]
     fn second_walk_hits_cache_and_agrees() {
+        let _loader = crate::test_support::loaded_objects_test_lock();
         let a = walk_pcs_from_here(32).expect("walker");
         let b = walk_pcs_from_here(32).expect("walker");
         // The chains differ only at THIS function's frame (two distinct
@@ -1779,6 +1780,7 @@ mod tests {
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     #[test]
     fn image_index_follows_dlopen_and_dlclose() {
+        let _loader = crate::test_support::loaded_objects_test_lock();
         use std::ffi::CStr;
 
         /// An executable address of the loaded object whose path ends in
