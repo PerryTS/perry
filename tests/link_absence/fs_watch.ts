@@ -10,3 +10,7 @@ watcher=watch(path,()=>{
 });
 deadline=setTimeout(()=>{watcher.close();unlinkSync(path);throw new Error("watch event missing");},3000);
 setTimeout(()=>writeFileSync(path,"second"),100);
+
+// This positive witness also exercises the complete module installer.
+import * as moduleSurface from "node:fs";
+if (Object.keys(moduleSurface).length === 0) throw new Error("empty builtin namespace");

@@ -11,6 +11,7 @@ use super::*;
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_module(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
     let NmCtx {
         obj,
@@ -80,6 +81,7 @@ pub(crate) unsafe fn nm_dispatch_module(ctx: &NmCtx, module_name: &str, method_n
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_net(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
     let NmCtx {
         obj,
@@ -200,6 +202,7 @@ pub unsafe extern "C" fn js_net_subclass_init(
 /// `new` on a bound node:net class value (`const Sock = net.Socket; new Sock()`,
 /// pg's function-local `new (require('net')).Socket()`). Registered by
 /// `js_nm_install_net`; the classes are provider-owned like the factories.
+#[inline(always)]
 pub(crate) unsafe fn nm_ctor_net(
     _module: &str,
     method: &str,
@@ -233,6 +236,7 @@ pub(crate) unsafe fn nm_ctor_net(
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_node_pty(
     ctx: &NmCtx,
     module_name: &str,
@@ -277,6 +281,7 @@ pub(crate) unsafe fn nm_dispatch_node_pty(
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_os(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
     let NmCtx {
         obj,
@@ -353,6 +358,7 @@ pub(crate) unsafe fn nm_dispatch_os(ctx: &NmCtx, module_name: &str, method_name:
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_path(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
     let NmCtx {
         obj,
@@ -586,6 +592,7 @@ pub(crate) unsafe fn nm_dispatch_path(ctx: &NmCtx, module_name: &str, method_nam
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_perf(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
     let NmCtx {
         obj,
@@ -705,6 +712,7 @@ pub(crate) unsafe fn nm_dispatch_perf(ctx: &NmCtx, module_name: &str, method_nam
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_process(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
     let NmCtx {
         obj,

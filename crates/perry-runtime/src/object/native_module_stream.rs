@@ -59,9 +59,7 @@ pub(crate) fn attach_stream_legacy_prototype(constructor_value: f64) {
     // built first. Arm the events attach before minting `EventEmitter`:
     // minting it earlier would cache a constructor without its statics for
     // the whole process.
-    super::native_module_registry::js_nm_install_events();
-    let event_emitter =
-        scope.root_nanbox_f64(bound_native_callable_export_value("events", "EventEmitter"));
+    let event_emitter = scope.root_nanbox_f64(super::native_module::event_emitter_export_value(0));
     let _ = crate::object::js_function_prototype_value_for_read(event_emitter.get_nanbox_f64());
     // `Stream.prototype`: node's `constructor`, `pipe` and `eventNames`, born
     // on its static layout and sealed (readable-stream's `.call(this)` borrows
@@ -89,15 +87,7 @@ pub(crate) fn attach_stream_legacy_prototype(constructor_value: f64) {
                 let module = "stream/promises";
                 super::js_create_native_module_namespace(module.as_ptr(), module.len())
             }
-            _ => unsafe {
-                let module = b"stream";
-                super::js_native_module_property_by_name(
-                    module.as_ptr(),
-                    module.len(),
-                    name.as_ptr(),
-                    name.len(),
-                )
-            },
+            _ => super::native_module::stream_export_value(name),
         };
         if JSValue::from_bits(value.to_bits()).is_undefined() {
             continue;

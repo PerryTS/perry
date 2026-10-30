@@ -207,6 +207,11 @@ unsafe fn construct_function_impl(
         if !super::super::native_module::is_native_module_constructor_export(&module, &method) {
             super::super::object_ops::throw_object_type_error(b"is not a constructor");
         }
+        if let Some(value) =
+            super::super::native_module::static_export_construct(func_value, args_ptr, args_len)
+        {
+            return value;
+        }
         if module == "perf_hooks" {
             if let Some(result) =
                 crate::perf_hook_slots::construct_perf_hooks_class(&method, args_ptr, args_len)

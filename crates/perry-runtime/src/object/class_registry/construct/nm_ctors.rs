@@ -21,6 +21,7 @@ unsafe fn nm_ctor_arg(args_ptr: *const f64, args_len: usize, n: usize) -> f64 {
     }
 }
 
+#[inline(always)]
 pub(crate) unsafe fn nm_ctor_tty(
     _module: &str,
     method: &str,
@@ -38,6 +39,7 @@ pub(crate) unsafe fn nm_ctor_tty(
     None
 }
 
+#[inline(always)]
 pub(crate) unsafe fn nm_ctor_child_process(
     _module: &str,
     method: &str,
@@ -47,6 +49,7 @@ pub(crate) unsafe fn nm_ctor_child_process(
     (method == "ChildProcess").then(crate::child_process::cp_build_unstarted_child_process)
 }
 
+#[inline(always)]
 pub(crate) unsafe fn nm_ctor_cluster(
     _module: &str,
     method: &str,
@@ -57,6 +60,7 @@ pub(crate) unsafe fn nm_ctor_cluster(
         .then(|| crate::cluster::js_cluster_worker_new(nm_ctor_arg(args_ptr, args_len, 0)))
 }
 
+#[inline(always)]
 pub(crate) unsafe fn nm_ctor_fs(
     _module: &str,
     method: &str,
@@ -83,6 +87,7 @@ pub(crate) unsafe fn nm_ctor_fs(
     None
 }
 
+#[inline(always)]
 pub(crate) unsafe fn nm_ctor_vm(
     _module: &str,
     method: &str,
@@ -99,6 +104,7 @@ pub(crate) unsafe fn nm_ctor_vm(
     None
 }
 
+#[inline(always)]
 pub(crate) unsafe fn nm_ctor_tls(
     _module: &str,
     method: &str,
@@ -113,6 +119,7 @@ pub(crate) unsafe fn nm_ctor_tls(
     crate::tls::construct_registered_tls_class(method, args_ptr, args_len)
 }
 
+#[inline(always)]
 pub(crate) unsafe fn nm_ctor_wasi(
     _module: &str,
     method: &str,
@@ -127,6 +134,7 @@ pub(crate) unsafe fn nm_ctor_wasi(
     None
 }
 
+#[inline(always)]
 pub(crate) unsafe fn nm_ctor_readline(
     module: &str,
     method: &str,
@@ -143,6 +151,7 @@ pub(crate) unsafe fn nm_ctor_readline(
     None
 }
 
+#[inline(always)]
 pub(crate) unsafe fn nm_ctor_repl(
     _module: &str,
     method: &str,
@@ -165,6 +174,7 @@ pub(crate) unsafe fn nm_ctor_repl(
 /// 'events'; new ev.EventEmitter()`). The callee is the bound
 /// `events.EventEmitter` export value; the instance is the same ordinary
 /// object the static `new EventEmitter()` builds (#10508).
+#[inline(always)]
 pub(crate) unsafe fn nm_ctor_events(
     _module: &str,
     method: &str,
@@ -181,6 +191,7 @@ pub(crate) unsafe fn nm_ctor_events(
     }
 }
 
+#[inline(always)]
 pub(crate) unsafe fn nm_ctor_stream(
     _module: &str,
     method: &str,

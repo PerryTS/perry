@@ -8,3 +8,7 @@ const instance=new Child();
 console.log(instance instanceof wasi.WASI);
 console.log(Object.keys(instance.getImportObject()).join(","));
 console.log(typeof instance.wasiImport.args_get);
+
+// This positive witness also exercises the complete module installer.
+import * as moduleSurface from "node:wasi";
+if (Object.keys(moduleSurface).length === 0) throw new Error("empty builtin namespace");
