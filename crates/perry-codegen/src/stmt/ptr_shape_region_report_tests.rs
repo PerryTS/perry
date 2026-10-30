@@ -29,6 +29,8 @@ fn fixture() -> Module {
         op: BinaryOp::Add,
         prefix: false,
         strict: false,
+        byte_offset: 0,
+        byte_end: 0,
     }));
     m
 }
@@ -177,6 +179,8 @@ fn straight_line_numeric_load_and_update_remain_live() {
         op: BinaryOp::Add,
         prefix: false,
         strict: false,
+        byte_offset: 0,
+        byte_end: 0,
     }));
     m.init.push(Stmt::Expr(Expr::Binary {
         op: BinaryOp::Mul,

@@ -206,10 +206,16 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
                 .map(|(id, name)| format!("[{id},{}]", crate::diagnostics::quote(name)))
                 .collect();
             out.push_str(&format!(
-                "D {{\"record\":\"verdict\",\"unit\":{},\"file\":{},\"start\":{},\"key\":{},\"call\":{},\"verdict\":{},\"bodies\":[{}]}}\n",
+                "D {{\"record\":\"verdict\",\"unit\":{},\"file\":{},\"start\":{},\"key\":{},\"call\":{},\"verdict\":{},\"cause\":{},\"bodies\":[{}]}}\n",
                 crate::diagnostics::quote(unit), crate::diagnostics::quote(&pf.module_paths[site.module as usize]),
                 site.byte_offset, crate::diagnostics::quote(&site.key), site.is_call,
-                crate::diagnostics::quote(&format!("{:?}", site.verdict)), bodies.join(",")));
+                crate::diagnostics::quote(&format!("{:?}", site.verdict)),
+                match crate::ledger::verdict_cause(&site.verdict) {
+                    None => "null".to_string(),
+                    Some(Ok(c)) => crate::diagnostics::quote(c.name()),
+                    Some(Err(_)) => crate::diagnostics::quote("unclassified"),
+                },
+                bodies.join(",")));
             for (copy, v) in &site.diagnostic_copies {
                 out.push_str(&format!(
                     "D {{\"record\":\"copy-verdict\",\"unit\":{},\"file\":{},\"start\":{},\"key\":{},\"call\":{},\"copy\":{},\"verdict\":{}}}\n",
@@ -223,7 +229,10 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
         for (file, id, name) in pf.active_bodies.iter().flatten() {
             out.push_str(&format!(
                 "D {{\"record\":\"active\",\"unit\":{},\"file\":{},\"fn\":{id},\"name\":{}}}\n",
-                crate::diagnostics::quote(unit), crate::diagnostics::quote(file), crate::diagnostics::quote(name)));
+                crate::diagnostics::quote(unit),
+                crate::diagnostics::quote(file),
+                crate::diagnostics::quote(name)
+            ));
         }
         for line in lines {
             out.push_str("D {");

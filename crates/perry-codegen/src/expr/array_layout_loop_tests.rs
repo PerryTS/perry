@@ -47,6 +47,8 @@ fn set(arr: u32, value: Expr) -> Stmt {
         value: Box::new(value),
         receiver: Box::new(Expr::LocalGet(arr)),
         strict: false,
+        byte_offset: 0,
+        byte_end: 0,
     })
 }
 
@@ -348,6 +350,8 @@ fn value_numeric_and_property_consumers_share_checked_element_reads() {
                 object: Box::new(Expr::LocalGet(10)),
                 property: "d".into(),
                 value: Box::new(Expr::LocalGet(I)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
         ],
         None,

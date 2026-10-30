@@ -398,13 +398,19 @@ fn generation_metadata_bucket_keeps_exact_range_boundaries() {
 #[test]
 fn large_leaf_arena_birth_is_young_in_dedicated_storage() {
     run_with_fresh_arenas(|| {
-        let ptr = arena_alloc_gc(crate::gc::LARGE_OBJECT_THRESHOLD_BYTES, 8, GC_TYPE_STRING) as usize;
+        let ptr =
+            arena_alloc_gc(crate::gc::LARGE_OBJECT_THRESHOLD_BYTES, 8, GC_TYPE_STRING) as usize;
         assert_eq!(classify_heap_generation(ptr), HeapGeneration::Nursery);
         assert!(is_large_storage(ptr));
         assert!(pointer_in_nursery(ptr));
         assert!(!pointer_in_old_gen(ptr));
-        unsafe { assert_eq!((*((ptr-GC_HEADER_SIZE) as *const GcHeader)).gc_flags & GC_FLAG_TENURED,0); }
-        assert_eq!(old_page_summary().pages,0);
+        unsafe {
+            assert_eq!(
+                (*((ptr - GC_HEADER_SIZE) as *const GcHeader)).gc_flags & GC_FLAG_TENURED,
+                0
+            );
+        }
+        assert_eq!(old_page_summary().pages, 0);
     });
 }
 

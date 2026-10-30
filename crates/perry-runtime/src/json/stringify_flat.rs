@@ -289,7 +289,11 @@ pub(super) unsafe fn try_object(bits: u64) -> Option<JSValue> {
     if fields == 2 {
         for i in 0..2 {
             // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
-            let value_bits = slot(crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _)).cast(), 0, i);
+            let value_bits = slot(
+                crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _)).cast(),
+                0,
+                i,
+            );
             if let Some(value) = parsed_plain_string_piece(value_bits) {
                 if let Some(result) = emit_two_field_parsed_string_object(obj, i, value) {
                     return Some(result);
@@ -313,7 +317,11 @@ unsafe fn emit_one_field_object(obj: *const crate::ObjectHeader) -> Option<JSVal
     let keys = keys_view.arr();
     let key_bits = slot(crate::array::array_elements_ptr(keys).cast(), 0, 0);
     // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
-    let value_bits = slot(crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _)).cast(), 0, 0);
+    let value_bits = slot(
+        crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _)).cast(),
+        0,
+        0,
+    );
     let key = key_piece(key_bits)?;
     let value = scalar_piece(value_bits)?;
     let (key_bytes, key_units) = key.lengths();
@@ -348,7 +356,11 @@ unsafe fn emit_one_field_object(obj: *const crate::ObjectHeader) -> Option<JSVal
             + emit_piece(
                 value,
                 // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
-                slot(crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _)).cast(), 0, 0),
+                slot(
+                    crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _)).cast(),
+                    0,
+                    0,
+                ),
                 output.add(at + 1),
             );
         // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
@@ -407,7 +419,11 @@ unsafe fn emit_two_field_parsed_string_object(
             proven_value
         } else {
             // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
-            scalar_piece(slot(crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _)).cast(), 0, i))?
+            scalar_piece(slot(
+                crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _)).cast(),
+                0,
+                i,
+            ))?
         };
         let (kb, ku) = key_plan[i].lengths();
         let (vb, vu) = value_plan[i].lengths();
@@ -461,7 +477,11 @@ unsafe fn emit_two_field_parsed_string_object(
             at += emit_piece(
                 value_plan[i],
                 // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
-                slot(crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _)).cast(), 0, i),
+                slot(
+                    crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _)).cast(),
+                    0,
+                    i,
+                ),
                 output.add(at),
             );
         }
@@ -512,7 +532,11 @@ unsafe fn emit_object(obj: *const crate::ObjectHeader, fields: usize) -> Option<
     for i in 0..fields {
         key_plan[i] = key_piece(slot(crate::array::array_elements_ptr(keys).cast(), 0, i))?;
         // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
-        value_plan[i] = scalar_piece(slot(crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _)).cast(), 0, i))?;
+        value_plan[i] = scalar_piece(slot(
+            crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _)).cast(),
+            0,
+            i,
+        ))?;
         let (kb, ku) = key_plan[i].lengths();
         let (vb, vu) = value_plan[i].lengths();
         let punctuation = 1 + u32::from(i != 0);
@@ -563,7 +587,11 @@ unsafe fn emit_object(obj: *const crate::ObjectHeader, fields: usize) -> Option<
             at += emit_piece(
                 value_plan[i],
                 // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
-                slot(crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _)).cast(), 0, i),
+                slot(
+                    crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _)).cast(),
+                    0,
+                    i,
+                ),
                 output.add(at),
             );
         }

@@ -839,6 +839,9 @@ impl Model {
                     let n = self.node_named("inst", || format!("inst{inst}.{i}"));
                     // A fresh slot holds one run's values.
                     self.nodes[n as usize].frame = inst + 1;
+                    if let Some(d) = &mut self.diagnostic {
+                        d.inst_orig.insert(n, s.orig[i as usize]);
+                    }
                     n
                 }
                 _ if ctx == NO_CTX => s.orig[i as usize],

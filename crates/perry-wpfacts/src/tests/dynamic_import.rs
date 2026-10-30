@@ -121,7 +121,11 @@ fn an_imported_module_is_called_through_its_namespace() {
     for (what, main) in [("literal", LITERAL), ("computed", COMPUTED), ("read", READ)] {
         for units in [false, true] {
             let pf = program(main, &["./m.js"], units, None);
-            assert!(!mk(&pf).is_empty(), "{what}: no .mk site\n{}", pf.dump_text());
+            assert!(
+                !mk(&pf).is_empty(),
+                "{what}: no .mk site\n{}",
+                pf.dump_text()
+            );
             assert!(
                 !one_receiver(&pf),
                 "{what} units={units}: base.mk proven on m.ts's receiver alone\n{}",
@@ -142,8 +146,16 @@ fn a_namespace_read_without_a_call_keeps_the_proof() {
         "{}",
         pf.dump_text()
     );
-    let r: Vec<_> = pf.sites.iter().filter(|s| s.module == 0 && s.key == "r").collect();
-    assert!(!r.is_empty() && r.iter().all(|s| proven(s)), "{}", pf.dump_text());
+    let r: Vec<_> = pf
+        .sites
+        .iter()
+        .filter(|s| s.module == 0 && s.key == "r")
+        .collect();
+    assert!(
+        !r.is_empty() && r.iter().all(|s| proven(s)),
+        "{}",
+        pf.dump_text()
+    );
 }
 
 #[test]

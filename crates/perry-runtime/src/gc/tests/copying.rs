@@ -1446,7 +1446,8 @@ fn large_object_old_born_array_slot_write_keeps_young_child_alive() {
 fn large_object_array_literal_direct_store_keeps_young_child_alive_and_excludes_parent() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    let arr = unsafe { promote_young_large(crate::array::js_array_alloc_literal(OLD_BORN_ELEMENTS)) };
+    let arr =
+        unsafe { promote_young_large(crate::array::js_array_alloc_literal(OLD_BORN_ELEMENTS)) };
     let child = young_leaf();
     let child_total = unsafe { (*header_from_user_ptr(child as *const u8)).size as usize };
     let parent_total = unsafe { (*header_from_user_ptr(arr as *const u8)).size as usize };
@@ -1563,7 +1564,10 @@ fn large_object_clone_direct_copy_keeps_young_child_alive_and_is_promoted_in_pla
     };
 
     assert!(crate::arena::pointer_in_nursery(clone as usize));
-    assert!(crate::arena::is_large_storage(clone as usize), "a large clone is young large storage");
+    assert!(
+        crate::arena::is_large_storage(clone as usize),
+        "a large clone is young large storage"
+    );
     assert!(is_large_object_total_size_for_type(
         parent_total,
         GC_TYPE_ARRAY
@@ -1576,10 +1580,16 @@ fn large_object_clone_direct_copy_keeps_young_child_alive_and_is_promoted_in_pla
 
     assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
     assert_eq!(clone_after, clone as usize, "traced in place, never moved");
-    assert!(crate::arena::pointer_in_old_gen(clone as usize), "promoted at its address");
+    assert!(
+        crate::arena::pointer_in_old_gen(clone as usize),
+        "promoted at its address"
+    );
     assert_ne!(rewritten, child);
     assert!(crate::arena::pointer_in_nursery(rewritten));
-    assert!(trace.copying_nursery.copied_bytes >= child_total, "the child itself was copied");
+    assert!(
+        trace.copying_nursery.copied_bytes >= child_total,
+        "the child itself was copied"
+    );
     assert!(trace.copying_nursery.copied_objects >= 1);
     assert!(
         remembered_set_size() > 0,

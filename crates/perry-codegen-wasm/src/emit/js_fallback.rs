@@ -431,6 +431,7 @@ impl WasmModuleEmitter {
                 object,
                 property,
                 value,
+                ..
             } => {
                 let obj = self.emit_js_expr(object, locals);
                 let val = self.emit_js_expr(value, locals);
@@ -631,6 +632,7 @@ impl WasmModuleEmitter {
                 object,
                 index,
                 value,
+                ..
             } => {
                 let obj = self.emit_js_expr(object, locals);
                 let idx = self.emit_js_expr(index, locals);

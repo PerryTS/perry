@@ -1918,12 +1918,14 @@ pub(crate) unsafe fn write_decimal(out: *mut u8, mut n: u32, len: usize) {
         let pair = (n % 100) as usize * 2;
         n /= 100;
         pos -= 2;
-        out.add(pos).copy_from_nonoverlapping(DIGIT_PAIRS.as_ptr().add(pair), 2);
+        out.add(pos)
+            .copy_from_nonoverlapping(DIGIT_PAIRS.as_ptr().add(pair), 2);
     }
     if n >= 10 {
         pos -= 2;
         let pair = n as usize * 2;
-        out.add(pos).copy_from_nonoverlapping(DIGIT_PAIRS.as_ptr().add(pair), 2);
+        out.add(pos)
+            .copy_from_nonoverlapping(DIGIT_PAIRS.as_ptr().add(pair), 2);
     } else {
         pos -= 1;
         *out.add(pos) = b'0' + n as u8;

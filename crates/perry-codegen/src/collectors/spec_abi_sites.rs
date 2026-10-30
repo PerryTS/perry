@@ -599,6 +599,7 @@ fn record_expr_use(e: &Expr, depth: u32, scan: &mut ModuleScan) {
             object,
             index,
             value,
+            ..
         } => {
             record_receiver_use(object, depth, scan);
             if let Expr::LocalGet(recv) = object.as_ref() {
@@ -1362,6 +1363,7 @@ pub(crate) fn guarded_number_array_param_eligible(stmts: &[Stmt], param_id: u32)
                 object,
                 index,
                 value,
+                ..
             } if matches!(object.as_ref(), Expr::LocalGet(id) if *id == param_id) => {
                 uses.write = true;
                 scan_expr(index, param_id, uses);

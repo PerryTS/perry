@@ -102,7 +102,11 @@ fn json_construction_wide_record_is_traced_in_place_and_keeps_sparse_children() 
         assert!(crate::JSValue::from_bits(last_before).is_pointer());
         gc_collect_minor();
         let live = crate::JSValue::from_bits(root.get_nanbox_u64());
-        assert_eq!(live.as_pointer::<u8>() as usize, record, "promoted at its address");
+        assert_eq!(
+            live.as_pointer::<u8>() as usize,
+            record,
+            "promoted at its address"
+        );
         assert!(crate::arena::pointer_in_old_gen(record));
         let last_after = last_child(live);
         assert_ne!(last_before, last_after);

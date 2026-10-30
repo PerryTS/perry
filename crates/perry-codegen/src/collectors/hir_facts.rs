@@ -1624,6 +1624,7 @@ impl ArrayFactCollector {
                 object,
                 index,
                 value,
+                ..
             } => {
                 if let Expr::LocalGet(id) = object.as_ref() {
                     let value_kind = if expr_is_i32_shaped(value) {
@@ -1658,6 +1659,7 @@ impl ArrayFactCollector {
                 object,
                 property,
                 value,
+                ..
             } => {
                 if let Expr::LocalGet(id) = object.as_ref() {
                     if property == "length" {
@@ -2866,6 +2868,8 @@ mod tests {
                     object: Box::new(Expr::LocalGet(2)),
                     index: Box::new(Expr::Integer(0)),
                     value: Box::new(Expr::Integer(9)),
+                    byte_offset: 0,
+                    byte_end: 0,
                 }),
             ],
             &HashSet::new(),
@@ -2888,6 +2892,8 @@ mod tests {
                     object: Box::new(Expr::LocalGet(1)),
                     index: Box::new(Expr::Integer(0)),
                     value: Box::new(Expr::Integer(9)),
+                    byte_offset: 0,
+                    byte_end: 0,
                 }),
             ],
             &HashSet::new(),

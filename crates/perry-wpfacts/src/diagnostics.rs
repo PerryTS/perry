@@ -1,5 +1,6 @@
 //! Observational dump data. Never add constraints, nodes, tokens or proof inputs here.
 use crate::gen::{Fx, Gen};
+use crate::ledger::Unknown;
 use crate::model::*;
 use crate::pts::FxHashMap;
 use perry_hir::Expr;
@@ -30,6 +31,10 @@ pub(crate) struct Trace {
     /// Every (function, transfer kind, cause) that reached a body, with the
     /// first call it was seen at.
     pub reach: BTreeMap<(FnIdx, &'static str, Cause), Option<CallId>>,
+    /// A summary instance's fresh slot node -> the summary's own node of
+    /// that slot: what an instance holds without a recorded predecessor it
+    /// holds as its summary does.
+    pub inst_orig: BTreeMap<NodeId, NodeId>,
 }
 
 /// The operation an event belongs to: a function body's (`Fn`), a token's
@@ -74,6 +79,9 @@ struct Site {
     callee: Option<NodeId>,
     result: NodeId,
     call: Option<CallId>,
+    /// The HIR expression's address (`ledger::census` compares the
+    /// recorded sites with the HIR).
+    addr: usize,
 }
 
 impl Model {
@@ -96,18 +104,41 @@ impl Model {
         };
         let mut n = start;
         let mut seen = BTreeSet::new();
+        // An instance slot with no recorded arrival holds what its
+        // summary's node holds (a slot without one, `NO_NODE`, ends here).
+        let summary = |n: NodeId| {
+            d.inst_orig.get(&n).copied().filter(|&o| {
+                o != n
+                    && self
+                        .nodes
+                        .get(o as usize)
+                        .is_some_and(|v| v.pts.contains_tok(TOP))
+            })
+        };
         while seen.insert(n) {
             if let Some(why) = d.seeds.get(&n) {
                 return (n, why.clone());
             }
             let Some((src, why)) = d.pred.get(&n) else {
-                return (n, String::new());
+                match summary(n) {
+                    Some(o) => {
+                        n = o;
+                        continue;
+                    }
+                    None => return (n, String::new()),
+                }
             };
             if !why.is_empty() {
                 return (n, why.clone());
             }
             if *src == NO_NODE || !self.nodes[*src as usize].pts.contains_tok(TOP) {
-                return (n, String::new());
+                match summary(n) {
+                    Some(o) => {
+                        n = o;
+                        continue;
+                    }
+                    None => return (n, String::new()),
+                }
             }
             n = *src;
         }
@@ -349,6 +380,92 @@ impl Gen<'_> {
                     get(callee),
                 )
             }
+            Expr::PropertySet {
+                object,
+                property,
+                byte_offset,
+                byte_end,
+                ..
+            } => (
+                *byte_offset,
+                *byte_end,
+                "write",
+                property.clone(),
+                get(object),
+                None,
+                None,
+            ),
+            Expr::PutValueSet {
+                target,
+                key,
+                byte_offset,
+                byte_end,
+                ..
+            } => match key.as_ref() {
+                Expr::String(k) => (
+                    *byte_offset,
+                    *byte_end,
+                    "write",
+                    k.clone(),
+                    get(target),
+                    None,
+                    None,
+                ),
+                _ => (
+                    *byte_offset,
+                    *byte_end,
+                    "element-write",
+                    "[]".into(),
+                    get(target),
+                    get(key),
+                    None,
+                ),
+            },
+            Expr::PropertyUpdate {
+                object,
+                property,
+                byte_offset,
+                byte_end,
+                ..
+            } => (
+                *byte_offset,
+                *byte_end,
+                "update",
+                property.clone(),
+                get(object),
+                None,
+                None,
+            ),
+            Expr::IndexSet {
+                object,
+                index,
+                byte_offset,
+                byte_end,
+                ..
+            } => (
+                *byte_offset,
+                *byte_end,
+                "element-write",
+                "[]".into(),
+                get(object),
+                get(index),
+                None,
+            ),
+            Expr::IndexUpdate {
+                object,
+                index,
+                byte_offset,
+                byte_end,
+                ..
+            } => (
+                *byte_offset,
+                *byte_end,
+                "element-update",
+                "[]".into(),
+                get(object),
+                get(index),
+                None,
+            ),
             Expr::New {
                 class_name,
                 byte_offset,
@@ -423,8 +540,74 @@ impl Gen<'_> {
             callee,
             result,
             call: d.calls.get(&result).copied(),
+            addr: e as *const Expr as usize,
         });
         d.values.insert(e as *const Expr as usize, result);
+    }
+}
+
+/// The HIR sites this analysis recorded: address, kind, start.
+pub(crate) fn recorded(g: &Gen) -> Vec<(usize, &'static str, u32)> {
+    g.diagnostic.as_ref().map_or_else(Vec::new, |d| {
+        d.sites.iter().map(|s| (s.addr, s.kind, s.start)).collect()
+    })
+}
+
+impl Model {
+    /// LEDGER: the first unknown value of operand `n` and why it is
+    /// unknown. ⊤ names the seed of its first-arrival path; a contract
+    /// function's parameter marker is the unit edge; no value at all is an
+    /// unexecuted or dead operand. `None`: every value is known.
+    fn diagnostic_unknown(&self, n: NodeId) -> Option<(Result<Unknown, String>, NodeId)> {
+        let v = &self.nodes[n as usize];
+        if v.pts.contains_tok(TOP) {
+            let (root, origin) = self.diagnostic_root(n);
+            return Some((crate::ledger::classify(&origin).ok_or(origin), root));
+        }
+        let toks = v.pts.to_sorted();
+        if toks.is_empty() && v.prim == 0 {
+            return Some((Ok(Unknown::NoValues), n));
+        }
+        // An argument marker stands for the parameter markers it reaches
+        // (DECISIONS 44).
+        let marker = toks.iter().find(|&&t| self.is_marker(t))?;
+        let param = self
+            .marker_members(*marker)
+            .into_iter()
+            .find_map(|t| self.param_marker.get(&t).copied());
+        Some((
+            Ok(match param {
+                Some((_, u32::MAX)) => Unknown::UnitEdgeThis,
+                Some(_) => Unknown::UnitEdgeParameter,
+                None => Unknown::UnitEdgeMarker,
+            }),
+            n,
+        ))
+    }
+
+    /// The `causes` field of a site record: one entry per open operand.
+    fn diagnostic_causes(&self, roles: &[(&str, Option<NodeId>)]) -> String {
+        let mut out = Vec::new();
+        for (role, n) in roles {
+            let Some(n) = n else {
+                continue;
+            };
+            let Some((cause, root)) = self.diagnostic_unknown(*n) else {
+                continue;
+            };
+            let (cause, origin) = match cause {
+                Ok(c) => (c.name(), self.diagnostic_root(root).1),
+                Err(origin) => ("unclassified", origin),
+            };
+            out.push(format!(
+                "{{\"role\":{},\"cause\":{},\"root\":{root},\"rootFunction\":{},\"origin\":{}}}",
+                quote(role),
+                quote(cause),
+                opt(self.diagnostic_owner(root)),
+                quote(&origin)
+            ));
+        }
+        format!("[{}]", out.join(","))
     }
 }
 
@@ -495,7 +678,12 @@ pub(crate) fn collect(g: &Gen) -> Vec<String> {
         }
         let raw = s.call.and_then(|c| m.diagnostic.as_ref()?.raw.get(&c));
         let bi = s.call.and_then(|c| m.diagnostic.as_ref()?.builtins.get(&c));
-        out.push(format!("{{\"record\":\"site\",\"file\":{},\"function\":{},\"start\":{},\"end\":{},\"kind\":{},\"key\":{},\"origin\":{},\"receiver\":{},\"index\":{},\"callee\":{},\"result\":{},\"call\":{},\"raw\":{},\"builtins\":{},\"args\":{},\"spread\":{}}}",
+        let causes = m.diagnostic_causes(&[
+            ("receiver", s.receiver),
+            ("index", s.index),
+            ("callee", s.callee),
+        ]);
+        out.push(format!("{{\"record\":\"site\",\"file\":{},\"function\":{},\"start\":{},\"end\":{},\"kind\":{},\"key\":{},\"origin\":{},\"causes\":{causes},\"receiver\":{},\"index\":{},\"callee\":{},\"result\":{},\"call\":{},\"raw\":{},\"builtins\":{},\"args\":{},\"spread\":{}}}",
             quote(&g.modules[s.module as usize].0),s.function,s.start,s.end,quote(s.kind),quote(&s.key),quote(s.origin),
             opt(s.receiver),opt(s.index),opt(s.callee),s.result,opt(s.call),
             nums(raw.into_iter().flatten()),strings(bi.into_iter().flatten().cloned()),
@@ -616,11 +804,18 @@ pub(crate) fn collect(g: &Gen) -> Vec<String> {
                 quote(m.reasons.get(e.reason as usize).map_or("", |s| s)), cause(&e.cause), opt(src_call(e.call))));
         }
         for (t, c) in &d.esc_causes {
-            out.push(format!("{{\"record\":\"escape-cause\",\"token\":{t},\"cause\":{}}}", cause(c)));
+            out.push(format!(
+                "{{\"record\":\"escape-cause\",\"token\":{t},\"cause\":{}}}",
+                cause(c)
+            ));
         }
         for ((f, kind, c), call) in &d.reach {
-            out.push(format!("{{\"record\":\"reach\",\"function\":{f},\"kind\":{},\"cause\":{},\"call\":{}}}",
-                quote(kind), cause(c), opt(src_call(*call))));
+            out.push(format!(
+                "{{\"record\":\"reach\",\"function\":{f},\"kind\":{},\"cause\":{},\"call\":{}}}",
+                quote(kind),
+                cause(c),
+                opt(src_call(*call))
+            ));
         }
     }
 

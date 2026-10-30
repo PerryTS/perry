@@ -157,6 +157,7 @@ fn scalar_method_straight_line_body<'a>(
                 object,
                 property,
                 value,
+                ..
             }) if matches!(object.as_ref(), Expr::This) && field_write.is_none() => {
                 field_write = Some((property.as_str(), value.as_ref()));
             }

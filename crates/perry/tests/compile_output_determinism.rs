@@ -80,7 +80,13 @@ fn compile_ir(dir: &Path, run: usize) -> String {
     assert!(!files.is_empty(), "no .ll saved under {}", ll.display());
     files
         .iter()
-        .map(|p| format!("; {}\n{}", p.file_name().unwrap().to_string_lossy(), std::fs::read_to_string(p).unwrap()))
+        .map(|p| {
+            format!(
+                "; {}\n{}",
+                p.file_name().unwrap().to_string_lossy(),
+                std::fs::read_to_string(p).unwrap()
+            )
+        })
         .collect()
 }
 

@@ -79,6 +79,8 @@ fn store_class(receiver_selector: i64) -> Class {
             value: Box::new(Expr::LocalGet(2)),
             receiver: Box::new(call_get_data(receiver_selector)),
             strict: true,
+            byte_offset: 0,
+            byte_end: 0,
         })],
     );
     let clear = function(
@@ -92,6 +94,8 @@ fn store_class(receiver_selector: i64) -> Class {
             value: Box::new(Expr::Integer(0)),
             receiver: Box::new(call_get_data(receiver_selector)),
             strict: true,
+            byte_offset: 0,
+            byte_end: 0,
         })],
     );
     Class {

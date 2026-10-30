@@ -181,7 +181,11 @@ impl Model {
         };
         self.activate(f, "call");
         if self.diagnostic.is_some() {
-            let kind = if self.ctor_calls.contains(&call) { "new" } else { "call" };
+            let kind = if self.ctor_calls.contains(&call) {
+                "new"
+            } else {
+                "call"
+            };
             self.diagnostic_reach(f, kind, call);
         }
         if !self.ctor_calls.contains(&call) {

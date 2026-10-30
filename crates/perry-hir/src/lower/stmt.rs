@@ -1028,6 +1028,8 @@ fn lower_stmt_inner(
                                         value: Box::new(Expr::LocalGet(id)),
                                         receiver: Box::new(Expr::GlobalThisExpr),
                                         strict: false,
+                                        byte_offset: 0,
+                                        byte_end: 0,
                                     }));
                                 }
                             }

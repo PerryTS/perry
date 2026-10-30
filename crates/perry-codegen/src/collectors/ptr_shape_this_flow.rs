@@ -348,6 +348,7 @@ impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
                 object,
                 property,
                 value,
+                ..
             } if matches!(object.as_ref(), Expr::This) => {
                 if !self.fields.contains(property)
                     || (!self.allow_this_in_store_values && expr_mentions_this(value))

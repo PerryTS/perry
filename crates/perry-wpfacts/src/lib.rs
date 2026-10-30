@@ -30,6 +30,7 @@ mod gen_cjs;
 mod gen_const;
 mod gen_expr;
 mod gen_rest;
+mod ledger;
 pub mod model;
 pub mod pts;
 mod rooted;
@@ -135,6 +136,9 @@ pub struct Stats {
 pub struct ProgramFacts {
     /// Dump-only JSON records, scoped by emitting analysis-unit identity.
     pub diagnostics: Vec<(String, Vec<String>)>,
+    /// Dump-only: the addresses of the HIR sites the analyses recorded
+    /// (`ledger::census` compares them with the HIR).
+    pub(crate) diagnostic_sites: Vec<(usize, &'static str, u32)>,
     /// DECISIONS 225: the activation pass's count (the whole program).
     pub activation: Option<String>,
     /// DECISIONS 225: the bodies the whole program walked, the ones that
@@ -247,7 +251,17 @@ pub struct ProgramFacts {
 /// Run the analysis over every module (paths must be the keys the caller
 /// uses for `digest_for` / `contract_section`).
 pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts {
-    compute_act(modules, cfg, None, None, true)
+    let mut pf = compute_act(modules, cfg, None, None, true);
+    if cfg.diagnostics {
+        let mut sorted: Vec<(&str, &Module)> =
+            modules.iter().map(|(p, m)| (p.as_str(), *m)).collect();
+        sorted.sort_by(|a, b| a.0.cmp(b.0));
+        pf.diagnostics.push((
+            "<census>".into(),
+            ledger::census(&sorted, &pf.diagnostic_sites),
+        ));
+    }
+    pf
 }
 
 #[path = "lib/contracts.rs"]
@@ -434,7 +448,11 @@ fn compute_act<'a>(
     // DECISIONS 225 (the whole program): the facts are over the bodies that
     // can run. Per unit every body runs (its published functions are called
     // by units it cannot see).
-    let act = if gate { activation(&sorted, cfg, t0) } else { None };
+    let act = if gate {
+        activation(&sorted, cfg, t0)
+    } else {
+        None
+    };
     let activation = act.as_ref().map(|a| a.on.len());
     let (mut g, gen_ms, t1) = generate(&sorted, cfg, published, view, act, t0);
     let activation = activation.map(|n| format!("active={n} functions={}", g.m.funcs.len()));
@@ -1525,6 +1543,11 @@ fn compute_act<'a>(
     } else {
         Vec::new()
     };
+    let diagnostic_sites = if cfg.diagnostics {
+        diagnostics::recorded(&g)
+    } else {
+        Vec::new()
+    };
     // Every body the analysis walked, and every body holding a site (a
     // context generation enters without a walk of its own).
     let active_bodies = g.m.act.as_ref().map(|a| {
@@ -1538,6 +1561,7 @@ fn compute_act<'a>(
     });
     let mut pf = ProgramFacts {
         diagnostics,
+        diagnostic_sites,
         activation,
         active_bodies,
         super_unrelinked,

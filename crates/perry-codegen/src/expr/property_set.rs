@@ -444,6 +444,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
             object,
             property,
             value,
+            ..
         } => {
             // A receiver the wpfacts lowering proves takes the elided read
             // and store below instead of the compound site.

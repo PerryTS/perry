@@ -282,6 +282,7 @@ fn scan_ta_view_escapes_expr(e: &perry_hir::Expr, views: &mut HashMap<u32, i64>)
             object,
             index,
             value,
+            ..
         } => {
             if !matches!(object.as_ref(), Expr::LocalGet(_)) {
                 scan_ta_view_escapes_expr(object, views);

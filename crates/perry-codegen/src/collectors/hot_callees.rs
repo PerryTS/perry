@@ -512,6 +512,7 @@ fn walk_expr(e: &Expr, in_loop: bool, scan: &mut HotCalleeScan) {
             object,
             index,
             value,
+            ..
         } => {
             walk_expr(object, in_loop, scan);
             walk_expr(index, in_loop, scan);

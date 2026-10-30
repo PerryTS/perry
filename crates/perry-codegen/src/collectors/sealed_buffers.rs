@@ -284,6 +284,7 @@ impl Probe {
                 object,
                 index,
                 value,
+                ..
             }
             | Expr::BufferIndexSet {
                 buffer: object,
@@ -600,6 +601,7 @@ impl<'a> Scan<'a> {
                 object,
                 index,
                 value,
+                ..
             } => {
                 if let Expr::LocalGet(recv) = object.as_ref() {
                     self.note_key(*recv, index);

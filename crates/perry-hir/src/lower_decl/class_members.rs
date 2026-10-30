@@ -253,6 +253,8 @@ fn lower_constructor_in_scope(
                     object: Box::new(Expr::This),
                     property: field_name.clone(),
                     value: Box::new(Expr::LocalGet(*param_id)),
+                    byte_offset: 0,
+                    byte_end: 0,
                 })
             })
             .collect();

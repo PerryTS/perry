@@ -1043,6 +1043,7 @@ impl<'a> ArrayWalk<'a> {
                 object,
                 property,
                 value,
+                ..
             } => {
                 if let Expr::LocalGet(id) = object.as_ref() {
                     if self.root_of(*id).is_some() {
@@ -1110,6 +1111,7 @@ impl<'a> ArrayWalk<'a> {
                 object,
                 index,
                 value,
+                ..
             } => {
                 if let Expr::LocalGet(id) = object.as_ref() {
                     self.disq(*id);

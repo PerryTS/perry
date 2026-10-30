@@ -313,7 +313,10 @@ fn an_edit_changes_exactly_the_slot_of_its_key_whatever_its_spelling() {
             ("id", "ad"),
             ("name", "nbme"),
             ("prototype", "qrototype"),
-            ("aVeryLongPropertyNameBeyondShort", "bVeryLongPropertyNameBeyondShort"),
+            (
+                "aVeryLongPropertyNameBeyondShort",
+                "bVeryLongPropertyNameBeyondShort",
+            ),
         ] {
             let obj = crate::object::js_object_alloc(0, 4);
             crate::object::js_object_set_field_by_name(obj, key(other), 1.0);
@@ -331,14 +334,21 @@ fn an_edit_changes_exactly_the_slot_of_its_key_whatever_its_spelling() {
             // the same edit twice, and a pair on one key, fold on one slot
             apply_edits(
                 obj,
-                &[AttrsEdit::Data(hit.as_bytes(), 2), AttrsEdit::Data(hit.as_bytes(), 1)],
+                &[
+                    AttrsEdit::Data(hit.as_bytes(), 2),
+                    AttrsEdit::Data(hit.as_bytes(), 1),
+                ],
             );
             assert_eq!(
                 crate::object::get_property_attrs(obj as usize, hit).map(|a| a.bits),
                 Some(1),
                 "{hit}: the later edit wins"
             );
-            assert_eq!(crate::object::object_keys(obj).count(), 2, "{hit}: no key was claimed");
+            assert_eq!(
+                crate::object::object_keys(obj).count(),
+                2,
+                "{hit}: no key was claimed"
+            );
         }
     }
 }

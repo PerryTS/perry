@@ -985,6 +985,8 @@ pub fn synthesize_class_captures(
                 object: Box::new(Expr::This),
                 property: crate::cap_fields::cap_field_name(cap_salt, outer_id),
                 value: Box::new(Expr::LocalGet(fresh_param_id)),
+                byte_offset: 0,
+                byte_end: 0,
             }
         }));
     }

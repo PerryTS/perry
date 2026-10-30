@@ -399,6 +399,8 @@ fn typed_feedback_instruments_property_and_method_boundaries() {
                 object: Box::new(Expr::LocalGet(1)),
                 property: "x".to_string(),
                 value: Box::new(Expr::Number(1.0)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Expr(Expr::Call {
                 byte_end: 0,
@@ -512,6 +514,8 @@ fn sloppy_property_set_uses_strictness_aware_put_value() {
                 object: Box::new(Expr::LocalGet(1)),
                 property: "x".to_string(),
                 value: Box::new(Expr::Number(1.0)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(Expr::PropertyGet {
                 byte_end: 0,
@@ -583,6 +587,8 @@ fn a_default_build_emits_no_typed_feedback_recording_calls() {
                 object: Box::new(Expr::LocalGet(1)),
                 property: "x".to_string(),
                 value: Box::new(Expr::Number(1.0)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Expr(Expr::Call {
                 byte_end: 0,
@@ -677,6 +683,8 @@ fn typed_feedback_guards_direct_class_field_specialization() {
                 object: Box::new(Expr::LocalGet(1)),
                 property: "x".to_string(),
                 value: Box::new(Expr::Number(7.0)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(Expr::Binary {
                 op: BinaryOp::Sub,
@@ -774,6 +782,8 @@ fn full_outline_ic_collapses_class_field_set_to_single_call() {
                     object: Box::new(Expr::LocalGet(1)),
                     property: "x".to_string(),
                     value: Box::new(Expr::Number(7.0)),
+                    byte_offset: 0,
+                    byte_end: 0,
                 }),
                 Stmt::Return(Some(Expr::Number(0.0))),
             ],
@@ -1008,6 +1018,8 @@ fn class_field_set_elides_write_barrier_for_nonpointer_value() {
                     object: Box::new(Expr::LocalGet(1)),
                     property: "s".to_string(),
                     value: Box::new(val),
+                    byte_offset: 0,
+                    byte_end: 0,
                 }),
                 Stmt::Return(Some(Expr::Number(0.0))),
             ],
@@ -1308,6 +1320,8 @@ fn typed_feedback_guards_array_index_specialization() {
                 object: Box::new(Expr::LocalGet(1)),
                 index: Box::new(Expr::Number(0.0)),
                 value: Box::new(Expr::Number(7.0)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(Expr::IndexGet {
                 byte_offset: 0,
@@ -1428,6 +1442,8 @@ fn typed_feedback_inline_array_writes_note_numeric_downgrade() {
                 object: Box::new(Expr::LocalGet(2)),
                 index: Box::new(Expr::Number(0.0)),
                 value: Box::new(Expr::String("not-number".to_string())),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Expr(Expr::ArrayPush {
                 array_id: 2,

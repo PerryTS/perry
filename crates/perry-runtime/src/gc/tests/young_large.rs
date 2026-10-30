@@ -31,12 +31,10 @@ fn large_leaf_has_dedicated_young_storage_and_no_payload_scan() {
         );
         assert_eq!((*header).gc_flags & GC_FLAG_TENURED, 0);
         assert!(crate::arena::is_large_storage(p));
-        assert_eq!(
-            crate::arena::copying_from_space_in_use_bytes(),
-            before
-        );
+        assert_eq!(crate::arena::copying_from_space_in_use_bytes(), before);
         assert_eq!(crate::arena::moving_from_space_in_use_bytes(), moving);
-        let mut collector = CopyingNurseryCollector::new::<{ cfg!(test) }>(CopyingPointerSet::new());
+        let mut collector =
+            CopyingNurseryCollector::new::<{ cfg!(test) }>(CopyingPointerSet::new());
         let classified = collector.ptrs.classify(p).unwrap();
         assert_eq!(classified.kind, CopyingPointerKind::YoungLarge);
         assert_eq!(collector.mark_addr::<{ cfg!(test) }>(p), Some(p));

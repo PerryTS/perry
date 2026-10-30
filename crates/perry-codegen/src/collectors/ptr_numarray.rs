@@ -698,6 +698,7 @@ impl<'a> UseWalk<'a> {
                 object,
                 index,
                 value,
+                ..
             } => {
                 if let Expr::LocalGet(id) = object.as_ref() {
                     if self.is_candidate(*id) {
@@ -952,6 +953,8 @@ mod tests {
             object: Box::new(Expr::LocalGet(id)),
             index: Box::new(index),
             value: Box::new(value),
+            byte_offset: 0,
+            byte_end: 0,
         }
     }
 
@@ -1140,6 +1143,8 @@ mod tests {
                     object: Box::new(Expr::LocalGet(ARR)),
                     property: "length".to_string(),
                     value: Box::new(Expr::Integer(0)),
+                    byte_offset: 0,
+                    byte_end: 0,
                 }),
             ),
             (
@@ -1256,6 +1261,8 @@ mod tests {
                     )),
                     index: Box::new(Expr::Integer(5)),
                     value: Box::new(Expr::Number(1.0)),
+                    byte_offset: 0,
+                    byte_end: 0,
                 },
             ),
             (

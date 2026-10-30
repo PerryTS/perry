@@ -181,7 +181,10 @@ mod tests {
         .join()
         .expect("spawner panicked");
         let (before, after, node_ok) = seed;
-        assert!(node_ok, "the worker's seeded record must carry the worker's own node");
+        assert!(
+            node_ok,
+            "the worker's seeded record must carry the worker's own node"
+        );
         assert!(
             !before,
             "a fresh worker agent must not already hold id {id}"

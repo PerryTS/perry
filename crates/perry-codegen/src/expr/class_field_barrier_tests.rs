@@ -175,6 +175,8 @@ fn param_prologue_ctor() -> Function {
             object: Box::new(Expr::This),
             property: "v".to_string(),
             value: Box::new(Expr::LocalGet(PARAM_ID)),
+            byte_offset: 0,
+            byte_end: 0,
         })],
         is_async: false,
         is_generator: false,
@@ -256,6 +258,8 @@ fn probe_module() -> Module {
                 object: Box::new(Expr::LocalGet(BOXED_ID)),
                 property: "v".to_string(),
                 value: Box::new(Expr::LocalGet(STORED_ID)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(Expr::LocalGet(BOXED_ID))),
         ],
@@ -308,6 +312,8 @@ pub(super) fn wide_prologue_ir() -> String {
                 object: Box::new(Expr::This),
                 property: name,
                 value: Box::new(Expr::LocalGet(PARAM_ID)),
+                byte_offset: 0,
+                byte_end: 0,
             }));
     }
     let mut opts = ir_opts();

@@ -70,6 +70,7 @@ pub(crate) fn preserves_layout(
                 object,
                 property,
                 value,
+                ..
             } if matches!(object.as_ref(), Expr::This) => {
                 own.contains(property.as_bytes()) && safe(value, own)
             }
