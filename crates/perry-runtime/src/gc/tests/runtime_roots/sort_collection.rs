@@ -207,3 +207,75 @@ fn sort_collection_getters_relocate_comparator_and_receiver() {
         }
     }
 }
+
+extern "C" fn collecting_compare(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    a: f64,
+    b: f64,
+) -> f64 {
+    gc_collect_minor();
+    a - b
+}
+
+#[test]
+fn to_sorted_returns_the_live_copy_after_a_collecting_comparator() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _evacuation = ForcedEvacuationTestGuard::on();
+    let _protection =
+        crate::arena::ProtectionModeGuard::set(crate::arena::FromSpaceProtection::PoisonOnly);
+    register_runtime_handle_root_scanner_for_tests();
+
+    let scope = RuntimeHandleScope::new();
+    let source = scope.root_raw_mut_ptr(crate::array::js_array_alloc_with_length(3));
+    for (index, value) in [3.0, 1.0, 2.0].into_iter().enumerate() {
+        source.with_mut_ptr(|array| crate::array::js_array_set_f64(array, index as u32, value));
+    }
+    let comparator = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
+        crate::fn_info!(collecting_compare, 2),
+        0,
+    ));
+    let before_source =
+        source.with_const_ptr(|array: *const crate::array::ArrayHeader| array as usize);
+    let returned = source.with_const_ptr(|array| {
+        comparator.with_const_ptr(|comparator| {
+            crate::array::js_array_to_sorted_with_comparator(array, comparator)
+        })
+    });
+    source.with_const_ptr(|array: *const crate::array::ArrayHeader| {
+        assert_ne!(
+            array as usize, before_source,
+            "the callback must actually move the nursery"
+        );
+        assert_ne!(
+            returned.cast_const(),
+            array,
+            "toSorted must return a distinct copy"
+        );
+    });
+    // Validate the returned address before reading its payload. A forwarding
+    // stub can make generic reads appear correct while leaking a stale return.
+    let header = unsafe {
+        crate::value::addr_class::try_read_tracked_gc_header_of_type(
+            returned as usize,
+            GC_TYPE_ARRAY,
+        )
+    }
+    .expect("toSorted must return a live tracked Array");
+    assert_eq!(unsafe { header.as_ref().gc_flags } & GC_FLAG_FORWARDED, 0);
+    for (index, expected) in [1.0, 2.0, 3.0].into_iter().enumerate() {
+        assert_eq!(
+            crate::array::js_array_get_f64(returned, index as u32),
+            expected
+        );
+    }
+    for (index, expected) in [3.0, 1.0, 2.0].into_iter().enumerate() {
+        source.with_const_ptr(|array| {
+            assert_eq!(
+                crate::array::js_array_get_f64(array, index as u32),
+                expected
+            );
+        });
+    }
+}
