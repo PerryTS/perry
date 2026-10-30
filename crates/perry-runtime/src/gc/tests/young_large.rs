@@ -115,7 +115,6 @@ fn old_edge_retains_large_leaf_by_identity_and_a_later_full_reclaims_it() {
         let _ = gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot {
             kind: GcTriggerKind::Direct,
             steps_before: Some(GcStepSnapshot::current()),
-            origin: None,
         });
         assert!(!crate::arena::pointer_in_nursery(p));
         assert_eq!(
@@ -166,7 +165,6 @@ fn large_birth_after_sweep_snapshot_survives_only_that_cycle() {
         let mut state = GcCycleState::new_full(GcTriggerSnapshot {
             kind: GcTriggerKind::Direct,
             steps_before: Some(GcStepSnapshot::current()),
-            origin: None,
         });
         for _ in 0..100_000 {
             if state.phase() == GcCyclePhase::Sweep {

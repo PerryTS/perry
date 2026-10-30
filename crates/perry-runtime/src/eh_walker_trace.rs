@@ -904,6 +904,7 @@ fn hdr_function(tables: &CfiTables, site: u64) -> Option<Option<(u64, u64)>> {
 
 /// The FDE at `fde_addr`, read up to its program: a cursor at the first
 /// instruction, the FDE's end, its `pc_range` and its CIE.
+#[inline(always)]
 fn fde_header(
     tables: &CfiTables,
     fde_addr: u64,

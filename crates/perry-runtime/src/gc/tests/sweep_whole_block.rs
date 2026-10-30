@@ -30,7 +30,6 @@ fn trace_snapshot() -> GcTriggerSnapshot {
     GcTriggerSnapshot {
         kind: GcTriggerKind::Manual,
         steps_before: Some(GcStepSnapshot::current()),
-        origin: None,
     }
 }
 

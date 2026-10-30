@@ -26,7 +26,6 @@ fn full_collection(kind: GcTriggerKind) {
     let _ = gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot {
         kind,
         steps_before: Some(GcStepSnapshot::current()),
-        origin: None,
     });
 }
 

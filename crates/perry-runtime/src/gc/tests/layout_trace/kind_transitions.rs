@@ -23,7 +23,6 @@ fn numbers_to_tagged_during_incremental_mark() {
     let mut state = GcCycleState::new_full(GcTriggerSnapshot {
         kind: GcTriggerKind::Manual,
         steps_before: Some(GcStepSnapshot::current()),
-        origin: None,
     });
     // This fixture inserts a mutator store between collector slices. Select
     // the production budgeted policy, including its late-store repair.

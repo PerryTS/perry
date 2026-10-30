@@ -101,7 +101,6 @@ fn test_layout_scan_trace_json_counts_pointer_free_slots() {
         GcTriggerSnapshot {
             kind: GcTriggerKind::Direct,
             steps_before: Some(GcStepSnapshot::current()),
-            origin: None,
         },
     )
     .expect("test requested GC trace capture");
@@ -158,7 +157,6 @@ fn test_layout_scan_trace_json_counts_pointer_slot_bytes() {
         GcTriggerSnapshot {
             kind: GcTriggerKind::Direct,
             steps_before: Some(GcStepSnapshot::current()),
-            origin: None,
         },
     )
     .expect("test requested GC trace capture");

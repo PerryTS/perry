@@ -1696,7 +1696,6 @@ mod thread_identity_tests {
         let trigger = GcTriggerSnapshot {
             kind: GcTriggerKind::Manual,
             steps_before: Some(GcStepSnapshot::current()),
-            origin: None,
         };
         GcCycleTrace::new(GcCollectionKind::Full, trigger)
             .unwrap()

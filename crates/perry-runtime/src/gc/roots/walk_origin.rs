@@ -1,35 +1,26 @@
 //! Where a root scan's native stack walk starts.
 //!
 //! A runtime entry that JS calls directly and that can collect (the back-edge
-//! poll `js_gc_loop_safepoint`, `gc()`) is entered through a shim that hands
-//! the body its caller's frame: the JS frame's return address, its stack
-//! pointer at the call and its frame pointer. The body passes that frame into
-//! the collection it requests, as a field of the request
-//! ([`super::super::policy::GcTriggerSnapshot::origin`]), and the collection
-//! publishes it for exactly its own synchronous duration. Its scans then start
-//! at the JS frame and never step the collector's own Rust frames, which hold
-//! no roots: statepoint records are the only root mechanism, and those frames
-//! have none.
+//! poll `js_gc_loop_safepoint`, `gc()`, the inline allocation slow paths) is
+//! entered through a shim that hands the body its caller's frame: the JS
+//! frame's return address, its stack pointer at the call and its frame
+//! pointer. While the body runs it offers that frame ([`EntryOrigin`]), and a
+//! scan that runs meanwhile starts its walk there instead of stepping the
+//! collector's own Rust frames, which hold no roots: statepoint records are
+//! the only root mechanism, and those frames have none.
 //!
-//! Scoping is what makes this sound, so both halves are guards:
+//! What makes this sound is what an offering entry does not do: it runs no JS
+//! before it returns (the poll, `gc()` and allocation run collector and
+//! allocator code only). So every frame between any scan made during the
+//! entry and the offered frame is the runtime's own, whichever collection,
+//! nested collection or budgeted step the scan belongs to. An entry that can
+//! call back into JS must not offer.
 //!
-//! * [`EntryOrigin`] lives for the entry body and offers the frame to every
-//!   collection request the body makes. That is sound because an entry that
-//!   offers its frame runs no JS before it returns (the poll, `gc()` and the
-//!   allocation slow paths run collector and allocator code only): every
-//!   frame between such a request and the offered frame is the runtime's own,
-//!   and holds no roots. An entry that can call back into JS must not offer.
-//!   It clears the offer when it returns.
-//! * [`ActiveOrigin`] lives for one synchronous collection (every collection
-//!   entry installs one) and restores what it replaced. A nested collection
-//!   installs its own, so a scan reads the origin of the collection it belongs
-//!   to. Outside every collection it is `None`: a budgeted step taken between
-//!   two mutator stretches walks from the scan, and one a collection drains
-//!   runs beneath that collection, whose origin is then still beneath it.
-//!
-//! The frame is never stored past either guard, so a walk can only start at
-//! a frame that is live and beneath the scan: the entry's caller, while the
-//! entry runs.
+//! The offer ends with the entry: [`EntryOrigin`] clears it on return (an
+//! entry nested in another, a Rust caller of an offering entry, so ends the
+//! outer offer too, and the outer body's later scans walk from the scan:
+//! never wrong, only slower). A walk can therefore only start at a frame that
+//! is live and beneath the scan.
 
 use std::cell::Cell;
 
@@ -44,13 +35,10 @@ pub(crate) struct WalkOrigin {
 }
 
 // `#[thread_local]`, not `thread_local!`: const, drop-free and all-zero (so
-// in `.tbss`), these need no accessor and no claimed slot. One
-// thread-pointer-relative load or store, which is what lets an allocation
-// slow path offer its frame for a few instructions.
+// in `.tbss`), it needs no accessor and no claimed slot. One
+// thread-pointer-relative load or store.
 #[thread_local]
 static OFFERED: Cell<Option<WalkOrigin>> = Cell::new(None);
-#[thread_local]
-static ACTIVE: Cell<Option<WalkOrigin>> = Cell::new(None);
 
 /// Offers the entry's caller frame to the collection requests of its body.
 #[cfg_attr(
@@ -82,38 +70,15 @@ impl Drop for EntryOrigin {
     }
 }
 
-/// The frame the running entry offers, if any: a collection request copies
-/// it into itself.
-#[inline]
-pub(crate) fn offered() -> Option<WalkOrigin> {
-    OFFERED.get()
-}
-
-/// Publishes one collection's origin (or none) to its scans.
-pub(crate) struct ActiveOrigin(Option<WalkOrigin>);
-
-impl ActiveOrigin {
-    #[inline]
-    pub(crate) fn enter(origin: Option<WalkOrigin>) -> Self {
-        Self(ACTIVE.replace(origin))
-    }
-}
-
-impl Drop for ActiveOrigin {
-    #[inline]
-    fn drop(&mut self) {
-        ACTIVE.set(self.0);
-    }
-}
-
-/// The running collection's origin, if its request carried one.
+/// The frame the running offering entry passed, if any: where a scan's walk
+/// starts.
 #[cfg_attr(
     not(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu")),
     allow(dead_code)
 )]
 #[inline]
-pub(crate) fn active() -> Option<WalkOrigin> {
-    ACTIVE.get()
+pub(crate) fn offered() -> Option<WalkOrigin> {
+    OFFERED.get()
 }
 
 /// The body of an x86-64 Linux naked entry that offers its caller's frame: it
@@ -169,19 +134,12 @@ mod tests {
         {
             let _entry = EntryOrigin::enter(A);
             assert_eq!(offered(), Some(A));
-            assert_eq!(offered(), Some(A), "every request of the entry carries it");
+            {
+                let _nested = EntryOrigin::enter(WalkOrigin { pc: 4, ..A });
+                assert_eq!(offered().map(|o| o.pc), Some(4));
+            }
+            assert_eq!(offered(), None, "a nested entry ends the outer offer");
         }
         assert_eq!(offered(), None, "the offer ends with its entry");
-    }
-
-    #[test]
-    fn a_nested_collection_reads_its_own_origin() {
-        let _outer = ActiveOrigin::enter(Some(A));
-        assert_eq!(active(), Some(A));
-        {
-            let _inner = ActiveOrigin::enter(None);
-            assert_eq!(active(), None);
-        }
-        assert_eq!(active(), Some(A));
     }
 }

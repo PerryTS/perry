@@ -7,7 +7,7 @@
 //! above the poll and the C start frames below `main`. This walk avoids all
 //! three costs.
 //!
-//! * **Start.** A collection whose request carried its entry's caller frame
+//! * **Start.** A scan made while an entry offers its caller frame
 //!   ([`super::super::walk_origin`]) starts there, at the JS frame that called
 //!   the poll or `gc()`. Otherwise the walk starts at its own frame.
 //! * **JS frame** (a pc `match_records` finds records for): its roots resolve
@@ -107,7 +107,7 @@ pub(super) fn visit(
     if top == 0 {
         return None;
     }
-    let origin = super::super::walk_origin::active();
+    let origin = super::super::walk_origin::offered();
     let (mut pc, mut sp, mut fp) = match origin {
         Some(origin) => (origin.pc, origin.sp, origin.fp),
         None => {

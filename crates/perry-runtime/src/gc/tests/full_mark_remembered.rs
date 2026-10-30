@@ -26,7 +26,6 @@ fn synchronous_full() -> GcCycleTrace {
     gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot {
         kind: GcTriggerKind::OldGenBytes,
         steps_before: Some(GcStepSnapshot::current()),
-        origin: None,
     })
     .trace
     .expect("full GC trace requested")

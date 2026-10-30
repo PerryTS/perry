@@ -51,7 +51,6 @@ fn map_store_full_sweep_reclaims_dead_active_block_and_preserves_live_owner() {
             let mut cycle = GcCycleState::new_full(GcTriggerSnapshot {
                 kind: GcTriggerKind::Manual,
                 steps_before: Some(GcStepSnapshot::current()),
-                origin: None,
             });
             if stepped {
                 while !cycle.step(GcWorkBudget::bounded(1)).completed {}
@@ -159,7 +158,6 @@ fn full_collection() {
     GcCycleState::new_full(GcTriggerSnapshot {
         kind: GcTriggerKind::Manual,
         steps_before: Some(GcStepSnapshot::current()),
-        origin: None,
     })
     .run_to_completion();
 }
@@ -457,7 +455,6 @@ fn map_index_external_bytes_balance_after_growth_clear_delete_and_collection() {
             let cycle = GcCycleState::new_full(GcTriggerSnapshot {
                 kind: GcTriggerKind::Manual,
                 steps_before: Some(GcStepSnapshot::current()),
-                origin: None,
             });
             cycle.run_to_completion();
             assert_eq!(test_thread_map_side_deallocation_snapshot().0 - before.0, 1);

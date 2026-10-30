@@ -33,7 +33,6 @@ fn full_collection() {
     let _ = gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot {
         kind: GcTriggerKind::Direct,
         steps_before: Some(GcStepSnapshot::current()),
-        origin: None,
     });
 }
 

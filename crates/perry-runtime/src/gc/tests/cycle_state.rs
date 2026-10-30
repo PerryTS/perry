@@ -14,7 +14,6 @@ fn trace_snapshot(kind: GcTriggerKind) -> GcTriggerSnapshot {
     GcTriggerSnapshot {
         kind,
         steps_before: Some(GcStepSnapshot::current()),
-        origin: None,
     }
 }
 
