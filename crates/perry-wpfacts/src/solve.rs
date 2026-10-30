@@ -325,7 +325,8 @@ impl Model {
 
     /// A node holding only ⊤ (all kinds) for one named unmodeled origin.
     pub fn top_val(&mut self, why: &str) -> NodeId {
-        if !self.explain {
+        // Explain and the dump name each origin: its own node.
+        if !self.explain && self.diagnostic.is_none() {
             return self.top_tok_node;
         }
         if let Some(&n) = self.top_vals.get(why) {

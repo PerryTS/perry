@@ -116,7 +116,10 @@ fn json_large_object_materialization_preserves_young_string_fields() {
     let obj = (parsed.bits() & POINTER_MASK) as *mut crate::object::ObjectHeader;
     js_shadow_slot_set(0, parsed.bits());
 
-    assert!(crate::arena::pointer_in_nursery(obj as usize), "wide JSON storage is born young");
+    assert!(
+        crate::arena::pointer_in_nursery(obj as usize),
+        "wide JSON storage is born young"
+    );
     let fields = unsafe {
         (obj as *mut u8).add(std::mem::size_of::<crate::object::ObjectHeader>()) as *mut u64
     };
@@ -165,7 +168,8 @@ fn regex_global_result_array_preserves_young_match_strings() {
         regex_handle.get_raw_const_ptr::<crate::regex::RegExpHeader>(),
     );
     assert!(
-        crate::arena::pointer_in_nursery(result as usize) && crate::arena::is_large_storage(result as usize),
+        crate::arena::pointer_in_nursery(result as usize)
+            && crate::arena::is_large_storage(result as usize),
         "a large match result is young large storage, traced in place"
     );
     js_shadow_slot_set(0, ptr_bits(result as usize));

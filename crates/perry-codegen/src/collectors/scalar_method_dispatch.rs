@@ -821,6 +821,7 @@ fn collect_candidate_property_writes(
             object,
             index,
             value: _,
+            ..
         } => {
             if let Expr::String(property) = index.as_ref() {
                 record(object, property);
@@ -1089,6 +1090,8 @@ mod tests {
             value: Box::new(Expr::Number(99.0)),
             receiver: Box::new(Expr::LocalGet(RECEIVER)),
             strict: false,
+            byte_offset: 0,
+            byte_end: 0,
         })
     }
 
@@ -1296,6 +1299,8 @@ mod tests {
             object: Box::new(Expr::LocalGet(PROTO)),
             property: "getValue".to_string(),
             value: Box::new(Expr::Number(9.0)),
+            byte_offset: 0,
+            byte_end: 0,
         }));
         module.classes.push(class.clone());
 

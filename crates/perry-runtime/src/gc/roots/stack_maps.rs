@@ -1320,7 +1320,8 @@ fn sve_vector_length_bytes() -> Option<usize> {
     None
 }
 
-type VerifyWalk = for<'a> fn(&StackMapIndex, &'a mut dyn FnMut(MutableRootSlot)) -> NativeStackWalkStats;
+type VerifyWalk =
+    for<'a> fn(&StackMapIndex, &'a mut dyn FnMut(MutableRootSlot)) -> NativeStackWalkStats;
 static VERIFY_WALK: crate::feature_hooks::Hook<VerifyWalk> = crate::feature_hooks::Hook::empty();
 
 fn verify_walk(

@@ -149,6 +149,7 @@ pub(crate) unsafe fn adopt_image_key(
 mod records;
 pub(crate) use records::{CanonicalKeys, LiveObject, SharedLayout};
 
+
 /// No trie node: an owned (dictionary) list, or a list whose holder never
 /// learned one. Shared with `ObjectKeys` and the shape record's packed field.
 pub(crate) const NO_NODE: u32 = u32::MAX;
@@ -409,7 +410,10 @@ impl CanonicalTable {
     /// used to hold).
     #[cfg(test)]
     fn published_count(&self) -> usize {
-        self.nodes.iter().filter(|n| n.published && n.addr != 0).count()
+        self.nodes
+            .iter()
+            .filter(|n| n.published && n.addr != 0)
+            .count()
     }
 
     fn alloc_node(
@@ -467,8 +471,11 @@ impl CanonicalTable {
     #[inline]
     fn share_backing_owner(&mut self, id: u32, parent: u32) {
         let inherited = self.shapes[parent as usize].backing_owner;
-        self.shapes[id as usize].backing_owner =
-            if inherited == NO_NODE { parent } else { inherited };
+        self.shapes[id as usize].backing_owner = if inherited == NO_NODE {
+            parent
+        } else {
+            inherited
+        };
     }
 
     /// Turn a validation-only prefix into an independently owned keys list.
@@ -955,7 +962,12 @@ fn edge_hash_with_entry(hash: u64, entry: u64) -> u64 {
 /// answered; a node pruned, rewitnessed or reused for another list since the
 /// holder learned it answers `None`.
 #[inline]
-fn validated_node(t: &CanonicalTable, arr: *const ArrayHeader, count: u32, node: u32) -> Option<u32> {
+fn validated_node(
+    t: &CanonicalTable,
+    arr: *const ArrayHeader,
+    count: u32,
+    node: u32,
+) -> Option<u32> {
     let n = t.nodes.get(node as usize)?;
     (n.published && n.addr == arr as usize && n.len == count).then_some(node)
 }
@@ -1039,9 +1051,11 @@ unsafe fn probe(
     with_table_or(None, |t| {
         let id = probe_node(t, node_of(t, parent)?, parent_len, appended, entry, h)?;
         let node = &t.nodes[id as usize];
-        let hit = node
-            .published
-            .then_some(CanonicalKeys::new(node.addr as *mut ArrayHeader, node.len, id));
+        let hit = node.published.then_some(CanonicalKeys::new(
+            node.addr as *mut ArrayHeader,
+            node.len,
+            id,
+        ));
         if hit.is_some() {
             t.note_reached(id);
         }
@@ -1076,9 +1090,11 @@ pub(crate) unsafe fn probe_born_layout(
             })?;
         }
         let node = &t.nodes[parent as usize];
-        let hit = node
-            .published
-            .then_some(CanonicalKeys::new(node.addr as *mut ArrayHeader, node.len, parent));
+        let hit = node.published.then_some(CanonicalKeys::new(
+            node.addr as *mut ArrayHeader,
+            node.len,
+            parent,
+        ));
         if hit.is_some() {
             t.note_reached(parent);
         }
@@ -1625,9 +1641,11 @@ unsafe fn find_canonical(
             parent = probe_node(t, parent, i, slot, entry, slot.edge_hash(entry))?;
         }
         let node = &t.nodes[parent as usize];
-        let hit = node
-            .published
-            .then_some(CanonicalKeys::new(node.addr as *mut ArrayHeader, node.len, parent));
+        let hit = node.published.then_some(CanonicalKeys::new(
+            node.addr as *mut ArrayHeader,
+            node.len,
+            parent,
+        ));
         // A declared whole list is not one receiver's growth. The list this
         // very array already spells at this count is the holder's own: it
         // arrives nowhere new.
@@ -1862,6 +1880,7 @@ pub(crate) use views::{
     for_each_list_shapes, node_publishes, note_latched_away, published_node_of,
     with_backing_shapes, with_list_shapes,
 };
+
 #[cfg(test)]
 #[path = "canonical_keys_tests.rs"]
 mod canonical_keys_tests;

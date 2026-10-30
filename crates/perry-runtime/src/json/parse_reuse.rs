@@ -184,7 +184,8 @@ pub(crate) unsafe fn remember_parse_object_template(
     // The plan rebuilds fixed slots under one layout. A record with an
     // overflow (§3.4) keeps keys and values in that table, which no plan
     // describes, so such a record is never remembered.
-    if crate::gc_type_is_not_object!(header.obj_type) || crate::object::overflow::has_overflow(object)
+    if crate::gc_type_is_not_object!(header.obj_type)
+        || crate::object::overflow::has_overflow(object)
     {
         return;
     }
@@ -193,8 +194,8 @@ pub(crate) unsafe fn remember_parse_object_template(
         return;
     }
     // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
-    let fields = crate::meta_slots_of!(crate::meta_obj_runtime_born!(object as *mut _))
-        .cast::<JSValue>();
+    let fields =
+        crate::meta_slots_of!(crate::meta_obj_runtime_born!(object as *mut _)).cast::<JSValue>();
     let mut values = [EMPTY_PARSE_TEMPLATE_VALUE; PARSE_OBJECT_TEMPLATE_MAX_FIELDS];
     for (index, slot) in values[..len].iter_mut().enumerate() {
         let Some(value) = parse_template_value(*fields.add(index)) else {

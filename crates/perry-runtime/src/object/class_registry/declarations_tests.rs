@@ -372,7 +372,10 @@ fn a_pooled_declaration_compares_name_pointers_not_bytes() {
     // Without the flag the same members dedupe by bytes.
     let unpooled = 0x7E57_0004;
     test_declare_pointer_named(unpooled, &[A, A_COPY, B], false);
-    assert_eq!(declared(unpooled), [("alpha".into(), 1), ("beta".into(), 2)]);
+    assert_eq!(
+        declared(unpooled),
+        [("alpha".into(), 1), ("beta".into(), 2)]
+    );
 }
 
 #[test]

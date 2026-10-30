@@ -498,6 +498,7 @@ pub fn expr_has_mutation(e: &perry_hir::Expr, id: u32) -> bool {
             object,
             index,
             value,
+            ..
         } => {
             is_local_get_chain(object, id)
                 || expr_has_mutation(object, id)
@@ -662,6 +663,8 @@ mod tests {
             object: Box::new(index(Expr::LocalGet(7), 0)),
             index: Box::new(Expr::Integer(1)),
             value: Box::new(Expr::Integer(99)),
+            byte_offset: 0,
+            byte_end: 0,
         };
         assert!(!flat_const_array_uses_are_read_only(
             &[perry_hir::Stmt::Expr(write)],
@@ -675,6 +678,8 @@ mod tests {
             object: Box::new(Expr::LocalGet(7)),
             property: "count".to_string(),
             value: Box::new(Expr::String("lie".to_string())),
+            byte_offset: 0,
+            byte_end: 0,
         };
         let update = Expr::PropertyUpdate {
             object: Box::new(Expr::LocalGet(7)),
@@ -682,6 +687,8 @@ mod tests {
             op: BinaryOp::Add,
             prefix: false,
             strict: true,
+            byte_offset: 0,
+            byte_end: 0,
         };
         assert!(expr_has_mutation(&set, 7));
         assert!(expr_has_mutation(&update, 7));
@@ -696,6 +703,8 @@ mod tests {
             value: Box::new(Expr::String("changed".to_string())),
             receiver: Box::new(Expr::LocalGet(8)),
             strict: true,
+            byte_offset: 0,
+            byte_end: 0,
         };
         assert!(expr_has_mutation(&set, 7));
         assert!(expr_has_mutation(&set, 8));

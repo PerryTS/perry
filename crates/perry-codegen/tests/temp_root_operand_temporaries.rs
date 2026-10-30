@@ -1636,6 +1636,8 @@ fn a_put_value_set_key_is_re_derived_below_the_value() {
                 value: Box::new(Expr::Object(Vec::new())),
                 receiver: Box::new(Expr::LocalGet(0)),
                 strict: true,
+                byte_offset: 0,
+                byte_end: 0,
             }),
         ],
     );

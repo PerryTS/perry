@@ -344,6 +344,8 @@ mod tests {
                 object: Box::new(Expr::This),
                 property: k.into(),
                 value: Box::new(Expr::Undefined),
+                byte_offset: 0,
+                byte_end: 0,
             })
         };
         assert_eq!(
@@ -363,6 +365,8 @@ mod tests {
             key: Box::new(Expr::LocalGet(7)),
             value: Box::new(Expr::Undefined),
             strict: true,
+            byte_offset: 0,
+            byte_end: 0,
         });
         assert_eq!(
             prefix(&[captured.clone()], &|id| id == 7),

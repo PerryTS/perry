@@ -595,6 +595,7 @@ fn collect_nested_closure_boxed_vars_in_expr(expr: &perry_hir::Expr, out: &mut H
             object,
             index,
             value,
+            ..
         } => {
             collect_nested_closure_boxed_vars_in_expr(object, out);
             collect_nested_closure_boxed_vars_in_expr(index, out);
@@ -1017,6 +1018,7 @@ fn collect_closure_refs_and_writes_in_expr(
             object,
             index,
             value,
+            ..
         } => {
             collect_closure_refs_and_writes_in_expr(object, refs, writes);
             collect_closure_refs_and_writes_in_expr(index, refs, writes);
@@ -1270,6 +1272,7 @@ fn collect_outer_writes_in_expr(expr: &perry_hir::Expr, out: &mut HashSet<u32>) 
             object,
             index,
             value,
+            ..
         } => {
             collect_outer_writes_in_expr(object, out);
             collect_outer_writes_in_expr(index, out);
@@ -1481,6 +1484,7 @@ fn collect_write_ids_in_expr(expr: &perry_hir::Expr, out: &mut HashSet<u32>) {
             object,
             index,
             value,
+            ..
         } => {
             collect_write_ids_in_expr(object, out);
             collect_write_ids_in_expr(index, out);

@@ -405,6 +405,7 @@ fn collect_instantiations_in_expr(
             object,
             index,
             value,
+            ..
         } => {
             collect_instantiations_in_expr(object, ctx, module, idx);
             collect_instantiations_in_expr(index, ctx, module, idx);

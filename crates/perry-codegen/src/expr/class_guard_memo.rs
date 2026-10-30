@@ -210,6 +210,7 @@ fn expr_safe(ctx: &FnCtx<'_>, expr: &Expr, sites: &mut BTreeMap<u32, usize>) -> 
             object,
             index,
             value,
+            ..
         } => {
             matches!(object.as_ref(), Expr::PropertyGet { .. })
                 && super::typed_element::declared_kind(ctx, object).is_some()

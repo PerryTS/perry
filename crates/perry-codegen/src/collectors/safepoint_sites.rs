@@ -317,6 +317,8 @@ mod tests {
             object: Box::new(this()),
             property: p.to_string(),
             value: Box::new(Expr::Number(1.0)),
+            byte_offset: 0,
+            byte_end: 0,
         };
         // Three field stores in the constructor body.
         let body = vec![
@@ -332,6 +334,8 @@ mod tests {
             object: Box::new(this()),
             index: Box::new(Expr::Number(0.0)),
             value: Box::new(call(vec![])),
+            byte_offset: 0,
+            byte_end: 0,
         };
         // 1 for the IndexSet + 1 for the call in `value`.
         assert_eq!(count_safepoint_sites(&[Stmt::Expr(idx_set)]), 2);

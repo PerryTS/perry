@@ -246,6 +246,8 @@ impl Plan {
                         object: target.clone(),
                         index: key.clone(),
                         value: value.clone(),
+                        byte_offset: 0,
+                        byte_end: 0,
                     },
                 )
             }
@@ -259,12 +261,15 @@ impl Plan {
                     object: array.clone(),
                     index: index.clone(),
                     value: value.clone(),
+                    byte_offset: 0,
+                    byte_end: 0,
                 },
             ),
             Expr::IndexSet {
                 object,
                 index,
                 value,
+                ..
             } => {
                 let Some(root) = self.receiver(ctx, object) else {
                     return false;
@@ -1148,6 +1153,8 @@ fn expression(
                 object: target.clone(),
                 index: key.clone(),
                 value: value.clone(),
+                byte_offset: 0,
+                byte_end: 0,
             },
             values,
             storage,
@@ -1163,6 +1170,8 @@ fn expression(
                 object: array.clone(),
                 index: index.clone(),
                 value: value.clone(),
+                byte_offset: 0,
+                byte_end: 0,
             },
             values,
             storage,
@@ -1171,6 +1180,7 @@ fn expression(
             object,
             index,
             value,
+            ..
         } => {
             let Expr::LocalGet(id) = object.as_ref() else {
                 unreachable!()

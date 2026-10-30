@@ -851,6 +851,8 @@ fn emit_field_push_writeback(
             object: Box::new(Expr::This),
             property: field.to_string(),
             value: Box::new(Expr::LocalGet(array_id)),
+            byte_offset: 0,
+            byte_end: 0,
         },
     )?;
     ctx.block().br(&done_label);

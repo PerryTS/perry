@@ -94,6 +94,8 @@ fn store(f: &str, value: Expr) -> Stmt {
         value: Box::new(value),
         receiver: Box::new(Expr::This),
         strict: true,
+        byte_offset: 0,
+        byte_end: 0,
     })
 }
 

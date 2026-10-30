@@ -348,6 +348,7 @@ pub fn expr_uses_this_as_value(e: &perry_hir::Expr, fields: &HashSet<String>) ->
             object,
             value,
             property,
+            ..
         } => {
             let obj_unsafe = if matches!(object.as_ref(), Expr::This) {
                 !fields.contains(property)
@@ -472,6 +473,7 @@ pub fn expr_uses_this_as_value(e: &perry_hir::Expr, fields: &HashSet<String>) ->
             object,
             index,
             value,
+            ..
         } => {
             expr_uses_this_as_value(object, fields)
                 || expr_uses_this_as_value(index, fields)
@@ -651,6 +653,8 @@ mod tests {
                     type_args: Vec::new(),
                     byte_offset: 0,
                 }),
+                byte_offset: 0,
+                byte_end: 0,
             })],
         )
     }

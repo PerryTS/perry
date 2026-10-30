@@ -205,6 +205,7 @@ pub fn collect_localsets_in_expr_for_propagate<'a>(
             object,
             index,
             value,
+            ..
         } => {
             collect_localsets_in_expr_for_propagate(object, out);
             collect_localsets_in_expr_for_propagate(index, out);
@@ -323,6 +324,7 @@ pub fn walk_index_uses_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
             object,
             index,
             value,
+            ..
         } => {
             collect_index_refs(index, out);
             walk_index_uses_in_expr(object, out);

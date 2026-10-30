@@ -685,9 +685,8 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                 .find(|(_i, (c, _b, _d))| !c.is_empty())
                 .map(|(i, (c, _b, d))| (i, (c.clone(), *d)))
                 .ok_or_else(|| anyhow!("continue statement outside any loop"))?;
-            let cont_label =
-                crate::expr::resume_locals::direct_dispatch_target(ctx, loop_index)
-                    .unwrap_or(cont_label);
+            let cont_label = crate::expr::resume_locals::direct_dispatch_target(ctx, loop_index)
+                .unwrap_or(cont_label);
             // Pop try frames escaped by jumping back to the loop header
             // (see Stmt::Break / Stmt::Return for the balancing rationale).
             for _ in target_depth..ctx.try_depth {

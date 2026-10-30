@@ -133,6 +133,7 @@ fn collect_pod_numeric_field_read_locals(ctx: &FnCtx<'_>, expr: &Expr, out: &mut
             object,
             index,
             value,
+            ..
         } => {
             collect_pod_numeric_field_read_locals(ctx, object, out);
             collect_pod_numeric_field_read_locals(ctx, index, out);
@@ -212,6 +213,7 @@ fn expr_may_materialize_pod_local(ctx: &FnCtx<'_>, expr: &Expr, target_id: u32) 
             object,
             property,
             value,
+            ..
         } => {
             let pod_field_set = matches!(object.as_ref(), Expr::LocalGet(id) if *id == target_id)
                 && ctx.pod_records.get(&target_id).is_some_and(|local| {
@@ -247,6 +249,7 @@ fn expr_may_materialize_pod_local(ctx: &FnCtx<'_>, expr: &Expr, target_id: u32) 
             object,
             index,
             value,
+            ..
         } => {
             expr_may_materialize_pod_local(ctx, object, target_id)
                 || expr_may_materialize_pod_local(ctx, index, target_id)

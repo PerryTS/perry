@@ -54,6 +54,7 @@ impl<'a> Gen<'a> {
                     object,
                     property,
                     value,
+                    ..
                 }) if matches!(object.as_ref(), Expr::This) && property == key => {
                     match value.as_ref() {
                         Expr::LocalGet(p) => ctor.params.iter().position(|q| q.id == *p),

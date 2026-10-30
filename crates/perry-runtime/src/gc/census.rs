@@ -485,8 +485,11 @@ impl Census {
         entry.count += 1;
         entry.bytes += size as u64;
         entry.slot_capacity += slot_capacity as u64;
-        if !crate::meta_read!(crate::meta_obj_from_type!(obj as *mut crate::object::ObjectHeader, t))
-            .is_null()
+        if !crate::meta_read!(crate::meta_obj_from_type!(
+            obj as *mut crate::object::ObjectHeader,
+            t
+        ))
+        .is_null()
         {
             entry.meta_objects += 1;
             self.obj_meta += 1;

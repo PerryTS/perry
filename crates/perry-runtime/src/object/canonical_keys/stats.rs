@@ -38,7 +38,11 @@ pub(crate) fn canonical_trie_stats() -> (usize, usize, usize) {
     with_table_or((0, 0, 0), |t| {
         let bytes = t.nodes.capacity() * std::mem::size_of::<Node>()
             + t.edges.capacity() * std::mem::size_of::<((u32, u64), u32)>();
-        let published = t.nodes.iter().filter(|n| n.published && n.addr != 0).count();
+        let published = t
+            .nodes
+            .iter()
+            .filter(|n| n.published && n.addr != 0)
+            .count();
         (t.edges.len(), published, bytes)
     })
 }

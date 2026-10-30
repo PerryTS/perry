@@ -541,6 +541,8 @@ fn array_set(array_id: u32, index: Expr, value: Expr) -> Stmt {
         object: Box::new(local(array_id)),
         index: Box::new(index),
         value: Box::new(value),
+        byte_offset: 0,
+        byte_end: 0,
     })
 }
 

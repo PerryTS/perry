@@ -75,18 +75,17 @@ fn find_birth_record(
     slab: &shapes_store::ShapeSlab,
     proto_id: u64,
 ) -> Option<(LayoutWord, *mut ShapeRecord)> {
-    let facts =
-        shapes_store::facts_key_proto(
-            shapes_store::list_identity(crate::object::canonical_keys::ROOT_NODE, 0),
-            0,
-            0,
-            0,
-            ShapeObjectKind::Ordinary,
-            0,
-            proto_id,
-            0,
-            0,
-        );
+    let facts = shapes_store::facts_key_proto(
+        shapes_store::list_identity(crate::object::canonical_keys::ROOT_NODE, 0),
+        0,
+        0,
+        0,
+        ShapeObjectKind::Ordinary,
+        0,
+        proto_id,
+        0,
+        0,
+    );
     let ids = inner.by_facts.get(&facts)?;
     for &id in ids.as_slice() {
         let Some(record) = slab.handle_record_ptr(id) else {

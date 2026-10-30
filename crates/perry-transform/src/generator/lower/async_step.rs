@@ -265,35 +265,35 @@ pub fn build_async_step_driver_direct(
         },
     ];
     let mut resume_body = vec![
-            Stmt::Try {
-                body: vec![labeled_loop],
-                catch: Some(CatchClause {
-                    param: Some((catch_e_id, "__step_catch_e".to_string())),
-                    body: vec![
-                        Stmt::If {
-                            condition: Expr::LocalGet(is_error_param_id),
-                            then_branch: reject_arm,
-                            else_branch: None,
-                        },
-                        // Use the step closure captured at entry so nested
-                        // calls cannot disturb the TLS self-reference before
-                        // the error re-entry path runs.
-                        Stmt::Return(Some(Expr::Call {
-                            byte_end: 0,
-                            callee: Box::new(Expr::LocalGet(step_self_id)),
-                            args: vec![Expr::LocalGet(catch_e_id), Expr::Bool(true)],
-                            type_args: vec![],
-                            byte_offset: 0,
-                        })),
-                    ],
-                }),
-                finally: None,
-            },
-            Stmt::If {
-                condition: Expr::IterResultGetDone,
-                then_branch: resolve_arm,
-                else_branch: None,
-            },
+        Stmt::Try {
+            body: vec![labeled_loop],
+            catch: Some(CatchClause {
+                param: Some((catch_e_id, "__step_catch_e".to_string())),
+                body: vec![
+                    Stmt::If {
+                        condition: Expr::LocalGet(is_error_param_id),
+                        then_branch: reject_arm,
+                        else_branch: None,
+                    },
+                    // Use the step closure captured at entry so nested
+                    // calls cannot disturb the TLS self-reference before
+                    // the error re-entry path runs.
+                    Stmt::Return(Some(Expr::Call {
+                        byte_end: 0,
+                        callee: Box::new(Expr::LocalGet(step_self_id)),
+                        args: vec![Expr::LocalGet(catch_e_id), Expr::Bool(true)],
+                        type_args: vec![],
+                        byte_offset: 0,
+                    })),
+                ],
+            }),
+            finally: None,
+        },
+        Stmt::If {
+            condition: Expr::IterResultGetDone,
+            then_branch: resolve_arm,
+            else_branch: None,
+        },
     ];
     resume_body.extend(continue_in_place);
     let resume_loop = Stmt::While {

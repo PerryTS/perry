@@ -4805,6 +4805,7 @@ js_worker_threads_worker_start_cpu_profile	f64	i64
 js_worker_threads_worker_start_heap_profile	f64	i64
 js_worker_threads_worker_terminate	f64	i64
 js_worker_threads_worker_unref	f64	i64
+js_worker_transfer_sequence	f64	f64
 js_workload_api_inspectGraph	ptr	f64
 js_workload_graph	ptr	ptr,ptr
 js_workload_handle_down	ptr	i64,i32s

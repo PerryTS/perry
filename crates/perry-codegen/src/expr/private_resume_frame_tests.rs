@@ -329,8 +329,10 @@ fn private_resume_ir(body: Vec<Stmt>) -> String {
             else_branch: None,
         }],
     );
-    String::from_utf8(crate::compile_module(&module, crate::temp_root_coverage::entry_opts()).unwrap())
-        .unwrap()
+    String::from_utf8(
+        crate::compile_module(&module, crate::temp_root_coverage::entry_opts()).unwrap(),
+    )
+    .unwrap()
 }
 
 fn private_definition(ir: &str) -> String {
@@ -358,10 +360,7 @@ fn resume_locals_write_back_on_every_exit() {
             set(2, Expr::Bool(true)),
             Stmt::If {
                 condition: Expr::Bool(false),
-                then_branch: vec![
-                    set(1, Expr::Number(4.0)),
-                    Stmt::Throw(Expr::Number(1.0)),
-                ],
+                then_branch: vec![set(1, Expr::Number(4.0)), Stmt::Throw(Expr::Number(1.0))],
                 else_branch: None,
             },
             Stmt::Return(Some(Expr::LocalGet(7))),
@@ -370,7 +369,10 @@ fn resume_locals_write_back_on_every_exit() {
         let exits = def.matches("ret double").count() + def.matches("@js_throw(").count();
         let writes = def.matches("; rlf.write_back").count();
         assert!(exits >= 2, "{mode}: body has a return and a throw\n{def}");
-        assert_eq!(writes, exits, "{mode}: every exit writes the controls back\n{def}");
+        assert_eq!(
+            writes, exits,
+            "{mode}: every exit writes the controls back\n{def}"
+        );
     });
 }
 

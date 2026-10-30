@@ -16,11 +16,9 @@
 mod dispatch_ext;
 
 use perry_ffi::{
-    alloc_bigint_from_str, alloc_string, bigint_value, build_object_shape, drop_handle,
-    get_handle,
-    js_array_alloc, js_array_push,
-    js_object_alloc_with_shape, js_object_set_field, read_string, register_handle, ArrayHeader,
-    ErrorKind, Handle, JsString, JsValue, ObjectHeader, StringHeader,
+    alloc_bigint_from_str, alloc_string, bigint_value, build_object_shape, drop_handle, get_handle,
+    js_array_alloc, js_array_push, js_object_alloc_with_shape, js_object_set_field, read_string,
+    register_handle, ArrayHeader, ErrorKind, Handle, JsString, JsValue, ObjectHeader, StringHeader,
 };
 use rusqlite::{types::Value as SqliteValue, Connection};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -506,8 +504,10 @@ pub unsafe extern "C" fn js_sqlite_stmt_get(
                                 for (idx, _) in column_names.iter().enumerate() {
                                     let value: SqliteValue =
                                         row.get(idx).unwrap_or(SqliteValue::Null);
-                                    row_arr =
-                                        js_array_push(row_arr, sqlite_value_to_jsvalue_with(&value, safe_ints));
+                                    row_arr = js_array_push(
+                                        row_arr,
+                                        sqlite_value_to_jsvalue_with(&value, safe_ints),
+                                    );
                                 }
                                 return f64::from_bits(JsValue::from_object_ptr(row_arr).bits());
                             }
@@ -585,8 +585,10 @@ pub unsafe extern "C" fn js_sqlite_stmt_all(
                                 for (idx, _) in column_names.iter().enumerate() {
                                     let value: SqliteValue =
                                         row.get(idx).unwrap_or(SqliteValue::Null);
-                                    row_arr =
-                                        js_array_push(row_arr, sqlite_value_to_jsvalue_with(&value, safe_ints));
+                                    row_arr = js_array_push(
+                                        row_arr,
+                                        sqlite_value_to_jsvalue_with(&value, safe_ints),
+                                    );
                                 }
                                 result_array =
                                     js_array_push(result_array, JsValue::from_object_ptr(row_arr));

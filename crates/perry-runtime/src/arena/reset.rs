@@ -19,14 +19,20 @@ pub fn arena_reset_all_blocks_to_zero() {
     ARENA.with(|arena| unsafe {
         let arena = &mut *arena.get();
         for block in arena.blocks.iter_mut() {
-            if block.extent_kind == super::region::Kind::LargeObject { continue; }
+            if block.extent_kind == super::region::Kind::LargeObject {
+                continue;
+            }
             block.clear_object_starts();
             block.offset = 0;
         }
         if !arena.blocks.iter().any(ArenaBlock::bump_target) {
             arena.install_fresh_block(BLOCK_SIZE);
         }
-        let first = arena.blocks.iter().position(ArenaBlock::bump_target).unwrap_or(0);
+        let first = arena
+            .blocks
+            .iter()
+            .position(ArenaBlock::bump_target)
+            .unwrap_or(0);
         arena.set_current(first);
         // Free list is now invalid (all entries point into reset blocks).
         crate::gc::ARENA_FREE_LIST.with(|fl| fl.borrow_mut().clear());
@@ -129,7 +135,11 @@ fn reset_region_to_zero(arena: &mut Arena, dead_cycles: DeadCycles) -> (usize, u
     }
     // Slot 0 may hold a dedicated large extent; `point_eden_at_first_mapped_block`
     // still covers an all-tombstone prefix.
-    let first = arena.blocks.iter().position(ArenaBlock::bump_target).unwrap_or(0);
+    let first = arena
+        .blocks
+        .iter()
+        .position(ArenaBlock::bump_target)
+        .unwrap_or(0);
     arena.set_current(first);
     (reset_blocks, reusable_bytes)
 }
@@ -796,7 +806,8 @@ impl ArenaResetEmptyBlocksState {
             let current = arena.current;
             let keep_low = current.saturating_sub(4);
             let block = arena.blocks.get_mut(block_idx)?;
-            if block.extent_kind == super::region::Kind::LargeObject || block.data.is_null()
+            if block.extent_kind == super::region::Kind::LargeObject
+                || block.data.is_null()
                 || block.data as usize != snapshot.data
                 || block.size != snapshot.size
                 || block.offset != snapshot.offset
@@ -1430,13 +1441,11 @@ impl OldArenaReclaimDeadBlocksState {
         }
         OLD_ARENA.with(|arena| unsafe {
             let arena = &mut *arena.get();
-            if let Some((idx, _)) = arena
-                .blocks
-                .iter()
-                .enumerate()
-                .find(|(_, block)| !block.data.is_null() && block.offset == 0
-                    && block.extent_kind != super::region::Kind::LargeObject)
-            {
+            if let Some((idx, _)) = arena.blocks.iter().enumerate().find(|(_, block)| {
+                !block.data.is_null()
+                    && block.offset == 0
+                    && block.extent_kind != super::region::Kind::LargeObject
+            }) {
                 arena.set_current(idx);
             } else if arena
                 .blocks
@@ -1444,13 +1453,9 @@ impl OldArenaReclaimDeadBlocksState {
                 .map(|block| block.data.is_null())
                 .unwrap_or(true)
             {
-                if let Some((idx, _)) = arena
-                    .blocks
-                    .iter()
-                    .enumerate()
-                    .find(|(_, block)| !block.data.is_null()
-                        && block.extent_kind != super::region::Kind::LargeObject)
-                {
+                if let Some((idx, _)) = arena.blocks.iter().enumerate().find(|(_, block)| {
+                    !block.data.is_null() && block.extent_kind != super::region::Kind::LargeObject
+                }) {
                     arena.set_current(idx);
                 }
             }
@@ -1521,13 +1526,11 @@ pub(crate) fn old_arena_reclaim_dead_blocks(block_has_live: &[bool]) -> ArenaRes
         }
 
         if changed {
-            if let Some((idx, _)) = arena
-                .blocks
-                .iter()
-                .enumerate()
-                .find(|(_, block)| !block.data.is_null() && block.offset == 0
-                    && block.extent_kind != super::region::Kind::LargeObject)
-            {
+            if let Some((idx, _)) = arena.blocks.iter().enumerate().find(|(_, block)| {
+                !block.data.is_null()
+                    && block.offset == 0
+                    && block.extent_kind != super::region::Kind::LargeObject
+            }) {
                 arena.set_current(idx);
             } else if arena
                 .blocks
@@ -1535,13 +1538,9 @@ pub(crate) fn old_arena_reclaim_dead_blocks(block_has_live: &[bool]) -> ArenaRes
                 .map(|block| block.data.is_null())
                 .unwrap_or(true)
             {
-                if let Some((idx, _)) = arena
-                    .blocks
-                    .iter()
-                    .enumerate()
-                    .find(|(_, block)| !block.data.is_null()
-                        && block.extent_kind != super::region::Kind::LargeObject)
-                {
+                if let Some((idx, _)) = arena.blocks.iter().enumerate().find(|(_, block)| {
+                    !block.data.is_null() && block.extent_kind != super::region::Kind::LargeObject
+                }) {
                     arena.set_current(idx);
                 }
             }
@@ -1627,13 +1626,11 @@ pub(crate) fn old_arena_reclaim_selected_dead_blocks(
         }
 
         if changed {
-            if let Some((idx, _)) = arena
-                .blocks
-                .iter()
-                .enumerate()
-                .find(|(_, block)| !block.data.is_null() && block.offset == 0
-                    && block.extent_kind != super::region::Kind::LargeObject)
-            {
+            if let Some((idx, _)) = arena.blocks.iter().enumerate().find(|(_, block)| {
+                !block.data.is_null()
+                    && block.offset == 0
+                    && block.extent_kind != super::region::Kind::LargeObject
+            }) {
                 arena.set_current(idx);
             } else if arena
                 .blocks
@@ -1641,13 +1638,9 @@ pub(crate) fn old_arena_reclaim_selected_dead_blocks(
                 .map(|block| block.data.is_null())
                 .unwrap_or(true)
             {
-                if let Some((idx, _)) = arena
-                    .blocks
-                    .iter()
-                    .enumerate()
-                    .find(|(_, block)| !block.data.is_null()
-                        && block.extent_kind != super::region::Kind::LargeObject)
-                {
+                if let Some((idx, _)) = arena.blocks.iter().enumerate().find(|(_, block)| {
+                    !block.data.is_null() && block.extent_kind != super::region::Kind::LargeObject
+                }) {
                     arena.set_current(idx);
                 }
             }
@@ -1679,8 +1672,10 @@ fn reclaim_dead_survivor_arena_blocks(
                     .blocks
                     .iter()
                     .enumerate()
-                    .find(|(_, block)| !block.data.is_null()
-                        && block.extent_kind != super::region::Kind::LargeObject)
+                    .find(|(_, block)| {
+                        !block.data.is_null()
+                            && block.extent_kind != super::region::Kind::LargeObject
+                    })
                     .map(|(i, _)| i)
             });
         let mut stats = ArenaResetStats::default();
@@ -1727,13 +1722,11 @@ fn reclaim_dead_survivor_arena_blocks(
         }
 
         if changed {
-            if let Some((idx, _)) = arena
-                .blocks
-                .iter()
-                .enumerate()
-                .find(|(_, block)| !block.data.is_null() && block.offset == 0
-                    && block.extent_kind != super::region::Kind::LargeObject)
-            {
+            if let Some((idx, _)) = arena.blocks.iter().enumerate().find(|(_, block)| {
+                !block.data.is_null()
+                    && block.offset == 0
+                    && block.extent_kind != super::region::Kind::LargeObject
+            }) {
                 arena.set_current(idx);
             } else if arena
                 .blocks
@@ -1741,13 +1734,9 @@ fn reclaim_dead_survivor_arena_blocks(
                 .map(|block| block.data.is_null())
                 .unwrap_or(true)
             {
-                if let Some((idx, _)) = arena
-                    .blocks
-                    .iter()
-                    .enumerate()
-                    .find(|(_, block)| !block.data.is_null()
-                        && block.extent_kind != super::region::Kind::LargeObject)
-                {
+                if let Some((idx, _)) = arena.blocks.iter().enumerate().find(|(_, block)| {
+                    !block.data.is_null() && block.extent_kind != super::region::Kind::LargeObject
+                }) {
                     arena.set_current(idx);
                 }
             }

@@ -183,6 +183,7 @@ pub fn rewrite_imul_calls_in_expr(e: &mut Expr, imul_ids: &HashSet<FuncId>) {
             object,
             index,
             value,
+            ..
         } => {
             rewrite_imul_calls_in_expr(object, imul_ids);
             rewrite_imul_calls_in_expr(index, imul_ids);

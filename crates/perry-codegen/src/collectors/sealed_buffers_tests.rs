@@ -276,6 +276,8 @@ fn a_sloppy_element_store_keeps_the_seal() {
             value: Box::new(Expr::Integer(2)),
             receiver: Box::new(Expr::LocalGet(receiver)),
             strict: false,
+            byte_offset: 0,
+            byte_end: 0,
         })
     };
     let m = module(

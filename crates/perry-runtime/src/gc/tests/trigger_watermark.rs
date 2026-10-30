@@ -205,7 +205,10 @@ fn small_allocation_crosses_the_leaf_window_before_the_copying_cap() {
     let leaf = crate::arena::arena_alloc_gc(LARGE_OBJECT_THRESHOLD_BYTES + 8, 8, GC_TYPE_STRING);
     std::hint::black_box(leaf);
     let leaves = crate::arena::young_large_in_use_bytes();
-    assert!(leaves > 0, "fixture must exercise dedicated young ownership");
+    assert!(
+        leaves > 0,
+        "fixture must exercise dedicated young ownership"
+    );
     assert_eq!(crate::arena::copying_active_survivor_in_use_bytes(), 0);
     let small = crate::arena::copying_from_space_in_use_bytes();
     let cap = small + leaves + 4096;
@@ -222,6 +225,12 @@ fn small_allocation_crosses_the_leaf_window_before_the_copying_cap() {
     assert!(trigger_watermark_fast_path_hits() > before);
     assert!(crate::arena::copying_from_space_in_use_bytes() < cap);
     assert_eq!(crate::arena::young_large_in_use_bytes(), leaves);
-    assert!(!nothing_due(), "the residual window must reach the full ladder");
-    assert_eq!(gc_budgeted_due_trigger(), Some(BudgetedGcTrigger::YoungScavengeCap));
+    assert!(
+        !nothing_due(),
+        "the residual window must reach the full ladder"
+    );
+    assert_eq!(
+        gc_budgeted_due_trigger(),
+        Some(BudgetedGcTrigger::YoungScavengeCap)
+    );
 }

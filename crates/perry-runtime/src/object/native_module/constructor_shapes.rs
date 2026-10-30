@@ -79,11 +79,15 @@ fn native_parent(module: &str, name: &str) -> Option<fn() -> f64> {
         ("fs", "WriteStream") | ("crypto", "Sign" | "Verify") => {
             || super::static_exports::js_native_export_73747265616d_5772697461626c65(0)
         }
-        ("crypto", "Cipheriv" | "Decipheriv" | "#Hash" | "#Hmac") => {
-            || private_parent_value("crypto", crate::realm_decl! { native_key "#LazyTransform"; realm { "node:crypto.Cipheriv.<prototype>", receiver = "%NativeNamespace:crypto%", kind = prototype, instance = "node:crypto.Cipheriv.prototype.<prototype>", extends = "node:stream.Transform"; } })
-        }
-        ("crypto", "Hash") => || private_parent_value("crypto", crate::realm_decl! { native_key "#Hash"; realm { "node:crypto.Hash.prototype.constructor", receiver = "%NativeNamespace:crypto%", kind = constructor, instance = "node:crypto.Hash.prototype", extends = "node:crypto.Cipheriv.<prototype>"; } }),
-        ("crypto", "Hmac") => || private_parent_value("crypto", crate::realm_decl! { native_key "#Hmac"; realm { "node:crypto.Hmac.prototype.constructor", receiver = "%NativeNamespace:crypto%", kind = constructor, instance = "node:crypto.Hmac.prototype", extends = "node:crypto.Cipheriv.<prototype>"; } }),
+        ("crypto", "Cipheriv" | "Decipheriv" | "#Hash" | "#Hmac") => || {
+            private_parent_value("crypto", crate::realm_decl! { native_key "#LazyTransform"; realm { "node:crypto.Cipheriv.<prototype>", receiver = "%NativeNamespace:crypto%", kind = prototype, instance = "node:crypto.Cipheriv.prototype.<prototype>", extends = "node:stream.Transform"; } })
+        },
+        ("crypto", "Hash") => || {
+            private_parent_value("crypto", crate::realm_decl! { native_key "#Hash"; realm { "node:crypto.Hash.prototype.constructor", receiver = "%NativeNamespace:crypto%", kind = constructor, instance = "node:crypto.Hash.prototype", extends = "node:crypto.Cipheriv.<prototype>"; } })
+        },
+        ("crypto", "Hmac") => || {
+            private_parent_value("crypto", crate::realm_decl! { native_key "#Hmac"; realm { "node:crypto.Hmac.prototype.constructor", receiver = "%NativeNamespace:crypto%", kind = constructor, instance = "node:crypto.Hmac.prototype", extends = "node:crypto.Cipheriv.<prototype>"; } })
+        },
         ("http", "ClientRequest" | "ServerResponse") => {
             || super::static_exports::js_native_export_68747470_4f7574676f696e674d657373616765(0)
         }
@@ -98,21 +102,31 @@ fn native_parent(module: &str, name: &str) -> Option<fn() -> f64> {
         ("tls", "TLSSocket") | ("tty", "ReadStream" | "WriteStream") => {
             || super::static_exports::js_native_export_6e6574_536f636b6574(0)
         }
-        ("readline", "Interface" | "InterfacePromises") => {
-            || private_parent_value("readline", crate::realm_decl! { native_key "#Interface"; realm { "node:readline/promises.Interface.<prototype>", receiver = "%NativeNamespace:readline%", kind = prototype, instance = "node:readline/promises.Interface.prototype.<prototype>", extends = "node:readline/promises.Interface.<prototype>.<prototype>"; } })
-        }
-        ("readline", "#Interface") => || private_parent_value("readline", crate::realm_decl! { native_key "#InterfaceConstructor"; realm { "node:readline/promises.Interface.<prototype>.<prototype>", receiver = "%NativeNamespace:readline%", kind = prototype, instance = "node:readline/promises.Interface.prototype.<prototype>.<prototype>", extends = "node:events.EventEmitter"; } }),
-        ("repl", "REPLServer") => || private_parent_value("readline", crate::realm_decl! { native_key "Interface"; realm { "node:repl.REPLServer.<prototype>", receiver = "%NativeNamespace:readline%", kind = prototype, instance = "node:repl.REPLServer.prototype.<prototype>", extends = "node:readline/promises.Interface.<prototype>"; } }),
+        ("readline", "Interface" | "InterfacePromises") => || {
+            private_parent_value("readline", crate::realm_decl! { native_key "#Interface"; realm { "node:readline/promises.Interface.<prototype>", receiver = "%NativeNamespace:readline%", kind = prototype, instance = "node:readline/promises.Interface.prototype.<prototype>", extends = "node:readline/promises.Interface.<prototype>.<prototype>"; } })
+        },
+        ("readline", "#Interface") => || {
+            private_parent_value("readline", crate::realm_decl! { native_key "#InterfaceConstructor"; realm { "node:readline/promises.Interface.<prototype>.<prototype>", receiver = "%NativeNamespace:readline%", kind = prototype, instance = "node:readline/promises.Interface.prototype.<prototype>.<prototype>", extends = "node:events.EventEmitter"; } })
+        },
+        ("repl", "REPLServer") => || {
+            private_parent_value("readline", crate::realm_decl! { native_key "Interface"; realm { "node:repl.REPLServer.<prototype>", receiver = "%NativeNamespace:readline%", kind = prototype, instance = "node:repl.REPLServer.prototype.<prototype>", extends = "node:readline/promises.Interface.<prototype>"; } })
+        },
         (
             "zlib",
             "Deflate" | "Inflate" | "Gzip" | "Gunzip" | "DeflateRaw" | "InflateRaw" | "Unzip"
             | "#Brotli",
-        ) => || private_parent_value("zlib", crate::realm_decl! { native_key "#Zlib"; realm { "node:zlib.Deflate.<prototype>", receiver = "%NativeNamespace:zlib%", kind = prototype, instance = "node:zlib.Deflate.prototype.<prototype>", extends = "node:zlib.Deflate.<prototype>.<prototype>"; } }),
-        ("zlib", "BrotliCompress" | "BrotliDecompress") => {
-            || private_parent_value("zlib", crate::realm_decl! { native_key "#Brotli"; realm { "node:zlib.BrotliCompress.<prototype>", receiver = "%NativeNamespace:zlib%", kind = prototype, instance = "node:zlib.BrotliCompress.prototype.<prototype>", extends = "node:zlib.Deflate.<prototype>"; } })
-        }
-        ("zlib", "ZstdCompress" | "ZstdDecompress") => || private_parent_value("zlib", crate::realm_decl! { native_key "#Zstd"; realm { "node:zlib.ZstdCompress.<prototype>", receiver = "%NativeNamespace:zlib%", kind = prototype, instance = "node:zlib.ZstdCompress.prototype.<prototype>", extends = "node:zlib.Deflate.<prototype>.<prototype>"; } }),
-        ("zlib", "#Zlib" | "#Zstd") => || private_parent_value("zlib", crate::realm_decl! { native_key "#ZlibBase"; realm { "node:zlib.Deflate.<prototype>.<prototype>", receiver = "%NativeNamespace:zlib%", kind = prototype, instance = "node:zlib.Deflate.prototype.<prototype>.<prototype>", extends = "node:stream.Transform"; } }),
+        ) => || {
+            private_parent_value("zlib", crate::realm_decl! { native_key "#Zlib"; realm { "node:zlib.Deflate.<prototype>", receiver = "%NativeNamespace:zlib%", kind = prototype, instance = "node:zlib.Deflate.prototype.<prototype>", extends = "node:zlib.Deflate.<prototype>.<prototype>"; } })
+        },
+        ("zlib", "BrotliCompress" | "BrotliDecompress") => || {
+            private_parent_value("zlib", crate::realm_decl! { native_key "#Brotli"; realm { "node:zlib.BrotliCompress.<prototype>", receiver = "%NativeNamespace:zlib%", kind = prototype, instance = "node:zlib.BrotliCompress.prototype.<prototype>", extends = "node:zlib.Deflate.<prototype>"; } })
+        },
+        ("zlib", "ZstdCompress" | "ZstdDecompress") => || {
+            private_parent_value("zlib", crate::realm_decl! { native_key "#Zstd"; realm { "node:zlib.ZstdCompress.<prototype>", receiver = "%NativeNamespace:zlib%", kind = prototype, instance = "node:zlib.ZstdCompress.prototype.<prototype>", extends = "node:zlib.Deflate.<prototype>.<prototype>"; } })
+        },
+        ("zlib", "#Zlib" | "#Zstd") => || {
+            private_parent_value("zlib", crate::realm_decl! { native_key "#ZlibBase"; realm { "node:zlib.Deflate.<prototype>.<prototype>", receiver = "%NativeNamespace:zlib%", kind = prototype, instance = "node:zlib.Deflate.prototype.<prototype>.<prototype>", extends = "node:stream.Transform"; } })
+        },
         _ => return None,
     })
 }

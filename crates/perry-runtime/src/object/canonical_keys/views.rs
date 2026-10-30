@@ -73,7 +73,9 @@ pub(crate) fn with_backing_shapes<R>(
 /// Every list's shape state with its backing address, in node order. The
 /// shape table's collector walk and census read families through this; `f`
 /// must not reach the trie.
-pub(crate) fn for_each_list_shapes(mut f: impl FnMut(u32, usize, &mut crate::object::shapes::ListShapes)) {
+pub(crate) fn for_each_list_shapes(
+    mut f: impl FnMut(u32, usize, &mut crate::object::shapes::ListShapes),
+) {
     try_with_table(|t| {
         for id in 0..t.nodes.len() {
             let addr = t.nodes[id].addr;
