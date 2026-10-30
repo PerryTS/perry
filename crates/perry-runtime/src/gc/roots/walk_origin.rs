@@ -11,8 +11,7 @@
 //! no roots: statepoint records are the only root mechanism, and those frames
 //! have none.
 //!
-//! Scoping is what makes this sound, so both halves are guards that restore
-//! what they replaced:
+//! Scoping is what makes this sound, so both halves are guards:
 //!
 //! * [`EntryOrigin`] lives for the entry body and offers the frame to every
 //!   collection request the body makes. That is sound because an entry that
@@ -20,8 +19,10 @@
 //!   allocation slow paths run collector and allocator code only): every
 //!   frame between such a request and the offered frame is the runtime's own,
 //!   and holds no roots. An entry that can call back into JS must not offer.
-//! * [`ActiveOrigin`] lives for one collection (every synchronous collection
-//!   entry and every budgeted step installs one). A nested collection
+//!   It clears the offer when it returns.
+//! * [`ActiveOrigin`] lives for one collection and restores what it replaced
+//!   (every synchronous collection entry and every budgeted step installs
+//!   one). A nested collection
 //!   installs its own, so a scan always reads the origin of the collection it
 //!   belongs to, and a collection that was not handed one walks from the scan
 //!   itself.
@@ -42,17 +43,21 @@ pub(crate) struct WalkOrigin {
     pub(crate) fp: usize,
 }
 
-crate::perry_thread_local! {
-    static OFFERED: Cell<Option<WalkOrigin>> = const { Cell::new(None) };
-    static ACTIVE: Cell<Option<WalkOrigin>> = const { Cell::new(None) };
-}
+// `#[thread_local]`, not `thread_local!`: const, drop-free and all-zero (so
+// in `.tbss`), these need no accessor and no claimed slot. One
+// thread-pointer-relative load or store, which is what lets an allocation
+// slow path offer its frame for a few instructions.
+#[thread_local]
+static OFFERED: Cell<Option<WalkOrigin>> = Cell::new(None);
+#[thread_local]
+static ACTIVE: Cell<Option<WalkOrigin>> = Cell::new(None);
 
 /// Offers the entry's caller frame to the collection requests of its body.
 #[cfg_attr(
     not(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu")),
     allow(dead_code)
 )]
-pub(crate) struct EntryOrigin(Option<WalkOrigin>);
+pub(crate) struct EntryOrigin(());
 
 #[cfg_attr(
     not(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu")),
@@ -61,14 +66,19 @@ pub(crate) struct EntryOrigin(Option<WalkOrigin>);
 impl EntryOrigin {
     #[inline]
     pub(crate) fn enter(origin: WalkOrigin) -> Self {
-        Self(OFFERED.with(|cell| cell.replace(Some(origin))))
+        OFFERED.set(Some(origin));
+        Self(())
     }
 }
 
+/// Clears rather than restores: an entry nested in another (a Rust caller of
+/// an offering entry) ends the outer offer too, and the outer body's later
+/// requests then walk from the scan. Never wrong, only slower, and it spares
+/// every entry a load.
 impl Drop for EntryOrigin {
     #[inline]
     fn drop(&mut self) {
-        OFFERED.with(|cell| cell.set(self.0));
+        OFFERED.set(None);
     }
 }
 
@@ -76,7 +86,7 @@ impl Drop for EntryOrigin {
 /// it into itself.
 #[inline]
 pub(crate) fn offered() -> Option<WalkOrigin> {
-    OFFERED.with(Cell::get)
+    OFFERED.get()
 }
 
 /// Publishes one collection's origin (or none) to its scans.
@@ -85,14 +95,14 @@ pub(crate) struct ActiveOrigin(Option<WalkOrigin>);
 impl ActiveOrigin {
     #[inline]
     pub(crate) fn enter(origin: Option<WalkOrigin>) -> Self {
-        Self(ACTIVE.with(|cell| cell.replace(origin)))
+        Self(ACTIVE.replace(origin))
     }
 }
 
 impl Drop for ActiveOrigin {
     #[inline]
     fn drop(&mut self) {
-        ACTIVE.with(|cell| cell.set(self.0));
+        ACTIVE.set(self.0);
     }
 }
 
@@ -103,7 +113,7 @@ impl Drop for ActiveOrigin {
 )]
 #[inline]
 pub(crate) fn active() -> Option<WalkOrigin> {
-    ACTIVE.with(Cell::get)
+    ACTIVE.get()
 }
 
 /// The body of an x86-64 Linux naked entry that offers its caller's frame: it
