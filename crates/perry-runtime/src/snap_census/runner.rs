@@ -402,11 +402,13 @@ unsafe fn start(out: String) {
     let (bin_lo, bin_hi) = writable_image_range(realm.0);
     let mut fs: usize = 0;
     libc::syscall(libc::SYS_arch_prctl, 0x1003 /* ARCH_GET_FS */, &mut fs as *mut usize);
-    let (tls_lo, tls_hi) = if fs != 0 && !(fs >= bin_lo && fs < bin_hi) {
-        let (lo, hi) = writable_image_range(fs);
-        (lo.max(fs.saturating_sub(16 << 20)), hi.min(fs + (1 << 20)))
+    // The executable's static TLS block sits right below the thread pointer
+    // (x86_64 variant II): [fs - memsz rounded to its alignment, fs).
+    let tls_size = executable_tls_size();
+    let (tls_lo, tls_hi) = if fs != 0 && tls_size != 0 {
+        (fs - tls_size, fs)
     } else {
-        (fs, fs + PAGE)
+        (fs, fs)
     };
     let mut st = Box::new(State {
         out,
@@ -558,6 +560,28 @@ fn writable_image_range(inside: usize) -> (usize, usize) {
         hi = rows[k].1;
     }
     (lo, hi)
+}
+
+/// `PT_TLS` memsz of the executable, rounded up to its alignment.
+fn executable_tls_size() -> usize {
+    unsafe extern "C" fn each(
+        info: *mut libc::dl_phdr_info,
+        _size: libc::size_t,
+        data: *mut libc::c_void,
+    ) -> libc::c_int {
+        let info = &*info;
+        for i in 0..info.dlpi_phnum as usize {
+            let ph = &*info.dlpi_phdr.add(i);
+            if ph.p_type == libc::PT_TLS {
+                let align = (ph.p_align as usize).max(1);
+                *(data as *mut usize) = (ph.p_memsz as usize).div_ceil(align) * align;
+            }
+        }
+        1 // the executable is the first object; stop
+    }
+    let mut size = 0usize;
+    unsafe { libc::dl_iterate_phdr(Some(each), (&mut size as *mut usize).cast()) };
+    size
 }
 
 fn open_instruction_counter() -> i32 {
