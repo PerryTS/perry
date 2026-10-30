@@ -281,6 +281,7 @@ fn this_kinds(ctx: &FnCtx<'_>, cids: &[u32], key: &str) -> Option<u16> {
     let mut mask = 0u16;
     for &cid in cids {
         let f = ctx.wpfacts.field(cid, key)?;
+        crate::facts_consumed::used();
         if f.declared {
             return None;
         }

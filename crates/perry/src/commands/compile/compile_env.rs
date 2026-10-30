@@ -108,6 +108,7 @@ pub(super) const COMPILE_ENV_VARS: &[&str] = &[
     "PERRY_LD",
     "PERRY_LD64.LLD",
     "PERRY_LIB_DIR",
+    "PERRY_LINK_PAD",
     "PERRY_LINUX_ARM64_CC",
     "PERRY_LINUX_ARM64_SYSROOT",
     "PERRY_LINUX_MUSL_AARCH64_CC",

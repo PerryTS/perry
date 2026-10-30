@@ -876,6 +876,7 @@ pub(crate) fn lower_expr_native(
     expected: ExpectedNativeRep,
 ) -> Result<LoweredValue> {
     let _fallback = crate::fallback_diag::enter_expr(ctx, e);
+    let _consumed = crate::facts_consumed::enter(e);
     match expected {
         ExpectedNativeRep::JsValueBits => lower_expr_native_js_value_bits(ctx, e),
         ExpectedNativeRep::I8 => lower_expr_native_i8(ctx, e),

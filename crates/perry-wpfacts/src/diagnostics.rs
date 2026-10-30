@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 #[derive(Default)]
 pub(crate) struct Trace {
     pub pred: BTreeMap<NodeId, (NodeId, String)>,
-    pub contract_inputs: BTreeMap<NodeId, String>,
+    pub contract_inputs: BTreeMap<NodeId, (String, String)>,
     pub seeds: BTreeMap<NodeId, String>,
     pub bound_origins: BTreeMap<u32, CallId>,
     pub source_calls: BTreeSet<CallId>,
@@ -35,6 +35,8 @@ pub(crate) struct Trace {
     /// that slot: what an instance holds without a recorded predecessor it
     /// holds as its summary does.
     pub inst_orig: BTreeMap<NodeId, NodeId>,
+    /// `Model::top_predecessors`, built when a chain needs it.
+    pub top_in: std::cell::OnceCell<FxHashMap<NodeId, Vec<NodeId>>>,
 }
 
 /// The operation an event belongs to: a function body's (`Fn`), a token's
@@ -98,12 +100,43 @@ impl Model {
             });
         }
     }
+    /// The origin text of a ⊤ whose chain has no recorded seed: the node it
+    /// ended at (its label) and how the chain broke. `ledger::classify`
+    /// reads it as `untraced-top`; the ledger reports the labels.
+    fn untraced(&self, n: NodeId, what: &str) -> String {
+        let label = self.labels.get(n as usize).copied().unwrap_or("");
+        format!("untraced: {what} at {label}")
+    }
+
+    /// The ⊤-holding nodes with a copy edge into each node (built once per
+    /// model, only for a chain that has no recorded arrival).
+    fn top_predecessors(&self) -> &FxHashMap<NodeId, Vec<NodeId>> {
+        let d = self.diagnostic.as_ref().expect("a diagnostic model");
+        d.top_in.get_or_init(|| {
+            let mut m: FxHashMap<NodeId, Vec<NodeId>> = FxHashMap::default();
+            for (s, v) in self.nodes.iter().enumerate() {
+                if v.pts.contains_tok(TOP) {
+                    for &b in &v.succ {
+                        m.entry(b).or_default().push(s as NodeId);
+                    }
+                }
+            }
+            for v in m.values_mut() {
+                v.sort_unstable();
+                v.dedup();
+            }
+            m
+        })
+    }
+
     fn diagnostic_root(&self, start: NodeId) -> (NodeId, String) {
         let Some(d) = &self.diagnostic else {
             return (start, String::new());
         };
         let mut n = start;
         let mut seen = BTreeSet::new();
+        // The node that led the walk to `n`.
+        let mut prev: Option<NodeId> = None;
         // An instance slot with no recorded arrival holds what its
         // summary's node holds (a slot without one, `NO_NODE`, ends here).
         let summary = |n: NodeId| {
@@ -115,34 +148,74 @@ impl Model {
                         .is_some_and(|v| v.pts.contains_tok(TOP))
             })
         };
-        while seen.insert(n) {
+        // Where the first arrival is not recorded (a set adopted whole, a
+        // seed copied from a summary, an edge added before the value): the
+        // lowest ⊤-holding node with a copy edge into `at` that the walk has
+        // not been through holds it as well.
+        let other = |at: NodeId, seen: &BTreeSet<NodeId>| {
+            self.top_predecessors()
+                .get(&at)
+                .and_then(|v| v.iter().copied().find(|s| !seen.contains(s)))
+        };
+        loop {
+            if !seen.insert(n) {
+                // A chain that came back to a node: leave through another
+                // predecessor of the node that led here.
+                match prev.and_then(|p| other(p, &seen).map(|o| (p, o))) {
+                    Some((p, o)) => {
+                        n = o;
+                        prev = Some(p);
+                        continue;
+                    }
+                    None => return (n, "cycle".into()),
+                }
+            }
             if let Some(why) = d.seeds.get(&n) {
                 return (n, why.clone());
             }
             let Some((src, why)) = d.pred.get(&n) else {
-                match summary(n) {
+                if let Some(o) = summary(n) {
+                    prev = Some(n);
+                    n = o;
+                    continue;
+                }
+                match other(n, &seen) {
                     Some(o) => {
+                        prev = Some(n);
                         n = o;
                         continue;
                     }
-                    None => return (n, String::new()),
+                    None => return (n, self.untraced(n, "no arrival recorded")),
                 }
             };
             if !why.is_empty() {
                 return (n, why.clone());
             }
             if *src == NO_NODE || !self.nodes[*src as usize].pts.contains_tok(TOP) {
-                match summary(n) {
+                if let Some(o) = summary(n) {
+                    prev = Some(n);
+                    n = o;
+                    continue;
+                }
+                match other(n, &seen) {
                     Some(o) => {
+                        prev = Some(n);
                         n = o;
                         continue;
                     }
-                    None => return (n, String::new()),
+                    None => {
+                        let what = if *src == NO_NODE {
+                            "arrival outside a rule"
+                        } else {
+                            "source no longer holds it"
+                        };
+                        return (n, self.untraced(n, what));
+                    }
                 }
             }
+            prev = Some(n);
             n = *src;
         }
-        (n, "cycle".into())
     }
 
     /// A summary instance keeps its template call identity. `CallSite::site`
@@ -856,10 +929,10 @@ pub(crate) fn collect(g: &Gen) -> Vec<String> {
         nodes.extend(m.closed_params.get(&f).into_iter().flatten());
     }
     if let Some(trace) = &m.diagnostic {
-        for (&n, input) in &trace.contract_inputs {
+        for (&n, (input, why)) in &trace.contract_inputs {
             nodes.insert(n);
             out.push(format!(
-                "{{\"record\":\"contract-input\",\"node\":{n},\"description\":{}}}",
+                "{{\"record\":\"contract-input\",\"node\":{n},\"description\":{},\"why\":{why}}}",
                 quote(input)
             ));
         }
@@ -922,10 +995,24 @@ pub(crate) fn collect(g: &Gen) -> Vec<String> {
 /// Existing contract summary, observed only after fact derivation.
 pub(crate) fn value_brief(c: &crate::units::ValueContract) -> String {
     format!(
-        "{{\"unknown\":{},\"prim\":{},\"functions\":{},\"arrays\":{}}}",
+        "{{\"unknown\":{},\"why\":{},\"prim\":{},\"functions\":{},\"arrays\":{}}}",
         c.unknown,
+        why_json(c),
         c.prim,
         strings(c.fns.iter().map(|f| f.name.clone())),
         strings(c.arrays.iter().cloned())
     )
+}
+
+/// The reason an unknown value contract is unknown and the unit that
+/// published it, as JSON (`null` when it is known or has no recorded reason).
+pub(crate) fn why_json(c: &crate::units::ValueContract) -> String {
+    match &c.why.0 {
+        Some((r, u)) if c.unknown => format!(
+            "{{\"reason\":{},\"unit\":{}}}",
+            quote(r),
+            u.as_deref().map_or("null".into(), quote)
+        ),
+        _ => "null".into(),
+    }
 }

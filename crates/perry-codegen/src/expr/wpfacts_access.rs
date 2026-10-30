@@ -150,10 +150,10 @@ fn receiver(ctx: &FnCtx<'_>, object: &Expr) -> Option<(crate::codegen::FactsRecv
             if ctx.scalar_replaced.contains_key(id) || ctx.pod_records.contains_key(id) {
                 return None;
             }
-            ctx.wpfacts
-                .locals
-                .get(id)
-                .map(|r| (r.clone(), format!("local {id}")))
+            ctx.wpfacts.locals.get(id).map(|r| {
+                crate::facts_consumed::used();
+                (r.clone(), format!("local {id}"))
+            })
         }
         Expr::This => {
             if ctx.is_static_class_this(object) {
@@ -161,10 +161,10 @@ fn receiver(ctx: &FnCtx<'_>, object: &Expr) -> Option<(crate::codegen::FactsRecv
             }
             let top = ctx.this_stack.last()?;
             let (_, fid) = ctx.wpfacts_this.iter().rev().find(|(s, _)| s == top)?;
-            ctx.wpfacts
-                .this_of
-                .get(fid)
-                .map(|r| (r.clone(), format!("this of fn {fid}")))
+            ctx.wpfacts.this_of.get(fid).map(|r| {
+                crate::facts_consumed::used();
+                (r.clone(), format!("this of fn {fid}"))
+            })
         }
         _ => None,
     }
@@ -184,13 +184,17 @@ pub(crate) fn proven_receiver_classes(ctx: &FnCtx<'_>, object: &Expr) -> Option<
 /// definition for the program's life (no write, no escape of the class
 /// object, no interpreted code).
 pub(crate) fn proves_static(ctx: &FnCtx<'_>, cid: u32, key: &str) -> bool {
-    !ctx.wpfacts_off
+    let proved = !ctx.wpfacts_off
         && !ctx.wpfacts.interp_guard
         && ctx
             .wpfacts
             .class_statics
             .get(&cid)
-            .is_some_and(|ks| ks.iter().any(|k| k == key))
+            .is_some_and(|ks| ks.iter().any(|k| k == key));
+    if proved {
+        crate::facts_consumed::used();
+    }
+    proved
 }
 
 /// The class id of a receiver the facts prove one of their classes: one

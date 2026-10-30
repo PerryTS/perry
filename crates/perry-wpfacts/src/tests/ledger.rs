@@ -579,3 +579,109 @@ fn ledger_probe() {
     }
     println!("PROBE completeness {:?}", completeness(&pf));
 }
+
+/// The closed list of reasons a published value contract is unknown
+/// (`ValueContract::unknown_because` / `unknown_for`, dump field `why`).
+const UNKNOWN_WHY: &[&str] = &[
+    "unit-aborted",
+    "undescribed-store-value",
+    "undescribed-cell-write",
+    "global-written-by-unmodeled-code",
+    "array-escaped",
+    "binding-write-over-the-bound",
+    "opaque-receiver",
+    "top-value",
+    "escaped-function-without-contract",
+    "class-without-contract",
+    "argument-marker-reach",
+    "function-without-publication",
+    "top-argument",
+    "bound-function-argument",
+    "class-constructor-argument",
+    "prototype-argument",
+    "builtin-argument",
+    "module-namespace-argument",
+    "argument-value",
+    "parameter-marker",
+    "broken-layout",
+    "layout-without-contract",
+];
+
+/// Every reason a source file gives (`unknown_because("..")`,
+/// `unknown_for("..")`, an `if` choosing between two literals) is in the
+/// closed list, and every member of the list is given somewhere.
+#[test]
+fn every_unknown_reason_is_named() {
+    fn files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for e in std::fs::read_dir(dir).unwrap().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                if p.file_name().is_some_and(|n| n != "tests") {
+                    files(&p, out);
+                }
+            } else if p.extension().is_some_and(|x| x == "rs") && !p.ends_with("tests.rs") {
+                out.push(p);
+            }
+        }
+    }
+    let mut paths = Vec::new();
+    files(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+        &mut paths,
+    );
+    let mut given = std::collections::BTreeSet::new();
+    for p in paths {
+        let s = std::fs::read_to_string(&p).unwrap();
+        for needle in ["unknown_because(", "unknown_for(", "let because = "] {
+            for (at, _) in s.match_indices(needle) {
+                // The literals up to the end of the statement or call.
+                let end = (at + 1500).min(s.len());
+                let end = s[at..end].find(';').map_or(end, |e| at + e);
+                let line = &s[at + needle.len()..end];
+                for (i, part) in line.split('"').enumerate() {
+                    if i % 2 == 1 && part.chars().all(|c| c.is_ascii_lowercase() || c == '-') {
+                        if needle == "let because = " && !UNKNOWN_WHY.contains(&part) {
+                            continue; // another variable
+                        }
+                        given.insert(part.to_string());
+                    }
+                }
+            }
+        }
+    }
+    for g in &given {
+        assert!(UNKNOWN_WHY.contains(&g.as_str()), "unnamed reason {g}");
+    }
+    for w in UNKNOWN_WHY {
+        assert!(given.contains(*w), "reason {w} is given nowhere");
+    }
+}
+
+/// An unknown published value names why, in the value-output,
+/// argument-output and contract-input records; a known one says null.
+#[test]
+fn unknown_values_carry_a_reason() {
+    let pf = units(&[
+        ("u.ts", "export function f(o: any) { return o.x; } export function mk(): any { return (globalThis as any).q; } export const g: any = (globalThis as any).hostValue;"),
+        ("t.ts", "import { f, mk, g } from \"./u\"; const h: any = (globalThis as any).hostFn; h(f); console.log(mk().z, g.k); f({ a: 1 });"),
+    ]);
+    let (mut unknown, mut with_why, mut known_with_why) = (0, 0, 0);
+    for (_, lines) in &pf.diagnostics {
+        for l in lines.iter().filter(|l| {
+            l.contains("\"record\":\"contract-input\"")
+                || l.contains("\"record\":\"value-output\"")
+                || l.contains("\"record\":\"argument-output\"")
+        }) {
+            let why = l.contains("\"why\":{\"reason\":\"");
+            if l.contains("\"unknown\":true") || l.contains(";unknown=true;") {
+                unknown += 1;
+                with_why += why as usize;
+            } else if why {
+                known_with_why += 1;
+            }
+        }
+    }
+    assert!(unknown > 0, "the program publishes no unknown value");
+    assert_eq!(unknown, with_why, "an unknown value without a reason");
+    assert_eq!(known_with_why, 0, "a reason on a known value");
+}

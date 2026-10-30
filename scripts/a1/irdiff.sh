@@ -42,12 +42,15 @@ for f in "$FIXED" "$MAPS_SHIM" "$STR_PLAIN"; do [ -f "$f" ] || { echo "missing m
 PRELOAD="$FIXED:$MAPS_SHIM:$STR_PLAIN"
 # Link-pad control (on unless IRDIFF_LINKPAD=0): rows that follow addresses with equal call counts (mimalloc
 # page map, address-sorted ranges, libc alignment) move when one arm's sections are smaller. linkpad.py pads
-# each arm with unreferenced retained sections linked last (PERRY_EXTRA_LINK_ARGS) until every paddable
-# section ends at the same address in both arms, so later sections, segments and the heap start coincide;
-# the layout proof is $OUT/<witness>.layout.txt and the pads are $OUT/pads.tsv. Nothing executes a pad.
+# each arm with unreferenced retained sections placed by perry right after the compiled objects, before the
+# runtime archive (PERRY_LINK_PAD), until the runtime archive's bytes start at the same address in every
+# padded section, plus an end pad linked last (PERRY_EXTRA_LINK_ARGS) that equalizes section ends and the
+# heap start when the runtime itself differs in size. The layout proof (markers, section ends, segment
+# starts, image end, runtime symbols compared by address) is $OUT/<witness>.layout.txt and the pads are
+# $OUT/pads.tsv. Nothing executes a pad.
 # Self-test of the control (A/A): IRDIFF_HEAD_LINK_ARGS links extra inputs (e.g. a perturbing pad object)
 # into the head arm only; with the same perry on both arms the unpadded run shows the address rows, the
-# padded run must show 0.
+# padded run must show 0. IRDIFF_HEAD_LINK_PAD does the same for inputs placed before the runtime archive.
 LINKPAD=${IRDIFF_LINKPAD:-1}; LINKPAD_PY=$(dirname "$(readlink -f "$0")")/linkpad.py
 # minimal environment of both the compile and the run (same for both arms)
 ENVV=(PATH=/usr/lib/llvm-22/bin:/root/.cargo/bin:/usr/bin:/bin HOME="$HOME" LANG=C LC_ALL=C TZ=UTC LD_PRELOAD="$PRELOAD" PERRY_ALLOW_PERRY_FEATURES=1 TMPDIR="$OUT/tmp" NO_COLOR=1 PKG_BENCH_N=0 PKG_BENCH_WARM=0)
@@ -66,20 +69,26 @@ if [ $full = 1 ]; then
       "nextjs_hello|${IRDIFF_NEXT:-/root/secret-tests/nextjs-hello}|${IRDIFF_NEXT_SRC:-main.ts}|")
 fi
 
-compile() { # arm perry ws name dir src [pad-object]  -> $OUT/w/$n.$arm
-  local arm=$1 perry=$2 ws=$3 n=$4 d=$5 s=$6 pad=${7:--} extra=() link=""
+compile() { # arm perry ws name dir src [mid-pad,end-pad]  -> $OUT/w/$n.$arm
+  local arm=$1 perry=$2 ws=$3 n=$4 d=$5 s=$6 pad=${7:--,-} extra=() link="" mid=${7%%,*} end=${7##*,}
+  [ -d "$OUT/tmp/cache.$arm" ] && mv "$OUT/tmp/cache.$arm" "$OUT/tmp/cache"
   [ "$arm" = head ] && link=${IRDIFF_HEAD_LINK_ARGS:-}
-  [ "$pad" != - ] && link="$link $pad"
+  [ "$end" != - ] && link="$link $end"
   [ -n "${link// }" ] && extra=(PERRY_EXTRA_LINK_ARGS="${link# }")
+  [ "$mid" = - ] && mid=""
+  [ "$arm" = head ] && mid="${IRDIFF_HEAD_LINK_PAD:-} $mid"  # a perturbation stands for compiled code: before the marker
+  mid=${mid# }; [ -n "${mid// }" ] && extra+=(PERRY_LINK_PAD="${mid% }")
   ( cd "$d" && env -i "${ENVV[@]}" "${extra[@]}" PERRY_RUNTIME_DIR=$(dirname "$perry") PERRY_WORKSPACE_ROOT=$ws PERRY_TARGET_CPU=x86-64-v3 PERRY_KEEP_SYMBOLS=1 \
       "$perry" compile --cache-dir "$OUT/tmp/cache" "$s" -o "$OUT/w/$n" > "$OUT/cg/$n.$arm.compile.log" 2>&1 )
-  local rc=$?; rm -rf "$OUT/tmp/cache"; [ $rc = 0 ] && mv "$OUT/w/$n" "$OUT/w/$n.$arm"; return $rc
+  # The cache path is part of generated symbol names, so both arms compile through the same path. The link-pad
+  # rounds relink the same objects: park the arm's object cache under its own name between compiles.
+  local rc=$?; if [ "$LINKPAD" = 1 ] && [ $rc = 0 ]; then mv "$OUT/tmp/cache" "$OUT/tmp/cache.$arm"; else rm -rf "$OUT/tmp/cache"; fi; [ $rc = 0 ] && mv "$OUT/w/$n" "$OUT/w/$n.$arm"; return $rc
 }
 # pads both arms of witness $n to the same layout (see LINKPAD); exit 1 if it does not converge
 linkpad() { # name dir src
   local n=$1 d=$2 s=$3 r res pm=- ph=- cm=- ch=-
   rm -f "$OUT/pad/$n.json"
-  for r in 1 2 3 4 5; do
+  for r in 1 2 3 4 5 6 7 8 9 10 11 12 13 14; do
     res=$(python3 "$LINKPAD_PY" plan "$OUT/w/$n.main" "$OUT/w/$n.head" "$OUT/pad/$n.json" "$OUT/pad") || return 1
     [ "$res" = CONVERGED ] && break
     pm=$(sed 's/.*main=\([^ ]*\).*/\1/' <<< "$res"); ph=$(sed 's/.*head=\([^ ]*\).*/\1/' <<< "$res")
@@ -87,7 +96,8 @@ linkpad() { # name dir src
     [ "$ph" != "$ch" ] && { compile head "$HEAD" "$WS_HEAD" "$n" "$d" "$s" "$ph" || return 1; ch=$ph; }
   done
   printf "%s\t%s\t%s\t%s\t%s\n" "$n" "$res" "$(basename "$cm")" "$(basename "$ch")" "$(tr -d ' \n' < "$OUT/pad/$n.json")" >> "$OUT/pads.tsv"
-  python3 "$LINKPAD_PY" check "$OUT/w/$n.main" "$OUT/w/$n.head" > "$OUT/$n.layout.txt"
+  rm -rf "$OUT/tmp/cache.main" "$OUT/tmp/cache.head"
+  python3 "$LINKPAD_PY" check "$OUT/w/$n.main" "$OUT/w/$n.head" "$(dirname "$MAIN")/libperry_runtime.a" > "$OUT/$n.layout.txt"
 }
 # per-function Ir of one callgrind run: fn<TAB>ir
 fn_ir() { # outfile
@@ -127,14 +137,15 @@ for spec in "${W[@]}"; do
   IFS='|' read -r n d s a <<< "$spec"
   if [ -n "${IRDIFF_ONLY:-}" ] && [[ " $IRDIFF_ONLY " != *" $n "* ]]; then continue; fi
   if [ ! -f "$d/$s" ]; then echo "MISSING $n: no harness at $d/$s" | tee -a "$OUT/missing.txt"; printf "%s\tMISSING\tMISSING\t-\t-\n" "$n" >> "$OUT/summary.tsv"; continue; fi
-  compile main "$MAIN" "$WS_MAIN" "$n" "$d" "$s" || { echo "COMPILE-FAIL $n main"; fail=1; continue; }
-  compile head "$HEAD" "$WS_HEAD" "$n" "$d" "$s" || { echo "COMPILE-FAIL $n head"; fail=1; continue; }
+  zero=-,-; [ "$LINKPAD" = 1 ] && zero=$(python3 "$LINKPAD_PY" zero "$OUT/pad"),-
+  compile main "$MAIN" "$WS_MAIN" "$n" "$d" "$s" "$zero" || { echo "COMPILE-FAIL $n main"; fail=1; continue; }
+  compile head "$HEAD" "$WS_HEAD" "$n" "$d" "$s" "$zero" || { echo "COMPILE-FAIL $n head"; fail=1; continue; }
   if [ "$LINKPAD" = 1 ]; then
-    linkpad "$n" "$d" "$s" || { echo "LINKPAD-FAIL $n: layouts differ (see $OUT/$n.layout.txt, $OUT/pads.tsv)"; fail=1; continue; }
+    linkpad "$n" "$d" "$s" || { rm -rf "$OUT/tmp/cache.main" "$OUT/tmp/cache.head"; echo "LINKPAD-FAIL $n: layouts differ (see $OUT/$n.layout.txt, $OUT/pads.tsv)"; fail=1; continue; }
   fi
   tm=$(measure main "$n" "$d" "$a") || { fail=1; continue; }
   th=$(measure head "$n" "$d" "$a") || { fail=1; continue; }
-  rm -f "$OUT/w/$n" "$OUT/w/$n.main" "$OUT/w/$n.head"
+  [ -n "${IRDIFF_KEEP:-}" ] || rm -f "$OUT/w/$n" "$OUT/w/$n.main" "$OUT/w/$n.head"  # IRDIFF_KEEP=1 keeps the linked arms
   awk -F'\t' 'NR==FNR { m[$1]=$2; next } { h[$1]=$2 } END { for (f in m) u[f]; for (f in h) u[f]; for (f in u) printf "%s\t%d\t%d\t%d\n", f, m[f]+0, h[f]+0, h[f]-m[f] }' \
     "$OUT/cg/$n.main.fn" "$OUT/cg/$n.head.fn" | awk -F'\t' '$4!=0' | sort -t$'\t' -k4,4nr > "$OUT/$n.tsv"
   grep -v '^#' "$ALLOW" 2>/dev/null | sed '/^$/d' | sort -u > "$OUT/tmp/allow.$n"
