@@ -864,8 +864,8 @@ fn direct_row(image: &EhFrameImage, site: u64, cies: &mut CieMemo) -> Option<Row
 }
 
 /// The two tables the direct decoder reads, as plain slices: an image the
-/// `Error` walker enumerated, or the object `_dl_find_object` names for the
-/// collector's frame walk (`gc_cfi_step`).
+/// `Error` walker enumerated, or a loaded object the collector's frame walk
+/// stepped into (`gc_cfi_step`).
 #[derive(Clone, Copy)]
 struct CfiTables {
     /// `.eh_frame`, from its first byte to (at most) the end of its object.
@@ -991,57 +991,101 @@ fn fde_row(
 //
 // The root scan steps a Rust, shim or foreign frame by its row here, and
 // nothing else: JS frames step by their frame record and never reach this.
-// The object is found by `_dl_find_object` (the loader's lock-free lookup over
-// the loaded objects, the one libgcc's unwinder uses), so the walk takes no
-// lock, keeps no image list and needs no rebuild when objects come and go.
-// Every row is read directly; a shape the direct decoder declines is
-// `Unreadable`, and the collector then fails closed to the system unwinder.
+// The runtime's own object is resolved once, with the stack-map index; a pc
+// outside it (libc, an addon, a GTK main loop) finds its object through
+// `dl_iterate_phdr`, which also sees objects loaded after the index was
+// built. Nothing is kept between walks. Every row is read directly; a shape
+// the direct decoder declines is `Unreadable`, and the collector then fails
+// closed to the system unwinder.
 // ---------------------------------------------------------------------------
 
-/// glibc's `struct dl_find_object` on x86-64 (no `dlfo_eh_dbase` there).
+/// The unwind tables of one loaded object and the range of its executable
+/// segments. `Default`: no object.
 #[cfg(target_env = "gnu")]
-#[repr(C)]
-struct DlFindObject {
-    flags: u64,
-    map_start: *mut core::ffi::c_void,
-    map_end: *mut core::ffi::c_void,
-    link_map: *mut core::ffi::c_void,
-    eh_frame: *mut core::ffi::c_void,
-    reserved: [u64; 7],
+#[derive(Clone, Copy, Default)]
+pub(crate) struct GcCfiObject {
+    text: (u64, u64),
+    tables: Option<CfiTables>,
 }
 
 #[cfg(target_env = "gnu")]
-type DlFindObjectFn =
-    unsafe extern "C" fn(*mut core::ffi::c_void, *mut DlFindObject) -> core::ffi::c_int;
-
-/// `_dl_find_object` (glibc 2.35), weak: an older loader leaves it null and
-/// every collector walk takes the system unwinder, as before.
-#[cfg(target_env = "gnu")]
-fn dl_find_object() -> Option<DlFindObjectFn> {
-    extern "C" {
-        #[linkage = "extern_weak"]
-        static _dl_find_object: *const u8;
+impl core::fmt::Debug for GcCfiObject {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "GcCfiObject({:#x}..{:#x}, tables: {})",
+            self.text.0,
+            self.text.1,
+            self.tables.is_some()
+        )
     }
-    // SAFETY: an extern_weak static reads as the symbol's address, or null;
-    // a non-null address is glibc's function of exactly this signature.
-    let address = unsafe { _dl_find_object };
-    (!address.is_null())
-        .then(|| unsafe { core::mem::transmute::<*const u8, DlFindObjectFn>(address) })
 }
 
-/// The tables of the object containing `pc`. `None`: no loaded object holds
-/// `pc`, the object has no `.eh_frame_hdr`, or the loader cannot say.
 #[cfg(target_env = "gnu")]
-fn tables_for(pc: u64) -> Option<CfiTables> {
-    let find = dl_find_object()?;
-    // SAFETY: plain-old-data out parameter.
-    let mut info: DlFindObject = unsafe { core::mem::zeroed() };
-    if unsafe { find(pc as *mut core::ffi::c_void, &mut info) } != 0 {
-        return None;
+impl GcCfiObject {
+    #[inline(always)]
+    fn contains(&self, pc: u64) -> bool {
+        pc.wrapping_sub(self.text.0) < self.text.1.wrapping_sub(self.text.0)
     }
-    let (start, end) = (info.map_start as u64, info.map_end as u64);
-    let hdr_addr = info.eh_frame as u64;
-    if hdr_addr < start || hdr_addr >= end {
+}
+
+/// The loaded object whose executable segments hold `pc`, with its tables
+/// when it has an `.eh_frame_hdr` this decoder reads.
+#[cfg(target_env = "gnu")]
+pub(crate) fn gc_cfi_object(pc: u64) -> GcCfiObject {
+    struct Query {
+        pc: u64,
+        found: GcCfiObject,
+    }
+    unsafe extern "C" fn each(
+        info: *mut libc::dl_phdr_info,
+        _size: libc::size_t,
+        data: *mut libc::c_void,
+    ) -> libc::c_int {
+        let query = unsafe { &mut *(data as *mut Query) };
+        let info = unsafe { &*info };
+        if info.dlpi_phdr.is_null() || info.dlpi_phnum == 0 {
+            return 0;
+        }
+        let base = info.dlpi_addr as u64;
+        let phdrs =
+            unsafe { core::slice::from_raw_parts(info.dlpi_phdr, info.dlpi_phnum as usize) };
+        let (mut text, mut end, mut holds, mut hdr_addr) = ((u64::MAX, 0u64), 0u64, false, 0u64);
+        for ph in phdrs {
+            let lo = base.wrapping_add(ph.p_vaddr as u64);
+            let hi = lo.wrapping_add(ph.p_memsz as u64);
+            if ph.p_type == libc::PT_LOAD {
+                end = end.max(hi);
+                if ph.p_flags & libc::PF_X != 0 {
+                    text = (text.0.min(lo), text.1.max(hi));
+                    holds |= query.pc >= lo && query.pc < hi;
+                }
+            } else if ph.p_type == libc::PT_GNU_EH_FRAME {
+                hdr_addr = lo;
+            }
+        }
+        if !holds {
+            return 0;
+        }
+        query.found = GcCfiObject {
+            text,
+            tables: tables_at(hdr_addr, end),
+        };
+        1
+    }
+    let mut query = Query {
+        pc,
+        found: GcCfiObject::default(),
+    };
+    unsafe { libc::dl_iterate_phdr(Some(each), &mut query as *mut Query as *mut libc::c_void) };
+    query.found
+}
+
+/// The tables whose `.eh_frame_hdr` is at `hdr_addr`, in an object mapped up
+/// to `end`.
+#[cfg(target_env = "gnu")]
+fn tables_at(hdr_addr: u64, end: u64) -> Option<CfiTables> {
+    if hdr_addr == 0 || hdr_addr >= end {
         return None;
     }
     // SAFETY: inside the object's mapping; every read below is bounded by
@@ -1054,7 +1098,7 @@ fn tables_for(pc: u64) -> Option<CfiTables> {
     }
     let rel = i32::from_le_bytes([hdr[4], hdr[5], hdr[6], hdr[7]]) as i64;
     let eh_frame_addr = (hdr_addr as i64).checked_add(4)?.checked_add(rel)? as u64;
-    if eh_frame_addr < start || eh_frame_addr >= end {
+    if eh_frame_addr >= end {
         return None;
     }
     // SAFETY: as above.
@@ -1092,19 +1136,27 @@ pub(crate) struct GcCfiScratch {
 
 /// Step the frame whose pc is the return address `pc` (with `rsp` its sp at
 /// that call and `rbp` its rbp) to its caller. Reads stay in `[low, top)`.
+/// `runtime` is the runtime's own object, resolved with the index.
 #[cfg(target_env = "gnu")]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn gc_cfi_step(
     pc: u64,
     rsp: u64,
     rbp: u64,
     low: u64,
     top: u64,
+    runtime: &GcCfiObject,
     scratch: &mut GcCfiScratch,
 ) -> GcCfiStep {
     // The pc is a return address; the row that describes the frame is the
     // one covering the call instruction.
     let site = pc.wrapping_sub(1);
-    let Some(tables) = tables_for(site) else {
+    let tables = if runtime.contains(site) {
+        runtime.tables
+    } else {
+        gc_cfi_object(site).tables
+    };
+    let Some(tables) = tables else {
         return GcCfiStep::Unreadable;
     };
     let Some(Some((start, fde))) = hdr_function(&tables, site) else {
@@ -1130,7 +1182,7 @@ pub(crate) fn gc_cfi_step(
 /// `(start, end)` of the function the unwind tables say contains `addr`.
 #[cfg(target_env = "gnu")]
 pub(crate) fn cfi_function_extent(addr: u64) -> Option<(u64, u64)> {
-    let tables = tables_for(addr)?;
+    let tables = gc_cfi_object(addr).tables?;
     let (start, fde) = hdr_function(&tables, addr)??;
     let (_, _, range, _) = fde_header(&tables, fde, &mut CieMemo::default())?;
     let end = start.checked_add(range)?;

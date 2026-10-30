@@ -48,8 +48,16 @@ crate::perry_thread_local! {
 }
 
 /// Offers the entry's caller frame to the collection requests of its body.
+#[cfg_attr(
+    not(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu")),
+    allow(dead_code)
+)]
 pub(crate) struct EntryOrigin(Option<WalkOrigin>);
 
+#[cfg_attr(
+    not(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu")),
+    allow(dead_code)
+)]
 impl EntryOrigin {
     #[inline]
     pub(crate) fn enter(origin: WalkOrigin) -> Self {

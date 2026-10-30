@@ -33,16 +33,19 @@
 //! real slots of validated frames, and visiting a slot twice is idempotent.
 
 use super::*;
-use crate::eh_walker::{gc_cfi_step, GcCfiScratch, GcCfiStep};
+use crate::eh_walker::{gc_cfi_object, gc_cfi_step, GcCfiObject, GcCfiScratch, GcCfiStep};
 
 const DWARF_REG_RBP: u16 = 6;
 
-/// The frames outward of which no JS can run: `main`'s and the worker base
-/// trap's, as `(start, end)` code ranges from the unwind tables. An empty
-/// range where a function is absent (an image without `main`, a unit test).
+/// What the walk needs of the image, resolved once with the index: the
+/// frames outward of which no JS can run (`main`'s and the worker base
+/// trap's, as `(start, end)` code ranges from the unwind tables; empty where
+/// a function is absent, as in a unit test), and the runtime's own object,
+/// whose unwind tables every Rust frame's step searches.
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct RootFrames {
     ranges: [(usize, usize); 2],
+    runtime: GcCfiObject,
 }
 
 impl RootFrames {
@@ -58,12 +61,16 @@ impl RootFrames {
         };
         Self {
             ranges: [extent(main), extent(base)],
+            runtime: gc_cfi_object(Self::resolve as fn() -> Self as usize as u64),
         }
     }
 
     #[cfg(test)]
     pub(super) fn of(ranges: [(usize, usize); 2]) -> Self {
-        Self { ranges }
+        Self {
+            ranges,
+            ..Self::resolve()
+        }
     }
 
     #[inline(always)]
@@ -89,10 +96,12 @@ fn walk_trace_enabled() -> bool {
     })
 }
 
+// One body for every visitor: not generic, so each collector phase's scan
+// does not carry its own copy of the walk.
 #[inline(never)]
-pub(super) fn visit<F: FnMut(ResolvedRoot)>(
+pub(super) fn visit(
     index: &StackMapIndex,
-    visit: &mut F,
+    visit: &mut dyn FnMut(ResolvedRoot),
 ) -> Option<NativeStackWalkStats> {
     let top = crate::native_stack::stack_top();
     if top == 0 {
@@ -209,6 +218,7 @@ pub(super) fn visit<F: FnMut(ResolvedRoot)>(
             fp as u64,
             low as u64,
             top as u64,
+            &roots.runtime,
             &mut scratch,
         ) {
             GcCfiStep::Caller {
@@ -230,6 +240,7 @@ pub(super) fn visit<F: FnMut(ResolvedRoot)>(
                         fp as u64,
                         low as u64,
                         top as u64,
+                        &roots.runtime,
                         &mut scratch,
                     ) {
                         GcCfiStep::Caller { pc: next, rsp, rbp } => {
