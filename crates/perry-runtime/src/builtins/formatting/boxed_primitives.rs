@@ -78,7 +78,8 @@ unsafe fn boxed_primitive_payload_for_object(
     ) {
         return None;
     }
-    let meta = (*obj_ptr).meta;
+    // A1_UNPROVEN: record-first: boxed primitive layout word (kind-A/B question for S0f).
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj_ptr as *mut _));
     let payload = if meta.is_null() {
         crate::object::js_object_get_field_f64(obj_ptr, 0)
     } else {
@@ -100,9 +101,9 @@ fn register_boxed_primitive_payload(obj: *mut crate::object::ObjectHeader, paylo
     // bag and spill funnels use this same no-move scope for internal stores.
     let _no_move = crate::gc::GcSuppressScope::new();
     unsafe {
-        // A1_UNPROVEN: register_boxed_primitive_payload(obj) parameter, no type test (kind-A/B question for S0b-S0e).
+        // A1_UNPROVEN: register_boxed_primitive_payload(obj) parameter, no type test (record-first: the receiver layout word; kind-A/B question for S0f).
         let meta = crate::object::object_meta_ensure(
-            crate::object::MetaObj::runtime_born(obj),
+            crate::meta_obj_runtime_born!(obj),
             crate::object::MetaReason::BoxedPrimitive,
         );
         // GC_STORE_AUDIT(BARRIERED): private metadata child slot + exact barrier.
@@ -182,7 +183,7 @@ fn install_string_wrapper_length(
 pub(crate) fn boxed_string_wrapper_utf16_len(addr: usize) -> Option<u32> {
     unsafe {
         let header = crate::value::addr_class::try_read_gc_header(addr)?;
-        if header.obj_type != crate::gc::GC_TYPE_OBJECT {
+        if !crate::object_has_meta_word!(header.obj_type) {
             return None;
         }
         let obj_ptr = addr as *const crate::object::ObjectHeader;
@@ -249,10 +250,7 @@ pub(crate) fn boxed_primitive_payload(value: f64) -> Option<(u32, f64)> {
         // two apart. `Number.prototype.toString` reaches here with exactly
         // that receiver once the dispatch tower has classified it a number.
         && unsafe {
-            crate::value::addr_class::try_read_tracked_gc_header_of_type(
-                bits as usize,
-                crate::gc::GC_TYPE_OBJECT,
-            )
+            crate::value::addr_class::try_read_tracked_gc_header_of_type(bits as usize, crate::gc_object_type_pat!())
         }
         .is_some()
     {

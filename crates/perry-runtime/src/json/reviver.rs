@@ -420,7 +420,7 @@ unsafe fn json_is_object(value: f64) -> bool {
         if crate::value::addr_class::is_handle_band(ptr as usize) {
             return false;
         }
-        return gc_obj_type(ptr) == crate::gc::GC_TYPE_OBJECT;
+        return crate::gc_type_is_object!(gc_obj_type(ptr));
     }
     false
 }

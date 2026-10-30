@@ -29,7 +29,7 @@ use super::*;
 #[derive(Clone, Copy)]
 pub struct ConcatPartSlot {
     pub word: u64,
-    pub meta: u64,
+    pub part_meta: u64,
 }
 
 /// `meta` of a value operand. A literal's `meta` carries a UTF-16 length below
@@ -212,12 +212,12 @@ impl<const M: usize> SimpleParts<M> {
     #[inline(always)]
     fn classify(&mut self, parts: *const ConcatPartSlot, i: usize) -> Option<()> {
         let slot = unsafe { *parts.add(i) };
-        if slot.meta != CONCAT_PART_VALUE {
-            let blen = lit_blen(slot.meta);
+        if slot.part_meta != CONCAT_PART_VALUE {
+            let blen = lit_blen(slot.part_meta);
             self.piece_ptrs[i] = slot.word as *const u8;
             self.piece_lens[i] = blen;
             self.total_blen += blen as u64;
-            self.total_u16 += lit_units(slot.meta) as u64;
+            self.total_u16 += lit_units(slot.part_meta) as u64;
             return Some(());
         }
         let bits = slot.word;
@@ -365,7 +365,7 @@ fn concat_parts_rooted_copy<const M: usize>(
     let mut handles = [None; M];
     for i in 0..n {
         let slot = unsafe { *parts.add(i) };
-        if slot.meta == CONCAT_PART_VALUE && slot.word >> 48 == 0x7FFF && piece_lens[i] != 0 {
+        if slot.part_meta == CONCAT_PART_VALUE && slot.word >> 48 == 0x7FFF && piece_lens[i] != 0 {
             handles[i] = Some(
                 scope.root_string_ptr((slot.word & 0x0000_FFFF_FFFF_FFFF) as *const StringHeader),
             );
@@ -412,12 +412,12 @@ fn concat_parts_general<const M: usize>(
 
     for i in 0..n {
         let slot = unsafe { *parts.add(i) };
-        if slot.meta != CONCAT_PART_VALUE {
-            let blen = lit_blen(slot.meta);
+        if slot.part_meta != CONCAT_PART_VALUE {
+            let blen = lit_blen(slot.part_meta);
             piece_ptrs[i] = slot.word as *const u8;
             piece_lens[i] = blen;
             total_blen = total_blen.saturating_add(blen);
-            total_u16 = total_u16.saturating_add(lit_units(slot.meta));
+            total_u16 = total_u16.saturating_add(lit_units(slot.part_meta));
             continue;
         }
         let value = f64::from_bits(slot.word);

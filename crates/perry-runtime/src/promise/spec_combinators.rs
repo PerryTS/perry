@@ -635,6 +635,25 @@ fn attachable_native_promise(value: f64) -> Option<*mut Promise> {
     Some(p)
 }
 
+/// The element itself when it is a native Promise cell that carries no
+/// per-object metadata. `meta` is where every own property, accessor
+/// descriptor and recorded prototype of a Promise cell lives, so null proves
+/// the element has no own `then`/`constructor` and no prototype override. Its
+/// `then`/`constructor` therefore resolve exactly as the intrinsic Promise
+/// ones do, which is what `js_promise_resolved` (returns the element itself)
+/// and `attachable_native_promise` (accepts it) each re-derive with keyed
+/// lookups. Pure header read, no allocation, runs no JS.
+fn plain_native_promise(value: f64) -> Option<*mut Promise> {
+    if crate::promise::js_value_is_promise(value) == 0 {
+        return None;
+    }
+    let p: *mut Promise = unboxed_ptr(value);
+    if p.is_null() || unsafe { !crate::object::cell_meta::promise_cell_meta(p).is_null() } {
+        return None;
+    }
+    Some(p)
+}
+
 /// A capability resolving function as a raw `ClosurePtr`, or `None` if it is
 /// not a plain closure (a user constructor's capability can hold anything).
 fn as_closure_ptr(value: f64) -> Option<crate::promise::ClosurePtr> {
@@ -737,7 +756,12 @@ fn perform(
         // reads `Get(next, "then")`, whose getter may throw and must funnel
         // through IfAbruptRejectPromise exactly as the generic call does.
         let element_fast = cap_reject_is_closure && !promise_lifecycle_observed();
-        let next_promise = if element_fast {
+        // A plain native promise needs neither the catch frame (no getter can
+        // run) nor the constructor/`then` probes; see `plain_native_promise`.
+        let plain = if element_fast { plain_native_promise(next) } else { None };
+        let next_promise = if plain.is_some() {
+            next
+        } else if element_fast {
             let next_h = iter.root_nanbox_f64(next);
             combinator_catch_js(|| {
                 let p = crate::promise::js_promise_resolved(next_h.get_nanbox_f64());
@@ -761,7 +785,12 @@ fn perform(
                 // `js_promise_resolved`: that call may return the element
                 // itself, so the expandos that make `Invoke` observable belong
                 // to the resolved promise rather than the raw input.
-                let direct = if element_fast && !promise_lifecycle_observed() {
+                let direct = if plain.is_some() {
+                    // No JS ran since `plain` was proved, so the observers
+                    // checked there are unchanged and the element is still the
+                    // same cell (re-read from its handle).
+                    Some(unboxed_ptr(next_promise_h.get_nanbox_f64()))
+                } else if element_fast && !promise_lifecycle_observed() {
                     attachable_native_promise(next_promise_h.get_nanbox_f64())
                 } else {
                     None
@@ -1306,6 +1335,70 @@ mod fast_arm_tests {
             );
         }
         undef()
+    }
+
+    /// The plain-promise proof is the metadata bit: a bare cell passes, a cell
+    /// with any own property (`then` or `constructor`), and anything that is
+    /// not a native promise, fails.
+    #[test]
+    fn plain_native_promise_requires_no_metadata() {
+        let plain = settled_promise(1.0);
+        assert_eq!(
+            plain_native_promise(plain),
+            Some(unboxed_ptr::<Promise>(plain))
+        );
+        for key in ["then", "constructor"] {
+            let p = settled_promise(1.0);
+            unsafe {
+                crate::object::exotic_expando::exotic_set_property(
+                    unboxed_ptr::<u8>(p) as usize,
+                    crate::object::exotic_expando::ExoticKind::Promise,
+                    key,
+                    1.0,
+                    p,
+                );
+            }
+            assert!(plain_native_promise(p).is_none(), "own `{key}`");
+        }
+        assert!(plain_native_promise(1.0).is_none());
+        assert!(plain_native_promise(undef()).is_none());
+        assert!(plain_native_promise(js_nanbox_pointer(0x40001)).is_none());
+        let arr = array_of(&[1.0]);
+        assert!(plain_native_promise(arr).is_none());
+    }
+
+    /// Plain and overridden elements in one call keep their order: the plain
+    /// ones attach directly, the overridden one goes through its own `then`.
+    #[test]
+    fn mixed_plain_and_overridden_elements_keep_order() {
+        reset();
+        let overridden = settled_promise(1.0);
+        let then = js_closure_alloc(crate::fn_info!(own_then_fn, 2), 1);
+        js_closure_set_capture_f64(then, 0, 99.0);
+        unsafe {
+            crate::object::exotic_expando::exotic_set_property(
+                unboxed_ptr::<u8>(overridden) as usize,
+                crate::object::exotic_expando::ExoticKind::Promise,
+                "then",
+                boxed_ptr(then),
+                overridden,
+            );
+        }
+        let all = run_all(array_of(&[
+            settled_promise(10.0),
+            overridden,
+            settled_promise(30.0),
+        ]));
+        js_promise_run_microtasks();
+        unsafe {
+            assert_eq!((*all).state, PromiseState::Fulfilled);
+            let results = crate::value::js_nanbox_get_pointer((*all).value)
+                as *const crate::array::ArrayHeader;
+            assert_eq!(js_array_get_f64(results, 0), 10.0);
+            assert_eq!(js_array_get_f64(results, 1), 99.0);
+            assert_eq!(js_array_get_f64(results, 2), 30.0);
+        }
+        assert_eq!(taken(), 2);
     }
 
     /// An own `then` on the resolved element is a user override the spec must

@@ -668,7 +668,7 @@ fn object_ptr_from_value(value: f64) -> Option<*mut perry_runtime::object::Objec
     unsafe {
         let header = (raw as *const u8).sub(perry_runtime::gc::GC_HEADER_SIZE)
             as *const perry_runtime::gc::GcHeader;
-        if (*header).obj_type != perry_runtime::gc::GC_TYPE_OBJECT {
+        if perry_runtime::gc_type_is_not_object!((*header).obj_type) {
             return None;
         }
     }
@@ -1351,15 +1351,33 @@ pub extern "C" fn js_worker_threads_message_channel_new() -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> f64 {
+    let options_state = WorkerOptions::from_value(options);
+    worker_new_prepared(entry_ptr, options, options_state, None)
+}
+
+fn worker_new_prepared(
+    entry_ptr: i64,
+    options: f64,
+    mut options_state: WorkerOptions,
+    source: Option<String>,
+) -> f64 {
     ensure_worker_gc_scanner();
     ensure_worker_thread_exit_hook_registered();
     worker_pump::ensure_parent_event_retire_hook();
     crate::worker_threads::async_shim::ensure_pump_registered();
 
-    let options_state = WorkerOptions::from_value(options);
     let process_state =
-        perry_runtime::process::WorkerProcessState::capture(options_state.env.as_deref());
-    let payload = environment_data::prepare(options);
+        perry_runtime::process::WorkerProcessState::capture(options_state.env.as_deref())
+            .with_worker_argv(source, options_state.argv.take());
+    let payload =
+        match perry_runtime::exception::catch_js_throw(|| environment_data::prepare(options)) {
+            Ok(payload) => payload,
+            Err(error) => {
+                drop(process_state);
+                drop(options_state);
+                perry_runtime::exception::js_throw(error)
+            }
+        };
     let worker_id = NEXT_WORKER_ID.fetch_add(1, Ordering::Relaxed);
     let (tx, rx) = mpsc::channel::<WorkerCommand>();
     let sender = WorkerSender::new(tx);
@@ -1410,7 +1428,7 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
     // only latches for an agent holding a route slot.
     perry_runtime::event_pump::claim_agent_loop_route();
 
-    let thread_options = options_state.clone();
+    let thread_options = options_state;
     // Captured on the creating thread: this Worker's events go to THIS agent.
     let parent_agent = perry_runtime::agent::current_agent();
     // #8546: the Worker re-runs its module bodies on its own thread, but it is

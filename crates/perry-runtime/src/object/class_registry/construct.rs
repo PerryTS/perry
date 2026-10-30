@@ -207,6 +207,11 @@ unsafe fn construct_function_impl(
         if !super::super::native_module::is_native_module_constructor_export(&module, &method) {
             super::super::object_ops::throw_object_type_error(b"is not a constructor");
         }
+        if let Some(value) =
+            super::super::native_module::static_export_construct(func_value, args_ptr, args_len)
+        {
+            return value;
+        }
         if module == "perf_hooks" {
             if let Some(result) =
                 crate::perf_hook_slots::construct_perf_hooks_class(&method, args_ptr, args_len)
@@ -900,6 +905,14 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
             return collections::construct(identity, func_value, args, nt);
         }
         if identity == BuiltinConstructorIdentity::Object {
+            return construct_object_with_new_target(nt);
+        }
+        // Abstract (§27.1.3.1): a subclass's `super()` creates an ordinary
+        // object from new.target; `new.target === Iterator` throws.
+        if identity == BuiltinConstructorIdentity::Iterator {
+            if nt.to_bits() == func_value.to_bits() {
+                return crate::object::iterator_ctor::throw_abstract_iterator();
+            }
             return construct_object_with_new_target(nt);
         }
         // These factories throw or return a proxy of the caller's target;

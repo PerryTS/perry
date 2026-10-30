@@ -37,7 +37,7 @@ pub(crate) fn cp_object_ptr(value: f64) -> Option<*mut ObjectHeader> {
     unsafe {
         let header =
             (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        if (*header).obj_type != crate::gc::GC_TYPE_OBJECT {
+        if crate::gc_type_is_not_object!((*header).obj_type) {
             return None;
         }
     }

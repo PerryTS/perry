@@ -137,7 +137,18 @@ pub(crate) fn class_prototype_method_value_for_name_bytes(
     class_id: u32,
     method_name: &[u8],
 ) -> f64 {
-    if let Some(bits) = class_kept_method_value_bytes(class_id, method_name) {
+    class_prototype_method_value_at(class_id, method_name, None)
+}
+
+/// [`class_prototype_method_value_for_name_bytes`] for a method declared at
+/// `known` (its declaration index), when the caller holds it: the declaration
+/// is then read at that index, never searched for by name.
+pub(crate) fn class_prototype_method_value_at(
+    class_id: u32,
+    method_name: &[u8],
+    known: Option<u32>,
+) -> f64 {
+    if let Some(bits) = class_kept_method_value(class_id, method_name, known) {
         return f64::from_bits(bits);
     }
     // The class's holder keeps its method values, so a declared class gets
@@ -151,25 +162,32 @@ pub(crate) fn class_prototype_method_value_for_name_bytes(
         && !crate::object::class_registry::template_has_class_objects(class_id)
     {
         crate::object::class_value::class_value_ptr(class_id);
-        if let Some(bits) = class_kept_method_value_bytes(class_id, method_name) {
+        if let Some(bits) = class_kept_method_value(class_id, method_name, known) {
             return f64::from_bits(bits);
         }
     }
 
     // The declaration is read only to materialize its function object.
     // Calls and probes subsequently read the holder's slot.
-    let declaration =
-        crate::object::class_registry::declarations::class_method_decl_bytes(class_id, method_name)
-            .map(|m| {
-                (
-                    m.code as usize,
-                    m.param_count,
-                    m.has_synthetic_arguments(),
-                    m.has_rest(),
-                    m.entry as usize,
-                    m.name.is_null(),
-                )
-            });
+    let declared = match known {
+        Some(index) => {
+            crate::object::class_registry::declarations::class_method_decl_at(class_id, index)
+        }
+        None => crate::object::class_registry::declarations::class_method_decl_bytes(
+            class_id,
+            method_name,
+        ),
+    };
+    let declaration = declared.map(|m| {
+        (
+            m.code as usize,
+            m.param_count,
+            m.has_synthetic_arguments(),
+            m.has_rest(),
+            m.entry as usize,
+            m.name.is_null(),
+        )
+    });
     let Some((body, params, synthetic, rest, entry, computed_name)) = declaration else {
         if crate::object::native_call_method::class_holder::name_is_not_a_prototype_method(
             method_name,
@@ -203,10 +221,11 @@ pub(crate) fn class_prototype_method_value_for_name_bytes(
     } else {
         ClassDeclarationValueKind::Method
     };
-    crate::object::class_registry::class_declaration_value_store_bytes(
+    crate::object::class_registry::class_declaration_value_store_known(
         class_id,
         kind,
         method_name,
+        known,
         value.to_bits(),
     );
     value
@@ -215,15 +234,15 @@ pub(crate) fn class_prototype_method_value_for_name_bytes(
 /// The method value class `class_id`'s holder keeps for `name`: one name
 /// has one kind (`proto_member_has_no_string_key` decides it, as the store
 /// below does).
-fn class_kept_method_value_bytes(class_id: u32, name: &[u8]) -> Option<u64> {
-    use crate::object::class_registry::{class_declaration_value_bytes, ClassDeclarationValueKind};
+fn class_kept_method_value(class_id: u32, name: &[u8], known: Option<u32>) -> Option<u64> {
+    use crate::object::class_registry::{class_declaration_value_known, ClassDeclarationValueKind};
     let kind =
         if crate::object::class_registry::proto_member_has_no_string_key_bytes(class_id, name) {
             ClassDeclarationValueKind::NonPropertyMethod
         } else {
             ClassDeclarationValueKind::Method
         };
-    class_declaration_value_bytes(class_id, kind, name)
+    class_declaration_value_known(class_id, kind, name, known)
 }
 
 /// A materialized lexical/symbol member, separate from public properties.

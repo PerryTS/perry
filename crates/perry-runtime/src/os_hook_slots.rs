@@ -12,9 +12,17 @@ pub(crate) fn add_internal_process_listener(
         .map_or_else(|| (), |run| run(event, callback))
 }
 static PROCESS_EXIT_EVENT_EMITTED: Hook<fn() -> bool> = Hook::empty();
+crate::perry_thread_local! {
+    /// The exit sequence ran on this thread in a program with no process
+    /// installer: there is no listener storage to consult, but the thread is
+    /// still the one ending the process.
+    static EXIT_SEQUENCE_RAN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 pub(crate) fn process_exit_event_emitted() -> bool {
     // Teardown observes the selected install; it must not bootstrap Rust fixtures.
-    PROCESS_EXIT_EVENT_EMITTED.peek().map_or(false, |run| run())
+    PROCESS_EXIT_EVENT_EMITTED
+        .peek()
+        .map_or_else(|| EXIT_SEQUENCE_RAN.with(|ran| ran.get()), |run| run())
 }
 static EMIT_PROCESS_EVENT: Hook<fn(&str, &[f64]) -> bool> = Hook::empty();
 pub(crate) fn emit_process_event(event: &str, args: &[f64]) -> bool {
@@ -59,7 +67,7 @@ static JS_PROCESS_EMIT_EXIT: Hook<extern "C" fn(f64) -> ()> = Hook::empty();
 pub(crate) fn js_process_emit_exit(code: f64) -> () {
     JS_PROCESS_EMIT_EXIT
         .get()
-        .map_or_else(|| (), |run| run(code))
+        .map_or_else(|| EXIT_SEQUENCE_RAN.with(|ran| ran.set(true)), |run| run(code))
 }
 static JS_PROCESS_EVENT_NAMES: Hook<extern "C" fn() -> *mut ArrayHeader> = Hook::empty();
 pub(crate) fn js_process_event_names() -> *mut ArrayHeader {

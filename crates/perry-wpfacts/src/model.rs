@@ -1134,6 +1134,14 @@ pub struct Model {
     pub proto_writers: FxHashMap<(TmplId, Atom), FieldWriters>,
     pub any_writers: FxHashMap<TmplId, FieldWriters>,
     pub adds_keys: FxHashMap<TmplId, u32>,
+    /// The part of `adds_keys` that came from a named store of a key the
+    /// template did not list as a birth key when the store was seen
+    /// (`(template, key) -> stores`). A class whose parent is the value of
+    /// another unit has only its own keys in `birth_keys` until the parent
+    /// settles (`settle_parent_layouts`); the layout facts count these stores
+    /// against the settled birth keys (`derive`), where an inherited birth key
+    /// is no add.
+    pub adds_named: FxHashMap<(TmplId, Atom), u32>,
     pub hard: FxHashMap<Tok, (Hard, u32)>,
     pub escaped: FxHashMap<Tok, u32>,
     /// `escaped` as a bitset by token (the hot membership test).

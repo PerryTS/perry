@@ -221,7 +221,7 @@ fn test_object_meta_private_evaluation_brand_survives_copied_minor_move() {
     unsafe {
         crate::object::js_object_mark_class(class as i64);
         let meta = crate::object::object_meta_ensure(
-            crate::object::MetaObj::runtime_born(owner),
+            crate::meta_obj_runtime_born!(owner),
             crate::object::MetaReason::RuntimeHandle,
         );
         (*meta).private_evaluation_brand = ptr_bits(class as usize);

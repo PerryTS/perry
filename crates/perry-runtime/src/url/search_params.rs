@@ -107,7 +107,7 @@ pub(crate) fn url_search_params_backing_of(object: f64) -> Option<*mut ObjectHea
     // SAFETY: `try_read_gc_header` classifies the address before reading, and
     // rejects handles, slab buffers and anything without a plausible header.
     match unsafe { crate::value::addr_class::try_read_gc_header(obj as usize) } {
-        Some(header) if header.obj_type == crate::gc::GC_TYPE_OBJECT => {}
+        Some(header) if crate::gc_type_is_object!(header.obj_type) => {}
         _ => return None,
     }
     // `js_url_search_params_subclass_init` stores the backing as an OWN data
@@ -512,7 +512,7 @@ pub(crate) fn try_read_as_search_params(
         // reaches here (mirrors the guard `is_url_object_shape` already applies
         // to the sibling `js_url_href_if_url` probe).
         match crate::value::addr_class::try_read_gc_header(params as usize) {
-            Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT => {}
+            Some(h) if crate::gc_type_is_object!(h.obj_type) => {}
             _ => return None,
         }
         // A genuine URLSearchParams is always allocated with `class_id == 0`
@@ -961,7 +961,7 @@ pub(crate) fn shape_is_url_search_params(obj: *const ObjectHeader) -> bool {
         // GC_TYPE_ARRAY, and so on. `try_read_gc_header` also rejects small
         // handles / slab buffers that would otherwise deref a fake header.
         match crate::value::addr_class::try_read_gc_header(obj as usize) {
-            Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT => {}
+            Some(h) if crate::gc_type_is_object!(h.obj_type) => {}
             _ => return false,
         }
         if (*obj).class_id != 0 {

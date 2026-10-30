@@ -238,10 +238,10 @@ pub(super) unsafe fn try_object(bits: u64) -> Option<JSValue> {
     let obj = (bits & POINTER_MASK) as *const crate::ObjectHeader;
     let header = crate::value::addr_class::try_read_tracked_gc_header(obj as usize)?;
     let header = header.as_ref();
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::gc_type_is_not_object!(header.obj_type)
         || header._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS != 0
         || (header.size as usize)
-            < crate::gc::GC_HEADER_SIZE + std::mem::size_of::<crate::ObjectHeader>()
+            < crate::gc::GC_HEADER_SIZE + crate::object::header::meta_form_alloc_bytes(0)
         || !super::stringify_tojson_probe::object_is_plain_record(obj)
     {
         return None;
@@ -263,7 +263,7 @@ pub(super) unsafe fn try_object(bits: u64) -> Option<JSValue> {
         return None;
     }
     if (header.size as usize)
-        < crate::gc::GC_HEADER_SIZE + std::mem::size_of::<crate::ObjectHeader>() + fields * 8
+        < crate::gc::GC_HEADER_SIZE + crate::object::header::meta_form_alloc_bytes(fields)
     {
         return None;
     }
@@ -288,7 +288,8 @@ pub(super) unsafe fn try_object(bits: u64) -> Option<JSValue> {
     }
     if fields == 2 {
         for i in 0..2 {
-            let value_bits = slot(obj.cast(), std::mem::size_of::<crate::ObjectHeader>(), i);
+            // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
+            let value_bits = slot(crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _)).cast(), 0, i);
             if let Some(value) = parsed_plain_string_piece(value_bits) {
                 if let Some(result) = emit_two_field_parsed_string_object(obj, i, value) {
                     return Some(result);
@@ -311,7 +312,8 @@ unsafe fn emit_one_field_object(obj: *const crate::ObjectHeader) -> Option<JSVal
     }
     let keys = keys_view.arr();
     let key_bits = slot(crate::array::array_elements_ptr(keys).cast(), 0, 0);
-    let value_bits = slot(obj.cast(), std::mem::size_of::<crate::ObjectHeader>(), 0);
+    // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
+    let value_bits = slot(crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _)).cast(), 0, 0);
     let key = key_piece(key_bits)?;
     let value = scalar_piece(value_bits)?;
     let (key_bytes, key_units) = key.lengths();
@@ -345,7 +347,8 @@ unsafe fn emit_one_field_object(obj: *const crate::ObjectHeader) -> Option<JSVal
             + 1
             + emit_piece(
                 value,
-                slot(obj.cast(), std::mem::size_of::<crate::ObjectHeader>(), 0),
+                // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
+                slot(crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _)).cast(), 0, 0),
                 output.add(at + 1),
             );
         // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
@@ -403,11 +406,8 @@ unsafe fn emit_two_field_parsed_string_object(
         value_plan[i] = if i == proven_index {
             proven_value
         } else {
-            scalar_piece(slot(
-                obj.cast(),
-                std::mem::size_of::<crate::ObjectHeader>(),
-                i,
-            ))?
+            // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
+            scalar_piece(slot(crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _)).cast(), 0, i))?
         };
         let (kb, ku) = key_plan[i].lengths();
         let (vb, vu) = value_plan[i].lengths();
@@ -460,7 +460,8 @@ unsafe fn emit_two_field_parsed_string_object(
             at += 1;
             at += emit_piece(
                 value_plan[i],
-                slot(obj.cast(), std::mem::size_of::<crate::ObjectHeader>(), i),
+                // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
+                slot(crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _)).cast(), 0, i),
                 output.add(at),
             );
         }
@@ -510,11 +511,8 @@ unsafe fn emit_object(obj: *const crate::ObjectHeader, fields: usize) -> Option<
     let mut units = 2u32;
     for i in 0..fields {
         key_plan[i] = key_piece(slot(crate::array::array_elements_ptr(keys).cast(), 0, i))?;
-        value_plan[i] = scalar_piece(slot(
-            obj.cast(),
-            std::mem::size_of::<crate::ObjectHeader>(),
-            i,
-        ))?;
+        // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
+        value_plan[i] = scalar_piece(slot(crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _)).cast(), 0, i))?;
         let (kb, ku) = key_plan[i].lengths();
         let (vb, vu) = value_plan[i].lengths();
         let punctuation = 1 + u32::from(i != 0);
@@ -564,7 +562,8 @@ unsafe fn emit_object(obj: *const crate::ObjectHeader, fields: usize) -> Option<
             at += 1;
             at += emit_piece(
                 value_plan[i],
-                slot(obj.cast(), std::mem::size_of::<crate::ObjectHeader>(), i),
+                // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
+                slot(crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _)).cast(), 0, i),
                 output.add(at),
             );
         }

@@ -198,7 +198,7 @@ unsafe fn req_handle_symbol_fallback(obj_f64: f64, sym_f64: f64) -> Option<f64> 
 
 unsafe fn object_header_ptr_from_value_bits(bits: u64) -> Option<usize> {
     let (raw, obj_type) = heap_ptr_and_type_from_value_bits(bits)?;
-    if obj_type == crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_object!(obj_type) {
         Some(raw)
     } else {
         None
@@ -1392,7 +1392,7 @@ pub(crate) unsafe fn has_declared_prototype_symbol_property(receiver: f64, sym: 
         return false;
     };
     let header = header.as_ref();
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::gc_type_is_not_object!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
     {
         return false;

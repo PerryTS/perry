@@ -503,7 +503,7 @@ pub fn dom_exception_has_error_brand_for_test(addr: usize) -> bool {
 pub(crate) fn is_dom_exception_object(obj: *const ObjectHeader) -> bool {
     unsafe {
         if !crate::value::addr_class::try_read_tracked_gc_header(obj as usize)
-            .is_some_and(|h| h.as_ref().obj_type == crate::gc::GC_TYPE_OBJECT)
+            .is_some_and(|h| crate::gc_type_is_object!(h.as_ref().obj_type))
         {
             return false;
         }
@@ -1032,7 +1032,7 @@ fn event_proto_receiver(this: crate::closure::JsThis) -> *mut ObjectHeader {
     if let Some(event) = value_as_ptr::<ObjectHeader>(receiver) {
         let valid = unsafe {
             crate::value::addr_class::try_read_tracked_gc_header(event as usize)
-                .is_some_and(|h| h.as_ref().obj_type == crate::gc::GC_TYPE_OBJECT)
+                .is_some_and(|h| crate::gc_type_is_object!(h.as_ref().obj_type))
         };
         if valid && is_event_instance(event) {
             return event;

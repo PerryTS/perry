@@ -888,7 +888,7 @@ pub(crate) fn normalize_array_receiver(arr: *const ArrayHeader) -> *const ArrayH
             let is_typed_array =
                 crate::typedarray_hook_slots::lookup_typed_array_kind(raw_addr).is_some();
             let is_buffer = crate::buffer::is_registered_buffer(raw_addr);
-            if obj_type == crate::gc::GC_TYPE_OBJECT && !is_typed_array && !is_buffer {
+            if crate::gc_type_is_object!(obj_type) && !is_typed_array && !is_buffer {
                 // Generic array-like object receiver
                 // (`Array.prototype.<m>.call({length, 0:…}, …)`): materialize
                 // `length` + indexed keys into a real array and operate on that.

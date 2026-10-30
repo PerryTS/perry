@@ -247,7 +247,7 @@ pub(crate) unsafe fn layout_init_pointer_free(user_ptr: *mut u8) {
     let Some(header) = layout_header_for_user(user_ptr as usize) else {
         return;
     };
-    if (*header).obj_type == GC_TYPE_OBJECT {
+    if crate::gc_type_is_object!((*header).obj_type) {
         return;
     }
     set_layout_state(header, GC_LAYOUT_POINTER_FREE);
@@ -331,7 +331,7 @@ pub(crate) unsafe fn layout_mark_unknown(user_ptr: *mut u8) {
     let Some(header) = layout_header_for_user(user_ptr as usize) else {
         return;
     };
-    if (*header).obj_type == GC_TYPE_OBJECT {
+    if crate::gc_type_is_object!((*header).obj_type) {
         return;
     }
     let state = (*header)._reserved & GC_LAYOUT_STATE_MASK;
@@ -421,7 +421,7 @@ pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits
             return;
         };
         if (*header).gc_flags & GC_FLAG_FORWARDED == 0 {
-            if (*header).obj_type == GC_TYPE_OBJECT {
+            if crate::gc_type_is_object!((*header).obj_type) {
                 return;
             }
             let needs_element_note = (*header).obj_type == GC_TYPE_ARRAY
@@ -609,7 +609,7 @@ pub(crate) unsafe fn layout_rebuild_from_slots(
     let Some(header) = layout_header_for_user(user_ptr as usize) else {
         return;
     };
-    if (*header).obj_type == GC_TYPE_OBJECT {
+    if crate::gc_type_is_object!((*header).obj_type) {
         return;
     }
     // A bulk scan can strengthen the payload kind without changing numeric facts.

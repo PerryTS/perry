@@ -168,7 +168,7 @@ fn instanceof_dispatch(
     if class_id < 0xFFFF0000 {
         let addr = value_addr(value);
         if unsafe { crate::value::addr_class::try_read_gc_header(addr) }
-            .is_some_and(|header| header.obj_type == crate::gc::GC_TYPE_OBJECT)
+            .is_some_and(|header| crate::gc_type_is_object!(header.obj_type))
         {
             return if unsafe {
                 shape_ancestry::class_shape_reaches(addr as *const ObjectHeader, class_id, true)
@@ -223,7 +223,7 @@ fn native_instanceof(
     // still knows builtin subclasses whose prototype chain is not materialized.
     if let Some(name) = heap_builtin_name(class_id) {
         let ordinary = unsafe { crate::value::addr_class::try_read_gc_header(value_addr(value)) }
-            .is_some_and(|header| header.obj_type == crate::gc::GC_TYPE_OBJECT);
+            .is_some_and(|header| crate::gc_type_is_object!(header.obj_type));
         let matches = if ordinary {
             prototype_instanceof_builtin(rooted_value, name, constructor)
         } else {
@@ -722,7 +722,7 @@ fn native_instanceof(
             if let Some(header) =
                 unsafe { crate::value::addr_class::try_read_gc_header(value_addr(value)) }
             {
-                if header.obj_type == crate::gc::GC_TYPE_OBJECT {
+                if crate::gc_type_is_object!(header.obj_type) {
                     let obj = value_addr(value) as *const ObjectHeader;
                     let answer = unsafe {
                         super::shape_ancestry::class_shape_reaches(obj, CLASS_ID_OBJECT, true)
@@ -898,7 +898,7 @@ fn native_instanceof(
             };
         }
 
-        if gc_type == crate::gc::GC_TYPE_OBJECT {
+        if crate::gc_type_is_object!(gc_type) {
             if let Some(matches) =
                 crate::perf_hook_slots::is_perf_hooks_shape_instance_of(value, class_id)
             {
@@ -936,7 +936,7 @@ fn native_instanceof(
         // else in that word — an array's `length`, a closure's function
         // pointer, a Map's `size` — so `[1, 2] instanceof C` was true whenever
         // the length equalled (or chained to) `C`'s class id.
-        if gc_type != crate::gc::GC_TYPE_OBJECT {
+        if crate::gc_type_is_not_object!(gc_type) {
             return false_val;
         }
 

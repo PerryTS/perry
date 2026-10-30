@@ -1599,7 +1599,7 @@ fn object_ptr(value: f64) -> Option<*mut ObjectHeader> {
     // native `new EventEmitter()` is a POINTER_TAG registry handle (`0x38000`)
     // that sailed over the old `0x10000` floor into a header read.
     let header = unsafe { crate::value::addr_class::try_read_gc_header(raw) }?;
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_not_object!(header.obj_type) {
         return None;
     }
     Some(raw as *mut ObjectHeader)

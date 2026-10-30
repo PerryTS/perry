@@ -16,7 +16,7 @@ fn receiver(this: crate::closure::JsThis, class: u32, name: &str) -> *mut Object
         let header = unsafe { crate::value::addr_class::try_read_tracked_gc_header(obj as usize) };
         if header
             .as_ref()
-            .is_some_and(|h| unsafe { h.as_ref().obj_type } == crate::gc::GC_TYPE_OBJECT)
+            .is_some_and(|h| crate::gc_type_is_object!(unsafe { h.as_ref().obj_type }))
         {
             let branded = match class {
                 ids::EVENT => is_event_instance(obj),

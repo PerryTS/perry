@@ -157,7 +157,8 @@ stream_slots! {
 fn record_of(stream: f64) -> Option<*mut ArrayHeader> {
     let obj = crate::object::field_get_set::runtime_read_site::object_receiver(stream)?;
     // SAFETY: a live ordinary object (checked above).
-    let meta = unsafe { (*obj).meta };
+    // A1_UNPROVEN: record-first: stream object layout word (kind-A/B question for S0f).
+    let meta = unsafe { crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _)) };
     if meta.is_null() {
         return None;
     }
@@ -332,7 +333,8 @@ fn state_data_object(stream: f64, readable: bool) -> Option<*mut ObjectHeader> {
     {
         // SAFETY: the layout's slots are inline storage of the live object.
         let bits = unsafe {
-            *((object as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64)
+            // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
+            *(crate::meta_slots_of!(crate::meta_obj_runtime_born!(object as *mut _)) as *const u64)
                 .add(slot as usize)
         };
         if bits == crate::value::TAG_HOLE {
@@ -512,8 +514,8 @@ pub(crate) fn ensure_record(stream: f64) -> bool {
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj = scope.root_raw_mut_ptr(obj);
     let meta =
-        // A1_UNPROVEN: object_ptr_from_value(stream): a JS value, no type test (kind-A/B question for S0b-S0e).
-        obj.with_mut_ptr::<ObjectHeader, _>(|o| unsafe { crate::object::object_meta_ensure(crate::object::MetaObj::runtime_born(o), crate::object::MetaReason::RuntimeHandle) });
+        // A1_UNPROVEN: object_ptr_from_value(stream): a JS value, no type test (record-first: the receiver layout word; kind-A/B question for S0f).
+        obj.with_mut_ptr::<ObjectHeader, _>(|o| unsafe { crate::object::object_meta_ensure(crate::meta_obj_runtime_born!(o), crate::object::MetaReason::RuntimeHandle) });
     if meta.is_null() {
         return false;
     }
@@ -549,7 +551,8 @@ pub(crate) fn ensure_record(stream: f64) -> bool {
     }
     let record_word = crate::value::JSValue::pointer(record as *const u8).bits();
     obj.with_mut_ptr::<ObjectHeader, _>(|o| unsafe {
-        let meta = (*o).meta;
+        // A1_UNPROVEN: record-first: stream object layout word (kind-A/B question for S0f).
+        let meta = crate::meta_read!(crate::meta_obj_runtime_born!(o as *mut _));
         (*meta).native_state = record_word;
         crate::gc::runtime_write_barrier_slot(
             meta as usize,

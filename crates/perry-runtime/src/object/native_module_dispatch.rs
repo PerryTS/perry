@@ -324,6 +324,15 @@ pub(crate) unsafe fn dispatch_native_module_method(
         ""
     };
     let (module_name, assert_skip_prototype) = normalize_dispatch_module_name(module_name);
+    if let Some(value) = super::native_module::call_minted_native_export(
+        module_name,
+        method_name,
+        crate::value::js_nanbox_pointer(obj as i64),
+        args_ptr,
+        args_len,
+    ) {
+        return value;
+    }
     // A module the submodule registry implements (`stream/promises`,
     // `timers/promises`, `stream/web`, ...) has no dispatch bucket: a direct
     // method call on its module value runs the registry's export, the same

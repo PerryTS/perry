@@ -89,6 +89,30 @@ fn js_promise_new_with_parent_impl(parent: *mut Promise, force_malloc: bool) -> 
     bump(&MT_PROMISE_NEW_COUNT);
     let async_hooks_active = crate::async_hook_slots::promise_hooks_active();
     let lifecycle_hooks_active = async_hooks_active || crate::v8::promise_hooks_active();
+    if parent.is_null() && !lifecycle_hooks_active && !force_malloc {
+        // Leaf arm (the await and Promise-combinator common case): no parent to
+        // keep rooted across the allocation, no hook to run after it, no
+        // malloc/pin step. The only calls after the allocation are a plain
+        // field initialisation and the id reservation, which neither allocate
+        // nor collect, so the fresh address needs no handle scope.
+        let promise = crate::arena::arena_alloc_gc(
+            std::mem::size_of::<Promise>(),
+            std::mem::align_of::<Promise>(),
+            crate::gc::GC_TYPE_PROMISE,
+        ) as *mut Promise;
+        // SAFETY: `promise` is freshly allocated, correctly sized and aligned
+        // storage that nothing else can reach yet.
+        unsafe {
+            // GC_STORE_AUDIT(INIT): initializes freshly allocated Promise storage before the promise is published.
+            ptr::write(promise, Promise::new());
+            let ids = crate::async_hook_slots::reserve_resource_ids(
+                crate::async_hook_slots::execution_async_id_u64(),
+            );
+            (*promise).async_id = ids.async_id;
+            (*promise).trigger_async_id = ids.trigger_async_id;
+        }
+        return promise;
+    }
     // Root the parent before allocating the child. The allocation itself may
     // move an arena-resident Promise that predates hook enablement; rooting it
     // afterwards records the retired address and gives the child a stale
@@ -1972,4 +1996,59 @@ extern "C" fn finally_passthrough_reject(
         crate::event_pump::js_notify_promise_progress();
     }
     f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+#[cfg(test)]
+mod leaf_arm_tests {
+    use super::*;
+
+    fn on_fresh_thread(f: impl FnOnce() + Send + 'static) {
+        std::thread::spawn(move || {
+            crate::gc::gc_init();
+            let _no_move = crate::gc::GcSuppressScope::new();
+            f();
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    fn leaf_arm_builds_a_pending_unpinned_promise_with_fresh_ids() {
+        on_fresh_thread(|| {
+            let first = js_promise_new();
+            let second = js_promise_new();
+            unsafe {
+                assert!(matches!((*first).state, PromiseState::Pending));
+                assert!(crate::object::cell_meta::promise_cell_meta(first).is_null());
+                assert_eq!((*first).native_pinned, 0);
+                assert!((*second).async_id > (*first).async_id);
+                assert_eq!(
+                    (*first).trigger_async_id,
+                    crate::async_hook_slots::execution_async_id_u64()
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn a_parent_keeps_the_rooted_arm_and_its_trigger_id() {
+        on_fresh_thread(|| {
+            let parent = js_promise_new();
+            unsafe { (*parent).async_id = 4242 };
+            let child = js_promise_new_with_parent_impl(parent, false);
+            unsafe {
+                assert_eq!((*child).trigger_async_id, 4242);
+            }
+        });
+    }
+
+    #[test]
+    fn force_malloc_keeps_the_pinned_arm() {
+        on_fresh_thread(|| {
+            let promise = js_promise_new_with_parent_impl(std::ptr::null_mut(), true);
+            unsafe {
+                assert_eq!((*promise).native_pinned, 1);
+            }
+        });
+    }
 }

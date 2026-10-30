@@ -212,7 +212,7 @@ unsafe fn private_plain_receiver_shape(obj: f64) -> Option<(*const ObjectHeader,
     }
     let addr = (bits & crate::value::POINTER_MASK) as usize;
     let header = crate::value::addr_class::try_read_gc_header(addr)?;
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::gc_type_is_not_object!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
     {
         return None;
@@ -407,12 +407,16 @@ unsafe fn private_site_publish(class_id: u32, site: *mut u64, proof: PrivateShap
 /// and takes the miss for anything else. Without it the slot is an `Any`
 /// lane, stored with the write barrier. Codegen mirrors it
 /// (`expr/private_field_site.rs`).
-pub(crate) const PRIVATE_FIELD_SITE_F64: u64 = 1 << 48;
-/// The slot bits of a field site word: `word >> 32 & PRIVATE_FIELD_SITE_SLOT_MASK`.
-pub(crate) const PRIVATE_FIELD_SITE_SLOT_MASK: u64 = 0xFFFF;
+pub(crate) const PRIVATE_FIELD_SITE_F64: u64 = 1 << 56;
+/// The slot bits of a field site word, `word >> 32 & PRIVATE_FIELD_SITE_SLOT_MASK`:
+/// the slot's byte offset from the object, which the compiled hit adds to it.
+pub(crate) const PRIVATE_FIELD_SITE_SLOT_MASK: u64 = 0xFF_FFFF;
+/// The highest slot a field site word names (its offset fits the mask).
+const PRIVATE_FIELD_SITE_MAX_SLOT: u32 = 0xFFFF;
 
 /// The word a compiled INSTANCE FIELD site keeps for receivers carrying
-/// `shape_id` (#11791): `ShapeId | slot << 32 | lane bit`, or 0 when the
+/// `shape_id` (#11791): `ShapeId | off << 32 | lane bit` (`off` the slot's
+/// byte offset, stored here once for the compiled reader), or 0 when the
 /// field is not a plain inline slot of that shape. Every input is a fact of
 /// the ShapeId (the key list with the entry and its position, the live
 /// inline bound, the slot's lane), so the word holds for every receiver the
@@ -452,7 +456,7 @@ unsafe fn private_field_site_word(
         return 0;
     }
     let slot = keys.storage_slot(slot);
-    if slot >= d.live_inline_slot_count || u64::from(slot) > PRIVATE_FIELD_SITE_SLOT_MASK {
+    if slot >= d.live_inline_slot_count || slot > PRIVATE_FIELD_SITE_MAX_SLOT {
         return 0;
     }
     let lane = if slot < crate::object::field_rep::REP_SLOTS {
@@ -465,7 +469,10 @@ unsafe fn private_field_site_word(
         crate::object::field_rep::REP_F64 => PRIVATE_FIELD_SITE_F64,
         _ => return 0,
     };
-    u64::from(shape_id.0) | (u64::from(slot) << 32) | lane_bit
+    // An ordinary class instance layout carries the meta word.
+    let off = crate::object::header::meta_form_slot_off(slot);
+    debug_assert!(u64::from(off) <= PRIVATE_FIELD_SITE_SLOT_MASK);
+    u64::from(shape_id.0) | (u64::from(off) << 32) | lane_bit
 }
 
 /// Publish a proven receiver shape to a FIELD site, with its slot and lane.
@@ -1090,8 +1097,8 @@ mod private_guard_fast_tests {
                 );
                 assert_eq!(
                     (site >> 32) & PRIVATE_FIELD_SITE_SLOT_MASK,
-                    0,
-                    "and the field's slot"
+                    u64::from(crate::object::header::meta_form_slot_off(0)),
+                    "and the field's slot offset"
                 );
                 assert!(private_site_hit(obj, CID, &site));
                 assert!(

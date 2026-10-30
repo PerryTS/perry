@@ -192,3 +192,12 @@ pub fn ui_method_to_runtime(method: &str) -> Option<&'static str> {
     }
     None
 }
+
+pub mod native_callable_exports;
+
+pub mod native_module_bucket;
+
+// The export inventory lives with the runtime that declares each body (the realm
+// manifest scans its sources); codegen shares the same file for the names.
+#[path = "../../perry-runtime/src/node_submodules/native_submodule_exports.rs"]
+pub mod native_submodule_exports;

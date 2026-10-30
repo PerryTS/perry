@@ -408,6 +408,13 @@ impl Model {
         self.bufs.push(toks);
     }
 
+    /// Work no solve has run yet: what was added since the last one (a
+    /// contract check's escapes and the instances they make) is part of
+    /// the unit's facts only once solved.
+    pub(crate) fn unsolved(&self) -> bool {
+        !self.wl.is_empty() || !self.sum.pending.is_empty() || !self.marker_links.is_empty()
+    }
+
     pub fn solve(&mut self) {
         self.rel_phase = b'S';
         self.mark_params();

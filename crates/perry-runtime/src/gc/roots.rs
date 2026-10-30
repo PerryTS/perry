@@ -1497,7 +1497,7 @@ pub(super) fn visit_shadow_stack_root_slots(
                 break;
             }
             let header = *s.ptr.add(header_base);
-            let slot_count = header.meta;
+            let slot_count = header.bound;
             let slots_end = top + slot_count;
             if slots_end > s.len {
                 break;

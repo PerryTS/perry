@@ -24,8 +24,8 @@ pub(super) fn field_is_primitive(bits: u64) -> bool {
 /// field base can be borrowed once for the whole preflight too.
 #[cfg(test)]
 pub(super) unsafe fn fields_are_primitive(obj: *const crate::ObjectHeader, count: u32) -> bool {
-    let fields = (obj as *const u8)
-        .add(std::mem::size_of::<crate::ObjectHeader>())
+    // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
+    let fields = crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _))
         .cast::<u64>();
     std::slice::from_raw_parts(fields, count as usize)
         .iter()
@@ -80,8 +80,8 @@ unsafe fn emit<const VALIDATE: bool>(
     let keys = keys_view.arr() as *const crate::ArrayHeader;
     crate::object::key_attrs::debug_assert_positional(keys, keys_view.count());
     let saved_len = buf.len();
-    let fields = (obj as *const u8)
-        .add(std::mem::size_of::<crate::ObjectHeader>())
+    // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
+    let fields = crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _))
         .cast::<u64>();
     let key_slots =
         crate::array::array_elements_ptr(keys as *const crate::ArrayHeader).cast::<u64>();

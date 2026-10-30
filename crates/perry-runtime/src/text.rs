@@ -164,7 +164,7 @@ fn text_native_state(value: f64, class_id: u32) -> Option<u64> {
     }
     let addr = (bits & crate::value::POINTER_MASK) as usize;
     let header = unsafe { crate::value::addr_class::try_read_gc_header(addr)? };
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_not_object!(header.obj_type) {
         return None;
     }
     let obj = addr as *mut ObjectHeader;
@@ -172,7 +172,7 @@ fn text_native_state(value: f64, class_id: u32) -> Option<u64> {
         if (*obj).class_id != class_id {
             return None;
         }
-        let meta = (*obj).meta;
+        let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
         if meta.is_null() {
             return Some(0);
         }
@@ -230,7 +230,7 @@ fn alloc_text_object(class_id: u32, builtin_name: &str, state: u64) -> i64 {
     if state != 0 {
         obj_handle.with_mut_ptr::<ObjectHeader, _>(|obj| unsafe {
             let meta = crate::object::object_meta_ensure(
-                crate::object::MetaObj::runtime_born(obj),
+                crate::meta_obj_runtime_born!(obj),
                 crate::object::MetaReason::RuntimeHandle,
             );
             // A decoder whose state word never landed would read back as the

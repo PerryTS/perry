@@ -754,7 +754,7 @@ mod layout_tests {
                     .cast::<perry_runtime::gc::GcHeader>();
                 assert_eq!(
                     (*gc).size as usize,
-                    perry_runtime::gc::GC_HEADER_SIZE + std::mem::size_of::<ObjectHeader>() + 40,
+                    perry_runtime::gc::GC_HEADER_SIZE + perry_runtime::meta_form_alloc_bytes(5),
                     "column metadata must allocate exactly its five declared slots"
                 );
             }

@@ -287,7 +287,7 @@ pub(crate) fn note_descriptor_target_edits(obj: usize, edits: &[AttrsEdit<'_>]) 
         // header or keys (`attrs_live_in_keys_for_install`).
         if let Some(header) = crate::value::addr_class::try_read_tracked_gc_header(obj) {
             let header = header.as_ptr();
-            if (*header).obj_type == crate::gc::GC_TYPE_OBJECT {
+            if crate::gc_type_is_object!((*header).obj_type) {
                 (*header)._reserved |= crate::gc::OBJ_FLAG_HAS_DESCRIPTORS;
                 super::key_attrs::apply_edits(obj as *mut crate::object::ObjectHeader, edits);
             }
@@ -318,8 +318,7 @@ pub(crate) fn get_property_attrs_bytes(obj: usize, key: &[u8]) -> Option<Propert
             let keys = super::object_keys(bag);
             if entry != 0
                 || (bag as usize != obj
-                    && super::keys_find_property_slot_by_bytes(keys, keys.count(), key)
-                        .is_some())
+                    && super::keys_find_property_slot_by_bytes(keys, keys.count(), key).is_some())
             {
                 return Some(PropertyAttrs {
                     bits: super::key_attrs::entry_to_attr_bits(entry),
@@ -494,7 +493,7 @@ pub(crate) unsafe fn holder_word_blocks_store(mut bits: u64, name: &[u8]) -> Opt
             } else {
                 crate::value::addr_class::tracked_header_of_bits(bits)?.as_ref()
             };
-        if header.obj_type != crate::gc::GC_TYPE_OBJECT
+        if crate::gc_type_is_not_object!(header.obj_type)
             || header._reserved
                 & (crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO | crate::gc::OBJ_FLAG_FROZEN)
                 != 0
@@ -515,7 +514,8 @@ pub(crate) unsafe fn holder_word_blocks_store(mut bits: u64, name: &[u8]) -> Opt
             super::shapes::ShapeObjectKind::OrdinaryUnmarked => true,
             _ => return None,
         };
-        let meta = (*holder).meta;
+        // A1_UNPROVEN: record-first: holder may be the user object (kind-A/B question for S0f).
+        let meta = crate::meta_read!(crate::meta_obj_runtime_born!(holder as *mut _));
         if !meta.is_null() && (*meta).flags & super::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER != 0 {
             return None;
         }
@@ -622,7 +622,8 @@ pub(crate) unsafe fn declared_class_chain_blocks_store(
             if (*holder).parent_class_id != word.0 {
                 return None;
             }
-            let meta = (*holder).meta;
+            // A1_UNPROVEN: record-first: holder may be the user object (kind-A/B question for S0f).
+            let meta = crate::meta_read!(crate::meta_obj_runtime_born!(holder as *mut _));
             let recorded = if meta.is_null() { 0 } else { (*meta).prototype };
             if recorded != 0 {
                 let parent_agrees = if record.proto_id() == super::shapes::PROTO_ID_NULL {
@@ -716,7 +717,7 @@ pub(crate) unsafe fn plain_custom_prototype_may_intercept(obj_addr: usize, key: 
         // A non-object prototype (function, array, …) may carry semantics this
         // walk does not model; a frozen one makes every inherited data property
         // non-writable whether or not a per-key entry records it.
-        if header.obj_type != crate::gc::GC_TYPE_OBJECT
+        if crate::gc_type_is_not_object!(header.obj_type)
             || header._reserved
                 & (crate::gc::OBJ_FLAG_FROZEN | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO)
                 != 0

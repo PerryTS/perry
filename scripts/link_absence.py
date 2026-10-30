@@ -33,6 +33,13 @@ NEGATIVES = {
     "without_math": ["global_math"],
     "without_regex": ["regex_engine"],
     "without_node_stream": ["node_stream"],
+    "named_fs_callee": ["node_stream"],
+    "named_fs_value": ["node_stream"],
+    "named_fs_promises_value": ["node_stream"],
+    "named_fs_constants": ["node_stream"],
+    "named_util_types": [],
+    "named_events_constructor": [],
+    "events_without_process_hooks": [],
     "without_json": ["global_json", "json_tape"],
     "bun_file_without_json": ["global_json", "json_tape"],
     "without_turnloop_net": ["turnloop_net"],
@@ -405,6 +412,8 @@ def main():
     parser.add_argument("--perry", default=os.environ.get("PERRY_BIN", ROOT/"target/release/perry"))
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--record-known-failures", action="store_true")
+    parser.add_argument("--witness", action="append", help="run only named witnesses for diagnostics; CI omits this")
+    parser.add_argument("--base-perry", type=Path, help="compiler built from the base commit: hello .text and the symbols it links beyond base are recorded as a measurement, not a rule")
     parser.add_argument("--negative-only", action="store_true", help="diagnostic/sabotage arm; CI always runs all positives")
     args = parser.parse_args()
     args.perry = str(Path(args.perry).resolve())
@@ -426,6 +435,9 @@ def main():
     report = {"platform": key, "node": node_version, "witnesses": {}, "subsystems": {}, "failures": []}
     exceptions = {}
     names = list(NEGATIVES) + ([] if args.negative_only else list(fixtures))
+    if args.witness:
+        assert set(args.witness) <= set(names), f"unknown witnesses: {set(args.witness) - set(names)}"
+        names = list(dict.fromkeys(args.witness))
     for name in names:
         try:
             binary, selected, _ = compile_witness(args, name, env)
@@ -446,6 +458,16 @@ def main():
                 f"{name}: Node parity failed: native exit={actual.returncode}, "
                 f"stdout={actual.stdout!r}, expected={oracle.stdout!r}; stderr={actual.stderr[-1000:]!r}")
             syms, text = symbols(binary, nm, demangler)
+            absence = re.search(r"^// HWS absent: (.+)$", (FIXTURES/(name+".ts")).read_text(), re.M)
+            if absence:
+                prefixes = absence[1].split("|")
+                assert all(prefixes), f"{name}: empty absence prefix"
+                forbidden = [symbol for symbol in syms if matches(symbol, {"prefixes": prefixes})]
+                if forbidden:
+                    edge = why_live(args, name, next((symbol for symbol in forbidden if symbol["name"] == "js_nm_install_fs"), max(forbidden, key=lambda symbol: symbol["bytes"])), env, demangler)
+                    report["failures"].append(f"{name}: forbidden export dependency: {forbidden[0]['name']}")
+                    report.setdefault("export_absence", {})[name] = {"symbols": [symbol["name"] for symbol in forbidden], "why_live": edge}
+                    print(f"FAIL {name}: forbidden export dependency\n{edge}", flush=True)
             report["witnesses"][name] = {"text_bytes": text, "binary_bytes": binary.stat().st_size,
                                           "installs": sorted(selected), "parity": True}
             if name not in NEGATIVES:
@@ -499,6 +521,17 @@ def main():
         assert "hello" in report["witnesses"], "cannot record exceptions from a broken hello"
         known_path.parent.mkdir(parents=True, exist_ok=True)
         known_path.write_text(json.dumps({"lane":"HWS2", "symbols":exceptions}, indent=2, sort_keys=True)+"\n")
+    if args.base_perry and "hello" in names and "hello" in report["witnesses"]:
+        try:
+            base_args = argparse.Namespace(perry=str(args.base_perry.resolve()), output=args.output/"base")
+            base_env = {**env, "PERRY_RUNTIME_DIR": str(args.base_perry.resolve().parent)}
+            base_binary, _, _ = compile_witness(base_args, "hello", base_env)
+            lane_syms, lane_text = symbols(args.output/"hello"/"app", nm, demangler)
+            base_syms, base_text = symbols(base_binary, nm, demangler)
+            added = sorted({s["name"] for s in lane_syms} - {s["name"] for s in base_syms})
+            report["hello_growth"] = {"base_text_bytes": base_text, "lane_text_bytes": lane_text, "new_symbols": added}
+        except (AssertionError, RuntimeError, subprocess.SubprocessError) as error:
+            report["failures"].append(str(error))
     report["elapsed_seconds"] = round(time.monotonic()-started, 2)
     (args.output/"report.json").write_text(json.dumps(report, indent=2, sort_keys=True)+"\n")
     print(f"HWS elapsed={report['elapsed_seconds']}s failures={len(report['failures'])}")

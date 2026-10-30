@@ -442,12 +442,107 @@ fn even_memberless_layoutless_classes_get_compiler_role_descriptors() {
         2,
         "neither role may be omitted without members or layout"
     );
+    // Role bit 8 (literal) or 16 (declared), plus `CLASS_DECL_NAMES_POOLED` = 32,
+    // which every emitted declaration carries.
     assert!(
-        records[0].globals[1].contains("i32 8, i32 0, ptr null"),
+        records[0].globals[1].contains("i32 40, i32 0, ptr null"),
         "literal role is compiler-owned"
     );
     assert!(
-        records[1].globals[1].contains("i32 16, i32 0, ptr null"),
+        records[1].globals[1].contains("i32 48, i32 0, ptr null"),
         "empty declaration has a distinct role"
     );
+}
+
+#[test]
+fn member_names_carry_the_compilers_utf8_fact() {
+    let mut class = anon_shape(0x32b0, "Utf8Names", 92, 80);
+    let template = class.constructor.clone().unwrap();
+    let mut pool = crate::strings::StringPool::new();
+    pool.intern("plain");
+    let lone = pool.intern_wtf8(&[0xED, 0xA0, 0x80]);
+    let lone_key = pool.entry(lone).value.clone();
+    let getter = |id: u32, name: &str| {
+        let mut f = template.clone();
+        f.id = id;
+        f.name = name.to_string();
+        (name.to_string(), f)
+    };
+    class.getters = vec![getter(200, "plain"), getter(201, &lone_key)];
+    let records = super::class_declarations::class_declaration_globals(
+        &[(class.id, &class)],
+        &pool,
+        "utf8_names",
+        &mut |_| panic!("getters request no function body"),
+        &crate::layout_families::ProgramLayouts::default(),
+    );
+    let members = &records[0].globals[0];
+    let plain = members.find("i32 200, i32 0, i8 1, i8 4, i16 -1");
+    let wtf8 = members.find("i32 201, i32 0, i8 1, i8 0, i16 -1");
+    assert!(plain.is_some() && wtf8.is_some(), "{members}");
+}
+
+/// The runtime dedupes a pooled declaration's member names by pointer
+/// (`CLASS_DECL_NAMES_POOLED`). That holds only if the emitter gives every
+/// member that names `x` the same global, whatever its kind, and different
+/// names different globals. Linker string merging is never relied on: the
+/// emitted symbols themselves must be equal.
+#[test]
+fn equal_member_names_of_a_declaration_share_one_emitted_global() {
+    let build = |prefix: &str, id: u32| {
+        let mut class = anon_shape(id, "Pooled", 93, 90);
+        let template = class.constructor.clone().unwrap();
+        let mut pool = crate::strings::StringPool::with_prefix(prefix.to_string());
+        let func = |fid: u32, name: &str| {
+            let mut f = template.clone();
+            f.id = fid;
+            f.name = name.to_string();
+            f
+        };
+        // Methods x y a; getters x a; setters x y. `a` is also a field name.
+        class.methods = vec![func(300, "x"), func(303, "y"), func(305, "a")];
+        class.getters = vec![
+            ("x".to_string(), func(301, "x")),
+            ("a".to_string(), func(306, "a")),
+        ];
+        class.setters = vec![
+            ("x".to_string(), func(302, "x")),
+            ("y".to_string(), func(304, "y")),
+        ];
+        for n in ["x", "y", "a"] {
+            pool.intern(n);
+        }
+        let records = super::class_declarations::class_declaration_globals(
+            &[(class.id, &class)],
+            &pool,
+            prefix,
+            &mut |s| format!("@{s}"),
+            &crate::layout_families::ProgramLayouts::default(),
+        );
+        // `{ ptr members, i32 count, i32 birth_shape, i32 flags, ...`
+        let flags: u32 = records[0].globals[1]
+            .split("i32 ")
+            .nth(3)
+            .and_then(|s| s.split(',').next())
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or_else(|| panic!("no flags in {}", records[0].globals[1]));
+        assert_ne!(flags & 32, 0, "CLASS_DECL_NAMES_POOLED must be set");
+        let names: Vec<String> = records[0].globals[0]
+            .split("{ ptr ")
+            .skip(1)
+            .map(|m| m.split(',').next().unwrap().trim().to_string())
+            .collect();
+        let sym = |n: &str| format!("@{}", pool.lookup(n).unwrap().bytes_global);
+        (names, sym("x"), sym("y"), sym("a"))
+    };
+    // Two units: each one pools by its own symbols.
+    for (prefix, id) in [("unit_a", 0x32c0), ("unit_b", 0x32c1)] {
+        let (names, x, y, a) = build(prefix, id);
+        assert!(x != y && y != a && x != a);
+        let mut want = vec![x.clone(), y.clone(), a.clone(), x.clone(), a, x, y];
+        let mut names = names;
+        want.sort();
+        names.sort();
+        assert_eq!(names, want);
+    }
 }

@@ -322,7 +322,7 @@ unsafe fn alloc_error(
     (*ptr).errors = std::ptr::null_mut();
     // No metadata record until something needs one; the GC treats a null meta
     // edge as absent.
-    (*ptr).meta = std::ptr::null_mut();
+    *crate::object::cell_meta::error_cell_meta_slot(ptr) = std::ptr::null_mut();
     (*ptr).frames = match &frames_handle {
         Some(handle) => handle.get_raw_const_ptr::<StringHeader>() as *mut StringHeader,
         None => std::ptr::null_mut(),

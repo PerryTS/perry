@@ -39,10 +39,10 @@ pub(super) fn attach_to_object_with<T: 'static>(
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj = scope.root_raw_mut_ptr(obj);
     let meta = obj
-        // A1_UNPROVEN: any_object(value): a JS value (kind-A/B question for S0b-S0e).
+        // A1_UNPROVEN: any_object(value): a JS value (record-first: the receiver layout word; kind-A/B question for S0f).
         .with_mut_ptr::<ObjectHeader, _>(|obj| unsafe {
             crate::object::object_meta_ensure(
-                crate::object::MetaObj::runtime_born(obj),
+                crate::meta_obj_runtime_born!(obj),
                 crate::object::MetaReason::NativePayload,
             )
         });
@@ -115,10 +115,10 @@ pub(crate) fn attach_external_rooted(
     external_bytes: usize,
 ) {
     let meta = obj
-        // A1_UNPROVEN: obj handle parameter, no type test (kind-A/B question for S0b-S0e).
+        // A1_UNPROVEN: obj handle parameter, no type test (record-first: the receiver layout word; kind-A/B question for S0f).
         .with_mut_ptr::<ObjectHeader, _>(|obj| unsafe {
             crate::object::object_meta_ensure(
-                crate::object::MetaObj::runtime_born(obj),
+                crate::meta_obj_runtime_born!(obj),
                 crate::object::MetaReason::NativePayload,
             )
         });
@@ -138,7 +138,8 @@ pub(crate) fn attach_external_rooted(
     super::test_census::created(unsafe { (*cell).type_id });
     let word = crate::value::JSValue::pointer(cell as *const u8).bits();
     obj.with_mut_ptr::<ObjectHeader, _>(|obj| unsafe {
-        let meta = (*obj).meta;
+        // A1_UNPROVEN: record-first: attach target layout word (kind-A/B question for S0f).
+        let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
         debug_assert!(!meta.is_null(), "object_meta_ensure ran above");
         if crate::stream_hooks::store_record_payload_cell((*meta).native_state, word) {
             return;
@@ -300,7 +301,7 @@ pub(crate) fn any_object(value: f64) -> Option<*mut ObjectHeader> {
     // A POINTER_TAG word names a GC-headed object (honest pointers): the
     // header kind is the whole proof.
     let header = crate::value::addr_class::pointer_value_header(bits)?;
-    (header.obj_type == crate::gc::GC_TYPE_OBJECT
+    (crate::gc_type_is_object!(header.obj_type)
         && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0)
         .then_some((bits & crate::value::POINTER_MASK) as *mut ObjectHeader)
 }

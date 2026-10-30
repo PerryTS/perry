@@ -1831,7 +1831,7 @@ pub(super) fn append_chunk_bytes(value: f64, out: &mut Vec<u8>, depth: u8) {
             Some(crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY) => {
                 append_array_chunks(raw, out, depth);
             }
-            Some(crate::gc::GC_TYPE_OBJECT) => {
+            Some(crate::gc_object_type_pat!()) => {
                 if let Some(chunks) = readable_hidden_chunks(value) {
                     append_chunk_bytes(chunks, out, depth + 1);
                 }

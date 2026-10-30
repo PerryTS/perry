@@ -242,8 +242,11 @@ unsafe fn object_own_get(obj: *const ObjectHeader, key: &[u8]) -> Option<f64> {
             && !crate::object::overflow::shadowed(obj)
         {
             let keys = d.keys as usize as *const crate::array::ArrayHeader;
-            let slot =
-                crate::object::keys_find_property_slot_by_bytes(d.keys_view(), d.logical_key_count, key)?;
+            let slot = crate::object::keys_find_property_slot_by_bytes(
+                d.keys_view(),
+                d.logical_key_count,
+                key,
+            )?;
             // An accessor key's slot holds its getter/setter pair, never a
             // data value.
             if d.summary & crate::object::key_attrs::SUMMARY_ACCESSOR != 0
@@ -357,9 +360,13 @@ pub(crate) unsafe fn bag_define_value(ptr: usize, key: &str, value: f64) {
 
 pub(crate) unsafe fn bag_define_value_bytes(ptr: usize, key: &[u8], value: f64) {
     let _no_move = crate::gc::GcSuppressScope::new();
-    if let Ok(key) = std::str::from_utf8(key) {
-        if bag_of(ptr).is_null() && bag_born_with_attrs(ptr, &[(key, value)], &[]) {
-            return;
+    // Only a new bag needs a UTF-8 key for its birth declaration. Existing
+    // bags use byte keys below, so their updates need no UTF-8 validation.
+    if bag_of(ptr).is_null() {
+        if let Ok(key) = std::str::from_utf8(key) {
+            if bag_born_with_attrs(ptr, &[(key, value)], &[]) {
+                return;
+            }
         }
     }
     let declared = crate::object::class_value::holds_declared_static_method_bytes(ptr, key);
@@ -394,15 +401,17 @@ pub(crate) unsafe fn bag_define_data_with_attrs_bytes(
     attrs: u8,
 ) {
     let _no_move = crate::gc::GcSuppressScope::new();
-    if let Ok(key) = std::str::from_utf8(key) {
-        if bag_of(ptr).is_null()
-            && bag_born_with_attrs(
+    // UTF-8 is required only by the bag's birth declaration. Once the
+    // function owns a bag, its shape and byte-key operations are sufficient.
+    if bag_of(ptr).is_null() {
+        if let Ok(key) = std::str::from_utf8(key) {
+            if bag_born_with_attrs(
                 ptr,
                 &[(key, value)],
                 &[crate::object::key_attrs::attr_bits_to_entry(attrs)],
-            )
-        {
-            return;
+            ) {
+                return;
+            }
         }
     }
     let entry = crate::object::key_attrs::attr_bits_to_entry(attrs);
@@ -474,7 +483,8 @@ pub(crate) unsafe fn bag_has_own(ptr: usize, key: &[u8]) -> bool {
     if arr.is_null() {
         return false;
     }
-    let Some(slot) = crate::object::keys_find_property_slot_by_bytes(keys, keys.count(), key) else {
+    let Some(slot) = crate::object::keys_find_property_slot_by_bytes(keys, keys.count(), key)
+    else {
         return false;
     };
     crate::object::key_attrs::key_is_accessor_at(arr, slot as u32)
@@ -637,14 +647,14 @@ unsafe fn state_ensure(ptr: usize) -> Option<*mut ObjectHeader> {
     // inherited setter may run on it), hung off the bag's `meta.expando` —
     // an ordinary traced edge of the bag.
     let meta = crate::object::object_meta_ensure(
-        crate::object::MetaObj::runtime_born(bag),
+        crate::meta_obj_runtime_born!(bag),
         crate::object::MetaReason::ClosureProps,
     );
     if meta.is_null() {
         return None;
     }
     let state = crate::object::js_object_alloc_null_proto(0, 0);
-    let meta = (*bag).meta;
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(bag as *mut _));
     let boxed = crate::value::js_nanbox_pointer(state as i64).to_bits();
     // GC_STORE_AUDIT(BARRIERED): metadata-record slot store + object barrier.
     (*meta).expando = boxed;

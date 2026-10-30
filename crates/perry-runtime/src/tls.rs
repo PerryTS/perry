@@ -254,7 +254,7 @@ fn freeze_heap_value(value: f64) -> f64 {
 fn object_ptr(value: f64) -> Option<*mut ObjectHeader> {
     unsafe {
         let header = gc_header(value)?;
-        if (*header).obj_type != crate::gc::GC_TYPE_OBJECT {
+        if crate::gc_type_is_not_object!((*header).obj_type) {
             return None;
         }
         Some(JSValue::from_bits(value.to_bits()).as_pointer::<ObjectHeader>() as *mut ObjectHeader)

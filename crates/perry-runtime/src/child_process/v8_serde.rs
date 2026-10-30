@@ -343,7 +343,7 @@ impl Serializer {
                 self.write_dense_array(raw as *mut crate::array::ArrayHeader);
                 return true;
             }
-            if header.obj_type == crate::gc::GC_TYPE_OBJECT {
+            if crate::gc_type_is_object!(header.obj_type) {
                 if self.depth >= MAX_DEPTH {
                     self.out.push(TAG_UNDEFINED);
                     return true;
@@ -594,7 +594,8 @@ impl Serializer {
         let keys_len = keys_arr_view.count();
         let num_fields = crate::object::object_live_slot_count(obj);
         let alloc_limit = std::cmp::max(num_fields, crate::object::INLINE_SLOT_FLOOR as u32);
-        let fields_ptr = (obj as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const f64;
+        // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
+        let fields_ptr = crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _)) as *const f64;
         let mut count = 0u64;
         for f in 0..keys_len {
             let key = crate::array::js_array_get_f64(keys_arr, f);

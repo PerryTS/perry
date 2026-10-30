@@ -633,6 +633,7 @@ impl Model {
                     // A store effect's key exists in the defining unit's layout.
                     if !self.tmpls[tm as usize].birth_keys.contains(&a) && !ctor && !effect {
                         *self.adds_keys.entry(tm).or_default() += 1;
+                        *self.adds_named.entry((tm, a)).or_default() += 1;
                     }
                 }
             }

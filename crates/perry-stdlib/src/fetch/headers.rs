@@ -135,7 +135,7 @@ fn describe_headers_init(value: f64) -> String {
         return "Set".to_string();
     }
     match gc_type_for_raw_ptr(raw) {
-        Some(t) if t == perry_runtime::gc::GC_TYPE_OBJECT => "object".to_string(),
+        Some(t) if perry_runtime::gc_type_is_object!(t) => "object".to_string(),
         Some(t) => format!("gc type {t}"),
         None => format!("non-heap {:#018x}", value.to_bits()),
     }
@@ -191,7 +191,7 @@ fn read_headers_record_entries(
         return unsafe { read_proxy_record_entries(value, scope) };
     }
     let raw = perry_runtime::js_nanbox_get_pointer(value);
-    if gc_type_for_raw_ptr(raw) != Some(perry_runtime::gc::GC_TYPE_OBJECT) {
+    if !matches!(gc_type_for_raw_ptr(raw), Some(perry_runtime::gc_object_type_pat!())) {
         return None;
     }
 

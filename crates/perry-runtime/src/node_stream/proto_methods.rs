@@ -90,8 +90,7 @@ fn ensure_stream_prototype(kind: StreamProto) -> f64 {
         return crate::value::js_nanbox_pointer(proto as i64);
     }
     let scope = crate::gc::RuntimeHandleScope::new();
-    let ctor = scope.root_nanbox_f64(crate::object::bound_native_callable_export_value(
-        "stream",
+    let ctor = scope.root_nanbox_f64(crate::object::native_module::stream_export_value(
         kind.export_name(),
     ));
     if let Some(proto) = layouts::node_prototype_of_serial(kind.serial()) {
@@ -402,9 +401,7 @@ pub(crate) fn build_passthrough_prototype(constructor: f64) -> f64 {
 /// (`class_registry::state::reserved_native_parent_prototype_bits`).
 pub(crate) fn stream_prototype_value(name: &str) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let ctor = scope.root_nanbox_f64(crate::object::bound_native_callable_export_value(
-        "stream", name,
-    ));
+    let ctor = scope.root_nanbox_f64(crate::object::native_module::stream_export_value(name));
     crate::object::js_function_prototype_value_for_read(ctor.get_nanbox_f64())
 }
 
@@ -417,7 +414,7 @@ pub(super) fn alloc_stream_instance(
     let (name, native_key) = kind.constructor();
     let ctor = scope.root_nanbox_f64(
         crate::object::native_module::minted_native_callable_export(native_key)
-            .unwrap_or_else(|| crate::object::bound_native_callable_export_value("stream", name)),
+            .unwrap_or_else(|| crate::object::native_module::stream_export_value(name)),
     );
     let proto = scope.root_nanbox_f64(
         super::constructors::own_prototype_by_bag(ctor.get_nanbox_f64()).unwrap_or_else(|| {

@@ -6,6 +6,7 @@
 use super::shape;
 use crate::object::{layout_desc::PerryLayoutDesc, runtime_layouts as layouts};
 
+#[inline(always)]
 fn definition(module: &str, name: &str) -> Option<(*const PerryLayoutDesc, u64)> {
     Some(match (module, name) {
         ("events", "EventEmitter") => (
@@ -52,8 +53,14 @@ fn definition(module: &str, name: &str) -> Option<(*const PerryLayoutDesc, u64)>
     })
 }
 
-/// Complete the runtime's definition before any program code can see it.
+/// Dynamic constructor readers share the definition resolver.
 pub(crate) fn seal(module: &str, name: &str, value: f64) {
+    seal_selected(module, name, value)
+}
+
+/// A selected constructor specializes only its own static layout declaration.
+#[inline(always)]
+pub(crate) fn seal_selected(module: &str, name: &str, value: f64) {
     let Some((desc, serial)) = definition(module, name) else {
         return;
     };
@@ -77,9 +84,9 @@ pub(crate) fn seal(module: &str, name: &str, value: f64) {
         let bag = crate::value::js_nanbox_get_pointer(image) as *mut crate::object::ObjectHeader;
         // The recorded constructor parent (and other private state) remains
         // an owned edge. It is never a JS property of this null-prototype bag.
-        if !(*old).meta.is_null() {
-            let state = (*(*old).meta).expando;
-            let meta = (*bag).meta;
+        if !crate::meta_read!(crate::meta_obj_runtime_born!(old as *mut _)).is_null() {
+            let state = (*crate::meta_read!(crate::meta_obj_runtime_born!(old as *mut _))).expando;
+            let meta = crate::meta_read!(crate::meta_obj_runtime_born!(bag as *mut _));
             // GC_STORE_AUDIT(BARRIERED): metadata-record child edge.
             (*meta).expando = state;
             crate::gc::runtime_write_barrier_slot(
@@ -118,7 +125,7 @@ pub(crate) unsafe fn inherits_function(closure: *const super::ClosureHeader, nam
     if bag.is_null() {
         return false;
     }
-    let meta = (*bag).meta;
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(bag as *mut _));
     if meta.is_null() {
         return false;
     }

@@ -805,7 +805,7 @@ mod static_record_layout_tests {
                 0,
                 "the empty handle placeholder must carry a registered layout"
             );
-            assert!((*pointer).meta.is_null());
+            assert!(perry_ffi::ObjectHeader::meta_is_null(pointer));
         }
     }
 }

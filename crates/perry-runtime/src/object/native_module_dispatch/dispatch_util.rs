@@ -11,6 +11,7 @@ use super::*;
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_util(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
     let NmCtx {
         obj,

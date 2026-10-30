@@ -150,16 +150,16 @@ pub(crate) fn filehandle_object_fd(value: f64) -> Option<i32> {
     }
     let header = unsafe { crate::value::addr_class::try_read_tracked_gc_header(addr) }?;
     unsafe {
-        if (*header.as_ptr()).obj_type != crate::gc::GC_TYPE_OBJECT
+        if crate::gc_type_is_not_object!((*header.as_ptr()).obj_type)
             || (*header.as_ptr()).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return None;
         }
         let obj = addr as *const crate::object::ObjectHeader;
-        if (*obj).class_id != CLASS_ID_FS_FILEHANDLE || (*obj).meta.is_null() {
+        if (*obj).class_id != CLASS_ID_FS_FILEHANDLE || crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _)).is_null() {
             return None;
         }
-        let word = (*(*obj).meta).native_state;
+        let word = (*crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _))).native_state;
         (word != 0).then_some(word.wrapping_sub(1) as u32 as i32)
     }
 }
@@ -170,7 +170,7 @@ pub(crate) unsafe fn set_filehandle_owner_fd(obj: *mut crate::object::ObjectHead
     let _no_move = crate::gc::GcSuppressScope::new();
     debug_assert_eq!((*obj).class_id, CLASS_ID_FS_FILEHANDLE);
     let meta = crate::object::object_meta_ensure(
-        crate::object::MetaObj::runtime_born(obj),
+        crate::meta_obj_runtime_born!(obj),
         crate::object::MetaReason::RuntimeHandle,
     );
     (*meta).native_state = u64::from(fd as u32) + 1;
@@ -196,7 +196,7 @@ fn object_class_id(value: f64) -> Option<u32> {
     unsafe {
         let gc_header =
             (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT {
+        if crate::gc_type_is_not_object!((*gc_header).obj_type) {
             return None;
         }
         Some((*obj).class_id)
@@ -1938,24 +1938,6 @@ mod sso_tests_1781 {
     }
 }
 
-pub(crate) fn install_roots() {
-    crate::fs_hook_slots::install();
-    dir_glob_watch::install_tls_resolvers();
-    crate::feature_hooks::FS_REGISTER_ROOTS.set(register_roots);
-    register_roots();
-}
-
-fn register_roots() {
-    crate::gc::gc_register_mutable_root_scanner_named_once(
-        "crate::fs::scan_fs_handle_roots_mut",
-        scan_fs_handle_roots_mut,
-    );
-    crate::gc::gc_register_mutable_root_scanner_named_once(
-        "crate::fs::scan_fs_stream_roots_mut",
-        scan_fs_stream_roots_mut,
-    );
-    crate::gc::gc_register_mutable_root_scanner_named_once(
-        "crate::fs::scan_fs_watcher_roots_mut",
-        scan_fs_watcher_roots_mut,
-    );
-}
+mod roots;
+pub(crate) use roots::install_roots;
+pub(crate) use roots::{install_handle_roots, install_stream_roots, install_watcher_roots};

@@ -32,7 +32,7 @@ pub(super) fn new(data: impl FnOnce() -> *const RegExpData) -> *mut RegExpHeader
                 (*receiver).class_id = 0;
                 (*receiver).parent_class_id = shape;
                 // GC_STORE_AUDIT(INIT): unpublished nursery object's empty metadata.
-                (*receiver).meta = std::ptr::null_mut();
+                *crate::object::cell_meta::regexp_cell_meta_slot(receiver) = std::ptr::null_mut();
                 crate::object::shapes::store_kind::premark_plain_ordinary(receiver);
                 let slots = receiver
                     .cast::<u8>()
@@ -192,7 +192,7 @@ pub(crate) fn builtin(value: f64) -> Option<*mut RegExpHeader> {
 #[inline(always)]
 pub(crate) fn birth_layout(value: f64) -> Option<*mut RegExpHeader> {
     let header = crate::value::addr_class::pointer_value_header(value.to_bits())?;
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::gc_type_is_not_object!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
     {
         return None;
@@ -203,6 +203,14 @@ pub(crate) fn birth_layout(value: f64) -> Option<*mut RegExpHeader> {
     // layout word, whose shadow bit is clear on the birth layout.
     (shape != 0 && unsafe { std::ptr::read(receiver as *const u64) } == u64::from(shape) << 32)
         .then_some(receiver)
+}
+
+/// Whether `value` carries the RegExp brand. The birth layout proves it with
+/// one header word (its first own key is `[[RegExpMatcher]]`); any other layout
+/// asks the private slot.
+#[inline(always)]
+pub(crate) fn is_branded(value: f64) -> bool {
+    birth_layout(value).is_some() || crate::regex::regexp_data_of(value).is_some()
 }
 
 /// The birth layout's inline slot `index` of a receiver [`builtin`] admitted.

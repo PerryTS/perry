@@ -408,6 +408,27 @@ fn declared_method_index_bytes(
     super::declarations::class_method_decl_index_bytes(class_id, name)
 }
 
+/// [`declared_method_index_bytes`] for a method whose declaration index the
+/// caller already holds (`known`), else a search by name.
+fn declared_method_index(
+    class_id: u32,
+    kind: ClassDeclarationValueKind,
+    name: &[u8],
+    known: Option<u32>,
+) -> Option<(usize, usize)> {
+    let Some(index) = known else {
+        return declared_method_index_bytes(class_id, kind, name);
+    };
+    let non_property = proto_member_has_no_string_key_bytes(class_id, name);
+    if non_property != (kind == ClassDeclarationValueKind::NonPropertyMethod) {
+        return None;
+    }
+    Some((
+        index as usize,
+        super::declarations::class_member_count(class_id),
+    ))
+}
+
 /// Class `class_id`'s declaration value (`kind`, `name`), if its holder
 /// keeps one. Reads only: a class whose holder was never minted has none.
 #[inline]
@@ -425,6 +446,18 @@ pub(crate) fn class_declaration_value_bytes(
     kind: ClassDeclarationValueKind,
     name: &[u8],
 ) -> Option<u64> {
+    class_declaration_value_known(class_id, kind, name, None)
+}
+
+/// [`class_declaration_value_bytes`] for a method declared at `known` (its
+/// declaration index, when the caller holds it).
+#[inline(never)]
+pub(crate) fn class_declaration_value_known(
+    class_id: u32,
+    kind: ClassDeclarationValueKind,
+    name: &[u8],
+    known: Option<u32>,
+) -> Option<u64> {
     let holder = crate::object::class_value::class_value_if_minted(class_id)? as usize;
     if kind == ClassDeclarationValueKind::PrivateStaticMethod {
         // SAFETY: this agent's live class function object.
@@ -433,7 +466,7 @@ pub(crate) fn class_declaration_value_bytes(
         }
         .map(f64::to_bits);
     }
-    let (index, _) = declared_method_index_bytes(class_id, kind, name)?;
+    let (index, _) = declared_method_index(class_id, kind, name, known)?;
     let values = method_values(holder)?;
     let bits = crate::array::js_array_get_f64(values, index as u32).to_bits();
     (bits != crate::value::TAG_UNDEFINED).then_some(bits)
@@ -462,6 +495,18 @@ pub(crate) fn class_declaration_value_store_bytes(
     name: &[u8],
     value_bits: u64,
 ) {
+    class_declaration_value_store_known(class_id, kind, name, None, value_bits)
+}
+
+/// [`class_declaration_value_store_bytes`] for a method declared at `known`.
+#[inline(never)]
+pub(crate) fn class_declaration_value_store_known(
+    class_id: u32,
+    kind: ClassDeclarationValueKind,
+    name: &[u8],
+    known: Option<u32>,
+    value_bits: u64,
+) {
     let Some(holder) = crate::object::class_value::class_value_if_minted(class_id) else {
         return;
     };
@@ -479,7 +524,7 @@ pub(crate) fn class_declaration_value_store_bytes(
         };
         return;
     }
-    let Some((index, count)) = declared_method_index_bytes(class_id, kind, name) else {
+    let Some((index, count)) = declared_method_index(class_id, kind, name, known) else {
         return;
     };
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -605,6 +650,12 @@ pub static CLASS_METHOD_BIND_LENGTHS: ImageTable<RwLock<Option<HashMap<(u32, Vec
 /// `class_id`, if any.
 pub(crate) fn class_method_entry_bytes(class_id: u32, name: &[u8]) -> Option<usize> {
     let entry = super::declarations::class_method_decl_bytes(class_id, name)?.entry as usize;
+    (entry != 0).then_some(entry)
+}
+
+/// [`class_method_entry_bytes`] for the method declared at `index`.
+pub(crate) fn class_method_entry_at(class_id: u32, index: u32) -> Option<usize> {
+    let entry = super::declarations::class_method_decl_at(class_id, index)?.entry as usize;
     (entry != 0).then_some(entry)
 }
 
@@ -1070,7 +1121,7 @@ pub(crate) fn class_id_for_decl_prototype_object(ptr: usize) -> Option<u32> {
 fn decl_prototype_class_id(ptr: usize) -> Option<u32> {
     // SAFETY: a live GC allocation's address or arbitrary non-pointer bits.
     let header = unsafe { crate::value::addr_class::try_read_gc_header(ptr) }?;
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_not_object!(header.obj_type) {
         return None;
     }
     // SAFETY: the header names an ordinary object at `ptr`; its first word
@@ -1107,20 +1158,34 @@ pub(crate) fn class_decl_prototype_object(class_id: u32) -> *mut ObjectHeader {
 }
 
 fn internal_symbol_dispatch_alias(name: &[u8]) -> bool {
-    matches!(
-        name,
-        b"@@iterator"
-            | b"@@asyncIterator"
-            | b"@@toPrimitive"
-            | b"__perry_dispose__"
-            | b"__perry_async_dispose__"
-            | b"__perry_inspect_custom__"
-    )
+    // Every alias starts `@@` or `__`: the first byte rules most names out
+    // before any byte compare.
+    matches!(name.first(), Some(b'@' | b'_'))
+        && matches!(
+            name,
+            b"@@iterator"
+                | b"@@asyncIterator"
+                | b"@@toPrimitive"
+                | b"__perry_dispose__"
+                | b"__perry_async_dispose__"
+                | b"__perry_inspect_custom__"
+        )
 }
 
-fn order_class_string_member_names(class_id: u32, is_static: bool, names: &mut Vec<Vec<u8>>) {
-    names.sort();
-    names.dedup();
+/// `items` (each named by `name`) in the class's ClassBody definition order:
+/// the members its order registrations rank, by rank, then the unranked by
+/// name. A deleted member and an unregistered dispatch alias are left out; an
+/// item the registrations name twice is kept once (`keep` merges the pair).
+///
+/// Each item's rank is read once. The names are compared only to break a tie
+/// of rank, which no two distinct ranked names have.
+fn order_class_string_members<T>(
+    class_id: u32,
+    is_static: bool,
+    items: Vec<T>,
+    name: impl Fn(&T) -> &[u8],
+    keep: impl Fn(T, T) -> T,
+) -> Vec<T> {
     let orders = CLASS_STRING_MEMBER_ORDERS.read().ok();
     let order_for = |name: &[u8]| {
         orders
@@ -1128,23 +1193,47 @@ fn order_class_string_member_names(class_id: u32, is_static: bool, names: &mut V
             .and_then(|guard| guard.as_ref())
             .and_then(|map| string_member_order(map, class_id, is_static, name))
     };
-    names.retain(|name| {
-        let key = name.as_ref();
+    let mut ranked: Vec<((u8, u32), T)> = Vec::with_capacity(items.len());
+    for item in items {
+        let key = name(&item);
         let order = order_for(key);
-        order != Some(u32::MAX) && (order.is_some() || !internal_symbol_dispatch_alias(key))
-    });
-    crate::cold_sort::sort_by(names, |left, right| {
-        match (order_for(left.as_ref()), order_for(right.as_ref())) {
-            (Some(a), Some(b)) => a.cmp(&b).then_with(|| left.cmp(right)),
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => left.cmp(right),
+        if order == Some(u32::MAX) || (order.is_none() && internal_symbol_dispatch_alias(key)) {
+            continue;
         }
+        let rank = order.map_or((1, 0), |order| (0, order));
+        ranked.push((rank, item));
+    }
+    crate::cold_sort::sort_by(&mut ranked, |(a_rank, a), (b_rank, b)| {
+        a_rank.cmp(b_rank).then_with(|| name(a).cmp(name(b)))
     });
-    // Equal keys have equal definition order and compare adjacent here.
-    // Deduplicate after the one shared sort, rather than instantiating a
-    // second full sort for each key representation before this one.
-    names.dedup();
+    // Equal items have equal rank and compare adjacent here.
+    let mut out: Vec<T> = Vec::with_capacity(ranked.len());
+    let mut pending: Option<((u8, u32), T)> = None;
+    for (rank, item) in ranked {
+        pending = Some(match pending.take() {
+            Some((pending_rank, prev)) if pending_rank == rank && name(&prev) == name(&item) => {
+                (rank, keep(prev, item))
+            }
+            Some((_, prev)) => {
+                out.push(prev);
+                (rank, item)
+            }
+            None => (rank, item),
+        });
+    }
+    out.extend(pending.map(|(_, item)| item));
+    out
+}
+
+fn order_class_string_member_names(class_id: u32, is_static: bool, names: &mut Vec<Vec<u8>>) {
+    let ordered = order_class_string_members(
+        class_id,
+        is_static,
+        std::mem::take(names),
+        |name| name.as_slice(),
+        |kept, _| kept,
+    );
+    *names = ordered;
 }
 
 /// Own string-keyed methods and accessors in ClassBody definition order.
@@ -1199,6 +1288,19 @@ pub(super) fn install_class_decl_prototype_method_field(
     class_id: u32,
     name: &[u8],
 ) {
+    let at = super::declarations::class_method_decl_index_bytes(class_id, name)
+        .map(|(index, _)| index as u32);
+    install_class_decl_prototype_method_field_at(proto, class_id, name, at)
+}
+
+/// [`install_class_decl_prototype_method_field`] for a method declared at
+/// `at` (its declaration index), when the caller holds it.
+pub(super) fn install_class_decl_prototype_method_field_at(
+    proto: *mut ObjectHeader,
+    class_id: u32,
+    name: &[u8],
+    at: Option<u32>,
+) {
     if proto.is_null() {
         return;
     }
@@ -1209,7 +1311,7 @@ pub(super) fn install_class_decl_prototype_method_field(
     // name and make the installation write the class constructor straight
     // back. The canonical vtable value is the property value we need.
     let method_handle = scope.root_nanbox_f64(
-        crate::object::native_module::class_prototype_method_value_for_name_bytes(class_id, name),
+        crate::object::native_module::class_prototype_method_value_at(class_id, name, at),
     );
     let key_handle = scope.root_string_ptr(crate::string::js_string_from_bytes(
         name.as_ptr(),
@@ -1348,21 +1450,39 @@ fn install_class_decl_prototype_symbol_members(proto: *mut ObjectHeader, class_i
     }
 }
 
-/// The class's own string-keyed prototype members in ClassBody order, each
-/// with whether it is an accessor (else a method).
-pub(crate) fn class_prototype_member_names(class_id: u32) -> Vec<(Vec<u8>, bool)> {
-    let (mut names, accessors) = super::declarations::class_declared_member_names(class_id);
-    names.extend(accessors.iter().cloned());
-    order_class_string_member_names(class_id, false, &mut names);
-    names
+/// One own string-keyed prototype member of a class: its name, whether it is
+/// an accessor (else a method), and where its declaration sits.
+pub(crate) struct ProtoMember {
+    pub name: Vec<u8>,
+    pub accessor: bool,
+    pub at: super::declarations::DeclAt,
+}
+
+/// The class's own string-keyed prototype members in ClassBody order. A name
+/// declared as both a method and an accessor is the accessor.
+pub(crate) fn class_prototype_member_names(class_id: u32) -> Vec<ProtoMember> {
+    let (methods, accessors) = super::declarations::class_declared_members(class_id);
+    let members: Vec<ProtoMember> = methods
         .into_iter()
-        // A private `#x` member is never a property of the prototype.
-        .filter(|name| !name.starts_with(b"#"))
-        .map(|name| {
-            let is_accessor = accessors.contains(&name);
-            (name, is_accessor)
+        .map(|m| (m, false))
+        .chain(accessors.into_iter().map(|m| (m, true)))
+        .map(|(m, accessor)| ProtoMember {
+            name: m.name,
+            accessor,
+            at: m.at,
         })
-        .collect()
+        .collect();
+    order_class_string_members(
+        class_id,
+        false,
+        members,
+        |m| m.name.as_slice(),
+        |kept, dup| if dup.accessor { dup } else { kept },
+    )
+    .into_iter()
+    // A private `#x` member is never a property of the prototype.
+    .filter(|m| !m.name.starts_with(b"#"))
+    .collect()
 }
 
 /// Install the class's own members on its decl prototype in ClassBody order:
@@ -1371,15 +1491,23 @@ pub(crate) fn class_prototype_member_names(class_id: u32) -> Vec<(Vec<u8>, bool)
 fn install_class_decl_prototype_method_fields(proto: *mut ObjectHeader, class_id: u32) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let proto_h = scope.root_raw_mut_ptr(proto);
-    for (name, is_accessor) in class_prototype_member_names(class_id) {
+    for member in class_prototype_member_names(class_id) {
         // Both installers root the prototype across their own allocations.
         proto_h.with_mut_ptr(|proto: *mut ObjectHeader| {
-            if is_accessor {
-                super::decl_accessors::install_decl_prototype_accessor_bytes(
-                    proto, class_id, &name,
+            if member.accessor {
+                super::decl_accessors::install_decl_prototype_accessor_at(
+                    proto,
+                    class_id,
+                    &member.name,
+                    Some(member.at),
                 );
             } else {
-                install_class_decl_prototype_method_field(proto, class_id, &name);
+                install_class_decl_prototype_method_field_at(
+                    proto,
+                    class_id,
+                    &member.name,
+                    member.at.method_index(),
+                );
             }
         });
     }

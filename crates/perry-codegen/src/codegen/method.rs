@@ -1704,6 +1704,29 @@ pub(super) fn compile_method(
             lowered.pre_statepoint_inline = true;
         }
     }
+    // The primary body of an ordinary method joins the early inliner when the
+    // facts close a call site over it (`closed_targets`) and it fits the same
+    // budget. Clones and wrappers are excluded; async and generator bodies
+    // are state machines.
+    if !is_pshape_clone
+        && !is_index_clone
+        && !arguments_length_clone
+        && !ptr_array_cache_clone
+        && !guarded_undefined_clone
+        && !pshape_arg_clone
+        && !generator_owner
+        && !method.is_async
+        && !method.is_generator
+        && !method.was_plain_async
+    {
+        let lowered = llmod
+            .function_mut(lowered_function_index)
+            .expect("just-lowered method function");
+        lowered.closed_target_preinline = super::helpers::guarded_specialization_admits_preinline(
+            lowered.estimated_ir_bytes(),
+            method.body.len(),
+        );
+    }
     publish_lowered_fn_artifacts(llmod, artifacts);
     // The Phase 5a and nonnegative-index clones are purely additive: the
     // public symbol (and its trampoline/forwarder, if any) belongs to the

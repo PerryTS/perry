@@ -330,6 +330,32 @@ impl Scanner<'_> {
 }
 
 impl Visit for Scanner<'_> {
+    fn visit_import_decl(&mut self, import: &ast::ImportDecl) {
+        if !import.type_only && matches!(import.src.value.as_str(), Some("module" | "node:module"))
+        {
+            let exposes_sync = import.specifiers.iter().any(|specifier| match specifier {
+                ast::ImportSpecifier::Named(named) => {
+                    !named.is_type_only
+                        && match &named.imported {
+                            Some(ast::ModuleExportName::Ident(name)) => {
+                                name.sym == "syncBuiltinESMExports"
+                            }
+                            Some(ast::ModuleExportName::Str(name)) => {
+                                name.value.as_str() == Some("syncBuiltinESMExports")
+                            }
+                            None => named.local.sym == "syncBuiltinESMExports",
+                        }
+                }
+                _ => true,
+            });
+            if exposes_sync {
+                self.out
+                    .insert(("node:module".into(), "syncBuiltinESMExports".into()));
+            }
+        }
+        import.visit_children_with(self);
+    }
+
     fn visit_ident(&mut self, id: &ast::Ident) {
         // Dynamic code can obtain every writer, including through aliases.
         if matches!(id.sym.as_ref(), "eval" | "Function") {
@@ -415,6 +441,24 @@ impl Visit for Scanner<'_> {
 
     fn visit_call_expr(&mut self, call: &ast::CallExpr) {
         call.visit_children_with(self);
+        let loads_module = match &call.callee {
+            ast::Callee::Import(_) => true,
+            ast::Callee::Expr(expr) => {
+                matches!(peel(expr), ast::Expr::Ident(name) if name.sym == "require")
+            }
+            _ => false,
+        };
+        if loads_module
+            && call.args.first().is_some_and(|arg| {
+                matches!(
+                    str_arg(&arg.expr).as_deref(),
+                    Some("module" | "node:module")
+                )
+            })
+        {
+            self.out
+                .insert(("node:module".into(), "syncBuiltinESMExports".into()));
+        }
         let ast::Callee::Expr(callee) = &call.callee else {
             return;
         };

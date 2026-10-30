@@ -1312,17 +1312,23 @@ pub enum Expr {
         step_closure: Box<Expr>,
     },
 
-    /// Settled self-next continuation (SNC). Evaluates to a NaN-boxed bool:
-    /// true when the runtime proved that the FIFO round trip of publishing
-    /// this await and dispatching it again is unobservable, in which case the
-    /// await result has been written to the iter-result value cell and the
-    /// step continues in place; false declines (nothing changed) and the
-    /// caller takes the ordinary `AsyncStepChain` path.
+    /// Settled self-next continuation (SNC). Evaluates to the await result
+    /// (the primitive, or the fulfilled native promise's value) when the
+    /// runtime proved that the FIFO round trip of publishing this await and
+    /// dispatching it again is unobservable; the step then continues in place
+    /// with that value as its next resume value. A decline evaluates to the
+    /// TDZ sentinel (never a legitimate await result: observing it throws) and
+    /// changes nothing; test it with `AsyncStepDeclined` and take the ordinary
+    /// `AsyncStepChain` path.
     /// Only emitted by `build_async_step_driver_direct`.
     AsyncStepResumeNow {
         value: Box<Expr>,
         step_closure: Box<Expr>,
     },
+
+    /// True (NaN-boxed bool) when the operand is the decline sentinel of
+    /// `AsyncStepResumeNow`. Only emitted by `build_async_step_driver_direct`.
+    AsyncStepDeclined(Box<Expr>),
 
     /// Optimized done-case for the async-step driver: equivalent to
     /// `Promise.resolve(value)` at the position where the state machine

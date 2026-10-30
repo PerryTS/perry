@@ -85,7 +85,7 @@ pub unsafe extern "C-unwind" fn js_method_call_slow(
             );
         }
         if let Some(h) = crate::value::addr_class::try_read_gc_header(addr) {
-            if h.obj_type == crate::gc::GC_TYPE_OBJECT
+            if crate::gc_type_is_object!(h.obj_type)
                 && crate::native_class_ids::is_native_payload_class_id(
                     (*(addr as *const ObjectHeader)).class_id,
                 )
@@ -220,7 +220,7 @@ unsafe fn prepare(recv: f64, method_id: i64) -> f64 {
             h.obj_type
         }
     });
-    let cell = matches!(kind, Some(t) if t != crate::gc::GC_TYPE_OBJECT
+    let cell = matches!(kind, Some(t) if crate::gc_type_is_not_object!(t)
         && t != crate::gc::GC_TYPE_CLOSURE && t != crate::gc::GC_TYPE_PROXY && t != u8::MAX);
     let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     let Some(name_ref) = crate::string::perry_string_ref_from_dispatch_id(method_id, &mut scratch)
@@ -341,7 +341,7 @@ unsafe fn builtin_prototype_has_accessor(proto: usize, object: usize, name: &[u8
     }
     match crate::value::addr_class::try_read_gc_header(proto) {
         Some(h) if h.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 => None,
-        Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT => {
+        Some(h) if crate::gc_type_is_object!(h.obj_type) => {
             let p = proto as *const ObjectHeader;
             let linked = match super::method_site::read_holder::admitted_proto_id(p) {
                 Some(super::shapes::PROTO_ID_DEFAULT) => true,
@@ -427,7 +427,7 @@ unsafe fn plain_ordinary(addr: usize) -> bool {
     let Some(header) = crate::value::addr_class::try_read_gc_header(addr) else {
         return false;
     };
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::object_lacks_meta_word!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || header._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0
     {
@@ -443,7 +443,7 @@ unsafe fn plain_ordinary(addr: usize) -> bool {
     {
         return false;
     }
-    let meta = (*obj).meta;
+    let meta = crate::meta_read!(crate::meta_obj_from_type!(obj as *mut _, header.obj_type));
     meta.is_null()
         || ((*meta).elements == 0
             && (*meta).flags & super::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER == 0)

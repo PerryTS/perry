@@ -869,7 +869,7 @@ fn callable_then_field(value: f64) -> Option<f64> {
     let Some(gc_header) = (unsafe { crate::value::addr_class::try_read_gc_header(addr) }) else {
         return None;
     };
-    if gc_header.obj_type != crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_not_object!(gc_header.obj_type) {
         return None;
     }
     // #9539: interning `"then"` allocates, so the receiver must be a root

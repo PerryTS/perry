@@ -482,8 +482,11 @@ pub(crate) unsafe fn keys_find_accessor_slot_resolved(
         }
         let value = crate::JSValue::from_bits((*slots.add(i)).to_bits());
         if crate::string::js_string_key_bytes(value, &mut sso) == Some(key) {
-            return (crate::object::keys_find_slot_by_bytes_resolved(crate::object::ObjectKeys::new(keys as *mut _, count), count, key)
-                == Some(i as u32))
+            return (crate::object::keys_find_slot_by_bytes_resolved(
+                crate::object::ObjectKeys::new(keys as *mut _, count),
+                count,
+                key,
+            ) == Some(i as u32))
             .then_some(i as u32);
         }
     }
@@ -1063,7 +1066,7 @@ pub(crate) fn attrs_live_in_keys_of_bits(bits: u64) -> bool {
     };
     // SAFETY: the classifier proved a live GC header.
     let header = unsafe { header.as_ref() };
-    header.obj_type == crate::gc::GC_TYPE_OBJECT
+    crate::gc_type_is_object!(header.obj_type)
         && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
         && crate::typedarray_hook_slots::lookup_typed_array_kind(
             (bits & crate::value::POINTER_MASK) as usize,
@@ -1087,7 +1090,7 @@ pub(crate) fn attrs_live_in_keys_of_bits(bits: u64) -> bool {
 #[inline]
 pub(crate) unsafe fn attrs_live_in_keys(addr: usize) -> bool {
     match crate::value::addr_class::try_read_gc_header(addr) {
-        Some(claim) if claim.obj_type == crate::gc::GC_TYPE_OBJECT => {
+        Some(claim) if crate::gc_type_is_object!(claim.obj_type) => {
             attrs_live_in_keys_of_bits(addr as u64)
         }
         _ => false,
@@ -1443,22 +1446,58 @@ impl AttrsEdit<'_> {
     }
 }
 
-/// The key bytes of a keys-array slot, when it holds a string key.
+/// Where each keyed edit's key sits in the list being edited (`NOT_OWN`: the
+/// key is not in it, or the edit is a whole-list one).
+///
+/// A list holds one slot per key text per namespace, so the slot a keyed edit
+/// is about is the one lookup of its key finds, once, and the fold decides by
+/// position: no key text is compared per slot, and nothing about how a slot
+/// spells its key (SSO value, atom, plain heap string) matters.
+const NOT_OWN: u32 = u32::MAX;
+
+/// Fill `out[i]` with the position of edit `i`'s key among the first `count`
+/// slots of `keys` (`NOT_OWN` when it is not there, or the edit is a
+/// whole-list one).
+unsafe fn find_positions(
+    edits: &[AttrsEdit<'_>],
+    keys: crate::object::ObjectKeys,
+    count: u32,
+    out: &mut [u32],
+) {
+    for (edit, at) in edits.iter().zip(out) {
+        let Some(key) = edit.key() else {
+            continue;
+        };
+        let found = if matches!(edit, AttrsEdit::Private(_)) {
+            crate::object::keys_find_private_slot_by_bytes(keys.arr(), count, key)
+        } else {
+            crate::object::keys_find_property_slot_by_bytes(keys, count, key)
+        };
+        if let Some(pos) = found {
+            *at = pos;
+        }
+    }
+}
+
+/// Do two edits name the same key text?
 #[inline]
-unsafe fn slot_key_bytes<'b>(
-    slot: crate::JSValue,
-    sso: &'b mut [u8; crate::value::SHORT_STRING_MAX_LEN],
-) -> Option<&'b [u8]> {
-    crate::string::js_string_key_bytes(slot, sso)
+fn same_key(edits: &[AttrsEdit<'_>], i: usize, j: usize) -> bool {
+    matches!((edits[i].key(), edits[j].key()), (Some(a), Some(b)) if a == b)
 }
 
 /// The entry position `pos` of a list takes after `edits`, from `old`.
-/// Whole-list integrity edits include symbol property entries. Byte-keyed
-/// edits compare string keys only; holes and private entries stay untouched.
+/// `at[i]` is where edit `i`'s key sits in the list ([`EditPositions`]).
+/// Whole-list integrity edits include symbol property entries; holes and
+/// private entries stay untouched by a property edit.
 #[inline]
-unsafe fn fold_edits(edits: &[AttrsEdit<'_>], slot: crate::JSValue, old: u8) -> u8 {
-    let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-    let Some(bytes) = slot_key_bytes(slot, &mut sso) else {
+unsafe fn fold_edits(
+    edits: &[AttrsEdit<'_>],
+    at: &[u32],
+    pos: u32,
+    slot: crate::JSValue,
+    old: u8,
+) -> u8 {
+    if !slot.is_string() && !slot.is_short_string() {
         if slot.is_pointer() && crate::symbol::js_is_symbol(f64::from_bits(slot.bits())) != 0 {
             return edits
                 .iter()
@@ -1466,15 +1505,13 @@ unsafe fn fold_edits(edits: &[AttrsEdit<'_>], slot: crate::JSValue, old: u8) -> 
                 .fold(old, |entry, edit| edit.apply(entry));
         }
         return old;
-    };
+    }
     let mut entry = old;
-    for edit in edits {
-        match edit.key() {
-            Some(k)
-                if k != bytes || matches!(edit, AttrsEdit::Private(_)) != entry_is_private(old) => {
-            }
-            _ => entry = edit.apply(entry),
+    for (edit, &key_at) in edits.iter().zip(at) {
+        if edit.key().is_some() && (key_at != pos || matches!(edit, AttrsEdit::Private(_)) != entry_is_private(old)) {
+            continue;
         }
+        entry = edit.apply(entry);
     }
     entry
 }
@@ -1512,7 +1549,7 @@ pub(crate) unsafe fn apply_edits(obj: *mut crate::object::ObjectHeader, edits: &
         let Some(key) = edit.key() else {
             continue;
         };
-        if edits[..i].iter().any(|e| e.key() == Some(key)) {
+        if (0..i).any(|j| same_key(edits, j, i)) {
             continue; // folded with its first occurrence
         }
         let keys = crate::object::object_keys(obj);
@@ -1528,8 +1565,9 @@ pub(crate) unsafe fn apply_edits(obj: *mut crate::object::ObjectHeader, edits: &
         }
         let entry = edits
             .iter()
-            .filter(|e| e.key().is_none() || e.key() == Some(key))
-            .fold(0u8, |acc, e| e.apply(acc));
+            .enumerate()
+            .filter(|&(j, e)| e.key().is_none() || same_key(edits, j, i))
+            .fold(0u8, |acc, (_, e)| e.apply(acc));
         if entry == 0 {
             // A default entry on an absent key changes nothing: the key is not
             // own, and when it becomes own it is born default.
@@ -1547,26 +1585,28 @@ pub(crate) unsafe fn apply_edits(obj: *mut crate::object::ObjectHeader, edits: &
     }
     let (slots, available) = crate::object::keys_array_dense_slots(keys.arr());
     let count = (keys.count() as usize).min(available);
+    let mut inline = [NOT_OWN; 8];
+    let mut spill;
+    let at: &mut [u32] = if edits.len() <= inline.len() {
+        &mut inline[..edits.len()]
+    } else {
+        spill = vec![NOT_OWN; edits.len()];
+        &mut spill
+    };
+    find_positions(edits, keys, count as u32, at);
+    let at: &[u32] = at;
     let changes_at = |pos: usize| -> bool {
         let slot = crate::JSValue::from_bits((*slots.add(pos)).to_bits());
         let old = keys_entry(keys.arr(), pos as u32);
-        fold_edits(edits, slot, old) != old
+        fold_edits(edits, at, pos as u32, slot, old) != old
     };
     let mut first_change: Option<u32> = None;
     if edits.iter().all(|e| e.key().is_some()) {
-        // Keyed edits touch only their keys' positions: find them, rather
-        // than walk the list (an install on a wide object is one lookup).
-        for edit in edits {
-            let key = edit.key().unwrap_or_default();
-            let position = if matches!(edit, AttrsEdit::Private(_)) {
-                crate::object::keys_find_private_slot_by_bytes(keys.arr(), count as u32, key)
-            } else {
-                crate::object::keys_find_property_slot_by_bytes(keys, count as u32, key)
-            };
-            if let Some(pos) = position {
-                if first_change.map_or(true, |f| pos < f) && changes_at(pos as usize) {
-                    first_change = Some(pos);
-                }
+        // Keyed edits touch only their keys' positions (an install on a wide
+        // object is one lookup, not a walk of the list).
+        for &pos in at.iter().filter(|&&pos| pos != NOT_OWN) {
+            if first_change.map_or(true, |f| pos < f) && changes_at(pos as usize) {
+                first_change = Some(pos);
             }
         }
     } else {
@@ -1582,7 +1622,7 @@ pub(crate) unsafe fn apply_edits(obj: *mut crate::object::ObjectHeader, edits: &
     if crate::object::overflow::has_overflow(obj) {
         #[cfg(feature = "attr-census")]
         crate::object::attr_census::note_global("edit.dictionary_in_place");
-        edit_private_list(obj, keys.arr(), from, count as u32, edits);
+        edit_private_list(obj, keys.arr(), from, count as u32, edits, at);
         crate::object::shapes::transition_object_shape_semantics(obj);
         return;
     }
@@ -1590,8 +1630,8 @@ pub(crate) unsafe fn apply_edits(obj: *mut crate::object::ObjectHeader, edits: &
         return;
     };
     let rebuilt =
-        crate::object::canonical_keys::rebuild_with_entries(&proof, keys, from, |_, slot, old| {
-            fold_edits(edits, slot, old)
+        crate::object::canonical_keys::rebuild_with_entries(&proof, keys, from, |pos, slot, old| {
+            fold_edits(edits, at, pos, slot, old)
         });
     crate::object::set_object_keys(obj, rebuilt.view());
 }
@@ -1611,6 +1651,7 @@ pub(crate) unsafe fn restrict_owned_integrity(obj: *mut crate::object::ObjectHea
         0,
         (*table).length,
         &[AttrsEdit::Integrity { freeze }],
+        &[NOT_OWN],
     );
 }
 
@@ -1621,12 +1662,13 @@ unsafe fn edit_private_list(
     from: u32,
     count: u32,
     edits: &[AttrsEdit<'_>],
+    at: &[u32],
 ) {
     let table = keys as *mut crate::object::overflow::Table;
     for pos in from..count {
         let key = crate::JSValue::from_bits(*crate::object::overflow::key_at(table, pos));
         let word = crate::object::overflow::attrs_at(table, pos);
-        let attrs = fold_edits(edits, key, *word as u8);
+        let attrs = fold_edits(edits, at, pos, key, *word as u8);
         crate::object::overflow::set_entry_attrs(obj, table, pos, attrs);
     }
 }

@@ -149,24 +149,6 @@
       "why": "A new scope id per withStoreScope call; dispose only sets disposed=true and never removes the entry"
     },
     {
-      "file": "crates/perry-runtime/src/node_submodules/mod.rs",
-      "name": "DEFAULT_OBJECT_SINGLETONS",
-      "verdict": "bounded_by_program",
-      "why": "Keyed by the &'static builtin submodule key: one cached default object per builtin submodule"
-    },
-    {
-      "file": "crates/perry-runtime/src/node_submodules/mod.rs",
-      "name": "EXPORT_SINGLETONS",
-      "verdict": "bounded_by_program",
-      "why": "Keyed by (&'static submodule key, &'static export name) of builtin node submodules: a fixed set of builtin exports"
-    },
-    {
-      "file": "crates/perry-runtime/src/node_submodules/mod.rs",
-      "name": "NAMESPACE_SINGLETONS",
-      "verdict": "bounded_by_program",
-      "why": "Keyed by the &'static builtin submodule key: one namespace object per builtin submodule on first use"
-    },
-    {
       "file": "crates/perry-runtime/src/node_submodules/trace_events.rs",
       "name": "TRACE_STATES",
       "verdict": "open_leak",
@@ -408,18 +390,6 @@
       "fn": "original_servernames",
       "verdict": "open_leak",
       "why": "Keyed by runtime TLS server handle; take_original_servername only pop_fronts the deque, the key stays after close"
-    },
-    {
-      "file": "crates/perry-stdlib/src/worker_threads.rs",
-      "name": "UNCLONEABLE_OBJECTS",
-      "verdict": "open_leak",
-      "why": "Object bits per markAsUncloneable call; never removed, and moved/freed objects leave stale keys"
-    },
-    {
-      "file": "crates/perry-stdlib/src/worker_threads.rs",
-      "name": "UNTRANSFERABLE_OBJECTS",
-      "verdict": "open_leak",
-      "why": "NaN-box bits of each object passed to markAsUntransferable: one per marked object, never unmarked"
     },
     {
       "file": "crates/perry-stdlib/src/worker_threads/entry_table.rs",

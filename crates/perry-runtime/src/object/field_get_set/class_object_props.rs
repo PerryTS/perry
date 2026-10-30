@@ -33,7 +33,7 @@ pub(crate) fn class_evaluation_prototype_class_id(ptr: usize) -> Option<u32> {
     }
     unsafe {
         let header = crate::value::addr_class::try_read_gc_header(ptr)?;
-        if header.obj_type != crate::gc::GC_TYPE_OBJECT
+        if crate::gc_type_is_not_object!(header.obj_type)
             || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return None;
@@ -228,13 +228,16 @@ pub(crate) unsafe fn finish_class_evaluation_prototype(
         });
     });
 
-    for (name, is_accessor) in super::super::class_registry::class_prototype_member_names(class_id)
-    {
-        if is_accessor {
+    for member in super::super::class_registry::class_prototype_member_names(class_id) {
+        let name = member.name;
+        if member.accessor {
             // S2: an accessor is a real accessor property of this prototype.
             proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
-                super::super::class_registry::install_decl_prototype_accessor_bytes(
-                    proto, class_id, &name,
+                super::super::class_registry::install_decl_prototype_accessor_at(
+                    proto,
+                    class_id,
+                    &name,
+                    Some(member.at),
                 )
             });
             continue;

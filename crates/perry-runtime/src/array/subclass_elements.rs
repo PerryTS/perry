@@ -90,7 +90,8 @@ impl Drop for ArraySubclassRepresentationGuard {
 /// `obj` must be a live `GC_TYPE_OBJECT` user pointer.
 #[inline]
 pub(crate) unsafe fn elements_of(obj: *const ObjectHeader) -> *mut ArrayHeader {
-    let meta = (*obj).meta;
+    // A1_UNPROVEN: record-first: layout word of the Array-subclass instance (kind-A/B question for S0f).
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
     if meta.is_null() {
         return std::ptr::null_mut();
     }
@@ -104,7 +105,8 @@ pub(crate) unsafe fn elements_of(obj: *const ObjectHeader) -> *mut ArrayHeader {
 /// `obj` must be a live `GC_TYPE_OBJECT` with a meta record.
 #[inline]
 pub(crate) unsafe fn set_elements_head(obj: *mut ObjectHeader, elements: *mut ArrayHeader) {
-    let meta = (*obj).meta;
+    // A1_UNPROVEN: record-first: layout word of the Array-subclass instance (kind-A/B question for S0f).
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
     debug_assert!(!meta.is_null());
     // GC_STORE_AUDIT(BARRIERED): meta-record child edge, stored exactly as
     // `reserve_object_spill` stores `spill`.
@@ -126,8 +128,8 @@ pub(crate) unsafe fn install_elements(obj: *mut ObjectHeader, length: u32) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj_handle = scope.root_raw_mut_ptr(obj);
     let (_, obj) =
-        // A1_UNPROVEN: an `extends Array` instance from a JS value, no type test (kind-A/B question for S0b-S0e).
-        obj_handle.across_mut::<ObjectHeader, _>(|| crate::object::object_meta_ensure(crate::object::MetaObj::runtime_born(obj), crate::object::MetaReason::ArraySubclassElements));
+        // A1_UNPROVEN: an `extends Array` instance from a JS value, no type test (record-first: the receiver layout word; kind-A/B question for S0f).
+        obj_handle.across_mut::<ObjectHeader, _>(|| crate::object::object_meta_ensure(crate::meta_obj_runtime_born!(obj), crate::object::MetaReason::ArraySubclassElements));
     if !elements_of(obj).is_null() {
         return;
     }
@@ -164,7 +166,7 @@ pub(crate) unsafe fn backed(addr: usize) -> Option<(*mut ObjectHeader, *mut Arra
         addr
     };
     let header = crate::value::addr_class::try_read_gc_header(raw)?;
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::gc_type_is_not_object!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
     {
         return None;

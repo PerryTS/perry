@@ -201,6 +201,7 @@ pub(crate) fn is_known_global_identifier_name(name: &str) -> bool {
             | "DisposableStack"
             | "AsyncDisposableStack"
             | "SuppressedError"
+            | "Iterator"
             | "Proxy"
             | "Reflect"
             | "Uint8Array"
@@ -405,6 +406,21 @@ pub(crate) fn native_module_binding_value(ctx: &LoweringContext, name: &str) -> 
         Some(v) => v,
         None => return Expr::Undefined,
     };
+    if method_name.is_none() {
+        if let Some((source, imported)) = ctx.native_import_value_origins.get(name) {
+            return Expr::Call {
+                callee: Box::new(Expr::ExternFuncRef {
+                    name: "js_native_module_named_esm_export_value".to_string(),
+                    param_types: vec![Type::String, Type::String],
+                    return_type: Type::Any,
+                }),
+                args: vec![Expr::String(source.clone()), Expr::String(imported.clone())],
+                type_args: vec![],
+                byte_offset: 0,
+                byte_end: 0,
+            };
+        }
+    }
     if module_name == "os" || module_name == "node:os" {
         if let Some(method) = method_name {
             match method {

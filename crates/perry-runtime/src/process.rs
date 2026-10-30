@@ -699,7 +699,7 @@ pub(crate) fn module_object_ptr(value: f64) -> Option<*const crate::object::Obje
         return None;
     }
     let gc_header = unsafe { &*(ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader) };
-    if gc_header.obj_type == crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_object!(gc_header.obj_type) {
         Some(ptr as *const crate::object::ObjectHeader)
     } else {
         None
@@ -837,7 +837,7 @@ pub fn process_metadata_property(property: &str) -> Option<f64> {
         // forms observe the same values (env/stdout are live singletons).
         "exitCode" => js_process_exit_code_get(),
         "env" => js_process_env(),
-        "argv" => f64::from_bits(JSValue::array_ptr(crate::os::js_process_argv()).bits()),
+        "argv" => crate::os::js_process_argv_value(),
         "platform" => f64::from_bits(JSValue::string_ptr(crate::os::js_os_platform()).bits()),
         "arch" => f64::from_bits(JSValue::string_ptr(crate::os::js_os_arch()).bits()),
         "pid" => crate::os::js_process_pid(),

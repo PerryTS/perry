@@ -375,7 +375,7 @@ pub extern "C" fn js_array_length(arr: *const ArrayHeader) -> u32 {
             // property like any object instead.
             if crate::value::addr_class::is_above_handle_band(raw_ptr as usize)
                 && crate::object::is_valid_obj_ptr(raw_ptr as *const u8)
-                && ((*gc_header).obj_type == crate::gc::GC_TYPE_OBJECT
+                && (crate::gc_type_is_object!((*gc_header).obj_type)
                     || (*gc_header).obj_type == crate::gc::GC_TYPE_CLOSURE)
             {
                 if let Some(v) = crate::array::subclass::array_subclass_fast_length_raw(raw_ptr) {
@@ -665,7 +665,7 @@ pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
     // proof first; it re-validates the object header itself. Every rejected
     // case (holes, descriptors, prototype overrides, spilled/unknown layouts)
     // still reaches the complete resolver and spec-generic `Get` below.
-    if receiver_tag.0 == crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_object!(receiver_tag.0) {
         if let Some(value) = crate::array::subclass::array_subclass_fast_index_get_raw(arr, index) {
             return value;
         }

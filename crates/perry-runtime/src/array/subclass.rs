@@ -194,7 +194,8 @@ fn publish_dense_layout(key: u64, layout: DenseSubclassLayout) {
 /// deep-copy rather than concurrently share ObjectHeaders.
 #[inline(always)]
 unsafe fn owner_cached_dense_layout(obj: *const ObjectHeader) -> Option<DenseSubclassLayout> {
-    let meta = (*obj).meta;
+    // A1_UNPROVEN: record-first: layout word of the subclass instance (kind-A/B question for S0f).
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
     if meta.is_null() {
         return None;
     }
@@ -214,7 +215,8 @@ unsafe fn owner_cached_dense_layout(obj: *const ObjectHeader) -> Option<DenseSub
 
 #[inline(always)]
 unsafe fn publish_owner_dense_layout(obj: *const ObjectHeader, layout: DenseSubclassLayout) {
-    let meta = (*obj).meta;
+    // A1_UNPROVEN: record-first: layout word of the subclass instance (kind-A/B question for S0f).
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
     if meta.is_null() {
         return;
     }
@@ -340,7 +342,7 @@ unsafe fn build_dense_layout(obj: *const ObjectHeader) -> Option<DenseSubclassLa
 #[inline]
 fn validated_object_receiver(raw: usize) -> Option<ValidatedObjectReceiver> {
     let header = unsafe { crate::value::addr_class::try_read_gc_header(raw)? };
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::gc_type_is_not_object!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
     {
         return None;
@@ -432,7 +434,7 @@ pub(crate) unsafe fn drop_packed_subclass_numeric_proof_record(
 ) -> Option<u32> {
     // `obj` is a live GC object by contract: its header needs no admission.
     let header = &*crate::gc::header_from_trusted_user_ptr(obj as *const u8);
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::gc_type_is_not_object!(header.obj_type)
         || crate::object::shapes::shape_object_kind_of_receiver(
             (crate::object::shapes::object_shape_stamp(obj)).0,
         ) != Some(crate::object::shapes::ShapeObjectKind::OrdinaryNumericProof)
@@ -441,7 +443,7 @@ pub(crate) unsafe fn drop_packed_subclass_numeric_proof_record(
     }
     // The caller moves away from the proof sibling before publishing another
     // shape or returning to a mutator; clear the bound and twin-id payload.
-    let meta = (*obj).meta;
+    let meta = crate::meta_read!(crate::meta_obj_from_kind!(obj as *mut _, crate::object::shapes::ShapeObjectKind::OrdinaryNumericProof));
     let mut unproven = 0;
     if !meta.is_null() {
         if (*meta).flags & PACKED_NUMERIC_META_VALID != 0 {
@@ -477,7 +479,7 @@ unsafe fn subclass_numeric_prefix_is_proven(
     {
         return false;
     }
-    let meta = (*obj).meta;
+    let meta = crate::meta_read!(crate::meta_obj_from_kind!(obj as *mut _, shape_id));
     if meta.is_null() {
         clear_packed_subclass_numeric_proof(obj as *mut ObjectHeader);
         return false;
@@ -503,7 +505,8 @@ unsafe fn publish_subclass_numeric_prefix(
     bound: u32,
     exact_u32: bool,
 ) -> bool {
-    let meta = (*obj).meta;
+    // A1_UNPROVEN: record-first: layout word of the subclass instance (kind-A/B question for S0f).
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
     if meta.is_null() || bound > 16_000_000 {
         return false;
     }
@@ -559,12 +562,12 @@ unsafe fn ensure_subclass_numeric_prefix(
             return false;
         };
         let value_ptr = if slot < layout.live_inline_slots {
-            (obj as *mut u8)
-                .add(std::mem::size_of::<ObjectHeader>())
+            // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
+            crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _))
                 .cast::<u64>()
                 .add(slot as usize)
         } else {
-            let meta = (*obj).meta;
+            let meta = crate::meta_read!(crate::meta_obj_from_storage!(obj as *mut _, slot));
             if meta.is_null() {
                 return false;
             }
@@ -640,12 +643,13 @@ fn layout_field_value(obj: *const ObjectHeader, slot: u32, live_inline_slots: u3
     unsafe {
         if slot < live_inline_slots {
             let fields =
-                (obj as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const JSValue;
+                // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
+                crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _)) as *const JSValue;
             return *fields.add(slot as usize);
         }
 
         {
-            let meta = (*obj).meta;
+            let meta = crate::meta_read!(crate::meta_obj_from_storage!(obj as *mut _, slot));
             if !meta.is_null() {
                 let spill = (*meta).spill as *const ArrayHeader;
                 if !spill.is_null() && slot < (*spill).length {
@@ -732,7 +736,7 @@ unsafe fn dense_slot_exists(obj: *const ObjectHeader, slot: u32, live_inline_slo
         return true;
     }
 
-    let meta = (*obj).meta;
+    let meta = crate::meta_read!(crate::meta_obj_from_storage!(obj as *mut _, slot));
     if meta.is_null() {
         return false;
     }
@@ -752,7 +756,7 @@ unsafe fn store_dense_slot(
         return true;
     }
 
-    let meta = (*obj).meta;
+    let meta = crate::meta_read!(crate::meta_obj_from_storage!(obj as *mut _, slot));
     if meta.is_null() {
         return false;
     }
@@ -788,15 +792,15 @@ unsafe fn store_dense_nonpointer_number_slot(
 ) -> bool {
     let value_bits = number.to_bits();
     if slot < live_inline_slots {
-        let fields = (obj as *mut u8)
-            .add(std::mem::size_of::<ObjectHeader>())
+        // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
+        let fields = crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _))
             .cast::<u64>();
         // GC_STORE_AUDIT(POINTER_FREE): the caller proved `number` is a raw nonnegative i32 Number; no edge changes.
         ptr::write(fields.add(slot as usize), value_bits);
         return true;
     }
 
-    let meta = (*obj).meta;
+    let meta = crate::meta_read!(crate::meta_obj_from_storage!(obj as *mut _, slot));
     if meta.is_null() {
         return false;
     }
@@ -817,8 +821,8 @@ unsafe fn clear_retired_dense_slot(
     former_live_inline_slots: u32,
 ) {
     if slot < former_live_inline_slots {
-        let fields = (obj as *mut u8)
-            .add(std::mem::size_of::<ObjectHeader>())
+        // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
+        let fields = crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _))
             .cast::<u64>();
         // The predecessor ShapeId is already installed, so this physical tail
         // is outside the object's traced slot range. Clearing it is storage
@@ -827,7 +831,7 @@ unsafe fn clear_retired_dense_slot(
         ptr::write(fields.add(slot as usize), crate::value::TAG_UNDEFINED);
         return;
     }
-    let meta = (*obj).meta;
+    let meta = crate::meta_read!(crate::meta_obj_from_storage!(obj as *mut _, slot));
     if meta.is_null() {
         return;
     }
@@ -853,14 +857,14 @@ unsafe fn clear_retired_dense_numeric_tail_slot(
     former_live_inline_slots: u32,
 ) {
     if slot < former_live_inline_slots {
-        let fields = (obj as *mut u8)
-            .add(std::mem::size_of::<ObjectHeader>())
+        // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
+        let fields = crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _))
             .cast::<u64>();
         // GC_STORE_AUDIT(POINTER_FREE): retiring a physical tail slot to `undefined` publishes no edge.
         ptr::write(fields.add(slot as usize), crate::value::TAG_UNDEFINED);
         return;
     }
-    let meta = (*obj).meta;
+    let meta = crate::meta_read!(crate::meta_obj_from_storage!(obj as *mut _, slot));
     if meta.is_null() {
         return;
     }
@@ -1313,7 +1317,7 @@ pub fn is_array_subclass_instance(object: f64) -> bool {
         Some(hdr) => hdr.obj_type,
         None => return false,
     };
-    if obj_type != crate::gc::GC_TYPE_OBJECT {
+    if !crate::object_has_meta_word!(obj_type) {
         return false;
     }
     unsafe { has_array_exotic_brand(raw as *const ObjectHeader) }

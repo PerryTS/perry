@@ -3,21 +3,16 @@
 //! one object per module. Split out of `object/native_module.rs` to stay under
 //! the 2,000-line cap (#10750).
 
+/// Dynamic readers share one alias resolver. Export declarations specialize
+/// the same shared declaration with their compile-time names.
 pub(crate) fn canonical_native_callable_property<'a>(
     module_name: &str,
     property_name: &'a str,
 ) -> &'a str {
-    match (module_name, property_name) {
-        ("domain", "create") => "createDomain",
-        ("net", "Stream") => "Socket",
-        ("fs", "FileReadStream") => "ReadStream",
-        ("fs", "FileWriteStream") => "WriteStream",
-        ("path" | "path.posix" | "path.win32", "_makeLong") => "toNamespacedPath",
-        ("querystring", "decode") => "parse",
-        ("querystring", "encode") => "stringify",
-        ("cluster", "setupMaster") => "setupPrimary",
-        _ => property_name,
-    }
+    perry_dispatch::native_callable_exports::canonical_native_callable_property(
+        module_name,
+        property_name,
+    )
 }
 
 pub(crate) fn assert_instance_base_module(module_name: &str) -> Option<&'static str> {

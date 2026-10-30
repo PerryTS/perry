@@ -361,7 +361,7 @@ fn typed_array_length_keeps_native_load_without_shape_barrier() {
 }
 
 #[test]
-fn fs_parent_promises_property_installs_before_resolution() {
+fn fs_parent_promises_property_initializes_only_its_child_before_export_read() {
     let mut module = Module::new("fs_parent_promises_property.ts");
     module.init = vec![Stmt::Return(Some(Expr::PropertyGet {
         byte_end: 0,
@@ -376,10 +376,16 @@ fn fs_parent_promises_property_installs_before_resolution() {
         .find("call void @js_node_submod_install_fs_promises()")
         .unwrap_or_else(|| panic!("fs.promises must emit its submodule installer:\n{ir}"));
     let resolve = ir
-        .find("call double @js_native_module_property_by_name")
-        .unwrap_or_else(|| {
-            panic!("fs.promises must use the native-module property resolver:\n{ir}")
-        });
+        .find("call double @js_native_module_esm_export_value")
+        .unwrap_or_else(|| panic!("fs.promises must read its selected export cell:\n{ir}"));
+    assert!(
+        !ir.contains("call void @js_nm_install_fs("),
+        "a selected child must not install the parent fs bucket:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call double @js_native_module_property_by_name"),
+        "a selected child must not read through the whole module object:\n{ir}"
+    );
     assert!(
         install < resolve,
         "fs.promises submodule installation must precede property resolution:\n{ir}"

@@ -69,7 +69,7 @@ fn heap_object_ptr(value: f64) -> Option<*mut ObjectHeader> {
         return None;
     }
     let header = unsafe { crate::value::addr_class::try_read_gc_header(ptr as usize)? };
-    if header.obj_type == crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_object!(header.obj_type) {
         Some(ptr as *mut ObjectHeader)
     } else {
         None
@@ -607,7 +607,7 @@ pub(crate) fn is_wasi_import_object(obj: *const ObjectHeader) -> bool {
     else {
         return false;
     };
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_not_object!(header.obj_type) {
         return false;
     }
     unsafe {

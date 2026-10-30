@@ -18,7 +18,7 @@ fn heap_type_name(heap_type: u16) -> &'static str {
     match heap_type as u8 {
         0 => "unknown",
         crate::gc::GC_TYPE_ARRAY => "array",
-        crate::gc::GC_TYPE_OBJECT => "object",
+        crate::gc_object_type_pat!() => "object",
         crate::gc::GC_TYPE_STRING => "string",
         crate::gc::GC_TYPE_CLOSURE => "closure",
         crate::gc::GC_TYPE_PROMISE => "promise",

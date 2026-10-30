@@ -173,7 +173,7 @@ unsafe fn receiver_obj_type(arr: *const ArrayHeader) -> u8 {
 }
 
 unsafe fn fs_dir_entries_iter_obj(arr: *const ArrayHeader, kind: i32) -> Option<i64> {
-    if kind != KIND_ENTRIES || receiver_obj_type(arr) != crate::gc::GC_TYPE_OBJECT {
+    if kind != KIND_ENTRIES || crate::gc_type_is_not_object!(receiver_obj_type(arr)) {
         return None;
     }
     let obj = arr as *const crate::object::ObjectHeader;

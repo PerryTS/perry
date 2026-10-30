@@ -42,11 +42,12 @@ pub(crate) unsafe fn bag(owner: usize, create: bool, last_slot: u32) -> *mut Arr
     let meta = if create {
         // A1_UNPROVEN: descriptor_holder(owner) may return the user object itself (kind-A/B question for S0b-S0e).
         super::object_meta_ensure(
-            super::MetaObj::runtime_born(holder),
+            crate::meta_obj_runtime_born!(holder),
             super::MetaReason::OwnedState,
         )
     } else {
-        (*holder).meta
+        // A1_UNPROVEN: record-first: holder may be the user object (kind-A/B question for S0f).
+        crate::meta_read!(crate::meta_obj_runtime_born!(holder as *mut _))
     };
     if meta.is_null() {
         return std::ptr::null_mut();

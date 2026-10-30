@@ -208,6 +208,7 @@ pub(crate) const INTERNAL_MODULE_KEYS: &[&str] = &["inspector.Network", "punycod
 /// `crates/perry-hir/src/ir.rs::RUNTIME_ONLY_MODULES`.
 pub const RUNTIME_ONLY_MODULES: &[&str] = &[
     "fs",
+    "fs/promises",
     "path",
     "path/posix",
     "path/win32",

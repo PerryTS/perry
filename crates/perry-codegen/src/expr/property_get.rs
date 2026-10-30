@@ -795,6 +795,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // ObjectHeader, and the outer PropertyGet routes through
             // `js_object_get_field_by_name`'s NATIVE_MODULE_CLASS_ID arm.
             if let Expr::NativeModuleRef(module_name) = object.as_ref() {
+                if let Some(export) =
+                    crate::native_export_value::prepare(ctx.strings, module_name, property, true)
+                {
+                    return Ok(export.emit(ctx.block()));
+                }
                 // Devirt: register this module's runtime dispatch bucket before
                 // the namespace value is produced, so later method calls on it
                 // route to the real handlers. The CJS-`require` shim lowers

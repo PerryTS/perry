@@ -66,7 +66,7 @@ unsafe fn instance_object_ptr(this: f64) -> Option<*mut ObjectHeader> {
         return None;
     }
     let header = crate::value::addr_class::try_read_gc_header(raw)?;
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_not_object!(header.obj_type) {
         return None;
     }
     Some(raw as *mut ObjectHeader)

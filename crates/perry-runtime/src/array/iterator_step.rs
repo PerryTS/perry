@@ -14,7 +14,7 @@ pub unsafe extern "C-unwind" fn js_iterator_step(iter: f64, next: f64, out: *mut
     if let Some(header) = crate::value::addr_class::pointer_value_header(iter.to_bits()) {
         let raw = (iter.to_bits() & crate::value::POINTER_MASK) as usize;
         {
-            if header.obj_type == crate::gc::GC_TYPE_OBJECT {
+            if crate::gc_type_is_object!(header.obj_type) {
                 let obj = raw as *mut ObjectHeader;
                 // Only these layouts can use the builtin collection step. A
                 // generator's branded frame goes directly to resume below;
@@ -136,7 +136,7 @@ pub unsafe extern "C-unwind" fn js_iterator_next_method(iter: f64) -> f64 {
 pub(super) unsafe fn iterator_next_method_rooted(iter: &crate::gc::RuntimeHandle<'_>) -> f64 {
     let raw = js_nanbox_get_pointer(iter.get_nanbox_f64()) as usize;
     if crate::value::addr_class::pointer_value_header(iter.get_nanbox_u64())
-        .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_OBJECT)
+        .is_some_and(|h| crate::gc_type_is_object!(h.obj_type))
     {
         let obj = raw as *const ObjectHeader;
         // An actual own next slot needs only its descriptor. In particular,

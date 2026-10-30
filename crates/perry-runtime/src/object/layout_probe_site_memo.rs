@@ -19,6 +19,9 @@ const ABSENT: u32 = u32::MAX - 1;
 const DECLINE: u32 = u32::MAX - 2;
 const ACCESSOR: u32 = 1 << 31;
 const SPILL: u32 = 1 << 30;
+/// The low bits of an answer: an inline slot's byte offset from the object
+/// (stored at fill, [`crate::object::header::meta_form_slot_off`]), or with [`SPILL`] the
+/// spill position.
 const SLOT_MASK: u32 = SPILL - 1;
 
 /// Exactly five (LayoutWord, slot) pairs. Zero shape means an empty answer.
@@ -66,13 +69,13 @@ pub(crate) enum Answer {
 #[inline(always)]
 unsafe fn ordinary_word(obj: *const ObjectHeader) -> Option<u32> {
     let h = crate::gc::header_from_trusted_user_ptr(obj.cast());
-    if (*h).obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::object_lacks_meta_word!((*h).obj_type)
         || (*h).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || (*h)._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0
     {
         return None;
     }
-    let meta = (*obj).meta;
+    let meta = crate::meta_read!(crate::meta_obj_from_type!(obj as *mut _, (*h).obj_type));
     if !meta.is_null()
         && (*meta).flags
             & (crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER
@@ -91,12 +94,11 @@ unsafe fn slot_answer(obj: *const ObjectHeader, slot: u32) -> Option<Answer> {
     if slot == ABSENT {
         return Some(Answer::Data(crate::value::TAG_UNDEFINED));
     }
-    let index = slot & SLOT_MASK;
+    let at = slot & SLOT_MASK;
     let bits = if slot & SPILL != 0 {
-        crate::object::spill::spill_get_present(obj as usize, index as usize)?
+        crate::object::spill::spill_get_present(obj as usize, at as usize)?
     } else {
-        *((obj as *const u8).add(std::mem::size_of::<ObjectHeader>() + index as usize * 8)
-            as *const u64)
+        *crate::object::header::object_slot_at(obj as *mut ObjectHeader, at)
     };
     if bits == TAG_HOLE {
         return None;
@@ -243,12 +245,20 @@ pub(crate) unsafe fn prime(
                 if slot >= SLOT_MASK - 1 {
                     return None;
                 }
-                let slot =
-                    slot | if slot < (*r).live_inline_slot_count {
-                        0
-                    } else {
-                        SPILL
-                    } | if attrs & crate::object::key_attrs::ENTRY_ACCESSOR_MASK != 0 {
+                // `ordinary_word` proved the meta form: an inline answer
+                // keeps the slot's byte offset, a spilled one its position.
+                let inline = slot < (*r).live_inline_slot_count;
+                let at = if inline {
+                    crate::object::header::meta_form_slot_off(slot)
+                } else {
+                    slot
+                };
+                if at >= SLOT_MASK - 1 {
+                    return None;
+                }
+                let slot = at
+                    | if inline { 0 } else { SPILL }
+                    | if attrs & crate::object::key_attrs::ENTRY_ACCESSOR_MASK != 0 {
                         ACCESSOR
                     } else {
                         0

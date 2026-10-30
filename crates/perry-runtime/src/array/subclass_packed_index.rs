@@ -85,7 +85,7 @@ pub extern "C" fn js_packed_arraylike_index_get(receiver: f64, index: f64) -> f6
                         index_u32,
                     );
                 }
-                if header.obj_type == crate::gc::GC_TYPE_OBJECT
+                if crate::gc_type_is_object!(header.obj_type)
                     && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
                 {
                     let obj = raw.cast::<ObjectHeader>();

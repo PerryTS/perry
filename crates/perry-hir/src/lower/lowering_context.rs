@@ -291,6 +291,9 @@ pub struct LoweringContext {
     /// For namespace imports (import * as x), method_name is None
     /// For named imports (import { v4 as uuid }), method_name is Some("v4")
     pub(crate) native_modules: Vec<(String, String, Option<String>)>,
+    /// Source binding of object-valued named imports; call dispatch can use a
+    /// submodule alias while value reads must preserve the original export.
+    pub(crate) native_import_value_origins: std::collections::HashMap<String, (String, String)>,
     /// #10623: `const { Key } = require("<resolvable native module>")`
     /// destructured bindings, keyed by the LOCAL binding name -> the
     /// destructured export KEY (identity for the common unaliased case).

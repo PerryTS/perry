@@ -216,7 +216,7 @@ fn value_gc_type(value: f64) -> Option<u8> {
 }
 
 fn is_plain_object_value(value: f64) -> bool {
-    value_gc_type(value) == Some(crate::gc::GC_TYPE_OBJECT)
+    matches!(value_gc_type(value), Some(crate::gc_object_type_pat!()))
 }
 
 fn option_field(options: f64, name: &str) -> f64 {

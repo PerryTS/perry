@@ -5159,9 +5159,9 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "perex"
-version = "0.1.17"
+version = "0.1.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e433f050afc90f72a69afa79c4bd4f172011f580c9381123ba72df06884a6e5c"
+checksum = "bc3ab87775130bf16e00a4dfff7032755ec762ba5021c7e2db9470b87fd51c1b"
 
 [[package]]
 name = "perry"
@@ -5787,6 +5787,7 @@ dependencies = [
  "num-traits",
  "perex",
  "perry-abi",
+ "perry-api-manifest",
  "perry-base64",
  "perry-component-io",
  "perry-diagnostics",

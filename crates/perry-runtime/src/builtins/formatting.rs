@@ -788,7 +788,7 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                         value_repr::render_array_body(&parts, inspect_compact_enabled())
                     };
                     inspect_finish_circular(ptr as usize, body_str)
-                } else if gc_type == crate::gc::GC_TYPE_OBJECT {
+                } else if crate::gc_type_is_object!(gc_type) {
                     // Object — check for keys_array. Cycle check FIRST so the
                     // self-referencing case wins over the depth-2 collapse to
                     // `[Object]` (#1204). The depth cap is overridable via
@@ -1568,7 +1568,7 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                             format!("[ {} ]", texts.join(", "))
                         };
                         inspect_finish_circular(ptr as usize, body_str)
-                    } else if gc_type == crate::gc::GC_TYPE_OBJECT {
+                    } else if crate::gc_type_is_object!(gc_type) {
                         // Cycle check FIRST so back-edges win over the
                         // depth-limit collapse to `[Object]` (#1204). The
                         // depth cap is overridable via INSPECT_DEPTH_LIMIT
