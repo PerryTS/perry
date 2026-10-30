@@ -1808,6 +1808,13 @@ pub(super) fn strip_bundled_shared_deps_from_well_known_lib(
         return Err(anyhow::anyhow!("failed to extract {lib_name}: {stderr}"));
     }
 
+    let localized_exports = localize_kept_shared_exports(
+        &nm,
+        &abs_lib,
+        &extract_dir,
+        candidates.iter().filter(|c| !to_remove.contains(*c)),
+        &replacement_defined_by_candidate,
+    )?;
     let mut ar_cmd = Command::new(&llvm_ar);
     ar_cmd.arg("crs").arg(&trimmed_lib);
     for member in &members {
@@ -1826,7 +1833,7 @@ pub(super) fn strip_bundled_shared_deps_from_well_known_lib(
 
     eprintln!(
         "[strip-dedup] {lib_name}: dropped {} bundled member(s) also provided by stdlib \
-         (shared transitive deps, fixed-point safe)",
+         (shared transitive deps, fixed-point safe); localized {localized_exports} kept export(s)",
         to_remove.len()
     );
     let _ = std::fs::remove_dir_all(&extract_dir);
@@ -1894,6 +1901,8 @@ fn requires_bundled_native_companion(symbol: &str) -> bool {
 mod object_format;
 use object_format::{object_is_coff, object_is_elf};
 
+mod kept_overlap;
+use kept_overlap::localize_kept_shared_exports;
 mod stub_symbols;
 pub(super) use stub_symbols::localize_stdlib_stub_symbols;
 use stub_symbols::strip_members_present_in_reference;
