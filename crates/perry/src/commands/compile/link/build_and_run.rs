@@ -158,6 +158,7 @@ pub(crate) fn build_and_run_link(
     for obj_path in obj_paths {
         cmd.arg(obj_path);
     }
+    cmd.args(super::link_pad_args());
 
     // HarmonyOS: pick up native C objects that build.rs scripts emitted
     // alongside the Rust artifacts. Rust's staticlib normally bundles these
