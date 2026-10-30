@@ -152,6 +152,7 @@ extern "C" fn process_stdin_detach_stub(
     _arg: f64,
 ) -> f64 {
     STDIN_DETACHED.store(true, std::sync::atomic::Ordering::Release);
+    note_process_stdin_paused();
     // #9676: mirror it into readline's flow state, so `pause()` means the same
     // thing whichever spelling reached it (and so the `resume()` below is a
     // true inverse rather than a partial one).
@@ -209,6 +210,80 @@ fn set_stdin_bool_field(name: &[u8], value: bool) {
             f64::from_bits(crate::value::JSValue::bool(value).bits()),
         );
     });
+}
+
+/// Field slot of `readableFlowing` on the stdin shape; see the key list in
+/// `os_process_streams_build.rs`.
+const STDIN_FLOWING_FIELD: u32 = 24;
+
+/// `process.stdin.readableFlowing`: 0 = `null` (paused, nobody asked for data),
+/// 1 = `true`, 2 = `false`. Node's Readable starts at `null`; only a `data`
+/// listener, `resume()` or `pipe()` flip it to `true`, and `pause()` or a
+/// `readable` listener flip it to `false`.
+static STDIN_FLOWING: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+fn stdin_flowing_value() -> f64 {
+    f64::from_bits(
+        match STDIN_FLOWING.load(std::sync::atomic::Ordering::Acquire) {
+            1 => crate::value::TAG_TRUE,
+            2 => crate::value::TAG_FALSE,
+            _ => crate::value::TAG_NULL,
+        },
+    )
+}
+
+fn set_stdin_flowing(flowing: bool) {
+    STDIN_FLOWING.store(
+        if flowing { 1 } else { 2 },
+        std::sync::atomic::Ordering::Release,
+    );
+    STDIN_STREAM_SINGLETON.with(|slot| {
+        let obj = *slot.borrow() as *mut crate::object::ObjectHeader;
+        if !obj.is_null() {
+            crate::object::js_object_set_field(
+                obj,
+                STDIN_FLOWING_FIELD,
+                crate::value::JSValue::from_bits(stdin_flowing_value().to_bits()),
+            );
+        }
+    });
+}
+
+/// `resume()` / `pipe()`: stdin is flowing.
+pub fn note_process_stdin_resumed() {
+    set_stdin_flowing(true);
+}
+
+/// `pause()`: stdin is explicitly paused.
+pub fn note_process_stdin_paused() {
+    set_stdin_flowing(false);
+}
+
+/// Mirror Node's `Readable.on(event)` flow transitions: a `data` listener
+/// resumes a stream that was not explicitly paused, a `readable` listener
+/// leaves it paused (`false`), and every other event leaves it untouched.
+pub fn note_process_stdin_listener(event: &str) {
+    match event {
+        "data" => {
+            if STDIN_FLOWING.load(std::sync::atomic::Ordering::Acquire) != 2 {
+                set_stdin_flowing(true);
+            }
+        }
+        "readable" => set_stdin_flowing(false),
+        _ => {}
+    }
+}
+
+/// `process.stdin.isPaused()`.
+extern "C" fn process_stdin_is_paused(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    _arg: f64,
+) -> f64 {
+    f64::from_bits(
+        crate::value::JSValue::bool(STDIN_FLOWING.load(std::sync::atomic::Ordering::Acquire) == 2)
+            .bits(),
+    )
 }
 
 pub fn set_process_stdin_raw_state(enabled: bool) {
@@ -853,6 +928,7 @@ pub fn enable_process_stdin_keypress_events(callback: i64) {
     if STDIN_KEYPRESS_EVENTS_ENABLED.swap(true, std::sync::atomic::Ordering::AcqRel) {
         return;
     }
+    note_process_stdin_listener("data");
     if let Some((on, _, _)) = stdin_ops_provider() {
         on(b"data".as_ptr(), 4, callback, 0);
     } else if let Ok(mut listeners) = STDIN_DATA_LISTENERS.lock() {
@@ -876,6 +952,7 @@ extern "C" fn process_stdin_add_listener(
         let name = stdin_event_name(event).unwrap_or_default();
         let cb = stdin_callback_ptr(callback);
         if cb != 0 {
+            note_process_stdin_listener(&name);
             on(name.as_ptr(), name.len(), cb, 0);
         }
         return stdin_this_value();
@@ -897,6 +974,7 @@ extern "C" fn process_stdin_add_listener_once(
         let name = stdin_event_name(event).unwrap_or_default();
         let cb = stdin_callback_ptr(callback);
         if cb != 0 {
+            note_process_stdin_listener(&name);
             on(name.as_ptr(), name.len(), cb, 1);
         }
         return stdin_this_value();
@@ -1112,7 +1190,11 @@ pub fn stdin_listeners_keep_loop_alive() -> bool {
     }
     let non_empty =
         |l: &std::sync::Mutex<Vec<i64>>| l.lock().map(|v| !v.is_empty()).unwrap_or(false);
-    let has_end_listener = non_empty(&STDIN_END_LISTENERS) || non_empty(&STDIN_END_ONCE);
+    // An `end`/`close` listener alone does not start reading, so it only holds
+    // the loop while another consumer has the reader running (or EOF is pending).
+    let has_end_listener = (non_empty(&STDIN_END_LISTENERS) || non_empty(&STDIN_END_ONCE))
+        && (STDIN_READER_STARTED.load(std::sync::atomic::Ordering::Acquire)
+            || STDIN_EOF_SEEN.load(std::sync::atomic::Ordering::Acquire));
     let has_any_listener = has_end_listener
         || non_empty(&STDIN_DATA_LISTENERS)
         || non_empty(&STDIN_DATA_ONCE)
@@ -1191,7 +1273,7 @@ fn register_stdin_listener(
     }
     let target = if is_once { once } else { persistent };
     match stdin_event_name(event).as_deref() {
-        Some("data") | Some("readable") | Some("end") | Some("close") => {
+        Some(name @ ("data" | "readable" | "end" | "close")) => {
             if let Ok(mut l) = target.lock() {
                 // EventEmitter allows the same listener registered multiple
                 // times; only `on` callers dedupe in practice, but each
@@ -1202,8 +1284,12 @@ fn register_stdin_listener(
                     l.push(cb);
                 }
             }
-            // Starting the reader lets it observe EOF, which drives `'end'`.
-            ensure_stdin_reader();
+            // Only `data`/`readable` start reading: `end`/`close` listeners
+            // wait for another consumer to drive the stream to EOF, as in Node.
+            if matches!(name, "data" | "readable") {
+                note_process_stdin_listener(name);
+                ensure_stdin_reader();
+            }
         }
         _ => {}
     }
@@ -1320,6 +1406,7 @@ extern "C" fn process_stdin_read(
     _this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
+    ensure_stdin_reader();
     let bytes = match STDIN_BUFFER.lock() {
         Ok(mut b) => std::mem::take(&mut *b),
         Err(_) => return f64::from_bits(crate::value::TAG_NULL),
@@ -1371,6 +1458,7 @@ extern "C" fn process_stdin_resume(
 ) -> f64 {
     STDIN_DETACHED.store(false, std::sync::atomic::Ordering::Release);
     STDIN_UNREFED.store(false, std::sync::atomic::Ordering::Release);
+    note_process_stdin_resumed();
     // #9676: clear readline's `STDIN_PAUSED` too. `rl.close()` and a literal
     // `process.stdin.pause()` set it, its pump branch stops draining
     // `PENDING_DATA`, and before this bridge only the LITERAL

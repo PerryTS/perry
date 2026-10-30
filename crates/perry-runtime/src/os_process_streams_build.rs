@@ -53,6 +53,8 @@ pub(super) fn build_stream_object_with_write(
             keys.extend_from_slice(STDIN_TEARDOWN_KEYS);
             keys.extend_from_slice(b"read\0"); // field 22: Readable.read()
             keys.extend_from_slice(b"listeners\0"); // field 23: EventEmitter.listeners()
+            keys.extend_from_slice(b"readableFlowing\0"); // field 24: STDIN_FLOWING_FIELD
+            keys.extend_from_slice(b"isPaused\0"); // field 25: Readable.isPaused()
             (
                 if is_tty {
                     crate::tty::CLASS_ID_TTY_READ_STREAM
@@ -60,7 +62,7 @@ pub(super) fn build_stream_object_with_write(
                     0
                 },
                 keys,
-                24,
+                26,
                 Some(12),
             )
         } else if is_tty {
@@ -272,6 +274,14 @@ pub(super) fn build_stream_object_with_write(
                 1,
             );
             js_object_set_field(obj, 23, JSValue::from_bits(listeners.to_bits()));
+            js_object_set_field(
+                obj,
+                STDIN_FLOWING_FIELD,
+                JSValue::from_bits(stdin_flowing_value().to_bits()),
+            );
+            let is_paused =
+                stdin_native_method(crate::fn_info!(process_stdin_is_paused, 1), "isPaused", 0);
+            js_object_set_field(obj, 25, JSValue::from_bits(is_paused.to_bits()));
         } else {
             set_field_with_stub(start + 7, lifecycle); // destroy
         }
